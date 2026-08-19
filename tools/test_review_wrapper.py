@@ -1128,3 +1128,83 @@ def test_review_with_failover_is_auto_allowed_under_loop_mode():
         Path(__file__).resolve().parents[1] / "tools" / "hooks" / "test_permission_guard.sh"
     ).read_text()
     assert '"just review-with-failover"' in test
+
+
+# ── round-6 absorptions ───────────────────────────────────────────────────────
+def test_reviewer_env_drops_secrets_and_marks_isolation():
+    base = {
+        "PATH": "/usr/bin",
+        "HOME": "/h",
+        "OPENAI_API_KEY": "x",
+        "ANTHROPIC_API_KEY": "x",
+        "E2B_API_KEY": "x",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/c.json",
+        "GH_TOKEN": "x",
+        "MY_SERVICE_PASSWORD": "x",
+        "SOME_AUTH_HEADER": "x",
+        "HARNESS_ROUND_N": "3",
+    }
+    env = rw.reviewer_env(base)
+    assert env == {
+        "PATH": "/usr/bin",
+        "HOME": "/h",
+        "HARNESS_ROUND_N": "3",
+        "HARNESS_CODEX_REVIEW_ISOLATED": "1",
+    }
+
+
+def test_default_invoke_runs_codex_with_the_reviewer_env(monkeypatch):
+    import subprocess
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "must-not-leak")
+    seen = {}
+
+    def fake_rb(cmd, *, cwd, timeout, env):
+        seen["env"] = env
+        seen["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, _block(), "")
+
+    monkeypatch.setattr(cr, "run_bounded", fake_rb)
+    cr._default_invoke(Path("."), "I")(10.0)
+    assert (
+        "ANTHROPIC_API_KEY" not in seen["env"]
+        and seen["env"]["HARNESS_CODEX_REVIEW_ISOLATED"] == "1"
+    )
+    assert "--ephemeral" not in seen["cmd"]  # C-HE-18 §2 needs the persisted session artifact
+
+
+def test_bound_block_already_on_stdout_when_our_cap_kills_still_blocks(tmp_path, monkeypatch):
+    """codex round 6: a discarded BLOCK would let the failover approve over proven findings."""
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
+    block = _block("BLOCK", [{"severity": "P1", "location": "l", "message": "m"}])
+    out = cr.run_codex_review(
+        Path("."), "main", invoke=lambda t: rw.Attempt(block, "timed out", 124, True)
+    )
+    assert out.terminal == "BLOCK" and len(out.findings) == 1
+
+
+def test_round_n_is_env_or_next_for_this_arc_and_producer(monkeypatch):
+    monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    rows = [
+        {"arc_id": "a", "producer": "p", "round_n": 2},
+        {"arc_id": "a", "producer": "q", "round_n": 9},
+        {"arc_id": "b", "producer": "p", "round_n": 7},
+    ]
+    assert rw.round_n_for("a", "p", rows) == 3
+    assert rw.round_n_for("a", "zzz", rows) == 1
+    assert rw.round_n_for("new", "p", []) == 1
+    monkeypatch.setenv("HARNESS_ROUND_N", "5")
+    assert rw.round_n_for("a", "p", rows) == 5
+
+
+def test_successive_wrapper_runs_get_distinct_rounds(tmp_path, monkeypatch):
+    monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
+    monkeypatch.setattr(cr, "ARTIFACT_LAG_S", 0.0)
+    log = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
+    cr.main(["--base", "main", "--invoke-test-empty"])
+    cr.main(["--base", "main", "--invoke-test-empty"])
+    assert [r["round_n"] for r in fr.read_rows(log)] == [1, 2]

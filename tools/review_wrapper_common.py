@@ -54,6 +54,41 @@ SECOND_ATTEMPT_MARGIN_S = 30.0
 #: classifier (codex round 3 read "not logged in" out of THIS diff and said permanent).
 CLASSIFIER_STREAM_LIMIT = 4096
 CLASSIFIER_TAIL = 512
+#: Environment a nested reviewer process may see: `just`'s dotenv-load injects the harness
+#: runtime's provider credentials, and a diff-induced shell command inside the reviewer could
+#: surface them into the transcript/model (codex round 6). Names matching this pattern are
+#: dropped, plus the explicit provider list; the sandbox hides files, not the environment.
+_SECRET_NAME_RE = re.compile(r"(KEY|TOKEN|SECRET|CREDENTIAL|PASSWORD|PASSWD|AUTH)", re.I)
+_SECRET_NAMES = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "E2B_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+    }
+)
+
+
+def reviewer_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment for a nested reviewer CLI: the caller's env minus every secret-shaped
+    variable, plus HARNESS_CODEX_REVIEW_ISOLATED=1 so the repo's own hooks (SessionStart / Stop
+    / checkpoint / loop-ledger writers) stay inert inside the reviewer (codex round 6)."""
+    src = os.environ if base is None else base
+    env = {k: v for k, v in src.items() if k not in _SECRET_NAMES and not _SECRET_NAME_RE.search(k)}
+    env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
+    return env
+
 
 #: C-HE-16 §4 -- per-CLI classifier, ONE ROW PER (channel, regex, class). First match wins.
 #: Unknown text -> transient (fail-safe toward retry-then-block, never toward APPROVE).
@@ -287,6 +322,23 @@ def run_with_failover(
 
 def exit_code(outcome: ReviewOutcome) -> int:
     return {"APPROVE": 0, "BLOCK": 1, "REVIEWER_UNAVAILABLE": 2}[outcome.terminal]
+
+
+def round_n_for(arc_id: str, producer: str, rows: list[dict] | None = None) -> int:
+    """`HARNESS_ROUND_N` when the loop sets it; otherwise the next round for this (arc, producer)
+    derived from the gate log (codex round 6: without this every invocation was round 0 and
+    distinct review heads collapsed into one round)."""
+    env = os.environ.get("HARNESS_ROUND_N")
+    if env is not None:
+        return int(env)
+    prior = [
+        r["round_n"]
+        for r in (rows if rows is not None else fr.read_rows())
+        if r.get("arc_id") == arc_id
+        and r.get("producer") == producer
+        and r.get("round_n") is not None
+    ]
+    return max(prior, default=0) + 1
 
 
 def env_arc_and_lane() -> tuple[str, str]:

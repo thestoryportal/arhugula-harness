@@ -152,8 +152,10 @@ def find_session_artifact(
 
 def _default_invoke(repo: Path, instructions: str) -> Callable[[float], rw.Attempt]:
     def invoke(timeout: float) -> rw.Attempt:
-        # Subscription auth, never the metered key (justfile `_require-codex-subscription`).
-        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        # Subscription auth, never the metered key, no harness secrets, hooks inert
+        # (rw.reviewer_env). NOT --ephemeral: C-HE-18 §2's session-artifact fallback needs
+        # the persisted rollout.
+        env = rw.reviewer_env()
         with tempfile.TemporaryDirectory(prefix="arhugula-codex-review-") as scratch:
             out_file = Path(scratch) / "last-message.md"
             proc = run_bounded(
@@ -212,6 +214,11 @@ def run_codex_review(
         nonlocal source
         att = invoke(timeout)
         if conclusive(att.stdout):
+            if att.timed_out:
+                # The verdict was already on stdout / in the -o file when OUR cap killed the
+                # process: it counts (a discarded bound BLOCK would let the failover approve
+                # over proven findings -- codex round 6); rc None = not a failed process.
+                return rw.Attempt(att.stdout, att.stderr, None, False)
             return att
         if att.timed_out:
             # Killed at the cap: the verdict may already sit in the session artifact (the CLI
@@ -233,6 +240,8 @@ def run_codex_review(
         if conclusive(att.stderr):
             source = "stderr"
             return rw.Attempt(att.stderr, att.stderr, att.returncode, False)
+        # (a timed-out attempt reaches here only when neither stdout, the -o file nor the
+        # artifact was conclusive; run_with_retry then records the timeout)
         # stdout inconclusive: wait up to ARTIFACT_LAG_S for the session artifact, never past
         # the shared 1260 s budget (Codex round-1 P2 on the plan).
         end = min(time.time() + ARTIFACT_LAG_S, wall_deadline)
@@ -262,7 +271,7 @@ def _emit_rows(
     outcome: rw.ReviewOutcome, *, producer: str = PRODUCER, channel: str = CHANNEL
 ) -> None:
     arc_id, lane_id = rw.env_arc_and_lane()
-    round_n = int(os.environ.get("HARNESS_ROUND_N", "0"))
+    round_n = rw.round_n_for(arc_id, producer)
     rw.emit_outcome(outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=round_n)
     rw.record_round_outcome_if_reserved(
         arc_id,
@@ -361,7 +370,7 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
             ["just", "gemini-review", base, str(envelope)],
             cwd=repo,
             timeout=FAILOVER_SUBPROCESS_CAP_S,
-            env=dict(os.environ),
+            env=dict(os.environ),  # the gemini wrapper strips its own provider env + hooks
         )
         stdout, stderr = proc.stdout or "", proc.stderr or ""
         outcome = _read_envelope(envelope, binding)

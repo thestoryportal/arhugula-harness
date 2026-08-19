@@ -526,7 +526,7 @@ def _emit(outcome: rw.ReviewOutcome) -> None:
     C-HE-23 §2), so the envelope the failover reads is written only after the rows landed
     (codex round 4)."""
     arc_id, lane_id = rw.env_arc_and_lane()
-    round_n = int(os.environ.get("HARNESS_ROUND_N", "0"))
+    round_n = rw.round_n_for(arc_id, PRODUCER)
     rw.emit_outcome(outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=round_n)
     rw.record_round_outcome_if_reserved(
         arc_id,
@@ -624,7 +624,7 @@ def run_review(repo: Path, base: str) -> int:
     except RuntimeError as exc:
         return _unavailable(str(exc), failure_class="transient", binding=binding)
 
-    env = os.environ.copy()
+    env = rw.reviewer_env()  # every secret-shaped variable dropped + hooks inert (codex round 6)
     for name in PROVIDER_ENV:
         env.pop(name, None)
     deadline = time.monotonic() + TOTAL_REVIEW_TIMEOUT_SECONDS
