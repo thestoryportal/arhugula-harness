@@ -38,6 +38,8 @@ PENDING = [
     "tools/merge_door.py",
     "tools/reservations.py",
     "tools/hooks/lane-init.sh",
+    "tools/mechanized_checks/__init__.py",  # STATE_PATH home (U-HE-40)
+    "tools/mechanized_checks/runner.py",
 ]
 #: (first-cell name, phrase the spec's "Authority for" cell carries) -- C-HE-30 table order.
 EIGHT: list[tuple[str, str]] = [
@@ -81,6 +83,17 @@ FAMILY_RELATION: list[tuple[str, str]] = [
     ("mechanized-checks-state.json", SOLE),
     ("mutation-probe-log.jsonl", "derived"),
     ("merge-gate-log.jsonl", "part of store 5"),
+]
+#: Required fact phrase in each sole carrier's fourth cell -- the fact itself, pinned, so a
+#: reworded/nonsense cell cannot pass on quoting + uniqueness alone.
+SOLE_FACTS: list[tuple[str, str]] = [
+    ("reservations/.seq/<n>", "highest `seq`"),
+    ("transition.<lease_token>", "who won the transition"),
+    ("attempts/<lane_id>", "attempts"),
+    ("tier-clean-cycles", "clean cycles"),
+    ("lanes/<k>", "lane indices"),
+    ("hil-deliveries", "CLAIMED this"),
+    ("mechanized-checks-state.json", "live `kind`"),
 ]
 _PART_OF = re.compile(r"^part of store [1-8]\b")
 #: Transient writer-exclusion / staging artifacts -- MUST be listed as non-stores.
@@ -145,7 +158,10 @@ def _token(kind: str, match: re.Match[str]) -> str | None:
         if raw == ".harness":
             return None  # the `".harness" / "<name>"` chain pattern carries this one
         if not _HAS_WORD.search(raw):
-            return None
+            # a fully-templated join still names a store SHAPE: `DOOR / f"{prefix}.{token}"`
+            # -> `*.*` must be listed (the audit carries the shape span); only a bare `*`
+            # (no structure at all) is skipped
+            return raw if raw not in ("", "*") else None
         return f"QUEUE_DIR/{raw}" if root == "QUEUE_DIR" else raw
     return raw
 
@@ -229,6 +245,10 @@ def test_family_table_relation_cells_are_classified() -> None:
     # distinct families live in distinct rows (folding several paths into one row would let
     # one cell "own" five families)
     assert len(set(owners)) == len(owners), owners
+    # each sole carrier's cell carries ITS fact, not just any unique quoted text
+    for key, phrase in SOLE_FACTS:
+        (row,) = [r for r in rows if key in r[1]]
+        assert phrase in row[3], (key, phrase, row[3])
     # no fact is owned twice: the fourth cell (derived-from / fact) is distinct per row, and
     # no family claims one of the eight stores' facts as its own
     facts = [r[3] for r in rows]
