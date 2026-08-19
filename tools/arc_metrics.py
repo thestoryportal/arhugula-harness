@@ -439,6 +439,43 @@ def extract(args: argparse.Namespace) -> ArcRow:
     return row
 
 
+class _LedgerClaim:
+    """Exclusive ownership of the ledger for one write, by CAS on a claim file.
+
+    C-HE-02 §1 bans `flock`/`fcntl` in this module, so the mutual exclusion
+    between the ledger's two writers -- `append` (drain) and
+    `relabel_arc_type_close` (whole-file rewrite) -- is the same primitive the
+    queue uses: `publish_exclusive` (atomic `os.link`, fails when taken) with a
+    pid@host owner stamp, and `_claim_owner_is_dead` to reclaim a claim left by
+    a crashed owner on this host. A live or foreign owner means "retry": the
+    caller aborts loudly rather than racing (codex R3 P2 -- without this, an
+    append landing between the relabel's compare and its replace was lost).
+    """
+
+    def __init__(self, ledger: Path) -> None:
+        self.path = ledger.with_name(f".{ledger.name}.claim")
+
+    def __enter__(self) -> _LedgerClaim:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+        for attempt in (1, 2):
+            try:
+                publish_exclusive(self.path, stamp)
+                return self
+            except FileExistsError:
+                if attempt == 1 and _claim_owner_is_dead(self.path):
+                    self.path.unlink(missing_ok=True)  # dead owner on this host: reclaim once
+                    continue
+                raise AbortError(
+                    f"ledger {self.path.name} is claimed by another writer -- retry "
+                    "(a live peer holds it, or the owner cannot be verified)"
+                ) from None
+        raise AssertionError("unreachable")
+
+    def __exit__(self, *_exc: object) -> None:
+        self.path.unlink(missing_ok=True)
+
+
 def append(row: ArcRow) -> None:
     # An arc is not an arc until it merged. Appending a pre-merge row would
     # persist null merge fields AND burn the arc_id, so the duplicate guard
@@ -452,14 +489,15 @@ def append(row: ArcRow) -> None:
             "capture after merge, or use --dry-run to inspect"
         )
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    existing = read_ledger()
-    if any(r.get("arc_id") == row.arc_id for r in existing):
-        raise AbortError(
-            f"arc_id '{row.arc_id}' already in ledger -- refusing to append a "
-            "duplicate (use a distinct --arc-id or remove the prior row)"
-        )
-    with LEDGER.open("a") as fh:
-        fh.write(json.dumps(asdict(row), sort_keys=True) + "\n")
+    with _LedgerClaim(LEDGER):
+        existing = read_ledger()
+        if any(r.get("arc_id") == row.arc_id for r in existing):
+            raise AbortError(
+                f"arc_id '{row.arc_id}' already in ledger -- refusing to append a "
+                "duplicate (use a distinct --arc-id or remove the prior row)"
+            )
+        with LEDGER.open("a") as fh:
+            fh.write(json.dumps(asdict(row), sort_keys=True) + "\n")
 
 
 ARC_TYPES = ("inventing", "applying")
@@ -470,30 +508,29 @@ def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
     second row (that would trip SPLIT_BRAIN_LEDGER). The rewrite is whole-file atomic
     (temp + os.replace) and touches only this arc's row.
 
-    Compare-and-swap, not a lock: C-HE-02 §1 bans `flock`/`fcntl` in this module, so the
-    guard is a byte-compare of the ledger against the snapshot the rewrite was derived
-    from, taken immediately before the replace. A concurrent append or relabel that lands
-    in between is detected and the relabel aborts (retry), rather than being silently
-    discarded by the whole-file rewrite (codex R2 P2). The compare-to-replace window is
-    the residual; the ledger's other writer (`append`, via drain) runs in a different
-    arc's session, and both retry paths are idempotent."""
+    Mutual exclusion with `append` is the `_LedgerClaim` CAS claim (C-HE-02 §1 bans
+    `flock`/`fcntl` here). Inside the claim a byte-compare of the ledger against the
+    snapshot the rewrite was derived from still guards against a writer that does not
+    take the claim (an older tool, a hand edit): the relabel then aborts (retry) rather
+    than silently discarding that write under the whole-file rewrite (codex R2/R3 P2)."""
     if arc_type_close not in ARC_TYPES:
         raise AbortError(f"arc_type_close must be inventing|applying, got {arc_type_close!r}")
-    snapshot = LEDGER.read_bytes() if LEDGER.exists() else b""
-    rows = read_ledger()
-    hits = [r for r in rows if r.get("arc_id") == arc_id]
-    if len(hits) != 1:
-        raise AbortError(f"{arc_id}: expected exactly one arc row, found {len(hits)}")
-    hits[0]["arc_type_close"] = arc_type_close
-    tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
-    tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
-    current = LEDGER.read_bytes() if LEDGER.exists() else b""
-    if current != snapshot:
-        tmp.unlink(missing_ok=True)
-        raise AbortError(
-            f"{arc_id}: ledger changed while the relabel was prepared -- nothing written, retry"
-        )
-    os.replace(tmp, LEDGER)
+    with _LedgerClaim(LEDGER):
+        snapshot = LEDGER.read_bytes() if LEDGER.exists() else b""
+        rows = read_ledger()
+        hits = [r for r in rows if r.get("arc_id") == arc_id]
+        if len(hits) != 1:
+            raise AbortError(f"{arc_id}: expected exactly one arc row, found {len(hits)}")
+        hits[0]["arc_type_close"] = arc_type_close
+        tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
+        tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows))
+        current = LEDGER.read_bytes() if LEDGER.exists() else b""
+        if current != snapshot:
+            tmp.unlink(missing_ok=True)
+            raise AbortError(
+                f"{arc_id}: ledger changed while the relabel was prepared -- nothing written, retry"
+            )
+        os.replace(tmp, LEDGER)
 
 
 def cmd_relabel(args: argparse.Namespace) -> int:

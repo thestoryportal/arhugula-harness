@@ -78,7 +78,14 @@ def test_approve_writes_a_no_finding_row_then_a_structured_md_line(tmp_path: Pat
     md = (tmp_path / "log.md").read_text()
     assert md == f"| {rows[0]['ts']} | #1 | {H[:12]} | {LENS} | APPROVE | 0 finding(s) |\n"
     assert mgl.read_md_rows(tmp_path / "log.md") == [
-        {"ts": rows[0]["ts"], "pr": 1, "head_sha": H[:12], "lens": LENS, "verdict": "APPROVE"}
+        {
+            "ts": rows[0]["ts"],
+            "pr": 1,
+            "head_sha": H[:12],
+            "lens": LENS,
+            "verdict": "APPROVE",
+            "n_findings": 0,
+        }
     ]
 
 
@@ -176,6 +183,7 @@ def test_consistency_orphan_class_and_reconcile(tmp_path: Path):
         "head_sha": H[:12],
         "lens": "merge-gate-spec",
         "verdict": "BLOCK",
+        "n_findings": 1,
     }
     assert "1 finding(s)" in md.read_text()
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
@@ -187,7 +195,40 @@ def test_missing_jsonl_is_the_red_class(tmp_path: Path):
     rows = _emit(tmp_path, pr=3)  # establishes the comparison window
     md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 4, "d" * 40, LENS, "APPROVE", 0))
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(4, "d" * 12, LENS, "APPROVE")] and not rep["orphan_jsonl"]
+    assert rep["missing_jsonl"] == [(4, "d" * 12, LENS, "APPROVE", 0)] and not rep["orphan_jsonl"]
+
+
+def test_a_deleted_machine_log_reds_every_structured_md_row(tmp_path: Path):
+    """codex R3 P1: no time window -- with zero surviving emissions every structured md row is
+    MISSING its sibling, so a wiped `.jsonl` can never pass `check`."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=3, md=md, jl=jl)
+    _emit(tmp_path, pr=4, md=md, jl=jl, lens="merge-gate-b")
+    jl.unlink()
+    rep = mgl.consistency_report(md, jl)
+    assert [k[0] for k in rep["missing_jsonl"]] == [3, 4] and not rep["orphan_jsonl"]
+
+
+def test_finding_count_is_part_of_the_sibling_match(tmp_path: Path):
+    """codex R3 P2: a BLOCK emission that lost a finding row (or an md line whose count no
+    longer matches any emission) is red -- multiset match on the finding count per key."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    fs = [
+        {"severity": "P1", "location": "x", "message": "m1"},
+        {"severity": "P2", "location": "y", "message": "m2"},
+    ]
+    _emit(tmp_path, pr=7, verdict="BLOCK", findings=fs, md=md, jl=jl)
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+    lines = jl.read_text().splitlines(keepends=True)
+    jl.write_text(lines[0])  # one finding row lost from the machine log
+    rep = mgl.consistency_report(md, jl)
+    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", 2)]
+    assert [r["round_n"] for r in rep["orphan_jsonl"]] == [1]  # the 1-finding emission: no line
+    # one emission cannot vouch for two md lines at its key
+    jl.write_text("".join(lines))
+    md.write_text(md.read_text() * 2)
+    rep = mgl.consistency_report(md, jl)
+    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", 2)] and not rep["orphan_jsonl"]
 
 
 def test_one_lens_md_failure_warn_does_not_suppress_another_lens_orphan(tmp_path: Path):
@@ -276,10 +317,9 @@ def test_legacy_markdown_rows_and_wrapper_rows_are_outside_the_comparison(tmp_pa
         path=jl,
     )
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
-    # an md structured row dated BEFORE the first gate verdict is outside the window
+    # a STRUCTURED md row is always compared, whatever its date (no window, codex R3 P1)
     md.write_text(md.read_text() + mgl._md_line("2000-01-01T00:00:00Z", 1, H, LENS, "APPROVE", 0))
-    _emit(tmp_path, pr=6)
-    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+    assert mgl.consistency_report(md, jl)["missing_jsonl"] == [(1, H[:12], LENS, "APPROVE", 0)]
 
 
 def test_reviewer_unavailable_is_recorded_but_is_not_a_gate_verdict(tmp_path: Path):
@@ -337,9 +377,10 @@ def test_config_hash_covers_every_carrier_on_both_runners(tmp_path: Path, monkey
     assert mgl.config_hash() != "noskill" and len(mgl.config_carriers()) >= 5
 
 
-def _lens_output(binding: dict, verdict: str, findings: list | None = None) -> str:
+def _lens_output(binding: dict, verdict: str, findings: list | None = None, line=None) -> str:
     body = {"verdict": verdict, "findings": findings or [], **binding}
-    return "prose before\n```json\n" + json.dumps(body) + "\n```\nprose after\n"
+    tail = f"VERDICT: {verdict}" if line is None else line
+    return "prose before\n```json\n" + json.dumps(body) + "\n```\nprose after\n" + tail + "\n"
 
 
 def test_cli_emit_parses_the_schema_block_and_holds_it_to_the_binding(
@@ -505,6 +546,26 @@ def test_cli_emit_reconciles_earlier_orphans_first(tmp_path, monkeypatch, capsys
     assert rc == 0 and "reconciled 1 orphan" in capsys.readouterr().out
     assert [r["pr"] for r in mgl.read_md_rows(md)] == [3, 9]
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
+def test_cli_emit_requires_the_verdict_line_to_agree_with_the_block(tmp_path, monkeypatch, capsys):
+    """codex R3 P2: JSON APPROVE + `VERDICT: BLOCK`, or no VERDICT line, is not a verdict."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS, cfg_hash="cfg")
+    f = tmp_path / "lens.txt"
+    f.write_text(_lens_output(b, "APPROVE", line="VERDICT: BLOCK: contradicts the block"))
+    assert mgl.main(_cli(f)) == 2
+    assert fr.read_rows(jl)[-1]["record_kind"] == "reviewer_unavailable"
+    assert "disagrees" in fr.read_rows(jl)[-1]["observed_evidence"]
+    f.write_text(_lens_output(b, "APPROVE", line="no verdict line here"))
+    assert mgl.main(_cli(f)) == 2
+    f.write_text(_lens_output(b, "APPROVE", line="VERDICT: APPROVE"))
+    assert mgl.main(_cli(f)) == 0
+    assert fr.read_rows(jl)[-1]["record_kind"] == "no_finding"
+    assert len(mgl.read_md_rows(md)) == 1  # only the agreeing run produced a structured line
+    assert md.read_text().count("REVIEWER_UNAVAILABLE") == 2
 
 
 def test_cli_binding_prints_the_six_fields(capsys):

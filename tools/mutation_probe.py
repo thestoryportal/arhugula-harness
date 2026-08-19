@@ -140,6 +140,33 @@ PROBE_LOG = Path(
     os.environ.get("HARNESS_PROBE_LOG")
     or Path(__file__).resolve().parent.parent / ".harness" / "mutation-probe-log.jsonl"
 )
+#: Digests of the bytes the LAST probe actually exercised, measured INSIDE `probe()` under the
+#: target lock -- the target from its in-memory original (the restore authority), the test
+#: artifact before the baseline and re-checked after step 3 (a change in between voids it).
+#: `log_result` writes these, never a fresh read after the lock is released (codex R2/R3 P2).
+MEASURED: dict[str, str | None] = {"target_sha": None, "test_sha": None}
+
+
+def _sha16(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    except OSError:
+        return None
+
+
+def test_file_of(test_cmd: str) -> Path | None:
+    """The test ARTIFACT a probe command exercises: for a pytest command the first non-flag
+    token naming a `.py` path (node id's file part); for `bash <script>` the script."""
+    toks = test_cmd.split()
+    if "pytest" in toks:
+        for tok in toks[toks.index("pytest") + 1 :]:
+            if not tok.startswith("-") and ".py" in tok:
+                return Path(tok.split("::", 1)[0])
+        return None
+    if toks[:1] == ["bash"] and len(toks) > 1:
+        return Path(toks[1])
+    return None
+
 
 # Extension → (mutation-comment prefix, syntax-check kind). Anything else is REFUSED: a
 # comment prefix guessed wrong would corrupt the file, and a language whose syntax this
@@ -1383,6 +1410,13 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     except ValueError as e:
         return _refuse(str(e))
 
+    # The test artifact's bytes BEFORE the baseline; re-checked after step 3 so the logged
+    # digest names exactly the witness both runs executed (or None if it moved in between).
+    MEASURED["target_sha"] = MEASURED["test_sha"] = None
+    tf = test_file_of(test_cmd)
+    test_path = (repo_root / tf) if tf is not None else None
+    test_sha_before = _sha16(test_path) if test_path is not None else None
+
     # Step 1 — the baseline MUST be green.
     print(f"[1/3] baseline: {test_cmd}")
     base = run_shell(test_cmd, repo_root, timeout)
@@ -1428,6 +1462,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
         return _refuse(f"cannot read {target} ({e}).")
     except UnicodeDecodeError:
         return _refuse(f"{target} is not UTF-8 text — refusing to mutate it.")
+    MEASURED["target_sha"] = hashlib.sha256(original).hexdigest()[:16]
 
     try:
         mutated_text = comment_out(text, start, end)
@@ -1492,6 +1527,8 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             res = run_shell(test_cmd, repo_root, timeout)
             mutation_output = res.combined
             verdict, reason = classify_step3(res.rc, mutation_output, looks_like_pytest(test_cmd))
+            if test_path is not None and _sha16(test_path) == test_sha_before:
+                MEASURED["test_sha"] = test_sha_before
             # SECOND GUARD (merge-gate lens 1). Independent of the lock and deliberately
             # kept alongside it: a verdict is only about the removed lines if the removed
             # lines were still gone when the test finished. Anything else on disk means the
@@ -1589,27 +1626,6 @@ def main(argv: list[str] | None = None) -> int:
     return rc
 
 
-def _sha16(path: Path) -> str | None:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    except OSError:
-        return None
-
-
-def test_file_of(test_cmd: str) -> Path | None:
-    """The test ARTIFACT a probe command exercises: for a pytest command the first non-flag
-    token naming a `.py` path (node id's file part); for `bash <script>` the script."""
-    toks = test_cmd.split()
-    if "pytest" in toks:
-        for tok in toks[toks.index("pytest") + 1 :]:
-            if not tok.startswith("-") and ".py" in tok:
-                return Path(tok.split("::", 1)[0])
-        return None
-    if toks[:1] == ["bash"] and len(toks) > 1:
-        return Path(toks[1])
-    return None
-
-
 def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = None) -> None:
     """Append one verdict line to PROBE_LOG: `{ts, file, lines, test, rc, head, target_sha,
     test_sha}`. The digests bind the verdict to the exact source + test bytes it measured, so
@@ -1619,7 +1635,6 @@ def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = Non
     stderr and never changes `rc` (the log is derived evidence, not the probe's authority)."""
     log = log or PROBE_LOG
     target = Path(file).expanduser()
-    tf = test_file_of(test)
     head = run(
         ["git", "rev-parse", "HEAD"], target.parent if target.parent.is_dir() else Path.cwd()
     )
@@ -1630,8 +1645,8 @@ def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = Non
         "test": test,
         "rc": rc,
         "head": head.out if head.rc == 0 else None,
-        "target_sha": _sha16(target),
-        "test_sha": _sha16(tf) if tf is not None else None,
+        "target_sha": MEASURED["target_sha"],
+        "test_sha": MEASURED["test_sha"],
     }
     try:
         log.parent.mkdir(parents=True, exist_ok=True)

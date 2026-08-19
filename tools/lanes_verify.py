@@ -163,12 +163,18 @@ def _sha16(path: Path) -> str | None:
 def _pin_is_live(e: dict, target: str) -> bool:
     """A PINNED entry is evidence only while the bytes it measured are the bytes at HEAD: the
     mutated source file (`file` + `target_sha`) AND the test artifact (`test_sha`) must both
-    still digest to the logged values (codex R2 P2). Entries without digests never count."""
+    still digest to the logged values (codex R2 P2). Entries without digests never count. The
+    probed file must be a SOURCE file that exists -- never the test artifact itself (a probe
+    of the witness is not a probe of the load-bearing line; codex R3 P2). WHICH source lines
+    the annotation names is a human contract: the coverage gate proves a live pin exists for
+    the annotated test, not that the pin is the annotated mutation (recorded residual)."""
     tsha, fsha = e.get("target_sha"), e.get("test_sha")
     if not tsha or not fsha or not e.get("file"):
         return False
     src = Path(_relative(str(e["file"])))
     test_file = Path(target.split("::", 1)[0])
+    if src == test_file or not (REPO / src).is_file():
+        return False
     return _sha16(REPO / src) == tsha and _sha16(REPO / test_file) == fsha
 
 
@@ -222,7 +228,12 @@ def required_probes(row: Row) -> list[str]:
     path = REPO / file_part
     if not path.exists():
         return [target]  # not yet landed: a gap until the file exists and its probes are pinned
-    return [f"{file_part}::{name}" for name in _ANNOT.findall(path.read_text())]
+    names = _ANNOT.findall(path.read_text())
+    if not names:
+        # a mutation-probe row whose file carries NO annotation is a gap, not a vacuous pass
+        # (codex R3 P2: deleting every annotation must not turn the gate green)
+        return [f"{file_part}::<no mutation-probe annotations>"]
+    return [f"{file_part}::{name}" for name in names]
 
 
 def coverage_gaps(log_path: Path | None = None) -> list[tuple[Row, str]]:

@@ -51,8 +51,10 @@ _LENS_RE = re.compile(r"^merge-gate-[a-z-]+$")
 _MD_ROW = re.compile(
     r"^\|\s*(?P<ts>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s*\|\s*#(?P<pr>\d+)\s*\|\s*"
     r"(?P<head>[0-9a-f]{12})\s*\|\s*(?P<lens>merge-gate-[a-z-]+)\s*\|\s*"
-    r"(?P<verdict>APPROVE|BLOCK)\s*\|"
+    r"(?P<verdict>APPROVE|BLOCK)\s*\|\s*(?P<n>\d+) finding\(s\)\s*\|"
 )
+#: The lens contract's trailing line (merge-gate SKILL.md "Parsing -- fail closed").
+_VERDICT_LINE = re.compile(r"^VERDICT:\s*(APPROVE|BLOCK)\b")
 _ARC_PR_RE = re.compile(r"^pr-(\d+)$")
 
 
@@ -205,6 +207,7 @@ def read_md_rows(md_path: Path | None = None) -> list[dict]:
                     "head_sha": m["head"],
                     "lens": m["lens"],
                     "verdict": m["verdict"],
+                    "n_findings": int(m["n"]),
                 }
             )
     return out
@@ -256,13 +259,13 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
     emissions = _emissions(jsonl_path)
-    first_ts = min((rows[0]["ts"] for rows in emissions.values()), default=None)
-    md = [r for r in read_md_rows(md_path) if first_ts is not None and r["ts"] >= first_ts]
-    md_count: dict[tuple, int] = {}
-    for r in md:
+    # EVERY structured md line is compared -- no time window (codex R3 P1: with zero surviving
+    # emissions a window filtered every md row out, so a deleted machine log passed). Only
+    # this module writes the structured shape; the legacy narrative rows never match it.
+    md_by_key: dict[tuple, list[int]] = {}
+    for r in read_md_rows(md_path):
         k = (r["pr"], r["head_sha"], r["lens"], r["verdict"])
-        md_count[k] = md_count.get(k, 0) + 1
-    jl_short = {k[:4] for k in emissions}
+        md_by_key.setdefault(k, []).append(r["n_findings"])
     # a warn vouches for ONE emission: same head, same lens, same round (codex R2 P2 -- keyed
     # without the round, a round-1 md failure would hide a round-2 crash between the writes)
     warned = {
@@ -270,17 +273,28 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
         for r in fr.read_rows(jsonl_path)
         if r.get("cause_attribution") == "markdown_write_failed"
     }
-    missing = sorted(k for k in md_count if k not in jl_short)
+    # per key, the UNWARNED emissions (as (finding_count, representative row), latest round
+    # last) and the md lines (as finding counts) must match as MULTISETS on the finding count
+    # (codex R3 P2: key membership alone let one emission vouch for N md rows, and a BLOCK
+    # that lost a finding row stayed green)
+    em_by_key: dict[tuple, list[tuple[int, dict]]] = {}
+    for k, rows in sorted(emissions.items(), key=lambda kv: kv[0][4]):
+        if (rows[0]["head_sha"], rows[0]["producer"], k[4]) in warned:
+            continue
+        n_findings = sum(1 for x in rows if x["record_kind"] == "finding")
+        em_by_key.setdefault(k[:4], []).append((n_findings, rows[0]))
+    missing: list[tuple] = []
     orphan: list[dict] = []
-    for short in sorted(jl_short):
-        unwarned = [
-            rows[0]
-            for k, rows in sorted(emissions.items(), key=lambda kv: kv[0][4])
-            if k[:4] == short and (rows[0]["head_sha"], rows[0]["producer"], k[4]) not in warned
-        ]
-        n = len(unwarned) - md_count.get(short, 0)
-        if n > 0:
-            orphan.extend(unwarned[-n:])  # the latest emissions are the ones without a line
+    for k in sorted(set(md_by_key) | set(em_by_key)):
+        md_counts = sorted(md_by_key.get(k, []))
+        ems = list(em_by_key.get(k, []))
+        for n in md_counts:
+            match = next((i for i, (c, _) in enumerate(ems) if c == n), None)
+            if match is None:
+                missing.append((*k, n))  # an md line with no emission of that finding count
+            else:
+                ems.pop(match)
+        orphan.extend(row for _, row in ems)  # emissions left without an md line
     return {"missing_jsonl": missing, "orphan_jsonl": orphan}
 
 
@@ -365,7 +379,25 @@ def main(argv: list[str] | None = None) -> int:
                 prompt_version=args.prompt_version,
                 cfg_hash=args.config_hash,
             )
-            outcome = rw.parse_verdict(CHANNEL, _read_text(args.verdict_json), expected)
+            text = _read_text(args.verdict_json)
+            outcome = rw.parse_verdict(CHANNEL, text, expected)
+            if outcome.terminal in ("APPROVE", "BLOCK"):
+                # the lens contract's trailing `VERDICT:` line must AGREE with the schema
+                # block -- JSON APPROVE + `VERDICT: BLOCK` (or no line) is not a verdict
+                # (codex R3 P2); the block alone never records an ambiguous response
+                tail = [ln.strip() for ln in text.splitlines() if ln.strip()]
+                m = _VERDICT_LINE.match(tail[-1]) if tail else None
+                if m is None or m.group(1) != outcome.terminal:
+                    outcome = rw.ReviewOutcome(
+                        "REVIEWER_UNAVAILABLE",
+                        CHANNEL,
+                        None,
+                        "final VERDICT line absent or disagrees with the schema block"
+                        + (f" ({tail[-1][:60]!r})" if tail else ""),
+                        [],
+                        None,
+                        outcome.source,
+                    )
             if outcome.terminal == "REVIEWER_UNAVAILABLE":
                 # held to the orchestrator's binding so the marker row is bound to its head
                 outcome.binding = dict(expected)

@@ -1198,6 +1198,43 @@ def test_relabel_aborts_when_the_ledger_changed_underneath(monkeypatch, tmp_path
     assert am.read_ledger()[0]["arc_type_close"] == "applying"
 
 
+# mutation-probe: drop the `with _LedgerClaim(LEDGER):` guard in append() (dedent its body)
+def test_append_and_relabel_are_mutually_exclusive_by_claim(monkeypatch, tmp_path: Path):
+    """codex R3 P2: the two ledger writers exclude each other through the CAS claim file (no
+    flock here, C-HE-02 §1); a live claim aborts the other writer loudly, a dead owner's claim
+    is reclaimed, and the claim never outlives its writer."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+    claim = tmp_path / ".l.jsonl.claim"
+    assert not claim.exists()
+    # a LIVE claim (this process) blocks both writers
+    am.publish_exclusive(
+        claim, json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    )
+    with pytest.raises(am.AbortError, match="claimed by another writer"):
+        am.append(am.ArcRow(arc_id="pr-2", merged_at="2026-08-18T00:00:00Z", merge_sha="b"))
+    with pytest.raises(am.AbortError, match="claimed by another writer"):
+        am.relabel_arc_type_close("pr-1", "applying")
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]
+    claim.unlink()
+    # a DEAD owner's claim (this host) is reclaimed once and the write proceeds
+    am.publish_exclusive(
+        claim, json.dumps({"_claim": {"pid": 2**22 + 12345, "host": socket.gethostname()}})
+    )
+    am.relabel_arc_type_close("pr-1", "applying")
+    assert am.read_ledger()[0]["arc_type_close"] == "applying" and not claim.exists()
+    # a foreign-host claim is never reclaimed (cannot tell) -> abort
+    am.publish_exclusive(claim, json.dumps({"_claim": {"pid": 1, "host": "other-host"}}))
+    with pytest.raises(am.AbortError, match="claimed by another writer"):
+        am.append(am.ArcRow(arc_id="pr-3", merged_at="2026-08-18T00:00:00Z", merge_sha="c"))
+    claim.unlink()
+    # the claim is released even when the write aborts inside it
+    with pytest.raises(am.AbortError, match="already in ledger"):
+        am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+    assert not claim.exists()
+
+
 def test_relabel_cli_is_wired(monkeypatch, tmp_path: Path, capsys):
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)

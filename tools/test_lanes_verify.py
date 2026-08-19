@@ -130,7 +130,7 @@ def _entry(repo: Path, test: str, file: str = "tools/src.py", rc: int = 0, **ove
         "test": test,
         "rc": rc,
         "head": "h" * 40,
-        "target_sha": _sha16(repo / file),
+        "target_sha": over.get("target_sha") or _sha16(repo / file),
         "test_sha": _sha16(repo / lv._relative(tfile)),
     }
     e.update(over)
@@ -205,6 +205,34 @@ def test_file_level_row_requires_every_annotation_exactly(repo: Path, monkeypatc
     # a whole-file run is NOT per-probe evidence
     log.write_text(_entry(repo, "uv run pytest tools/test_y.py -q"))
     assert len(lv.coverage_gaps(log)) == 2
+
+
+def test_file_level_row_with_no_annotations_is_a_gap_not_a_vacuous_pass(repo: Path, monkeypatch):
+    """codex R3 P2: delete every `# mutation-probe:` comment and the gate must NOT go green."""
+    (repo / "tools" / "test_z.py").write_text("def test_a(): pass\n")
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_z.py")])
+    assert [n for _, n in lv.coverage_gaps(repo / "mp.jsonl")] == [
+        "tools/test_z.py::<no mutation-probe annotations>"
+    ]
+    # the production manifest: every file-level probe row has at least one annotation
+    monkeypatch.undo()
+    for r in lv.MANIFEST:
+        if r.mutation_probe and r.artifact.startswith("pytest:") and "::" not in r.artifact:
+            assert "<no mutation-probe annotations>" not in "".join(lv.required_probes(r)), r
+
+
+def test_a_probe_of_the_test_file_itself_or_a_missing_source_is_not_a_pin(repo: Path, monkeypatch):
+    """codex R3 P2: the probed `file` must be an existing source file, never the witness."""
+    log = repo / "mp.jsonl"
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::t")])
+    log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t", file="tools/test_x.py"))
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
+    log.write_text(
+        _entry(
+            repo, "uv run pytest -q tools/test_x.py::t", file="tools/gone.py", target_sha="x" * 16
+        )
+    )
+    assert [n for _, n in lv.coverage_gaps(log)] == ["tools/test_x.py::t"]
 
 
 def test_file_level_row_for_a_not_yet_landed_file_is_a_gap(repo: Path, monkeypatch):

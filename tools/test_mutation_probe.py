@@ -1711,6 +1711,20 @@ def test_verdict_is_logged_with_the_test_command_and_rc(repo, _probe_log_isolate
     assert json.loads(log.read_text().splitlines()[-1])["rc"] == 1
 
 
+def test_a_test_artifact_that_changes_during_the_probe_voids_its_digest(repo, _probe_log_isolated):
+    """codex R3 P2: the logged test digest names the witness BOTH runs executed; a test artifact
+    that moved between the baseline and step 3 is logged with test_sha=None (never a live pin),
+    while the verdict itself is untouched."""
+    (repo / "self_mutating.sh").write_text(
+        f"#!/usr/bin/env bash\necho '# touched' >> self_mutating.sh\n{pytest_cmd('test_real.py')}\n"
+    )
+    r = run_probe(repo, "src.py", PINNED, "bash self_mutating.sh")
+    assert r.returncode == 0, r.stdout + r.stderr
+    entry = json.loads(_probe_log_isolated.read_text().splitlines()[-1])
+    assert entry["rc"] == 0 and entry["test_sha"] is None
+    assert entry["target_sha"] == hashlib.sha256((repo / "src.py").read_bytes()).hexdigest()[:16]
+
+
 def test_test_file_of_resolves_pytest_nodeids_and_shell_scripts():
     assert mp.test_file_of("uv run pytest -q -p no:cacheprovider tools/test_a.py::t -x") == Path(
         "tools/test_a.py"
