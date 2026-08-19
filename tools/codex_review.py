@@ -476,15 +476,22 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
     return outcome
 
 
-def _route_to_hitl(arc_id: str, reason: str, *, blocking: bool = True) -> None:
+def _route_to_hitl(arc_id: str, reason: str, *, kind: str = "both-unavailable") -> None:
     """C-HE-20 §1: a REVIEWER_UNAVAILABLE routes to the EXISTING durable HITL queue (loop_lib.sh,
-    the C-HE-09 venue; no new escalation store) -- as a `DEFERRED-HIL` row (`loop_defer`) when
-    it BLOCKS the arc (both channels unavailable), as a `NOTIFY` row when the failover carried
-    the review (informational-only events use NOTIFY, C-HE-09 §5; codex rounds 4/7). A failed
-    write is reported loudly; the exit code already carries the outcome."""
+    the C-HE-09 venue; no new escalation store). Three shapes (codex rounds 4/7/9/13):
+    `both-unavailable` -> `DEFERRED-HIL` on the ARC (it is blocked); `primary-permanent` ->
+    `DEFERRED-HIL` on the CHANNEL item `codex-review-channel` (a stale login / missing binary is
+    human-fixable and would otherwise silently demote every future review; the arc itself was
+    carried and is NOT marked pending); `primary-transient` -> `NOTIFY` (informational, C-HE-09
+    §5). A failed write is reported loudly; the exit code already carries the outcome."""
     lib = rw.REPO / "tools" / "hooks"
-    if blocking:
+    if kind == "both-unavailable":
         call = 'loop_defer "$1" "review-with-failover: REVIEWER_UNAVAILABLE on both channels — $2"'
+    elif kind == "primary-permanent":
+        call = (
+            'loop_defer codex-review-channel "primary channel permanently unavailable; the '
+            'failover carried $1 — fix the codex login/binary — $2"'
+        )
     else:
         call = (
             'loop_log NOTIFY "review-with-failover: primary REVIEWER_UNAVAILABLE, failover '
@@ -552,15 +559,12 @@ def main(argv: list[str] | None = None) -> int:
     if fo.terminal == "REVIEWER_UNAVAILABLE":
         both = f"codex: {first.reason}; gemini: {fo.reason}"
         print(f"review-with-failover: BOTH channels unavailable -- {both}", file=sys.stderr)
-        _route_to_hitl(rw.env_arc_and_lane()[0], both, blocking=True)
+        _route_to_hitl(rw.env_arc_and_lane()[0], both, kind="both-unavailable")
     else:
-        # A PERMANENT primary outage (stale login, missing binary) is human-fixable and would
-        # otherwise silently demote every future review to the failover: DEFERRED-HIL even
-        # though this arc was carried (codex round 9); a transient one is informational.
         _route_to_hitl(
             rw.env_arc_and_lane()[0],
             f"codex: {first.reason}; gemini: {fo.terminal}",
-            blocking=first.failure_class == "permanent",
+            kind="primary-permanent" if first.failure_class == "permanent" else "primary-transient",
         )
     return rw.exit_code(fo)
 

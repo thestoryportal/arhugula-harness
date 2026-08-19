@@ -616,7 +616,10 @@ codex-review-uncommitted: _require-codex-subscription
 # verdict, C-HE-16 classifier + bounded retry, C-HE-24 rows. Exit 0 APPROVE / 1 BLOCK / 2 UNAVAILABLE.
 # `outcome_json` (optional): write the wrapper's own terminal envelope to that path -- the D-C
 # failover (`just review-with-failover`) reads it instead of re-parsing raw vendor stdout.
-gemini-review base='main' outcome_json='': _require-antigravity
+# No `_require-antigravity` prerequisite (codex round 13): a missing `agy` is classified by the
+# wrapper as REVIEWER_UNAVAILABLE(permanent) with a recorded row (C-HE-16 §4); the preflight
+# exited 1 before that terminal contract could apply.
+gemini-review base='main' outcome_json='':
     uv run python tools/agy_review.py --base {{base}} {{ if outcome_json != '' { '--outcome-json ' + quote(outcome_json) } else { '' } }}
 
 _require-antigravity:

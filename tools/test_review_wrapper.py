@@ -860,7 +860,7 @@ def test_codex_review_failover_both_unavailable_exits_2_with_both_reasons(
     assert "codex-reason" in err and "gemini-reason" in err and "BOTH channels unavailable" in err
     # C-HE-20 §1: the arc-blocking outage routes to the durable HITL queue, once, as DEFERRED-HIL
     assert len(routed) == 1 and "codex-reason" in routed[0][1] and "gemini-reason" in routed[0][1]
-    assert routed[0][2] == {"blocking": True}
+    assert routed[0][2] == {"kind": "both-unavailable"}
 
 
 def test_primary_outage_with_a_successful_failover_routes_by_failure_class(monkeypatch, tmp_path):
@@ -883,7 +883,7 @@ def test_primary_outage_with_a_successful_failover_routes_by_failure_class(monke
         cr, "_route_to_hitl", lambda arc_id, reason, **kw: routed.append((reason, kw))
     )
     assert cr.main(["--base", "main", "--failover"]) == 0
-    assert routed == [("codex: codex-reason; gemini: APPROVE", {"blocking": True})]
+    assert routed == [("codex: codex-reason; gemini: APPROVE", {"kind": "primary-permanent"})]
     routed.clear()
     monkeypatch.setattr(
         cr,
@@ -893,13 +893,13 @@ def test_primary_outage_with_a_successful_failover_routes_by_failure_class(monke
         ),
     )
     assert cr.main(["--base", "main", "--failover"]) == 0
-    assert routed == [("codex: codex-reason; gemini: APPROVE", {"blocking": False})]
+    assert routed == [("codex: codex-reason; gemini: APPROVE", {"kind": "primary-transient"})]
 
 
 def test_route_to_hitl_notify_kind_for_the_non_blocking_case(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     (tmp_path / ".harness").mkdir()
-    _REAL_ROUTE_TO_HITL("B-778", "codex: x; gemini: APPROVE", blocking=False)
+    _REAL_ROUTE_TO_HITL("B-778", "codex: x; gemini: APPROVE", kind="primary-transient")
     ledger = (tmp_path / ".harness" / "loop_status.md").read_text()
     assert (
         "| NOTIFY | review-with-failover: primary REVIEWER_UNAVAILABLE, failover carried the "
@@ -1477,3 +1477,22 @@ def test_bound_block_on_stderr_when_our_cap_kills_still_blocks(tmp_path, monkeyp
         Path("."), "main", invoke=lambda t: rw.Attempt("", "transcript\n" + block, 124, True)
     )
     assert out.terminal == "BLOCK" and out.source == "stderr"
+
+
+def test_route_to_hitl_permanent_primary_defers_the_channel_not_the_arc(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    (tmp_path / ".harness").mkdir()
+    _REAL_ROUTE_TO_HITL("B-780", "codex: not logged in; gemini: BLOCK", kind="primary-permanent")
+    ledger = (tmp_path / ".harness" / "loop_status.md").read_text()
+    assert (
+        "| DEFERRED-HIL | codex-review-channel — primary channel permanently unavailable; "
+        "the failover carried B-780"
+    ) in ledger
+    assert "| DEFERRED-HIL | B-780" not in ledger  # the arc itself is NOT marked pending
+    assert "on both channels" not in ledger
+
+
+def test_gemini_review_recipe_has_no_antigravity_preflight():
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    line = next(ln for ln in justfile.splitlines() if ln.startswith("gemini-review base='main'"))
+    assert "_require-antigravity" not in line
