@@ -287,6 +287,7 @@ def test_budget_exhaustion_is_hitl_recoverable():
     )
     assert out.terminal == "REVIEWER_UNAVAILABLE" and out.reason.startswith("HITL-recoverable")
     assert out.failure_class == "transient"
+    assert out.binding == EXPECTED  # an unavailable outcome is still bound to its invocation
 
 
 def test_exhausted_budget_never_invokes_the_channel():
@@ -460,3 +461,184 @@ def test_env_arc_and_lane_never_empty_never_colon(monkeypatch):
     monkeypatch.delenv("HARNESS_LANE_ID")
     arc, lane = rw.env_arc_and_lane()
     assert arc.startswith("branch-") and lane.endswith("-nolane") and ":" not in arc + lane
+
+
+# ── U-HE-04: codex_review.py wrapper (C-HE-18) ───────────────────────────────
+import os  # noqa: E402
+import time  # noqa: E402
+import types  # noqa: E402
+
+import codex_review as cr  # noqa: E402
+
+
+def _artifact_tree(tmp_path: Path, head: str, mtime: float) -> Path:
+    d = tmp_path / "2026" / "08" / "18"
+    d.mkdir(parents=True)
+    p = d / "rollout-2026-08-18T00-00-00-abc.jsonl"
+    # real shape: the assistant text (fenced block, newlines ESCAPED inside the string) nested
+    # in a JSONL envelope
+    p.write_text(
+        json.dumps(
+            {
+                "type": "response_item",
+                "payload": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": _block(head_sha=head)}],
+                },
+            }
+        )
+        + "\n"
+    )
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def test_artifact_text_decodes_jsonl_envelopes(tmp_path):
+    p = _artifact_tree(tmp_path, "a" * 40, mtime=1.0)
+    raw = p.read_text()
+    decoded = cr.artifact_text(p)
+    assert rw.extract_fenced_json(raw) is None  # the raw envelope hides the fence behind escaping
+    assert rw.extract_fenced_json(decoded) is not None  # decoding exposes it
+
+
+def test_session_artifact_discovery_newest_after_start_containing_head(tmp_path):
+    old = _artifact_tree(tmp_path / "a", "a" * 40, mtime=100.0)
+    hit = _artifact_tree(tmp_path / "b", "a" * 40, mtime=200.0)
+    assert (
+        cr.find_session_artifact("a" * 40, started_at=150.0, now=210.0, root=tmp_path / "b") == hit
+    )
+    assert (
+        cr.find_session_artifact("a" * 40, started_at=150.0, now=210.0, root=tmp_path / "a") is None
+    )
+    assert old.exists()
+    # a fresh artifact for a DIFFERENT head is never picked up (binding to this invocation)
+    assert (
+        cr.find_session_artifact("d" * 40, started_at=150.0, now=210.0, root=tmp_path / "b") is None
+    )
+    assert (
+        cr.find_session_artifact("a" * 40, started_at=0.0, now=1.0, root=tmp_path / "missing")
+        is None
+    )
+
+
+def test_log_frozen_but_artifact_has_verdict_parses_from_artifact(tmp_path, monkeypatch):
+    """PR #1386 mode: stdout inconclusive, session artifact carries the verdict."""
+    head = "a" * 40
+    _artifact_tree(tmp_path, head, mtime=time.time() + 1)
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path)
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: {**EXPECTED, "head_sha": head})
+
+    def invoke(timeout):
+        return rw.Attempt(stdout="working...\n", stderr="", returncode=0, timed_out=False)
+
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke)
+    assert out.terminal == "APPROVE" and out.source == "session-artifact"
+
+
+def test_artifact_with_foreign_binding_is_still_unavailable(tmp_path, monkeypatch):
+    """The artifact path requires the SAME positive parse + byte-compare (C-HE-18 §2)."""
+    _artifact_tree(tmp_path, "a" * 40, mtime=time.time() + 1)
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path)
+    monkeypatch.setattr(cr, "ARTIFACT_LAG_S", 0.0)
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: {**EXPECTED, "head_sha": "d" * 40})
+    out = cr.run_codex_review(Path("."), "main", invoke=lambda t: rw.Attempt("", "", 0, False))
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and out.source != "session-artifact"
+
+
+def test_artifact_polling_capped_by_shared_deadline(tmp_path, monkeypatch):
+    """Two 550 s attempts + artifact polling must not exceed the 1260 s budget."""
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
+    fake_now = {"t": 1000.0}
+    monkeypatch.setattr(cr.time, "time", lambda: fake_now["t"])
+    monkeypatch.setattr(cr.time, "sleep", lambda s: fake_now.__setitem__("t", fake_now["t"] + s))
+    clock = {"m": 0.0}
+
+    def invoke(timeout):
+        clock["m"] += timeout
+        fake_now["t"] += timeout
+        return rw.Attempt("", "", 0, False)
+
+    out = cr.run_codex_review(Path("."), "main", invoke=invoke, clock=lambda: clock["m"])
+    assert out.terminal == "REVIEWER_UNAVAILABLE"
+    assert fake_now["t"] - 1000.0 <= rw.TOTAL_BUDGET_S + 1e-6
+
+
+def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "gate.jsonl")
+    monkeypatch.setattr(cr, "ARTIFACT_LAG_S", 0.0)
+    rc = cr.main(["--base", "main", "--invoke-test-empty"])
+    assert rc == 2
+    rows = fr.read_rows(tmp_path / "gate.jsonl")
+    assert rows and rows[0]["producer"] == "codex_review_wrapper"
+    assert rows[0]["record_kind"] == "reviewer_unavailable"
+    assert rows[0]["finding_type"] == "transient-retry" and rows[0]["head_sha"] == "a" * 40
+    fr.validate(rows[0])
+
+
+def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
+    calls = []
+    stub = types.SimpleNamespace(
+        current=lambda arc_id: (1, {"state": "open"}),
+        record_round_outcome=lambda arc_id, n, **kw: calls.append((arc_id, n, kw)),
+    )
+    monkeypatch.setitem(sys.modules, "reservations", stub)
+    rw.record_round_outcome_if_reserved(
+        "pr-1", 2, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
+    )
+    assert calls == [
+        ("pr-1", 2, {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0})
+    ]
+    # no reservation for this arc → no-op
+    stub.current = lambda arc_id: None
+    rw.record_round_outcome_if_reserved(
+        "pr-2", 1, channel="codex", terminal="APPROVE", finding_count=0
+    )
+    assert len(calls) == 1
+
+
+def test_wrapper_round_outcome_noop_without_reservation_substrate(monkeypatch, capsys):
+    """Pre-S4b: tools/reservations.py is absent → silent no-op, no stderr noise."""
+    monkeypatch.setitem(sys.modules, "reservations", None)  # forces ImportError
+    rw.record_round_outcome_if_reserved(
+        "pr-1", 1, channel="codex", terminal="APPROVE", finding_count=0
+    )
+    assert capsys.readouterr().err == ""
+
+
+def test_build_command_is_codex_review_with_positional_instructions():
+    cmd = cr.build_command("main", "INSTR")
+    assert cmd[:2] == ["codex", "review"] and "--base" in cmd and cmd[-1] == "INSTR"
+    assert cmd[cmd.index("--base") + 1] == "main"
+
+
+def test_review_instructions_carry_all_six_binding_values():
+    text = cr.review_instructions(EXPECTED)
+    for k, v in EXPECTED.items():
+        assert f"{k}={v}" in text
+    assert "```json" in text and "APPROVE|BLOCK" in text
+
+
+def test_default_invoke_maps_run_bounded_timeout_to_timed_out(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(
+        cr,
+        "run_bounded",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a[0], 124, "", "command timed out after 1 seconds"
+        ),
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-leak")
+    seen = {}
+
+    def fake_rb(cmd, *, cwd, timeout, env):
+        seen["env"] = env
+        return subprocess.CompletedProcess(cmd, 124, "", "command timed out after 1 seconds")
+
+    monkeypatch.setattr(cr, "run_bounded", fake_rb)
+    att = cr._default_invoke(Path("."), "main", "I")(1.0)
+    assert att.timed_out and att.returncode == 124
+    assert "OPENAI_API_KEY" not in seen["env"]  # subscription auth only, never the metered key

@@ -81,6 +81,9 @@ class ReviewOutcome:
     failure_class: str | None  # permanent | transient | None
     reason: str
     findings: list[dict] = field(default_factory=list)
+    #: the six binding values the invocation was held to (byte-equal to the channel's on
+    #: APPROVE/BLOCK; the wrapper's expected values on a retry-loop REVIEWER_UNAVAILABLE so the
+    #: silent-death row is still bound to its head; None only for a bare parse failure)
     binding: dict[str, str] | None = None
     source: str | None = None  # stdout | session-artifact | None
 
@@ -179,14 +182,16 @@ def run_with_retry(
     not permanent.
     """
     last_reason = "no attempt made"
+
+    def unavailable(cls: str, reason: str) -> ReviewOutcome:
+        return ReviewOutcome("REVIEWER_UNAVAILABLE", channel, cls, reason, [], dict(expected))
+
     for attempt_n in range(1, MAX_ATTEMPTS + 1):
         remaining = deadline - clock()
         margin = 0.0 if attempt_n == 1 else SECOND_ATTEMPT_MARGIN_S
         timeout = min(PER_ATTEMPT_TIMEOUT_S, remaining - margin)
         if timeout <= 0:
-            return ReviewOutcome(
-                "REVIEWER_UNAVAILABLE",
-                channel,
+            return unavailable(
                 "transient",
                 f"HITL-recoverable: review budget exhausted before attempt {attempt_n} "
                 f"({last_reason})",
@@ -202,13 +207,11 @@ def run_with_retry(
         cls = classify(channel, combined)
         last_reason = f"attempt {attempt_n}: {outcome.reason}"
         if cls == "permanent":
-            return ReviewOutcome("REVIEWER_UNAVAILABLE", channel, "permanent", last_reason)
+            return unavailable("permanent", last_reason)
         # transient (incl. empty first attempt) -> one bounded re-invocation, no backoff
     if clock() >= deadline:
-        return ReviewOutcome(
-            "REVIEWER_UNAVAILABLE", channel, "transient", f"HITL-recoverable: {last_reason}"
-        )
-    return ReviewOutcome("REVIEWER_UNAVAILABLE", channel, "transient", last_reason)
+        return unavailable("transient", f"HITL-recoverable: {last_reason}")
+    return unavailable("transient", last_reason)
 
 
 def run_with_failover(

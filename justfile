@@ -588,8 +588,11 @@ _require-codex-subscription:
 # effective `model:` — confirm it reads `gpt-5.6-sol`.
 
 # Out-of-family review of the current branch vs BASE (default main), subscription auth.
+# Routed through the fail-closed wrapper (C-HE-18): schema-parsed verdict, session-artifact
+# fallback, REVIEWER_UNAVAILABLE on any parse failure. Exit 0 APPROVE / 1 BLOCK / 2 UNAVAILABLE.
+# The wrapper strips OPENAI_API_KEY itself and pins `preferred_auth_method="chatgpt"`.
 codex-review base='main': _require-codex-subscription
-    env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --base {{base}}
+    uv run python tools/codex_review.py --base {{base}}
 
 # Out-of-family review of staged + unstaged + untracked changes, subscription auth.
 codex-review-uncommitted: _require-codex-subscription
