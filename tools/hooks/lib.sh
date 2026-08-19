@@ -493,6 +493,18 @@ hook_worktree_local_state() {
   done <<EOF
 $raw
 EOF
+  # C-HE-04 §6: committed-but-unpushed commits are capture that a later branch
+  # prune could lose -- with an upstream, ahead-of-@{u} is refusal residue. A
+  # worktree with NO upstream keeps today's behavior (the spec scopes this check
+  # to `rev-list @{u}..HEAD`; the never-pushed-branch composition is a registered
+  # residual -- refusing it would refuse every local-only scratch worktree).
+  local ahead
+  if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
+    if [ "${ahead:-0}" -gt 0 ]; then
+      residue="${residue}${residue:+
+}ahead-of-upstream: ${ahead} commit(s)"
+    fi
+  fi
   [ -n "$residue" ] || return 1
   printf '%s\n' "$residue"
   return 0

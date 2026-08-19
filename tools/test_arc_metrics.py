@@ -8,9 +8,12 @@ noted -- revert the guard it covers and the test must red.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -655,6 +658,15 @@ def test_a_non_race_claim_failure_aborts_rather_than_reporting_a_lost_race(
         raise PermissionError(13, "read-only file system")
 
     monkeypatch.setattr(Path, "open", unwritable)
+    # A SYSTEMIC fault (permission/I/O, C-HE-04 SS3) keeps its OSError identity so
+    # drain() can abort the whole loop once -- it must not be softened per-arc.
+    with pytest.raises(PermissionError):
+        am._claim_arc(path, entry)
+
+    def transient(*_a, **_k):
+        raise OSError(24, "too many open files")  # EMFILE: per-arc, not systemic
+
+    monkeypatch.setattr(Path, "open", transient)
     with pytest.raises(am.AbortError) as exc:
         am._claim_arc(path, entry)
     assert "cannot claim" in str(exc.value)
@@ -977,8 +989,6 @@ def test_ci_green_timing_uses_the_one_predicate(monkeypatch):
 def test_env_overrides(tmp_path: Path):
     """Two subprocesses with different ARC_METRICS_REPO observe different LEDGER paths and
     one QUEUE_DIR (C-HE-05 Verification)."""
-    import subprocess
-
     q = tmp_path / "queue"
     code = (
         "import arc_metrics as am, json; "
@@ -1004,8 +1014,6 @@ def test_env_overrides(tmp_path: Path):
 
 def test_env_override_ledger_wins_over_repo(tmp_path: Path):
     """ARC_METRICS_LEDGER names the file directly; ARC_METRICS_REPO only supplies the default."""
-    import subprocess
-
     code = "import arc_metrics as am; print(am.LEDGER)"
     env = {
         **os.environ,
@@ -1074,8 +1082,6 @@ def test_ledger_rows_are_all_record_kind_arc():
 
 # mutation-probe: drop the `by_lanes` grouping block in summary()
 def test_cohort_split_null_safe(monkeypatch, tmp_path: Path, capsys):
-    import argparse
-
     ledger = tmp_path / "l.jsonl"
     rows = [
         {
@@ -1144,8 +1150,6 @@ def test_relabel_leaves_every_other_row_byte_identical(monkeypatch, tmp_path: Pa
 
 
 def test_extract_records_which_side_declared_the_label(monkeypatch):
-    import argparse
-
     monkeypatch.setattr(
         am,
         "gh_pr",
@@ -1274,3 +1278,174 @@ def test_relabel_cli_is_wired(monkeypatch, tmp_path: Path, capsys):
     assert am.read_ledger()[0]["arc_type_close"] == "inventing"
     assert am.main(["relabel", "--arc-id", "pr-3", "--arc-type-close", "inventing"]) == 0
     assert len(am.read_ledger()) == 1
+
+
+# ─── U-HE-15: drain fault isolation + capture durability (C-HE-04 §1/§3/§4/§7) ──
+
+
+def _queue_entries(am_mod, tmp_path, monkeypatch, n):
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am_mod, "QUEUE_DIR", q)
+    monkeypatch.setattr(am_mod, "LEDGER", tmp_path / "l.jsonl")
+    for i in range(1, n + 1):
+        (q / f"pr-{i}.json").write_text(
+            json.dumps({"pr": i, "arc_id": f"pr-{i}", "arc_type": "inventing", "decisions": 1})
+        )
+    return q
+
+
+# mutation-probe: remove the `except AbortError` clause in drain()'s loop (let the exception escape)
+def test_drain_fault_isolation(tmp_path, monkeypatch):
+    """Entry 1 raises INSIDE _claim_arc; entries 2..n are still processed (C-HE-04 §3)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 3)
+    real_claim = am._claim_arc
+
+    def boom(path, entry):
+        if entry["pr"] == 1:
+            raise am.AbortError("cannot claim pr-1: injected")
+        return real_claim(path, entry)
+
+    monkeypatch.setattr(am, "_claim_arc", boom)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    ledger = [r["arc_id"] for r in am.read_ledger()]
+    assert ledger == ["pr-2", "pr-3"], "the fault in pr-1 must not abandon pr-2/pr-3"
+    assert rc == 1  # pr-1 kept; two appended rows are held pending commit
+    assert (q / "pr-1.json").exists(), "the faulted entry stays queued for retry"
+
+
+def test_drain_systemic_oserror_aborts_once(tmp_path, monkeypatch, capsys):
+    """A queue-dir permission fault aborts the loop with ONE message (C-HE-04 §3)."""
+    _queue_entries(am, tmp_path, monkeypatch, 3)
+
+    def perm(path, entry):
+        raise PermissionError(13, "queue dir read-only")
+
+    monkeypatch.setattr(am, "_claim_arc", perm)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    rc = am.drain(argparse.Namespace())
+    out = capsys.readouterr()
+    assert rc == 2
+    # Count the full marker phrase: tmp_path embeds this test's own name, which
+    # itself contains "systemic" -- the bare token would self-match via QUEUE_DIR.
+    n = (out.out + out.err).count("ABORT: systemic queue fault")
+    assert n == 1, "one abort message, no per-entry repeats"
+
+
+def test_recover_dead_claims_fnf_guarded(tmp_path, monkeypatch):
+    """A peer restoring the same dead claim first must not raise (C-HE-04 §1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    real_replace = os.replace
+
+    def vanish(src, dst):
+        Path(src).unlink()  # a peer restored it first
+        return real_replace(src, dst)  # raises FileNotFoundError
+
+    monkeypatch.setattr(am.os, "replace", vanish)
+    am._recover_dead_claims()  # must NOT raise
+
+
+# mutation-probe: replace _restore_or_republish's publish_exclusive fallback with a bare os.replace
+def test_e9_capture_republish(tmp_path, monkeypatch):
+    """A drain that appended must not return with the arc's queue entry absent (C-HE-04 §4)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+
+    def extract_and_steal(a):
+        # peer removes the winner's .taken between append and restore (E9)
+        (q / "pr-1.taken").unlink()
+        return am.ArcRow(
+            arc_id="pr-1",
+            pr=1,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        )
+
+    monkeypatch.setattr(am, "extract", extract_and_steal)
+    am.drain(argparse.Namespace())
+    assert (q / "pr-1.json").exists(), "entry re-published from the in-memory capture"
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]
+
+
+def test_abort_branch_restores_before_kept_queued(tmp_path, monkeypatch, capsys):
+    """On AbortError the entry is durably back BEFORE `KEPT QUEUED` is reported (C-HE-04 §7)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+
+    def abort(a):
+        (q / "pr-1.taken").unlink()
+        raise am.AbortError("no round logs")
+
+    monkeypatch.setattr(am, "extract", abort)
+    am.drain(argparse.Namespace())
+    assert (q / "pr-1.json").exists(), "restore-or-republish ran on the abort branch"
+    assert "KEPT QUEUED" in capsys.readouterr().err
+
+
+# ─── U-HE-16: C-HE-02 witnesses — lock-free grep, takeover, kill seam ───────────
+
+_TOOLS_DIR = Path(__file__).resolve().parent
+COORD_MODULES = ["tools/arc_metrics.py", "tools/merge_door.py", "tools/reservations.py"]
+
+
+def test_no_flock_fcntl_in_coordination_modules():
+    """C-HE-02 §1 invariant: no flock/fcntl in the three lane-coordination modules."""
+    for m in COORD_MODULES:
+        p = _TOOLS_DIR.parent / m
+        if p.exists():
+            assert not re.search(r"flock|fcntl", p.read_text()), m
+
+
+# mutation-probe: comment out the unknown-is-live guard in _claim_owner_is_dead()
+def test_takeover_token_compare(tmp_path, monkeypatch):
+    """Two dead-owner takeovers on one claim: exactly one wins the second publish_exclusive;
+    the loser yields; unverifiable ownership is never judged dead (C-HE-02 §6)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    entry = {"pr": 5, "arc_id": "pr-5"}
+    (q / "pr-5.json").write_text(json.dumps(entry))
+    (q / "pr-5.taken").write_text(
+        json.dumps({**entry, "_claim": {"pid": 999999, "host": socket.gethostname()}})
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid == os.getpid())
+    wins = [am._claim_arc(q / "pr-5.json", entry), am._claim_arc(q / "pr-5.json", entry)]
+    assert sum(w is not None for w in wins) == 1
+    assert am._claim_owner_is_dead(q / "pr-5.taken") is False  # the winner (this pid) is alive
+    # A foreign-host claim is unverifiable from here: NEVER dead, even with a dead pid.
+    (q / "pr-9.taken").write_text(
+        json.dumps({"pr": 9, "_claim": {"pid": 999999, "host": "elsewhere.invalid"}})
+    )
+    assert am._claim_owner_is_dead(q / "pr-9.taken") is False
+
+
+def test_kill_after_seam_exits_137():
+    """ARC_METRICS_TEST_KILL_AFTER=<step> is a real process death (C-HE-04 verification (vi))."""
+    code = (
+        "import os; os.environ['ARC_METRICS_TEST_KILL_AFTER']='x'; "
+        "import arc_metrics as am; am._kill_after('x'); print('alive')"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PYTHONPATH": str(_TOOLS_DIR)},
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 137
+    assert "alive" not in r.stdout

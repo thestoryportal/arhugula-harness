@@ -28,6 +28,7 @@ a measured zero.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import itertools
 import json
@@ -453,7 +454,7 @@ def _ledger_claim_path(ledger: Path) -> Path:
 def claim_ledger(ledger: Path) -> None:
     """Take exclusive ownership of the ledger for one write, by CAS on a claim file.
 
-    C-HE-02 §1 bans `flock`/`fcntl` in this module, so the mutual exclusion
+    C-HE-02 §1 bans kernel file locks in this module, so the mutual exclusion
     between the ledger's two writers -- `append` (drain) and
     `relabel_arc_type_close` (whole-file rewrite) -- is the same primitive the
     queue uses: `publish_exclusive` (atomic `os.link`, fails when taken) with a
@@ -551,7 +552,7 @@ def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
     (temp + os.replace) and touches only this arc's row.
 
     Mutual exclusion with `append` is the `claim_ledger` CAS claim (C-HE-02 §1 bans
-    `flock`/`fcntl` here). Inside the claim a byte-compare of the ledger against the
+    kernel file locks here). Inside the claim a byte-compare of the ledger against the
     snapshot the rewrite was derived from still guards against a writer that does not
     take the claim (an older tool, a hand edit): the relabel then aborts (retry) rather
     than silently discarding that write under the whole-file rewrite (codex R2/R3 P2)."""
@@ -798,7 +799,12 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
         except OSError as exc:
             # A read-only queue, a permission problem, an I/O error -- none of
             # these are a lost race, and reporting them as one would let an
-            # incomplete drain exit 0.
+            # incomplete drain exit 0. A SYSTEMIC fault (C-HE-04 SS3) must keep
+            # its OSError identity so drain() can abort the whole loop once
+            # rather than re-logging the identical failure per entry -- the
+            # classification has to happen before the AbortError conversion.
+            if _is_systemic(exc):
+                raise
             raise AbortError(f"cannot claim {path.name}: {exc}") from exc
         try:
             path.unlink()
@@ -808,6 +814,48 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
             return None
         return taken
     return None
+
+
+def _kill_after(step: str) -> None:
+    """Test seam (C-HE-04 verification (vi)): ARC_METRICS_TEST_KILL_AFTER=<step> exits 137
+    right after the named step -- a real process death, not an exception a ``finally``
+    could tidy. Steps: claim, extract, append, restore, restore-abort (used by U-HE-20)."""
+    if os.environ.get("ARC_METRICS_TEST_KILL_AFTER") == step:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(137)
+
+
+def _is_systemic(exc: OSError) -> bool:
+    """A queue-dir permission / I/O / disk fault -- not a per-arc content fault, not a
+    lost race (C-HE-04 SS3). One such fault dooms every remaining entry identically, so
+    drain() aborts once instead of re-logging the same failure per arc."""
+    return isinstance(exc, PermissionError) or exc.errno in {
+        errno.EACCES,
+        errno.EROFS,
+        errno.EIO,
+        errno.ENOSPC,
+    }
+
+
+def _restore_or_republish(taken: Path, path: Path, entry: dict) -> None:
+    """Put the queue entry back DURABLY (C-HE-04 SS4/SS7, E9/E21).
+
+    The held ``.taken`` can vanish under us (a peer judged us dead and took over,
+    ``_claim_arc``'s dead-owner retry); a bare ``os.replace`` then raises and the
+    appended-but-uncommitted row's declarations exist nowhere else. Re-publish from the
+    in-memory capture instead. ``FileExistsError`` means a peer already put the entry
+    back -- the capture is durable either way."""
+    try:
+        os.replace(taken, path)
+        return
+    except FileNotFoundError:
+        pass
+    payload = json.dumps({k: v for k, v in entry.items() if k != "_claim"}, sort_keys=True)
+    try:
+        publish_exclusive(path, payload)
+    except FileExistsError:
+        pass
 
 
 def _recover_dead_claims() -> None:
@@ -833,8 +881,76 @@ def _recover_dead_claims() -> None:
         if not _claim_owner_is_dead(claim):
             print(f"  {claim.name} is held by a live or unverifiable owner; leaving it")
             continue
-        os.replace(claim, restored)
+        try:
+            os.replace(claim, restored)
+        except FileNotFoundError:
+            # C-HE-04 SS1: a peer restored it between our scan and this replace.
+            # The losing racer logs and yields; it must not propagate.
+            print(f"  {claim.name}: a peer recovered it first; leaving it")
+            continue
         print(f"  recovered claim from a dead owner -> {restored.name}")
+
+
+def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local: set[str]) -> str:
+    """Process ONE queued arc; return its outcome (released|held|outstanding|added).
+
+    Extracted from drain()'s loop body so a fault in one entry -- including inside
+    _claim_arc -- surfaces as an exception drain() can isolate per arc (C-HE-04 SS3)
+    instead of abandoning every remaining pending entry.
+    """
+    if arc_id in committed:
+        print(f"  {arc_id}: in committed ledger, releasing queue entry")
+        path.unlink(missing_ok=True)
+        return "released"
+    if arc_id in local:
+        # Appended, but only into the working tree. Hold the capture until
+        # the row actually reaches history -- this arc can still be reset or
+        # its worktree disposed, and nothing else holds the declarations.
+        print(f"  {arc_id}: row appended locally, awaiting commit -- entry held")
+        return "held"
+
+    # CLAIM this arc by renaming its queued file before capturing it. Two
+    # parallel next-arc sessions can otherwise both pass the ledger's
+    # read-then-check duplicate guard and append the same arc twice, which
+    # breaks one-row-per-arc and biases every cohort. Exactly one drain wins
+    # the claim, the other sees it vanish and moves on. Same structural fix as
+    # the queue itself -- no lock required.
+    taken = _claim_arc(path, entry)
+    _kill_after("claim")
+    if taken is None:
+        print(f"  {arc_id}: claimed by a concurrent drain, still outstanding")
+        return "outstanding"
+
+    args = argparse.Namespace(
+        pr=entry["pr"],
+        arc_id=entry.get("arc_id"),
+        arc_type=entry.get("arc_type"),
+        arc_type_declared_at=entry.get("arc_type_declared_at"),
+        decisions=entry.get("decisions"),
+        # The metrics were derived at closure; drain never re-reads the logs.
+        round_snapshot=entry.get("round_snapshot"),
+        round_logs=None,
+        levers=entry.get("levers"),
+        notes=entry.get("notes", ""),
+    )
+    try:
+        row = extract(args)
+        _kill_after("extract")
+        append(row)
+        _kill_after("append")
+    except AbortError:
+        # Durable restore BEFORE the caller reports KEPT QUEUED (C-HE-04 SS7).
+        _restore_or_republish(taken, path, entry)
+        _kill_after("restore-abort")
+        raise
+    # Restore the capture to the queue rather than deleting it: the row is
+    # only in the working tree so far, and the declarations it carries exist
+    # nowhere else. It is released on a later drain, once the row is in
+    # committed history.
+    _restore_or_republish(taken, path, entry)
+    _kill_after("restore")
+    print(f"  {arc_id}: appended (entry held until the row is committed)")
+    return "added"
 
 
 def drain(_args: argparse.Namespace) -> int:
@@ -867,65 +983,39 @@ def drain(_args: argparse.Namespace) -> int:
     local = {r.get("arc_id") for r in read_ledger()}
     kept = len(outstanding)
     added = 0
-    for path, entry in pending:
+    for i, (path, entry) in enumerate(pending):
         arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
-        if arc_id in committed:
-            print(f"  {arc_id}: in committed ledger, releasing queue entry")
-            path.unlink(missing_ok=True)
-            continue
-        if arc_id in local:
-            # Appended, but only into the working tree. Hold the capture until
-            # the row actually reaches history -- this arc can still be reset or
-            # its worktree disposed, and nothing else holds the declarations.
-            print(f"  {arc_id}: row appended locally, awaiting commit -- entry held")
-            kept += 1
-            continue
-
-        # CLAIM this arc by renaming its queued file before capturing it. Two
-        # parallel next-arc sessions can otherwise both pass the ledger's
-        # read-then-check duplicate guard and append the same arc twice, which
-        # breaks one-row-per-arc and biases every cohort. os.rename is atomic:
-        # exactly one drain wins the claim, the other sees it vanish and moves
-        # on. Same structural fix as the queue itself -- no lock required.
-        taken = _claim_arc(path, entry)
-        if taken is None:
-            # Outstanding, not done: a peer holds it and this drain has no idea
-            # whether that peer will succeed. `outstanding` was snapshotted
-            # before the loop, so without counting it here the run could exit 0
-            # with a live claim on disk -- contradicting the documented contract
-            # that exit 0 means nothing is left to fold.
-            print(f"  {arc_id}: claimed by a concurrent drain, still outstanding")
-            kept += 1
-            continue
-
-        args = argparse.Namespace(
-            pr=entry["pr"],
-            arc_id=entry.get("arc_id"),
-            arc_type=entry.get("arc_type"),
-            arc_type_declared_at=entry.get("arc_type_declared_at"),
-            decisions=entry.get("decisions"),
-            # The metrics were derived at closure; drain never re-reads the logs.
-            round_snapshot=entry.get("round_snapshot"),
-            round_logs=None,
-            levers=entry.get("levers"),
-            notes=entry.get("notes", ""),
-        )
         try:
-            append(extract(args))
+            outcome = _drain_one(path, entry, arc_id, committed, local)
         except AbortError as exc:
-            # Release the claim so the next drain can retry this arc.
-            os.replace(taken, path)
+            # Per-arc fault: this entry stays queued (already durably restored
+            # by _drain_one where a claim was held); the rest still drain.
             print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
             kept += 1
             continue
-        # Restore the capture to the queue rather than deleting it: the row is
-        # only in the working tree so far, and the declarations it carries exist
-        # nowhere else. It is released on a later drain, once the row is in
-        # committed history.
-        os.replace(taken, path)
-        print(f"  {arc_id}: appended (entry held until the row is committed)")
-        added += 1
-        kept += 1
+        except OSError as exc:
+            if _is_systemic(exc):
+                # One systemic queue-dir fault dooms every remaining entry the
+                # same way: abort once with one message (C-HE-04 SS3).
+                remaining = len(pending) - i
+                print(
+                    f"ABORT: systemic queue fault on {QUEUE_DIR}: {exc}; "
+                    f"{remaining} entr(y/ies) not processed",
+                    file=sys.stderr,
+                )
+                return 2
+            print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
+            kept += 1
+            continue
+        if outcome == "added":
+            added += 1
+            kept += 1
+        elif outcome in ("held", "outstanding"):
+            # Outstanding, not done: a peer holds it and this drain has no idea
+            # whether that peer will succeed. Without counting it here the run
+            # could exit 0 with a live claim on disk -- contradicting the
+            # documented contract that exit 0 means nothing is left to fold.
+            kept += 1
 
     print(f"drained {added} arc(s); {kept} entr(y/ies) still queued")
     # Non-zero on a retained entry, so automation cannot read a pending retry
