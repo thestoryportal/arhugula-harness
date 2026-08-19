@@ -231,6 +231,84 @@ loop_pending_hil_summary() {
   printf '[loop] ⏸ %s item(s) await your input from the last loop run: %s. See .harness/loop_status.md' "$n" "$cap"
 }
 
+# C-HE-20: TTL is a NOTIFICATION threshold. Re-surface pending deferrals older than
+# HARNESS_HIL_TTL_S (default 24h) as NOTIFY rows -- at most once per TTL window per item.
+# This function MUST NOT resolve, reclaim, release, or transition anything (D8): it reads the
+# ledger and appends NOTIFY rows, nothing else. Called once per SessionStart
+# (tools/roadmap-audit/session-start.sh). Timestamps are parsed in pure awk (days-from-civil)
+# so no `date` fork happens per row and macOS/Linux behave identically. Shape-aware for the
+# structured column U-HE-29 introduces (`$4 ~ /^lane=/` -> detail is `$5`).
+# Row written: `| <ts> | NOTIFY | ttl-expired <item> — pending > <ttl>s; re-surfaced, state unchanged |`
+# The eligibility read and the NOTIFY append are ONE critical section under a kernel flock on
+# `.harness/.loop-status.lock` (fd 8; the lib.sh worktree-mutex pattern) -- concurrent
+# SessionStart hooks would otherwise each read "no NOTIFY yet" and all append (codex round 3:
+# 20 hooks -> 20 notifications). The lock is released on process death; a lock that cannot be
+# taken within the bounded wait skips this session's re-surface (a notification only -- nothing
+# is lost; the next SessionStart retries).
+loop_hil_ttl_resurface() {
+  local p ttl now lock rc; p=$(loop_status_path); [ -f "$p" ] || return 0
+  ttl="${HARNESS_HIL_TTL_S:-86400}"; now=$(loop_now)
+  lock="$(dirname "$p")/.loop-status.lock"
+  exec 8>> "$lock" 2>/dev/null || return 0
+  if ! /usr/bin/python3 - 8 "${HARNESS_LOOP_STATUS_LOCK_TIMEOUT_SECONDS:-10}" <<'PY'
+import fcntl, sys, time
+fd = int(sys.argv[1]); deadline = time.monotonic() + float(sys.argv[2])
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+    except BlockingIOError:
+        if time.monotonic() >= deadline:
+            raise SystemExit(1)
+        time.sleep(0.05)
+PY
+  then
+    exec 8>&-; return 0
+  fi
+  _loop_hil_ttl_resurface_unlocked "$p" "$ttl" "$now"; rc=$?
+  exec 8>&-
+  return $rc
+}
+
+_loop_hil_ttl_resurface_unlocked() {
+  local p="$1" ttl="$2" now="$3"
+  awk -F'|' -v now_ts="$now" -v ttl="$ttl" '
+    function dfc(y, m, d,   era, yoe, doy, doe) {          # days from civil (Hinnant)
+      if (m <= 2) y -= 1
+      era = int((y >= 0 ? y : y - 399) / 400); yoe = y - era * 400
+      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+      return era * 146097 + doe - 719468
+    }
+    function epoch(ts) {                                    # YYYY-MM-DDTHH:MM:SSZ -> seconds
+      gsub(/^[ \t]+|[ \t]+$/, "", ts)
+      if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) return -1
+      return dfc(substr(ts,1,4)+0, substr(ts,6,2)+0, substr(ts,9,2)+0) * 86400 \
+             + substr(ts,12,2)*3600 + substr(ts,15,2)*60 + substr(ts,18,2)
+    }
+    function detail(   s) { s = $4; if (s ~ /^[ \t]*lane=/) s = $5; sub(/^[ \t]+/, "", s); return s }
+    BEGIN { now = epoch(now_ts) }
+    { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
+    k == "ACTIVATE" { delete state; delete at }
+    k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
+      split(detail(), a, /[ \t]/); tok = a[1]
+      if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; at[tok] = epoch($2) } else { state[tok] = "RESOLVED" }
+    }
+    k == "NOTIFY" { split(detail(), b, /[ \t]+/); if (b[1] == "ttl-expired") last[b[2]] = epoch($2) }
+    END {
+      if (now < 0) exit 0
+      for (t in state) {
+        if (state[t] != "PENDING" || at[t] < 0) continue
+        if (now - at[t] < ttl) continue
+        if ((t in last) && now - last[t] < ttl) continue
+        print t
+      }
+    }
+  ' "$p" 2>/dev/null | sort | while IFS= read -r item; do
+    [ -n "$item" ] && loop_log NOTIFY "ttl-expired ${item} — pending > ${ttl}s; re-surfaced, state unchanged"
+  done
+  return 0
+}
+
 # Turn loop mode ON: create the marker + log the activation. Usage: loop_activate [reason]
 loop_activate() {
   local mp; mp=$(loop_marker_path)

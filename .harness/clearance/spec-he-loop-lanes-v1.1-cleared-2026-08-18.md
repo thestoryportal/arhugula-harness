@@ -13,7 +13,7 @@ reviewer_chain:
   - "author grounding: `PC_PIPE_BUF` = 512 on macOS; a minimal C-HE-24 row encodes to ≈700 bytes; POSIX scopes PIPE_BUF atomicity to pipes/FIFOs"
   - "council NOT convened (proportionality: mechanism-only, no contract guarantee changed; operator may reverse via v1.2)"
 supersedes: spec-he-loop-lanes-v1-cleared-2026-08-18.md
-superseded_by: null
+superseded_by: spec-he-loop-lanes-v1.2-cleared-2026-08-19.md
 ---
 
 # Clearance — `Spec_HE_Loop_Lanes` v1.1 (execution correction X1; H_E tooling, `C-HE-*` namespace)

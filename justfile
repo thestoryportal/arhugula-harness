@@ -587,9 +587,16 @@ _require-codex-subscription:
 # governed by config.toml, not pinned here. The run banner prints the
 # effective `model:` — confirm it reads `gpt-5.6-sol`.
 
-# Out-of-family review of the current branch vs BASE (default main), subscription auth.
-codex-review base='main': _require-codex-subscription
-    env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --base {{base}}
+# Out-of-family review of the committed branch HEAD vs BASE (default main), subscription auth.
+# Routed through the fail-closed wrapper (C-HE-18): schema-parsed verdict, session-artifact
+# fallback, REVIEWER_UNAVAILABLE on any parse failure. Exit 0 APPROVE / 1 BLOCK / 2 UNAVAILABLE.
+# No `_require-codex-subscription` prerequisite: the wrapper strips OPENAI_API_KEY itself, pins
+# `preferred_auth_method="chatgpt"`, and classifies a missing binary / stale login as
+# REVIEWER_UNAVAILABLE(permanent) with a recorded row (C-HE-16 §4) -- the preflight would exit 1
+# before that terminal contract could apply (codex round 8). Commit before reviewing: the
+# verdict is bound to HEAD (C-HE-15 §3).
+codex-review base='main':
+    uv run python tools/codex_review.py --base {{base}}
 
 # Out-of-family review of staged + unstaged + untracked changes, subscription auth.
 codex-review-uncommitted: _require-codex-subscription
@@ -604,8 +611,16 @@ codex-review-uncommitted: _require-codex-subscription
 # GEMINI_API_KEY/GOOGLE_API_KEY are stripped as insurance — justfile dotenv loads
 # .env, which carries the harness runtime's own provider keys; those must never
 # leak into review billing.
-gemini-review base='main': _require-antigravity
-    /usr/bin/python3 tools/agy_review.py --base {{base}}
+# Runs under the workspace interpreter (not /usr/bin/python3): since U-HE-06 the wrapper
+# shares tools/review_wrapper_common.py (jsonschema) with codex-review -- schema-parsed final
+# verdict, C-HE-16 classifier + bounded retry, C-HE-24 rows. Exit 0 APPROVE / 1 BLOCK / 2 UNAVAILABLE.
+# `outcome_json` (optional): write the wrapper's own terminal envelope to that path -- the D-C
+# failover (`just review-with-failover`) reads it instead of re-parsing raw vendor stdout.
+# No `_require-antigravity` prerequisite (codex round 13): a missing `agy` is classified by the
+# wrapper as REVIEWER_UNAVAILABLE(permanent) with a recorded row (C-HE-16 §4); the preflight
+# exited 1 before that terminal contract could apply.
+gemini-review base='main' outcome_json='':
+    uv run python tools/agy_review.py --base {{base}} {{ if outcome_json != '' { '--outcome-json ' + quote(outcome_json) } else { '' } }}
 
 _require-antigravity:
     @if ! command -v agy >/dev/null 2>&1; then \
@@ -613,6 +628,15 @@ _require-antigravity:
         echo "  Install per https://antigravity.google (Google AI Ultra subscription auth)."; \
         exit 1; \
     fi
+
+# D-C failover chain (C-HE-17): codex-review, then gemini-review ONCE on REVIEWER_UNAVAILABLE,
+# identical bar; the failover verdict blocks. Exit 0/1/2 as codex-review.
+# NO `_require-codex-subscription` prerequisite here: a missing binary / stale login is exactly
+# the permanent failure the wrapper classifies (C-HE-16 §4) and that MUST reach the failover
+# (C-HE-17). The wrapper is the loud-failure surface: exit 2 + a `reviewer_unavailable` row --
+# never a silent metered fallback (the wrapper strips OPENAI_API_KEY and pins chatgpt auth).
+review-with-failover base='main':
+    uv run python tools/codex_review.py --base {{base}} --failover
 
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.

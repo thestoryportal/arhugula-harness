@@ -914,3 +914,58 @@ def test_p1_count_collapses_the_codex_duplicate_printing(tmp_path: Path):
     # un-deduped count of 2 would still yield [1] and leave this test green.
     # Assert the count itself, or this stops witnessing the collapse it names.
     assert am.count_p1(a.read_text()) == 1, "two emissions of one finding are one finding"
+
+
+# ── C-HE-19: CI terminal states -- CANCELLED is INCOMPLETE, never green (U-HE-08) ────────
+# mutation-probe: add "cancelled" to CI_GREEN in arc_metrics
+@pytest.mark.parametrize(
+    "conclusion,green",
+    [
+        ("success", True),
+        ("failure", False),
+        ("cancelled", False),
+        ("", False),
+        (None, False),
+        ("SUCCESS", True),
+        ("CANCELLED", False),
+        ("skipped", False),
+        ("timed_out", False),
+    ],
+)
+def test_ci_state_cancelled_incomplete(conclusion, green):
+    assert am.ci_is_green(conclusion) is green
+    assert am.CI_TERMINAL == ("SUCCESS", "FAILURE", "CANCELLED")
+    assert am.CI_GREEN == frozenset({"SUCCESS"})
+
+
+def test_ci_green_timing_uses_the_one_predicate(monkeypatch):
+    """The green-timing exclusion consumes `ci_is_green`: a cancelled run never enters the
+    baseline even if the raw conclusion filter were edited."""
+    runs = [
+        {
+            "headSha": "a" * 40,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:01:05Z",
+            "conclusion": "cancelled",
+            "event": "push",
+        },
+        {
+            "headSha": "a" * 40,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:05:50Z",
+            "conclusion": "success",
+            "event": "push",
+        },
+    ]
+    monkeypatch.setattr(am, "run", lambda *a, **k: json.dumps(runs))
+    seen: list[str | None] = []
+    real = am.ci_is_green
+
+    def spy(c):
+        seen.append(c)
+        return real(c)
+
+    monkeypatch.setattr(am, "ci_is_green", spy)
+    n, durations = am.ci_metrics("a" * 40)
+    assert n == 2 and durations == [350.0]
+    assert seen == ["cancelled", "success"]

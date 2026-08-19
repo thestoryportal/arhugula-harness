@@ -22,6 +22,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,7 +32,11 @@ import jsonschema
 from codex_context_guard import Finding
 
 REPO = Path(__file__).resolve().parent.parent
-GATE_LOG_JSONL = REPO / ".harness" / "merge-gate-log.jsonl"
+#: The gate log (C-HE-23 §2). `HARNESS_GATE_LOG` redirects it for a whole process tree -- the
+#: seam the reviewer-wrapper subprocess tests use so a fixture run never writes the tracked log.
+GATE_LOG_JSONL = Path(
+    os.environ.get("HARNESS_GATE_LOG") or REPO / ".harness" / "merge-gate-log.jsonl"
+)
 SCHEMA_PATH = REPO / "tools" / "review_schemas" / "finding_record.schema.json"
 SCHEMA: dict[str, Any] = json.loads(SCHEMA_PATH.read_text())
 
@@ -357,6 +362,34 @@ def append_observation(core_fields: dict, env: Envelope, path: Path | None = Non
         _check_against_prior_rows(row, path)  # a fresh id has no prior; kept for the invariant
         _append_line(fd, _encode(row), path)
         written.update(row)
+
+    _under_log_lock(path, body)
+    return written
+
+
+def append_observations(
+    build: Callable[[list[dict]], list[tuple[dict, Envelope]]], path: Path | None = None
+) -> list[dict]:
+    """Append SEVERAL new observations under ONE critical section. `build(rows)` receives the
+    log as it stands under the lock and returns `(core_fields, env)` pairs (each like
+    `append_observation`'s arguments) -- so anything the caller derives from the current log
+    (a next round number, a count) and the appends it conditions are one atomic step (two
+    wrappers on one arc cannot both mint the same round; C-HE-22 / S1 codex round 7). Ids are
+    minted per pair against the rows already present PLUS the pairs appended before it."""
+    path = path or GATE_LOG_JSONL
+    written: list[dict] = []
+
+    def body(fd: int) -> None:
+        rows = read_rows(path)
+        for core_fields, env in build(rows):
+            head = env.head_sha if env.head_sha is not None else "nohead"
+            fid = next_finding_id(core_fields["producer"], head, core_fields["location"], rows)
+            row = make_row(FindingCore(finding_id=fid, **core_fields), env)
+            validate(row)
+            _check_against_prior_rows(row, path)
+            _append_line(fd, _encode(row), path)
+            rows.append(row)
+            written.append(row)
 
     _under_log_lock(path, body)
     return written

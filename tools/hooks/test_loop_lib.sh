@@ -254,6 +254,38 @@ else
 fi
 chmod 644 "$P" 2>/dev/null
 
+# 18) C-HE-20 (U-HE-09): the HITL TTL re-surfaces, never reclaims. Stub loop_now so the ledger
+#     carries deterministic timestamps; the reducer must key on the HIL item token and emit at
+#     most one NOTIFY per TTL window per item; the skip-set (state) is untouched.
+: > "$(loop_status_path)"; loop_activate "ttl test" >/dev/null
+loop_now() { echo "2026-08-17T00:00:00Z"; }; loop_defer B-1 "old deferral"
+loop_now() { echo "2026-08-17T23:00:00Z"; }; loop_defer B-2 "young deferral"
+loop_now() { echo "2026-08-18T00:00:01Z"; }
+HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface
+grep -q '| NOTIFY | ttl-expired B-1 .*state unchanged' "$(loop_status_path)" && ok "TTL expiry emits NOTIFY for the aged item" || bad "no NOTIFY on TTL expiry"
+grep -q '| NOTIFY | ttl-expired B-2 ' "$(loop_status_path)" && bad "young deferral re-surfaced early" || ok "young deferral (< TTL) not re-surfaced"
+[ "$(loop_skip_set)" = "B-1 B-2" ] && ok "TTL does not resolve/reclaim the deferral (skip-set unchanged)" || bad "TTL changed skip-set: $(loop_skip_set)"
+n_before=$(grep -c '| NOTIFY |' "$(loop_status_path)"); HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface
+[ "$(grep -c '| NOTIFY |' "$(loop_status_path)")" = "$n_before" ] && ok "second pass within the window is idempotent" || bad "duplicate NOTIFY within one TTL window"
+loop_now() { echo "2026-08-19T00:00:02Z"; }; HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface
+[ "$(grep -c '| NOTIFY | ttl-expired B-1 ' "$(loop_status_path)")" = "2" ] && ok "next TTL window re-surfaces the still-pending item again" || bad "no re-surface in the next window: $(grep -c '| NOTIFY | ttl-expired B-1 ' "$(loop_status_path)")"
+[ "$(grep -c '| NOTIFY | ttl-expired B-2 ' "$(loop_status_path)")" = "1" ] && ok "B-2 re-surfaced once its own TTL elapsed" || bad "B-2 count: $(grep -c '| NOTIFY | ttl-expired B-2 ' "$(loop_status_path)")"
+loop_resolve B-1 "answered" >/dev/null
+loop_now() { echo "2026-08-21T00:00:00Z"; }; HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface
+[ "$(grep -c '| NOTIFY | ttl-expired B-1 ' "$(loop_status_path)")" = "2" ] && ok "a resolved item is never re-surfaced" || bad "resolved item re-surfaced"
+# structured-column shape (U-HE-29 forward-compat): detail in $5 when $4 is `lane=...`
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | lane=h-w-1 | B-3 — structured row |\n' >> "$(loop_status_path)"
+HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface
+grep -q '| NOTIFY | ttl-expired B-3 ' "$(loop_status_path)" && ok "structured-column DEFERRED-HIL row is keyed on its item token" || bad "structured row not re-surfaced"
+# 19) Concurrent SessionStart hooks: the eligibility read + NOTIFY append are one critical
+#     section (codex round 3 on S1: 20 unlocked processes emitted 20 notifications for one item).
+: > "$(loop_status_path)"; loop_activate "ttl race" >/dev/null
+loop_now() { echo "2026-08-17T00:00:00Z"; }; loop_defer B-9 "raced deferral"
+loop_now() { echo "2026-08-18T00:00:01Z"; }
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do ( HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface ) & done; wait
+[ "$(grep -c '| NOTIFY | ttl-expired B-9 ' "$(loop_status_path)")" = "1" ] && ok "12 concurrent re-surface passes emit exactly one NOTIFY" || bad "concurrent NOTIFY count: $(grep -c '| NOTIFY | ttl-expired B-9 ' "$(loop_status_path)")"
+unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

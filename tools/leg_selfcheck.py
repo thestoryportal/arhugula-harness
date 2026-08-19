@@ -489,10 +489,15 @@ def check_cites(
     # them and skipped the second — stale, and green (codex round 8 [P2]).
     seen: set[tuple[str, str, str]] = set()
     checked = 0
+    # History carriers (`*-log*`, `*_log*`, `*archive*`) are skipped here as in the count
+    # scan: a gate-log row records a reviewer finding's location AT THE HEAD IT REVIEWED, and
+    # that line number drifts by design as the arc absorbs the finding -- it is evidence of
+    # a past head, not a claim this arc makes about the current one (S1, the first tracked
+    # `.harness/merge-gate-log.jsonl` rows).
     scanned = [
         (path, line)
         for path, lines in by_file.items()
-        if not is_fixture_path(path)
+        if not is_fixture_path(path) and not is_history_path(path)
         for line in lines
     ]
     for source, line in scanned:

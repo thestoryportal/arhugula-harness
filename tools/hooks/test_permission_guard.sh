@@ -279,6 +279,8 @@ for c in \
   "just codex-loop-check" \
   "just codex-worktree-gc" \
   "just codex-worktree-gc --reap" \
+  "just review-with-failover" \
+  "just review-with-failover main" \
   "just overlay-check"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"

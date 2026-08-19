@@ -1215,9 +1215,9 @@ def test_reconciled_hardening_docs_do_not_preserve_superseded_gc_or_path_claims(
 
 def test_antigravity_review_is_read_only_and_uses_writable_operational_log() -> None:
     justfile = (ROOT / "justfile").read_text(encoding="utf-8")
-    recipe = justfile.split("gemini-review base='main':", 1)[1].split("\n_require-antigravity:", 1)[
-        0
-    ]
+    recipe = justfile.split("gemini-review base='main' outcome_json='':", 1)[1].split(
+        "\n_require-antigravity:", 1
+    )[0]
     reviewer = (ROOT / "tools" / "agy_review.py").read_text(encoding="utf-8")
     agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
