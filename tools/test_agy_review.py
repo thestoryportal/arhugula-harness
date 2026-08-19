@@ -58,8 +58,9 @@ def _clock(values: list[float]):
 
 
 def _bind(reviewer, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """In-process runs use tmp_path as `repo` (not a git checkout): pin the binding."""
+    """In-process runs use tmp_path as `repo` (not a git checkout): pin the binding and HEAD."""
     monkeypatch.setattr(reviewer, "gemini_binding", lambda _repo, _base: dict(BINDING))
+    monkeypatch.setattr(reviewer, "_head", lambda _repo: BINDING["head_sha"])
     return dict(BINDING)
 
 

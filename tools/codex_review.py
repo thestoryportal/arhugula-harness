@@ -46,18 +46,22 @@ _RUN_BOUNDED_TIMEOUT_RC = 124
 
 
 def review_instructions(binding: dict[str, str], *, nonce: str = "") -> str:
-    """The review brief + output contract, run through `codex exec` (interface probes re-run at
+    """The review brief + output contract, run through `codex exec` in a scratch directory that
+    holds EXACTLY the bound bytes (`bound.diff`) and the tree at `head_sha` (`tree/`, a
+    `git archive` export -- never the live worktree, whose uncommitted edits to touched files
+    would otherwise be visible as context; codex round 10). Interface probes re-run at
     execution: `codex review --base` rejects a PROMPT; `codex review "<prompt>"` treats it as a
     review target and, on a real PR-sized diff, answers in its own native findings JSON and
-    ignores the output contract -- round 3 on the S1 branch. `codex exec` follows the brief and
-    hands the final message back through `-o`)."""
+    ignores the output contract (round 3); `codex exec` follows the brief and hands the final
+    message back through `-o`."""
     return (
         "You are an out-of-family code reviewer for an agent-harness monorepo. Review EXACTLY "
-        f"the committed diff `git diff --binary {binding['base_sha']} {binding['head_sha']}` "
-        "(run that command read-only; you may open the files it touches at that HEAD for "
-        "context) for real defects: correctness, hook and permission semantics, contract "
-        "drift, unsafe state handling, concurrency, and tests that would stay green if the "
-        f"change were reverted. Report at most {MAX_FINDINGS} findings, each with an exact "
+        f"the committed diff in ./bound.diff (`git diff --binary {binding['base_sha']} "
+        f"{binding['head_sha']}`); the full tree at that HEAD is exported read-only under "
+        "./tree/ for context -- open nothing outside this directory. Look for real defects: "
+        "correctness, hook and permission semantics, contract drift, unsafe state handling, "
+        "concurrency, and tests that would stay green if the change were reverted. Report at "
+        f"most {MAX_FINDINGS} findings, each with an exact "
         "file:line location and a concrete message; no style nits; only findings proven by the "
         "diff. Do not edit files. When done, print ONE fenced ```json block, and nothing after "
         "it, with exactly these keys: verdict (APPROVE|BLOCK), findings (array of "
@@ -69,60 +73,97 @@ def review_instructions(binding: dict[str, str], *, nonce: str = "") -> str:
     )
 
 
-def build_command(repo: Path, instructions: str, *, output_file: Path) -> list[str]:
-    """`codex exec` in a read-only sandbox; the final assistant message is ALSO written to
-    `output_file` (`-o`), the channel's most reliable output surface (probed 2026-08-19)."""
+#: The CLI overrides the channel runs with -- part of the bound configuration (codex round 10).
+CODEX_OVERRIDES = ("-c", 'preferred_auth_method="chatgpt"')
+
+
+def build_command(workdir: Path, instructions: str, *, output_file: Path) -> list[str]:
+    """`codex exec` in a read-only sandbox rooted at the scratch `workdir` (an exported tree,
+    not a git checkout: `--skip-git-repo-check`); the final assistant message is ALSO written
+    to `output_file` (`-o`), the channel's most reliable output surface (probed 2026-08-19)."""
     return [
         "codex",
         "exec",
         "--sandbox",
         "read-only",
-        "-c",
-        'preferred_auth_method="chatgpt"',
+        "--skip-git-repo-check",
+        *CODEX_OVERRIDES,
         "-C",
-        str(repo),
+        str(workdir),
         "-o",
         str(output_file),
         instructions,
     ]
 
 
-def _config_hash() -> str:
-    cfg = CODEX_HOME / "config.toml"
-    body = cfg.read_bytes() if cfg.exists() else b""
-    return hashlib.sha256(body).hexdigest()[:16]
+def export_bound_tree(repo: Path, head_sha: str, base_sha: str, dest: Path) -> None:
+    """Materialise what the reviewer may see: `dest/bound.diff` (rw.bound_diff, the digested
+    bytes) and `dest/tree/` = `git archive <head_sha>` -- the committed tree, never the live
+    worktree (codex round 10)."""
+    (dest / "tree").mkdir(parents=True, exist_ok=True)
+    (dest / "bound.diff").write_bytes(rw.bound_diff(repo, base_sha, head_sha))
+    archive = subprocess.run(
+        ["git", "-C", str(repo), "archive", "--format=tar", head_sha],
+        check=True,
+        capture_output=True,
+    ).stdout
+    subprocess.run(["tar", "-x", "-C", str(dest / "tree")], input=archive, check=True)
+
+
+def _config_hash(repo: Path | None = None) -> str:
+    """Everything that configures the channel: the user config, the repo-scoped `.codex/config.toml`
+    (codex exec reads project config), and the CLI overrides (codex round 10)."""
+    h = hashlib.sha256()
+    for cfg in (CODEX_HOME / "config.toml", (repo or Path.cwd()) / ".codex" / "config.toml"):
+        h.update(cfg.read_bytes() if cfg.exists() else b"")
+        h.update(b"\0")
+    h.update(" ".join(CODEX_OVERRIDES).encode())
+    return h.hexdigest()[:16]
 
 
 def _binding(repo: Path, base: str) -> dict[str, str]:
     return rw.compute_binding(
-        repo, base, channel=CHANNEL, prompt_version=PROMPT_VERSION, config_hash=_config_hash()
+        repo, base, channel=CHANNEL, prompt_version=PROMPT_VERSION, config_hash=_config_hash(repo)
     )
 
 
 def artifact_text(path: Path) -> str:
     """Session artifacts are JSONL envelopes: the assistant text (with its fenced block) sits
-    INSIDE string fields, newline-escaped. Deserialize every line and collect all string values
-    so the fenced JSON is visible to the parser (Codex round-2 P1 on the plan: raw `read_text()`
-    can never match `_FENCE_RE`)."""
+    INSIDE string fields, newline-escaped. Only the ASSISTANT's output is collected --
+    `agent_message` events, assistant `response_item`s, `task_complete.last_agent_message` --
+    never tool output,
+    the user brief or the echoed diff (a fenced JSON example in reviewed text would otherwise
+    make the channel's own verdict look ambiguous; codex round 10). Envelopes are deserialised
+    line by line; a non-JSON line is ignored."""
     out: list[str] = []
 
-    def collect(v: object) -> None:
+    def strings(v: object) -> None:
         if isinstance(v, str):
             out.append(v)
         elif isinstance(v, dict):
             for x in v.values():
-                collect(x)
+                strings(x)
         elif isinstance(v, list):
             for x in v:
-                collect(x)
+                strings(x)
 
     for line in path.read_text(errors="replace").splitlines():
         if not line.strip():
             continue
         try:
-            collect(json.loads(line))
+            d = json.loads(line)
         except json.JSONDecodeError:
-            out.append(line)  # a non-JSON line is kept verbatim; the schema parse decides
+            continue
+        if not isinstance(d, dict):
+            continue
+        payload = d.get("payload") if isinstance(d.get("payload"), dict) else {}
+        kind = d.get("type")
+        if kind == "event_msg" and payload.get("type") == "agent_message":
+            strings(payload.get("message"))
+        elif kind == "event_msg" and payload.get("type") == "task_complete":
+            strings(payload.get("last_agent_message"))
+        elif kind == "response_item" and payload.get("role") == "assistant":
+            strings(payload.get("content"))
     return "\n".join(out)
 
 
@@ -158,17 +199,21 @@ def find_session_artifact(
     return None
 
 
-def _default_invoke(repo: Path, instructions: str) -> Callable[[float], rw.Attempt]:
+def _default_invoke(
+    repo: Path, instructions: str, binding: dict[str, str]
+) -> Callable[[float], rw.Attempt]:
     def invoke(timeout: float) -> rw.Attempt:
         # Subscription auth, never the metered key, no harness secrets, hooks inert
         # (rw.reviewer_env). NOT --ephemeral: C-HE-18 §2's session-artifact fallback needs
-        # the persisted rollout.
+        # the persisted rollout. The reviewer is rooted at a scratch export of the BOUND tree.
         env = rw.reviewer_env()
         with tempfile.TemporaryDirectory(prefix="arhugula-codex-review-") as scratch:
+            work = Path(scratch) / "review"
+            export_bound_tree(repo, binding["head_sha"], binding["base_sha"], work)
             out_file = Path(scratch) / "last-message.md"
             proc = run_bounded(
-                build_command(repo, instructions, output_file=out_file),
-                cwd=repo,
+                build_command(work, instructions, output_file=out_file),
+                cwd=work,
                 timeout=timeout,
                 env=env,
             )
@@ -211,7 +256,7 @@ def run_codex_review(
             f"binding: {' '.join(exc.cmd[:4])} failed: {(exc.stderr or '').strip()[:300]}",
         )
     instructions = review_instructions(binding, nonce=nonce)
-    invoke = invoke or _default_invoke(repo, instructions)
+    invoke = invoke or _default_invoke(repo, instructions, binding)
     started_wall = time.time()
     deadline = clock() + rw.TOTAL_BUDGET_S
     wall_deadline = started_wall + rw.TOTAL_BUDGET_S
@@ -282,7 +327,25 @@ def run_codex_review(
     )
     if outcome.terminal != "REVIEWER_UNAVAILABLE":
         outcome.source = source
+        current = _head(repo)
+        if current != binding["head_sha"]:
+            # The verdict is valid for head_sha and is recorded as such, but the CALLER reads
+            # this invocation's terminal as "HEAD is reviewed": a commit that landed during the
+            # (up to 1260 s) review must not inherit the verdict (codex round 10).
+            return rw.ReviewOutcome(
+                "REVIEWER_UNAVAILABLE",
+                CHANNEL,
+                "transient",
+                f"HEAD moved during the review ({binding['head_sha'][:12]} -> {current[:12]}); "
+                "re-run on the current head",
+                [],
+                binding,
+            )
     return outcome
+
+
+def _head(repo: Path) -> str:
+    return rw._git(repo, "rev-parse", "HEAD")
 
 
 def _emit_rows(
@@ -423,15 +486,16 @@ def _route_to_hitl(arc_id: str, reason: str, *, blocking: bool = True) -> None:
             'loop_log NOTIFY "review-with-failover: primary REVIEWER_UNAVAILABLE, failover '
             'carried the review — $1: $2"'
         )
-    # loop_log swallows a failed append by design (`|| true`); verify the EFFECT -- the row we
-    # just wrote is in the ledger -- never the call's status (codex round 9; loop_resolve does
-    # the same).
+    # loop_log swallows a failed append by design (`|| true`); verify the EFFECT -- THIS row,
+    # identified by a per-call ref token, is in the ledger -- never the call's status and never
+    # an earlier row with the same text (codex rounds 9/10; loop_resolve does the same).
+    ref = f"ref {uuid.uuid4().hex[:10]}"
     script = (
         f'. "{lib / "lib.sh"}" && . "{lib / "loop_lib.sh"}" && {call} && '
-        'grep -qF -- "$2" "$(loop_status_path)"'
+        'grep -qF -- "$3" "$(loop_status_path)"'
     )
     proc = subprocess.run(
-        ["bash", "-c", script, "loop_route", arc_id, reason],
+        ["bash", "-c", script, "loop_route", arc_id, f"{reason} [{ref}]", ref],
         cwd=rw.REPO,
         capture_output=True,
         text=True,

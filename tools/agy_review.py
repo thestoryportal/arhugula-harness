@@ -612,6 +612,10 @@ def _fatal_binding(exc: subprocess.CalledProcessError) -> int:
     )
 
 
+def _head(repo: Path) -> str:
+    return rw._git(repo, "rev-parse", "HEAD")
+
+
 def _nonzero_exit_verdict(
     proc: subprocess.CompletedProcess[str], binding: dict[str, str], marker: str
 ) -> bool:
@@ -763,6 +767,15 @@ def run_review(repo: Path, base: str) -> int:
         if output:
             print(output, file=sys.stderr)
         return _unavailable(outcome.reason, failure_class="transient", binding=binding)
+    current = _head(repo)
+    if current != binding["head_sha"]:
+        # valid for head_sha, but the caller reads this terminal as "HEAD reviewed" (codex round 10)
+        return _unavailable(
+            f"HEAD moved during the review ({binding['head_sha'][:12]} -> {current[:12]}); "
+            "re-run on the current head",
+            failure_class="transient",
+            binding=binding,
+        )
     if verdict == "VERDICT: BLOCK" and outcome.terminal != "BLOCK":
         print(output, file=sys.stderr)
         return _unavailable(
