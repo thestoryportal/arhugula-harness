@@ -112,6 +112,13 @@ MANIFEST: list[Row] = [
         "local + CI",
         True,
     ),
+    Row(
+        "C-HE-26 §2",
+        "pytest:tools/test_arc_metrics.py::test_dead_claim_reclaim_never_steals_a_peers_fresh_live_claim",
+        "phase0",
+        "local + CI",
+        True,
+    ),
     Row("C-HE-23", "pytest:tools/test_merge_gate_log.py", "phase0", "local + CI", True),
     Row("C-HE-23", "just:merge-gate-log-check", "phase0", "local + CI", False),
     # §8.1 / §0.3 (U-HE-05)
