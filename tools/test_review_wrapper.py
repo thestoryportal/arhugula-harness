@@ -25,7 +25,7 @@ def _no_live_reviewers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         cr, "run_bounded", lambda *a, **k: pytest.fail(f"real reviewer subprocess: {a[0][:3]}")
     )
-    monkeypatch.setattr(cr, "_route_to_hitl", lambda arc_id, reason: None)
+    monkeypatch.setattr(cr, "_route_to_hitl", lambda arc_id, reason, **kw: None)
 
 
 EXPECTED = {
@@ -815,13 +815,49 @@ def test_codex_review_failover_both_unavailable_exits_2_with_both_reasons(
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
     routed = []
     monkeypatch.setattr(
-        cr, "_route_to_hitl", lambda arc_id, reason: routed.append((arc_id, reason))
+        cr, "_route_to_hitl", lambda arc_id, reason, **kw: routed.append((arc_id, reason, kw))
     )
     assert cr.main(["--base", "main", "--failover"]) == 2
     err = capsys.readouterr().err
     assert "codex-reason" in err and "gemini-reason" in err and "BOTH channels unavailable" in err
-    # C-HE-20 §1: the arc-blocking outage routes to the durable HITL queue, once
+    # C-HE-20 §1: the arc-blocking outage routes to the durable HITL queue, once, as DEFERRED-HIL
     assert len(routed) == 1 and "codex-reason" in routed[0][1] and "gemini-reason" in routed[0][1]
+    assert routed[0][2] == {"blocking": True}
+
+
+def test_primary_outage_with_a_successful_failover_is_a_notify_not_a_deferral(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        cr,
+        "run_codex_review",
+        lambda repo, base, **kw: rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE", "codex", "permanent", "codex-reason", [], EXPECTED
+        ),
+    )
+    monkeypatch.setattr(
+        cr,
+        "_run_gemini_failover",
+        lambda repo, base: rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout"),
+    )
+    routed = []
+    monkeypatch.setattr(
+        cr, "_route_to_hitl", lambda arc_id, reason, **kw: routed.append((reason, kw))
+    )
+    assert cr.main(["--base", "main", "--failover"]) == 0
+    assert routed == [("codex: codex-reason; gemini: APPROVE", {"blocking": False})]
+
+
+def test_route_to_hitl_notify_kind_for_the_non_blocking_case(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
+    (tmp_path / ".harness").mkdir()
+    _REAL_ROUTE_TO_HITL("B-778", "codex: x; gemini: APPROVE", blocking=False)
+    ledger = (tmp_path / ".harness" / "loop_status.md").read_text()
+    assert (
+        "| NOTIFY | review-with-failover: primary REVIEWER_UNAVAILABLE, failover carried the "
+        "review — B-778: codex: x; gemini: APPROVE |"
+    ) in ledger
+    assert "| DEFERRED-HIL |" not in ledger  # the header prose mentions the kind; rows do not
 
 
 def test_route_to_hitl_writes_a_deferred_hil_row_via_loop_defer(tmp_path, monkeypatch):
@@ -1208,3 +1244,22 @@ def test_successive_wrapper_runs_get_distinct_rounds(tmp_path, monkeypatch):
     cr.main(["--base", "main", "--invoke-test-empty"])
     cr.main(["--base", "main", "--invoke-test-empty"])
     assert [r["round_n"] for r in fr.read_rows(log)] == [1, 2]
+
+
+def test_concurrent_emitters_never_share_a_round(tmp_path, monkeypatch):
+    """codex round 7: the round is minted under the same lock as the append."""
+    import concurrent.futures
+
+    monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    log = tmp_path / "gate.jsonl"
+    out = rw.ReviewOutcome("REVIEWER_UNAVAILABLE", "codex", "transient", "x", [], EXPECTED)
+
+    def emit(_):
+        return rw.emit_outcome(out, producer="p", arc_id="a", lane_id="l", round_n=None, path=log)[
+            0
+        ]["round_n"]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        rounds = sorted(ex.map(emit, range(8)))
+    assert rounds == list(range(1, 9))
+    assert sorted(r["round_n"] for r in fr.read_rows(log)) == list(range(1, 9))

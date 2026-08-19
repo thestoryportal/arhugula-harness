@@ -56,36 +56,49 @@ CLASSIFIER_STREAM_LIMIT = 4096
 CLASSIFIER_TAIL = 512
 #: Environment a nested reviewer process may see: `just`'s dotenv-load injects the harness
 #: runtime's provider credentials, and a diff-induced shell command inside the reviewer could
-#: surface them into the transcript/model (codex round 6). Names matching this pattern are
-#: dropped, plus the explicit provider list; the sandbox hides files, not the environment.
-_SECRET_NAME_RE = re.compile(r"(KEY|TOKEN|SECRET|CREDENTIAL|PASSWORD|PASSWD|AUTH)", re.I)
-_SECRET_NAMES = frozenset(
+#: surface them into the transcript/model; the sandbox hides files, not the environment (codex
+#: rounds 6-7). ALLOWLIST, not denylist (a `DATABASE_URL` / `SENTRY_DSN` carries a secret
+#: without a secret-shaped name): exact names the CLIs need to run + vendor/harness prefixes,
+#: and a secret-name filter on top of the prefixes.
+_ENV_ALLOW_EXACT = frozenset(
     {
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "E2B_API_KEY",
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "GOOGLE_CLOUD_PROJECT",
-        "GOOGLE_CLOUD_LOCATION",
-        "GOOGLE_GENAI_USE_VERTEXAI",
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_PROFILE",
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TERM",
+        "LANG",
+        "LANGUAGE",
+        "TMPDIR",
+        "TZ",
+        "PWD",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
     }
 )
+_ENV_ALLOW_PREFIXES = ("LC_", "XDG_", "HARNESS_", "CODEX_", "AGY_", "ANTIGRAVITY_")
+_SECRET_NAME_RE = re.compile(r"(KEY|TOKEN|SECRET|CREDENTIAL|PASSWORD|PASSWD|AUTH)", re.I)
 
 
 def reviewer_env(base: dict[str, str] | None = None) -> dict[str, str]:
-    """The environment for a nested reviewer CLI: the caller's env minus every secret-shaped
-    variable, plus HARNESS_CODEX_REVIEW_ISOLATED=1 so the repo's own hooks (SessionStart / Stop
-    / checkpoint / loop-ledger writers) stay inert inside the reviewer (codex round 6)."""
+    """The environment for a nested reviewer CLI: only allowlisted names / prefixes (never a
+    secret-shaped name even under an allowed prefix), plus HARNESS_CODEX_REVIEW_ISOLATED=1 so
+    the repo's own hooks (SessionStart / Stop / checkpoint / loop-ledger writers) stay inert
+    inside the reviewer (codex round 6)."""
     src = os.environ if base is None else base
-    env = {k: v for k, v in src.items() if k not in _SECRET_NAMES and not _SECRET_NAME_RE.search(k)}
+    env = {
+        k: v
+        for k, v in src.items()
+        if (k in _ENV_ALLOW_EXACT or k.startswith(_ENV_ALLOW_PREFIXES))
+        and not _SECRET_NAME_RE.search(k)
+    }
     env["HARNESS_CODEX_REVIEW_ISOLATED"] = "1"
     return env
 
@@ -462,17 +475,25 @@ def emit_outcome(
     producer: str,
     arc_id: str,
     lane_id: str,
-    round_n: int,
+    round_n: int | None,
     path: Path | None = None,
 ) -> list[dict]:
-    """Append every observation of `outcome` to the gate log, minting each `finding_id` under
-    the log lock. Returns the rows as written. A `RecordError` propagates: the record is part
-    of the contract (C-HE-18 §3), so a failed write must not be silent."""
-    written = []
-    for obs in outcome_rows(
-        outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=round_n
-    ):
-        env = fr.Envelope(**{k: obs[k] for k in _ENV_KEYS})
-        core = {k: v for k, v in obs.items() if k not in _ENV_KEYS}
-        written.append(fr.append_observation(core, env, path))
-    return written
+    """Append every observation of `outcome` to the gate log in ONE critical section: when
+    `round_n` is None the round is minted there (`round_n_for` against the log as it stands
+    under the lock -- two concurrent wrappers on one arc cannot both take the same round; codex
+    round 7), and each `finding_id` is minted against the same snapshot. Returns the rows as
+    written (their `round_n` is the allocated one). A `RecordError` propagates: the record is
+    part of the contract (C-HE-18 §3), so a failed write must not be silent."""
+
+    def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
+        n = round_n if round_n is not None else round_n_for(arc_id, producer, rows)
+        pairs = []
+        for obs in outcome_rows(
+            outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=n
+        ):
+            env = fr.Envelope(**{k: obs[k] for k in _ENV_KEYS})
+            core = {k: v for k, v in obs.items() if k not in _ENV_KEYS}
+            pairs.append((core, env))
+        return pairs
+
+    return fr.append_observations(build, path)

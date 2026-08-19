@@ -526,8 +526,10 @@ def _emit(outcome: rw.ReviewOutcome) -> None:
     C-HE-23 §2), so the envelope the failover reads is written only after the rows landed
     (codex round 4)."""
     arc_id, lane_id = rw.env_arc_and_lane()
-    round_n = rw.round_n_for(arc_id, PRODUCER)
-    rw.emit_outcome(outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=round_n)
+    written = rw.emit_outcome(
+        outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=None
+    )  # the round is minted under the log lock (codex round 7)
+    round_n = written[0]["round_n"] if written else rw.round_n_for(arc_id, PRODUCER)
     rw.record_round_outcome_if_reserved(
         arc_id,
         round_n,
@@ -582,13 +584,15 @@ def _bounded_with_retry(
             return last
         proc = run_bounded(cmd_for(timeout), cwd=cwd, timeout=timeout, env=env)
         output = proc.stdout.strip()
-        validation_error, _ = validate_review_output(output, marker)
+        validation_error, verdict_line = validate_review_output(output, marker)
         final = binding is not None and marker == ARTIFACT_COMPLETE_MARKER
         terminal = rw.parse_verdict(CHANNEL, output, binding).terminal if final else None
         parsed = not final or terminal != "REVIEWER_UNAVAILABLE"
-        if validation_error is None and parsed and (proc.returncode == 0 or terminal == "BLOCK"):
-            # A non-zero exit with a bound BLOCK is a terminal, not a retry: re-invoking could
-            # replace blocking findings with an APPROVE (codex round 4).
+        blocks = terminal == "BLOCK" or (not final and verdict_line == "VERDICT: BLOCK")
+        if validation_error is None and parsed and (proc.returncode == 0 or blocks):
+            # A non-zero exit with a BLOCK (bound block on the final output; VERDICT line on a
+            # segment) is a terminal, not a retry: re-invoking could replace blocking findings
+            # with an APPROVE (codex rounds 4/7).
             return proc
         if rw.classify(CHANNEL, rw.classifier_text(proc.stdout, proc.stderr)) == "permanent":
             return proc
@@ -608,10 +612,17 @@ def _fatal_binding(exc: subprocess.CalledProcessError) -> int:
     )
 
 
-def _nonzero_exit_verdict(proc: subprocess.CompletedProcess[str], binding: dict[str, str]) -> bool:
-    """A non-zero reviewer exit still BLOCKS when its output parses to a bound BLOCK (findings
-    are preserved); a parsed APPROVE from a failed process is never counted (gemini round 3)."""
-    return rw.parse_verdict(CHANNEL, proc.stdout.strip(), binding).terminal == "BLOCK"
+def _nonzero_exit_verdict(
+    proc: subprocess.CompletedProcess[str], binding: dict[str, str], marker: str
+) -> bool:
+    """A non-zero reviewer exit still BLOCKS when its output is a BLOCK -- the bound fenced
+    verdict on the artifact-complete output, the `VERDICT: BLOCK` line on a segment (findings
+    are preserved); a parsed APPROVE from a failed process is never counted (gemini round 3,
+    codex round 7)."""
+    output = proc.stdout.strip()
+    if marker == ARTIFACT_COMPLETE_MARKER:
+        return rw.parse_verdict(CHANNEL, output, binding).terminal == "BLOCK"
+    return validate_review_output(output, marker)[1] == "VERDICT: BLOCK"
 
 
 def run_review(repo: Path, base: str) -> int:
@@ -674,9 +685,7 @@ def run_review(repo: Path, base: str) -> int:
                     return _unavailable(
                         "whole-review deadline expired", failure_class="transient", binding=binding
                     )
-                if proc.returncode != 0 and not (
-                    marker == ARTIFACT_COMPLETE_MARKER and _nonzero_exit_verdict(proc, binding)
-                ):
+                if proc.returncode != 0 and not _nonzero_exit_verdict(proc, binding, marker):
                     return report_process_failure(proc, binding=binding)
                 model_error = verify_effective_model(log_path)
                 if model_error is not None:
@@ -724,7 +733,9 @@ def run_review(repo: Path, base: str) -> int:
                     return _unavailable(
                         "whole-review deadline expired", failure_class="transient", binding=binding
                     )
-                if proc.returncode != 0 and not _nonzero_exit_verdict(proc, binding):
+                if proc.returncode != 0 and not _nonzero_exit_verdict(
+                    proc, binding, ARTIFACT_COMPLETE_MARKER
+                ):
                     return report_process_failure(proc, binding=binding)
                 model_error = verify_effective_model(log_path)
                 if model_error is not None:

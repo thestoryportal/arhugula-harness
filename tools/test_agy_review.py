@@ -1066,7 +1066,7 @@ def test_cli_sigterm_reaps_reviewer_tree(tmp_path: Path) -> None:
     (bin_dir / "agy").write_text(
         "#!/bin/sh\n"
         '(trap "" TERM; sleep 30) & child=$!\n'
-        'printf "%s" "$child" > "$REVIEWER_CHILD_PID"\n'
+        'printf "%s" "$child" > "$AGY_REVIEWER_CHILD_PID"\n'
         'wait "$child"\n',
         encoding="utf-8",
     )
@@ -1077,7 +1077,7 @@ def test_cli_sigterm_reaps_reviewer_tree(tmp_path: Path) -> None:
             "PATH": f"{bin_dir}:{env['PATH']}",
             "AGY_CAPTURE": str(capture),
             "AGY_REVIEW_ROOT": str(tmp_path / "main-root"),
-            "REVIEWER_CHILD_PID": str(child_pid_file),
+            "AGY_REVIEWER_CHILD_PID": str(child_pid_file),
         }
     )
     controller = subprocess.Popen(

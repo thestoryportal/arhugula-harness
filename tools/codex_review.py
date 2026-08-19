@@ -271,8 +271,10 @@ def _emit_rows(
     outcome: rw.ReviewOutcome, *, producer: str = PRODUCER, channel: str = CHANNEL
 ) -> None:
     arc_id, lane_id = rw.env_arc_and_lane()
-    round_n = rw.round_n_for(arc_id, producer)
-    rw.emit_outcome(outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=round_n)
+    written = rw.emit_outcome(
+        outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=None
+    )  # the round is minted under the log lock (codex round 7)
+    round_n = written[0]["round_n"] if written else rw.round_n_for(arc_id, producer)
     rw.record_round_outcome_if_reserved(
         arc_id,
         round_n,
@@ -389,18 +391,23 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
     return outcome
 
 
-def _route_to_hitl(arc_id: str, reason: str) -> None:
-    """C-HE-20 §1: a REVIEWER_UNAVAILABLE that blocks the arc routes to the EXISTING durable
-    HITL queue -- a `DEFERRED-HIL` row via `loop_defer` (loop_lib.sh, the C-HE-09 venue); no new
-    escalation store (codex round 4). A failed write is reported loudly; the exit code already
-    blocks."""
+def _route_to_hitl(arc_id: str, reason: str, *, blocking: bool = True) -> None:
+    """C-HE-20 §1: a REVIEWER_UNAVAILABLE routes to the EXISTING durable HITL queue (loop_lib.sh,
+    the C-HE-09 venue; no new escalation store) -- as a `DEFERRED-HIL` row (`loop_defer`) when
+    it BLOCKS the arc (both channels unavailable), as a `NOTIFY` row when the failover carried
+    the review (informational-only events use NOTIFY, C-HE-09 §5; codex rounds 4/7). A failed
+    write is reported loudly; the exit code already carries the outcome."""
     lib = rw.REPO / "tools" / "hooks"
-    script = (
-        f'. "{lib / "lib.sh"}" && . "{lib / "loop_lib.sh"}" && '
-        'loop_defer "$1" "review-with-failover: REVIEWER_UNAVAILABLE on both channels — $2"'
-    )
+    if blocking:
+        call = 'loop_defer "$1" "review-with-failover: REVIEWER_UNAVAILABLE on both channels — $2"'
+    else:
+        call = (
+            'loop_log NOTIFY "review-with-failover: primary REVIEWER_UNAVAILABLE, failover '
+            'carried the review — $1: $2"'
+        )
+    script = f'. "{lib / "lib.sh"}" && . "{lib / "loop_lib.sh"}" && {call}'
     proc = subprocess.run(
-        ["bash", "-c", script, "loop_defer", arc_id, reason],
+        ["bash", "-c", script, "loop_route", arc_id, reason],
         cwd=rw.REPO,
         capture_output=True,
         text=True,
@@ -453,7 +460,13 @@ def main(argv: list[str] | None = None) -> int:
     if fo.terminal == "REVIEWER_UNAVAILABLE":
         both = f"codex: {first.reason}; gemini: {fo.reason}"
         print(f"review-with-failover: BOTH channels unavailable -- {both}", file=sys.stderr)
-        _route_to_hitl(rw.env_arc_and_lane()[0], both)
+        _route_to_hitl(rw.env_arc_and_lane()[0], both, blocking=True)
+    else:
+        _route_to_hitl(
+            rw.env_arc_and_lane()[0],
+            f"codex: {first.reason}; gemini: {fo.terminal}",
+            blocking=False,
+        )
     return rw.exit_code(fo)
 
 
