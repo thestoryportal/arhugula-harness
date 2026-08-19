@@ -175,8 +175,13 @@ def phase0_verdict(results: list[Result]) -> int:
 #: node alone could come from probing an unrelated file). The LINES the annotation names stay a
 #: human contract -- the gate proves a live pin of the named file exists for the annotated test.
 _ANNOT = re.compile(
-    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: .*\n(?:@[^\n]*\n)*def (?P<name>test_\w+)", re.M
+    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:@[^\n]*\n)*"
+    r"def (?P<name>test_\w+)",
+    re.M,
 )
+#: The `red-first` skill's form, `# mutation-probe: <path>:<lines> ...` -- a leading path:lines
+#: token in the description names the target too (one grammar for both carriers).
+_DESC_TARGET = re.compile(r"^(?P<path>[\w./-]+\.(?:py|sh|yaml|yml)):\d")
 
 
 def _relative(token: str) -> str:
@@ -254,8 +259,16 @@ def _pinned_nodeids(log_path: Path) -> set[tuple[str, str]]:
 
 
 def _annotations(path: Path) -> list[tuple[str, str | None]]:
-    """`(test name, explicit target or None)` for every annotation in a test file."""
-    return [(m.group("name"), m.group("target")) for m in _ANNOT.finditer(path.read_text())]
+    """`(test name, explicit target or None)` for every annotation in a test file. Explicit =
+    `# mutation-probe(<path>):` or a red-first style `# mutation-probe: <path>:<lines> ...`."""
+    out: list[tuple[str, str | None]] = []
+    for m in _ANNOT.finditer(path.read_text()):
+        target = m.group("target")
+        if target is None:
+            d = _DESC_TARGET.match(m.group("desc").strip())
+            target = d.group("path") if d else None
+        out.append((m.group("name"), target))
+    return out
 
 
 def required_probes(row: Row) -> list[tuple[str, str]]:

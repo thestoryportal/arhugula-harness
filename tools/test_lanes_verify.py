@@ -263,13 +263,16 @@ def test_annotation_binds_the_pin_to_the_annotated_file(repo: Path, monkeypatch)
     file under the same test node is NOT coverage."""
     (repo / "tools" / "test_w.py").write_text(
         "# mutation-probe: default target\ndef test_d(): pass\n\n"
-        "# mutation-probe(tools/src.py): explicit target\ndef test_e(): pass\n"
+        "# mutation-probe(tools/src.py): explicit target\ndef test_e(): pass\n\n"
+        "# mutation-probe: tools/src.py:12-14 the red-first form names the target too\n"
+        "def test_f(): pass\n"
     )
     (repo / "tools" / "w.py").write_text("def f():\n    return 1\n")
     monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_w.py")])
     assert lv.required_probes(lv.MANIFEST[0]) == [
         ("tools/test_w.py::test_d", "tools/w.py"),
         ("tools/test_w.py::test_e", "tools/src.py"),
+        ("tools/test_w.py::test_f", "tools/src.py"),
     ]
     log = repo / "mp.jsonl"
     # pins of the WRONG file do not count, even under the right test node
@@ -277,11 +280,16 @@ def test_annotation_binds_the_pin_to_the_annotated_file(repo: Path, monkeypatch)
         _entry(repo, "uv run pytest tools/test_w.py::test_d -q", file="tools/src.py")
         + _entry(repo, "uv run pytest tools/test_w.py::test_e -q", file="tools/w.py")
     )
-    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_w.py::test_d", "tools/test_w.py::test_e"]
+    assert _nodes(lv.coverage_gaps(log)) == [
+        "tools/test_w.py::test_d",
+        "tools/test_w.py::test_e",
+        "tools/test_w.py::test_f",
+    ]
     assert all("[probe of tools/" in n for _, n in lv.coverage_gaps(log))
     log.write_text(
         _entry(repo, "uv run pytest tools/test_w.py::test_d -q", file="tools/w.py")
         + _entry(repo, "uv run pytest tools/test_w.py::test_e -q", file="tools/src.py")
+        + _entry(repo, "uv run pytest tools/test_w.py::test_f -q", file="tools/src.py")
     )
     assert lv.coverage_gaps(log) == []
     # a node-level row honours the node's own explicit target
