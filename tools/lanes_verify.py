@@ -197,8 +197,11 @@ def _pinned_nodeids(log_path: Path) -> set[str]:
                     break
         elif toks[:1] == ["bash"] and len(toks) > 1:
             target = _relative(toks[1])
-        if target is not None and _pin_is_live(e, target):
-            out.add(target)
+        if target is None:
+            continue
+        if not _pin_is_live(e, target):
+            continue
+        out.add(target)
     return out
 
 

@@ -150,7 +150,7 @@ def test_coverage_gap_when_probe_never_pinned(repo: Path, monkeypatch):
     assert lv.coverage_gaps(log) == []
 
 
-# mutation-probe: drop the `_pin_is_live(e, target)` conjunct in _pinned_nodeids()
+# mutation-probe: drop the `if not _pin_is_live(e, target): continue` guard in _pinned_nodeids()
 def test_pin_is_stale_once_the_source_or_the_test_changes(repo: Path, monkeypatch):
     """codex R2 P2: a PINNED verdict is evidence for the bytes it measured. Revert the guarded
     line (source changes) or weaken the witness (test changes) and the pin no longer counts;
