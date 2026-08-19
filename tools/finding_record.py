@@ -104,7 +104,15 @@ def next_finding_id(producer: str, head: str, location: str, rows: list[dict]) -
     an id and be rejected as a core mutation (Codex round-10 P1). `head` is the id's head
     component -- the row's `head_sha`, or the emitter's null-head token (e.g. `nohead`)."""
     prefix = f"{producer}:{head}:{location_hash(location)}:"
-    used = {int(r["finding_id"][len(prefix) :]) for r in rows if r["finding_id"].startswith(prefix)}
+    used: set[int] = set()
+    for r in rows:
+        fid = r["finding_id"]
+        if not fid.startswith(prefix):
+            continue
+        tail = fid[len(prefix) :]
+        if not tail.isdigit():  # a row that never passed validate() (legacy / external append)
+            raise RecordError(f"finding_id {fid!r} has a non-integer <n> component (C-HE-24 §4)")
+        used.add(int(tail))
     return f"{prefix}{max(used, default=0) + 1}"
 
 
@@ -218,10 +226,11 @@ def _check_against_prior_rows(row: dict, path: Path) -> None:
     adjudicated); an adjudication's ts is strictly later; nothing but further adjudications
     follows an adjudication. A repeated
     `finding` row (an emitter retry minting the same id) is held to the same core as the first
-    row, not only adjudications (Codex round-1 P1). Because `producer` is core-immutable, an
-    adjudication cannot smuggle a new producer in to evade the self-disposition ban: the swap
-    is rejected here as a core-field change, and the ban itself has exactly one write-time
-    enforcement point -- ``validate()``."""
+    row, not only adjudications (Codex round-1 P1). An adjudication cannot smuggle a new
+    producer in to evade the self-disposition ban: the id binds `producer`, so
+    `_check_finding_id_components` rejects the swap upstream (and `producer` is also listed
+    core-immutable here); the ban itself has exactly one write-time enforcement point --
+    ``validate()``."""
     prior = [r for r in read_rows(path) if r["finding_id"] == row["finding_id"]]
     if not prior:
         if row["record_kind"] == "finding_adjudication":

@@ -79,6 +79,7 @@ def test_self_disposition_rejected_at_write(tmp_path: Path):
     row = fr.make_row(
         _core(),
         _env(
+            ts="2026-08-18T00:00:01Z",  # later ts: the self-disposition ban is the ONLY rejector
             record_kind="finding_adjudication",
             disposition="accepted",
             disposition_actor="merge-gate",
@@ -119,6 +120,7 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
             fr.make_row(
                 _core(finding_id=fid, severity="P3"),
                 _env(
+                    ts="2026-08-18T00:00:01Z",  # later ts: the core check is the ONLY rejector
                     record_kind="finding_adjudication",
                     disposition="accepted",
                     disposition_actor="operator",
@@ -133,6 +135,7 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
             fr.make_row(
                 _core(finding_id=fid, producer="operator"),
                 _env(
+                    ts="2026-08-18T00:00:01Z",
                     record_kind="finding_adjudication",
                     disposition="accepted",
                     disposition_actor="merge-gate",
@@ -141,12 +144,13 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
             p,
         )
     with pytest.raises(
-        fr.RecordError, match="core field"
+        fr.RecordError, match="core field 'lane_id'"
     ):  # envelope fields are immutable too (round-3 P2)
         fr.append_row(
             fr.make_row(
                 _core(finding_id=fid),
                 _env(
+                    ts="2026-08-18T00:00:01Z",
                     lane_id="other-lane",
                     record_kind="finding_adjudication",
                     disposition="accepted",
@@ -160,6 +164,7 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
             fr.make_row(
                 _core(finding_id=fr.make_finding_id("merge-gate", HEAD, LOC, 99)),
                 _env(
+                    ts="2026-08-18T00:00:01Z",
                     record_kind="finding_adjudication",
                     disposition="accepted",
                     disposition_actor="operator",
@@ -335,6 +340,82 @@ def test_append_observation_mints_fresh_ids_across_rounds(tmp_path: Path):
         p,
     )
     assert r4["finding_id"].startswith("merge-gate:nohead:")
+
+
+# mutation-probe: drop the `_lock_exclusive(fd, path)` line in _under_log_lock()
+def test_append_observation_allocates_and_appends_in_one_critical_section(
+    tmp_path: Path, monkeypatch
+):
+    """Two concurrent emitters minting for the same (producer, head, location) get DISTINCT ids
+    (`:1`, `:2`) -- never the same id twice. If allocation ran outside the lock (or the lock were
+    gone) both would read an empty log, both would mint `:1`, and -- being identical same-kind
+    rows -- both would land: two rows, one id. The barrier inside the patched read_rows only
+    rendezvous when both callers are inside the section at once (merge-gate L3 finding)."""
+    p = tmp_path / "g.jsonl"
+    gate = threading.Barrier(2, timeout=1.0)
+    real_read = fr.read_rows
+
+    def read_then_rendezvous(path=None):
+        rows = real_read(path)
+        try:
+            gate.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return rows
+
+    monkeypatch.setattr(fr, "read_rows", read_then_rendezvous)
+    fields = dict(
+        location=LOC,
+        observed_evidence="lease acquired without pr",
+        expected_contract="C-HE-06 §3",
+        severity="P1",
+        finding_type="terminal-block",
+        lineage_claim="fresh",
+        producer="merge-gate",
+    )
+    minted: list[str] = []
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        try:
+            minted.append(fr.append_observation(fields, _env(), p)["finding_id"])
+        except fr.RecordError as exc:  # pragma: no cover - a rejection here is itself a failure
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer) for _ in range(2)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(timeout=30)
+    rows = real_read(p)
+    assert errors == [] and len(rows) == 2, (errors, rows)
+    assert sorted(r["finding_id"].rsplit(":", 1)[1] for r in rows) == ["1", "2"]
+    assert len(set(minted)) == 2
+
+
+def test_next_finding_id_rejects_a_non_integer_tail_loudly():
+    """A legacy/externally-appended row that never passed validate() surfaces as a RecordError,
+    not a bare ValueError (merge-gate L3 advisory)."""
+    bad = fr.make_row(_core(finding_id=f"merge-gate:{HEAD}:{fr.location_hash(LOC)}:x"), _env())
+    with pytest.raises(fr.RecordError, match="non-integer <n>"):
+        fr.next_finding_id("merge-gate", HEAD, LOC, [bad])
+
+
+def test_cli_validate_exit_codes(tmp_path: Path, capsys):
+    """`finding_record.py validate <jsonl>`: 0 on an absent/empty/valid file, 1 when any row
+    fails validate() (named on stderr), 2 on usage (merge-gate L3 advisory)."""
+    p = tmp_path / "g.jsonl"
+    assert fr.main(["validate", str(p)]) == 0  # absent
+    fr.append_row(fr.make_row(_core(), _env()), p)
+    assert fr.main(["validate", str(p)]) == 0  # valid
+    bad = fr.make_row(
+        _core(), _env(record_kind="finding", disposition="accepted")
+    )  # would fail validate()
+    with p.open("a") as fh:
+        fh.write(json.dumps(bad, sort_keys=True) + "\n")  # bypass the API, as a hand-edit would
+    assert fr.main(["validate", str(p)]) == 1
+    assert "row 2:" in capsys.readouterr().err
+    assert fr.main(["nope"]) == 2
 
 
 # mutation-probe: drop the `orig["record_kind"] != "finding"` adjudicable-kind guard
@@ -585,6 +666,8 @@ def test_projection_code_triple_and_severity_map():
     assert f.message == row["observed_evidence"]
     hard = fr.to_guard_finding(fr.make_row(_core(finding_type="permanent-fail-exit"), _env()))
     assert hard.severity == "hard"
+    other = fr.to_guard_finding(fr.make_row(_core(finding_type="equivalence_proof"), _env()))
+    assert other.severity == "info"  # anything outside the hard/warn prefix families
 
 
 def _guard_state() -> cg.GuardState:
