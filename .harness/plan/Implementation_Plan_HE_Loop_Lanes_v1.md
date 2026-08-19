@@ -35,7 +35,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | Field | Value |
 |---|---|
 | Status | **Accepted on merge of PR #1393, with the review record in §7 items 4–8** — exit gate = five out-of-family `just codex-review` rounds on the PR (40 P1 / 22 P2 in total, every finding absorbed in-plan before the next round; one spec-internal tension registered, not absorbed); item 8 is the terminal record and states the residual classes honestly (yield did NOT converge to zero — it is carried by unit execution's RED-first + per-PR codex + merge-gate). The spec's clearance marker (same PR) admits the plan only under this recorded gate. |
-| Version | v1.0 |
+| Version | v1.0 + **rev 2026-08-19 (spec v1.3 X3 absorption, U-HE-14 only)**: the U-HE-14 audit template's family table is re-headed "Derived families + new-fact carriers" with a `Relation` column (`derived` / `part of store N` / `sole carrier (new fact)`) and the `.seq` allocator, transition-marker `fresh_lease`, and LEASE sidecars are classified per the as-landed audit — the S4 units (U-HE-17/22/23/30) land against that classification, not the v1.0 "no new authority" template. No other unit changed. |
 | Date | 2026-08-18 |
 | Repo | `17011f89c` (every `file:line` below is pinned there, matching the spec's `[V]` set; re-verified in this authoring session) |
 | Path | `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` |
@@ -2410,7 +2410,7 @@ git commit -m "feat(he-lanes): U-HE-13 merge-gate JSONL sibling — jsonl-first 
 
 ### U-HE-14: Durable store audit one-pager + `tools/test_store_audit.py`
 
-**Scope.** Author `.harness/spec/store-audit-he-loop-lanes.md` listing exactly the eight stores of C-HE-30's table plus the derived families (reservation generation dirs, `transition.<token>` markers + `released.*/reclaimed.*`, `QUEUE_DIR/lanes/<k>`, `.harness/mechanized-checks-state.json`, `.harness/mutation-probe-log.jsonl`) with one authority per fact; and the static test that greps every `QUEUE_DIR`/`.harness` path literal in the four coordination modules and asserts each is listed.
+**Scope.** Author `.harness/spec/store-audit-he-loop-lanes.md` listing exactly the eight stores of C-HE-30's table plus the families the clearance fold adds (reservation generation dirs + `.seq` allocator, `transition.<token>` markers + `released.*/reclaimed.*` + `LEASE.<token>.*` sidecars, `QUEUE_DIR/lanes/<k>`, `hil-deliveries/`, `merge-door/attempts/` + `tier-clean-cycles/`, `.harness/mechanized-checks-state.json`, `.harness/mutation-probe-log.jsonl`), each classified `derived` / `part of store N` / `sole carrier (new fact)` (spec v1.3 X3) with one authority per fact; and the static test that greps every `QUEUE_DIR`/`.harness` path literal in the four coordination modules and asserts each is listed. *As landed (PR for U-HE-14): the test also parses the eight-store and family tables (one row per store, authority cells bound to the C-HE-30 facts, Relation cells pinned, no fact owned twice) and the extractor covers pathlib / f-string / chained / call-root joins, `glob`, `with_suffix`, `.tmp` stagers and the shell `$(..)/<name>` idiom; S4 units MUST move their module from `PENDING` to `LANDED` in `tools/test_store_audit.py` when it lands.*
 
 **Spec linkage.** C-HE-30 (table, invariants, verification: `tools/test_store_audit.py` phase0); §7; §11 #1.
 
@@ -2474,9 +2474,11 @@ Rule: exactly one authority per fact. Any fact found with two authorities is res
 | Finding emission (`codex_context_guard.Finding` projection) | CI/stdout | derived from the 8-field record — never authored independently |
 | Committed history on `MERGED_REF` | git | the only proof that a row is durable |
 
-## Derived families (no new authority)
+## Derived families + new-fact carriers (no second authority for an existing fact)
 
-| Family | Path | Derived from |
+*(v1.0 template headed "Derived families (no new authority)"; re-headed per spec v1.3 X3 — each row carries a `Relation` cell: `derived` / `part of store N` / `sole carrier (new fact)`. The as-landed page is canonical for the classifications; this template is illustrative.)*
+
+| Family | Path | Derived from / sole carrier of |
 |---|---|---|
 | Reservation generations | `QUEUE_DIR/reservations/<arc_id>/<gen>.json`, `.seq/<n>`, `.<gen>.<pid>.tmp` | the reservation store (history by construction; GC prunes below head) |
 | Lease transition markers + history | `QUEUE_DIR/merge-door/transition.<lease_token>`, `released.<token>`, `reclaimed.<token>`, `LEASE.<token>.attempted`, `LEASE.<token>.blocked`, `LEASE.<token>.refresh`, `attempts/<lane_id>/<ts>`, `tier-clean-cycles/<token>` | the lease (fencing + audit + §10 tiering counter; GC 30 d) |

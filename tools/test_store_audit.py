@@ -216,10 +216,15 @@ def test_family_table_relation_cells_are_classified() -> None:
         if r[2] == SOLE:
             # a sole carrier names its fact as a quoted phrase, not a description of a process
             assert r[3].startswith('"'), r
+    owners: list[str] = []
     for key, relation in FAMILY_RELATION:
         hits = [r for r in rows if key in r[1]]
         assert len(hits) == 1, (key, [r[1] for r in hits])
         assert relation in hits[0][2], (key, relation, hits[0][2])
+        owners.append(hits[0][0])
+    # distinct families live in distinct rows (folding several paths into one row would let
+    # one cell "own" five families)
+    assert len(set(owners)) == len(owners), owners
     # no fact is owned twice: the fourth cell (derived-from / fact) is distinct per row, and
     # no family claims one of the eight stores' facts as its own
     facts = [r[3] for r in rows]
