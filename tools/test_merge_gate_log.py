@@ -609,11 +609,30 @@ def test_cli_emit_requires_the_verdict_line_to_agree_with_the_block(tmp_path, mo
     assert "disagrees" in fr.read_rows(jl)[-1]["observed_evidence"]
     f.write_text(_lens_output(b, "APPROVE", line="no verdict line here"))
     assert mgl.main(_cli(f)) == 2
+    # codex R6 P1: the line is a FULL-line match -- ambiguous / decorated forms never approve
+    for bad in (
+        "VERDICT: APPROVE or BLOCK",
+        "VERDICT: APPROVE (tentative)",
+        "VERDICT:APPROVE",
+        "VERDICT: APPROVE: with a reason",
+        "VERDICT: BLOCK",
+    ):  # BLOCK needs its reason
+        f.write_text(_lens_output(b, "APPROVE", line=bad))
+        assert mgl.main(_cli(f)) == 2, bad
+    f.write_text(
+        _lens_output(
+            b,
+            "BLOCK",
+            [{"severity": "P1", "location": "x", "message": "m"}],
+            line="VERDICT: BLOCK: one concrete reason",
+        )
+    )
+    assert mgl.main(_cli(f)) == 1
     f.write_text(_lens_output(b, "APPROVE", line="VERDICT: APPROVE"))
     assert mgl.main(_cli(f)) == 0
     assert fr.read_rows(jl)[-1]["record_kind"] == "no_finding"
-    assert len(mgl.read_md_rows(md)) == 1  # only the agreeing run produced a structured line
-    assert md.read_text().count("REVIEWER_UNAVAILABLE") == 2
+    assert len(mgl.read_md_rows(md)) == 2  # only the agreeing runs produced structured lines
+    assert md.read_text().count("REVIEWER_UNAVAILABLE") == 7
 
 
 def test_no_cli_override_of_the_config_hash(tmp_path: Path):

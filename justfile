@@ -281,6 +281,16 @@ mutation-probe-coverage-check:
 merge-gate-log-check:
     uv run python tools/merge_gate_log.py check
 
+# Six binding values for one merge-gate lens (C-HE-15 §4) -- paste into the lens prompt.
+merge-gate-binding lens base='main':
+    uv run python tools/merge_gate_log.py binding --lens {{lens}} --base {{base}}
+
+# Record one lens verdict: JSONL first, markdown second (C-HE-23 §2, U-HE-13). Exit 0 APPROVE
+# recorded / 1 BLOCK recorded / 2 NOT recorded (does not count; re-run the lens).
+#   just merge-gate-emit --pr <N> --lens merge-gate-<id> --verdict-json .harness/tmp/<file>
+merge-gate-emit *ARGS:
+    uv run python tools/merge_gate_log.py emit "$@"
+
 # ─── MEMORY.md — byte-cap gate + idempotent index upsert ────────────────────
 # NOT a semantic compactor (that stays the agent's call) — a deterministic
 # byte-exact cap gate + idempotent upsert. See tools/memory_compact.py's header.

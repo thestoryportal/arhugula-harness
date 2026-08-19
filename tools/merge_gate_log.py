@@ -57,8 +57,10 @@ _MD_ROW = re.compile(
     r"(?P<head>[0-9a-f]{12})\s*\|\s*(?P<lens>merge-gate-[a-z-]+)\s*\|\s*"
     r"(?P<verdict>APPROVE|BLOCK)\s*\|\s*(?P<n>\d+) finding\(s\)\s*\|"
 )
-#: The lens contract's trailing line (merge-gate SKILL.md "Parsing -- fail closed").
-_VERDICT_LINE = re.compile(r"^VERDICT:\s*(APPROVE|BLOCK)\b")
+#: The lens contract's trailing line (merge-gate SKILL.md "Parsing -- fail closed"): EXACTLY
+#: `VERDICT: APPROVE` or `VERDICT: BLOCK: <reason>` -- a FULL-line match, so `VERDICT: APPROVE
+#: or BLOCK` / `VERDICT: APPROVE (tentative)` are ambiguous, not approvals (codex R6 P1).
+_VERDICT_LINE = re.compile(r"^VERDICT: (?:(APPROVE)|(BLOCK)(?:: \S.*)?)$")
 _ARC_PR_RE = re.compile(r"^pr-(\d+)$")
 
 
@@ -452,8 +454,9 @@ def main(argv: list[str] | None = None) -> int:
                 # block -- JSON APPROVE + `VERDICT: BLOCK` (or no line) is not a verdict
                 # (codex R3 P2); the block alone never records an ambiguous response
                 tail = [ln.strip() for ln in text.splitlines() if ln.strip()]
-                m = _VERDICT_LINE.match(tail[-1]) if tail else None
-                if m is None or m.group(1) != outcome.terminal:
+                m = _VERDICT_LINE.fullmatch(tail[-1]) if tail else None
+                line_verdict = (m.group(1) or m.group(2)) if m else None
+                if line_verdict != outcome.terminal:
                     outcome = rw.ReviewOutcome(
                         "REVIEWER_UNAVAILABLE",
                         CHANNEL,

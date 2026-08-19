@@ -75,7 +75,7 @@ radius, never a ceiling. `tools/graft_reachability.py` documents this same limit
 
 Each lens verdict is bound to the exact tree it reviewed. For each lens id —
 `merge-gate-concurrency`, `merge-gate-spec-conformance`, `merge-gate-witness-adequacy` — run
-`uv run python tools/merge_gate_log.py binding --lens <id> --base main` on the checked-out
+`just merge-gate-binding <id>` (base `main`) on the checked-out
 PR head and paste the six printed values (`head_sha`, `base_sha`, `diff_digest`,
 `reviewer_identity`, `prompt_version`, `config_hash`) into that lens's prompt. The lens
 copies them VERBATIM into its fenced JSON block; `emit` (below) recomputes them and refuses
@@ -153,9 +153,11 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   documented for Codex's non-interactive streaming-capture limitation
   (`[[codex-out-of-family-reviewer]]`); it applies just as much to a raw subagent reply.
 - **Record each lens verdict through the structured sibling (C-HE-23 §2).** Write the lens's
-  full response to a file and run
-  `uv run python tools/merge_gate_log.py emit --pr <PR#> --lens <id> --verdict-json <file> --base main`.
-  It parses the fenced JSON against the schema, holds it to the binding, and writes the
+  full response to `.harness/tmp/merge-gate-lens-<id>.txt` (in-worktree, gitignored — the
+  permission guard auto-allows the wrapper only on in-worktree paths) and run
+  `just merge-gate-emit --pr <PR#> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`.
+  It parses the fenced JSON against the schema, holds it to the binding, requires the final
+  `VERDICT:` line to agree with it (exact-line match), and writes the
   `.harness/merge-gate-log.jsonl` rows FIRST and a structured `.harness/merge-gate-log.md`
   line second. Exit 0 = APPROVE recorded, 1 = BLOCK recorded, **2 = NOT recorded (no schema
   block / binding mismatch / unwritable JSONL) — the lens verdict does not count; treat as
@@ -186,6 +188,12 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   blast-radius field is logged even when it is `NOT RUN`: a missing field and a field
   recording that the pre-flight could not run are different facts, and only one of them is
   recoverable later.
+- **Commit the gate rows before merging.** The emitted `.harness/merge-gate-log.jsonl` +
+  `.harness/merge-gate-log.md` rows are TRACKED records: commit + push them on the PR branch
+  (a gate-row-only delta — the same practice as today's narrative row; it never re-opens the
+  lens verdicts, which are bound to the reviewed head), wait for CI at that final head, and
+  only then merge. A record left as dirty local state is lost with the worktree and is not a
+  record (mirror of the Codex carrier's "commit and push the gate-log row before merge").
 
 ## Wiring into `ship-pr` / the loop
 

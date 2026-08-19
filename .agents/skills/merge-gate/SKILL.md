@@ -59,14 +59,15 @@ final non-empty line is exactly one permitted verdict. Missing, malformed, trunc
 ambiguous output is `BLOCK`.
 
 Before launching, compute each lens's binding with
-`uv run python tools/merge_gate_log.py binding --lens merge-gate-<concurrency|spec-conformance|witness-adequacy> --base main`
+`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`
 and include the six printed values in that lens's prompt; require, immediately before the
 `VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
-(`verdict`, `findings`, the six values verbatim). After each run, record it:
-`uv run python tools/merge_gate_log.py emit --pr <N> --lens <id> --verdict-json <output-file> --base main`
-(JSONL row first, structured markdown line second, C-HE-23 §2). Exit 0 = APPROVE recorded,
-1 = BLOCK recorded, 2 = NOT recorded — that lens verdict does not count; treat as `BLOCK`
-and re-run the lens.
+(`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
+the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored) and record it:
+`just merge-gate-emit --pr <N> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+(JSONL row first, structured markdown line second, C-HE-23 §2; the final `VERDICT:` line must
+agree with the block, exact-line match). Exit 0 = APPROVE recorded, 1 = BLOCK recorded,
+2 = NOT recorded — that lens verdict does not count; treat as `BLOCK` and re-run the lens.
 
 ## Outcome
 

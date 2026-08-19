@@ -36,6 +36,12 @@ audit-entries.jsonl.lock
 # never committed (codex round-2 [P2]).
 .harness/r420-scratch/
 routing_manifest/
+# spec-he-loop-lanes (U-HE-12/13): transient writer-exclusion artifacts beside the two
+# tracked records -- the arc-metrics ledger CAS claim + rewrite temp, the merge-gate
+# emission lock -- and the per-gate lens-response scratch dir. Never committed.
+.harness/.arc-metrics.jsonl.*
+.harness/merge-gate-log.jsonl.emit.lock
+.harness/tmp/
 
 # B-40: cross-process ledger advisory-lock sidecars (harness_is.cross_process_ledger_lock),
 # created next to any canonical ledger path (state.jsonl.lock, memory_ops.jsonl.lock, etc).
