@@ -99,7 +99,7 @@ def test_colon_in_identifier_rejected(field):
         fr.validate(row)
 
 
-# mutation-probe: drop _check_adjudication_against_original() from append_row()
+# mutation-probe: drop the _check_against_prior_rows() call from append_row()
 def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Path):
     p = tmp_path / "g.jsonl"
     fid = "merge-gate:abc:loc:1"
@@ -168,6 +168,57 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
         ),
         p,
     )
+
+
+# mutation-probe: drop the `elif` non-adjudication null-disposition branch in validate()
+@pytest.mark.parametrize("kind", ["finding", "no_finding", "gate_demotion"])
+def test_only_adjudication_rows_carry_disposition(kind):
+    """C-HE-24 §5: a pre-disposed non-adjudication row would let a reviewer dispose its own
+    finding without any append-only adjudication event (Codex round-1 P1)."""
+    with pytest.raises(fr.RecordError, match="null disposition"):
+        fr.validate(fr.make_row(_core(), _env(record_kind=kind, disposition="accepted")))
+    with pytest.raises(fr.RecordError, match="null disposition"):
+        fr.validate(fr.make_row(_core(), _env(record_kind=kind, disposition_actor="operator")))
+    fr.validate(fr.make_row(_core(), _env(record_kind=kind)))  # null both -> legal
+
+
+def test_repeated_finding_row_must_keep_the_same_core(tmp_path: Path):
+    """C-HE-24 invariant: two rows with one finding_id differ only by ts / record_kind /
+    disposition / disposition_actor / unique_catch -- for a repeated `finding` row too, not only
+    adjudications (Codex round-1 P1)."""
+    p = tmp_path / "g.jsonl"
+    fid = "merge-gate:abc:loc:1"
+    fr.append_row(fr.make_row(_core(finding_id=fid), _env()), p)
+    with pytest.raises(fr.RecordError, match="core field 'observed_evidence'"):
+        fr.append_row(fr.make_row(_core(finding_id=fid, observed_evidence="rewritten"), _env()), p)
+    with pytest.raises(fr.RecordError, match="core field 'severity'"):
+        fr.append_row(fr.make_row(_core(finding_id=fid, severity="P3"), _env()), p)
+    fr.append_row(
+        fr.make_row(_core(finding_id=fid), _env(ts="2026-08-18T00:00:09Z")), p
+    )  # same core: legal
+    assert len(fr.read_rows(p)) == 2
+
+
+def test_reducer_uses_file_order_not_ts(tmp_path: Path):
+    """The append-only log is the ordering authority: a later physical row with an EARLIER ts
+    (clock regression / back-fill) still wins (Codex round-1 P2)."""
+    p = tmp_path / "g.jsonl"
+    fid = "merge-gate:abc:loc:1"
+    fr.append_row(fr.make_row(_core(finding_id=fid), _env(ts="2026-08-18T00:00:05Z")), p)
+    fr.append_row(
+        fr.make_row(
+            _core(finding_id=fid),
+            _env(
+                ts="2026-08-18T00:00:01Z",  # earlier than the row before it
+                record_kind="finding_adjudication",
+                disposition="accepted",
+                disposition_actor="operator",
+            ),
+        ),
+        p,
+    )
+    last = fr.reduce_last_by_finding_id(fr.read_rows(p))
+    assert last[fid]["disposition"] == "accepted"
 
 
 def test_reducer_last_row_wins(tmp_path: Path):

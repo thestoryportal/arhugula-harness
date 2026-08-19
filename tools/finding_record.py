@@ -96,6 +96,14 @@ def validate(row: dict) -> None:
     if row["record_kind"] == "finding_adjudication":
         if row["disposition"] is None or row["disposition_actor"] is None:
             raise RecordError("finding_adjudication rows require disposition and disposition_actor")
+    elif row["disposition"] is not None or row["disposition_actor"] is not None:
+        # C-HE-24 §2/§5: disposition is set ONLY by an append-only adjudication row. A `finding`
+        # row that arrives pre-disposed would let the reviewer dispose its own finding without
+        # any adjudication event (Codex round-1 P1).
+        raise RecordError(
+            f"{row['record_kind']!r} rows must carry null disposition/disposition_actor "
+            "(only finding_adjudication rows dispose, C-HE-24 §5)"
+        )
     if row["disposition_actor"] is not None and row["disposition_actor"] == row["producer"]:
         raise RecordError(
             f"disposition_actor {row['disposition_actor']!r} equals producer -- "
@@ -122,17 +130,19 @@ _CORE_IMMUTABLE = (
 )
 
 
-def _check_adjudication_against_original(row: dict, path: Path) -> None:
-    """C-HE-24 §5 invariant at WRITE time: two rows with one finding_id differ only by
-    ts / record_kind / disposition / disposition_actor / unique_catch. Because `producer` is
-    core-immutable, an adjudication cannot smuggle a new producer in to evade the
-    self-disposition ban (Codex round-1 P2): the swap is rejected here as a core-field change,
-    and the ban itself has exactly one write-time enforcement point -- ``validate()``."""
-    if row["record_kind"] != "finding_adjudication":
-        return
+def _check_against_prior_rows(row: dict, path: Path) -> None:
+    """C-HE-24 §5 invariant at WRITE time, for EVERY row kind: two rows with one finding_id
+    differ only by ts / record_kind / disposition / disposition_actor / unique_catch. A repeated
+    `finding` row (an emitter retry minting the same id) is held to the same core as the first
+    row, not only adjudications (Codex round-1 P1). Because `producer` is core-immutable, an
+    adjudication cannot smuggle a new producer in to evade the self-disposition ban: the swap
+    is rejected here as a core-field change, and the ban itself has exactly one write-time
+    enforcement point -- ``validate()``."""
     prior = [r for r in read_rows(path) if r["finding_id"] == row["finding_id"]]
     if not prior:
-        raise RecordError(f"adjudication for unknown finding_id {row['finding_id']!r}")
+        if row["record_kind"] == "finding_adjudication":
+            raise RecordError(f"adjudication for unknown finding_id {row['finding_id']!r}")
+        return
     orig = prior[0]
     for k in _CORE_IMMUTABLE:
         if row[k] != orig[k]:
@@ -142,13 +152,13 @@ def _check_adjudication_against_original(row: dict, path: Path) -> None:
 
 
 def append_row(row: dict, path: Path | None = None) -> None:
-    """Validate (incl. the same-core invariant for adjudications), then append one line with a
-    single write. `path` defaults to GATE_LOG_JSONL resolved AT CALL TIME (not bound at def
-    time) so tests may monkeypatch it and production writes never leak into a test's tree
+    """Validate (incl. the same-core invariant for repeated finding_ids), then append one line
+    with a single write. `path` defaults to GATE_LOG_JSONL resolved AT CALL TIME (not bound at
+    def time) so tests may monkeypatch it and production writes never leak into a test's tree
     (Codex round-5 P1)."""
     path = path or GATE_LOG_JSONL
     validate(row)
-    _check_adjudication_against_original(row, path)
+    _check_against_prior_rows(row, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(row, sort_keys=True) + "\n"
     with path.open("a") as fh:
@@ -171,9 +181,12 @@ def read_rows(path: Path | None = None) -> list[dict]:
 
 
 def reduce_last_by_finding_id(rows: list[dict]) -> dict[str, dict]:
-    """Last row per finding_id by (ts, file order). Append-only makes this monotonic."""
+    """Last row per finding_id in FILE (append) order -- the append-only log is the ordering
+    authority. `ts` is emitter-supplied and is never used to reorder: a clock regression or a
+    back-filled row must not let an earlier physical row outrank the latest appended
+    adjudication (Codex round-1 P2; C-HE-24 §5 "readers reduce by finding_id -> last row")."""
     out: dict[str, dict] = {}
-    for row in sorted(rows, key=lambda r: r["ts"]):  # stable sort keeps file order on ties
+    for row in rows:
         out[row["finding_id"]] = row
     return out
 
