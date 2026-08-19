@@ -1,0 +1,20 @@
+{"file": "tools/finding_record.py", "lines": "197-201", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_self_disposition_rejected_at_write", "ts": "2026-08-19T14:55:37Z"}
+{"file": "tools/finding_record.py", "lines": "340", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_adjudication_cannot_change_core_or_evade_self_disposition", "ts": "2026-08-19T14:55:39Z"}
+{"file": "tools/finding_record.py", "lines": "159-166", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_ts_must_be_a_real_utc_timestamp", "ts": "2026-08-19T14:55:42Z"}
+{"file": "tools/finding_record.py", "lines": "167-174", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_finding_rows_require_grounding_fields", "ts": "2026-08-19T14:55:44Z"}
+{"file": "tools/finding_record.py", "lines": "189-196", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_only_adjudication_rows_carry_disposition", "ts": "2026-08-19T14:55:47Z"}
+{"file": "tools/finding_record.py", "lines": "244-253", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_retry_after_adjudication_is_rejected", "ts": "2026-08-19T14:55:49Z"}
+{"file": "tools/finding_record.py", "lines": "314", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_append_observation_allocates_and_appends_in_one_critical_section", "ts": "2026-08-19T14:55:53Z"}
+{"file": "tools/finding_record.py", "lines": "255-262", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_only_finding_rows_may_be_adjudicated", "ts": "2026-08-19T14:55:55Z"}
+{"file": "tools/finding_record.py", "lines": "180-188", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_equivalence_proof_rows_carry_the_prover_inline", "ts": "2026-08-19T14:55:57Z"}
+{"file": "tools/finding_record.py", "lines": "263-271", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_only_same_kind_retry_or_adjudication_may_follow_an_existing_id", "ts": "2026-08-19T14:56:00Z"}
+{"file": "tools/finding_record.py", "lines": "277-286", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_adjudication_ts_must_be_strictly_later", "ts": "2026-08-19T14:56:02Z"}
+{"file": "tools/finding_record.py", "lines": "158", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_finding_id_components_must_agree_with_the_row", "ts": "2026-08-19T14:56:04Z"}
+{"file": "tools/finding_record.py", "lines": "314", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_check_and_append_are_one_critical_section", "ts": "2026-08-19T14:56:08Z"}
+{"file": "tools/finding_record.py", "lines": "448", "rc": 0, "test": "uv run pytest -q tools/test_finding_record.py::test_projection_code_triple_and_severity_map", "ts": "2026-08-19T14:56:10Z"}
+{"file": "tools/review_wrapper_common.py", "lines": "253-257", "rc": 0, "test": "uv run pytest -q tools/test_review_wrapper.py::test_empty_stdout_exit0_is_unavailable", "ts": "2026-08-19T14:56:13Z"}
+{"file": "tools/arc_metrics.py", "lines": "94-99", "rc": 0, "test": "uv run pytest -q tools/test_arc_metrics.py::test_ci_state_cancelled_incomplete", "ts": "2026-08-19T14:56:15Z"}
+{"file": "tools/arc_metrics.py", "lines": "476-477", "rc": 0, "test": "uv run pytest -q tools/test_arc_metrics.py::test_arc_type_at_open", "ts": "2026-08-19T14:56:17Z"}
+{"file": "tools/lanes_verify.py", "lines": "167-168", "rc": 0, "test": "uv run pytest -q tools/test_lanes_verify.py::test_coverage_gap_when_probe_never_pinned", "ts": "2026-08-19T14:56:19Z"}
+{"file": "tools/merge_gate_log.py", "lines": "137-159", "rc": 0, "test": "uv run pytest -q tools/test_merge_gate_log.py::test_md_failure_leaves_the_jsonl_row_and_records_a_warn_finding", "ts": "2026-08-19T14:56:22Z"}
+{"file": "tools/hooks/loop_lib.sh", "lines": "301", "rc": 0, "test": "bash tools/hooks/test_loop_lib.sh", "ts": "2026-08-19T14:56:28Z"}
