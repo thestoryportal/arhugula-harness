@@ -91,10 +91,8 @@ def validate(row: dict) -> None:
         jsonschema.validate(row, SCHEMA)
     except jsonschema.ValidationError as exc:
         raise RecordError(f"finding record schema: {exc.message}") from exc
-    for key in ("producer", "lane_id", "disposition_actor"):
-        val = row.get(key)
-        if isinstance(val, str) and ":" in val:
-            raise RecordError(f"{key} must not contain ':' (finding_id/code delimiter): {val!r}")
+    # `:`-free identifiers (producer / lane_id / disposition_actor, C-HE-24 §2) are enforced by
+    # the schema's `pattern` alone -- one enforcement point, no duplicate charset loop here.
     if row["record_kind"] == "finding_adjudication":
         if row["disposition"] is None or row["disposition_actor"] is None:
             raise RecordError("finding_adjudication rows require disposition and disposition_actor")
@@ -126,20 +124,16 @@ _CORE_IMMUTABLE = (
 
 def _check_adjudication_against_original(row: dict, path: Path) -> None:
     """C-HE-24 §5 invariant at WRITE time: two rows with one finding_id differ only by
-    ts / record_kind / disposition / disposition_actor / unique_catch. The self-disposition
-    ban is checked against the ORIGINAL producer, so an adjudication cannot smuggle a new
-    producer in to evade it (Codex round-1 P2)."""
+    ts / record_kind / disposition / disposition_actor / unique_catch. Because `producer` is
+    core-immutable, an adjudication cannot smuggle a new producer in to evade the
+    self-disposition ban (Codex round-1 P2): the swap is rejected here as a core-field change,
+    and the ban itself has exactly one write-time enforcement point -- ``validate()``."""
     if row["record_kind"] != "finding_adjudication":
         return
     prior = [r for r in read_rows(path) if r["finding_id"] == row["finding_id"]]
     if not prior:
         raise RecordError(f"adjudication for unknown finding_id {row['finding_id']!r}")
     orig = prior[0]
-    # Checked BEFORE the core loop so the producer-swap evasion is named as such.
-    if row["disposition_actor"] == orig["producer"]:
-        raise RecordError(
-            f"disposition_actor {row['disposition_actor']!r} equals the finding's original producer"
-        )
     for k in _CORE_IMMUTABLE:
         if row[k] != orig[k]:
             raise RecordError(

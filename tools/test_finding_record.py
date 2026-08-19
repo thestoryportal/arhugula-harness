@@ -86,7 +86,8 @@ def test_adjudication_requires_actor():
         )
 
 
-# mutation-probe: drop the ':' charset check in validate()
+# The `:` ban has ONE enforcement point -- the schema `pattern` -- so there is no Python guard
+# line to mutation-probe; the hand witness (drop the pattern -> this test red) is in the PR body.
 @pytest.mark.parametrize("field", ["producer", "lane_id"])
 def test_colon_in_identifier_rejected(field):
     kwargs = {field: "bad:id"}
@@ -116,8 +117,8 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
             p,
         )
     with pytest.raises(
-        fr.RecordError, match="original producer"
-    ):  # producer swapped to evade the self-disposition ban
+        fr.RecordError, match="core field 'producer'"
+    ):  # producer swapped to evade the self-disposition ban -> a core-field change
         fr.append_row(
             fr.make_row(
                 _core(finding_id=fid, producer="operator"),
@@ -208,7 +209,7 @@ def test_finding_id_shape():
     assert len(parts[2]) == 12
 
 
-# mutation-probe: change the `code` join in to_guard_finding() to a different delimiter
+# mutation-probe: drop the `code` join line in to_guard_finding()
 def test_projection_code_triple_and_severity_map():
     row = fr.make_row(
         _core(producer="merge-door-lease-acquire", finding_type="transient-retry", severity="P3"),
