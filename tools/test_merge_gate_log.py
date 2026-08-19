@@ -78,7 +78,7 @@ def test_approve_writes_a_no_finding_row_then_a_structured_md_line(tmp_path: Pat
     assert rows[0]["producer"] == LENS and rows[0]["arc_id"] == "pr-1" and rows[0]["round_n"] == 1
     assert rows[0]["head_sha"] == H and rows[0]["base_sha"] == B and rows[0]["diff_digest"] == D
     md = (tmp_path / "log.md").read_text()
-    assert md == f"| {rows[0]['ts']} | #1 | {H[:12]} | {LENS} | APPROVE | 0 finding(s) |\n"
+    assert md == f"| {rows[0]['ts']} | #1 | {H[:12]} | {LENS} | APPROVE | 0 finding(s) | r1 |\n"
     assert mgl.read_md_rows(tmp_path / "log.md") == [
         {
             "ts": rows[0]["ts"],
@@ -87,6 +87,7 @@ def test_approve_writes_a_no_finding_row_then_a_structured_md_line(tmp_path: Pat
             "lens": LENS,
             "verdict": "APPROVE",
             "n_findings": 0,
+            "round_n": 1,
         }
     ]
 
@@ -186,6 +187,7 @@ def test_consistency_orphan_class_and_reconcile(tmp_path: Path):
         "lens": "merge-gate-spec",
         "verdict": "BLOCK",
         "n_findings": 1,
+        "round_n": 1,
     }
     assert "1 finding(s)" in md.read_text()
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
@@ -195,9 +197,9 @@ def test_consistency_orphan_class_and_reconcile(tmp_path: Path):
 def test_missing_jsonl_is_the_red_class(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     rows = _emit(tmp_path, pr=3)  # establishes the comparison window
-    md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 4, "d" * 40, LENS, "APPROVE", 0))
+    md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 4, "d" * 40, LENS, "APPROVE", 0, 1))
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(4, "d" * 12, LENS, "APPROVE", rows[0]["ts"], 0)]
+    assert rep["missing_jsonl"] == [(4, "d" * 12, LENS, "APPROVE", rows[0]["ts"], 0, 1)]
     assert not rep["orphan_jsonl"]
 
 
@@ -226,13 +228,14 @@ def test_finding_count_is_part_of_the_sibling_match(tmp_path: Path):
     lines = jl.read_text().splitlines(keepends=True)
     jl.write_text(lines[0])  # one finding row lost from the machine log
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", ts, 2)]
+    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", ts, 2, 1)]
     assert [r["round_n"] for r in rep["orphan_jsonl"]] == [1]  # the 1-finding emission: no line
     # one emission cannot vouch for two md lines at its key
     jl.write_text("".join(lines))
     md.write_text(md.read_text() * 2)
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", ts, 2)] and not rep["orphan_jsonl"]
+    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", ts, 2, 1)]
+    assert not rep["orphan_jsonl"]
 
 
 def test_one_lens_md_failure_warn_does_not_suppress_another_lens_orphan(tmp_path: Path):
@@ -361,10 +364,25 @@ def test_a_duplicated_round_1_line_cannot_stand_in_for_a_lost_round_2_line(tmp_p
     l1, l2 = md.read_text().splitlines(keepends=True)
     md.write_text(l1 + l1)  # round 1's line twice, round 2's lost
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(4, H[:12], LENS, "APPROVE", "2026-08-19T10:00:00Z", 0)]
+    assert rep["missing_jsonl"] == [(4, H[:12], LENS, "APPROVE", "2026-08-19T10:00:00Z", 0, 1)]
     assert [r["round_n"] for r in rep["orphan_jsonl"]] == [2]
     assert mgl.reconcile_orphans(md, jl) == 1
     assert md.read_text().endswith(l2)  # re-emitted with round 2's own ts
+
+
+def test_same_second_reruns_are_distinct_md_lines(tmp_path, monkeypatch):
+    """codex R9 P2: two reruns within one second at one head/lens/verdict/count are told apart
+    by the md line's round column; a duplicate of one cannot conceal the loss of the other."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-19T10:00:00Z")
+    _emit(tmp_path, pr=4, md=md, jl=jl, round_n=1)
+    _emit(tmp_path, pr=4, md=md, jl=jl, round_n=2)
+    l1, l2 = md.read_text().splitlines(keepends=True)
+    assert l1.endswith("| r1 |\n") and l2.endswith("| r2 |\n")
+    md.write_text(l1 + l1)
+    rep = mgl.consistency_report(md, jl)
+    assert rep["missing_jsonl"] == [(4, H[:12], LENS, "APPROVE", "2026-08-19T10:00:00Z", 0, 1)]
+    assert [r["round_n"] for r in rep["orphan_jsonl"]] == [2]
 
 
 def test_landing_delta_transfers_only_over_gate_row_files(tmp_path: Path):
@@ -379,20 +397,45 @@ def test_landing_delta_transfers_only_over_gate_row_files(tmp_path: Path):
     g("config", "user.name", "t")
     (repo / ".harness").mkdir()
     (repo / "code.py").write_text("x = 1\n")
-    (repo / ".harness" / "merge-gate-log.jsonl").write_text("")
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text('{"a": 1}\n')
+    (repo / ".harness" / "merge-gate-log.md").write_text("| row |\n")
     g("add", "-A")
     g("commit", "-qm", "h1")
     h1 = g("rev-parse", "HEAD").stdout.strip()
-    (repo / ".harness" / "merge-gate-log.jsonl").write_text("{}\n")
-    (repo / ".harness" / "merge-gate-log.md").write_text("| row |\n")
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text('{"a": 1}\n{"b": 2}\n')
+    (repo / ".harness" / "merge-gate-log.md").write_text("| row |\n| row2 |\n")
     g("add", "-A")
     g("commit", "-qm", "gate rows")
     assert mgl.landing_delta(h1, "HEAD", repo) == []  # approvals transfer
+    h2 = g("rev-parse", "HEAD").stdout.strip()
     (repo / "code.py").write_text("x = 2\n")
     g("add", "-A")
     g("commit", "-qm", "sneaky")
     assert mgl.landing_delta(h1, "HEAD", repo) == ["code.py"]  # re-gate
     assert mgl.main(["landing-delta", "--reviewed", "not-a-ref"]) == 2
+    # codex R9 P2: a gate-log file counts only as an APPEND -- rewrite / truncate / delete is change
+    g("checkout", "-q", h2)
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text("")  # truncated
+    g("add", "-A")
+    g("commit", "-qm", "truncate")
+    assert mgl.landing_delta(h1, "HEAD", repo) == [
+        ".harness/merge-gate-log.jsonl (not an append: rewritten, truncated or removed)"
+    ]
+    g("checkout", "-q", h2)
+    (repo / ".harness" / "merge-gate-log.md").write_text(
+        "| roW |\n| row2 |\n"
+    )  # rewritten in place
+    g("add", "-A")
+    g("commit", "-qm", "rewrite")
+    assert mgl.landing_delta(h1, "HEAD", repo) == [
+        ".harness/merge-gate-log.md (not an append: rewritten, truncated or removed)"
+    ]
+    g("checkout", "-q", h2)
+    g("rm", "-q", ".harness/merge-gate-log.md")
+    g("commit", "-qm", "delete")
+    assert mgl.landing_delta(h1, "HEAD", repo) == [
+        ".harness/merge-gate-log.md (not an append: rewritten, truncated or removed)"
+    ]
 
 
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
@@ -421,9 +464,11 @@ def test_legacy_markdown_rows_and_wrapper_rows_are_outside_the_comparison(tmp_pa
     )
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
     # a STRUCTURED md row is always compared, whatever its date (no window, codex R3 P1)
-    md.write_text(md.read_text() + mgl._md_line("2000-01-01T00:00:00Z", 1, H, LENS, "APPROVE", 0))
+    md.write_text(
+        md.read_text() + mgl._md_line("2000-01-01T00:00:00Z", 1, H, LENS, "APPROVE", 0, 1)
+    )
     assert mgl.consistency_report(md, jl)["missing_jsonl"] == [
-        (1, H[:12], LENS, "APPROVE", "2000-01-01T00:00:00Z", 0)
+        (1, H[:12], LENS, "APPROVE", "2000-01-01T00:00:00Z", 0, 1)
     ]
 
 
@@ -762,6 +807,6 @@ def test_cli_check_is_red_only_on_missing_jsonl(tmp_path: Path, monkeypatch, cap
     assert mgl.main(["check"]) == 0  # orphan: listed, reconciled next run, not red
     assert "ORPHAN-JSONL" in capsys.readouterr().out
     assert mgl.main(["reconcile"]) == 0 and mgl.read_md_rows(md)
-    md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 8, "e" * 40, LENS, "BLOCK", 1))
+    md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 8, "e" * 40, LENS, "BLOCK", 1, 1))
     assert mgl.main(["check"]) == 1
     assert "MISSING-JSONL pr=8" in capsys.readouterr().out

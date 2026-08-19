@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from collections.abc import Callable
@@ -50,12 +51,15 @@ CHANNEL = "merge-gate"
 PROMPT_VERSION = "merge-gate-lens-v1"
 _LENS_RE = re.compile(r"^merge-gate-[a-z-]+$")
 #: The structured markdown line this module writes (the reducer reads ONLY this shape):
-#: `| <ts> | #<pr> | <head12> | <lens> | <APPROVE|BLOCK|REVIEWER_UNAVAILABLE> | <n> finding(s) |`.
-#: The legacy per-PR narrative rows (`| #NNNN | <date> | <branch> | ... |`) do not match it.
+#: `| <ts> | #<pr> | <head12> | <lens> | <APPROVE|BLOCK|REVIEWER_UNAVAILABLE> | <n> finding(s)
+#: | r<round> |`.
+#: The round column makes each line's identity exact -- two same-second reruns at one head,
+#: lens and verdict are distinct lines (codex R9 P2). The legacy per-PR narrative rows
+#: (`| #NNNN | <date> | <branch> | ... |`) do not match it.
 _MD_ROW = re.compile(
     r"^\|\s*(?P<ts>\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)\s*\|\s*#(?P<pr>\d+)\s*\|\s*"
     r"(?P<head>[0-9a-f]{12})\s*\|\s*(?P<lens>merge-gate-[a-z-]+)\s*\|\s*"
-    r"(?P<verdict>APPROVE|BLOCK)\s*\|\s*(?P<n>\d+) finding\(s\)\s*\|"
+    r"(?P<verdict>APPROVE|BLOCK)\s*\|\s*(?P<n>\d+) finding\(s\)\s*\|\s*r(?P<round>\d+)\s*\|"
 )
 #: The lens contract's trailing line (merge-gate SKILL.md "Parsing -- fail closed"): EXACTLY
 #: `VERDICT: APPROVE` or `VERDICT: BLOCK: <reason>` -- a FULL-line match, so `VERDICT: APPROVE
@@ -168,8 +172,13 @@ def verdict_of(row: dict) -> str | None:
     return None
 
 
-def _md_line(ts: str, pr: int, head_sha: str, lens: str, terminal: str, n_findings: int) -> str:
-    return f"| {ts} | #{pr} | {head_sha[:12]} | {lens} | {terminal} | {n_findings} finding(s) |\n"
+def _md_line(
+    ts: str, pr: int, head_sha: str, lens: str, terminal: str, n_findings: int, round_n: int
+) -> str:
+    return (
+        f"| {ts} | #{pr} | {head_sha[:12]} | {lens} | {terminal} | {n_findings} finding(s) "
+        f"| r{round_n} |\n"
+    )
 
 
 def emit_gate_row(
@@ -222,7 +231,15 @@ def _emit_gate_row_locked(
     try:
         with md_path.open("a", encoding="utf-8") as fh:  # (2) human view second
             fh.write(
-                _md_line(rows[0]["ts"], pr, head, lens, outcome.terminal, len(outcome.findings))
+                _md_line(
+                    rows[0]["ts"],
+                    pr,
+                    head,
+                    lens,
+                    outcome.terminal,
+                    len(outcome.findings),
+                    rows[0]["round_n"],
+                )
             )
     except OSError as exc:
         # The machine record stands; the failure is itself a recorded `warn` finding so the
@@ -279,6 +296,7 @@ def read_md_rows(md_path: Path | None = None) -> list[dict]:
                     "lens": m["lens"],
                     "verdict": m["verdict"],
                     "n_findings": int(m["n"]),
+                    "round_n": int(m["round"]),
                 }
             )
     return out
@@ -333,10 +351,10 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     # EVERY structured md line is compared -- no time window (codex R3 P1: with zero surviving
     # emissions a window filtered every md row out, so a deleted machine log passed). Only
     # this module writes the structured shape; the legacy narrative rows never match it.
-    md_by_key: dict[tuple, list[tuple[str, int]]] = {}
+    md_by_key: dict[tuple, list[tuple[str, int, int]]] = {}
     for r in read_md_rows(md_path):
         k = (r["pr"], r["head_sha"], r["lens"], r["verdict"])
-        md_by_key.setdefault(k, []).append((r["ts"], r["n_findings"]))
+        md_by_key.setdefault(k, []).append((r["ts"], r["n_findings"], r["round_n"]))
     # a warn vouches for ONE emission: same head, same lens, same round (codex R2 P2 -- keyed
     # without the round, a round-1 md failure would hide a round-2 crash between the writes)
     warned = {
@@ -350,25 +368,27 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     # finding row stayed green; codex R8 P2: without `ts` a duplicated round-1 line could
     # stand in for a lost round-2 line -- each md line carries its emission's ts, and
     # `reconcile_orphans` re-emits with that same ts)
-    em_by_key: dict[tuple, list[tuple[str, int, dict]]] = {}
+    em_by_key: dict[tuple, list[tuple[str, int, int, dict]]] = {}
     for k, rows in sorted(emissions.items(), key=lambda kv: kv[0][4]):
         # the warn vouches for ONE emission: same arc (pr), head, lens AND round (codex R2/R4
         # P2 -- two PRs at one head+lens both have a round 1)
         if (rows[0]["arc_id"], rows[0]["head_sha"], rows[0]["producer"], k[4]) in warned:
             continue
         n_findings = sum(1 for x in rows if x["record_kind"] == "finding")
-        em_by_key.setdefault(k[:4], []).append((rows[0]["ts"], n_findings, rows[0]))
+        em_by_key.setdefault(k[:4], []).append((rows[0]["ts"], n_findings, k[4], rows[0]))
     missing: list[tuple] = []
     orphan: list[dict] = []
     for k in sorted(set(md_by_key) | set(em_by_key)):
         ems = list(em_by_key.get(k, []))
-        for ts, n in sorted(md_by_key.get(k, [])):
-            match = next((i for i, (ets, c, _) in enumerate(ems) if (ets, c) == (ts, n)), None)
+        for ts, n, rn in sorted(md_by_key.get(k, [])):
+            match = next(
+                (i for i, (ets, c, er, _) in enumerate(ems) if (ets, c, er) == (ts, n, rn)), None
+            )
             if match is None:
-                missing.append((*k, ts, n))  # an md line with no emission of that ts+count
+                missing.append((*k, ts, n, rn))  # an md line with no emission of that identity
             else:
                 ems.pop(match)
-        orphan.extend(row for _, _, row in ems)  # emissions left without an md line
+        orphan.extend(row for _, _, _, row in ems)  # emissions left without an md line
     return {"missing_jsonl": missing, "orphan_jsonl": orphan}
 
 
@@ -389,7 +409,9 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
                 n_findings = sum(
                     1 for x in emissions[(*k, r["round_n"])] if x["record_kind"] == "finding"
                 )
-                fh.write(_md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], n_findings))
+                fh.write(
+                    _md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], n_findings, r["round_n"])
+                )
         return len(orphans)
 
     # under the same lock emission holds: an in-flight emitter's JSONL-but-not-yet-md state
@@ -405,15 +427,35 @@ LENS_SCRATCH = REPO / ".harness" / "tmp"
 GATE_ROW_FILES = frozenset({".harness/merge-gate-log.jsonl", ".harness/merge-gate-log.md"})
 
 
+def _blob(repo: Path, ref: str, path: str) -> bytes:
+    """The file's bytes at `ref`, or b"" when absent there."""
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "show", f"{ref}:{path}"], capture_output=True, check=False
+    )
+    return proc.stdout if proc.returncode == 0 else b""
+
+
 def landing_delta(
     reviewed_head: str, final_head: str = "HEAD", repo: Path | None = None
 ) -> list[str]:
-    """Files changed between the head the lenses APPROVED and the head about to merge that are
-    NOT gate-log rows. Empty means the approvals transfer (a gate-row-only delta, the rule
-    both merge-gate carriers state); anything else means H2 carries unreviewed change and the
-    gate must re-run (codex R8 P1; the U-HE-23 landing predicate, landed early)."""
-    out = rw._git(repo or REPO, "diff", "--name-only", reviewed_head, final_head)
-    return sorted(f for f in out.splitlines() if f.strip() and f.strip() not in GATE_ROW_FILES)
+    """What in reviewed..final is NOT a gate-row append. Empty means the approvals transfer
+    (a gate-row-only delta, the rule both merge-gate carriers state); anything else means the
+    final head carries unreviewed change and the gate must re-run (codex R8 P1; the U-HE-23
+    landing predicate, landed early). A gate-log file counts as a row append ONLY if its
+    reviewed-head bytes are a strict prefix of its final-head bytes -- a truncation, rewrite
+    or deletion of either log is a change, not a record (codex R9 P2)."""
+    repo = repo or REPO
+    out = rw._git(repo, "diff", "--name-only", reviewed_head, final_head)
+    changed = [f.strip() for f in out.splitlines() if f.strip()]
+    bad: list[str] = []
+    for f in changed:
+        if f not in GATE_ROW_FILES:
+            bad.append(f)
+            continue
+        before, after = _blob(repo, reviewed_head, f), _blob(repo, final_head, f)
+        if not after.startswith(before) or len(after) <= len(before):
+            bad.append(f"{f} (not an append: rewritten, truncated or removed)")
+    return sorted(bad)
 
 
 def _read_text(arg: str) -> str:
