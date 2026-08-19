@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import codex_context_guard as cg
 import finding_record as fr
 from codex_context_guard import Finding
 
@@ -364,10 +365,48 @@ def test_projection_code_triple_and_severity_map():
     assert hard.severity == "hard"
 
 
-def test_projection_round_trip_keeps_existing_codes_byte_identical():
-    """Pre-existing guard codes are never re-shaped by the projection layer."""
-    f = Finding("hard", "ROADMAP_STATUS_DRIFT", "x")
-    assert (
-        json.dumps(f.__dict__)
-        == '{"severity": "hard", "code": "ROADMAP_STATUS_DRIFT", "message": "x"}'
+def _guard_state() -> cg.GuardState:
+    # Mirrors tools/test_codex_context_guard.py::_state -- the report's non-findings fields are
+    # incidental here; the assertion is on the `findings` list it renders.
+    return cg.GuardState(
+        root=Path("/repo"),
+        cwd=Path("/repo"),
+        branch="feature",
+        default_branch="main",
+        head8="abc12345",
+        git_dir=".git/worktrees/feature",
+        is_linked_worktree=True,
+        status_entries=[],
+        changed_files=[],
+        roadmap_status=cg.RoadmapStatusState(
+            hash="abc", git_head="abc12345", last_refreshed="2026-06-05T00:00:00-06:00"
+        ),
+        computed_hash="abc",
+        open_prs="",
+        open_prs_available=True,
+        fork_doc_count=0,
+        latest_retirement_batch=".harness/phase-7d-retirement-events-batch-51.md",
+        lag_expected=False,
+        owed_lag=False,
     )
+
+
+def test_projection_round_trip_through_json_report_keeps_existing_codes_byte_identical():
+    """C-HE-24 §Verification: record -> `Finding` -> `_json_report` unchanged for pre-existing
+    codes. The REAL path (Codex round-3 P2): a projected record row and a pre-existing guard
+    finding go through `codex_context_guard._json_report` together; the pre-existing code comes
+    out byte-identical and the projected one carries the namespaced triple -- neither is
+    split, re-shaped, or dropped by the report."""
+    pre_existing = Finding("hard", "ROADMAP_STATUS_DRIFT", "x")
+    row = fr.make_row(_core(finding_type="terminal-block"), _env(cause_attribution="lease_lost"))
+    projected = fr.to_guard_finding(row)
+    report = json.loads(cg._json_report(_guard_state(), [pre_existing, projected]))
+    assert report["findings"] == [
+        {"severity": "hard", "code": "ROADMAP_STATUS_DRIFT", "message": "x"},
+        {
+            "severity": "hard",
+            "code": "merge-gate:terminal-block:lease_lost",
+            "message": row["observed_evidence"],
+        },
+    ]
+    assert json.dumps(report["findings"][0]) == json.dumps(pre_existing.__dict__)
