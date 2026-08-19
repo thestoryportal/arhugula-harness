@@ -1464,3 +1464,14 @@ def test_build_command_roots_the_reviewer_in_the_scratch_export(tmp_path):
     assert "--skip-git-repo-check" in cmd and cmd[cmd.index("-C") + 1] == str(tmp_path / "review")
     brief = cr.review_instructions(EXPECTED)
     assert "./bound.diff" in brief and "./tree/" in brief and "open nothing outside" in brief
+
+
+# ── round-11 absorptions ──────────────────────────────────────────────────────
+def test_bound_block_on_stderr_when_our_cap_kills_still_blocks(tmp_path, monkeypatch):
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
+    block = _block("BLOCK", [{"severity": "P1", "location": "l", "message": "m"}])
+    out = cr.run_codex_review(
+        Path("."), "main", invoke=lambda t: rw.Attempt("", "transcript\n" + block, 124, True)
+    )
+    assert out.terminal == "BLOCK" and out.source == "stderr"

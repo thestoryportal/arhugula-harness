@@ -1504,3 +1504,20 @@ def test_outcome_sink_never_overwrites_and_never_lands_in_the_repo(
     monkeypatch.setattr(reviewer, "OUTCOME_SINK", fresh)
     reviewer._emit(outcome)
     assert json.loads(fresh.read_text())["terminal"] == "APPROVE"
+
+
+def test_timed_out_stage_is_not_re_invoked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """spec v1.2 X2 / codex round 11: run_bounded's timeout return (rc 124) is terminal."""
+    reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: b"+small diff")
+    calls = 0
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(args, 124, "", "command timed out after 1200.0 seconds")
+
+    monkeypatch.setattr(reviewer, "run_bounded", fake_run)
+    assert reviewer.run_review(tmp_path, "main") == 2
+    assert calls == 1

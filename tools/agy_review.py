@@ -583,6 +583,10 @@ def _bounded_with_retry(
         if timeout <= PARENT_TIMEOUT_GRACE_SECONDS:
             return last
         proc = run_bounded(cmd_for(timeout), cwd=cwd, timeout=timeout, env=env)
+        if proc.returncode == 124 and "timed out" in (proc.stderr or ""):
+            # A timed-out attempt is never re-invoked (spec v1.2 X2; codex round 11): only a
+            # stub of the shared budget remains, and later segments / synthesis need it.
+            return proc
         output = proc.stdout.strip()
         validation_error, verdict_line = validate_review_output(output, marker)
         final = binding is not None and marker == ARTIFACT_COMPLETE_MARKER

@@ -276,9 +276,13 @@ def run_codex_review(
                 return rw.Attempt(att.stdout, att.stderr, None, False)
             return att
         if att.timed_out:
-            # Killed at the cap: the verdict may already sit in the session artifact (the CLI
-            # persists the final message before it finishes streaming). One look, no wait --
-            # the same positive parse + byte-compare applies; otherwise the timeout stands.
+            # Killed at the cap: the verdict may already be on stderr (the transcript echo) or
+            # in the session artifact (the CLI persists the final message before it finishes
+            # streaming). One look each, no wait -- the same positive parse + byte-compare
+            # applies; otherwise the timeout stands (codex rounds 5/11).
+            if conclusive(att.stderr):
+                source = "stderr"
+                return rw.Attempt(att.stderr, att.stderr, None, False)
             art = find_session_artifact(
                 binding["head_sha"],
                 started_at=started_wall,
