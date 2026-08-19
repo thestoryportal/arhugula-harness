@@ -273,7 +273,7 @@ def _append_line(fd: int, data: bytes, path: Path) -> None:
     PIPE_BUF governs pipes, not regular files); the operative guarantees here are: writers are
     serialized by the lock, the line goes down in one syscall, and a SHORT write (disk full)
     is rolled back to the pre-write offset before raising, so a torn tail never poisons the log
-    (Codex round-6 P2). Registered as a v1.1 spec change-note candidate."""
+    (Codex round-6 P2). Spec v1.1 change-note X1 (C-HE-23 §2) records this correction."""
     end = os.lseek(fd, 0, os.SEEK_END)
     n = os.write(fd, data)
     if n != len(data):
