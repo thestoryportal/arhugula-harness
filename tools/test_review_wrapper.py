@@ -671,3 +671,21 @@ def test_default_invoke_maps_run_bounded_timeout_to_timed_out(monkeypatch):
     att = cr._default_invoke(Path("."), "I")(1.0)
     assert att.timed_out and att.returncode == 124
     assert "OPENAI_API_KEY" not in seen["env"]  # subscription auth only, never the metered key
+
+
+def test_gate_log_env_override_redirects_the_process_tree(tmp_path: Path):
+    """`HARNESS_GATE_LOG` (finding_record) is the seam subprocess fixtures use so a reviewer run
+    never appends to the tracked log."""
+    import subprocess
+
+    env = {**os.environ, "HARNESS_GATE_LOG": str(tmp_path / "g.jsonl")}
+    out = subprocess.run(
+        [sys.executable, "-c", "import finding_record as fr; print(fr.GATE_LOG_JSONL)"],
+        cwd=Path(__file__).resolve().parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert out == str(tmp_path / "g.jsonl")
+    assert fr.GATE_LOG_JSONL.name == "merge-gate-log.jsonl"  # this process: the default

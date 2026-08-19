@@ -31,7 +31,11 @@ import jsonschema
 from codex_context_guard import Finding
 
 REPO = Path(__file__).resolve().parent.parent
-GATE_LOG_JSONL = REPO / ".harness" / "merge-gate-log.jsonl"
+#: The gate log (C-HE-23 §2). `HARNESS_GATE_LOG` redirects it for a whole process tree -- the
+#: seam the reviewer-wrapper subprocess tests use so a fixture run never writes the tracked log.
+GATE_LOG_JSONL = Path(
+    os.environ.get("HARNESS_GATE_LOG") or REPO / ".harness" / "merge-gate-log.jsonl"
+)
 SCHEMA_PATH = REPO / "tools" / "review_schemas" / "finding_record.schema.json"
 SCHEMA: dict[str, Any] = json.loads(SCHEMA_PATH.read_text())
 

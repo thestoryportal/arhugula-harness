@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
+import json
 import os
 import signal
 import subprocess
@@ -17,6 +18,49 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 REVIEWER = ROOT / "tools" / "agy_review.py"
 _REVIEWER_START_TIMEOUT_SECONDS = 60.0
+
+sys.path.insert(0, str(ROOT / "tools"))
+
+import finding_record as fr  # noqa: E402
+
+#: A fixed six-field binding for in-process tests (the subprocess harness derives the real one
+#: from the fake `git`; see `_fake_commands`).
+BINDING = {
+    "head_sha": "a" * 40,
+    "base_sha": "b" * 40,
+    "diff_digest": "c" * 64,
+    "reviewer_identity": "gemini-review",
+    "prompt_version": "gemini-review-v2-json",
+    "config_hash": "ch1",
+}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gate_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Every reviewer terminal now emits C-HE-24 rows; keep them out of the tracked log for
+    in-process runs (module attribute) and subprocess runs (`HARNESS_GATE_LOG`)."""
+    log = tmp_path / "gate-log.jsonl"
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
+    monkeypatch.setenv("HARNESS_GATE_LOG", str(log))
+    return log
+
+
+def _final_output(verdict: str, binding: dict[str, str] | None = None, findings=None) -> str:
+    """A compliant artifact-complete output: fenced schema block, marker, VERDICT line."""
+    body = {"verdict": verdict, "findings": findings or [], **(binding or BINDING)}
+    return "```json\n" + json.dumps(body) + "\n```\nARTIFACT: COMPLETE\nVERDICT: " + verdict
+
+
+def _clock(values: list[float]):
+    """A monotonic stub that serves the scripted stage reads, then holds its last value: the
+    gate-log lock (`finding_record._lock_exclusive`) also reads `time.monotonic` at emit time."""
+    return itertools.chain(values, itertools.repeat(values[-1]))
+
+
+def _bind(reviewer, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """In-process runs use tmp_path as `repo` (not a git checkout): pin the binding."""
+    monkeypatch.setattr(reviewer, "gemini_binding", lambda _repo, _base: dict(BINDING))
+    return dict(BINDING)
 
 
 def _reviewer_module():
@@ -204,6 +248,7 @@ def test_reviewer_unavailable_exit_maps_to_two(
     reviewer_returncode: int,
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+bounded timeout")
     monkeypatch.setattr(
         reviewer,
@@ -214,7 +259,7 @@ def test_reviewer_unavailable_exit_maps_to_two(
     )
 
     assert reviewer.run_review(tmp_path, "HEAD") == 2
-    assert "agy-review: reviewer unavailable:" in capsys.readouterr().err
+    assert "agy-review: reviewer unavailable (" in capsys.readouterr().err
 
 
 def test_collect_diff_rejects_empty_tracked_and_untracked_diff(
@@ -241,6 +286,8 @@ def _fake_commands(
     effective_model: str = "Gemini 3.1 Pro (High)",
     emit_completeness: bool = True,
     required_synthesis_tokens: tuple[str, ...] = (),
+    json_block: bool = True,
+    json_head_sha: str | None = None,
 ) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -251,6 +298,17 @@ def _fake_commands(
     git = bin_dir / "git"
     git.write_text(
         "#!/bin/sh\n"
+        # review_wrapper_common.compute_binding calls `git -C <repo> ...`: strip the prefix so
+        # the branches below see the subcommand first.
+        "if [ \"$1\" = '-C' ]; then shift 2; fi\n"
+        "if [ \"$1 $2\" = 'rev-parse HEAD' ]; then printf '%s\\n' "
+        "'1111111111111111111111111111111111111111'; exit 0; fi\n"
+        "if [ \"$1 $2 $3\" = 'rev-parse --abbrev-ref HEAD' ]; then printf '%s\\n' "
+        "'fake-branch'; exit 0; fi\n"
+        "if [ \"$1\" = 'merge-base' ]; then printf '%s\\n' "
+        "'2222222222222222222222222222222222222222'; exit 0; fi\n"
+        "if [ \"$1 $2\" = 'diff 2222222222222222222222222222222222222222' ]; then "
+        "printf '%s\\n' 'diff --git a/bound b/bound' '+bound witness'; exit 0; fi\n"
         "if [ \"$1 $2 $3\" = 'rev-parse --path-format=absolute --git-common-dir' ]; then\n"
         "  printf '%s\\n' \"$AGY_REVIEW_ROOT/.git\"\n"
         "  exit 0\n"
@@ -275,12 +333,30 @@ def _fake_commands(
         output_lines = output.splitlines()
         output_prefix = "\n".join(output_lines[:-1])
         output_verdict = output_lines[-1]
+        # A compliant reviewer copies the six binding values VERBATIM from the prompt into the
+        # fenced block (C-HE-15 §4); the fake does exactly that, so the block only parses when
+        # the wrapper's own expected values match what it asked for.
+        json_lines = (
+            '  bind() { grep -o "$1=[^,. ]*" "$capture" | head -1 | cut -d= -f2; }\n'
+            f"  v=$(printf '%s' {output_verdict!r} | sed 's/^VERDICT: //')\n"
+            '  if [ "$v" = BLOCK ]; then f=\'[{"severity": "P1", "location": "fake.py:1", '
+            '"message": "blocking witness"}]\'; else f=\'[]\'; fi\n'
+            '  printf \'```json\\n{"verdict": "%s", "findings": %s, "head_sha": "%s", '
+            '"base_sha": "%s", "diff_digest": "%s", "reviewer_identity": "%s", '
+            '"prompt_version": "%s", "config_hash": "%s"}\\n```\\n\' '
+            f'"$v" "$f" "{json_head_sha or "$(bind head_sha)"}" '
+            '"$(bind base_sha)" "$(bind diff_digest)" '
+            '"$(bind reviewer_identity)" "$(bind prompt_version)" "$(bind config_hash)"\n'
+            if json_block
+            else ""
+        )
         if emit_completeness:
             return (
                 f"printf '%b\\n' {output_prefix!r}\n"
                 'if grep -q "This is review segment" "$capture"; then\n'
                 "  printf '%s\\n' 'SEGMENT: COMPLETE'\n"
                 "else\n"
+                f"{json_lines}"
                 "  printf '%s\\n' 'ARTIFACT: COMPLETE'\n"
                 "fi\n"
                 f"printf '%b\\n' {output_verdict!r}\n"
@@ -366,6 +442,8 @@ def _run(
     effective_model: str = "Gemini 3.1 Pro (High)",
     emit_completeness: bool = True,
     required_synthesis_tokens: tuple[str, ...] = (),
+    json_block: bool = True,
+    json_head_sha: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir, capture = _fake_commands(
         tmp_path,
@@ -375,6 +453,8 @@ def _run(
         effective_model=effective_model,
         emit_completeness=emit_completeness,
         required_synthesis_tokens=required_synthesis_tokens,
+        json_block=json_block,
+        json_head_sha=json_head_sha,
     )
     env = os.environ.copy()
     env.update(
@@ -447,7 +527,8 @@ def test_review_passes_actual_diff_and_accepts_exact_verdict(tmp_path: Path) -> 
     assert "--add-dir" in args
     assert Path(args[args.index("--add-dir") + 1]).name.startswith("arhugula-agy-review-")
     assert args[args.index("--model") + 1] == "Gemini 3.1 Pro (High)"
-    assert args[args.index("--print-timeout") + 1] == "20m"
+    # C-HE-16 §3: one attempt = min(550 s, remaining) -> agy print-timeout 550 - 5 s grace
+    assert args[args.index("--print-timeout") + 1] == "545s"
     route_log = Path(args[args.index("--log-file") + 1])
     assert route_log.name == "route.log"
     assert route_log.parent.name.startswith("arhugula-agy-review-")
@@ -514,9 +595,10 @@ def test_large_review_shares_one_deadline_across_segments_and_synthesis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
-    clock = iter([100.0, 110.0, 500.0, 900.0])
+    clock = _clock([100.0, 110.0, 500.0, 900.0])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     observed_timeouts: list[float] = []
     observed_print_timeouts: list[str] = []
@@ -529,18 +611,19 @@ def test_large_review_shares_one_deadline_across_segments_and_synthesis(
             'Propagating selected model override to backend: label="Gemini 3.1 Pro (High)"\n',
             encoding="utf-8",
         )
-        marker = (
-            "ARTIFACT: COMPLETE"
-            if "Synthesize the completed segment reviews" in prompt
-            else "SEGMENT: COMPLETE"
-        )
-        return subprocess.CompletedProcess(args, 0, f"{marker}\nVERDICT: APPROVE", "")
+        if "Synthesize the completed segment reviews" in prompt:
+            output = _final_output("APPROVE")
+        else:
+            output = "SEGMENT: COMPLETE\nVERDICT: APPROVE"
+        return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(reviewer, "run_bounded", fake_run)
 
     assert reviewer.run_review(tmp_path, "main") == 0
-    assert observed_timeouts == [1250.0, 860.0, 460.0]
-    assert observed_print_timeouts == ["20m", "855s", "455s"]
+    # C-HE-16 §3: each stage is one bounded attempt of min(550, remaining) under the shared
+    # 1260 s deadline (the pre-S1 single-pass decrementer handed each stage the whole remainder).
+    assert observed_timeouts == [550.0, 550.0, 460.0]
+    assert observed_print_timeouts == ["545s", "545s", "455s"]
 
 
 def test_large_review_refuses_stage_when_only_cleanup_grace_remains(
@@ -549,8 +632,9 @@ def test_large_review_refuses_stage_when_only_cleanup_grace_remains(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
-    clock = iter([100.0, 1356.0])
+    clock = _clock([100.0, 1356.0])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(
         reviewer,
@@ -568,8 +652,9 @@ def test_large_review_refuses_stage_at_cleanup_grace_boundary(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
-    clock = iter([100.0, 1355.0])
+    clock = _clock([100.0, 1355.0])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(
         reviewer,
@@ -586,8 +671,9 @@ def test_large_review_starts_stage_just_above_cleanup_grace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
-    clock = iter([100.0, 1354.999])
+    clock = _clock([100.0, 1354.999])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     observed_timeouts: list[float] = []
 
@@ -597,12 +683,7 @@ def test_large_review_starts_stage_just_above_cleanup_grace(
             'Propagating selected model override to backend: label="Gemini 3.1 Pro (High)"\n',
             encoding="utf-8",
         )
-        return subprocess.CompletedProcess(
-            args,
-            0,
-            "ARTIFACT: COMPLETE\nVERDICT: APPROVE",
-            "",
-        )
+        return subprocess.CompletedProcess(args, 0, _final_output("APPROVE"), "")
 
     monkeypatch.setattr(reviewer, "run_bounded", fake_run)
 
@@ -751,6 +832,7 @@ def test_large_review_uses_bounded_segments_then_synthesizes_one_verdict(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 438_333)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
     prompts: list[str] = []
@@ -764,7 +846,7 @@ def test_large_review_uses_bounded_segments_then_synthesizes_one_verdict(
             encoding="utf-8",
         )
         if "Synthesize the completed segment reviews" in prompt:
-            output = "No blocking findings.\nARTIFACT: COMPLETE\nVERDICT: APPROVE"
+            output = "No blocking findings.\n" + _final_output("APPROVE")
         else:
             output = "No local findings.\nSEGMENT: COMPLETE\nVERDICT: APPROVE"
         return subprocess.CompletedProcess(args, 0, output, "")
@@ -878,14 +960,21 @@ def test_large_review_fails_closed_for_invalid_stage(
     invalid_surface: str,
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
     observed_stages = 0
+    calls = 0
+    last_prompt = None
 
     def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        nonlocal observed_stages
-        observed_stages += 1
-        is_synthesis = "Synthesize the completed segment reviews" in args[args.index("-p") + 1]
+        nonlocal observed_stages, calls, last_prompt
+        prompt = args[args.index("-p") + 1]
+        calls += 1
+        if prompt != last_prompt:  # a C-HE-16 §3 retry re-issues the SAME stage prompt
+            observed_stages += 1
+            last_prompt = prompt
+        is_synthesis = "Synthesize the completed segment reviews" in prompt
         label = (
             "Gemini 3.6 Flash (High)"
             if invalid_surface == "model" and observed_stages == invalid_stage
@@ -895,15 +984,18 @@ def test_large_review_fails_closed_for_invalid_stage(
             f'Propagating selected model override to backend: label="{label}"\n',
             encoding="utf-8",
         )
-        marker = "ARTIFACT: COMPLETE" if is_synthesis else "SEGMENT: COMPLETE"
+        output = _final_output("APPROVE") if is_synthesis else "SEGMENT: COMPLETE\nVERDICT: APPROVE"
         if invalid_surface == "completeness" and observed_stages == invalid_stage:
-            marker = "COMPLETENESS OMITTED"
-        return subprocess.CompletedProcess(args, 0, f"{marker}\nVERDICT: APPROVE", "")
+            output = "COMPLETENESS OMITTED\nVERDICT: APPROVE"
+        return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(reviewer, "run_bounded", fake_run)
 
     assert reviewer.run_review(tmp_path, "main") == 2
     assert observed_stages == invalid_stage
+    # a missing marker is transient -> exactly one bounded re-invocation of that stage
+    # (C-HE-16 §3); a wrong effective model is permanent -> no retry
+    assert calls == invalid_stage + (1 if invalid_surface == "completeness" else 0)
     error = capsys.readouterr().err
     if invalid_surface == "model":
         assert "effective model mismatch" in error
@@ -984,6 +1076,7 @@ def test_large_review_accepts_segment_result_at_exact_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
     suffix = "\nSEGMENT: COMPLETE\nVERDICT: APPROVE"
@@ -999,7 +1092,7 @@ def test_large_review_accepts_segment_result_at_exact_limit(
             'Propagating selected model override to backend: label="Gemini 3.1 Pro (High)"\n',
             encoding="utf-8",
         )
-        output = "ARTIFACT: COMPLETE\nVERDICT: APPROVE" if is_synthesis else exact_output
+        output = _final_output("APPROVE") if is_synthesis else exact_output
         return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(reviewer, "run_bounded", fake_run)
@@ -1014,6 +1107,7 @@ def test_large_review_rejects_segment_result_one_byte_over_32_kib(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
     suffix = "\nSEGMENT: COMPLETE\nVERDICT: APPROVE"
@@ -1043,6 +1137,7 @@ def test_large_review_rejects_oversized_segment_result_before_synthesis(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
     monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
     prompts: list[str] = []
@@ -1163,9 +1258,11 @@ def test_review_preserves_findings_on_nonzero_agy_exit(tmp_path: Path) -> None:
         agy_exit=7,
     )
 
-    assert proc.returncode == 7
+    # C-HE-16 §3: terminal states are exactly the triple -- a non-zero reviewer exit is
+    # REVIEWER_UNAVAILABLE (2), never the reviewer's own status; findings stay on stdout.
+    assert proc.returncode == 2
     assert proc.stdout.rstrip().endswith("VERDICT: BLOCK")
-    assert "agy-review: reviewer failed: exit 7" in proc.stderr
+    assert "agy-review: reviewer unavailable (transient): exit 7" in proc.stderr
 
 
 def test_review_rejects_exact_block_verdict(tmp_path: Path) -> None:
@@ -1191,3 +1288,116 @@ def test_review_includes_untracked_file_patch(tmp_path: Path) -> None:
     prompt = (tmp_path / "agy-prompt.txt").read_text(encoding="utf-8")
     assert "diff --git a/dev/null b/new.py" in prompt
     assert "+untracked witness" in prompt
+
+
+# ── U-HE-06: the gemini channel under the fail-closed core (C-HE-15/16/17 §4) ────────────
+def test_final_output_without_fenced_json_is_unavailable(tmp_path: Path) -> None:
+    """Marker + VERDICT line alone no longer counts (C-HE-15 §1)."""
+    proc = _run(tmp_path, agy_output="F1 none\nVERDICT: APPROVE", json_block=False)
+    assert proc.returncode == 2
+    assert "reviewer unavailable (transient): no fenced json block" in proc.stderr
+    rows = fr.read_rows(tmp_path / "gate-log.jsonl")
+    assert [r["record_kind"] for r in rows] == ["reviewer_unavailable"]
+    assert rows[0]["producer"] == "gemini_review_wrapper" and rows[0]["head_sha"] == "1" * 40
+
+
+def test_final_output_with_schema_block_and_binding_counts_and_is_recorded(tmp_path: Path) -> None:
+    proc = _run(tmp_path, agy_output="F1 none\nVERDICT: APPROVE")
+    assert proc.returncode == 0, proc.stderr
+    prompt = (tmp_path / "agy-prompt.txt").read_text(encoding="utf-8")
+    assert "print ONE fenced ```json block" in prompt and "head_sha=" + "1" * 40 in prompt
+    assert fr.read_rows(tmp_path / "gate-log.jsonl") == []  # APPROVE with no findings: no rows
+    (tmp_path / "blk").mkdir()
+    proc = _run(tmp_path / "blk", agy_output="F1 [P1] defect\nVERDICT: BLOCK")
+    assert proc.returncode == 1
+    rows = fr.read_rows(tmp_path / "gate-log.jsonl")
+    assert len(rows) == 1 and rows[0]["record_kind"] == "finding" and rows[0]["severity"] == "P1"
+    assert (
+        rows[0]["producer"] == "gemini_review_wrapper"
+        and rows[0]["finding_type"] == "terminal-block"
+    )
+
+
+def test_final_output_bound_to_a_foreign_head_is_unavailable(tmp_path: Path) -> None:
+    """Schema-valid block, but head_sha is not this invocation's: byte-compare refuses it."""
+    proc = _run(tmp_path, agy_output="F1 none\nVERDICT: APPROVE", json_head_sha="9" * 40)
+    assert proc.returncode == 2
+    assert "binding mismatch on head_sha" in proc.stderr
+
+
+def test_permanent_stderr_text_classifies_permanent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reviewer = _reviewer_module()
+    proc = subprocess.CompletedProcess([], 1, "", "antigravity CLI not logged in")
+    assert reviewer.report_process_failure(proc, binding=BINDING) == 2
+    assert "reviewer unavailable (permanent)" in capsys.readouterr().err
+    rows = fr.read_rows(tmp_path / "gate-log.jsonl")
+    assert rows[0]["finding_type"] == "permanent-fail-exit" and rows[0]["severity"] == "hard"
+
+
+def test_transient_segment_failure_gets_one_bounded_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First call returns empty (transient) -> exactly one re-invocation with min(550,
+    remaining - 30) computed at attempt time (C-HE-16 §3)."""
+    reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    clock = _clock([100.0, 110.0, 900.0])
+    monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
+    seen: list[float] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen.append(float(kwargs["timeout"]))
+        Path(args[args.index("--log-file") + 1]).write_text(
+            'Propagating selected model override to backend: label="Gemini 3.1 Pro (High)"\n',
+            encoding="utf-8",
+        )
+        output = "" if len(seen) == 1 else _final_output("APPROVE")
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    monkeypatch.setattr(reviewer, "run_bounded", fake_run)
+    assert reviewer.run_review(tmp_path, "main") == 0
+    assert seen == [550.0, pytest.approx(430.0)]  # min(550, 1360-900-30)
+
+
+def test_permanent_segment_failure_skips_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reviewer = _reviewer_module()
+    _bind(reviewer, monkeypatch)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    calls = 0
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal calls
+        calls += 1
+        return subprocess.CompletedProcess(args, 1, "", "antigravity CLI not logged in")
+
+    monkeypatch.setattr(reviewer, "run_bounded", fake_run)
+    assert reviewer.run_review(tmp_path, "main") == 2
+    assert calls == 1 and "reviewer unavailable (permanent)" in capsys.readouterr().err
+
+
+def test_json_block_required_only_on_artifact_complete_output(tmp_path: Path) -> None:
+    reviewer = _reviewer_module()
+    parts = [tmp_path / "p1.diff"]
+    single = reviewer.review_prompt(tmp_path, parts, binding=BINDING)
+    segment = reviewer.review_prompt(
+        tmp_path, parts, binding=BINDING, segment_index=1, segment_count=2
+    )
+    synthesis = reviewer.synthesis_prompt(tmp_path, parts, binding=BINDING)
+    assert "fenced ```json block" in single and "fenced ```json block" in synthesis
+    assert "fenced ```json block" not in segment
+    for k in ("head_sha", "diff_digest", "config_hash"):
+        assert f"{k}={BINDING[k]}" in single and f"{k}={BINDING[k]}" in synthesis
+
+
+def test_gemini_config_hash_is_shared_and_stable() -> None:
+    reviewer = _reviewer_module()
+    assert reviewer.gemini_config_hash() == reviewer.gemini_config_hash()
+    assert (
+        len(reviewer.gemini_config_hash()) == 16
+        and reviewer.GEMINI_PROMPT_VERSION == "gemini-review-v2-json"
+    )

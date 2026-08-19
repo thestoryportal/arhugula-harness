@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import signal
@@ -13,6 +14,8 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+
+import review_wrapper_common as rw  # C-HE-15/16 shared core
 
 MODEL_ARGUMENT = "Gemini 3.1 Pro (High)"
 EXPECTED_MODEL_LABEL = "Gemini 3.1 Pro (High)"
@@ -35,6 +38,38 @@ PROVIDER_ENV = (
 VERDICTS = {"VERDICT: APPROVE", "VERDICT: BLOCK"}
 MODEL_LABEL_RE = re.compile(r'Propagating selected model override to backend: label="([^"]+)"')
 TERMINATION_GRACE_SECONDS = 5.0
+GEMINI_PROMPT_VERSION = "gemini-review-v2-json"
+CHANNEL = "gemini"
+PRODUCER = "gemini_review_wrapper"
+
+
+def gemini_config_hash() -> str:
+    """The channel configuration a verdict is bound to (C-HE-15 §3 `config_hash`): the pinned
+    model label + the per-call print timeout. Shared with codex_review's failover path so both
+    compute the identical expected binding."""
+    return hashlib.sha256(f"{MODEL_ARGUMENT}|{MAX_AGY_PRINT_TIMEOUT_SECONDS}".encode()).hexdigest()[
+        :16
+    ]
+
+
+def gemini_binding(repo: Path, base: str) -> dict[str, str]:
+    return rw.compute_binding(
+        repo,
+        base,
+        channel=CHANNEL,
+        prompt_version=GEMINI_PROMPT_VERSION,
+        config_hash=gemini_config_hash(),
+    )
+
+
+def json_block_instruction(binding: dict[str, str]) -> str:
+    return (
+        "Immediately BEFORE the completion marker, print ONE fenced ```json block with exactly "
+        "these keys: verdict (APPROVE|BLOCK), findings (array of {severity: P1|P2|P3, "
+        "location, message}), and these six values copied VERBATIM: "
+        + ", ".join(f"{k}={binding[k]}" for k in rw.BINDING_FIELDS)
+        + ". No other keys.\n"
+    )
 
 
 class TerminationRequested(BaseException):
@@ -275,6 +310,7 @@ def review_prompt(
     repo: Path,
     diff_paths: list[Path],
     *,
+    binding: dict[str, str],
     segment_index: int | None = None,
     segment_count: int | None = None,
 ) -> str:
@@ -286,7 +322,9 @@ def review_prompt(
         )
         completion_marker = ARTIFACT_COMPLETE_MARKER
         concatenation_scope = "the complete diff"
-        synopsis = ""
+        # Only the artifact-complete output carries the schema block (C-HE-15 §4); segment
+        # outputs feed the synthesis, which carries it.
+        synopsis = json_block_instruction(binding)
     else:
         scope = (
             f"The authoritative workspace root is {repo}. This is review segment "
@@ -364,7 +402,7 @@ def review_prompt(
     )
 
 
-def synthesis_prompt(repo: Path, result_paths: list[Path]) -> str:
+def synthesis_prompt(repo: Path, result_paths: list[Path], *, binding: dict[str, str]) -> str:
     numbered_paths = "\n".join(f"{index}. {path}" for index, path in enumerate(result_paths, 1))
     return (
         "You are the final out-of-family synthesis reviewer for an agent-harness monorepo.\n"
@@ -381,7 +419,9 @@ def synthesis_prompt(repo: Path, result_paths: list[Path]) -> str:
         "or inconsistent references. Preserve any proven blocking finding. Report at most 5 "
         "findings, numbered F1..Fn and tagged [P1]/[P2]/[P3] with file:line; no style nits. "
         "Only report findings supported by the segment results. If any segment verdict is BLOCK, "
-        "the synthesis verdict must also be BLOCK. After every numbered result was read "
+        "the synthesis verdict must also be BLOCK. "
+        f"{json_block_instruction(binding)}"
+        "After every numbered result was read "
         "completely, emit the exact line\n"
         f"{ARTIFACT_COMPLETE_MARKER}\n"
         "immediately before the verdict. If any result is incomplete or unreadable, omit that "
@@ -446,29 +486,75 @@ def validate_review_output(output: str, marker: str) -> tuple[str | None, str | 
     return None, final_line
 
 
-def report_process_failure(proc: subprocess.CompletedProcess[str]) -> int:
+def _emit(outcome: rw.ReviewOutcome) -> None:
+    """C-HE-24 rows for this invocation's terminal (`producer=gemini_review_wrapper`) + the
+    C-HE-25 per-round outcome on the arc's reservation when one exists."""
+    arc_id, lane_id = rw.env_arc_and_lane()
+    round_n = int(os.environ.get("HARNESS_ROUND_N", "0"))
+    rw.emit_outcome(outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=round_n)
+    rw.record_round_outcome_if_reserved(
+        arc_id,
+        round_n,
+        channel=CHANNEL,
+        terminal=outcome.terminal,
+        finding_count=len(outcome.findings),
+    )
+
+
+def _unavailable(reason: str, *, failure_class: str, binding: dict[str, str] | None) -> int:
+    """The single REVIEWER_UNAVAILABLE exit: classified, printed, recorded (C-HE-16 §3)."""
+    print(f"agy-review: reviewer unavailable ({failure_class}): {reason}", file=sys.stderr)
+    _emit(rw.ReviewOutcome("REVIEWER_UNAVAILABLE", CHANNEL, failure_class, reason, [], binding))
+    return 2
+
+
+def report_process_failure(
+    proc: subprocess.CompletedProcess[str], *, binding: dict[str, str] | None = None
+) -> int:
+    """A non-zero exit is REVIEWER_UNAVAILABLE (never proc.returncode: terminal states are
+    exactly the C-HE-16 §3 triple), classified permanent/transient by the C-HE-16 §4 table."""
     output = proc.stdout.strip()
     if output:
         print(output)
     detail = proc.stderr.strip() or f"exit {proc.returncode}"
-    if proc.returncode in {124, 127}:
-        print(f"agy-review: reviewer unavailable: {detail}", file=sys.stderr)
-        return 2
-    print(f"agy-review: reviewer failed: {detail}", file=sys.stderr)
-    return proc.returncode
+    cls = rw.classify(CHANNEL, (proc.stdout or "") + "\n" + detail)
+    return _unavailable(detail, failure_class=cls, binding=binding)
 
 
-def remaining_review_timeout(deadline: float) -> float | None:
-    remaining = deadline - time.monotonic()
-    return remaining if remaining > PARENT_TIMEOUT_GRACE_SECONDS else None
+def _bounded_with_retry(
+    cmd_for,
+    deadline: float,
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    marker: str,
+) -> subprocess.CompletedProcess[str] | None:
+    """C-HE-16 §3: one bounded re-invocation on a transient failure; timeout 1 = min(550,
+    remaining), timeout 2 = min(550, remaining - 30). None when the shared deadline leaves no
+    room for a stage (whole-review deadline expired). Permanent failures skip the retry."""
+    last: subprocess.CompletedProcess[str] | None = None
+    for n in (1, 2):
+        remaining = deadline - time.monotonic()
+        margin = 0.0 if n == 1 else rw.SECOND_ATTEMPT_MARGIN_S
+        timeout = min(rw.PER_ATTEMPT_TIMEOUT_S, remaining - margin)
+        if timeout <= PARENT_TIMEOUT_GRACE_SECONDS:
+            return last
+        proc = run_bounded(cmd_for(timeout), cwd=cwd, timeout=timeout, env=env)
+        validation_error, _ = validate_review_output(proc.stdout.strip(), marker)
+        if proc.returncode == 0 and validation_error is None:
+            return proc
+        if rw.classify(CHANNEL, (proc.stdout or "") + "\n" + (proc.stderr or "")) == "permanent":
+            return proc
+        last = proc
+    return last
 
 
 def run_review(repo: Path, base: str) -> int:
     try:
         diff = collect_diff(repo, base)
     except RuntimeError as exc:
-        print(f"agy-review: {exc}", file=sys.stderr)
-        return 2
+        return _unavailable(str(exc), failure_class="transient", binding=None)
+    binding = gemini_binding(repo, base)
 
     env = os.environ.copy()
     for name in PROVIDER_ENV:
@@ -481,7 +567,7 @@ def run_review(repo: Path, base: str) -> int:
             if len(groups) == 1:
                 review_specs = [
                     (
-                        review_prompt(repo, groups[0]),
+                        review_prompt(repo, groups[0], binding=binding),
                         ARTIFACT_COMPLETE_MARKER,
                         Path(scratch) / "route.log",
                     )
@@ -492,6 +578,7 @@ def run_review(repo: Path, base: str) -> int:
                         review_prompt(
                             repo,
                             group,
+                            binding=binding,
                             segment_index=index,
                             segment_count=len(groups),
                         ),
@@ -505,41 +592,41 @@ def run_review(repo: Path, base: str) -> int:
             accepted_verdicts: list[str] = []
             result_paths: list[Path] = []
             for index, (prompt, marker, log_path) in enumerate(review_specs, 1):
-                timeout = remaining_review_timeout(deadline)
-                if timeout is None:
-                    print(
-                        "agy-review: reviewer unavailable: whole-review deadline expired",
-                        file=sys.stderr,
-                    )
-                    return 2
-                proc = run_bounded(
-                    agy_command(scratch, log_path, prompt, timeout=timeout),
+                proc = _bounded_with_retry(
+                    lambda timeout, p=prompt, lp=log_path: agy_command(
+                        scratch, lp, p, timeout=timeout
+                    ),
+                    deadline,
                     cwd=repo,
-                    timeout=timeout,
                     env=env,
+                    marker=marker,
                 )
+                if proc is None:
+                    return _unavailable(
+                        "whole-review deadline expired", failure_class="transient", binding=binding
+                    )
                 if proc.returncode != 0:
-                    return report_process_failure(proc)
+                    return report_process_failure(proc, binding=binding)
                 model_error = verify_effective_model(log_path)
                 if model_error is not None:
-                    print(f"agy-review: {model_error}", file=sys.stderr)
-                    return 2
+                    return _unavailable(model_error, failure_class="permanent", binding=binding)
                 output = proc.stdout.strip()
                 validation_error, verdict = validate_review_output(output, marker)
                 if validation_error is not None:
                     if output:
                         print(output, file=sys.stderr)
-                    print(f"agy-review: {validation_error}", file=sys.stderr)
-                    return 2
+                    return _unavailable(
+                        validation_error, failure_class="transient", binding=binding
+                    )
                 assert verdict is not None
                 if marker == SEGMENT_COMPLETE_MARKER and len(output.encode("utf-8")) > (
                     MAX_REVIEW_RESULT_BYTES
                 ):
-                    print(
-                        "agy-review: segment review output exceeds synthesis limit",
-                        file=sys.stderr,
+                    return _unavailable(
+                        "segment review output exceeds synthesis limit",
+                        failure_class="transient",
+                        binding=binding,
                     )
-                    return 2
                 accepted_outputs.append(output)
                 accepted_verdicts.append(verdict)
                 if len(groups) > 1:
@@ -553,55 +640,64 @@ def run_review(repo: Path, base: str) -> int:
 
             if len(groups) > 1:
                 log_path = Path(scratch) / "route-synthesis.log"
-                timeout = remaining_review_timeout(deadline)
-                if timeout is None:
-                    print(
-                        "agy-review: reviewer unavailable: whole-review deadline expired",
-                        file=sys.stderr,
-                    )
-                    return 2
-                proc = run_bounded(
-                    agy_command(
-                        scratch,
-                        log_path,
-                        synthesis_prompt(repo, result_paths),
-                        timeout=timeout,
-                    ),
+                synthesis = synthesis_prompt(repo, result_paths, binding=binding)
+                proc = _bounded_with_retry(
+                    lambda timeout: agy_command(scratch, log_path, synthesis, timeout=timeout),
+                    deadline,
                     cwd=repo,
-                    timeout=timeout,
                     env=env,
+                    marker=ARTIFACT_COMPLETE_MARKER,
                 )
+                if proc is None:
+                    return _unavailable(
+                        "whole-review deadline expired", failure_class="transient", binding=binding
+                    )
                 if proc.returncode != 0:
-                    return report_process_failure(proc)
+                    return report_process_failure(proc, binding=binding)
                 model_error = verify_effective_model(log_path)
                 if model_error is not None:
-                    print(f"agy-review: {model_error}", file=sys.stderr)
-                    return 2
+                    return _unavailable(model_error, failure_class="permanent", binding=binding)
                 output = proc.stdout.strip()
                 validation_error, verdict = validate_review_output(output, ARTIFACT_COMPLETE_MARKER)
                 if validation_error is not None:
                     if output:
                         print(output, file=sys.stderr)
-                    print(f"agy-review: {validation_error}", file=sys.stderr)
-                    return 2
-                assert verdict is not None
-                if "VERDICT: BLOCK" in accepted_verdicts and verdict != "VERDICT: BLOCK":
-                    print(output, file=sys.stderr)
-                    print(
-                        "agy-review: synthesis contradicted a blocking segment verdict",
-                        file=sys.stderr,
+                    return _unavailable(
+                        validation_error, failure_class="transient", binding=binding
                     )
-                    return 2
+                assert verdict is not None
             else:
                 output = accepted_outputs[0]
                 verdict = accepted_verdicts[0]
     except OSError as exc:
-        print(f"agy-review: reviewer unavailable: {exc}", file=sys.stderr)
-        return 2
+        return _unavailable(str(exc), failure_class="transient", binding=binding)
 
+    # C-HE-15 §1/§4: the marker + VERDICT line are agy's truncation guard; the verdict COUNTS
+    # only on a positive parse of the fenced block against gemini.schema.json with the six
+    # binding values byte-equal to this invocation's own (rw.parse_verdict).
+    outcome = rw.parse_verdict(CHANNEL, output, binding)
+    if outcome.terminal == "REVIEWER_UNAVAILABLE":
+        if output:
+            print(output, file=sys.stderr)
+        return _unavailable(outcome.reason, failure_class="transient", binding=binding)
+    if verdict == "VERDICT: BLOCK" and outcome.terminal != "BLOCK":
+        print(output, file=sys.stderr)
+        return _unavailable(
+            "fenced verdict contradicts the VERDICT line",
+            failure_class="transient",
+            binding=binding,
+        )
+    if "VERDICT: BLOCK" in accepted_verdicts and outcome.terminal != "BLOCK":
+        print(output, file=sys.stderr)
+        return _unavailable(
+            "synthesis contradicted a blocking segment verdict",
+            failure_class="transient",
+            binding=binding,
+        )
+    _emit(outcome)
     print(f"agy-review: effective model: {EXPECTED_MODEL_LABEL}")
-    print(output)
-    if verdict == "VERDICT: BLOCK":
+    print(output)  # the raw output already carries the findings; stdout still ends VERDICT: X
+    if outcome.terminal == "BLOCK":
         print("agy-review: blocking findings require resolution", file=sys.stderr)
         return 1
     return 0

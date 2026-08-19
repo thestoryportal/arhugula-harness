@@ -607,8 +607,11 @@ codex-review-uncommitted: _require-codex-subscription
 # GEMINI_API_KEY/GOOGLE_API_KEY are stripped as insurance — justfile dotenv loads
 # .env, which carries the harness runtime's own provider keys; those must never
 # leak into review billing.
+# Runs under the workspace interpreter (not /usr/bin/python3): since U-HE-06 the wrapper
+# shares tools/review_wrapper_common.py (jsonschema) with codex-review -- schema-parsed final
+# verdict, C-HE-16 classifier + bounded retry, C-HE-24 rows. Exit 0 APPROVE / 1 BLOCK / 2 UNAVAILABLE.
 gemini-review base='main': _require-antigravity
-    /usr/bin/python3 tools/agy_review.py --base {{base}}
+    uv run python tools/agy_review.py --base {{base}}
 
 _require-antigravity:
     @if ! command -v agy >/dev/null 2>&1; then \
