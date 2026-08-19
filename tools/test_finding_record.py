@@ -208,6 +208,40 @@ def test_repeated_finding_row_must_keep_the_same_core(tmp_path: Path):
     assert len(fr.read_rows(p)) == 2
 
 
+# mutation-probe: drop the already-adjudicated guard in _check_against_prior_rows()
+def test_retry_after_adjudication_is_rejected(tmp_path: Path):
+    """A same-core `finding` retry appended AFTER an adjudication would be the reducer's last row
+    with a null disposition -- the decision would silently vanish (Codex round-4 P2)."""
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env()), p)
+    fr.append_row(
+        fr.make_row(
+            _core(),
+            _env(
+                record_kind="finding_adjudication",
+                disposition="accepted",
+                disposition_actor="operator",
+            ),
+        ),
+        p,
+    )
+    with pytest.raises(fr.RecordError, match="already adjudicated"):
+        fr.append_row(fr.make_row(_core(), _env(ts="2026-08-18T00:00:09Z")), p)
+    fr.append_row(
+        fr.make_row(
+            _core(),
+            _env(
+                record_kind="finding_adjudication",
+                disposition="rejected",
+                disposition_actor="operator",
+            ),
+        ),
+        p,
+    )  # further adjudication: legal
+    last = fr.reduce_last_by_finding_id(fr.read_rows(p))
+    assert last[FID]["disposition"] == "rejected" and len(fr.read_rows(p)) == 3
+
+
 def test_reducer_uses_file_order_not_ts(tmp_path: Path):
     """The append-only log is the ordering authority: a later physical row with an EARLIER ts
     (clock regression / back-fill) still wins (Codex round-1 P2)."""

@@ -182,6 +182,16 @@ def _check_against_prior_rows(row: dict, path: Path) -> None:
         if row["record_kind"] == "finding_adjudication":
             raise RecordError(f"adjudication for unknown finding_id {row['finding_id']!r}")
         return
+    if row["record_kind"] != "finding_adjudication" and any(
+        r["record_kind"] == "finding_adjudication" for r in prior
+    ):
+        # Once adjudicated, only further adjudications may follow: a same-core retry appended
+        # after the decision would become the reducer's last row with a null disposition and
+        # silently erase it (Codex round-4 P2; C-HE-24 §5, C-HE-29 "last disposition").
+        raise RecordError(
+            f"finding_id {row['finding_id']!r} is already adjudicated; a {row['record_kind']!r} "
+            "row may not follow a finding_adjudication row"
+        )
     orig = prior[0]
     for k in _CORE_IMMUTABLE:
         if row[k] != orig[k]:
