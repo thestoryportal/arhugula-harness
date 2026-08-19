@@ -22,7 +22,7 @@ reviewer_chain:
   - "E4 residual sweep: CLEAR-WITH-FOLD, 4 mechanical residuals folded (06-e4)"
   - "advisor() deliberately NOT in the chain (operator decision D4: clearance = adversarial + Codex + council)"
 supersedes: null
-superseded_by: null
+superseded_by: spec-he-loop-lanes-v1.1-cleared-2026-08-18.md
 ---
 
 # Clearance — `Spec_HE_Loop_Lanes v1` (H_E tooling; `C-HE-*` namespace)

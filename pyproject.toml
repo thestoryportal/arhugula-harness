@@ -47,6 +47,7 @@ dev = [
     #   the AS/OD-axis units that require GenAI instrumentation. Logged as Class 3 informational.
     "instructor>=1.15.4",
     "cryptography>=44.0",     # Test-only Ed25519 double for C-CP-20 §20.2.1 SigningBackend seam (B-22)
+    "jsonschema>=4.26",       # H_E tooling: C-HE-24 finding-record schema + C-HE-15 review-verdict schemas (tools/finding_record.py; was transitive-only via mcp)
 ]
 
 [tool.uv]

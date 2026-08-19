@@ -18,6 +18,7 @@ uv run pytest -q \
   tools/test_arc_exit_report.py \
   tools/test_mutation_probe.py \
   tools/test_arc_metrics.py \
+  tools/test_finding_record.py \
   tools/test_closure_certification.py \
   tools/test_docs_completeness.py \
   tools/test_graft_reachability.py \
