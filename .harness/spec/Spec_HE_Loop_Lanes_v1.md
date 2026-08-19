@@ -4,7 +4,7 @@
 
 Clearance-folded draft (operator draft review ✓ → Codex gate 7/10 ✓ → harness council + adversarial + Codex cold review ✓ → consolidated reconcile + fold ✓ → E4 residual sweep → operator ratification → clearance marker).
 
-Path: `.harness/spec/Spec_HE_Loop_Lanes_v1.md` · Date: 2026-08-18 · **v1.2** (execution-correction change-notes X1 2026-08-18 + X2 2026-08-19; marker `spec-he-loop-lanes-v1.2-cleared-2026-08-19.md`) · Repo at `17011f89c` (all `file:line` cites are pinned to this commit) · Namespace `C-HE-*` (H_E dev tooling; see §0.2)
+Path: `.harness/spec/Spec_HE_Loop_Lanes_v1.md` · Date: 2026-08-18 · **v1.3** (execution-correction change-notes X1 2026-08-18 + X2 2026-08-19 + X3 2026-08-19; marker `spec-he-loop-lanes-v1.3-cleared-2026-08-19.md`) · Repo at `17011f89c` (all `file:line` cites are pinned to this commit) · Namespace `C-HE-*` (H_E dev tooling; see §0.2)
 
 Authority chain (earlier links govern where later links are silent — HE-1 §0):
 `BUILD-PLAN-operator-ratified-2026-08-17.md` (operator-ratified: D-A…D-D, Arcs 1–7) →
@@ -14,6 +14,14 @@ Authority chain (earlier links govern where later links are silent — HE-1 §0)
 **this specification** → implementation plan (next phase) → Phase-7-style implementation.
 
 Evidence tags: **[V]** re-verified at HEAD `17011f89c` in this authoring session (2026-08-18) · **[C]** council- or corpus-recorded, not independently re-verified here · **[R]** operator-ratified (BUILD-PLAN 2026-08-17 or the D5–D8 spec-phase decisions of 2026-08-18, §12).
+
+## Change-note (v1.3 — execution correction, 2026-08-19)
+
+**Trigger.** S3 execution (U-HE-14, the C-HE-30 store audit `.harness/spec/store-audit-he-loop-lanes.md` + `tools/test_store_audit.py`): out-of-family Codex rounds 2–4 on the U-HE-14 PR held the audit against C-HE-30's clearance-fold parenthetical — *"all derived from the authorities above, none a new authority for an existing fact"* — and showed its first clause is false for six of the families it names: the `transition.<token>` marker (C-HE-06 §6 payload `{pid, host, target_action, created_at}`, from which a third party completes a dead creator's transition after `LEASE` has moved), `merge-door/attempts/` (the rate window), `tier-clean-cycles/` (the §10 counter), `lanes/<k>`, `hil-deliveries/<gen-id>` (exclusive-create registries), and `.harness/mechanized-checks-state.json` (a promotion is recorded only there). Each is the **sole carrier of a NEW coordination fact** this spec introduces — not recomputable from the eight authorities — while the parenthetical's operative invariant (no **existing** fact gains a second carrier; the authority set for existing facts is exactly the eight) holds for every one. An audit that certifies C-HE-30 cannot certify against a sentence it has to call false.
+
+- **X3** C-HE-30, three wording edits. (i) The clearance-fold parenthetical "all derived from the authorities above, none a new authority for an existing fact" is REPLACED by "each either derived from an authority above or the sole carrier of a new coordination fact this spec introduces — never a second authority for an existing fact; the audit document classifies every family as one or the other". (ii) The opening sentence "The store set after this spec is **eight** (seven from HE-1 §5 plus the gate sibling)" becomes "**eight** authorities for the facts HE-1 §5 enumerates (…) **plus the coordination-state carriers the clearance fold adds** (enumerated and classified by the audit document)" — a durable sole carrier is itself a store, so the count sentence can no longer read as the whole durable set. (iii) Verification: "plus the derived families named in the note" becomes "plus the families named in the note (each classified `derived` / part of a store / sole carrier of a new fact)". The contract table (the eight rows), the "any fact with two authorities" rule, both Invariants and the Verification row's mechanics are UNCHANGED. Witnesses: `tools/test_store_audit.py::test_family_table_relation_cells_are_classified` (pins each family's `Relation` cell: `derived` vs `sole carrier (new fact)`), `::test_eight_store_table_one_row_per_store_one_fact_per_row`.
+
+**Scope + reversal.** Wording-only: no `C-HE-*` guarantee, contract number, store count, §5 file, or §6 order changes; no implementation site (the S4 units that create these files land against the unchanged C-HE-06/C-HE-11 contracts). Clearance is proportionate: surfaced and reviewed by the out-of-family chain on the U-HE-14 PR (rounds 2–4); no council convened. **Operator may reverse** by a v1.4 note. Marker: `.harness/clearance/spec-he-loop-lanes-v1.3-cleared-2026-08-19.md`.
 
 ## Change-note (v1.2 — execution correction, 2026-08-19)
 
@@ -671,7 +679,7 @@ Closes X1 / loop-D1 (an absent verdict reads as clean: zero-byte output ~3× in 
 
 ### Contract
 
-The store set after this spec is **eight** (seven from HE-1 §5 plus the gate sibling). Before D1/D4-shaped code lands, the plan MUST produce a one-page audit confirming exactly one authority per fact:
+The store set after this spec is **eight** authorities for the facts HE-1 §5 enumerates (seven from HE-1 §5 plus the gate sibling) **plus the coordination-state carriers the clearance fold adds** (enumerated and classified by the audit document — *v1.3 X3; v1–v1.2 read "The store set after this spec is eight"*). Before D1/D4-shaped code lands, the plan MUST produce a one-page audit confirming exactly one authority per fact:
 
 | Store | Venue | Authority for |
 |---|---|---|
@@ -686,7 +694,7 @@ The store set after this spec is **eight** (seven from HE-1 §5 plus the gate si
 
 Any fact found with two authorities MUST be resolved by demoting one to a derived copy before the corresponding contract is implemented.
 
-*(Clearance fold G1/G3/G21: the reservation is now a generation-versioned directory per arc; the lease adds a `transition.<token>` marker family and `released.*/reclaimed.*` history under `QUEUE_DIR/merge-door/`; the lane index registry lives at `QUEUE_DIR/lanes/<k>`; mechanized-check state at `.harness/mechanized-checks-state.json` — all derived from the authorities above, none a new authority for an existing fact. The audit document lists them.)*
+*(Clearance fold G1/G3/G21: the reservation is now a generation-versioned directory per arc; the lease adds a `transition.<token>` marker family and `released.*/reclaimed.*` history under `QUEUE_DIR/merge-door/`; the lane index registry lives at `QUEUE_DIR/lanes/<k>`; mechanized-check state at `.harness/mechanized-checks-state.json` — each either derived from an authority above or the sole carrier of a new coordination fact this spec introduces — never a second authority for an existing fact; the audit document classifies every family as one or the other. *v1.3 X3 correction: v1–v1.2 read "all derived from the authorities above, none a new authority for an existing fact"; the first clause was false for the transition marker, attempt window, tiering counter, lane index, HIL delivery claims and mechanized-check state — see the v1.3 change-note.*)*
 
 ### Invariants
 
@@ -695,7 +703,7 @@ Any fact found with two authorities MUST be resolved by demoting one to a derive
 
 ### Verification
 
-- Static (`tools/test_store_audit.py`, **phase0**): `.harness/spec/store-audit-he-loop-lanes.md` exists, enumerates exactly the eight stores of the table above plus the derived families named in the note, and assigns each fact to one authority; the test greps every `QUEUE_DIR`/`.harness` path literal in `tools/arc_metrics.py`, `tools/merge_door.py`, `tools/reservations.py`, `tools/hooks/loop_lib.sh` and asserts each is listed.
+- Static (`tools/test_store_audit.py`, **phase0**): `.harness/spec/store-audit-he-loop-lanes.md` exists, enumerates exactly the eight stores of the table above plus the families named in the note (each classified `derived` / part of a store / sole carrier of a new fact — *v1.3 X3*), and assigns each fact to one authority; the test greps every `QUEUE_DIR`/`.harness` path literal in `tools/arc_metrics.py`, `tools/merge_door.py`, `tools/reservations.py`, `tools/hooks/loop_lib.sh` and asserts each is listed.
 
 ---
 

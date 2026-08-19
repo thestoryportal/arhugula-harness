@@ -121,6 +121,9 @@ MANIFEST: list[Row] = [
     ),
     Row("C-HE-23", "pytest:tools/test_merge_gate_log.py", "phase0", "local + CI", True),
     Row("C-HE-23", "just:merge-gate-log-check", "phase0", "local + CI", False),
+    # C-HE-30 (U-HE-14)
+    # spec §8.1: mutation-probe `—` (static doc witness; no deletion-expressible target)
+    Row("C-HE-30", "pytest:tools/test_store_audit.py", "phase0", "local + CI", False),
     # §8.1 / §0.3 (U-HE-05)
     Row("§8.1", "pytest:tools/test_lanes_verify.py", "phase0", "local + CI", True),
     Row("§0.3", "just:mutation-probe-coverage-check", "phase0", "local + CI", False),

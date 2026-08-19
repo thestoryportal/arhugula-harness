@@ -22,6 +22,7 @@ uv run pytest -q \
   tools/test_lanes_verify.py \
   tools/test_merge_gate_log.py \
   tools/test_review_wrapper.py \
+  tools/test_store_audit.py \
   tools/test_closure_certification.py \
   tools/test_docs_completeness.py \
   tools/test_graft_reachability.py \
