@@ -65,7 +65,7 @@ DERIVED = [
 #: above. Reverting a sole carrier to "derived" is the misclassification this pins.
 SOLE = "sole carrier (new fact)"
 FAMILY_RELATION: list[tuple[str, str]] = [
-    ("reservations/<arc_id>/<gen>.json", "derived"),
+    ("reservations/<arc_id>/<gen>.json", "part of store 2"),
     ("reservations/.seq/<n>", SOLE),
     ("transition.<lease_token>", SOLE),
     ("LEASE.<token>.<suffix>", "part of store 3"),
@@ -93,11 +93,15 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\.harness/[A-Za-z0-9_.\-]+"), "text"),
     # pathlib chain `".harness" / "<name>"`
     (re.compile(r'"\.harness"\s*/\s*"([^"]+)"'), "harness_seg"),
-    # ANY identifier joined with one or more literals -- `QUEUE_DIR / "<name>"`,
-    # `QUEUE_DIR / f"<name>"`, `QUEUE_DIR / "merge-door" / "x"`, single- or double-quoted, and
-    # alias roots such as `DOOR / "attempts"`, `RES / f"{gen}.json"` (the S4 modules); the
-    # whole literal chain is the token, so a new child of a listed dir is itself unlisted
-    (re.compile(r'\b([A-Za-z_]\w*)((?:\s*/\s*f?(?:"[^"]+"|\'[^\']+\'))+)'), "join"),
+    # ANY identifier or call joined with one or more literals -- `QUEUE_DIR / "<name>"`,
+    # `QUEUE_DIR / f"<name>"`, `QUEUE_DIR / "merge-door" / "x"`, `reservations_root() / ".seq"`,
+    # single- or double-quoted, and alias roots such as `DOOR / "attempts"`, `RES / f"{gen}.json"`
+    # (the S4 modules); the whole literal chain is the token, so a new child of a listed dir
+    # is itself unlisted
+    (
+        re.compile(r'\b([A-Za-z_]\w*(?:\([^()]*\))?)((?:\s*/\s*f?(?:"[^"]+"|\'[^\']+\'))+)'),
+        "join",
+    ),
     # `<any>.glob("<pat>")`
     (re.compile(r'\b\w+\.glob\((?:"([^"]+)"|\'([^\']+)\')\)'), "glob"),
     # `.with_suffix("<ext>")`
@@ -216,9 +220,13 @@ def test_family_table_relation_cells_are_classified() -> None:
         hits = [r for r in rows if key in r[1]]
         assert len(hits) == 1, (key, [r[1] for r in hits])
         assert relation in hits[0][2], (key, relation, hits[0][2])
-    # no fact is owned twice: the fourth cell (derived-from / fact) is distinct per row
+    # no fact is owned twice: the fourth cell (derived-from / fact) is distinct per row, and
+    # no family claims one of the eight stores' facts as its own
     facts = [r[3] for r in rows]
     assert len(set(facts)) == len(facts), facts
+    for r in rows:
+        for name, fact in EIGHT:
+            assert fact not in r[3], (r[0], "claims", name, fact)
 
 
 def test_audit_exists_and_lists_eight_plus_derived() -> None:
