@@ -587,11 +587,15 @@ _require-codex-subscription:
 # governed by config.toml, not pinned here. The run banner prints the
 # effective `model:` — confirm it reads `gpt-5.6-sol`.
 
-# Out-of-family review of the current branch vs BASE (default main), subscription auth.
+# Out-of-family review of the committed branch HEAD vs BASE (default main), subscription auth.
 # Routed through the fail-closed wrapper (C-HE-18): schema-parsed verdict, session-artifact
 # fallback, REVIEWER_UNAVAILABLE on any parse failure. Exit 0 APPROVE / 1 BLOCK / 2 UNAVAILABLE.
-# The wrapper strips OPENAI_API_KEY itself and pins `preferred_auth_method="chatgpt"`.
-codex-review base='main': _require-codex-subscription
+# No `_require-codex-subscription` prerequisite: the wrapper strips OPENAI_API_KEY itself, pins
+# `preferred_auth_method="chatgpt"`, and classifies a missing binary / stale login as
+# REVIEWER_UNAVAILABLE(permanent) with a recorded row (C-HE-16 §4) -- the preflight would exit 1
+# before that terminal contract could apply (codex round 8). Commit before reviewing: the
+# verdict is bound to HEAD (C-HE-15 §3).
+codex-review base='main':
     uv run python tools/codex_review.py --base {{base}}
 
 # Out-of-family review of staged + unstaged + untracked changes, subscription auth.

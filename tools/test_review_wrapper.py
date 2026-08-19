@@ -1263,3 +1263,35 @@ def test_concurrent_emitters_never_share_a_round(tmp_path, monkeypatch):
         rounds = sorted(ex.map(emit, range(8)))
     assert rounds == list(range(1, 9))
     assert sorted(r["round_n"] for r in fr.read_rows(log)) == list(range(1, 9))
+
+
+# ── round-8 absorptions ───────────────────────────────────────────────────────
+def test_reviewer_prose_on_stdout_never_classifies_permanent_when_stderr_speaks():
+    prose = "The wrapper handles 401 unauthorized and login failures; truncated..."
+    assert rw.classify("codex", rw.classifier_text(prose, "tokens used 12,345")) == "transient"
+    # stderr silent: a CLI that reports its auth error on stdout is still caught
+    assert rw.classify("codex", rw.classifier_text("Error: not logged in", "")) == "permanent"
+    # stderr speaks: it is the only classified stream
+    assert rw.classify("codex", rw.classifier_text(prose, "Error: not logged in")) == "permanent"
+
+
+def test_findings_cap_matches_each_channel_prompt():
+    caps = {"codex": cr.MAX_FINDINGS, "gemini": 5, "merge-gate": 8}
+    for ch, cap in caps.items():
+        assert rw.load_schema(ch)["properties"]["findings"]["maxItems"] == cap
+    too_many = [{"severity": "P3", "location": f"f{i}", "message": "m"} for i in range(9)]
+    assert (
+        rw.parse_verdict("codex", _block("BLOCK", too_many), EXPECTED).terminal
+        == "REVIEWER_UNAVAILABLE"
+    )
+    assert "at most 8 findings" in cr.review_instructions(EXPECTED)
+
+
+def test_codex_review_recipe_has_no_subscription_preflight():
+    """codex round 8: the preflight would exit 1 before the wrapper's terminal contract applies."""
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    line = next(ln for ln in justfile.splitlines() if ln.startswith("codex-review base='main':"))
+    assert "_require-codex-subscription" not in line
+    assert (
+        "codex-review-uncommitted: _require-codex-subscription" in justfile
+    )  # the ad-hoc recipe keeps it

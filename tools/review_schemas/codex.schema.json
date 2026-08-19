@@ -47,7 +47,8 @@
             "minLength": 1
           }
         }
-      }
+      },
+      "maxItems": 8
     },
     "head_sha": {
       "type": "string",

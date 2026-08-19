@@ -158,15 +158,20 @@ def classify(channel: str, text: str) -> str:
 
 
 def classifier_text(stdout: str, stderr: str) -> str:
-    """The part of a channel's output the C-HE-16 §4 table may read: a short stream whole (a
-    usage / auth error is a few lines), a long stream only by its tail (a transcript that
-    echoes the reviewed diff would otherwise match auth words that live IN the diff)."""
+    """The part of a channel's output the C-HE-16 §4 table may read: stderr -- where both CLIs
+    report usage / auth / binary errors -- whole when short, by its tail when it is a transcript
+    (a transcript echoes the reviewed diff, which may contain auth words); stdout only when
+    stderr is silent (a CLI that reports on stdout), and then under the same rule. Reviewer
+    PROSE on stdout that merely discusses logins / 401s must never classify a parse failure as
+    permanent (codex round 8)."""
 
     def part(s: str) -> str:
         s = s or ""
         return s if len(s) <= CLASSIFIER_STREAM_LIMIT else s[-CLASSIFIER_TAIL:]
 
-    return part(stdout) + "\n" + part(stderr)
+    if (stderr or "").strip():
+        return part(stderr)
+    return part(stdout)
 
 
 def _git(repo: Path, *args: str) -> str:
