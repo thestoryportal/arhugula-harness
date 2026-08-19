@@ -1656,10 +1656,12 @@ def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = Non
     try:
         log.parent.mkdir(parents=True, exist_ok=True)
         # The target lock is PER TARGET, so two probes on different files may log at once:
-        # one `os.write` on an O_APPEND descriptor under the log's own flock, a short write
-        # rolled back -- the `finding_record._append_line` shape, never a buffered TextIO write
-        # that may split a line across syscalls (merge-gate L1 on #1399). Admissible flock:
-        # a REPO-resident run log, not QUEUE_DIR coordination state (C-HE-02 §1 scope).
+        # one `os.write` on an O_APPEND descriptor (the append offset and the bytes land as one
+        # syscall -- never a buffered TextIO write that may split a line), and a SHORT write
+        # rolled back to the pre-write offset. The flock exists for the ROLLBACK: without it a
+        # peer's line appended between a short write and its `ftruncate(end)` would be cut off
+        # (merge-gate L1/L3 on #1399); the `finding_record._append_line` shape. Admissible
+        # flock: a REPO-resident run log, not QUEUE_DIR coordination state (C-HE-02 §1 scope).
         fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)

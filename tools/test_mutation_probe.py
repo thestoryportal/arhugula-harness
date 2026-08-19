@@ -1741,8 +1741,10 @@ def test_refusals_before_the_probe_are_logged_too(repo, _probe_log_isolated: Pat
 
 def test_concurrent_log_result_writers_never_tear_a_line(tmp_path: Path):
     """merge-gate L1 on #1399: the target lock is per target, so two probes on DIFFERENT files
-    may log at once -- each verdict is one `os.write` on an O_APPEND descriptor under the
-    log's flock; 16 concurrent writers of long entries yield 16 intact JSON lines."""
+    may log at once -- each verdict is ONE `os.write` on an O_APPEND descriptor; 16 concurrent
+    writers of long entries yield 16 intact JSON lines. This witnesses the single-syscall
+    append (a buffered TextIO writer could split a line); it does NOT discriminate the flock --
+    that is `test_short_write_rollback_cannot_cut_a_concurrent_peers_line` (merge-gate L3)."""
     import threading
 
     log = tmp_path / "mp.jsonl"
@@ -1765,6 +1767,65 @@ def test_concurrent_log_result_writers_never_tear_a_line(tmp_path: Path):
     assert len(lines) == 16
     seen = sorted(json.loads(ln)["file"] for ln in lines)  # every line parses whole
     assert seen == sorted(f"f{i}.py" for i in range(16))
+
+
+def test_short_write_is_rolled_back_and_reported(tmp_path: Path, monkeypatch, capsys):
+    """merge-gate L3 on #1399 (P3): a short `os.write` is truncated back to the pre-write offset
+    -- the log keeps only whole lines -- and the verdict is reported, not silently half-logged."""
+    log = tmp_path / "mp.jsonl"
+    mp.log_result("a.py", "1", "true", 0, log=log)
+    before = log.read_bytes()
+    real_write = os.write
+
+    def short_write(fd: int, data: bytes) -> int:
+        return real_write(fd, data[:7])  # a torn tail lands... and must be cut back off
+
+    monkeypatch.setattr(mp.os, "write", short_write)
+    mp.log_result("b.py", "1", "true", 0, log=log)
+    monkeypatch.undo()
+    assert log.read_bytes() == before  # rolled back to exactly the pre-write offset
+    assert "short write (7 of" in capsys.readouterr().err
+
+
+def test_short_write_rollback_cannot_cut_a_concurrent_peers_line(tmp_path: Path, monkeypatch):
+    """merge-gate L3 on #1399 (P2): WHY the append is under the log's flock. Writer A suffers a
+    short write and rolls back with `ftruncate(end)`; writer B appends in between. Held lock:
+    B blocks until A has rolled back, and B's line is the file's only line. Without the lock
+    (delete the flock calls) B's line lands after A's torn bytes and A's truncate cuts it --
+    the interleaving is forced deterministically through the mocked write, so this test reds
+    on exactly that deletion."""
+    import threading
+    import time
+
+    log = tmp_path / "mp.jsonl"
+    real_write = os.write
+    a_started_short_write = threading.Event()
+    b_marker = b'"file": "b.py"'  # part of B's line, used to tell the writers apart
+
+    def racing_write(fd: int, data: bytes) -> int:
+        if b_marker in data:
+            return real_write(fd, data)  # B writes normally
+        n = real_write(fd, data[:9])  # A: torn write lands
+        a_started_short_write.set()  # ...B is released now, while A still holds the lock
+        time.sleep(0.5)  # give B every chance to append BEFORE A's rollback
+        return n
+
+    monkeypatch.setattr(mp.os, "write", racing_write)
+    b_done = {}
+
+    def b() -> None:
+        a_started_short_write.wait(timeout=10)
+        mp.log_result("b.py", "1", "true", 0, log=log)
+        b_done["t"] = time.monotonic()
+
+    tb = threading.Thread(target=b)
+    tb.start()
+    mp.log_result("a.py", "1", "true", 0, log=log)  # A: short write + rollback under the lock
+    tb.join(timeout=15)
+    monkeypatch.undo()
+    lines = log.read_text().splitlines()
+    assert lines and all(json.loads(ln)["file"] == "b.py" for ln in lines), lines
+    assert len(lines) == 1
 
 
 def test_test_file_of_resolves_pytest_nodeids_and_shell_scripts():
