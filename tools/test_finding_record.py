@@ -170,6 +170,7 @@ def test_adjudication_cannot_change_core_or_evade_self_disposition(tmp_path: Pat
         fr.make_row(
             _core(finding_id=fid),
             _env(
+                ts="2026-08-18T00:00:01Z",
                 record_kind="finding_adjudication",
                 disposition="accepted",
                 disposition_actor="operator",
@@ -218,6 +219,7 @@ def test_retry_after_adjudication_is_rejected(tmp_path: Path):
         fr.make_row(
             _core(),
             _env(
+                ts="2026-08-18T00:00:01Z",
                 record_kind="finding_adjudication",
                 disposition="accepted",
                 disposition_actor="operator",
@@ -231,6 +233,7 @@ def test_retry_after_adjudication_is_rejected(tmp_path: Path):
         fr.make_row(
             _core(),
             _env(
+                ts="2026-08-18T00:00:02Z",
                 record_kind="finding_adjudication",
                 disposition="rejected",
                 disposition_actor="operator",
@@ -242,15 +245,14 @@ def test_retry_after_adjudication_is_rejected(tmp_path: Path):
     assert last[FID]["disposition"] == "rejected" and len(fr.read_rows(p)) == 3
 
 
-def test_reducer_uses_file_order_not_ts(tmp_path: Path):
+def test_reducer_uses_file_order_not_ts():
     """The append-only log is the ordering authority: a later physical row with an EARLIER ts
-    (clock regression / back-fill) still wins (Codex round-1 P2)."""
-    p = tmp_path / "g.jsonl"
-    fid = FID
-    fr.append_row(fr.make_row(_core(finding_id=fid), _env(ts="2026-08-18T00:00:05Z")), p)
-    fr.append_row(
+    (a back-filled / imported log the write-time ts guard never saw) still wins (Codex round-1
+    P2). Rows are built directly -- append_row itself now rejects a non-later adjudication ts."""
+    rows = [
+        fr.make_row(_core(), _env(ts="2026-08-18T00:00:05Z")),
         fr.make_row(
-            _core(finding_id=fid),
+            _core(),
             _env(
                 ts="2026-08-18T00:00:01Z",  # earlier than the row before it
                 record_kind="finding_adjudication",
@@ -258,10 +260,40 @@ def test_reducer_uses_file_order_not_ts(tmp_path: Path):
                 disposition_actor="operator",
             ),
         ),
-        p,
+    ]
+    assert fr.reduce_last_by_finding_id(rows)[FID]["disposition"] == "accepted"
+
+
+# mutation-probe: drop the record_kind-transition guard in _check_against_prior_rows()
+def test_only_same_kind_retry_or_adjudication_may_follow_an_existing_id(tmp_path: Path):
+    """`finding` -> `no_finding` on one id would let the producer erase its own finding through
+    the reducer with no disposition_actor (Codex round-5 P1)."""
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env()), p)
+    with pytest.raises(fr.RecordError, match="may not follow it"):
+        fr.append_row(
+            fr.make_row(_core(), _env(record_kind="no_finding", ts="2026-08-18T00:00:01Z")), p
+        )
+    fr.append_row(
+        fr.make_row(_core(), _env(ts="2026-08-18T00:00:01Z")), p
+    )  # same-kind retry: legal
+    assert len(fr.read_rows(p)) == 2
+
+
+# mutation-probe: drop the adjudication-ts guard in _check_against_prior_rows()
+def test_adjudication_ts_must_be_strictly_later(tmp_path: Path):
+    """C-HE-24 §5: an adjudication carries "a later ts" -- same-second (now_iso() is
+    second-granular) and earlier are both rejected at write (Codex round-5 P2)."""
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env(ts="2026-08-18T00:00:05Z")), p)
+    adj = dict(
+        record_kind="finding_adjudication", disposition="accepted", disposition_actor="operator"
     )
-    last = fr.reduce_last_by_finding_id(fr.read_rows(p))
-    assert last[fid]["disposition"] == "accepted"
+    for ts in ("2026-08-18T00:00:05Z", "2026-08-18T00:00:01Z"):
+        with pytest.raises(fr.RecordError, match="must be later"):
+            fr.append_row(fr.make_row(_core(), _env(ts=ts, **adj)), p)
+    fr.append_row(fr.make_row(_core(), _env(ts="2026-08-18T00:00:06Z", **adj)), p)
+    assert len(fr.read_rows(p)) == 2
 
 
 def test_reducer_last_row_wins(tmp_path: Path):

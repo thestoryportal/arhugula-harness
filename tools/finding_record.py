@@ -170,8 +170,10 @@ _CORE_IMMUTABLE = (
 
 
 def _check_against_prior_rows(row: dict, path: Path) -> None:
-    """C-HE-24 §5 invariant at WRITE time, for EVERY row kind: two rows with one finding_id
-    differ only by ts / record_kind / disposition / disposition_actor / unique_catch. A repeated
+    """C-HE-24 §5 invariants at WRITE time, for EVERY row kind: two rows with one finding_id
+    differ only by ts / record_kind / disposition / disposition_actor / unique_catch; the only
+    kind transition is <original kind> -> finding_adjudication; an adjudication's ts is strictly
+    later; nothing but further adjudications follows an adjudication. A repeated
     `finding` row (an emitter retry minting the same id) is held to the same core as the first
     row, not only adjudications (Codex round-1 P1). Because `producer` is core-immutable, an
     adjudication cannot smuggle a new producer in to evade the self-disposition ban: the swap
@@ -193,10 +195,29 @@ def _check_against_prior_rows(row: dict, path: Path) -> None:
             "row may not follow a finding_adjudication row"
         )
     orig = prior[0]
+    if row["record_kind"] not in ("finding_adjudication", orig["record_kind"]):
+        # A retry may repeat the ORIGINAL kind; the only other kind allowed on an existing id is
+        # an adjudication. `finding` -> `no_finding` on one id would let the producer erase its
+        # own finding through the reducer with no disposition_actor (Codex round-5 P1).
+        raise RecordError(
+            f"finding_id {row['finding_id']!r} was recorded as {orig['record_kind']!r}; a "
+            f"{row['record_kind']!r} row may not follow it (only a same-kind retry or a "
+            "finding_adjudication may)"
+        )
     for k in _CORE_IMMUTABLE:
         if row[k] != orig[k]:
             raise RecordError(
                 f"adjudication may not change core field {k!r} ({orig[k]!r} -> {row[k]!r})"
+            )
+    if row["record_kind"] == "finding_adjudication":
+        latest_ts = max(r["ts"] for r in prior)
+        if row["ts"] <= latest_ts:
+            # C-HE-24 §5: an adjudication carries "a later ts". `now_iso()` is second-granular,
+            # so a same-second adjudication is reachable and is rejected here rather than
+            # recorded as a non-monotonic lineage (Codex round-5 P2). Reduction stays file-order.
+            raise RecordError(
+                f"adjudication ts {row['ts']!r} must be later than the finding's latest row ts "
+                f"{latest_ts!r} (C-HE-24 §5)"
             )
 
 
