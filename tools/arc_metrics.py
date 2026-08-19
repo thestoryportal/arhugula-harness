@@ -465,13 +465,43 @@ def claim_ledger(ledger: Path) -> None:
             publish_exclusive(claim, stamp)
             return
         except FileExistsError:
-            if attempt == 1 and _claim_owner_is_dead(claim):
-                claim.unlink(missing_ok=True)  # dead owner on this host: reclaim once
-                continue
+            if attempt == 1 and _reclaim_dead_claim(claim):
+                continue  # the dead claim is gone; publish once more
             raise AbortError(
                 f"ledger {claim.name} is claimed by another writer -- retry "
                 "(a live peer holds it, or the owner cannot be verified)"
             ) from None
+
+
+def _reclaim_dead_claim(claim: Path) -> bool:
+    """Remove a claim whose recorded owner is provably dead -- and ONLY that claim.
+
+    Judge, then move the judged file aside by atomic rename and re-read it: if the
+    bytes moved are not the bytes judged, a peer reclaimed first and published its
+    own LIVE claim in between (codex R8 P2 -- an unconditional unlink here would
+    have stolen it); put it straight back and report "not reclaimed". True iff the
+    dead claim was removed by THIS writer.
+    """
+    try:
+        judged = claim.read_bytes()
+    except OSError:
+        return False
+    if not _claim_owner_is_dead(claim):
+        return False
+    aside = claim.with_name(f"{claim.name}.dead.{os.getpid()}")
+    try:
+        os.rename(claim, aside)
+    except FileNotFoundError:
+        return True  # a peer removed it first; the publish retry decides who owns it
+    try:
+        moved = aside.read_bytes()
+    except OSError:
+        moved = b""
+    if moved != judged:
+        os.rename(aside, claim)  # not the claim we judged: a live peer's -- restore it
+        return False
+    aside.unlink(missing_ok=True)
+    return True
 
 
 def release_ledger(ledger: Path) -> None:

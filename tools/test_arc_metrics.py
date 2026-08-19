@@ -1235,6 +1235,32 @@ def test_append_and_relabel_are_mutually_exclusive_by_claim(monkeypatch, tmp_pat
     assert not claim.exists()
 
 
+# mutation-probe: drop the `if moved != judged:` restore-and-refuse branch in _reclaim_dead_claim()
+def test_dead_claim_reclaim_never_steals_a_peers_fresh_live_claim(monkeypatch, tmp_path: Path):
+    """codex R8 P2: two writers judge the same claim dead; A reclaims and publishes its LIVE
+    claim; B must not remove A's. B moves the file aside and re-reads it: not the bytes it
+    judged -> restored, B aborts, A's claim stands."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    claim = tmp_path / ".l.jsonl.claim"
+    dead = json.dumps({"_claim": {"pid": 2**22 + 4242, "host": socket.gethostname()}})
+    live = json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    am.publish_exclusive(claim, dead)
+    real_dead = am._claim_owner_is_dead
+
+    def judged_dead_then_peer_reclaims_and_publishes(path):
+        verdict = real_dead(path)  # True: the stamp is dead
+        claim.write_text(live)  # ...but peer A reclaimed + published ITS live claim meanwhile
+        return verdict
+
+    monkeypatch.setattr(am, "_claim_owner_is_dead", judged_dead_then_peer_reclaims_and_publishes)
+    with pytest.raises(am.AbortError, match="claimed by another writer"):
+        am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+    assert claim.read_text() == live  # A's claim survived, byte-identical
+    assert not list(tmp_path.glob(".l.jsonl.claim.dead.*"))
+    assert not ledger.exists()
+
+
 def test_relabel_cli_is_wired(monkeypatch, tmp_path: Path, capsys):
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)

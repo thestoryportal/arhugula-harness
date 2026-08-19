@@ -285,6 +285,7 @@ for c in \
   "just merge-gate-binding merge-gate-spec-conformance main" \
   "just merge-gate-emit --pr 1397 --lens merge-gate-concurrency --verdict-json .harness/tmp/merge-gate-lens-concurrency.txt --base main" \
   "just merge-gate-log-check" \
+  "just merge-gate-landing-delta 0123456789abcdef0123456789abcdef01234567" \
   "just lanes-verify" \
   "just lanes-phase0-check" \
   "just mutation-probe-coverage-check" \

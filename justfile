@@ -291,6 +291,11 @@ merge-gate-binding lens base='main':
 merge-gate-emit *ARGS:
     uv run python tools/merge_gate_log.py emit "$@"
 
+# Landing predicate: the head about to merge may differ from the head the lenses approved
+# ONLY by the two gate-log files. Exit 1 (re-gate) otherwise.
+merge-gate-landing-delta reviewed final='HEAD':
+    uv run python tools/merge_gate_log.py landing-delta --reviewed {{reviewed}} --final {{final}}
+
 # ─── MEMORY.md — byte-cap gate + idempotent index upsert ────────────────────
 # NOT a semantic compactor (that stays the agent's call) — a deterministic
 # byte-exact cap gate + idempotent upsert. See tools/memory_compact.py's header.

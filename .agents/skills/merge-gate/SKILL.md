@@ -83,7 +83,9 @@ agree with the block, exact-line match). Exit 0 = APPROVE recorded, 1 = BLOCK re
 
 Commit and push the gate-log row before merge, then wait for CI on that final PR HEAD to be
 green. The log-only commit does not require re-running approved lenses, but any code, test,
-contract, or lens-input change does. Merge only after the final-head CI check and only with
+contract, or lens-input change does — prove which with `just merge-gate-landing-delta
+<reviewed-head>` (exit 0: reviewed..final touches only the two gate-log files, approvals
+transfer; non-zero: re-gate). Merge only after the final-head CI check and only with
 current merge authorization. Re-read the final PR head SHA immediately before merging and
 pin the operation with `gh pr merge <PR#> --squash --match-head-commit <final-head-sha>` so
 a concurrent push fails closed. Never bypass branch protection.

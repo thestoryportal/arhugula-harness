@@ -197,7 +197,8 @@ def test_missing_jsonl_is_the_red_class(tmp_path: Path):
     rows = _emit(tmp_path, pr=3)  # establishes the comparison window
     md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 4, "d" * 40, LENS, "APPROVE", 0))
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(4, "d" * 12, LENS, "APPROVE", 0)] and not rep["orphan_jsonl"]
+    assert rep["missing_jsonl"] == [(4, "d" * 12, LENS, "APPROVE", rows[0]["ts"], 0)]
+    assert not rep["orphan_jsonl"]
 
 
 def test_a_deleted_machine_log_reds_every_structured_md_row(tmp_path: Path):
@@ -219,18 +220,19 @@ def test_finding_count_is_part_of_the_sibling_match(tmp_path: Path):
         {"severity": "P1", "location": "x", "message": "m1"},
         {"severity": "P2", "location": "y", "message": "m2"},
     ]
-    _emit(tmp_path, pr=7, verdict="BLOCK", findings=fs, md=md, jl=jl)
+    rows = _emit(tmp_path, pr=7, verdict="BLOCK", findings=fs, md=md, jl=jl)
+    ts = rows[0]["ts"]
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
     lines = jl.read_text().splitlines(keepends=True)
     jl.write_text(lines[0])  # one finding row lost from the machine log
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", 2)]
+    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", ts, 2)]
     assert [r["round_n"] for r in rep["orphan_jsonl"]] == [1]  # the 1-finding emission: no line
     # one emission cannot vouch for two md lines at its key
     jl.write_text("".join(lines))
     md.write_text(md.read_text() * 2)
     rep = mgl.consistency_report(md, jl)
-    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", 2)] and not rep["orphan_jsonl"]
+    assert rep["missing_jsonl"] == [(7, H[:12], LENS, "BLOCK", ts, 2)] and not rep["orphan_jsonl"]
 
 
 def test_one_lens_md_failure_warn_does_not_suppress_another_lens_orphan(tmp_path: Path):
@@ -348,6 +350,51 @@ def test_reconcile_is_serialized_with_an_in_flight_emission(tmp_path: Path, monk
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
 
 
+def test_a_duplicated_round_1_line_cannot_stand_in_for_a_lost_round_2_line(tmp_path, monkeypatch):
+    """codex R8 P2: the md line carries its emission's ts; the match is on (ts, count), so a
+    duplicate of round 1's line + a lost round-2 line is one missing + one orphan, not clean."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-19T10:00:00Z")
+    _emit(tmp_path, pr=4, md=md, jl=jl, round_n=1)
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-19T10:00:07Z")
+    _emit(tmp_path, pr=4, md=md, jl=jl, round_n=2)
+    l1, l2 = md.read_text().splitlines(keepends=True)
+    md.write_text(l1 + l1)  # round 1's line twice, round 2's lost
+    rep = mgl.consistency_report(md, jl)
+    assert rep["missing_jsonl"] == [(4, H[:12], LENS, "APPROVE", "2026-08-19T10:00:00Z", 0)]
+    assert [r["round_n"] for r in rep["orphan_jsonl"]] == [2]
+    assert mgl.reconcile_orphans(md, jl) == 1
+    assert md.read_text().endswith(l2)  # re-emitted with round 2's own ts
+
+
+def test_landing_delta_transfers_only_over_gate_row_files(tmp_path: Path):
+    """codex R8 P1 / U-HE-23 predicate: H1..H2 may touch ONLY the two gate-log files."""
+    import subprocess
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    g = lambda *a: subprocess.run(["git", *a], cwd=repo, capture_output=True, text=True, check=True)  # noqa: E731
+    g("init", "-q")
+    g("config", "user.email", "t@t")
+    g("config", "user.name", "t")
+    (repo / ".harness").mkdir()
+    (repo / "code.py").write_text("x = 1\n")
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text("")
+    g("add", "-A")
+    g("commit", "-qm", "h1")
+    h1 = g("rev-parse", "HEAD").stdout.strip()
+    (repo / ".harness" / "merge-gate-log.jsonl").write_text("{}\n")
+    (repo / ".harness" / "merge-gate-log.md").write_text("| row |\n")
+    g("add", "-A")
+    g("commit", "-qm", "gate rows")
+    assert mgl.landing_delta(h1, "HEAD", repo) == []  # approvals transfer
+    (repo / "code.py").write_text("x = 2\n")
+    g("add", "-A")
+    g("commit", "-qm", "sneaky")
+    assert mgl.landing_delta(h1, "HEAD", repo) == ["code.py"]  # re-gate
+    assert mgl.main(["landing-delta", "--reviewed", "not-a-ref"]) == 2
+
+
 def test_one_lens_sibling_never_vouches_for_another_lens(tmp_path: Path):
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     _emit(tmp_path, pr=5, lens="merge-gate-a")
@@ -375,7 +422,9 @@ def test_legacy_markdown_rows_and_wrapper_rows_are_outside_the_comparison(tmp_pa
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
     # a STRUCTURED md row is always compared, whatever its date (no window, codex R3 P1)
     md.write_text(md.read_text() + mgl._md_line("2000-01-01T00:00:00Z", 1, H, LENS, "APPROVE", 0))
-    assert mgl.consistency_report(md, jl)["missing_jsonl"] == [(1, H[:12], LENS, "APPROVE", 0)]
+    assert mgl.consistency_report(md, jl)["missing_jsonl"] == [
+        (1, H[:12], LENS, "APPROVE", "2000-01-01T00:00:00Z", 0)
+    ]
 
 
 def test_reviewer_unavailable_is_recorded_but_is_not_a_gate_verdict(tmp_path: Path):

@@ -194,6 +194,9 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   lens verdicts, which are bound to the reviewed head), wait for CI at that final head, and
   only then merge. A record left as dirty local state is lost with the worktree and is not a
   record (mirror of the Codex carrier's "commit and push the gate-log row before merge").
+  **The approvals transfer to that final head ONLY if `just merge-gate-landing-delta
+  <reviewed-head>` exits 0** (the reviewed..final diff names nothing but the two gate-log
+  files); any other file in that delta is unreviewed change — re-run the gate.
 
 ## Wiring into `ship-pr` / the loop
 

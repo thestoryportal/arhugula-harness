@@ -333,10 +333,10 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     # EVERY structured md line is compared -- no time window (codex R3 P1: with zero surviving
     # emissions a window filtered every md row out, so a deleted machine log passed). Only
     # this module writes the structured shape; the legacy narrative rows never match it.
-    md_by_key: dict[tuple, list[int]] = {}
+    md_by_key: dict[tuple, list[tuple[str, int]]] = {}
     for r in read_md_rows(md_path):
         k = (r["pr"], r["head_sha"], r["lens"], r["verdict"])
-        md_by_key.setdefault(k, []).append(r["n_findings"])
+        md_by_key.setdefault(k, []).append((r["ts"], r["n_findings"]))
     # a warn vouches for ONE emission: same head, same lens, same round (codex R2 P2 -- keyed
     # without the round, a round-1 md failure would hide a round-2 crash between the writes)
     warned = {
@@ -344,30 +344,31 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
         for r in fr.read_rows(jsonl_path)
         if r.get("cause_attribution") == "markdown_write_failed"
     }
-    # per key, the UNWARNED emissions (as (finding_count, representative row), latest round
-    # last) and the md lines (as finding counts) must match as MULTISETS on the finding count
-    # (codex R3 P2: key membership alone let one emission vouch for N md rows, and a BLOCK
-    # that lost a finding row stayed green)
-    em_by_key: dict[tuple, list[tuple[int, dict]]] = {}
+    # per key, the UNWARNED emissions (as (ts, finding_count, representative row), latest
+    # round last) and the md lines (as (ts, finding_count)) must match as MULTISETS (codex R3
+    # P2: key membership alone let one emission vouch for N md rows, and a BLOCK that lost a
+    # finding row stayed green; codex R8 P2: without `ts` a duplicated round-1 line could
+    # stand in for a lost round-2 line -- each md line carries its emission's ts, and
+    # `reconcile_orphans` re-emits with that same ts)
+    em_by_key: dict[tuple, list[tuple[str, int, dict]]] = {}
     for k, rows in sorted(emissions.items(), key=lambda kv: kv[0][4]):
         # the warn vouches for ONE emission: same arc (pr), head, lens AND round (codex R2/R4
         # P2 -- two PRs at one head+lens both have a round 1)
         if (rows[0]["arc_id"], rows[0]["head_sha"], rows[0]["producer"], k[4]) in warned:
             continue
         n_findings = sum(1 for x in rows if x["record_kind"] == "finding")
-        em_by_key.setdefault(k[:4], []).append((n_findings, rows[0]))
+        em_by_key.setdefault(k[:4], []).append((rows[0]["ts"], n_findings, rows[0]))
     missing: list[tuple] = []
     orphan: list[dict] = []
     for k in sorted(set(md_by_key) | set(em_by_key)):
-        md_counts = sorted(md_by_key.get(k, []))
         ems = list(em_by_key.get(k, []))
-        for n in md_counts:
-            match = next((i for i, (c, _) in enumerate(ems) if c == n), None)
+        for ts, n in sorted(md_by_key.get(k, [])):
+            match = next((i for i, (ets, c, _) in enumerate(ems) if (ets, c) == (ts, n)), None)
             if match is None:
-                missing.append((*k, n))  # an md line with no emission of that finding count
+                missing.append((*k, ts, n))  # an md line with no emission of that ts+count
             else:
                 ems.pop(match)
-        orphan.extend(row for _, row in ems)  # emissions left without an md line
+        orphan.extend(row for _, _, row in ems)  # emissions left without an md line
     return {"missing_jsonl": missing, "orphan_jsonl": orphan}
 
 
@@ -398,6 +399,21 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
 
 #: Where lens responses live for `emit` (the skills write them here; gitignored).
 LENS_SCRATCH = REPO / ".harness" / "tmp"
+
+
+#: The only files a post-gate "log-only" commit may touch (C-HE-23 §2 sibling + human view).
+GATE_ROW_FILES = frozenset({".harness/merge-gate-log.jsonl", ".harness/merge-gate-log.md"})
+
+
+def landing_delta(
+    reviewed_head: str, final_head: str = "HEAD", repo: Path | None = None
+) -> list[str]:
+    """Files changed between the head the lenses APPROVED and the head about to merge that are
+    NOT gate-log rows. Empty means the approvals transfer (a gate-row-only delta, the rule
+    both merge-gate carriers state); anything else means H2 carries unreviewed change and the
+    gate must re-run (codex R8 P1; the U-HE-23 landing predicate, landed early)."""
+    out = rw._git(repo or REPO, "diff", "--name-only", reviewed_head, final_head)
+    return sorted(f for f in out.splitlines() if f.strip() and f.strip() not in GATE_ROW_FILES)
 
 
 def _read_text(arg: str) -> str:
@@ -441,6 +457,11 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("check", help="C-HE-23 §2 consistency reducer (exit 1 on a missing sibling)")
     sub.add_parser("reconcile", help="re-emit markdown rows for orphan JSONL verdicts")
+    ld = sub.add_parser(
+        "landing-delta", help="exit 1 if reviewed..final touches anything but the gate-log rows"
+    )
+    ld.add_argument("--reviewed", required=True, help="the head the lenses approved")
+    ld.add_argument("--final", default="HEAD", help="the head about to merge")
 
     args = p.parse_args(argv)
     if args.cmd == "binding":
@@ -550,6 +571,20 @@ def main(argv: list[str] | None = None) -> int:
             f"{len(rep['orphan_jsonl'])} orphan JSONL verdict(s)"
         )
         return 1 if rep["missing_jsonl"] else 0  # orphans reconcile on the next gate run
+    if args.cmd == "landing-delta":
+        try:
+            extra = landing_delta(args.reviewed, args.final)
+        except Exception as exc:  # an unresolvable ref is NOT a clean delta
+            print(f"merge-gate-log: landing delta could not be computed: {exc}", file=sys.stderr)
+            return 2
+        for f in extra:
+            print(f"UNREVIEWED {f}")
+        print(
+            f"merge-gate-log: {args.reviewed[:12]}..{args.final[:12]} touches "
+            f"{len(extra)} non-gate-row file(s); approvals "
+            + ("TRANSFER" if not extra else "DO NOT TRANSFER -- re-gate")
+        )
+        return 1 if extra else 0
     print(f"reconciled {reconcile_orphans()} orphan row(s)")
     return 0
 
