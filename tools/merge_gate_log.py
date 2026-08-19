@@ -406,7 +406,6 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--lens", required=True)
     b.add_argument("--base", default="main")
     b.add_argument("--prompt-version", default=PROMPT_VERSION)
-    b.add_argument("--config-hash", default=None)
 
     e = sub.add_parser("emit", help="record one lens verdict: JSONL first, markdown second")
     e.add_argument("--pr", type=int, required=True)
@@ -417,23 +416,19 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--lane-id", default=None)
     e.add_argument("--round-n", type=int, default=None)
     e.add_argument("--prompt-version", default=PROMPT_VERSION)
-    e.add_argument("--config-hash", default=None)
 
     sub.add_parser("check", help="C-HE-23 §2 consistency reducer (exit 1 on a missing sibling)")
     sub.add_parser("reconcile", help="re-emit markdown rows for orphan JSONL verdicts")
 
     args = p.parse_args(argv)
     if args.cmd == "binding":
+        # `config_hash` is ALWAYS the independent digest of the current carriers -- no CLI
+        # override on either command (codex R5 P2: a shared arbitrary value would let a verdict
+        # bind to nothing); tests patch `config_hash` itself.
         try:
             print(
                 json.dumps(
-                    lens_binding(
-                        REPO,
-                        args.base,
-                        args.lens,
-                        prompt_version=args.prompt_version,
-                        cfg_hash=args.config_hash,
-                    ),
+                    lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version),
                     indent=2,
                     sort_keys=True,
                 )
@@ -449,13 +444,7 @@ def main(argv: list[str] | None = None) -> int:
             n = reconcile_orphans()
             if n:
                 print(f"merge-gate-log: reconciled {n} orphan md row(s) from an earlier run")
-            expected = lens_binding(
-                REPO,
-                args.base,
-                args.lens,
-                prompt_version=args.prompt_version,
-                cfg_hash=args.config_hash,
-            )
+            expected = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
             text = _read_text(args.verdict_json)
             outcome = rw.parse_verdict(CHANNEL, text, expected)
             if outcome.terminal in ("APPROVE", "BLOCK"):
@@ -510,7 +499,15 @@ def main(argv: list[str] | None = None) -> int:
         # HEAD-moved guard (codex R2 P1): the rows are a true record of `expected["head_sha"]`,
         # but if the checkout moved while we recorded, this is NOT a verdict for the current
         # head -- the skill must not read exit 0/1 as one. Same rule as the codex wrapper.
-        head_now = rw._git(REPO, "rev-parse", "HEAD")
+        try:
+            head_now = rw._git(REPO, "rev-parse", "HEAD")
+        except Exception as exc:  # the record stands; whether it is for THIS head is unknown
+            print(
+                f"merge-gate-log: recorded, but HEAD could not be re-read ({exc}) -- the verdict "
+                "does not count for the current checkout; re-run the lens",
+                file=sys.stderr,
+            )
+            return 2
         if head_now != expected["head_sha"]:
             print(
                 f"merge-gate-log: HEAD moved during emit ({expected['head_sha'][:12]} -> "

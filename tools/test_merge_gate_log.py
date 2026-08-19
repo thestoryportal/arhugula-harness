@@ -28,6 +28,7 @@ def _isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "unused-gate-log.jsonl")
     monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "unused-log.md")
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    monkeypatch.setattr(mgl, "config_hash", lambda: "cfg")  # no CLI override exists (R5 P2)
 
 
 def _binding(lens: str = LENS, head: str = H) -> dict[str, str]:
@@ -405,6 +406,7 @@ def test_lens_binding_uses_the_orchestrators_values_and_the_lens_identity():
 def test_config_hash_covers_every_carrier_on_both_runners(tmp_path: Path, monkeypatch):
     """gemini R1 P2: the Claude skill alone is not the configuration -- the Codex projection and
     the Codex lens prompts are carriers too; a change to ANY of them changes the hash."""
+    monkeypatch.undo()  # this test exercises the REAL config_hash (the autouse pin is lifted)
     monkeypatch.setattr(mgl, "REPO", tmp_path)
     claude, codex = tmp_path / "c" / "SKILL.md", tmp_path / "a" / "SKILL.md"
     lenses = tmp_path / "lenses"
@@ -457,8 +459,6 @@ def test_cli_emit_parses_the_schema_block_and_holds_it_to_the_binding(
             str(f),
             "--base",
             "HEAD",
-            "--config-hash",
-            "cfg",
             "--lane-id",
             "h",
         ]
@@ -478,8 +478,6 @@ def test_cli_emit_parses_the_schema_block_and_holds_it_to_the_binding(
             str(f),
             "--base",
             "HEAD",
-            "--config-hash",
-            "cfg",
             "--lane-id",
             "h",
         ]
@@ -499,8 +497,6 @@ def test_cli_emit_parses_the_schema_block_and_holds_it_to_the_binding(
             str(f),
             "--base",
             "HEAD",
-            "--config-hash",
-            "cfg",
             "--lane-id",
             "h",
         ]
@@ -523,8 +519,6 @@ def test_cli_emit_parses_the_schema_block_and_holds_it_to_the_binding(
                 str(f),
                 "--base",
                 "HEAD",
-                "--config-hash",
-                "cfg",
                 "--lane-id",
                 "h",
             ]
@@ -536,7 +530,7 @@ def test_cli_emit_parses_the_schema_block_and_holds_it_to_the_binding(
 
 def _cli(f, *extra):
     return ["emit", "--pr", "9", "--lens", LENS, "--verdict-json", str(f), "--base", "HEAD",
-            "--config-hash", "cfg", "--lane-id", "h", *extra]  # fmt: skip
+            "--lane-id", "h", *extra]  # fmt: skip
 
 
 def test_cli_emit_exit_2_on_any_non_recording_failure_never_1(tmp_path, monkeypatch, capsys):
@@ -622,8 +616,42 @@ def test_cli_emit_requires_the_verdict_line_to_agree_with_the_block(tmp_path, mo
     assert md.read_text().count("REVIEWER_UNAVAILABLE") == 2
 
 
+def test_no_cli_override_of_the_config_hash(tmp_path: Path):
+    """codex R5 P2: `config_hash` is always the independent digest of the current carriers --
+    neither command accepts a caller-supplied value that both could share."""
+    for argv in (
+        ["binding", "--lens", LENS, "--config-hash", "x"],
+        ["emit", "--pr", "1", "--lens", LENS, "--verdict-json", "f", "--config-hash", "x"],
+    ):
+        with pytest.raises(SystemExit) as exc:
+            mgl.main(argv)
+        assert exc.value.code == 2
+
+
+def test_cli_emit_head_reread_failure_after_recording_is_exit_2(tmp_path, monkeypatch, capsys):
+    """codex R5 P2: a failing post-record `rev-parse` must be exit 2 (recorded, but not known
+    to be for this checkout), never the uncaught exit 1 the skills read as BLOCK."""
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
+    f = tmp_path / "lens.txt"
+    f.write_text(_lens_output(b, "APPROVE"))
+    real_git = rw._git
+
+    def git_dies_after_recording(repo, *args):
+        if args == ("rev-parse", "HEAD") and jl.exists():
+            raise RuntimeError("git gone")
+        return real_git(repo, *args)
+
+    monkeypatch.setattr(rw, "_git", git_dies_after_recording)
+    assert mgl.main(_cli(f)) == 2
+    assert "HEAD could not be re-read" in capsys.readouterr().err
+    assert fr.read_rows(jl)[0]["record_kind"] == "no_finding"  # the record stands
+
+
 def test_cli_binding_prints_the_six_fields(capsys):
-    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD", "--config-hash", "cfg"]) == 0
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert set(out) == set(rw.BINDING_FIELDS) and out["reviewer_identity"] == LENS
     assert mgl.main(["binding", "--lens", "nope", "--base", "HEAD"]) == 2
