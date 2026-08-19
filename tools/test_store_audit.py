@@ -30,11 +30,14 @@ AUDIT = REPO / ".harness" / "spec" / "store-audit-he-loop-lanes.md"
 LANDED = [
     "tools/arc_metrics.py",
     "tools/hooks/loop_lib.sh",
+    "tools/lanes_verify.py",  # C-HE-31 §4d evaluator site; reads the probe log today
 ]
-#: S4 modules -- skipped until they land; U-HE-17 / U-HE-22 MUST move theirs into LANDED.
+#: Planned store creators -- skipped until they land; the landing unit (U-HE-17 / U-HE-22 /
+#: U-HE-15 lane-init) MUST move its module into LANDED in the same change.
 PENDING = [
     "tools/merge_door.py",
     "tools/reservations.py",
+    "tools/hooks/lane-init.sh",
 ]
 #: (first-cell name, phrase the spec's "Authority for" cell carries) -- C-HE-30 table order.
 EIGHT: list[tuple[str, str]] = [
@@ -74,7 +77,7 @@ FAMILY_RELATION: list[tuple[str, str]] = [
     ("tier-clean-cycles", SOLE),
     ("lanes/<k>", SOLE),
     ("hil-deliveries", SOLE),
-    (".loop-active", SOLE),
+    (".loop-active", "part of store 6"),
     ("mechanized-checks-state.json", SOLE),
     ("mutation-probe-log.jsonl", "derived"),
     ("merge-gate-log.jsonl", "part of store 5"),
@@ -108,8 +111,9 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r'\.with_suffix\((?:"([^"]+)"|\'([^\']+)\')\)'), "suffix"),
     # `.tmp` stagers (`with_name(f".{name}.{pid}.tmp")`)
     (re.compile(r'f?(?:"[^"]*\.tmp"|\'[^\']*\.tmp\')'), "tmp"),
-    # shell: `$(dirname "$p")/.loop-status.lock"` / `$d/<name>"` (one segment before the quote)
-    (re.compile(r'(?:\)|\$\{?\w+\}?)/([A-Za-z0-9_.\-]+)"'), "shell"),
+    # shell: `$(dirname "$p")/.loop-status.lock"`, `$d/<name>"`, `${VAR:-default}/<name>` -- one
+    # segment after a `)`, `}` or `$var` root, ended by a quote, slash, space or `;`
+    (re.compile(r'(?:\)|\}|\$\w+)/([A-Za-z0-9_.\-]+)(?=["\'/\s;)]|$)', re.M), "shell"),
 ]
 #: Python-only idioms; a shell module spells its paths textually or via the `shell` form, and
 #: `case` patterns like `"refs/heads/"*)` would otherwise read as joins.

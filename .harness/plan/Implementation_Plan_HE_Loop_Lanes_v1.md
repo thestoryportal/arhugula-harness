@@ -2478,15 +2478,21 @@ Rule: exactly one authority per fact. Any fact found with two authorities is res
 
 *(v1.0 template headed "Derived families (no new authority)"; re-headed per spec v1.3 X3 — each row carries a `Relation` cell: `derived` / `part of store N` / `sole carrier (new fact)`. The as-landed page is canonical for the classifications; this template is illustrative.)*
 
-| Family | Path | Derived from / sole carrier of |
-|---|---|---|
-| Reservation generations | `QUEUE_DIR/reservations/<arc_id>/<gen>.json`, `.seq/<n>`, `.<gen>.<pid>.tmp` | the reservation store (history by construction; GC prunes below head) |
-| Lease transition markers + history | `QUEUE_DIR/merge-door/transition.<lease_token>`, `released.<token>`, `reclaimed.<token>`, `LEASE.<token>.attempted`, `LEASE.<token>.blocked`, `LEASE.<token>.refresh`, `attempts/<lane_id>/<ts>`, `tier-clean-cycles/<token>` | the lease (fencing + audit + §10 tiering counter; GC 30 d) |
-| Lane index registry | `QUEUE_DIR/lanes/<k>` | lane-init (exclusive create; released at teardown) |
-| HIL coalescing delivery claims | `QUEUE_DIR/hil-deliveries/<gen-id>` | `loop_hil_deliver` (exclusive create per generation; the `COALESCE-DELIVERED` row is the audit twin) |
-| Mechanized-check runtime state | `.harness/mechanized-checks-state.json` | `just lanes-verify` promotion/demotion evaluation (C-HE-31 §4d) |
-| Mutation-probe run log | `.harness/mutation-probe-log.jsonl` | `tools/mutation_probe.py` exits (coverage check input) |
-| Structured gate sibling | `.harness/merge-gate-log.jsonl` | listed above with its markdown twin |
+| Family | Path | Relation | Derived from / sole carrier of |
+|---|---|---|---|
+| Reservation generations | `QUEUE_DIR/reservations/<arc_id>/<gen>.json`, `.<gen>.<pid>.tmp` | part of store 2 | the reservation files ARE store 2; head = highest gen, below-head = immutable history (GC prunes below head) |
+| Reservation sequence allocator | `QUEUE_DIR/reservations/.seq/<n>` | sole carrier (new fact) | "the highest `seq` ever allocated" (`alloc_seq` exclusive-creates before the generation that carries it is written) |
+| Lease transition marker | `QUEUE_DIR/merge-door/transition.<lease_token>` (payload `{pid, host, target_action, created_at}` + `fresh_lease` on reclaim) | sole carrier (new fact) | "who won the transition of this token, toward what — and the fresh lease to publish" (C-HE-06 §6); completion is read from the history below |
+| Lease per-token sidecars | `QUEUE_DIR/merge-door/LEASE.<token>.<attempted|blocked|refresh>` | part of store 3 | `read_lease` merges them into the lease view (`merge_attempted_at`, blocked state, refresh continuation) |
+| Lease transition history | `QUEUE_DIR/merge-door/released.<token>`, `reclaimed.<token>` | derived | the renamed-aside `LEASE` payload (GC 30 d) |
+| Door attempt rate-window | `QUEUE_DIR/merge-door/attempts/<lane_id>/<ts>` | sole carrier (new fact) | "attempts per lane in the window" (C-HE-06 rate limit) |
+| Attestation-tier counter | `QUEUE_DIR/merge-door/tier-clean-cycles/<token>` | sole carrier (new fact) | "consecutive clean cycles" (C-HE-06 §10) |
+| Lane index registry | `QUEUE_DIR/lanes/<k>` | sole carrier (new fact) | "which lane indices are taken" (lane-init exclusive create; released at teardown) |
+| HIL coalescing delivery claims | `QUEUE_DIR/hil-deliveries/<gen-id>` | sole carrier (new fact) | "one deliverer has claimed this generation" (`loop_hil_deliver`; the `COALESCE-DELIVERED` row is the delivery's audit twin) |
+| Loop control markers (per-lane) | `.harness/.loop-active`, `.loop-iter`, `.loop-halt` | part of store 6 | pre-existing Wave-2 control state the C-HE-30 row 6 names ("control markers per-lane") |
+| Mechanized-check runtime state | `.harness/mechanized-checks-state.json` | sole carrier (new fact) | "each check's live `kind` + demotion window" (C-HE-31 §4d; a promotion is recorded only here) |
+| Mutation-probe run log | `.harness/mutation-probe-log.jsonl` | derived | `tools/mutation_probe.py` exits (coverage check input) |
+| Structured gate sibling | `.harness/merge-gate-log.jsonl` | part of store 5 | listed above with its markdown twin (JSONL-first, same step) |
 
 ## Two-authority checks performed
 
