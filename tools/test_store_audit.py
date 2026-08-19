@@ -59,6 +59,24 @@ DERIVED = [
     "mutation-probe-log.jsonl",
     "merge-gate-log.jsonl",
 ]
+#: (Path-cell key, required Relation cell) for the derived / new-fact family table. A sole
+#: carrier holds a coordination fact no other store records (C-HE-06 §6 marker payload,
+#: exclusive-create registries, promotion state); a derived row is recomputable from a store
+#: above. Reverting a sole carrier to "derived" is the misclassification this pins.
+SOLE = "sole carrier (new fact)"
+FAMILY_RELATION: list[tuple[str, str]] = [
+    ("reservations/<arc_id>/<gen>.json", "derived"),
+    ("transition.<lease_token>", SOLE),
+    ("released.<token>", "derived"),
+    ("attempts/<lane_id>", SOLE),
+    ("tier-clean-cycles", SOLE),
+    ("lanes/<k>", SOLE),
+    ("hil-deliveries", SOLE),
+    (".loop-active", SOLE),
+    ("mechanized-checks-state.json", SOLE),
+    ("mutation-probe-log.jsonl", "derived"),
+    ("merge-gate-log.jsonl", "authority half of store 5"),
+]
 #: Transient writer-exclusion / staging artifacts -- MUST be listed as non-stores.
 NON_STORES = [
     ".ledger-claim-",
@@ -72,15 +90,17 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\.harness/[A-Za-z0-9_.\-]+"), "text"),
     # pathlib chain `".harness" / "<name>"`
     (re.compile(r'"\.harness"\s*/\s*"([^"]+)"'), "harness_seg"),
-    # ANY identifier joined with a literal -- `QUEUE_DIR / "<name>"`, `QUEUE_DIR / f"<name>"`,
-    # and alias roots such as `DOOR / "attempts"`, `RES / f"{gen}.json"` (the S4 modules)
-    (re.compile(r'\b([A-Za-z_]\w*)\s*/\s*f?"([^"]+)"'), "join"),
+    # ANY identifier joined with one or more literals -- `QUEUE_DIR / "<name>"`,
+    # `QUEUE_DIR / f"<name>"`, `QUEUE_DIR / "merge-door" / "x"`, single- or double-quoted, and
+    # alias roots such as `DOOR / "attempts"`, `RES / f"{gen}.json"` (the S4 modules); the
+    # whole literal chain is the token, so a new child of a listed dir is itself unlisted
+    (re.compile(r'\b([A-Za-z_]\w*)((?:\s*/\s*f?(?:"[^"]+"|\'[^\']+\'))+)'), "join"),
     # `<any>.glob("<pat>")`
-    (re.compile(r'\b\w+\.glob\("([^"]+)"\)'), "glob"),
+    (re.compile(r'\b\w+\.glob\((?:"([^"]+)"|\'([^\']+)\')\)'), "glob"),
     # `.with_suffix("<ext>")`
-    (re.compile(r'\.with_suffix\("([^"]+)"\)'), "suffix"),
+    (re.compile(r'\.with_suffix\((?:"([^"]+)"|\'([^\']+)\')\)'), "suffix"),
     # `.tmp` stagers (`with_name(f".{name}.{pid}.tmp")`)
-    (re.compile(r'f?"[^"]*\.tmp"'), "tmp"),
+    (re.compile(r'f?(?:"[^"]*\.tmp"|\'[^\']*\.tmp\')'), "tmp"),
     # shell: `$(dirname "$p")/.loop-status.lock"` / `$d/<name>"` (one segment before the quote)
     (re.compile(r'(?:\)|\$\{?\w+\}?)/([A-Za-z0-9_.\-]+)"'), "shell"),
 ]
@@ -89,17 +109,19 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
 _PY_ONLY = frozenset({"join", "glob", "suffix", "tmp"})
 _SH_ONLY = frozenset({"shell"})
 _HAS_WORD = re.compile(r"[A-Za-z0-9]")
+_QUOTED = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 
 
 def _token(kind: str, match: re.Match[str]) -> str | None:
     """The audit-page token a literal must appear as, or None when the literal carries no
     store name of its own (a pure-placeholder join such as `f"{prefix}.{token}"`)."""
     if kind == "join":
-        root, raw = match.group(1), match.group(2)
+        root = match.group(1)
+        raw = "/".join(a or b for a, b in _QUOTED.findall(match.group(2)))
     else:
         root = ""
-        raw = match.group(1) if match.re.groups else match.group(0)
-    raw = _PLACEHOLDER.sub("*", raw.strip('"'))
+        raw = next((g for g in match.groups() if g), None) or match.group(0)
+    raw = _PLACEHOLDER.sub("*", raw.strip("\"'"))
     if kind == "text":
         return raw
     if kind == "harness_seg":
@@ -142,17 +164,21 @@ def audit_spans(text: str) -> list[str]:
 
 
 def listed(token: str, spans: list[str]) -> bool:
-    """A token is listed iff some code span IS it, ends with `/<token>`, has it as a whole
-    `/`-segment, or -- for a bare-extension token (`.tmp`) -- has a segment ending in it. A
-    glob (`*.json`) must match a glob segment; a bare substring anywhere (`state` inside
-    `mechanized-checks-state.json`) is NOT a listing."""
+    """A token is listed iff its `/`-segments occur as a CONTIGUOUS run of some code span's
+    segments (`QUEUE_DIR/reservations` inside `QUEUE_DIR/reservations/*/*.json`; `attempts`
+    inside `QUEUE_DIR/merge-door/attempts/*/*`), or -- for a bare-extension token (`.tmp`)
+    -- some segment ends in it. A glob (`*.json`) must match a glob segment; a bare
+    substring (`state` inside `mechanized-checks-state.json`) or a new child of a listed
+    dir (`merge-door/unlisted`) is NOT a listing."""
+    want = token.split("/")
     ext = token if token.startswith(".") and "/" not in token else None
     for span in spans:
-        if span == token or span.endswith("/" + token):
-            return True
-        for seg in span.split("/"):
-            if seg == token or (ext is not None and seg.endswith(ext)):
+        segs = span.split("/")
+        for i in range(len(segs) - len(want) + 1):
+            if segs[i : i + len(want)] == want:
                 return True
+        if ext is not None and any(seg.endswith(ext) for seg in segs):
+            return True
     return False
 
 
@@ -163,6 +189,27 @@ def _eight_store_rows(text: str) -> list[list[str]]:
     body = [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in rows[2:]]
     assert rows[0].split("|")[1:4] == [" Store ", " Venue ", " Authority for "], rows[0]
     return body
+
+
+def _family_rows(text: str) -> list[list[str]]:
+    """Body rows of the `## Derived families + new-fact carriers` table as cell lists."""
+    section = text.split("## Derived families", 1)[1].split("\n## ", 1)[0]
+    rows = [ln for ln in section.splitlines() if ln.startswith("|")]
+    assert rows[0].split("|")[1:4] == [" Family ", " Path ", " Relation "], rows[0]
+    return [[c.strip() for c in ln.strip().strip("|").split("|")] for ln in rows[2:]]
+
+
+def test_family_table_relation_cells_are_classified() -> None:
+    """Every family row carries a Relation cell; each pinned family is present exactly once
+    and carries its required classification (a loose substring does not count)."""
+    rows = _family_rows(AUDIT.read_text())
+    for r in rows:
+        assert len(r) == 4 and all(r), r
+        assert r[2] == "derived" or r[2] == SOLE or "authority half of store 5" in r[2], r
+    for key, relation in FAMILY_RELATION:
+        hits = [r for r in rows if key in r[1]]
+        assert len(hits) == 1, (key, [r[1] for r in hits])
+        assert relation in hits[0][2], (key, relation, hits[0][2])
 
 
 def test_audit_exists_and_lists_eight_plus_derived() -> None:
@@ -231,6 +278,10 @@ def test_listed_is_segment_bound_not_substring() -> None:
     assert listed(".tmp", spans)
     assert listed("*.taken", spans)
     assert listed(".harness/mechanized-checks-state.json", spans)
+    assert listed("QUEUE_DIR/merge-door", spans)
+    assert listed("merge-door/attempts", spans)
     assert not listed("*.json", spans)  # a glob needs a glob segment, not any `.json` file
     assert not listed("state", spans)
     assert not listed("merge-door/state", spans)
+    assert not listed("attempts/state", spans)  # a new child of a listed dir is unlisted
+    assert not listed("QUEUE_DIR/attempts", spans)  # segments must be contiguous
