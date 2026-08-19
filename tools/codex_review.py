@@ -38,25 +38,24 @@ _RUN_BOUNDED_TIMEOUT_RC = 124
 
 
 def review_instructions(binding: dict[str, str]) -> str:
+    """The review TARGET + output contract. `codex review` (codex-cli 0.146.0) takes the
+    positional PROMPT as a review target that is mutually exclusive with `--base`, so the
+    instructions name the exact committed diff the binding digests (interface probe re-run at
+    execution: `--base` + PROMPT is rejected by the CLI; PROMPT alone runs the review flow)."""
     return (
-        "Review the diff for correctness defects. When done, print ONE fenced ```json block, "
-        "and nothing after it, with exactly these keys: verdict (APPROVE|BLOCK), findings "
-        "(array of {severity: P1|P2|P3, location, message}), and copy these six values "
-        "VERBATIM: " + ", ".join(f"{k}={binding[k]}" for k in rw.BINDING_FIELDS) + ". "
-        "No other keys. A missing or altered value invalidates the review."
+        f"Review the committed diff `git diff {binding['base_sha']} {binding['head_sha']}` "
+        "(HEAD against its merge-base with the base branch; obtain it with exactly that command) "
+        "for correctness defects. When done, print ONE fenced ```json block, and nothing after "
+        "it, with exactly these keys: verdict (APPROVE|BLOCK), findings (array of "
+        "{severity: P1|P2|P3, location, message}; BLOCK requires at least one finding, APPROVE "
+        "requires none), and copy these six values VERBATIM: "
+        + ", ".join(f"{k}={binding[k]}" for k in rw.BINDING_FIELDS)
+        + ". No other keys. A missing or altered value invalidates the review."
     )
 
 
-def build_command(base: str, instructions: str) -> list[str]:
-    return [
-        "codex",
-        "review",
-        "-c",
-        'preferred_auth_method="chatgpt"',
-        "--base",
-        base,
-        instructions,
-    ]
+def build_command(instructions: str) -> list[str]:
+    return ["codex", "review", "-c", 'preferred_auth_method="chatgpt"', instructions]
 
 
 def _config_hash() -> str:
@@ -122,11 +121,11 @@ def find_session_artifact(
     return None
 
 
-def _default_invoke(repo: Path, base: str, instructions: str) -> Callable[[float], rw.Attempt]:
+def _default_invoke(repo: Path, instructions: str) -> Callable[[float], rw.Attempt]:
     def invoke(timeout: float) -> rw.Attempt:
         # Subscription auth, never the metered key (justfile `_require-codex-subscription`).
         env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        proc = run_bounded(build_command(base, instructions), cwd=repo, timeout=timeout, env=env)
+        proc = run_bounded(build_command(instructions), cwd=repo, timeout=timeout, env=env)
         timed_out = proc.returncode == _RUN_BOUNDED_TIMEOUT_RC and "timed out" in (
             proc.stderr or ""
         )
@@ -144,19 +143,25 @@ def run_codex_review(
 ) -> rw.ReviewOutcome:
     binding = _binding(repo, base)
     instructions = review_instructions(binding)
-    invoke = invoke or _default_invoke(repo, base, instructions)
+    invoke = invoke or _default_invoke(repo, instructions)
     started_wall = time.time()
     deadline = clock() + rw.TOTAL_BUDGET_S
     wall_deadline = started_wall + rw.TOTAL_BUDGET_S
-    used_artifact = False
+    source = "stdout"
+
+    def conclusive(text: str) -> bool:
+        return rw.parse_verdict(CHANNEL, text, binding).terminal != "REVIEWER_UNAVAILABLE"
 
     def attempt_with_artifact(timeout: float) -> rw.Attempt:
-        nonlocal used_artifact
+        nonlocal source
         att = invoke(timeout)
-        if att.timed_out:
+        if att.timed_out or conclusive(att.stdout):
             return att
-        if rw.parse_verdict(CHANNEL, att.stdout, binding).terminal != "REVIEWER_UNAVAILABLE":
-            return att
+        # `codex review` echoes its transcript (final message included) on stderr: the same
+        # positive parse + byte-compare applies there before the session artifact is consulted.
+        if conclusive(att.stderr):
+            source = "stderr"
+            return rw.Attempt(att.stderr, att.stderr, att.returncode, False)
         # stdout inconclusive: wait up to ARTIFACT_LAG_S for the session artifact, never past
         # the shared 1260 s budget (Codex round-1 P2 on the plan).
         end = min(time.time() + ARTIFACT_LAG_S, wall_deadline)
@@ -166,8 +171,8 @@ def run_codex_review(
             )
             if art is not None:
                 text = artifact_text(art)
-                if rw.parse_verdict(CHANNEL, text, binding).terminal != "REVIEWER_UNAVAILABLE":
-                    used_artifact = True
+                if conclusive(text):
+                    source = "session-artifact"
                     return rw.Attempt(text, att.stderr, att.returncode, False)
             if time.time() >= end:
                 break
@@ -177,8 +182,8 @@ def run_codex_review(
     outcome = rw.run_with_retry(
         attempt_with_artifact, channel=CHANNEL, expected=binding, deadline=deadline, clock=clock
     )
-    if used_artifact and outcome.terminal != "REVIEWER_UNAVAILABLE":
-        outcome.source = "session-artifact"
+    if outcome.terminal != "REVIEWER_UNAVAILABLE":
+        outcome.source = source
     return outcome
 
 
@@ -201,7 +206,7 @@ def _report(outcome: rw.ReviewOutcome, *, label: str) -> None:
     for f in outcome.findings:
         print(f"- [{f['severity']}] {f['location']}: {f['message']}")
     tail = f" ({outcome.failure_class}: {outcome.reason})" if outcome.reason else ""
-    src = f" [source: {outcome.source}]" if outcome.source == "session-artifact" else ""
+    src = f" [source: {outcome.source}]" if outcome.source not in (None, "stdout") else ""
     print(f"{label}: {outcome.terminal}{tail}{src}", file=sys.stderr)
 
 

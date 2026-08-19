@@ -75,6 +75,18 @@ def test_blank_location_or_message_is_unavailable():
         )
 
 
+def test_verdict_findings_consistency_is_enforced_by_schema():
+    """Codex round-1 P2 on this arc: BLOCK with no findings / APPROVE with findings are
+    contradictory results and must not parse."""
+    assert (
+        rw.parse_verdict("codex", _block("BLOCK", []), EXPECTED).terminal == "REVIEWER_UNAVAILABLE"
+    )
+    text = _block("APPROVE", [{"severity": "P3", "location": "x", "message": "m"}])
+    assert rw.parse_verdict("codex", text, EXPECTED).terminal == "REVIEWER_UNAVAILABLE"
+    for ch in ("codex", "gemini", "merge-gate"):
+        assert len(rw.load_schema(ch)["allOf"]) == 2
+
+
 def test_well_formed_parses():
     out = rw.parse_verdict(
         "codex", _block("BLOCK", [{"severity": "P1", "location": "x", "message": "m"}]), EXPECTED
@@ -609,16 +621,33 @@ def test_wrapper_round_outcome_noop_without_reservation_substrate(monkeypatch, c
 
 
 def test_build_command_is_codex_review_with_positional_instructions():
-    cmd = cr.build_command("main", "INSTR")
-    assert cmd[:2] == ["codex", "review"] and "--base" in cmd and cmd[-1] == "INSTR"
-    assert cmd[cmd.index("--base") + 1] == "main"
+    """codex-cli 0.146.0: the PROMPT is a review target, mutually exclusive with `--base`
+    (`error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`, probed live)."""
+    cmd = cr.build_command("INSTR")
+    assert cmd[:2] == ["codex", "review"] and cmd[-1] == "INSTR"
+    assert "--base" not in cmd and 'preferred_auth_method="chatgpt"' in cmd
 
 
-def test_review_instructions_carry_all_six_binding_values():
+def test_review_instructions_name_the_bound_diff_and_carry_all_six_binding_values():
     text = cr.review_instructions(EXPECTED)
+    assert f"git diff {EXPECTED['base_sha']} {EXPECTED['head_sha']}" in text
     for k, v in EXPECTED.items():
         assert f"{k}={v}" in text
     assert "```json" in text and "APPROVE|BLOCK" in text
+
+
+def test_stderr_echo_is_a_second_source_under_the_same_bar(monkeypatch, tmp_path):
+    """`codex review` echoes the transcript on stderr; the same parse + byte-compare applies."""
+    monkeypatch.setattr(cr, "SESSIONS_DIR", tmp_path / "empty")
+    monkeypatch.setattr(cr, "_binding", lambda repo, base: EXPECTED)
+    monkeypatch.setattr(cr, "ARTIFACT_LAG_S", 0.0)
+    out = cr.run_codex_review(
+        Path("."), "main", invoke=lambda t: rw.Attempt("", "transcript\n" + _block(), 0, False)
+    )
+    assert out.terminal == "APPROVE" and out.source == "stderr"
+    foreign = _block(head_sha="d" * 40)
+    out = cr.run_codex_review(Path("."), "main", invoke=lambda t: rw.Attempt("", foreign, 0, False))
+    assert out.terminal == "REVIEWER_UNAVAILABLE"
 
 
 def test_default_invoke_maps_run_bounded_timeout_to_timed_out(monkeypatch):
@@ -639,6 +668,6 @@ def test_default_invoke_maps_run_bounded_timeout_to_timed_out(monkeypatch):
         return subprocess.CompletedProcess(cmd, 124, "", "command timed out after 1 seconds")
 
     monkeypatch.setattr(cr, "run_bounded", fake_rb)
-    att = cr._default_invoke(Path("."), "main", "I")(1.0)
+    att = cr._default_invoke(Path("."), "I")(1.0)
     assert att.timed_out and att.returncode == 124
     assert "OPENAI_API_KEY" not in seen["env"]  # subscription auth only, never the metered key
