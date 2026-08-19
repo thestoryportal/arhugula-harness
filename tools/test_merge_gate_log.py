@@ -96,6 +96,7 @@ def test_block_writes_one_finding_row_per_finding_and_ids_are_minted_under_the_l
     assert again[0]["round_n"] == 2
 
 
+# mutation-probe: drop the `fr.append_observation(...)` warn-row call in the md OSError handler
 def test_md_failure_leaves_the_jsonl_row_and_records_a_warn_finding(tmp_path: Path, capsys):
     ro = tmp_path / "ro"
     ro.mkdir()
@@ -116,8 +117,10 @@ def test_md_failure_leaves_the_jsonl_row_and_records_a_warn_finding(tmp_path: Pa
     assert rep == {"missing_jsonl": [], "orphan_jsonl": []}
 
 
-# mutation-probe: swap the two writes so markdown goes first (move the md `with` block above emit_outcome)
 def test_jsonl_failure_fails_the_gate_step_and_writes_no_markdown(tmp_path: Path):
+    """Write-order witness: with the two writes swapped (markdown first) the md file would exist
+    here. Hand-mutation witness recorded in the PR body (a swap is not deletion-expressible for
+    `just mutation-probe`)."""
     ro = tmp_path / "ro"
     ro.mkdir()
     ro.chmod(0o500)
