@@ -18,3 +18,5 @@
 {"file": "tools/lanes_verify.py", "lines": "167-168", "rc": 0, "test": "uv run pytest -q tools/test_lanes_verify.py::test_coverage_gap_when_probe_never_pinned", "ts": "2026-08-19T14:56:19Z"}
 {"file": "tools/merge_gate_log.py", "lines": "137-159", "rc": 0, "test": "uv run pytest -q tools/test_merge_gate_log.py::test_md_failure_leaves_the_jsonl_row_and_records_a_warn_finding", "ts": "2026-08-19T14:56:22Z"}
 {"file": "tools/hooks/loop_lib.sh", "lines": "301", "rc": 0, "test": "bash tools/hooks/test_loop_lib.sh", "ts": "2026-08-19T14:56:28Z"}
+{"file": "tools/merge_gate_log.py", "lines": "160-182", "rc": 0, "test": "uv run pytest -q tools/test_merge_gate_log.py::test_md_failure_leaves_the_jsonl_row_and_records_a_warn_finding", "ts": "2026-08-19T15:24:05Z"}
+{"file": "tools/lanes_verify.py", "lines": "167-168", "rc": 0, "test": "uv run pytest -q tools/test_lanes_verify.py::test_coverage_gap_when_probe_never_pinned", "ts": "2026-08-19T15:24:07Z"}
