@@ -176,13 +176,18 @@ def test_rows_not_marked_mutation_probe_require_nothing():
     assert lv.required_probes(_row(mp=False, art="shell:tools/hooks/test_x.sh")) == []
 
 
-def test_main_modes_and_exit_codes(monkeypatch, capsys):
+def test_main_modes_and_exit_codes(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setattr(
         lv, "MANIFEST", [_row(tag="phase0", mp=True, art="pytest:tools/test_x.py::t")]
     )
     monkeypatch.setattr(lv, "PROBE_LOG", Path("/nonexistent/mp.jsonl"))
     assert lv.main(["coverage"]) == 1
     assert "UNPROBED C-HE-99 tools/test_x.py::t" in capsys.readouterr().out
+    # the log path is resolved at CALL time: a pinned row in the (patched) log turns it green
+    pinned = tmp_path / "mp.jsonl"
+    pinned.write_text(json.dumps({"test": "uv run pytest -q tools/test_x.py::t", "rc": 0}) + "\n")
+    monkeypatch.setattr(lv, "PROBE_LOG", pinned)
+    assert lv.main(["coverage"]) == 0
     monkeypatch.setattr(lv, "run_row", lambda r, **k: lv.Result(r, "skip", "gh-auth-absent"))
     assert lv.main(["phase0"]) == 1  # a phase0 skip is NOT a pass
     assert lv.main(["verify"]) == 0  # verify reds only on fail

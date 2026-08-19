@@ -198,8 +198,10 @@ def required_probes(row: Row) -> list[str]:
     return [f"{file_part}::{name}" for name in _ANNOT.findall(path.read_text())]
 
 
-def coverage_gaps(log_path: Path = PROBE_LOG) -> list[tuple[Row, str]]:
-    pinned = _pinned_nodeids(log_path)
+def coverage_gaps(log_path: Path | None = None) -> list[tuple[Row, str]]:
+    """`log_path` resolves to PROBE_LOG AT CALL TIME (never bound at def time) so a
+    monkeypatched log is honoured and `main` never silently reads the tracked log in a test."""
+    pinned = _pinned_nodeids(log_path or PROBE_LOG)
     gaps: list[tuple[Row, str]] = []
     for r in MANIFEST:
         for node in required_probes(r):
