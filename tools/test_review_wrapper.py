@@ -1496,3 +1496,44 @@ def test_gemini_review_recipe_has_no_antigravity_preflight():
     justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
     line = next(ln for ln in justfile.splitlines() if ln.startswith("gemini-review base='main'"))
     assert "_require-antigravity" not in line
+
+
+# ── merge-gate observations (L1 / L3) ─────────────────────────────────────────
+def test_one_outcome_repeating_a_location_mints_distinct_ids_in_one_call(tmp_path):
+    """append_observations mints each id against the snapshot PLUS the pairs already appended
+    in the same call (merge-gate L3)."""
+    log = tmp_path / "gate.jsonl"
+    out = rw.ReviewOutcome(
+        "BLOCK",
+        "codex",
+        None,
+        "",
+        [
+            {"severity": "P1", "location": "a.py:1", "message": "first"},
+            {"severity": "P2", "location": "a.py:1", "message": "second, same location"},
+        ],
+        EXPECTED,
+        "stdout",
+    )
+    rows = rw.emit_outcome(out, producer="p", arc_id="a", lane_id="l", round_n=None, path=log)
+    assert [r["finding_id"].rsplit(":", 1)[1] for r in rows] == ["1", "2"]
+    assert len({r["finding_id"] for r in fr.read_rows(log)}) == 2
+
+
+def test_compute_binding_merge_base_uses_the_captured_head(monkeypatch):
+    import subprocess
+
+    seen = []
+
+    def fake_run(cmd, **k):
+        seen.append(cmd)
+        if "rev-parse" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "e" * 40 + "\n", "")
+        if "merge-base" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "b" * 40 + "\n", "")
+        return subprocess.CompletedProcess(cmd, 0, b"diff", b"")
+
+    monkeypatch.setattr(rw.subprocess, "run", fake_run)
+    rw.compute_binding(Path("."), "main", channel="codex", prompt_version="p", config_hash="c")
+    mb = next(c for c in seen if "merge-base" in c)
+    assert mb[-2:] == ["main", "e" * 40]  # never a second "HEAD" read (merge-gate L1)

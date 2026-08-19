@@ -5,7 +5,8 @@ description: Decorrelated 3-lens pre-merge review gate — launches three parall
 
 # merge-gate — decorrelated 3-lens pre-merge review
 
-An **addition** to the existing pre-merge apparatus (`just codex-review` + `advisor()`), not a
+An **addition** to the existing pre-merge apparatus (`just review-with-failover` — the fail-closed
+`codex-review` wrapper with the `gemini-review` failover — + `advisor()`), not a
 replacement. It composes with `ship-pr`'s pre-flight — see the wiring note at the end.
 
 ## Honesty caveat — read this before trusting an all-approve
@@ -142,7 +143,7 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   `[[feedback-merge-without-hil-once-ci-green]]` directive — CI-green is a precondition, this
   gate is now an additional one for code-touching PRs).
 - **Any `BLOCK`, or a split verdict** → do **not** merge. If the block names a concrete,
-  narrow, fixable defect: fix it, then re-run `just codex-review` to convergence and re-run
+  narrow, fixable defect: fix it, then re-run `just review-with-failover` to convergence and re-run
   this gate. **Cap this at ten rounds total** (operator decision, 2026-08-01) — an eleventh
   substantive disagreement is a genuine decision point,
   not a bug to keep iterating on; auto-fix-and-re-gate without a cap is an infinite loop in
@@ -162,6 +163,6 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
 ## Wiring into `ship-pr` / the loop
 
 `ship-pr/SKILL.md` invokes this skill in its pre-merge section — after CI green is confirmed
-and `just codex-review` has converged, before the actual `gh pr merge`. `roadmap-continue` →
+and `just review-with-failover` has converged, before the actual `gh pr merge`. `roadmap-continue` →
 `ship-pr` is the loop path this composes into; no changes needed to `loop-start`/`loop-stop`
 (the gate is a step inside `ship-pr`, not a separate autonomy tier).

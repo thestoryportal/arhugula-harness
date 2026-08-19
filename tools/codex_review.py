@@ -358,8 +358,8 @@ def _emit_rows(
     arc_id, lane_id = rw.env_arc_and_lane()
     written = rw.emit_outcome(
         outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=None
-    )  # the round is minted under the log lock (codex round 7)
-    round_n = written[0]["round_n"] if written else rw.round_n_for(arc_id, producer)
+    )  # the round is minted under the log lock (codex round 7); every terminal yields >= 1 row
+    round_n = written[0]["round_n"]
     rw.record_round_outcome_if_reserved(
         arc_id,
         round_n,

@@ -210,7 +210,9 @@ def compute_binding(
     channel. `diff_digest` covers the committed diff merge-base(base, HEAD)..HEAD -- the state
     the review is bound to (the loop commits before it reviews)."""
     head_sha = _git(repo, "rev-parse", "HEAD")
-    base_sha = _git(repo, "merge-base", base, "HEAD")
+    # merge-base against the CAPTURED head, not "HEAD" again: a commit landing between the two
+    # git calls must not bind a base computed for a head other than head_sha (merge-gate L1)
+    base_sha = _git(repo, "merge-base", base, head_sha)
     return {
         "head_sha": head_sha,
         "base_sha": base_sha,

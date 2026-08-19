@@ -310,7 +310,7 @@ def test_gemini_envelope_is_written_only_after_the_rows_landed(
             reviewer.rw.ReviewOutcome("APPROVE", "gemini", None, "", [], BINDING, "stdout")
         )
     assert not sink.exists()
-    monkeypatch.setattr(reviewer.rw, "emit_outcome", lambda *a, **k: [])
+    monkeypatch.setattr(reviewer.rw, "emit_outcome", lambda *a, **k: [{"round_n": 1}])
     reviewer._emit(reviewer.rw.ReviewOutcome("APPROVE", "gemini", None, "", [], BINDING, "stdout"))
     assert json.loads(sink.read_text())["terminal"] == "APPROVE"
 
@@ -1489,7 +1489,7 @@ def test_outcome_sink_never_overwrites_and_never_lands_in_the_repo(
 ) -> None:
     """codex round 5: the recipe is auto-allowed with the path as a positional argument."""
     reviewer = _reviewer_module()
-    monkeypatch.setattr(reviewer.rw, "emit_outcome", lambda *a, **k: [])
+    monkeypatch.setattr(reviewer.rw, "emit_outcome", lambda *a, **k: [{"round_n": 1}])
     outcome = reviewer.rw.ReviewOutcome("APPROVE", "gemini", None, "", [], BINDING, "stdout")
     existing = tmp_path / "gate.jsonl"
     existing.write_text("precious\n")
