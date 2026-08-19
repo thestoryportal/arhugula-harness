@@ -277,6 +277,13 @@ loop_now() { echo "2026-08-21T00:00:00Z"; }; HARNESS_HIL_TTL_S=86400 loop_hil_tt
 printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | lane=h-w-1 | B-3 — structured row |\n' >> "$(loop_status_path)"
 HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface
 grep -q '| NOTIFY | ttl-expired B-3 ' "$(loop_status_path)" && ok "structured-column DEFERRED-HIL row is keyed on its item token" || bad "structured row not re-surfaced"
+# 19) Concurrent SessionStart hooks: the eligibility read + NOTIFY append are one critical
+#     section (codex round 3 on S1: 20 unlocked processes emitted 20 notifications for one item).
+: > "$(loop_status_path)"; loop_activate "ttl race" >/dev/null
+loop_now() { echo "2026-08-17T00:00:00Z"; }; loop_defer B-9 "raced deferral"
+loop_now() { echo "2026-08-18T00:00:01Z"; }
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do ( HARNESS_HIL_TTL_S=86400 loop_hil_ttl_resurface ) & done; wait
+[ "$(grep -c '| NOTIFY | ttl-expired B-9 ' "$(loop_status_path)")" = "1" ] && ok "12 concurrent re-surface passes emit exactly one NOTIFY" || bad "concurrent NOTIFY count: $(grep -c '| NOTIFY | ttl-expired B-9 ' "$(loop_status_path)")"
 unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 echo "----"

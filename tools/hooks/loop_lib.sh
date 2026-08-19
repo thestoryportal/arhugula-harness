@@ -239,9 +239,38 @@ loop_pending_hil_summary() {
 # so no `date` fork happens per row and macOS/Linux behave identically. Shape-aware for the
 # structured column U-HE-29 introduces (`$4 ~ /^lane=/` -> detail is `$5`).
 # Row written: `| <ts> | NOTIFY | ttl-expired <item> — pending > <ttl>s; re-surfaced, state unchanged |`
+# The eligibility read and the NOTIFY append are ONE critical section under a kernel flock on
+# `.harness/.loop-status.lock` (fd 8; the lib.sh worktree-mutex pattern) -- concurrent
+# SessionStart hooks would otherwise each read "no NOTIFY yet" and all append (codex round 3:
+# 20 hooks -> 20 notifications). The lock is released on process death; a lock that cannot be
+# taken within the bounded wait skips this session's re-surface (a notification only -- nothing
+# is lost; the next SessionStart retries).
 loop_hil_ttl_resurface() {
-  local p ttl now; p=$(loop_status_path); [ -f "$p" ] || return 0
+  local p ttl now lock rc; p=$(loop_status_path); [ -f "$p" ] || return 0
   ttl="${HARNESS_HIL_TTL_S:-86400}"; now=$(loop_now)
+  lock="$(dirname "$p")/.loop-status.lock"
+  exec 8>> "$lock" 2>/dev/null || return 0
+  if ! /usr/bin/python3 - 8 "${HARNESS_LOOP_STATUS_LOCK_TIMEOUT_SECONDS:-10}" <<'PY'
+import fcntl, sys, time
+fd = int(sys.argv[1]); deadline = time.monotonic() + float(sys.argv[2])
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+    except BlockingIOError:
+        if time.monotonic() >= deadline:
+            raise SystemExit(1)
+        time.sleep(0.05)
+PY
+  then
+    exec 8>&-; return 0
+  fi
+  _loop_hil_ttl_resurface_unlocked "$p" "$ttl" "$now"; rc=$?
+  exec 8>&-
+  return $rc
+}
+
+_loop_hil_ttl_resurface_unlocked() {
+  local p="$1" ttl="$2" now="$3"
   awk -F'|' -v now_ts="$now" -v ttl="$ttl" '
     function dfc(y, m, d,   era, yoe, doy, doe) {          # days from civil (Hinnant)
       if (m <= 2) y -= 1

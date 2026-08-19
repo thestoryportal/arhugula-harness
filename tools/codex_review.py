@@ -18,36 +18,44 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
 
-import finding_record as fr
 import review_wrapper_common as rw
 from agy_review import GEMINI_PROMPT_VERSION, gemini_config_hash, run_bounded
 
 SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 ARTIFACT_LAG_S = 130.0  # measured PR #1386 lag (C-HE-18 §2)
 ARTIFACT_POLL_S = 2.0
-PROMPT_VERSION = "codex-review-v1"
+PROMPT_VERSION = "codex-review-v2-exec"
 CHANNEL = "codex"
 PRODUCER = "codex_review_wrapper"
+MAX_FINDINGS = 8
 #: run_bounded's own timeout exit status (agy_review.run_bounded appends the detail to stderr).
 _RUN_BOUNDED_TIMEOUT_RC = 124
 
 
 def review_instructions(binding: dict[str, str]) -> str:
-    """The review TARGET + output contract. `codex review` (codex-cli 0.146.0) takes the
-    positional PROMPT as a review target that is mutually exclusive with `--base`, so the
-    instructions name the exact committed diff the binding digests (interface probe re-run at
-    execution: `--base` + PROMPT is rejected by the CLI; PROMPT alone runs the review flow)."""
+    """The review brief + output contract, run through `codex exec` (interface probes re-run at
+    execution: `codex review --base` rejects a PROMPT; `codex review "<prompt>"` treats it as a
+    review target and, on a real PR-sized diff, answers in its own native findings JSON and
+    ignores the output contract -- round 3 on the S1 branch. `codex exec` follows the brief and
+    hands the final message back through `-o`)."""
     return (
-        f"Review the committed diff `git diff {binding['base_sha']} {binding['head_sha']}` "
-        "(HEAD against its merge-base with the base branch; obtain it with exactly that command) "
-        "for correctness defects. When done, print ONE fenced ```json block, and nothing after "
+        "You are an out-of-family code reviewer for an agent-harness monorepo. Review EXACTLY "
+        f"the committed diff `git diff --binary {binding['base_sha']} {binding['head_sha']}` "
+        "(run that command read-only; you may open the files it touches at that HEAD for "
+        "context) for real defects: correctness, hook and permission semantics, contract "
+        "drift, unsafe state handling, concurrency, and tests that would stay green if the "
+        f"change were reverted. Report at most {MAX_FINDINGS} findings, each with an exact "
+        "file:line location and a concrete message; no style nits; only findings proven by the "
+        "diff. Do not edit files. When done, print ONE fenced ```json block, and nothing after "
         "it, with exactly these keys: verdict (APPROVE|BLOCK), findings (array of "
         "{severity: P1|P2|P3, location, message}; BLOCK requires at least one finding, APPROVE "
         "requires none), and copy these six values VERBATIM: "
@@ -56,8 +64,22 @@ def review_instructions(binding: dict[str, str]) -> str:
     )
 
 
-def build_command(instructions: str) -> list[str]:
-    return ["codex", "review", "-c", 'preferred_auth_method="chatgpt"', instructions]
+def build_command(repo: Path, instructions: str, *, output_file: Path) -> list[str]:
+    """`codex exec` in a read-only sandbox; the final assistant message is ALSO written to
+    `output_file` (`-o`), the channel's most reliable output surface (probed 2026-08-19)."""
+    return [
+        "codex",
+        "exec",
+        "--sandbox",
+        "read-only",
+        "-c",
+        'preferred_auth_method="chatgpt"',
+        "-C",
+        str(repo),
+        "-o",
+        str(output_file),
+        instructions,
+    ]
 
 
 def _config_hash() -> str:
@@ -106,13 +128,18 @@ def find_session_artifact(
     (C-HE-18 §2)."""
     if not root.is_dir():
         return None
+    # Whole-second floor: a filesystem may truncate mtime granularity, so an artifact written
+    # right after a fractional `started_at` must not fall below it (gemini round 3). No upper
+    # bound: the head_sha content check is the binding, and `now` only names the scan time.
+    del now
+    floor = math.floor(started_at)
     candidates: list[tuple[float, Path]] = []
     for p in root.rglob("*.jsonl"):
         try:
             mtime = p.stat().st_mtime
         except OSError:
             continue
-        if started_at <= mtime <= now:
+        if mtime >= floor:
             candidates.append((mtime, p))
     for _, p in sorted(candidates, key=lambda t: t[0], reverse=True):
         try:
@@ -127,11 +154,26 @@ def _default_invoke(repo: Path, instructions: str) -> Callable[[float], rw.Attem
     def invoke(timeout: float) -> rw.Attempt:
         # Subscription auth, never the metered key (justfile `_require-codex-subscription`).
         env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
-        proc = run_bounded(build_command(instructions), cwd=repo, timeout=timeout, env=env)
+        with tempfile.TemporaryDirectory(prefix="arhugula-codex-review-") as scratch:
+            out_file = Path(scratch) / "last-message.md"
+            proc = run_bounded(
+                build_command(repo, instructions, output_file=out_file),
+                cwd=repo,
+                timeout=timeout,
+                env=env,
+            )
+            # The `-o` file is the channel's own final-message surface: read it as stdout when
+            # it exists (stdout may be truncated/frozen -- the PR #1386 mode; stderr carries the
+            # transcript). The same positive parse applies to whichever surface is used.
+            stdout = proc.stdout or ""
+            if out_file.exists():
+                last = out_file.read_text(errors="replace")
+                if last.strip():
+                    stdout = last
         timed_out = proc.returncode == _RUN_BOUNDED_TIMEOUT_RC and "timed out" in (
             proc.stderr or ""
         )
-        return rw.Attempt(proc.stdout or "", proc.stderr or "", proc.returncode, timed_out)
+        return rw.Attempt(stdout, proc.stderr or "", proc.returncode, timed_out)
 
     return invoke
 
@@ -241,47 +283,104 @@ FAILOVER_SUBPROCESS_CAP_S = rw.TOTAL_BUDGET_S + 60.0
 GEMINI_PRODUCER = "gemini_review_wrapper"
 
 
+def _read_envelope(path: Path, expected: dict[str, str]) -> rw.ReviewOutcome | None:
+    """The gemini wrapper's OWN terminal envelope (`agy_review --outcome-json`): terminal in the
+    C-HE-16 §3 triple, findings a list, and -- identical bar -- a terminal verdict's binding
+    byte-equal to THIS invocation's expected six values. Anything else -> None (not an
+    envelope we can trust)."""
+    if not path.exists():
+        return None
+    try:
+        env = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(env, dict) or env.get("terminal") not in rw.TERMINAL_STATES:
+        return None
+    findings = env.get("findings")
+    if not isinstance(findings, list):
+        return None
+    if env["terminal"] != "REVIEWER_UNAVAILABLE" and env.get("binding") != expected:
+        return rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE",
+            "gemini",
+            "transient",
+            f"failover envelope bound to a different invocation: {env.get('binding')!r}",
+            [],
+            dict(expected),
+        )
+    return rw.ReviewOutcome(
+        env["terminal"],
+        "gemini",
+        env.get("failure_class"),
+        str(env.get("reason") or ""),
+        findings,
+        dict(expected),
+        env.get("source"),
+    )
+
+
 def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
     """C-HE-17 §1: on primary REVIEWER_UNAVAILABLE run `just gemini-review` ONCE under the
-    IDENTICAL bar -- the gemini wrapper's own schema parse (U-HE-06); its stdout is re-parsed
-    here against the same expected binding, exit code never read as a verdict."""
-    binding = rw.compute_binding(
-        repo,
-        base,
-        channel="gemini",
-        prompt_version=GEMINI_PROMPT_VERSION,
-        config_hash=_gemini_config_hash(),
-    )
-    before = sum(1 for r in fr.read_rows() if r["producer"] == GEMINI_PRODUCER)
+    IDENTICAL bar. The gemini wrapper (U-HE-06) does its own schema parse and records its own
+    rows; this reads back its terminal ENVELOPE (`--outcome-json`), never the raw vendor stdout
+    (codex round 3: a vendor exit-2 path may still print a schema-valid APPROVE block) and never
+    the exit code. Envelope absent = the wrapper never reached a terminal (recipe preflight
+    death, missing `just`, cap): classified from stderr and recorded HERE, the one emitter for
+    that case (no global row counting -- gemini round 3 / codex round 3)."""
     try:
-        proc = subprocess.run(
-            ["just", "gemini-review", base],
-            cwd=repo,
-            capture_output=True,
-            text=True,
-            timeout=FAILOVER_SUBPROCESS_CAP_S,
+        binding = rw.compute_binding(
+            repo,
+            base,
+            channel="gemini",
+            prompt_version=GEMINI_PROMPT_VERSION,
+            config_hash=_gemini_config_hash(),
         )
-        stdout, stderr = proc.stdout or "", proc.stderr or ""
-    except subprocess.TimeoutExpired as exc:
-        stdout = (
-            (exc.stdout or b"").decode(errors="replace")
-            if isinstance(exc.stdout, bytes)
-            else (exc.stdout or "")
+    except subprocess.CalledProcessError as exc:
+        err = (
+            exc.stderr
+            if isinstance(exc.stderr, str)
+            else (exc.stderr or b"").decode(errors="replace")
         )
-        stderr = f"failover subprocess timed out after {FAILOVER_SUBPROCESS_CAP_S:.0f}s"
-    outcome = rw.parse_verdict("gemini", stdout, binding)
-    if outcome.terminal == "REVIEWER_UNAVAILABLE":
-        outcome.failure_class = rw.classify("gemini", stdout + "\n" + stderr)
-        outcome.binding = binding
-        outcome.reason = (
-            f"{outcome.reason}; {stderr.strip()[-400:]}" if stderr.strip() else outcome.reason
+        outcome = rw.ReviewOutcome(
+            "REVIEWER_UNAVAILABLE",
+            "gemini",
+            "permanent",
+            f"binding: {' '.join(exc.cmd[:4])} failed: {err.strip()[:300]}",
         )
-    after = sum(1 for r in fr.read_rows() if r["producer"] == GEMINI_PRODUCER)
-    if after == before:
-        # The recipe died at its `_require-antigravity` preflight (or the wrapper never ran):
-        # the subprocess wrote nothing, so BOTH reasons would not be on record (C-HE-17). Emit
-        # here -- and only here (a wrapper that ran already recorded its own rows).
         _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini")
+        return outcome
+    with tempfile.TemporaryDirectory(prefix="arhugula-gemini-failover-") as scratch:
+        envelope = Path(scratch) / "outcome.json"
+        stderr = ""
+        try:
+            proc = subprocess.run(
+                ["just", "gemini-review", base, str(envelope)],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=FAILOVER_SUBPROCESS_CAP_S,
+            )
+            stdout, stderr = proc.stdout or "", proc.stderr or ""
+        except subprocess.TimeoutExpired:
+            stdout, stderr = (
+                "",
+                f"failover subprocess timed out after {FAILOVER_SUBPROCESS_CAP_S:.0f}s",
+            )
+        except OSError as exc:  # `just` missing from PATH (gemini round 3)
+            stdout, stderr = "", f"cannot start `just gemini-review`: {exc}"
+        outcome = _read_envelope(envelope, binding)
+    if outcome is not None:
+        return outcome  # the wrapper reached a terminal and recorded its own rows
+    outcome = rw.ReviewOutcome(
+        "REVIEWER_UNAVAILABLE",
+        "gemini",
+        rw.classify("gemini", rw.classifier_text(stdout, stderr)),
+        "no outcome envelope from the gemini wrapper"
+        + (f"; {stderr.strip()[-400:]}" if stderr.strip() else ""),
+        [],
+        binding,
+    )
+    _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini")
     return outcome
 
 

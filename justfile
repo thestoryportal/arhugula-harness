@@ -610,8 +610,10 @@ codex-review-uncommitted: _require-codex-subscription
 # Runs under the workspace interpreter (not /usr/bin/python3): since U-HE-06 the wrapper
 # shares tools/review_wrapper_common.py (jsonschema) with codex-review -- schema-parsed final
 # verdict, C-HE-16 classifier + bounded retry, C-HE-24 rows. Exit 0 APPROVE / 1 BLOCK / 2 UNAVAILABLE.
-gemini-review base='main': _require-antigravity
-    uv run python tools/agy_review.py --base {{base}}
+# `outcome_json` (optional): write the wrapper's own terminal envelope to that path -- the D-C
+# failover (`just review-with-failover`) reads it instead of re-parsing raw vendor stdout.
+gemini-review base='main' outcome_json='': _require-antigravity
+    uv run python tools/agy_review.py --base {{base}} {{ if outcome_json != '' { '--outcome-json ' + quote(outcome_json) } else { '' } }}
 
 _require-antigravity:
     @if ! command -v agy >/dev/null 2>&1; then \

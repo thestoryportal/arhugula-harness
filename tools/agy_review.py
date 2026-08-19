@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import signal
@@ -22,8 +23,10 @@ EXPECTED_MODEL_LABEL = "Gemini 3.1 Pro (High)"
 MAX_DIFF_PART_BYTES = 32 * 1024
 MAX_REVIEW_SEGMENT_BYTES = 96 * 1024
 MAX_REVIEW_RESULT_BYTES = 32 * 1024
-TOTAL_REVIEW_TIMEOUT_SECONDS = 1260.0
-MAX_AGY_PRINT_TIMEOUT_SECONDS = 1200
+#: The two budget constants live in review_wrapper_common (C-HE-16 §3, one home for both
+#: channels); re-exported here under their historical names.
+TOTAL_REVIEW_TIMEOUT_SECONDS = rw.TOTAL_BUDGET_S  # 1260.0
+MAX_AGY_PRINT_TIMEOUT_SECONDS = int(rw.PER_ATTEMPT_TIMEOUT_S)  # 1200
 PARENT_TIMEOUT_GRACE_SECONDS = 5
 ARTIFACT_COMPLETE_MARKER = "ARTIFACT: COMPLETE"
 SEGMENT_COMPLETE_MARKER = "SEGMENT: COMPLETE"
@@ -229,33 +232,17 @@ def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def collect_diff(repo: Path, base: str) -> str:
-    tracked = run_git(repo, "diff", "--merge-base", "--binary", base)
-    if tracked.returncode != 0:
-        raise RuntimeError(tracked.stderr.strip() or "git diff failed")
-
-    untracked = run_git(repo, "ls-files", "--others", "--exclude-standard", "-z")
-    if untracked.returncode != 0:
-        raise RuntimeError(untracked.stderr.strip() or "git ls-files failed")
-
-    parts = [tracked.stdout]
-    for relative_path in filter(None, untracked.stdout.split("\0")):
-        patch = run_git(
-            repo,
-            "diff",
-            "--no-index",
-            "--binary",
-            "--",
-            "/dev/null",
-            relative_path,
-        )
-        if patch.returncode not in {0, 1}:
-            raise RuntimeError(
-                patch.stderr.strip() or f"could not diff untracked file: {relative_path}"
-            )
-        parts.append(patch.stdout)
-
-    diff = "".join(parts).strip()
+def collect_diff(repo: Path, base_sha: str, head_sha: str) -> str:
+    """The reviewer's payload is EXACTLY the bound bytes (`rw.bound_diff`, the same call the
+    digest hashes) -- committed base_sha..head_sha, never the working tree or untracked files
+    (codex round 3: the wrapper's own gate-log append and any WIP would otherwise be reviewed
+    under a digest that does not describe them; the loop commits before it reviews)."""
+    try:
+        raw = rw.bound_diff(repo, base_sha, head_sha)
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or b"").decode(errors="replace").strip()
+        raise RuntimeError(err or "git diff failed") from exc
+    diff = raw.decode("utf-8", errors="replace").strip()
     if not diff:
         raise RuntimeError("review diff is empty")
     return diff
@@ -486,9 +473,36 @@ def validate_review_output(output: str, marker: str) -> tuple[str | None, str | 
     return None, final_line
 
 
+#: `--outcome-json PATH`: the wrapper's OWN terminal envelope, written at the single terminal
+#: site of each path. The D-C failover (codex_review._run_gemini_failover) consumes THIS, never
+#: the raw vendor stdout (codex round 3: a vendor exit-2 path could still print a schema-valid
+#: APPROVE block that a raw re-parse would count).
+OUTCOME_SINK: Path | None = None
+
+
+def _sink(outcome: rw.ReviewOutcome) -> None:
+    if OUTCOME_SINK is None:
+        return
+    OUTCOME_SINK.write_text(
+        json.dumps(
+            {
+                "terminal": outcome.terminal,
+                "channel": outcome.channel,
+                "failure_class": outcome.failure_class,
+                "reason": outcome.reason,
+                "findings": outcome.findings,
+                "binding": outcome.binding,
+                "source": outcome.source,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _emit(outcome: rw.ReviewOutcome) -> None:
     """C-HE-24 rows for this invocation's terminal (`producer=gemini_review_wrapper`) + the
-    C-HE-25 per-round outcome on the arc's reservation when one exists."""
+    C-HE-25 per-round outcome on the arc's reservation when one exists + the outcome envelope."""
+    _sink(outcome)
     arc_id, lane_id = rw.env_arc_and_lane()
     round_n = int(os.environ.get("HARNESS_ROUND_N", "0"))
     rw.emit_outcome(outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=round_n)
@@ -517,7 +531,7 @@ def report_process_failure(
     if output:
         print(output)
     detail = proc.stderr.strip() or f"exit {proc.returncode}"
-    cls = rw.classify(CHANNEL, (proc.stdout or "") + "\n" + detail)
+    cls = rw.classify(CHANNEL, rw.classifier_text(proc.stdout, detail))
     return _unavailable(detail, failure_class=cls, binding=binding)
 
 
@@ -528,10 +542,14 @@ def _bounded_with_retry(
     cwd: Path,
     env: dict[str, str],
     marker: str,
+    binding: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str] | None:
-    """C-HE-16 §3: one bounded re-invocation on a transient failure; timeout 1 = min(550,
-    remaining), timeout 2 = min(550, remaining - 30). None when the shared deadline leaves no
-    room for a stage (whole-review deadline expired). Permanent failures skip the retry."""
+    """C-HE-16 §3 (v1.2 X2): one bounded re-invocation on a transient failure; timeout 1 =
+    min(cap, remaining), timeout 2 = min(cap, remaining - 30). None when the shared deadline
+    leaves no room for a stage (whole-review deadline expired). Permanent failures skip the
+    retry. An attempt SUCCEEDS only when it would count: marker + verdict line for a segment;
+    for the artifact-complete output ALSO the positive schema parse against `binding` (codex
+    round 3: a marker-valid but schema-invalid final output must consume the retry)."""
     last: subprocess.CompletedProcess[str] | None = None
     for n in (1, 2):
         remaining = deadline - time.monotonic()
@@ -540,29 +558,48 @@ def _bounded_with_retry(
         if timeout <= PARENT_TIMEOUT_GRACE_SECONDS:
             return last
         proc = run_bounded(cmd_for(timeout), cwd=cwd, timeout=timeout, env=env)
-        validation_error, _ = validate_review_output(proc.stdout.strip(), marker)
-        if proc.returncode == 0 and validation_error is None:
+        output = proc.stdout.strip()
+        validation_error, _ = validate_review_output(output, marker)
+        parsed = (
+            binding is None
+            or marker != ARTIFACT_COMPLETE_MARKER
+            or rw.parse_verdict(CHANNEL, output, binding).terminal != "REVIEWER_UNAVAILABLE"
+        )
+        if proc.returncode == 0 and validation_error is None and parsed:
             return proc
-        if rw.classify(CHANNEL, (proc.stdout or "") + "\n" + (proc.stderr or "")) == "permanent":
+        if rw.classify(CHANNEL, rw.classifier_text(proc.stdout, proc.stderr)) == "permanent":
             return proc
         last = proc
     return last
 
 
+def _fatal_binding(exc: subprocess.CalledProcessError) -> int:
+    # An unresolvable base is caller-side and human-fixable: permanent, never a traceback.
+    err = (
+        exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
+    )
+    return _unavailable(
+        f"binding: {' '.join(exc.cmd[:4])} failed: {err.strip()[:300]}",
+        failure_class="permanent",
+        binding=None,
+    )
+
+
+def _nonzero_exit_verdict(proc: subprocess.CompletedProcess[str], binding: dict[str, str]) -> bool:
+    """A non-zero reviewer exit still BLOCKS when its output parses to a bound BLOCK (findings
+    are preserved); a parsed APPROVE from a failed process is never counted (gemini round 3)."""
+    return rw.parse_verdict(CHANNEL, proc.stdout.strip(), binding).terminal == "BLOCK"
+
+
 def run_review(repo: Path, base: str) -> int:
-    try:
-        diff = collect_diff(repo, base)
-    except RuntimeError as exc:
-        return _unavailable(str(exc), failure_class="transient", binding=None)
     try:
         binding = gemini_binding(repo, base)
     except subprocess.CalledProcessError as exc:
-        # An unresolvable base is caller-side and human-fixable: permanent, never a traceback.
-        return _unavailable(
-            f"binding: {' '.join(exc.cmd[:4])} failed: {(exc.stderr or '').strip()[:300]}",
-            failure_class="permanent",
-            binding=None,
-        )
+        return _fatal_binding(exc)
+    try:
+        diff = collect_diff(repo, binding["base_sha"], binding["head_sha"])
+    except RuntimeError as exc:
+        return _unavailable(str(exc), failure_class="transient", binding=binding)
 
     env = os.environ.copy()
     for name in PROVIDER_ENV:
@@ -608,12 +645,15 @@ def run_review(repo: Path, base: str) -> int:
                     cwd=repo,
                     env=env,
                     marker=marker,
+                    binding=binding,
                 )
                 if proc is None:
                     return _unavailable(
                         "whole-review deadline expired", failure_class="transient", binding=binding
                     )
-                if proc.returncode != 0:
+                if proc.returncode != 0 and not (
+                    marker == ARTIFACT_COMPLETE_MARKER and _nonzero_exit_verdict(proc, binding)
+                ):
                     return report_process_failure(proc, binding=binding)
                 model_error = verify_effective_model(log_path)
                 if model_error is not None:
@@ -655,12 +695,13 @@ def run_review(repo: Path, base: str) -> int:
                     cwd=repo,
                     env=env,
                     marker=ARTIFACT_COMPLETE_MARKER,
+                    binding=binding,
                 )
                 if proc is None:
                     return _unavailable(
                         "whole-review deadline expired", failure_class="transient", binding=binding
                     )
-                if proc.returncode != 0:
+                if proc.returncode != 0 and not _nonzero_exit_verdict(proc, binding):
                     return report_process_failure(proc, binding=binding)
                 model_error = verify_effective_model(log_path)
                 if model_error is not None:
@@ -712,9 +753,17 @@ def run_review(repo: Path, base: str) -> int:
 
 
 def main() -> int:
+    global OUTCOME_SINK
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="main")
+    parser.add_argument(
+        "--outcome-json",
+        default=None,
+        help="write this wrapper's own terminal envelope (terminal/failure_class/reason/"
+        "findings/binding/source) to PATH -- the D-C failover's input (C-HE-17)",
+    )
     args = parser.parse_args()
+    OUTCOME_SINK = Path(args.outcome_json) if args.outcome_json else None
     previous_sigterm = signal.signal(signal.SIGTERM, handle_termination_signal)
     try:
         return run_review(Path.cwd(), args.base)

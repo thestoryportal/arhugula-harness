@@ -23,7 +23,6 @@ from pathlib import Path
 
 import finding_record as fr
 import jsonschema
-from agy_review import MAX_AGY_PRINT_TIMEOUT_SECONDS, TOTAL_REVIEW_TIMEOUT_SECONDS
 
 REPO = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = REPO / "tools" / "review_schemas"
@@ -38,16 +37,23 @@ BINDING_FIELDS = (
     "config_hash",
 )
 
-#: C-HE-16 §3 retry parameters (spec v1.2 X2). The per-attempt figure is a CAP: every attempt
-#: runs min(cap, remaining - margin) on the shared 1260 s deadline, so a second attempt exists
-#: only after a FAST transient failure (empty output, rate-limit, auth flake). The cap equals
-#: agy_review.MAX_AGY_PRINT_TIMEOUT_SECONDS -- the bound the gemini channel applied per
+#: C-HE-16 §3 retry parameters (spec v1.2 X2). This module is the single home of the two
+#: budget constants for BOTH channels -- agy_review re-exports them (a back-import from
+#: agy_review made `import agy_review` fail on the partially-initialised module; codex round
+#: 3). The per-attempt figure is a CAP: every attempt runs min(cap, remaining - margin) on the
+#: shared 1260 s deadline, so a second attempt exists only after a FAST transient failure
+#: (empty output, rate-limit, auth flake). 1200 s is the bound the gemini channel applied per
 #: invocation before S1; the v1/v1.1 figure of 550 s (budget arithmetic) killed real codex
-#: reviews mid-flight. Single implementation site for both channels.
-PER_ATTEMPT_TIMEOUT_S = float(MAX_AGY_PRINT_TIMEOUT_SECONDS)  # 1200.0
+#: reviews mid-flight.
+PER_ATTEMPT_TIMEOUT_S = 1200.0
 MAX_ATTEMPTS = 2
-TOTAL_BUDGET_S = TOTAL_REVIEW_TIMEOUT_SECONDS  # 1260.0
+TOTAL_BUDGET_S = 1260.0
 SECOND_ATTEMPT_MARGIN_S = 30.0
+#: A stream longer than this is a transcript (the vendor CLIs echo the diff + prompt), not a
+#: CLI error: only its tail can carry the fatal line, and diff/prompt text must never feed the
+#: classifier (codex round 3 read "not logged in" out of THIS diff and said permanent).
+CLASSIFIER_STREAM_LIMIT = 4096
+CLASSIFIER_TAIL = 512
 
 #: C-HE-16 §4 -- per-CLI classifier, ONE ROW PER (channel, regex, class). First match wins.
 #: Unknown text -> transient (fail-safe toward retry-then-block, never toward APPROVE).
@@ -100,10 +106,33 @@ def classify(channel: str, text: str) -> str:
     return "transient"
 
 
+def classifier_text(stdout: str, stderr: str) -> str:
+    """The part of a channel's output the C-HE-16 §4 table may read: a short stream whole (a
+    usage / auth error is a few lines), a long stream only by its tail (a transcript that
+    echoes the reviewed diff would otherwise match auth words that live IN the diff)."""
+
+    def part(s: str) -> str:
+        s = s or ""
+        return s if len(s) <= CLASSIFIER_STREAM_LIMIT else s[-CLASSIFIER_TAIL:]
+
+    return part(stdout) + "\n" + part(stderr)
+
+
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True
     ).stdout.strip()
+
+
+def bound_diff(repo: Path, base_sha: str, head_sha: str) -> bytes:
+    """THE reviewed bytes: `git diff --binary <base_sha> <head_sha>` as raw bytes (a diff may
+    carry non-UTF-8 hunks; gemini round 3). Both the digest and the reviewer's payload come
+    from this one function so the digest describes exactly what was reviewed (codex round 3)."""
+    return subprocess.run(
+        ["git", "-C", str(repo), "diff", "--binary", base_sha, head_sha],
+        check=True,
+        capture_output=True,
+    ).stdout
 
 
 def compute_binding(
@@ -114,16 +143,10 @@ def compute_binding(
     the review is bound to (the loop commits before it reviews)."""
     head_sha = _git(repo, "rev-parse", "HEAD")
     base_sha = _git(repo, "merge-base", base, "HEAD")
-    diff = subprocess.run(
-        ["git", "-C", str(repo), "diff", base_sha, "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
     return {
         "head_sha": head_sha,
         "base_sha": base_sha,
-        "diff_digest": hashlib.sha256(diff.encode()).hexdigest(),
+        "diff_digest": hashlib.sha256(bound_diff(repo, base_sha, head_sha)).hexdigest(),
         "reviewer_identity": channel if channel.endswith("-review") else f"{channel}-review",
         "prompt_version": prompt_version,
         "config_hash": config_hash,
@@ -203,13 +226,25 @@ def run_with_retry(
                 f"({last_reason})",
             )
         att = invoke(timeout)
-        combined = (att.stdout or "") + "\n" + (att.stderr or "")
+        combined = classifier_text(att.stdout, att.stderr)
         if att.timed_out:
             last_reason = f"attempt {attempt_n} timed out after {timeout:.0f}s"
             continue  # transient by definition
         outcome = parse_verdict(channel, att.stdout, expected)
-        if outcome.terminal != "REVIEWER_UNAVAILABLE":
-            return outcome
+        if outcome.terminal == "BLOCK":
+            return outcome  # a crash after a parsed BLOCK still blocks: findings are preserved
+        if outcome.terminal == "APPROVE":
+            if att.returncode in (0, None):
+                return outcome
+            # A reviewer that exited non-zero does not get to approve (gemini round 3: exit
+            # code is never a COMPLETION signal, but a failed process's approval is not a
+            # verdict either); classified like any other failure and retried if transient.
+            outcome = ReviewOutcome(
+                "REVIEWER_UNAVAILABLE",
+                channel,
+                None,
+                f"exit {att.returncode} with a parsed APPROVE (fail-closed: not counted)",
+            )
         cls = classify(channel, combined)
         last_reason = f"attempt {attempt_n}: {outcome.reason}"
         if cls == "permanent":
@@ -299,6 +334,23 @@ def outcome_rows(
                 producer=producer,
                 record_kind="reviewer_unavailable",
                 cause_attribution=f"reviewer_unavailable_{outcome.failure_class}",
+                **env_common,
+            )
+        ]
+    if outcome.terminal == "APPROVE":
+        # A clean review is durable evidence too (C-HE-17 §5 "both rows in the record"): one
+        # bound `no_finding` marker per approving invocation (codex round 3), never a `finding`.
+        return [
+            dict(
+                location=outcome.channel,
+                observed_evidence=f"APPROVE from {outcome.source or 'stdout'}: 0 findings",
+                expected_contract="C-HE-15 §1 positive schema parse",
+                severity="info",
+                finding_type="clean-approve",
+                lineage_claim="wrapper",
+                producer=producer,
+                record_kind="no_finding",
+                cause_attribution=None,
                 **env_common,
             )
         ]

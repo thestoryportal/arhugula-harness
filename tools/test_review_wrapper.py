@@ -410,7 +410,11 @@ def test_outcome_rows_one_finding_row_per_finding_bound_to_head():
     assert [r["severity"] for r in rows] == ["P1", "P2"] and rows[0]["head_sha"] == "a" * 40
     assert rows[0]["finding_type"] == "terminal-block" and rows[0]["round_n"] == 3
     approve = rw.ReviewOutcome("APPROVE", "codex", None, "", [], EXPECTED, "stdout")
-    assert rw.outcome_rows(approve, producer="p", arc_id="a", lane_id="l", round_n=0) == []
+    marker = rw.outcome_rows(approve, producer="p", arc_id="a", lane_id="l", round_n=0)
+    # a clean review is durable evidence too (C-HE-17 §5): ONE bound no_finding marker
+    assert len(marker) == 1 and marker[0]["record_kind"] == "no_finding"
+    assert marker[0]["finding_type"] == "clean-approve" and marker[0]["head_sha"] == "a" * 40
+    assert marker[0]["severity"] == "info"
 
 
 def test_emit_outcome_mints_distinct_ids_on_rerun_at_same_head(tmp_path: Path):
@@ -620,20 +624,38 @@ def test_wrapper_round_outcome_noop_without_reservation_substrate(monkeypatch, c
     assert capsys.readouterr().err == ""
 
 
-def test_build_command_is_codex_review_with_positional_instructions():
-    """codex-cli 0.146.0: the PROMPT is a review target, mutually exclusive with `--base`
-    (`error: the argument '--base <BRANCH>' cannot be used with '[PROMPT]'`, probed live)."""
-    cmd = cr.build_command("INSTR")
-    assert cmd[:2] == ["codex", "review"] and cmd[-1] == "INSTR"
+def test_build_command_is_codex_exec_read_only_with_output_file(tmp_path):
+    """codex-cli 0.146.0 (probed live): `codex review --base` rejects a PROMPT, and
+    `codex review "<prompt>"` answers in its native findings JSON on a real diff; `codex exec`
+    follows the brief and writes the final message to `-o`."""
+    cmd = cr.build_command(Path("/r"), "INSTR", output_file=tmp_path / "last.md")
+    assert cmd[:2] == ["codex", "exec"] and cmd[-1] == "INSTR"
+    assert cmd[cmd.index("--sandbox") + 1] == "read-only"
+    assert cmd[cmd.index("-C") + 1] == "/r" and cmd[cmd.index("-o") + 1] == str(
+        tmp_path / "last.md"
+    )
     assert "--base" not in cmd and 'preferred_auth_method="chatgpt"' in cmd
 
 
 def test_review_instructions_name_the_bound_diff_and_carry_all_six_binding_values():
     text = cr.review_instructions(EXPECTED)
-    assert f"git diff {EXPECTED['base_sha']} {EXPECTED['head_sha']}" in text
+    assert f"git diff --binary {EXPECTED['base_sha']} {EXPECTED['head_sha']}" in text
     for k, v in EXPECTED.items():
         assert f"{k}={v}" in text
-    assert "```json" in text and "APPROVE|BLOCK" in text
+    assert "```json" in text and "APPROVE|BLOCK" in text and "Do not edit files" in text
+
+
+def test_default_invoke_prefers_the_output_file_over_stdout(monkeypatch):
+    """The `-o` file is the final message even when stdout is frozen/truncated (PR #1386)."""
+    import subprocess
+
+    def fake_rb(cmd, *, cwd, timeout, env):
+        Path(cmd[cmd.index("-o") + 1]).write_text(_block())
+        return subprocess.CompletedProcess(cmd, 0, "working...", "transcript")
+
+    monkeypatch.setattr(cr, "run_bounded", fake_rb)
+    att = cr._default_invoke(Path("."), "I")(10.0)
+    assert att.stdout == _block() and att.stderr == "transcript" and not att.timed_out
 
 
 def test_stderr_echo_is_a_second_source_under_the_same_bar(monkeypatch, tmp_path):
@@ -784,11 +806,30 @@ def test_failover_preflight_failure_still_records_both_reasons(monkeypatch, tmp_
     assert rows[0]["finding_type"] == "permanent-fail-exit"
 
 
-def test_failover_reads_the_gemini_wrapper_verdict_under_the_identical_bar(monkeypatch, tmp_path):
-    """A wrapper that ran wrote its own rows (count moved) → no second emission; its stdout is
-    re-parsed against the SAME expected binding."""
+_REAL_RUN = __import__("subprocess").run
+
+
+def _fake_just(envelope_body, *, raise_exc=None):
+    """A `just gemini-review <base> <envelope>` stand-in that writes the wrapper envelope (or
+    raises); every other command (git for arc/lane ids) runs for real."""
     import subprocess
 
+    def run(cmd, **k):
+        if cmd[:1] != ["just"]:
+            return _REAL_RUN(cmd, **k)
+        if raise_exc is not None:
+            raise raise_exc
+        if envelope_body is not None:
+            Path(cmd[3]).write_text(json.dumps(envelope_body))
+        return subprocess.CompletedProcess(cmd, 1, "raw vendor stdout " + _block(), "stderr")
+
+    return run
+
+
+def test_failover_reads_the_gemini_wrapper_envelope_not_raw_stdout(monkeypatch, tmp_path):
+    """The wrapper reached a terminal and wrote its own rows: consume its envelope (identical
+    bar: binding byte-equal to THIS invocation's expected); raw stdout may carry a schema-valid
+    APPROVE the wrapper itself refused (codex round 3) -- it is never re-parsed."""
     log = tmp_path / "g.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
     gem = {**EXPECTED, "reviewer_identity": "gemini-review"}
@@ -797,38 +838,68 @@ def test_failover_reads_the_gemini_wrapper_verdict_under_the_identical_bar(monke
     )
     monkeypatch.setattr(cr, "_gemini_config_hash", lambda: EXPECTED["config_hash"])
     body = {
-        "verdict": "BLOCK",
+        "terminal": "BLOCK",
+        "channel": "gemini",
+        "failure_class": None,
+        "reason": "",
         "findings": [{"severity": "P1", "location": "l", "message": "m"}],
-        **gem,
+        "binding": gem,
+        "source": "stdout",
     }
-    stdout = (
-        "agy-review: effective model: X\n```json\n"
-        + json.dumps(body)
-        + "\n```\nARTIFACT: COMPLETE\nVERDICT: BLOCK\n"
-    )
-
-    def fake_run(*a, **k):
-        # the wrapper subprocess records its own row while running
-        rw.emit_outcome(
-            rw.ReviewOutcome("BLOCK", "gemini", None, "", body["findings"], gem, "stdout"),
-            producer="gemini_review_wrapper",
-            arc_id="a",
-            lane_id="l",
-            round_n=0,
-            path=log,
-        )
-        return subprocess.CompletedProcess(a[0], 1, stdout, "")
-
-    monkeypatch.setattr(cr.subprocess, "run", fake_run)
+    monkeypatch.setattr(cr.subprocess, "run", _fake_just(body))
     out = cr._run_gemini_failover(Path("."), "main")
-    assert out.terminal == "BLOCK" and len(out.findings) == 1
-    assert len(fr.read_rows(log)) == 1  # the wrapper's own row; no duplicate from the failover
-    # foreign binding on the wrapper's stdout → unavailable even though the exit code was 1
-    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: "other")
+    assert out.terminal == "BLOCK" and len(out.findings) == 1 and out.binding == gem
+    assert fr.read_rows(log) == []  # the wrapper's own rows are its business; no duplicate here
+    # the wrapper said unavailable although its raw stdout carries a valid APPROVE block
+    body_u = {
+        **body,
+        "terminal": "REVIEWER_UNAVAILABLE",
+        "failure_class": "transient",
+        "reason": "model mismatch",
+        "findings": [],
+    }
+    monkeypatch.setattr(cr.subprocess, "run", _fake_just(body_u))
+    out = cr._run_gemini_failover(Path("."), "main")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and out.reason == "model mismatch"
+    # an envelope bound to a different invocation is refused (identical bar)
+    body_f = {**body, "binding": {**gem, "head_sha": "d" * 40}}
+    monkeypatch.setattr(cr.subprocess, "run", _fake_just(body_f))
+    out = cr._run_gemini_failover(Path("."), "main")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "different invocation" in out.reason
+
+
+def test_failover_without_envelope_is_recorded_here_once(monkeypatch, tmp_path):
+    """No envelope = the wrapper never reached a terminal (preflight death / missing `just`):
+    classify from stderr, emit exactly one row here."""
+    import subprocess
+
+    log = tmp_path / "g.jsonl"
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
+    monkeypatch.setattr(rw, "compute_binding", lambda *a, **k: dict(EXPECTED))
+    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: "x")
+    monkeypatch.setattr(cr.subprocess, "run", _fake_just(None))
+    out = cr._run_gemini_failover(Path("."), "main")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "no outcome envelope" in out.reason
+    assert len(fr.read_rows(log)) == 1
+
     monkeypatch.setattr(
-        cr.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 1, stdout, "")
+        cr.subprocess,
+        "run",
+        _fake_just(None, raise_exc=FileNotFoundError(2, "No such file: 'just'")),
     )
-    assert cr._run_gemini_failover(Path("."), "main").terminal == "REVIEWER_UNAVAILABLE"
+    out = cr._run_gemini_failover(Path("."), "main")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "cannot start" in out.reason
+    assert len(fr.read_rows(log)) == 2
+
+    def bad_base(*a, **k):
+        raise subprocess.CalledProcessError(
+            128, ["git", "-C", ".", "merge-base"], stderr="fatal: bad"
+        )
+
+    monkeypatch.setattr(rw, "compute_binding", bad_base)
+    out = cr._run_gemini_failover(Path("."), "nope")
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and out.failure_class == "permanent"
+    assert len(fr.read_rows(log)) == 3
 
 
 def test_review_with_failover_recipe_and_carriers_present():
@@ -894,3 +965,92 @@ def test_unresolvable_base_is_permanent_unavailable_not_a_traceback(monkeypatch,
     out = cr.run_codex_review(Path("."), "nope")
     assert out.terminal == "REVIEWER_UNAVAILABLE" and out.failure_class == "permanent"
     assert "Not a valid object name" in out.reason
+
+
+# ── round-3 absorptions: classifier input, exit-code rule, artifact floor, import ────────
+def test_classifier_reads_short_streams_whole_and_long_streams_by_tail():
+    diff_echo = "x" * 5000 + "\n-    ('codex', 'not logged in') 401 unauthorized\n" + "y" * 5000
+    assert rw.classify("codex", rw.classifier_text("", diff_echo)) == "transient"
+    assert rw.classify("codex", rw.classifier_text("", "Error: not logged in")) == "permanent"
+    assert (
+        rw.classify("codex", rw.classifier_text("", "z" * 9000 + "\nError: unauthorized"))
+        == "permanent"
+    )
+    assert rw.classify("codex", rw.classifier_text("Error: not logged in", "")) == "permanent"
+
+
+def test_retry_loop_ignores_auth_words_inside_a_long_transcript():
+    n = count()
+
+    def invoke(timeout):
+        next(n)
+        return rw.Attempt(
+            "", "transcript " + "diff --git\n" * 900 + "+ 'not logged in'\n" + "t" * 3000, 0, False
+        )
+
+    out = rw.run_with_retry(
+        invoke, channel="codex", expected=EXPECTED, deadline=10_000.0, clock=lambda: 0.0
+    )
+    assert out.failure_class == "transient" and next(n) == 2  # retried, not misread as permanent
+
+
+def test_nonzero_exit_with_parsed_approve_is_unavailable_but_block_stands():
+    approve_crash = lambda t: rw.Attempt(_block("APPROVE"), "", 3, False)  # noqa: E731
+    out = rw.run_with_retry(
+        approve_crash, channel="codex", expected=EXPECTED, deadline=10_000.0, clock=lambda: 0.0
+    )
+    assert out.terminal == "REVIEWER_UNAVAILABLE" and "parsed APPROVE" in out.reason
+
+    def block_crash(t):
+        return rw.Attempt(
+            _block("BLOCK", [{"severity": "P1", "location": "l", "message": "m"}]), "", 3, False
+        )
+
+    out = rw.run_with_retry(
+        block_crash, channel="codex", expected=EXPECTED, deadline=10_000.0, clock=lambda: 0.0
+    )
+    assert out.terminal == "BLOCK" and len(out.findings) == 1
+
+
+def test_artifact_discovery_floors_the_start_and_needs_no_upper_bound(tmp_path):
+    p = _artifact_tree(tmp_path, "a" * 40, mtime=1000.0)  # whole-second mtime
+    assert cr.find_session_artifact("a" * 40, started_at=1000.7, now=1001.0, root=tmp_path) == p
+    assert cr.find_session_artifact("a" * 40, started_at=1001.0, now=1002.0, root=tmp_path) is None
+    future = _artifact_tree(tmp_path / "f", "a" * 40, mtime=5000.0)
+    assert (
+        cr.find_session_artifact("a" * 40, started_at=1000.0, now=1001.0, root=tmp_path / "f")
+        == future
+    )
+
+
+def test_bound_diff_is_bytes_and_the_digest_hashes_them(monkeypatch):
+    import subprocess
+
+    raw = b"diff --git a/x b/x\n+\xff\xfe not utf-8\n"
+
+    def fake_run(cmd, **k):
+        if cmd[3:5] == ["diff", "--binary"]:
+            return subprocess.CompletedProcess(cmd, 0, raw, b"")
+        return subprocess.CompletedProcess(
+            cmd, 0, "e" * 40 + "\n" if "rev-parse" in cmd else "b" * 40 + "\n", ""
+        )
+
+    monkeypatch.setattr(rw.subprocess, "run", fake_run)
+    b = rw.compute_binding(Path("."), "main", channel="codex", prompt_version="p", config_hash="c")
+    import hashlib
+
+    assert b["diff_digest"] == hashlib.sha256(raw).hexdigest()
+    assert rw.bound_diff(Path("."), "b" * 40, "e" * 40) == raw
+
+
+def test_agy_review_imports_cleanly_in_a_fresh_interpreter():
+    """codex round 3: review_wrapper_common back-imported constants from agy_review, so a plain
+    `import agy_review` hit the partially-initialised module."""
+    import subprocess
+
+    subprocess.run(
+        [sys.executable, "-c", "import agy_review, review_wrapper_common, codex_review"],
+        cwd=Path(__file__).resolve().parent,
+        check=True,
+        capture_output=True,
+    )

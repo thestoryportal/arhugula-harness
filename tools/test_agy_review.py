@@ -249,7 +249,7 @@ def test_reviewer_unavailable_exit_maps_to_two(
 ) -> None:
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+bounded timeout")
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: "+bounded timeout")
     monkeypatch.setattr(
         reviewer,
         "run_bounded",
@@ -267,14 +267,19 @@ def test_collect_diff_rejects_empty_tracked_and_untracked_diff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reviewer = _reviewer_module()
-    monkeypatch.setattr(
-        reviewer,
-        "run_git",
-        lambda _repo, *_args: subprocess.CompletedProcess(["git"], 0, "", ""),
-    )
+    monkeypatch.setattr(reviewer.rw, "bound_diff", lambda _repo, _base, _head: b"   \n")
 
     with pytest.raises(RuntimeError, match="review diff is empty"):
-        reviewer.collect_diff(tmp_path, "main")
+        reviewer.collect_diff(tmp_path, "b" * 40, "a" * 40)
+
+
+def test_collect_diff_decodes_non_utf8_bound_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The digest hashes raw bytes; the reviewer sees a lossless-as-possible text decode."""
+    reviewer = _reviewer_module()
+    monkeypatch.setattr(reviewer.rw, "bound_diff", lambda *_a: b"diff --git a/x b/x\n+\xff\xfe\n")
+    assert reviewer.collect_diff(tmp_path, "b" * 40, "a" * 40).startswith("diff --git a/x b/x")
 
 
 def _fake_commands(
@@ -307,20 +312,12 @@ def _fake_commands(
         "'fake-branch'; exit 0; fi\n"
         "if [ \"$1\" = 'merge-base' ]; then printf '%s\\n' "
         "'2222222222222222222222222222222222222222'; exit 0; fi\n"
-        "if [ \"$1 $2\" = 'diff 2222222222222222222222222222222222222222' ]; then "
-        "printf '%s\\n' 'diff --git a/bound b/bound' '+bound witness'; exit 0; fi\n"
         "if [ \"$1 $2 $3\" = 'rev-parse --path-format=absolute --git-common-dir' ]; then\n"
         "  printf '%s\\n' \"$AGY_REVIEW_ROOT/.git\"\n"
         "  exit 0\n"
         "fi\n"
-        "if [ \"$1\" = 'ls-files' ]; then\n"
-        '  [ -n "${AGY_UNTRACKED_PATH:-}" ] && printf \'%s\\0\' "$AGY_UNTRACKED_PATH"\n'
-        "  exit 0\n"
-        "fi\n"
-        "if [ \"$1 $2\" = 'diff --no-index' ]; then\n"
-        "  printf '%s\\n' 'diff --git a/dev/null b/new.py' '+untracked witness'\n"
-        "  exit 1\n"
-        "fi\n"
+        # `git diff --binary <base_sha> <head_sha>` -- the ONE bound-diff call both the digest
+        # and the reviewer payload use (rw.bound_diff); the working tree is never consulted.
         'if [ -n "${AGY_DIFF_FILE:-}" ]; then cat "$AGY_DIFF_FILE"; exit 0; fi\n'
         "printf '%s\\n' 'diff --git a/a.py b/a.py' '+new line'\n",
         encoding="utf-8",
@@ -437,7 +434,6 @@ def _run(
     agy_output: str,
     agy_outputs: tuple[str, ...] | None = None,
     agy_exit: int = 0,
-    untracked_path: str = "",
     diff_file: Path | None = None,
     effective_model: str = "Gemini 3.1 Pro (High)",
     emit_completeness: bool = True,
@@ -467,7 +463,6 @@ def _run(
             "AGY_CWD_CAPTURE": str(tmp_path / "agy-cwd.txt"),
             "AGY_COUNTER": str(tmp_path / "agy-counter.txt"),
             "AGY_REVIEW_ROOT": str(tmp_path / "main-root"),
-            "AGY_UNTRACKED_PATH": untracked_path,
             "AGY_DIFF_FILE": str(diff_file) if diff_file is not None else "",
             "GEMINI_API_KEY": "must-not-leak",
             "GOOGLE_API_KEY": "must-not-leak",
@@ -598,7 +593,7 @@ def test_large_review_shares_one_deadline_across_segments_and_synthesis(
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: diff)
     clock = _clock([100.0, 110.0, 500.0, 900.0])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     observed_timeouts: list[float] = []
@@ -634,7 +629,7 @@ def test_large_review_refuses_stage_when_only_cleanup_grace_remains(
 ) -> None:
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: "+small diff")
     clock = _clock([100.0, 1356.0])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(
@@ -654,7 +649,7 @@ def test_large_review_refuses_stage_at_cleanup_grace_boundary(
 ) -> None:
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: "+small diff")
     clock = _clock([100.0, 1355.0])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(
@@ -673,7 +668,7 @@ def test_large_review_starts_stage_just_above_cleanup_grace(
 ) -> None:
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: "+small diff")
     clock = _clock([100.0, 1354.999])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     observed_timeouts: list[float] = []
@@ -835,7 +830,7 @@ def test_large_review_uses_bounded_segments_then_synthesizes_one_verdict(
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 438_333)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: diff)
     prompts: list[str] = []
 
     def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -963,7 +958,7 @@ def test_large_review_fails_closed_for_invalid_stage(
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: diff)
     observed_stages = 0
     calls = 0
     last_prompt = None
@@ -1079,7 +1074,7 @@ def test_large_review_accepts_segment_result_at_exact_limit(
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: diff)
     suffix = "\nSEGMENT: COMPLETE\nVERDICT: APPROVE"
     exact_output = ("x" * (reviewer.MAX_REVIEW_RESULT_BYTES - len(suffix.encode("utf-8")))) + suffix
     assert len(exact_output.encode("utf-8")) == reviewer.MAX_REVIEW_RESULT_BYTES
@@ -1110,7 +1105,7 @@ def test_large_review_rejects_segment_result_one_byte_over_32_kib(
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: diff)
     suffix = "\nSEGMENT: COMPLETE\nVERDICT: APPROVE"
     output = ("x" * ((32 * 1024 + 1) - len(suffix.encode("utf-8")))) + suffix
     observed_stages = 0
@@ -1140,7 +1135,7 @@ def test_large_review_rejects_oversized_segment_result_before_synthesis(
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
     diff = "diff --git a/a b/a\n+" + ("x" * 150_000)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: diff)
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: diff)
     prompts: list[str] = []
 
     def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -1259,10 +1254,17 @@ def test_review_preserves_findings_on_nonzero_agy_exit(tmp_path: Path) -> None:
         agy_exit=7,
     )
 
-    # C-HE-16 §3: terminal states are exactly the triple -- a non-zero reviewer exit is
-    # REVIEWER_UNAVAILABLE (2), never the reviewer's own status; findings stay on stdout.
-    assert proc.returncode == 2
+    # A non-zero reviewer exit whose output parses to a bound BLOCK still BLOCKS (findings are
+    # preserved, exit 1 -- never the reviewer's own status); a parsed APPROVE from a failed
+    # process is never counted (next test).
+    assert proc.returncode == 1
     assert proc.stdout.rstrip().endswith("VERDICT: BLOCK")
+    assert "blocking findings require resolution" in proc.stderr
+
+
+def test_nonzero_agy_exit_with_a_parsed_approve_is_unavailable(tmp_path: Path) -> None:
+    proc = _run(tmp_path, agy_output="F1 none\nVERDICT: APPROVE", agy_exit=7)
+    assert proc.returncode == 2
     assert "agy-review: reviewer unavailable (transient): exit 7" in proc.stderr
 
 
@@ -1278,17 +1280,21 @@ def test_review_rejects_exact_block_verdict(tmp_path: Path) -> None:
     assert "blocking findings require resolution" in proc.stderr
 
 
-def test_review_includes_untracked_file_patch(tmp_path: Path) -> None:
-    proc = _run(
-        tmp_path,
-        agy_output="F1 none\nVERDICT: APPROVE",
-        untracked_path="new.py",
-    )
+def test_review_payload_is_exactly_the_bound_diff(tmp_path: Path) -> None:
+    """The reviewer sees `git diff --binary <base_sha> <head_sha>` and nothing else -- no
+    working-tree edits, no untracked files (codex round 3: the digest must describe the
+    reviewed bytes; the loop commits before it reviews)."""
+    diff_file = tmp_path / "bound.diff"
+    diff_file.write_text("diff --git a/bound.py b/bound.py\n+bound witness\n", encoding="utf-8")
+    (tmp_path / "wip-untracked.txt").write_text("untracked witness\n", encoding="utf-8")
+    proc = _run(tmp_path, agy_output="F1 none\nVERDICT: APPROVE", diff_file=diff_file)
 
     assert proc.returncode == 0, proc.stderr
-    prompt = (tmp_path / "agy-prompt.txt").read_text(encoding="utf-8")
-    assert "diff --git a/dev/null b/new.py" in prompt
-    assert "+untracked witness" in prompt
+    reviewed = (tmp_path / "agy-diff.txt").read_text(encoding="utf-8")
+    assert (
+        reviewed.strip() == diff_file.read_text(encoding="utf-8").strip()
+    )  # payload = bound bytes
+    assert "untracked witness" not in reviewed
 
 
 # ── U-HE-06: the gemini channel under the fail-closed core (C-HE-15/16/17 §4) ────────────
@@ -1307,16 +1313,16 @@ def test_final_output_with_schema_block_and_binding_counts_and_is_recorded(tmp_p
     assert proc.returncode == 0, proc.stderr
     prompt = (tmp_path / "agy-prompt.txt").read_text(encoding="utf-8")
     assert "print ONE fenced ```json block" in prompt and "head_sha=" + "1" * 40 in prompt
-    assert fr.read_rows(tmp_path / "gate-log.jsonl") == []  # APPROVE with no findings: no rows
+    rows = fr.read_rows(tmp_path / "gate-log.jsonl")  # a clean review leaves ONE bound marker
+    assert [r["record_kind"] for r in rows] == ["no_finding"]
+    assert rows[0]["producer"] == "gemini_review_wrapper" and rows[0]["head_sha"] == "1" * 40
     (tmp_path / "blk").mkdir()
     proc = _run(tmp_path / "blk", agy_output="F1 [P1] defect\nVERDICT: BLOCK")
     assert proc.returncode == 1
-    rows = fr.read_rows(tmp_path / "gate-log.jsonl")
-    assert len(rows) == 1 and rows[0]["record_kind"] == "finding" and rows[0]["severity"] == "P1"
-    assert (
-        rows[0]["producer"] == "gemini_review_wrapper"
-        and rows[0]["finding_type"] == "terminal-block"
-    )
+    rows = fr.read_rows(tmp_path / "gate-log.jsonl")  # the marker above + this run's finding
+    assert [r["record_kind"] for r in rows] == ["no_finding", "finding"]
+    assert rows[1]["severity"] == "P1" and rows[1]["finding_type"] == "terminal-block"
+    assert rows[1]["producer"] == "gemini_review_wrapper"
 
 
 def test_final_output_bound_to_a_foreign_head_is_unavailable(tmp_path: Path) -> None:
@@ -1344,7 +1350,7 @@ def test_transient_segment_failure_gets_one_bounded_retry(
     remaining - 30) computed at attempt time (C-HE-16 §3)."""
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: "+small diff")
     clock = _clock([100.0, 110.0, 900.0])
     monkeypatch.setattr(reviewer.time, "monotonic", lambda: next(clock))
     seen: list[float] = []
@@ -1368,7 +1374,7 @@ def test_permanent_segment_failure_skips_retry(
 ) -> None:
     reviewer = _reviewer_module()
     _bind(reviewer, monkeypatch)
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: "+small diff")
     calls = 0
 
     def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -1408,7 +1414,7 @@ def test_unresolvable_base_is_permanent_unavailable_not_a_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     reviewer = _reviewer_module()
-    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base: "+small diff")
+    monkeypatch.setattr(reviewer, "collect_diff", lambda _repo, _base, _head: "+small diff")
 
     def boom(_repo, _base):
         raise subprocess.CalledProcessError(
