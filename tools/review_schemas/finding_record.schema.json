@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "C-HE-24 finding record (8-field core + envelope)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["finding_id", "location", "observed_evidence", "expected_contract", "severity", "finding_type",
+               "lineage_claim", "producer", "record_kind", "ts", "arc_id", "lane_id", "head_sha", "base_sha",
+               "diff_digest", "round_n", "cause_attribution", "disposition", "disposition_actor", "unique_catch"],
+  "properties": {
+    "finding_id": {"type": "string", "minLength": 1},
+    "location": {"type": "string"},
+    "observed_evidence": {"type": "string"},
+    "expected_contract": {"type": "string"},
+    "severity": {"enum": ["P1", "P2", "P3", "hard", "warn", "info"]},
+    "finding_type": {"type": "string", "minLength": 1},
+    "lineage_claim": {"type": "string"},
+    "producer": {"type": "string", "pattern": "^[^:]+$"},
+    "record_kind": {"enum": ["finding", "finding_adjudication", "no_finding", "equivalence_proof", "gate_demotion", "reviewer_unavailable"]},
+    "ts": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "arc_id": {"type": "string", "minLength": 1},
+    "lane_id": {"type": "string", "pattern": "^[^:]+$"},
+    "head_sha": {"type": ["string", "null"]},
+    "base_sha": {"type": ["string", "null"]},
+    "diff_digest": {"type": ["string", "null"]},
+    "round_n": {"type": ["integer", "null"], "minimum": 0},
+    "cause_attribution": {"type": ["string", "null"]},
+    "disposition": {"enum": [null, "accepted", "rejected", "suppressed"]},
+    "disposition_actor": {"type": ["string", "null"], "pattern": "^[^:]+$"},
+    "unique_catch": {"type": ["boolean", "null"]}
+  }
+}
