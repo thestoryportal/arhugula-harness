@@ -61,6 +61,12 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   title; body lists what changed + verification (tests/assertions, codex rounds) + the
   R-NNN it advances. End the body with the standard generated-with trailer.
 - Commit/PR trailers per the workspace convention (Co-Authored-By; 🤖 Generated-with).
+- **Reservation back-fill at PR creation (C-HE-03 §3, U-HE-21).** The arc's reservation was
+  minted at selection by `roadmap-continue` (`HARNESS_ARC_ID` is exported). Immediately
+  after `gh pr create`:
+  ```bash
+  uv run python tools/reservations.py update --arc-id "$HARNESS_ARC_ID" --set pr=<N> head_sha=$(git rev-parse HEAD) base_sha=$(git rev-parse origin/main)
+  ```
 
 ## Pre-merge gate — CI green + decorrelated 3-lens review (before `gh pr merge`)
 
@@ -77,6 +83,21 @@ verdict → do not merge; automatic fix-and-re-gate is capped at ten rounds. An 
 substantive disagreement is the decision point surfaced to the operator via one
 `AskUserQuestion` — see the skill for the full procedure, parse-failure handling, and the
 audit-log append.
+
+**Final-gate reservation back-fill (C-HE-03 §3 + C-HE-06 §4(ii), U-HE-21).** After the
+gate all-approves and BEFORE the merge door: refresh the merge tuple and record the
+attested merge tree the door will byte-compare (`git merge-tree --write-tree` needs
+git ≥ 2.38; prints the tree OID):
+
+```bash
+uv run python tools/reservations.py update --arc-id "$HARNESS_ARC_ID" \
+  --set head_sha=$(git rev-parse HEAD) base_sha=$(git rev-parse origin/main) \
+        attested_merge_tree=$(git merge-tree --write-tree origin/main HEAD)
+```
+
+A stale tuple cannot merge: C-HE-06 step (ii) re-confirms head/base against `gh` and
+byte-compares the tree at the door (the merge-door consumer lands with U-HE-22; recording
+starts now so every arc from this one forward carries the attestation).
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 

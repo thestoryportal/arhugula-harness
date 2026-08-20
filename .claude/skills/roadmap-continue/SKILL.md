@@ -22,6 +22,27 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    for a specific prior round if one is genuinely needed, never read it wholesale). If the
    auto-`ACTIVE` queue is empty, apply the **no-parking directive (§12.4.1)**: pick the
    highest-value forward item, do NOT stop citing "operator-owned."
+
+   **Arc open (C-HE-03 §4) — the instant the unit is chosen, BEFORE any work.** Selection
+   IS arc open: mint the `pending` reservation now, with the `arc_type` declared now
+   (C-HE-26 §1 — the open-time capture point, never inferred at close):
+   ```bash
+   ARC_ID=<unit-id-or-pr-slug>            # e.g. u-he-21 (single path component, no ':')
+   export HARNESS_LANE_ID="${HARNESS_LANE_ID:-$(uv run python tools/reservations.py mint-lane-id)}"
+   uv run python tools/reservations.py selectable --arc-id "$ARC_ID" || {
+     # Reserved already. Same-lane resume (crash/compaction re-entry): `show` reveals our
+     # own lane_id on a pending/open head → continue WITHOUT re-reserving. Any other
+     # lane's reservation → this unit is taken: re-derive and pick the next unit.
+     uv run python tools/reservations.py show --arc-id "$ARC_ID"
+   }
+   uv run python tools/reservations.py reserve --arc-id "$ARC_ID" \
+     --lane-id "$HARNESS_LANE_ID" --branch "$(git branch --show-current)" \
+     --arc-type <inventing|applying>      # declare the type NOW (C-HE-26 §1)
+   export HARNESS_ARC_ID="$ARC_ID"        # review-wrapper rows join the real reservation
+   ```
+   A second lane's selection of the same unit fails here (duplicate *scheduling* is
+   prevented at open; duplicate *append* by C-HE-03 §6). `ship-pr` back-fills
+   `pr`/`head_sha`/`base_sha`/`attested_merge_tree` on this same record.
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
