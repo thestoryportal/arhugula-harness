@@ -1486,7 +1486,7 @@ def test_recovery_restores_an_orphaned_aside_from_a_dead_recoverer(tmp_path, mon
     assert list(q.glob("*.taken.recover.*")) == [q / "pr-8.taken.recover.elsewhere.invalid.999999"]
 
 
-# mutation-probe: replace _restore_or_republish's os.link with os.replace (clobbering restore)
+# mutation-probe: comment out the `except FileExistsError` drop-stale tail in _restore_or_republish
 def test_restore_never_clobbers_a_newer_requeue(tmp_path, monkeypatch):
     """While an arc is claimed its .json name is free; a concurrent re-queue that
     published UPDATED declarations there must survive the stale restore (C-HE-04 SS4)."""
