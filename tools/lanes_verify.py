@@ -80,10 +80,32 @@ MANIFEST: list[Row] = [
         True,
     ),
     Row("C-HE-04", "shell:tools/hooks/test_lib.sh", "phase0", "local + CI", True),
-    # C-HE-04 §2/§4/§5 (U-HE-19): holder-gated append + drain ⇄ reservation integration
+    # C-HE-04 §2/§4/§5 (U-HE-19): holder-gated append + drain ⇄ reservation integration —
+    # one row per contract section so reverting any half leaves a RED row (codex r2 P3)
     Row(
         "C-HE-04",
         "pytest:tools/test_arc_metrics.py::test_append_refuses_unless_holder",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-04",
+        "pytest:tools/test_arc_metrics.py::test_drain_flips_before_append_and_folds_reservation_fields",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-04",
+        "pytest:tools/test_arc_metrics.py::test_recover_transfers_holder_to_recoverer",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-04",
+        "pytest:tools/test_arc_metrics.py::test_local_row_reconciliation_drops_superseded_rows",
         "phase0",
         "local + CI",
         True,

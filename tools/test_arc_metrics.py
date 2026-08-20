@@ -1915,6 +1915,7 @@ def test_append_refuses_unless_holder(tmp_path, monkeypatch, qdir_res):
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-40"]
 
 
+# mutation-probe: drop the pending->open flip in _drain_one
 def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkeypatch):
     """C-HE-04 §2 order (flip BEFORE append) + the C-HE-27 §3 / C-HE-25 / C-HE-26 §1 fold."""
     q = _queue_entries(am, tmp_path, monkeypatch, 1)
@@ -1967,6 +1968,7 @@ def test_recover_transfers_holder_to_recoverer(tmp_path, monkeypatch, qdir_res):
     assert (q / "pr-50.json").exists() and rs.holder("pr-50") == "B"
 
 
+# mutation-probe: drop the open-held-by-another-lane drop branch in _reconcile_local_rows
 def test_local_row_reconciliation_drops_superseded_rows(tmp_path, monkeypatch, qdir_res):
     """C-HE-04 §5: uncommitted local rows whose reservation is held/merged by ANOTHER
     lane are dropped at drain start; this lane's own rows survive."""
@@ -2078,3 +2080,39 @@ def test_lane_id_fallback_is_stable_across_invocations():
     else:
         assert am.LANE_ID == expected
     assert am.LANE_ID and ":" not in am.LANE_ID
+
+
+def test_merged_reservation_holds_entry_until_committed(tmp_path, monkeypatch):
+    """codex U-HE-19 r2 P1: a merged reservation proves the PR merged, not that any row
+    exists -- the entry is held (never released) until the arc is in COMMITTED history
+    (the C-HE-04 invariant's only release path)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
+    rs.open_with_sensor("pr-1", "A")
+    rs.transition("pr-1", "merged", lane_id="A")
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1 and (q / "pr-1.json").exists(), "sole capture held, never deleted"
+    assert am.read_ledger() == [], "nothing appended for a terminal reservation"
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-1"})
+    rc = am.drain(argparse.Namespace())
+    assert rc == 0 and not (q / "pr-1.json").exists(), "committed history releases it"
+
+
+def test_local_row_reconciliation_keeps_merged_without_committed_row(
+    tmp_path, monkeypatch, qdir_res
+):
+    """codex U-HE-19 r2 P1: merged-by-another-lane without a committed replacement row
+    may be the ONLY capture of that arc -- kept (loudly), never dropped."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    ledger.write_text(json.dumps({"arc_id": "pr-62", "record_kind": "arc"}) + "\n")
+    rs.reserve("pr-62", lane_id="B", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-62", "B")
+    rs.transition("pr-62", "merged", lane_id="B")
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    am._reconcile_local_rows()
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-62"], "sole capture survives"

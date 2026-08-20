@@ -1067,15 +1067,17 @@ def _recover_dead_claims() -> None:
         if _claim_owner_is_dead(orphan):
             target = orphan.with_name(base[: -len(".taken")] + ".json")
             what = "restored orphaned recovery file"
+            # Dead-owner route only: same-step holder transfer (C-HE-04 §4), read from the
+            # aside bytes BEFORE the queue name is public (codex U-HE-19 r2 P2: once the
+            # .json exists a peer can claim + consume it and the stamped dead-holder
+            # evidence vanishes with the aside).
+            _transfer_reservation_to_recoverer(orphan)
         else:
             target = orphan.with_name(base)
             what = "returned live claim from a dead recoverer"
         try:
             os.link(orphan, target)
             print(f"  {what} -> {target.name}")
-            if target.suffix == ".json":
-                # dead-owner route only: same-step holder transfer (C-HE-04 §4)
-                _transfer_reservation_to_recoverer(target)
         except FileExistsError:
             pass  # the name is already durably held; the aside is redundant
         except FileNotFoundError:
@@ -1139,10 +1141,13 @@ def _recover_dead_claims() -> None:
         # would silently revert it to the stale dead-claim payload (codex r5
         # P1). FileExistsError therefore means the queue name is durably held
         # and this stale copy is dropped.
+        # Transfer the holder from the ASIDE bytes, BEFORE the queue name is public
+        # (codex U-HE-19 r2 P2): once the .json exists a peer can claim + consume it and
+        # the dead-holder evidence (the stamped claim) is gone with the aside.
+        _transfer_reservation_to_recoverer(aside)
         try:
             os.link(aside, restored)
             print(f"  recovered claim from a dead owner -> {restored.name}")
-            _transfer_reservation_to_recoverer(restored)
         except FileExistsError:
             print(f"  {claim.name}: a newer capture holds the queue name; dropping the stale copy")
         aside.unlink(missing_ok=True)
@@ -1221,10 +1226,17 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             )
             return "held"
         elif state == "merged":
-            path.unlink(missing_ok=True)
-            taken.unlink(missing_ok=True)
-            print(f"  {arc_id}: reservation merged; releasing queue entry")
-            return "released"
+            # NEVER release here (codex U-HE-19 r2 P1): the C-HE-04 invariant releases an
+            # entry only once its row is in COMMITTED history (the `arc_id in committed`
+            # branch above). A merged reservation proves the PR merged -- not that any
+            # lane's row exists (the holder can die between the merged flip and append;
+            # reconcile() terminalizes from GitHub state alone). Hold the sole capture.
+            _restore_or_republish(taken, path, entry)
+            print(
+                f"  {arc_id}: reservation merged but the row is not in committed history; "
+                "entry held (HITL if it persists: backfill via extract, then commit)"
+            )
+            return "held"
         res = cur[1]
         # Namespace construction reads entry fields, so a malformed entry can
         # raise HERE, after the claim -- it must restore before propagating or
@@ -1304,10 +1316,30 @@ def _reconcile_local_rows() -> None:
         keep, dropped = [], []
         for r in rows:
             aid = r.get("arc_id")
-            cur = rs.current(aid) if aid and aid not in committed else None
-            if cur and cur[1]["state"] in ("open", "merged") and cur[1]["lane_id"] != LANE_ID:
+            try:
+                cur = rs.current(aid) if aid and aid not in committed else None
+            except (ValueError, rs.ReservationError) as exc:
+                # Per-row fault isolation (codex U-HE-19 r2 P2): one corrupt reservation
+                # head must not abort the whole drain before unrelated entries process.
+                # Fail SAFE: keep the row, say so.
+                print(f"  {aid}: reservation unreadable during reconciliation ({exc}); row kept")
+                keep.append(r)
+                continue
+            if cur and cur[1]["state"] == "open" and cur[1]["lane_id"] != LANE_ID:
+                # Superseded via §4 while this lane was dead: the peer HOLDS the open
+                # reservation and owns the append; the queue entry (held under the
+                # C-HE-04 invariant) still carries the declarations.
                 dropped.append(aid)
                 continue
+            if cur and cur[1]["state"] == "merged" and cur[1]["lane_id"] != LANE_ID:
+                # C-HE-04 §5 names "merged by another lane's ROW" -- merged state alone
+                # does not prove that row exists (codex U-HE-19 r2 P1: the holder can die
+                # between the merged flip and append). Until the replacement row reaches
+                # committed history, this row may be the only capture: keep it, loudly.
+                print(
+                    f"  {aid}: reservation merged by {cur[1]['lane_id']} but no committed "
+                    "row yet; local row kept pending reconciliation"
+                )
             keep.append(r)
         if dropped:
             tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
@@ -1642,6 +1674,17 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if rs.current(row.arc_id) is None:
         append(row, require_holder=False)
         print("note: historical backfill (no reservation exists), holder check bypassed")
+        if rs.current(row.arc_id) is not None:
+            # Check-then-act window (codex U-HE-19 r2 P2): a lane reserved this arc while
+            # the backfill was in flight. The ledger stays one-row-per-arc (that lane's
+            # own append will hit the duplicate guard, loudly) -- but the collision is an
+            # operator-attention condition, so say so here too, at the earliest stage.
+            print(
+                f"WARNING: {row.arc_id} was reserved while the backfill ran; the "
+                "reserving lane's append will be refused by the duplicate guard -- "
+                "reconcile by hand",
+                file=sys.stderr,
+            )
     else:
         append(row)
     print(f"appended {row.arc_id} -> {LEDGER}")
