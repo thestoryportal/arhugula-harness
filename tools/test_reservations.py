@@ -211,6 +211,34 @@ def test_record_phase_accretes(qdir):
     }
 
 
+def test_cli_update_accepts_digit_leading_sha_and_parses_ints(qdir, capsys):
+    """codex round-1 P1: a raw hex SHA beginning with a digit is a STRING, not JSON."""
+    rs.reserve("pr-12", lane_id="A", branch="b", arc_type="inventing")
+    assert rs.main(["update", "--arc-id", "pr-12", "--set", "head_sha=4be86eec1abc", "pr=8"]) == 0
+    head = rs.current("pr-12")[1]
+    assert head["head_sha"] == "4be86eec1abc" and head["pr"] == 8
+
+
+# mutation-probe: drop the FileNotFoundError guard around the gc tmp-sweep stat/unlink
+def test_gc_survives_tmp_vanishing_mid_sweep(qdir, monkeypatch):
+    """codex round-1 P2: a tmp entry unlinked between glob and stat/unlink is benign — the
+    sweep continues instead of aborting on FileNotFoundError."""
+    rs.reserve("pr-13", lane_id="A", branch="b", arc_type="inventing")
+    d = qdir / "reservations" / "pr-13"
+    tmp = d / ".1.99999.tmp"
+    tmp.write_text("{}")
+    old = datetime.now(UTC) - timedelta(hours=2)
+    os.utime(tmp, (old.timestamp(), old.timestamp()))
+
+    def vanish_then_dead(pid):
+        tmp.unlink()  # a concurrent sweeper wins the unlink race
+        return False
+
+    monkeypatch.setattr(rs, "_process_is_alive", vanish_then_dead)
+    removed = rs.gc()  # must not raise
+    assert not tmp.exists() and tmp not in removed
+
+
 # mutation-probe: cut off by each file's mtime instead of the terminal head's transitioned_at
 def test_gc_prunes_below_head_only_after_terminal_plus_30d_and_sweeps_tmp(qdir, monkeypatch):
     rs.reserve("pr-11", lane_id="A", branch="b", arc_type="inventing")

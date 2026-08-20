@@ -409,22 +409,36 @@ def gc(*, now: datetime | None = None) -> list[Path]:
             if now - terminal_at > timedelta(days=GC_KEEP_DAYS):
                 for p in d.glob("*.json"):
                     if p.stem.isdigit() and int(p.stem) < head_gen:
-                        p.unlink()
+                        try:
+                            p.unlink()
+                        except FileNotFoundError:
+                            continue  # a concurrent gc already pruned it: the goal state holds
                         removed.append(p)
         for tmp in d.glob(".*.tmp"):
             parts = tmp.name.split(".")
             pid = int(parts[-2]) if len(parts) >= 3 and parts[-2].isdigit() else None
-            old = datetime.fromtimestamp(tmp.stat().st_mtime, UTC) < now - timedelta(hours=1)
-            if old and (pid is None or not _process_is_alive(pid)):
-                tmp.unlink()
-                removed.append(tmp)
+            # glob -> stat -> unlink races normal publication (publish_exclusive removes its
+            # stager) and concurrent gc processes; a vanished entry is the goal state, never a
+            # sweep-aborting error (codex round-1 P2; C-HE-04 §4 vanished-entry doctrine).
+            try:
+                old = datetime.fromtimestamp(tmp.stat().st_mtime, UTC) < now - timedelta(hours=1)
+                if old and (pid is None or not _process_is_alive(pid)):
+                    tmp.unlink()
+                    removed.append(tmp)
+            except FileNotFoundError:
+                continue
     return removed
 
 
 def emit_loop_row(kind: str, lane_id: str, cause: str, detail: str) -> None:
     """Append a structured row to the SHARED loop_status.md through loop_lib.sh -- one writer
     of the ledger format (C-HE-09 §3, U-HE-29 `loop_log_structured`). RAISES
-    LoopStatusWriteError on write failure."""
+    LoopStatusWriteError on write failure.
+
+    Landing order (plan §3): `loop_log_structured` ships at U-HE-29 (S4d). Until it lands,
+    every call fails CLOSED here (`bash` exits 127 -> LoopStatusWriteError) -- loud by design,
+    never a silently dropped operator signal. No U-HE-17 caller invokes this yet; the first
+    callers arrive with U-HE-18/U-HE-29."""
     script = (
         "source tools/hooks/lib.sh; source tools/hooks/loop_lib.sh; "
         'loop_log_structured "$1" "$2" "$3" "$4"'
@@ -489,11 +503,19 @@ def main(argv: list[str] | None = None) -> int:
     ml.add_argument("--worktree", default=".")
     args = p.parse_args(argv)
 
+    def coerce(v: str):
+        # JSON where it parses, raw string otherwise: a hex SHA beginning with a digit
+        # (`head_sha=4be86e...`) must land as a string, never a JSONDecodeError
+        # (codex round-1 P1).
+        if v[:1] in '0123456789{["n-':
+            try:
+                return json.loads(v)
+            except ValueError:
+                return v
+        return v
+
     def kv(items: list[str]) -> dict:
-        return {
-            k: (json.loads(v) if v[:1] in '0123456789{["n' else v)
-            for k, v in (i.split("=", 1) for i in items)
-        }
+        return {k: coerce(v) for k, v in (i.split("=", 1) for i in items)}
 
     try:
         if args.cmd == "reserve":
