@@ -923,6 +923,7 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
         {**entry, "_claim": {"pid": os.getpid(), "host": socket.gethostname(), "lane_id": LANE_ID}},
         sort_keys=True,
     )
+    dead_claim_entry: dict | None = None
     for _attempt in (1, 2):
         try:
             # Atomic publish, not create-then-write: a claim interrupted
@@ -953,10 +954,15 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
                     return None
                 # The dead claimant may have been the reservation holder (it claimed,
                 # flipped open, and died mid-drain after the startup recovery sweep):
-                # transfer from the aside bytes -- the LAST lane-stamped evidence --
-                # before they vanish (codex U-HE-19 r12 P2; same C-HE-04 §4 step as
-                # _recover_dead_claims' restore sites).
-                _transfer_reservation_to_recoverer(aside)
+                # STASH the aside bytes -- the LAST lane-stamped evidence -- before
+                # they vanish (codex U-HE-19 r12 P2); the transfer itself waits until
+                # the replacement claim is atomically WON (codex r15 P2: transferring
+                # first and then losing the retry would re-home the reservation under
+                # a lane with no claim).
+                try:
+                    dead_claim_entry = json.loads(aside.read_text())
+                except (OSError, ValueError):
+                    dead_claim_entry = None
                 aside.unlink(missing_ok=True)
                 continue  # the owner is provably gone; retry once against the freed name
             return None
@@ -970,6 +976,10 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
             if _is_systemic(exc):
                 raise
             raise AbortError(f"cannot claim {path.name}: {exc}") from exc
+        if dead_claim_entry is not None:
+            # the replacement claim is WON: the C-HE-04 §4 transfer is now safe
+            _transfer_from_dead_claim(dead_claim_entry)
+            dead_claim_entry = None
         # Verify the entry on disk is still the bytes this drain LISTED before
         # consuming it: a producer can have published corrected declarations
         # (remove + re-queue) after our read_queue() -- unlinking blindly would
@@ -1070,12 +1080,20 @@ def _transfer_reservation_to_recoverer(restored: Path) -> None:
     stalls as a stuck-open reservation until C-HE-03 §5's ground-truth pass escalates
     it (NOTIFY + DEFERRED-HIL via reconcile_all at session start; HITL, never TTL).
     Stall-not-duplicate is the same posture C-HE-02 §6 accepts for pid reuse."""
-    import reservations as rs
-
     try:
         entry = json.loads(restored.read_text())
     except (OSError, ValueError):
         return  # consumed or unreadable meanwhile -- the drain loop re-judges it
+    _transfer_from_dead_claim(entry)
+
+
+def _transfer_from_dead_claim(entry: dict) -> None:
+    """The parsed-bytes half of `_transfer_reservation_to_recoverer` -- for callers
+    that must stash the dead claim's evidence and transfer only after a later atomic
+    step succeeds (codex r15 P2: _claim_arc's takeover transfers only once it has WON
+    the replacement claim)."""
+    import reservations as rs
+
     arc_id = entry.get("arc_id") or (f"pr-{entry['pr']}" if "pr" in entry else None)
     if not arc_id:
         return

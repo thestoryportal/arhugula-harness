@@ -2470,7 +2470,7 @@ def test_backfill_discriminator_cannot_be_a_real_branch(tmp_path, monkeypatch, q
     assert not (tmp_path / "l.jsonl").exists()
 
 
-# mutation-probe: drop _transfer_reservation_to_recoverer() from _claim_arc's takeover
+# mutation-probe: drop the transfer-after-win call in _claim_arc
 def test_claim_arc_takeover_transfers_the_dead_holders_reservation(tmp_path, monkeypatch, qdir_res):
     """codex U-HE-19 r12 P2: the mid-drain takeover in _claim_arc is a THIRD dead-owner
     consumption site -- it too must run the C-HE-04 §4 transfer from the lane-stamped
