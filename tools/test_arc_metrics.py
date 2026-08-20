@@ -1923,8 +1923,9 @@ def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkey
         am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
     )
     am.drain(argparse.Namespace())
-    assert order == [("append", "merged")], (
-        "flip AND serialized terminalization precede append (codex r8 P2)"
+    assert order == [("append", "open")], (
+        "flip BEFORE append; terminalization follows append so the open-head "
+        "recovery paths stay alive (codex r9 P1)"
     )
     row = am.read_ledger()[0]
     assert row["arc_type_open"] == "applying" and row["lane_id"] == "A"
@@ -2187,9 +2188,12 @@ def test_local_row_reconciliation_drops_divergent_committed_duplicate(
         },
     )
     am._reconcile_local_rows()
-    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-80"], (
-        "committed content kept, divergent duplicate dropped"
+    rows = am.read_ledger()
+    assert [r["arc_id"] for r in rows] == ["pr-80", "pr-81"], (
+        "committed content kept; the divergent row CONVERGES to canonical, never a bare"
+        " deletion (codex r9 P2: it may be pre-rebase baseline content)"
     )
+    assert rows[1] == replacement, "the committed canonical content replaced the stale bytes"
 
 
 def test_cmd_extract_backfill_loses_the_reservation_race_loudly(tmp_path, monkeypatch, qdir_res):
@@ -2289,3 +2293,54 @@ def test_interrupted_terminalization_is_completed_on_the_held_retry(tmp_path, mo
     assert head["state"] == "merged" and head["pr"] == 1, (
         "the deferred terminalization completed on the retry"
     )
+
+
+def test_cmd_extract_refuses_a_normal_same_lane_reservation(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r9 P2: manual extract must not consume a NORMAL reserved arc --
+    that append would skip the drain's reservation fold and deadlock the queued
+    drain's correct row behind the duplicate guard."""
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id="pr-96", pr=96, merged_at="t", merge_sha="s", arc_type="applying"
+        ),
+    )
+    rs.reserve("pr-96", lane_id="A", branch="feat/real-arc", arc_type="applying")
+    with pytest.raises(am.AbortError, match="queue"):
+        am.cmd_extract(argparse.Namespace(dry_run=False))
+    assert not (tmp_path / "l.jsonl").exists(), "nothing appended"
+    rs.open_with_sensor("pr-96", "A")
+    with pytest.raises(am.AbortError, match="queue"):
+        am.cmd_extract(argparse.Namespace(dry_run=False))
+
+
+def test_late_accretion_is_refolded_into_the_local_row(tmp_path, monkeypatch):
+    """codex U-HE-19 r8/r9: an accretion CAS landing between the fold read and the
+    generation-bound terminalization must reach the one arc row -- via the local-row
+    re-fold, not a silent omission (and append still ran under an OPEN head)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    monkeypatch.setattr(
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+    )
+    real_append = am.append
+
+    def append_then_late_accretion(row):
+        real_append(row)
+        # a concurrent record_phase CAS lands AFTER the fold read, BEFORE terminalize
+        rs.record_phase("pr-1", "execute", "end", ts="2026-08-20T01:00:00Z")
+
+    monkeypatch.setattr(am, "append", append_then_late_accretion)
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1
+    row = am.read_ledger()[0]
+    assert row["phases"]["execute"]["end"] == "2026-08-20T01:00:00Z", (
+        "the late accretion reached the row via the re-fold"
+    )
+    assert rs.current("pr-1")[1]["state"] == "merged"
