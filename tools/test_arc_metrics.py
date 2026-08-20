@@ -1763,6 +1763,43 @@ def test_takeover_token_compare(tmp_path, monkeypatch):
     assert am._claim_owner_is_dead(q / "pr-9.taken") is False
 
 
+# mutation-probe: comment out the stale-judgment re-judge guard in _claim_arc's takeover
+def test_stale_dead_judgment_cannot_delete_a_fresh_live_claim(tmp_path, monkeypatch):
+    """Two contenders both judged the dead owner; the slower one's takeover runs
+    AFTER the winner published a live claim. The atomic-rename + re-judge must
+    return the live claim untouched and yield (codex r8 P1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    entry = {"pr": 5, "arc_id": "pr-5"}
+    (q / "pr-5.json").write_text(json.dumps(entry))
+    (q / "pr-5.taken").write_text(
+        json.dumps({**entry, "_claim": {"pid": 999999, "host": socket.gethostname()}})
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid == os.getpid())
+    first = am._claim_arc(q / "pr-5.json", entry)
+    assert first is not None, "the winner's takeover succeeds"
+    # The entry is re-published (as a concurrent queue_capture legitimately can),
+    # and contender B arrives carrying a STALE dead-judgment of the claim name.
+    (q / "pr-5.json").write_text(json.dumps(entry))
+    real_dead = am._claim_owner_is_dead
+    calls = {"n": 0}
+
+    def stale_once(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return True  # B's stale judgment of the now-live claim
+        return real_dead(path)
+
+    monkeypatch.setattr(am, "_claim_owner_is_dead", stale_once)
+    second = am._claim_arc(q / "pr-5.json", entry)
+    assert second is None, "the stale judge yields"
+    taken = q / "pr-5.taken"
+    assert taken.exists(), "the winner's live claim survived the stale takeover"
+    assert json.loads(taken.read_text())["_claim"]["pid"] == os.getpid()
+    assert not list(q.glob("*.taken.recover.*")), "no aside left behind"
+
+
 def test_kill_after_seam_exits_137():
     """ARC_METRICS_TEST_KILL_AFTER=<step> is a real process death (C-HE-04 verification (vi))."""
     code = (

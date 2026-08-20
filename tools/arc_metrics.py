@@ -831,8 +831,30 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
             publish_exclusive(taken, payload)
         except FileExistsError:
             if _attempt == 1 and _claim_owner_is_dead(taken):
-                taken.unlink(missing_ok=True)
-                continue  # the owner is gone; retry once against the freed name
+                # Take over by ATOMIC RENAME, never unlink-then-publish: two
+                # contenders can both judge the same dead owner, and with a
+                # bare unlink the slower one deletes the faster one's freshly
+                # published LIVE claim (codex r8 P1). Exactly one rename wins;
+                # the loser's rename raises FNF and its retry-publish then sees
+                # the winner's live claim.
+                aside = taken.with_name(
+                    f"{taken.name}.recover.{socket.gethostname()}.{os.getpid()}"
+                )
+                try:
+                    os.rename(taken, aside)
+                except FileNotFoundError:
+                    continue  # a contender took over first; the retry sees its claim
+                if not _claim_owner_is_dead(aside):
+                    # Our judgment was STALE -- the aside holds a live claim
+                    # restamped meanwhile. Return it (exclusively) and yield.
+                    try:
+                        os.link(aside, taken)
+                    except FileExistsError:
+                        pass
+                    aside.unlink(missing_ok=True)
+                    return None
+                aside.unlink(missing_ok=True)
+                continue  # the owner is provably gone; retry once against the freed name
             return None
         except OSError as exc:
             # A read-only queue, a permission problem, an I/O error -- none of
