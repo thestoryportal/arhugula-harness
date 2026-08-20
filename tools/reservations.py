@@ -97,6 +97,10 @@ class ChainError(ReservationError):
     """superseded_by chain cycle or depth > CHAIN_DEPTH_CAP."""
 
 
+class RoundOutcomeConflict(ReservationError):  # noqa: N818 — Conflict IS the condition named
+    """The requested round_n is already recorded with different content (append-only map)."""
+
+
 class LoopStatusWriteError(ReservationError):
     """The shared loop_status.md could not be written -- an operator recovery signal would
     be lost."""
@@ -322,6 +326,10 @@ def update_payload(arc_id: str, updates: dict) -> dict:
     The flow-level wiring lands at U-HE-19/U-HE-21."""
 
     def build(head: dict) -> dict:
+        # backfills are open-window operations (C-HE-03 §3: ship-pr writes them before the
+        # merged flip); a CAS replay onto a terminal head could stamp stale SHAs over the
+        # terminal audit used by attestation checks (codex round-5 P2).
+        _refuse_terminal_accretion(arc_id, "update_payload", head)
         _check_updates("update_payload", updates, PAYLOAD_MUTABLE)
         head.update(updates)
         return head
@@ -400,12 +408,36 @@ def record_round_outcome(
         outcomes = head.setdefault("round_outcomes", {})
         existing = outcomes.get(str(int(round_n)))
         if existing is not None and existing != row:
-            raise ReservationError(
+            raise RoundOutcomeConflict(
                 f"{arc_id}: round {round_n} already recorded "
                 f"({existing['channel']}/{existing['terminal']}); the audit map is "
                 "append-only — allocate a new round_n (C-HE-25)"
             )
         outcomes[str(int(round_n))] = dict(row)
+        return head
+
+    return _cas_next(arc_id, build)
+
+
+def record_round_outcome_next(
+    arc_id: str, *, channel: str, terminal: str, finding_count: int
+) -> dict:
+    """Record at the smallest unused integer round key — arc-level allocation preserving the
+    C-HE-25 map shape. Used when the caller's producer-scoped round number is already taken
+    by a DIFFERENT channel: gate-log rounds are per (arc, producer) (`round_n_for`), so a
+    D-C failover's two legs can both carry the same number arc-level (codex round-5 P2).
+    Allocation happens inside the CAS build, so a lost CAS re-reads and re-allocates."""
+    if terminal not in ("APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE"):
+        raise ReservationError(
+            f"terminal must be APPROVE|BLOCK|REVIEWER_UNAVAILABLE, got {terminal!r}"
+        )
+    row = {"channel": channel, "terminal": terminal, "finding_count": int(finding_count)}
+
+    def build(head: dict) -> dict:
+        _refuse_terminal_accretion(arc_id, "record_round_outcome_next", head)
+        outcomes = head.setdefault("round_outcomes", {})
+        nxt = max((int(k) for k in outcomes if k.isdigit()), default=0) + 1
+        outcomes[str(nxt)] = dict(row)
         return head
 
     return _cas_next(arc_id, build)

@@ -678,6 +678,31 @@ def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
     assert len(calls) == 1
 
 
+def test_wrapper_failover_collision_persists_both_channels(tmp_path, monkeypatch, capsys):
+    """codex round-5 P2 (real reservations module): the codex leg records round 1
+    REVIEWER_UNAVAILABLE; the gemini failover leg also carries round 1 (per-producer
+    gate-log rounds) -- the wrapper lands it at the next free arc-level key instead of
+    dropping it. Both channels persist; nothing is erased."""
+    import reservations as real_rs
+
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(real_rs, "QUEUE_DIR", q)
+    monkeypatch.setitem(sys.modules, "reservations", real_rs)
+    real_rs.reserve("pr-fo", lane_id="A", branch="b", arc_type="inventing")
+    rw.record_round_outcome_if_reserved(
+        "pr-fo", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
+    )
+    rw.record_round_outcome_if_reserved(
+        "pr-fo", 1, channel="gemini", terminal="BLOCK", finding_count=3
+    )
+    assert capsys.readouterr().err == ""
+    outcomes = real_rs.current("pr-fo")[1]["round_outcomes"]
+    assert outcomes["1"]["channel"] == "codex"
+    assert outcomes["1"]["terminal"] == "REVIEWER_UNAVAILABLE"
+    assert outcomes["2"] == {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3}
+
+
 def test_wrapper_round_outcome_noop_without_reservation_substrate(monkeypatch, capsys):
     """Pre-S4b: tools/reservations.py is absent → silent no-op, no stderr noise."""
     monkeypatch.setitem(sys.modules, "reservations", None)  # forces ImportError

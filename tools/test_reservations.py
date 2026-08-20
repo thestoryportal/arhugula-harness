@@ -341,6 +341,30 @@ def test_accretion_refused_on_terminal_reservation(qdir):
         rs.record_phase("pr-19", "execute", "end")
     with pytest.raises(rs.IllegalTransition, match="open window"):
         rs.record_round_outcome("pr-19", 1, channel="codex", terminal="APPROVE", finding_count=0)
+    # codex round-5 P2: payload backfills are open-window too — a CAS replay onto a terminal
+    # head must never stamp stale SHAs over the terminal audit.
+    with pytest.raises(rs.IllegalTransition, match="open window"):
+        rs.update_payload("pr-19", {"head_sha": "stale" + "0" * 35})
+
+
+# mutation-probe: drop the arc-level next-key allocation in record_round_outcome_next.build
+def test_round_outcome_next_lands_failover_leg_at_free_key(qdir):
+    """codex round-5 P2: gate-log rounds are per (arc, producer); a failover's two legs can
+    both carry round 1 arc-level. `_next` lands the second leg at the next free key — both
+    channels persist, nothing erased."""
+    rs.reserve("pr-20", lane_id="A", branch="b", arc_type="inventing")
+    rs.record_round_outcome(
+        "pr-20", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
+    )
+    p = rs.record_round_outcome_next("pr-20", channel="gemini", terminal="BLOCK", finding_count=2)
+    assert p["round_outcomes"]["1"]["channel"] == "codex"
+    assert p["round_outcomes"]["2"] == {
+        "channel": "gemini",
+        "terminal": "BLOCK",
+        "finding_count": 2,
+    }
+    with pytest.raises(rs.ReservationError, match="terminal must be"):
+        rs.record_round_outcome_next("pr-20", channel="x", terminal="NOPE", finding_count=0)
 
 
 # mutation-probe: cut off by each file's mtime instead of the terminal head's transitioned_at
