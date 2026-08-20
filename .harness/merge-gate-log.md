@@ -481,3 +481,13 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-20T12:57:05Z | #1407 | be4b0ad06f34 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-08-20T12:57:51Z | #1407 | be4b0ad06f34 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
 | PR #1407 | 2026-08-20 | feat/he-lanes-u-he-18 | r1: concurrency BLOCK (P1 superseder-blind idempotency; P2 root stager gc-invisible; P3 closed_no_pointer dedup) / spec APPROVE / witness BLOCK (P2 marks discriminator; P2 hook reader untested; P3 order + catch arms) → fixes + registered residuals → r2: 3× APPROVE at be4b0ad0 | MERGED after r2 all-approve | blast-radius: 5 production consumers (in-module transition/sibling_open_count chain + codex-session-start.sh + settings.json SessionStart), floor-not-ceiling |
+| 2026-08-20T18:25:26Z | #1409 | 7f93f9a8215f | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-08-20T18:27:24Z | #1409 | 7f93f9a8215f | merge-gate-concurrency | BLOCK | 1 finding(s) | r1 |
+| 2026-08-20T18:27:37Z | #1409 | 7f93f9a8215f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-20T19:06:55Z | #1409 | 9538ecfb0223 | merge-gate-concurrency | BLOCK | 1 finding(s) | r2 |
+| 2026-08-20T19:07:07Z | #1409 | 9538ecfb0223 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-20T19:07:27Z | #1409 | 9538ecfb0223 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r2 |
+| 2026-08-20T19:15:26Z | #1409 | a078af05baf2 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| 2026-08-20T19:16:05Z | #1409 | a078af05baf2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-08-20T19:18:27Z | #1409 | a078af05baf2 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+- PR #1409 | 2026-08-20 | feat/he-lanes-u-he-19 | r1: concurrency BLOCK (backfill-pending hijack) / spec APPROVE / witness BLOCK (4th transfer site unwitnessed) → fixed; r2: concurrency BLOCK (hold only pending-state) / spec BLOCK (rev item xii owed) / witness APPROVE → fixed; r3 @ a078af05: concurrency APPROVE / spec APPROVE / witness APPROVE → MERGE. blast-radius: 4 production consumers (justfile arc-metrics CLI; reservations.py imports; session-start.sh reconcile; internal drain chain) via graft callers; static-edge floor, not ceiling.
