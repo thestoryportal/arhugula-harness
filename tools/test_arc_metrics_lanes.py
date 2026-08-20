@@ -105,8 +105,13 @@ def _spawn(
 ) -> subprocess.Popen:
     pre = ""
     if barrier is not None:
+        # Two-phase rendezvous (codex U-HE-20 r4 P2): each lane REPORTS readiness
+        # (`<lane>.ready`) before polling `.go`; the parent releases `.go` only after
+        # BOTH ready files exist, so neither leg can complete before the other starts.
+        ready = barrier.with_name(f"{lane_id}.ready")
         pre = (
             "import os, time\n"
+            f"open({str(ready)!r}, 'w').close()\n"
             f"_d = time.monotonic() + {BARRIER_TIMEOUT_S}\n"
             f"while not os.path.exists({str(barrier)!r}):\n"
             "    time.sleep(0.01)\n"
@@ -120,6 +125,14 @@ def _spawn(
         stderr=subprocess.PIPE,
         text=True,
     )
+
+
+def _release(barrier: Path, *lane_ids: str) -> None:
+    """Release a two-phase barrier: wait until every named lane reported readiness,
+    then create the go file both lanes poll for."""
+    for lane in lane_ids:
+        _wait_for(barrier.with_name(f"{lane}.ready"))
+    barrier.touch()
 
 
 def _finish(p: subprocess.Popen, expect_rc: tuple[int, ...] = (0, 1)) -> tuple[str, str]:
@@ -245,7 +258,7 @@ def test_ac2_a_same_instant(lanes, interleaving):
     if interleaving == "i-both-claim":
         _reserve(q)
         pa, pb = _spawn(a, q, "lane-a", barrier), _spawn(b, q, "lane-b", barrier)
-        barrier.touch()
+        _release(barrier, "lane-a", "lane-b")
         _finish(pa), _finish(pb)
         _union_ok(a, b, q)
 
@@ -255,15 +268,22 @@ def test_ac2_a_same_instant(lanes, interleaving):
         d = json.loads((q / "pr-1.taken").read_text())
         # a dead claim is transferable only when it PROVABLY belonged to the holder:
         # pid+host say dead, lane_id says which lane (codex U-HE-19 r1 P1). The pid is
-        # a REAPED child's -- provably dead on every platform (codex U-HE-20 r2 P3;
-        # a fixed sentinel like 999999 can be a live pid where pid_max exceeds it).
+        # a REAPED child's, VERIFIED dead at stamp time (codex U-HE-20 r2 P3 / r4 P3:
+        # a fixed sentinel can be live where pid_max exceeds it; a reaped pid is
+        # re-verified via kill(0) -- the residual reuse window between this stamp and
+        # recovery is the same one production's liveness check carries by design).
         reaped = subprocess.Popen([sys.executable, "-c", "pass"])
         reaped.wait(timeout=30)
+        try:
+            os.kill(reaped.pid, 0)
+            pytest.fail(f"reaped pid {reaped.pid} still signalable -- cannot stamp a dead claim")
+        except ProcessLookupError:
+            pass
         d["_claim"] = {"pid": reaped.pid, "host": socket.gethostname(), "lane_id": "dead-lane"}
         (q / "pr-1.taken").write_text(json.dumps(d))
         # same-instant leg: both lanes judge the same dead .taken recoverable
         pa, pb = _spawn(a, q, "lane-a", barrier), _spawn(b, q, "lane-b", barrier)
-        barrier.touch()
+        _release(barrier, "lane-a", "lane-b")
         _finish(pa), _finish(pb)
         res = _show(q)
         winner = res["lane_id"]
@@ -324,18 +344,23 @@ def test_ac2_a_same_instant(lanes, interleaving):
             a,
             q,
             "lane-a",
-            ARC_METRICS_TEST_HOLD_AFTER="restore-abort",
+            ARC_METRICS_TEST_HOLD_AFTER="restore-link",
             ARC_METRICS_TEST_HOLD_DIR=hold,
             ARC_METRICS_TEST_ABORT_EXTRACT="1",
         )
-        _wait_for(hold / "restore-abort.reached")  # A flipped open, aborted, restored
+        # A is held MID-abort-restore (codex U-HE-20 r4 P2): the AbortError restore's
+        # exclusive re-link has run, the claim unlink has not; A's claim is live.
+        _wait_for(hold / "restore-link.reached")
         pb = _spawn(b, q, "lane-b")
         out_b, _ = _finish(pb)
-        assert "open reservation held by lane-a" in out_b, out_b
-        (hold / "restore-abort.go").touch()
-        _finish(pa)
+        assert "still outstanding" in out_b, out_b  # refused by A's LIVE claim
+        (hold / "restore-link.go").touch()
+        _finish(pa)  # A completes the restore, then the AbortError keeps the entry
         assert _rows(a) + _rows(b) == [], "nothing may append across the abort"
         assert (q / "pr-1.json").exists(), "the entry stays durable"
+        pb2 = _spawn(b, q, "lane-b")  # post-restore claim: the open-holder guard
+        out_b2, _ = _finish(pb2)
+        assert "open reservation held by lane-a" in out_b2, out_b2
         pa2 = _spawn(a, q, "lane-a")  # A (holder) re-drains and appends
         _finish(pa2)
         _union_ok(a, b, q)
