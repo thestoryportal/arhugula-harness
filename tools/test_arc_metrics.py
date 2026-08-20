@@ -2643,3 +2643,17 @@ def test_reconciliation_stops_when_committed_history_is_unreadable(tmp_path, mon
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-88"], (
         "nothing reconciled while history is unknown"
     )
+
+
+def test_reconciliation_stops_on_a_corrupt_committed_line(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r22 P2: an unparseable committed line means the snapshot cannot
+    support destructive judgments -- reconcile NOTHING."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    ledger.write_text(json.dumps({"arc_id": "pr-89", "record_kind": "arc"}) + "\n")
+    rs.reserve("pr-89", lane_id="B", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-89", "B")  # would be dropped if reconciliation ran
+    monkeypatch.setattr(am, "_committed_ledger_lines", lambda: {'{"arc_id": TRUNC'})
+    am._reconcile_local_rows()
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-89"], "row survived corruption"

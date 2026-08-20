@@ -1538,7 +1538,14 @@ def _reconcile_local_rows() -> None:
             try:
                 committed.add(json.loads(cl).get("arc_id"))
             except json.JSONDecodeError:
-                continue
+                # A malformed committed line could BE any arc's row: corruption reads
+                # as UNREADABLE, never as absence (codex r22 P2, same posture as the
+                # merged-append fence) -- no destructive judgment on a corrupt ledger.
+                print(
+                    "  local-row reconciliation skipped: committed history contains "
+                    "an unparseable line"
+                )
+                return
         keep, dropped = [], []
         replaced: set[str] = set()
         for r in rows:
