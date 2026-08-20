@@ -843,7 +843,15 @@ def reconcile(
         # unknown-state response is the same not-confirmed ground truth as a gh failure.
         state = view.get("state") if isinstance(view, dict) else None
         if state not in ("MERGED", "CLOSED", "OPEN"):
-            state = None
+            # Unrecognized shape/state is NOT confirmation the PR is still OPEN: return
+            # through the same fail-safe as a gh failure -- no transition AND no aged
+            # open-stuck rows whose detail would falsely assert "still OPEN" (codex r5 P2).
+            print(
+                f"reservations: unrecognized gh view for {arc_id}: {view!r}; "
+                f"still open, not reclaimable",
+                file=sys.stderr,
+            )
+            return "open"
     except Exception as exc:  # ANY gh failure fails safe (C-HE-03 §5)
         print(
             f"reservations: gh transient for {arc_id}: {exc}; still open, not reclaimable",
@@ -1075,8 +1083,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print(json.dumps(out, sort_keys=True))
         return 0
-    except ReservationError as exc:
-        print(f"ABORT: {exc}", file=sys.stderr)
+    except (ReservationError, OSError, ValueError, KeyError, TypeError) as exc:
+        # Same isolation classes as reconcile_all (codex r5 P3): a schema-malformed head
+        # reached through ANY subcommand is a fail-closed ABORT/exit-2, never a traceback.
+        print(f"ABORT: {exc!r}", file=sys.stderr)
         return 2
 
 

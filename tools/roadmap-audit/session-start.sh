@@ -57,8 +57,14 @@ fi
 _QROOT="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
 _RROOT="${_QROOT}/reservations"
 _RESV=""
+# Activation gate (codex r5 P2): the pass's C-HE-20 escalation rows need loop_lib.sh's
+# `loop_log_structured` (U-HE-29). Until that writer exists at HEAD, an unattended aged-
+# reservation pass could only fail closed into the log -- so the spawn stays dormant and
+# SELF-ACTIVATES the moment U-HE-29 lands. Synchronous callers (CLI, U-HE-22 merge lane)
+# are unaffected: their exit codes surface directly.
 if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ] && [ -f tools/reservations.py ] \
-  && command -v uv >/dev/null 2>&1; then
+  && command -v uv >/dev/null 2>&1 \
+  && grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh 2>/dev/null; then
   # Surface the LAST detached pass's outcome first (codex r2 P2): the store-local log is
   # the durable venue until U-HE-29 lands the loop-ledger emitter. Local grep -- no budget
   # risk. The log write itself is store-owned + O_NOFOLLOW inside reservations.py (codex

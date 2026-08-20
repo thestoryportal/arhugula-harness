@@ -893,9 +893,25 @@ def test_reconcile_corrupt_state_isolates_in_band(qdir, monkeypatch):
     bad.write_text(json.dumps(head))
     out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
     assert out["pr-99"].startswith("ERROR") and "bogus" in out["pr-99"]
-    # non-dict gh payload: fail safe to open, no crash, no transition
+    # non-dict gh payload: fail safe to open -- no crash, no transition, and NO stale rows
+    # whose detail would falsely assert the PR is still OPEN (r5 P2)
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, lane, c, d: rows.append((k, c)))
     rs.reserve("pr-100", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-100", "A")
     rs.update_payload("pr-100", {"pr": 100})
-    assert rs.reconcile("pr-100", gh_view=lambda pr: ["not", "a", "dict"]) == "open"
-    assert rs.current("pr-100")[1]["state"] == "open"
+    far = datetime.now(UTC) + timedelta(days=30)
+    assert rs.reconcile("pr-100", gh_view=lambda pr: ["not", "a", "dict"], now=far) == "open"
+    assert rs.current("pr-100")[1]["state"] == "open" and rows == []
+
+
+def test_cli_single_arc_reconcile_malformed_head_aborts(qdir, monkeypatch, capsys):
+    """r5 P3: a schema-malformed head through the single-arc CLI is ABORT/exit-2, never
+    an uncontrolled traceback."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-101", lane_id="A", branch="b", arc_type="inventing")
+    (qdir / "reservations" / "pr-101" / "2.json").write_text(
+        json.dumps({"state": "open", "generation": 2})
+    )
+    assert rs.main(["reconcile", "--arc-id", "pr-101"]) == 2
+    assert "ABORT" in capsys.readouterr().err
