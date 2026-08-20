@@ -231,6 +231,40 @@ def test_record_round_outcome_accretes(qdir):
         rs.record_round_outcome("pr-10b", 3, channel="codex", terminal="MAYBE", finding_count=0)
 
 
+# mutation-probe: drop the append-only conflict check in record_round_outcome.build
+def test_round_outcome_map_is_append_only(qdir):
+    """codex round-3 P2: a conflicting re-record of an existing round_n raises — a failover
+    leg must never erase the codex REVIEWER_UNAVAILABLE row (C-HE-25; C-HE-27 §4 N6
+    exclusion). Identical re-record is idempotent."""
+    rs.reserve("pr-15", lane_id="A", branch="b", arc_type="inventing")
+    rs.record_round_outcome(
+        "pr-15", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
+    )
+    with pytest.raises(rs.ReservationError, match="append-only"):
+        rs.record_round_outcome("pr-15", 1, channel="gemini", terminal="BLOCK", finding_count=2)
+    # idempotent identical re-record
+    rs.record_round_outcome(
+        "pr-15", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
+    )
+    p = rs.record_round_outcome("pr-15", 2, channel="gemini", terminal="BLOCK", finding_count=2)
+    assert p["round_outcomes"]["1"]["terminal"] == "REVIEWER_UNAVAILABLE"
+    assert p["round_outcomes"]["2"]["channel"] == "gemini"
+
+
+def test_gc_sweeps_tmp_in_headless_dir(qdir, monkeypatch):
+    """codex round-3 P3: a crash during gen-1 publication leaves a dir with ONLY a tmp
+    stager and no head — the sweep must still remove it."""
+    d = qdir / "reservations" / "pr-crashed"
+    d.mkdir(parents=True)
+    tmp = d / ".1.json.88888.tmp"
+    tmp.write_text("{}")
+    old = datetime.now(UTC) - timedelta(hours=2)
+    os.utime(tmp, (old.timestamp(), old.timestamp()))
+    monkeypatch.setattr(rs, "_process_is_alive", lambda pid: False)
+    removed = rs.gc()
+    assert tmp in removed and not tmp.exists()
+
+
 def test_record_phase_accretes(qdir):
     rs.reserve("pr-10", lane_id="A", branch="b", arc_type="inventing")
     rs.record_phase("pr-10", "execute", "start", ts="2026-08-18T00:00:00Z")

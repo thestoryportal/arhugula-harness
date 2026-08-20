@@ -356,18 +356,29 @@ def record_round_outcome(
 ) -> dict:
     """C-HE-25 per-round terminal outcome, accreted on the reservation during the open window
     (like phases) and folded into the arc row at drain. `terminal` MUST be one of the
-    C-HE-16 §3 triple."""
+    C-HE-16 §3 triple.
+
+    The map is APPEND-ONLY per round (codex round-3 P2): a conflicting re-record of an
+    existing round_n RAISES instead of silently overwriting — a D-C failover leg that erased
+    the codex REVIEWER_UNAVAILABLE row would corrupt the durable audit and the C-HE-27 §4
+    N6 denominator exclusion. Callers allocate a fresh round_n per recorded outcome; an
+    identical re-record is idempotent."""
     if terminal not in ("APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE"):
         raise ReservationError(
             f"terminal must be APPROVE|BLOCK|REVIEWER_UNAVAILABLE, got {terminal!r}"
         )
+    row = {"channel": channel, "terminal": terminal, "finding_count": int(finding_count)}
 
     def build(head: dict) -> dict:
-        head.setdefault("round_outcomes", {})[str(int(round_n))] = {
-            "channel": channel,
-            "terminal": terminal,
-            "finding_count": int(finding_count),
-        }
+        outcomes = head.setdefault("round_outcomes", {})
+        existing = outcomes.get(str(int(round_n)))
+        if existing is not None and existing != row:
+            raise ReservationError(
+                f"{arc_id}: round {round_n} already recorded "
+                f"({existing['channel']}/{existing['terminal']}); the audit map is "
+                "append-only — allocate a new round_n (C-HE-25)"
+            )
+        outcomes[str(int(round_n))] = dict(row)
         return head
 
     return _cas_next(arc_id, build)
@@ -429,6 +440,22 @@ def gc(*, now: datetime | None = None) -> list[Path]:
     for d in root.iterdir():
         if not d.is_dir() or d.name.startswith("."):
             continue
+        # Sweep tmps BEFORE the head check: a crash during first-generation publication
+        # leaves a directory with only `.1.json.<pid>.tmp` and no head at all — skipping it
+        # would orphan that stager forever (codex round-3 P3).
+        for tmp in d.glob(".*.tmp"):
+            parts = tmp.name.split(".")
+            pid = int(parts[-2]) if len(parts) >= 3 and parts[-2].isdigit() else None
+            # glob -> stat -> unlink races normal publication (publish_exclusive removes its
+            # stager) and concurrent gc processes; a vanished entry is the goal state, never a
+            # sweep-aborting error (codex round-1 P2; C-HE-04 §4 vanished-entry doctrine).
+            try:
+                old = datetime.fromtimestamp(tmp.stat().st_mtime, UTC) < now - timedelta(hours=1)
+                if old and (pid is None or not _process_is_alive(pid)):
+                    tmp.unlink()
+                    removed.append(tmp)
+            except FileNotFoundError:
+                continue
         cur = current(d.name)
         if cur is None:
             continue
@@ -448,19 +475,6 @@ def gc(*, now: datetime | None = None) -> list[Path]:
                         except FileNotFoundError:
                             continue  # a concurrent gc already pruned it: the goal state holds
                         removed.append(p)
-        for tmp in d.glob(".*.tmp"):
-            parts = tmp.name.split(".")
-            pid = int(parts[-2]) if len(parts) >= 3 and parts[-2].isdigit() else None
-            # glob -> stat -> unlink races normal publication (publish_exclusive removes its
-            # stager) and concurrent gc processes; a vanished entry is the goal state, never a
-            # sweep-aborting error (codex round-1 P2; C-HE-04 §4 vanished-entry doctrine).
-            try:
-                old = datetime.fromtimestamp(tmp.stat().st_mtime, UTC) < now - timedelta(hours=1)
-                if old and (pid is None or not _process_is_alive(pid)):
-                    tmp.unlink()
-                    removed.append(tmp)
-            except FileNotFoundError:
-                continue
     return removed
 
 
