@@ -1939,6 +1939,9 @@ def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkey
     assert order == [("append", "open")], "flip happened BEFORE append"
     row = am.read_ledger()[0]
     assert row["arc_type_open"] == "applying" and row["lane_id"] == "A"
+    assert row["arc_type"] == "applying" and row["arc_type_declared_at"] == "open", (
+        "canonical label follows the open-time provenance (codex r6 P2)"
+    )
     assert row["phases"]["execute"]["start"] == "2026-08-20T00:00:00Z"
     assert row["round_outcomes"] == {
         "1": {"channel": "codex", "terminal": "APPROVE", "finding_count": 0}
@@ -2254,3 +2257,41 @@ def test_recovery_transfers_holder_on_the_orphaned_aside_route(tmp_path, monkeyp
     am._recover_dead_claims()
     assert (q / "pr-53.json").exists(), "orphaned aside restored to the queue"
     assert rs.holder("pr-53") == "B", "the dead holder's reservation transferred"
+
+
+def test_merged_append_refused_once_a_row_is_in_committed_history(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r6 P1: the merged-holder admission covers only the NOT-YET-COMMITTED
+    first capture -- a same-lane append from a reset/another worktree ledger against a
+    committed arc is the C-HE-03 §6 re-append and is refused."""
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")  # fresh (reset) ledger
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve("pr-95", lane_id="A", branch="b", arc_type="applying")
+    rs.open_with_sensor("pr-95", "A")
+    rs.transition("pr-95", "merged", lane_id="A")
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-95"})
+    with pytest.raises(am.AbortError, match="re-append refused"):
+        am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
+    # the same shape with NO committed row is the legitimate first capture
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
+
+
+def test_interrupted_terminalization_is_completed_on_the_held_retry(tmp_path, monkeypatch):
+    """codex U-HE-19 r6 P2: a crash between append and the open->merged flip leaves the
+    row local and the head open; the retry's `arc_id in local` hold must FINISH the
+    terminalization instead of parking the head open forever."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
+    rs.open_with_sensor("pr-1", "A")  # the interrupted drain's flip survived
+    (tmp_path / "l.jsonl").write_text(
+        json.dumps({"arc_id": "pr-1", "record_kind": "arc"}) + "\n"
+    )  # ...and so did its appended local row
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1 and (q / "pr-1.json").exists(), "entry held pending commit"
+    head = rs.current("pr-1")[1]
+    assert head["state"] == "merged" and head["pr"] == 1, (
+        "the deferred terminalization completed on the retry"
+    )

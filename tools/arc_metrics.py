@@ -567,6 +567,15 @@ def append(row: ArcRow, *, require_holder: bool = True) -> None:
                 f"{row.arc_id}: this lane ({LANE_ID}) is not the reservation holder "
                 f"(state={state!r}, lane={owner!r}) -- append refused (C-HE-04 §2)"
             )
+        if state == "merged" and row.arc_id in committed_arc_ids():
+            # The merged-holder admission covers exactly the not-yet-committed first
+            # capture. Once a row for this arc is in COMMITTED history, a same-lane
+            # append from another/reset worktree ledger would be the C-HE-03 §6
+            # re-append the per-worktree duplicate guard cannot see (codex r6 P1).
+            raise AbortError(
+                f"{row.arc_id}: reservation is merged and a row is already in committed "
+                "history -- re-append refused (C-HE-03 §6)"
+            )
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     claim_ledger(LEDGER)
     try:
@@ -1056,10 +1065,12 @@ def _transfer_reservation_to_recoverer(restored: Path) -> None:
                 f"  {arc_id}: dead claim belonged to {claim_lane!r}, not the holder "
                 f"({dead_lane!r}); holder transfer refused"
             )
-    except rs.ReservationError as exc:
-        # A stale precondition (a peer transferred first, or the state moved on) is a
-        # lost race, not a fault: the entry is safely back; the holder gate at append
-        # keeps this lane honest either way. Loud, never silent.
+    except (KeyError, TypeError, ValueError, AttributeError, rs.ReservationError) as exc:
+        # A stale precondition (a peer transferred first, the state moved on) OR an
+        # unreadable/malformed reservation head (JSONDecodeError is a ValueError; a
+        # non-object head raises AttributeError -- codex r6 P2) is a per-arc condition:
+        # the entry is safely back; the holder gate at append keeps this lane honest
+        # either way. Loud, never silent, never a whole-drain abort.
         print(f"  {arc_id}: holder transfer skipped ({exc})")
 
 
@@ -1206,6 +1217,21 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         # Appended, but only into the working tree. Hold the capture until
         # the row actually reaches history -- this arc can still be reset or
         # its worktree disposed, and nothing else holds the declarations.
+        # If OUR open reservation survived an interrupted post-append
+        # terminalization, finish it here (codex r6 P2: without this retry the
+        # early return keeps the head open forever while the row sits local).
+        import reservations as rs
+
+        try:
+            cur = rs.current(arc_id)
+            if cur and cur[1]["state"] == "open" and cur[1]["lane_id"] == LANE_ID:
+                updates = (
+                    {"pr": entry["pr"]} if cur[1].get("pr") is None and "pr" in entry else None
+                )
+                rs.transition(arc_id, "merged", lane_id=LANE_ID, updates=updates)
+                print(f"  {arc_id}: completed deferred reservation terminalization")
+        except (KeyError, TypeError, ValueError, rs.ReservationError) as exc:
+            print(f"  {arc_id}: deferred terminalization not completed ({exc})")
         print(f"  {arc_id}: row appended locally, awaiting commit -- entry held")
         return "held"
 
@@ -1318,6 +1344,10 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             # when the entry carried one, stays visible beside it (C-HE-26 §2).
             row.arc_type_open = res.get("arc_type")
             row.arc_type_declared_at = "open"
+            # The canonical label follows the declared-at provenance (codex r6 P2): a
+            # row stamped declared_at="open" whose arc_type still held the closure-time
+            # value would contaminate every arc_type cohort read.
+            row.arc_type = res.get("arc_type")
         row.lane_id = LANE_ID
         row.head_sha = res.get("head_sha")
         row.base_sha = res.get("base_sha")
@@ -1805,10 +1835,12 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("queue", help="record capture inputs out-of-repo (arc closure)")
     q.add_argument("--pr", type=int, required=True)
     q.add_argument("--arc-id")
-    # Required HERE but optional on `extract`: only the closing session knows
-    # these, and once a row is drained the duplicate guard blocks a corrected
-    # capture. `extract` stays permissive for historical backfills, where the
-    # judgement genuinely is unavailable and is recorded as unmapped.
+    # Required HERE and (since U-HE-19, codex r4/r6) effectively on `extract` too: the
+    # backfill now mints its race-fence reservation, whose C-HE-26 §1 label is
+    # mandatory -- cmd_extract refuses an unclassified non-dry-run backfill with an
+    # instruction to pass --arc-type. Pre-existing unclassified HISTORICAL rows keep
+    # their null arc_type (C-HE-25 additive-null reads); only NEW manual captures must
+    # declare, at parity with this queue entrance.
     q.add_argument("--arc-type", choices=list(ARC_TYPES), required=True)
     q.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     q.add_argument("--decisions", type=int, required=True, help="independent decision count")
