@@ -267,6 +267,19 @@ def transition(
     _check_id("lane_id", lane_id)
     if to_state == "abandoned" and not superseded_by:
         raise ReservationError("superseded_by is MANDATORY on abandoned (C-HE-03 §2)")
+    if to_state != "abandoned" and superseded_by:
+        # superseded_by belongs to `abandoned` records only (C-HE-03 §2); a merged record
+        # carrying a supersession pointer is mutually inconsistent landing metadata
+        # (codex round-4 P2).
+        raise ReservationError(
+            f"superseded_by is only legal on abandoned, not {to_state} (C-HE-03 §2)"
+        )
+    if updates and "concurrent_lanes_at_open" in updates and to_state != "open":
+        # the sensor is captured at the pending->open flip and never rewritten by a later
+        # transition (C-HE-03 §7; codex round-4 P2).
+        raise ReservationError(
+            "concurrent_lanes_at_open is captured only at the pending->open flip (C-HE-03 §7)"
+        )
 
     def build(head: dict) -> dict:
         if (head["state"], to_state) not in LEGAL_TRANSITIONS:
@@ -284,7 +297,8 @@ def transition(
             )
         head["state"] = to_state
         head["transitioned_at"] = now_iso()
-        head["superseded_by"] = superseded_by or head.get("superseded_by")
+        if superseded_by:
+            head["superseded_by"] = superseded_by
         if to_state == "open":
             head["lane_id"] = lane_id  # the holder = the draining lane
         if updates:
@@ -340,11 +354,23 @@ def transfer_holder(arc_id: str, *, from_lane_id: str, to_lane_id: str) -> dict:
     return _cas_next(arc_id, build)
 
 
+def _refuse_terminal_accretion(arc_id: str, fn: str, head: dict) -> None:
+    """Accretion is confined to the active arc window (C-HE-03 §3, C-HE-27 §3: `during the
+    open window`): a late emitter publishing generations onto a merged/abandoned record
+    would race terminal audit data with post-merge activity (codex round-4 P2)."""
+    if head["state"] in TERMINAL:
+        raise IllegalTransition(
+            f"{arc_id}: {fn} on a {head['state']} reservation -- accretion is confined "
+            "to the open window (C-HE-03 §3)"
+        )
+
+
 def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> dict:
     if phase not in PHASES or edge not in ("start", "end"):
         raise ReservationError(f"bad phase/edge {phase!r}/{edge!r}")
 
     def build(head: dict) -> dict:
+        _refuse_terminal_accretion(arc_id, "record_phase", head)
         head.setdefault("phases", {}).setdefault(phase, {})[edge] = ts or now_iso()
         return head
 
@@ -370,6 +396,7 @@ def record_round_outcome(
     row = {"channel": channel, "terminal": terminal, "finding_count": int(finding_count)}
 
     def build(head: dict) -> dict:
+        _refuse_terminal_accretion(arc_id, "record_round_outcome", head)
         outcomes = head.setdefault("round_outcomes", {})
         existing = outcomes.get(str(int(round_n)))
         if existing is not None and existing != row:

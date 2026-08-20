@@ -304,6 +304,45 @@ def test_gc_survives_tmp_vanishing_mid_sweep(qdir, monkeypatch):
     assert not tmp.exists() and tmp not in removed
 
 
+# mutation-probe: drop the to_state!=abandoned superseded_by refusal in transition()
+def test_superseded_by_only_on_abandoned(qdir):
+    """codex round-4 P2: a merged record must never carry a supersession pointer
+    (C-HE-03 §2)."""
+    rs.reserve("pr-16", lane_id="A", branch="b", arc_type="inventing")
+    with pytest.raises(rs.ReservationError, match="only legal on abandoned"):
+        rs.transition("pr-16", "open", lane_id="A", superseded_by="pr-17")
+    rs.transition("pr-16", "open", lane_id="A")
+    with pytest.raises(rs.ReservationError, match="only legal on abandoned"):
+        rs.transition("pr-16", "merged", lane_id="A", superseded_by="pr-17")
+    p = rs.transition("pr-16", "merged", lane_id="A")
+    assert p["superseded_by"] is None
+
+
+# mutation-probe: drop the concurrent_lanes_at_open pending->open-only refusal in transition()
+def test_lanes_at_open_sensor_writable_only_at_open_flip(qdir):
+    """codex round-4 P2: the cohort sensor is captured at the pending->open flip and never
+    rewritten by a later transition (C-HE-03 §7)."""
+    rs.reserve("pr-18", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-18", "open", lane_id="A", updates={"concurrent_lanes_at_open": 2})
+    with pytest.raises(rs.ReservationError, match="pending->open flip"):
+        rs.transition("pr-18", "merged", lane_id="A", updates={"concurrent_lanes_at_open": 9})
+    assert rs.current("pr-18")[1]["concurrent_lanes_at_open"] == 2
+
+
+# mutation-probe: drop the _refuse_terminal_accretion state check
+def test_accretion_refused_on_terminal_reservation(qdir):
+    """codex round-4 P2: phases / round outcomes accrete only during the open window
+    (C-HE-03 §3, C-HE-27 §3) — never onto a merged/abandoned record."""
+    rs.reserve("pr-19", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-19", "open", lane_id="A")
+    rs.record_phase("pr-19", "execute", "start")
+    rs.transition("pr-19", "merged", lane_id="A")
+    with pytest.raises(rs.IllegalTransition, match="open window"):
+        rs.record_phase("pr-19", "execute", "end")
+    with pytest.raises(rs.IllegalTransition, match="open window"):
+        rs.record_round_outcome("pr-19", 1, channel="codex", terminal="APPROVE", finding_count=0)
+
+
 # mutation-probe: cut off by each file's mtime instead of the terminal head's transitioned_at
 def test_gc_prunes_below_head_only_after_terminal_plus_30d_and_sweeps_tmp(qdir, monkeypatch):
     rs.reserve("pr-11", lane_id="A", branch="b", arc_type="inventing")
