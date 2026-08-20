@@ -657,23 +657,21 @@ def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
     fr.validate(rows[0])
 
 
-def test_round_mint_is_arc_global(tmp_path, monkeypatch):
-    """codex rounds 16/18: rounds are ARC-level events (C-HE-25) minted inside the log-lock
-    critical section over EVERY producer's rows — a prior gemini round 3 forces the next
-    codex mint to round 4, so a forced chain round can never be duplicated by an independent
-    invocation minting after the primary's row lands."""
+def test_gate_lens_rounds_stay_producer_scoped(tmp_path, monkeypatch):
+    """codex r19: one merge-gate pass emits three lenses sequentially with round_n=None --
+    each lens is its own producer, so all three must land at the SAME round number."""
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
-    seeded = rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout")
-    rw.emit_outcome(seeded, producer=cr.GEMINI_PRODUCER, arc_id="a1", lane_id="l", round_n=3)
-    primary = rw.ReviewOutcome("REVIEWER_UNAVAILABLE", "codex", "transient", "r", [], EXPECTED)
-    written = rw.emit_outcome(primary, producer=cr.PRODUCER, arc_id="a1", lane_id="l", round_n=None)
-    assert written[0]["round_n"] == 4
-    # an independent gemini mint after the chain's primary row lands can never reuse 4
-    indep = rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout")
-    later = rw.emit_outcome(
-        indep, producer=cr.GEMINI_PRODUCER, arc_id="a1", lane_id="l", round_n=None
-    )
-    assert later[0]["round_n"] == 5
+    monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    out = rw.ReviewOutcome("APPROVE", "merge-gate", None, "", [], EXPECTED, "stdout")
+    rounds = [
+        rw.emit_outcome(out, producer=lens, arc_id="a1", lane_id="l", round_n=None)[0]["round_n"]
+        for lens in (
+            "merge-gate-concurrency",
+            "merge-gate-spec-conformance",
+            "merge-gate-witness-adequacy",
+        )
+    ]
+    assert rounds == [1, 1, 1]
 
 
 def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
@@ -1388,18 +1386,18 @@ def test_bound_block_already_on_stdout_when_our_cap_kills_still_blocks(tmp_path,
     assert out.terminal == "BLOCK" and len(out.findings) == 1
 
 
-def test_round_n_is_env_or_next_for_this_arc(monkeypatch):
-    """Rounds are ARC-GLOBAL (codex rounds 16/18, U-HE-17): the mint is max over EVERY
-    producer's rows for the arc, so a forced failover-chain round can never be duplicated
-    by an independent producer's own mint."""
+def test_round_n_is_env_or_next_for_this_arc_and_producer(monkeypatch):
+    """Per-(arc, producer) scoping is load-bearing for the merge-gate lenses (codex r19:
+    an arc-global mint renumbered one gate pass's three lens rows N/N+1/N+2 and was
+    reverted); the failover chain shares its round via HARNESS_ROUND_N instead."""
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
     rows = [
         {"arc_id": "a", "producer": "p", "round_n": 2},
         {"arc_id": "a", "producer": "q", "round_n": 9},
         {"arc_id": "b", "producer": "p", "round_n": 7},
     ]
-    assert rw.round_n_for("a", "p", rows) == 10  # arc-global: q's round 9 counts
-    assert rw.round_n_for("a", "zzz", rows) == 10
+    assert rw.round_n_for("a", "p", rows) == 3
+    assert rw.round_n_for("a", "zzz", rows) == 1
     assert rw.round_n_for("new", "p", []) == 1
     monkeypatch.setenv("HARNESS_ROUND_N", "5")
     assert rw.round_n_for("a", "p", rows) == 5

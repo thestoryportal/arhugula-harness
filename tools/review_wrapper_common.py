@@ -357,23 +357,25 @@ def exit_code(outcome: ReviewOutcome) -> int:
 
 
 def round_n_for(arc_id: str, producer: str, rows: list[dict] | None = None) -> int:
-    """`HARNESS_ROUND_N` when the loop sets it; otherwise the next round for this ARC --
-    max over EVERY producer's rows (codex round 6 introduced per-(arc, producer) scoping so
-    distinct review heads stopped collapsing into one round; U-HE-17 merge-gate widened it
-    to arc-global: a round is an ARC-level event per C-HE-25, and per-producer sequences
-    let a D-C failover's two legs collide with unrelated same-number rounds -- with an
-    arc-global mint, the chain child forced to the primary's N can never be duplicated by
-    an independent invocation, whose own mint always sees the primary's row and lands at
-    N+1 or later). `producer` is retained for signature compatibility; it no longer scopes
-    the mint."""
+    """`HARNESS_ROUND_N` when the loop sets it; otherwise the next round for this
+    (arc, producer) derived from the gate log (codex round 6: without this every invocation
+    was round 0 and distinct review heads collapsed into one round). Per-producer scoping is
+    LOAD-BEARING for the merge-gate lenses: each lens is its own producer and one gate pass
+    must yield three rows sharing a round number (U-HE-17 codex r19 -- an arc-global mint
+    was tried and reverted: it renumbered the three sequential lens emissions N/N+1/N+2).
+    The D-C failover chain instead shares its round by FORCING the child to the primary's
+    number via HARNESS_ROUND_N; the residual same-(producer, round) collision with a
+    hypothetical concurrent independent gemini review of the same arc is registered to
+    U-HE-19/21 (flow-excluded by the arc-serial holder discipline)."""
     env = os.environ.get("HARNESS_ROUND_N")
     if env is not None:
         return int(env)
-    del producer  # arc-global (see docstring)
     prior = [
         r["round_n"]
         for r in (rows if rows is not None else fr.read_rows())
-        if r.get("arc_id") == arc_id and r.get("round_n") is not None
+        if r.get("arc_id") == arc_id
+        and r.get("producer") == producer
+        and r.get("round_n") is not None
     ]
     return max(prior, default=0) + 1
 
@@ -387,7 +389,9 @@ def env_arc_and_lane() -> tuple[str, str]:
     lane_id = os.environ.get("HARNESS_LANE_ID") or (
         f"{socket.gethostname().split('.')[0]}-{Path.cwd().name}-nolane"
     )
-    return arc_id.replace(":", "_"), lane_id.replace(":", "_")
+    # '/' would make the fallback id unreservable (reservations arc_ids are single path
+    # components), silently skipping every C-HE-25 outcome persist (codex r19 P2)
+    return arc_id.replace(":", "_").replace("/", "-"), lane_id.replace(":", "_").replace("/", "-")
 
 
 def record_round_outcome_if_reserved(
@@ -516,9 +520,8 @@ def emit_outcome(
     part of the contract (C-HE-18 §3), so a failed write must not be silent."""
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
-        # arc-global mint INSIDE this critical section (codex round-16 P1: a pre-lock max()
-        # held across a 1200 s review was racy; round-18 P2: arc-global numbering makes a
-        # forced chain round un-duplicable by independent invocations, see round_n_for)
+        # minted INSIDE this critical section (codex round-16 P1: a pre-lock allocation
+        # held across a 1200 s review was racy)
         n = round_n if round_n is not None else round_n_for(arc_id, producer, rows)
         pairs = []
         for obs in outcome_rows(
