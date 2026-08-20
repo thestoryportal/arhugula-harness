@@ -115,8 +115,14 @@ def _spawn(
     )
 
 
-def _finish(p: subprocess.Popen) -> tuple[str, str]:
+def _finish(p: subprocess.Popen, expect_rc: tuple[int, ...] = (0, 1)) -> tuple[str, str]:
+    """Reap a lane and VALIDATE its termination: a losing racer must exit through the
+    documented outcome classes (0 = drained clean, 1 = kept/outstanding), never a
+    traceback (C-HE-04 §1: the losing racer logs and yields; no FileNotFoundError
+    escapes drain()). The kill leg passes expect_rc=(137,)."""
     out, err = p.communicate(timeout=60)
+    assert p.returncode in expect_rc, f"lane exited {p.returncode}, wanted {expect_rc}: {err}"
+    assert "Traceback" not in err, f"a lane propagated instead of yielding: {err}"
     return out, err
 
 
@@ -312,8 +318,7 @@ def test_ac2_a_same_instant(lanes, interleaving):
     else:  # vi-killed-after-append
         _reserve(q)
         pa = _spawn(a, q, "lane-a", ARC_METRICS_TEST_KILL_AFTER="append")
-        _finish(pa)
-        assert pa.returncode == 137, "a real death, not an exception"
+        _finish(pa, expect_rc=(137,))  # a real death, not an exception
         assert (q / "pr-1.taken").exists(), "the dead lane's claim survives"
         assert [r["arc_id"] for r in _rows(a)] == ["pr-1"], "A appended before dying"
         pb = _spawn(b, q, "lane-b")  # recovers the dead claim, takes the holder, appends
