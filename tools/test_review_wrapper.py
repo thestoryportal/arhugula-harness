@@ -661,14 +661,16 @@ def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
     calls = []
     stub = types.SimpleNamespace(
         current=lambda arc_id: (1, {"state": "open"}),
-        record_round_outcome=lambda arc_id, n, **kw: calls.append((arc_id, n, kw)),
+        record_round_outcome_next=lambda arc_id, **kw: calls.append((arc_id, kw)),
     )
     monkeypatch.setitem(sys.modules, "reservations", stub)
     rw.record_round_outcome_if_reserved(
         "pr-1", 2, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
     )
+    # the reservation round is an ARC-LEVEL ordinal minted by the allocator, never the
+    # caller's producer-scoped gate-log round (codex round-5/6 P2)
     assert calls == [
-        ("pr-1", 2, {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0})
+        ("pr-1", {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0})
     ]
     # no reservation for this arc → no-op
     stub.current = lambda arc_id: None

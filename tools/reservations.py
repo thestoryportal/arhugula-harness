@@ -193,6 +193,12 @@ def reserve(
     """(none) -> pending at arc OPEN. Refuses if a pending/open reservation exists
     (selection-time fence)."""
     _check_id("lane_id", lane_id)
+    if arc_type_declared_at != "open":
+        # reserve() IS the open-time capture point (C-HE-26 §1); a reservation minted with
+        # declared_at='close' would contaminate the cohort label downstream (codex round-6 P3).
+        raise ReservationError(
+            f"arc_type_declared_at must be 'open' at reserve(), got {arc_type_declared_at!r}"
+        )
     if arc_type not in ARC_TYPES:
         raise ReservationError(
             f"arc_type is required at open and must be one of {ARC_TYPES} (C-HE-26 §1); "
@@ -271,6 +277,8 @@ def transition(
     _check_id("lane_id", lane_id)
     if to_state == "abandoned" and not superseded_by:
         raise ReservationError("superseded_by is MANDATORY on abandoned (C-HE-03 §2)")
+    if superseded_by is not None:
+        _dir(superseded_by)  # shape check: same rules as any arc_id (codex round-6 P2)
     if to_state != "abandoned" and superseded_by:
         # superseded_by belongs to `abandoned` records only (C-HE-03 §2); a merged record
         # carrying a supersession pointer is mutually inconsistent landing metadata
@@ -298,6 +306,14 @@ def transition(
             raise IllegalTransition(
                 f"{arc_id}: {head['state']}->{to_state} requires the holder "
                 f"({head['lane_id']}), not {lane_id}"
+            )
+        if superseded_by and current(superseded_by) is None:
+            # the chain walks reservation-to-reservation (C-HE-03 §2); committing a pointer
+            # at a missing reservation into an IMMUTABLE terminal head would make
+            # walk_terminal raise forever with no legal repair transition (codex round-6 P2).
+            raise ReservationError(
+                f"{arc_id}: superseded_by names a missing reservation {superseded_by!r}; "
+                "reserve the superseding arc first (C-HE-03 §2)"
             )
         head["state"] = to_state
         head["transitioned_at"] = now_iso()

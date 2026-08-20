@@ -399,22 +399,16 @@ def record_round_outcome_if_reserved(
         return
     try:
         if rs.current(arc_id) is not None:
-            try:
-                rs.record_round_outcome(
-                    arc_id,
-                    round_n,
-                    channel=channel,
-                    terminal=terminal,
-                    finding_count=finding_count,
-                )
-            except rs.RoundOutcomeConflict:
-                # Gate-log rounds are per (arc, producer) (`round_n_for`), so a D-C
-                # failover's two legs can both carry the same number arc-level; the
-                # reservation map is append-only (C-HE-25), so land this leg at the next
-                # free arc-level round instead of erasing or dropping it (codex round-5 P2).
-                rs.record_round_outcome_next(
-                    arc_id, channel=channel, terminal=terminal, finding_count=finding_count
-                )
+            # The reservation map's keys are ARC-LEVEL emission ordinals, always minted by
+            # the CAS-safe allocator -- never the caller's gate-log round, which is scoped
+            # per (arc, producer) (`round_n_for`) and therefore collides across a D-C
+            # failover's two legs (codex round-5/6 P2). The gate log stays the sole
+            # authority for producer-scoped rounds (C-HE-30 one-authority rule); the
+            # reservation map is the arc's ordered outcome summary, joined by
+            # (channel, terminal, finding_count), not by key.
+            rs.record_round_outcome_next(
+                arc_id, channel=channel, terminal=terminal, finding_count=finding_count
+            )
     except Exception as exc:
         print(f"review wrapper: round outcome not persisted ({exc})", file=sys.stderr)
 

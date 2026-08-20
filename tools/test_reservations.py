@@ -84,6 +84,7 @@ def test_cas_loser_revalidates_and_raises(qdir, monkeypatch):
     """Two writers read gen n (open) with different intents; loser re-validates and RAISES;
     head stays merged."""
     rs.reserve("pr-5", lane_id="A", branch="b", arc_type="inventing")
+    rs.reserve("pr-6", lane_id="A", branch="b", arc_type="inventing")  # the superseder must exist
     rs.transition("pr-5", "open", lane_id="A")
     real_write = rs._write_gen
     fired = {"done": False}
@@ -104,6 +105,8 @@ def test_cas_loser_revalidates_and_raises(qdir, monkeypatch):
 # mutation-probe: drop the holder check in transition.build for open->terminal
 def test_only_holder_terminalizes_open_reservation(qdir):
     rs.reserve("pr-7b", lane_id="A", branch="b", arc_type="inventing")
+    rs.reserve("pr-8", lane_id="A", branch="b", arc_type="inventing")
+    rs.reserve("pr-9x", lane_id="A", branch="b", arc_type="inventing")
     rs.transition("pr-7b", "open", lane_id="A")
     with pytest.raises(rs.IllegalTransition, match="requires the holder"):
         rs.transition("pr-7b", "merged", lane_id="B")
@@ -113,9 +116,34 @@ def test_only_holder_terminalizes_open_reservation(qdir):
     rs.reserve("pr-7c", lane_id="A", branch="b", arc_type="inventing")
     # pending: any lane
     assert (
-        rs.transition("pr-7c", "abandoned", lane_id="OTHER", superseded_by="pr-9")["state"]
+        rs.transition("pr-7c", "abandoned", lane_id="OTHER", superseded_by="pr-9x")["state"]
         == "abandoned"
     )
+
+
+# mutation-probe: drop the missing-superseder existence check in transition.build
+def test_abandoned_requires_existing_superseder(qdir):
+    """codex round-6 P2: a pointer at a missing reservation committed into an immutable
+    terminal head would make walk_terminal raise forever with no repair path."""
+    rs.reserve("pr-21", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-21", "open", lane_id="A")
+    with pytest.raises(rs.ReservationError, match="missing reservation"):
+        rs.transition("pr-21", "abandoned", lane_id="A", superseded_by="pr-ghost")
+    with pytest.raises(rs.ReservationError, match="bad arc_id"):
+        rs.transition("pr-21", "abandoned", lane_id="A", superseded_by="../evil")
+    rs.reserve("pr-22", lane_id="A", branch="b", arc_type="inventing")
+    assert (
+        rs.transition("pr-21", "abandoned", lane_id="A", superseded_by="pr-22")["state"]
+        == "abandoned"
+    )
+
+
+def test_reserve_requires_declared_at_open(qdir):
+    """codex round-6 P3: reserve() is the open-time capture point (C-HE-26 §1)."""
+    with pytest.raises(rs.ReservationError, match="must be 'open'"):
+        rs.reserve(
+            "pr-23", lane_id="A", branch="b", arc_type="inventing", arc_type_declared_at="close"
+        )
 
 
 def test_abandoned_requires_superseded_by(qdir):
