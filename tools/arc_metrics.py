@@ -2010,11 +2010,20 @@ def cmd_extract(args: argparse.Namespace) -> int:
         # the merged-holder gate -- self-healing, never an open/pr=null wedge deadlocked
         # behind the duplicate guard. The extract() precondition (merged_at/merge_sha)
         # is the C-HE-03 §4 confirmed-merge witness for this flip.
-        if state == "pending":
-            rs.open_with_sensor(row.arc_id, LANE_ID)
-        if row.pr is not None and cur[1].get("pr") is None:
-            rs.update_payload(row.arc_id, {"pr": row.pr})
-        rs.transition(row.arc_id, "merged", lane_id=LANE_ID)
+        try:
+            if state == "pending":
+                rs.open_with_sensor(row.arc_id, LANE_ID)
+            if row.pr is not None and cur[1].get("pr") is None:
+                rs.update_payload(row.arc_id, {"pr": row.pr})
+            rs.transition(row.arc_id, "merged", lane_id=LANE_ID)
+        except rs.ReservationError as exc:
+            # A concurrent same-worktree retry won a CAS in this sequence (codex r14
+            # P3): an expected cooperative loss surfaces as the CLI's clean AbortError
+            # semantics, never a raw traceback. The winner completes the backfill.
+            raise AbortError(
+                f"{row.arc_id}: lost the backfill resume race ({exc}); the winning "
+                "invocation completes this backfill"
+            ) from exc
         print("note: backfill reservation terminalized merged; appending the row")
     append(row)
     print(f"appended {row.arc_id} -> {LEDGER}")
