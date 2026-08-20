@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `31d9c799bc15` |
+| `workspace_state_hash` | `fcf325faf77a` |
 | `last_refreshed` | 2026-08-20T00:00:00Z |
-| `git_head` | `2797189c` —  |
+| `git_head` | `80c94811` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1409).** S4b continues: U-HE-19 is on main (#1409). The recommended next action / next implementable unit is `U-HE-20` (AC#2 subprocess harness — six interleavings + cross-latency, C-HE-04/C-HE-03 Verification, plan §S4b; deps U-HE-19 + U-HE-16 both landed), then U-HE-21 per plan §3. Registered residuals close there and beyond: wrapper arc-id minting + R17-a/b wrapper-side + update_payload merge-tuple remainder (U-HE-21); the C-HE-04 §2(ii)/C-HE-03 §6 vs C-HE-06 §4(vi) merged-gate contradiction + merged-headless-capture stall + stale-MERGED_REF bound (U-HE-22 merge-lane landing, rev items vii/ix/xii); detached-launch supervision, RESOLVED-HIL minting, emission dedup, the §0-vs-§1 S4b/S4d ordering contradiction, and the activation-gate go-live witness (U-HE-29). Alternatives if the operator defers the lanes program: B-186 step (1), B-160, B-148 (unchanged).
+**Current next action (post-#1411).** S4b continues: U-HE-20 is on main (#1411). The recommended next action / next implementable unit is `U-HE-21` (reservation CLI wiring into roadmap-continue + ship-pr — reserve at selection, selectable check, ship-pr back-fills pr/head_sha/base_sha/attested_merge_tree, HARNESS_ARC_ID export, session-start reconcile-all; C-HE-03 §3/§4, C-HE-26 §1, C-HE-06 §4(ii); deps U-HE-17 + U-HE-18 both landed; plan §S4b), then U-HE-22 per plan §3. Registered residuals close there and beyond: wrapper arc-id minting + R17-a/b wrapper-side + update_payload merge-tuple remainder (U-HE-21); the C-HE-04 §2(ii)/C-HE-03 §6 vs C-HE-06 §4(vi) merged-gate contradiction + merged-headless-capture stall + stale-MERGED_REF bound + the C-HE-04 (vi) immediate-drop vs landed keep-loudly §5 sentence (7-round held class at U-HE-20) + spec §8.1 stale '(5 interleavings)' count (U-HE-22 merge-lane landing, rev items vii/ix/xii); detached-launch supervision, RESOLVED-HIL minting, emission dedup, the §0-vs-§1 S4b/S4d ordering contradiction, and the activation-gate go-live witness (U-HE-29). Alternatives if the operator defers the lanes program: B-186 step (1), B-160, B-148 (unchanged).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1411 | 2026-08-20 | S4b U-HE-20 on main (#1411, squash 80c94811): AC#2 subprocess harness tools/test_arc_metrics_lanes.py — six interleavings + cross-latency over real lanes, RED-first at pre-U-HE-19 8638f2e7; inert hold/abort seams incl. restore-link mid-restore; 2 no-skip §8.1 rows; 20 probes PINNED coverage 0; 7 codex rounds to register-and-hold terminal (held (vi) immediate-drop class routed to U-HE-22) + merge-gate 3x APPROVE r1; C-HE-30 audit row + as-built rev note + clearance marker |
 | 1409 | 2026-08-20 | S4b U-HE-19 on main (#1409, squash 2797189c): drain ⇄ reservation integration — holder-gated append (merged-holder first-capture reading REGISTERED to U-HE-22, rev items vii/ix), flip-before-append + fresh-head fold via fold_round_outcomes, dead-claim holder transfer at all four consumption sites (lane-stamped claims), local-row reconciliation (tri-state committed-history stops, canonical convergence), cmd_extract backfill reservation-fence (BACKFILL_BRANCH sentinel, every-state drain hold); 22 codex rounds to register-and-hold terminal + 3 merge-gate rounds (r1 2 BLOCKs fixed, r2 2 BLOCKs fixed, r3 3x APPROVE); 19 mutation probes PINNED, coverage 0; plan rev items i–xii + 2 clearance markers |
 | PR #1407 | 2026-08-20 | S4b U-HE-18 on main (#1407, squash 8638f2e7): reconcile() ground truth (HITL never TTL, fail-safe gh, UNCONFIRMED marks), open_with_sensor, reconcile_all per-arc isolation + CLI, detached activation-gated session-start pass, C-HE-19/20 manifest row, C-HE-30 .reconcile.log audit row, 19 probe pins; 11 codex rounds + 2 merge-gate rounds (r1 2 BLOCKs fixed, r2 3x APPROVE); plan rev note incl. registered S4b/S4d ordering contradiction -> U-HE-29 |
 | 1405 | 2026-08-20 | S4a->S4b: U-HE-17 on main (#1405, squash 7834cf47): tools/reservations.py generation-CAS reservation record (reserve/transition/update_payload/transfer_holder/record_phase/record_round_outcome + fold projection/walk_terminal/alloc_seq/gc/CLI; C-HE-03 §1-8, C-HE-26 §1, C-HE-27 §3); wrapper failover-chain round + reservation-outcome wiring; 18 probe pins; 20 codex rounds + 4 merge-gate rounds (r1 2 BLOCKs fixed, r2-r4 3x APPROVE); plan U-HE-19 fold line rev + clearance marker; 6 residuals registered to U-HE-19/21 |
 | 1403 | 2026-08-19 | S3->S4a: S4a cluster U-HE-15/16 on main (#1403, squash f0e64f21): drain fault isolation (_drain_one, systemic split, exclusive restore-or-republish, kill seam, atomic-rename takeover, KEPT-QUEUED-verified/CAPTURE-AT-RISK accounting), teardown guard (ahead-of-@{u} config-gated + detached-HEAD + pruned-upstream fail-closed), C-HE-02 witnesses; plan U-HE-15 Step 4b rev + clearance marker; 12 review-with-failover rounds + 2 merge-gate rounds (r1 concurrency BLOCK fixed, r2 3x APPROVE); 12 probe pins live; 6 residuals registered to S4b/U-HE-20 |
-| 1401 | 2026-08-19 | S3 U-HE-14 durable store audit (C-HE-30) + phase0 witness + §8.1 row + parity wiring; spec v1.3 X3 with marker + artifact-heads; plan body revised; 11 review rounds (r11 APPROVE) + 3-lens gate 3x APPROVE; U-HE-30 HIL claim-ordering residual registered |
 
 ---
 
