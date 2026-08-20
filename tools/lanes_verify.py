@@ -108,6 +108,14 @@ MANIFEST: list[Row] = [
         "local + CI",
         True,
     ),
+    # C-HE-19/20 + C-HE-03 §5 (U-HE-18): TTL never reclaims -- ground-truth reconcile only
+    Row(
+        "C-HE-19/20",
+        "pytest:tools/test_reservations.py::test_ttl_never_reclaims",
+        "phase0",
+        "local + CI",
+        True,
+    ),
     # C-HE-23–26 (U-HE-01 / U-HE-11 / U-HE-12 / U-HE-13)
     Row("C-HE-23–26", "pytest:tools/test_finding_record.py", "phase0", "local + CI", True),
     Row(

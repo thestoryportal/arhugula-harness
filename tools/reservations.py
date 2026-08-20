@@ -733,6 +733,150 @@ def emit_loop_row(kind: str, lane_id: str, cause: str, detail: str) -> None:
         )
 
 
+def open_with_sensor(arc_id: str, lane_id: str) -> dict:
+    """pending -> open at drain start, recording the best-effort sibling-open snapshot
+    (C-HE-03 §7: `derived`, never `declared` -- D7/M8)."""
+    n = sibling_open_count(arc_id)
+    return transition(arc_id, "open", lane_id=lane_id, updates={"concurrent_lanes_at_open": n})
+
+
+def _aged(ts: str, now: datetime) -> bool:
+    dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    return (now - dt).total_seconds() > STALE_AFTER_S
+
+
+def _gh_view(pr: int) -> dict:
+    """`gh pr view`-backed ground truth (C-HE-03 §5), bounded 30 s. ANY failure raises;
+    reconcile() catches it and fails safe to "still open, not reclaimable"."""
+    proc = subprocess.run(
+        ["gh", "pr", "view", str(pr), "--json", "state,mergedAt"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ReservationError(f"gh pr view {pr} failed: {proc.stderr.strip()}")
+    return json.loads(proc.stdout)
+
+
+def reconcile(
+    arc_id: str,
+    *,
+    gh_view: Callable[[int], dict],
+    superseded_by: str | None = None,
+    now: datetime | None = None,
+) -> str:
+    """Staleness by GROUND TRUTH -- HITL, never TTL (C-HE-03 §5, C-HE-20, D8). Returns the
+    head state after the pass; a stuck/aged head emits NOTIFY + DEFERRED-HIL (C-HE-20 §1)
+    and stays UNCHANGED -- `pending`/`open` leave only by operator RESOLVED-HIL, a
+    superseding arc (`superseded_by`), or confirmed ground truth."""
+    now = now or datetime.now(UTC)
+    cur = current(arc_id)
+    if cur is None:
+        raise ReservationError(f"{arc_id}: no reservation")
+    head = cur[1]
+    lane = head["lane_id"]
+    if head["state"] in TERMINAL:
+        return head["state"]
+    if head["state"] == "pending":
+        if _aged(head["reserved_at"], now):
+            emit_loop_row(
+                "NOTIFY",
+                lane,
+                "reservation-stale:HITL-recoverable:pending_aged",
+                f"{arc_id} pending > 24h; state unchanged",
+            )
+            emit_loop_row(
+                "DEFERRED-HIL",
+                lane,
+                "reservation-stale:HITL-recoverable:pending_aged",
+                f"{arc_id} -- aged pending reservation needs operator disposition "
+                f"(RESOLVED-HIL or superseding arc)",
+            )
+        return "pending"
+    # open
+    if head["pr"] is None:
+        if _aged(head["transitioned_at"], now):
+            emit_loop_row(
+                "NOTIFY",
+                lane,
+                "reservation-stale:HITL-recoverable:open_no_pr",
+                f"{arc_id} open > 24h with no PR; state unchanged",
+            )
+            emit_loop_row(
+                "DEFERRED-HIL",
+                lane,
+                "reservation-stale:HITL-recoverable:open_no_pr",
+                f"{arc_id} -- open reservation with no PR needs operator disposition",
+            )
+        return "open"
+    try:
+        view = gh_view(int(head["pr"]))
+    except Exception as exc:  # ANY gh failure fails safe (C-HE-03 §5)
+        print(
+            f"reservations: gh transient for {arc_id}: {exc}; still open, not reclaimable",
+            file=sys.stderr,
+        )
+        return "open"
+    state = (view or {}).get("state")
+    if state == "MERGED":
+        transition(arc_id, "merged", lane_id=lane)
+        return "merged"
+    if state == "CLOSED":
+        if superseded_by:
+            transition(arc_id, "abandoned", lane_id=lane, superseded_by=superseded_by)
+            return "abandoned"
+        emit_loop_row(
+            "DEFERRED-HIL",
+            lane,
+            "reservation-stale:HITL-recoverable:closed_no_pointer",
+            f"{arc_id} -- PR #{head['pr']} CLOSED without a superseding pointer; "
+            f"confirm abandonment",
+        )
+        return "open"
+    if _aged(head["transitioned_at"], now):
+        emit_loop_row(
+            "NOTIFY",
+            lane,
+            "reservation-stale:HITL-recoverable:open_stuck",
+            f"{arc_id} open > 24h, PR #{head['pr']} still OPEN; state unchanged",
+        )
+        emit_loop_row(
+            "DEFERRED-HIL",
+            lane,
+            "reservation-stale:HITL-recoverable:open_stuck",
+            f"{arc_id} -- stuck open reservation; operator disposition needed",
+        )
+    return "open"
+
+
+def reconcile_all(
+    *, gh_view: Callable[[int], dict] | None = None, now: datetime | None = None
+) -> dict[str, str]:
+    """One ground-truth pass over every non-terminal reservation (session start + the merge
+    lane). Per-arc fault isolation (C-HE-04 §3 analog): one arc's failure -- e.g. the
+    fail-closed emit_loop_row before U-HE-29 lands `loop_log_structured` -- must not abandon
+    the remaining pass; it lands in-band as an `ERROR: ...` value and the CLI exits 2."""
+    view = gh_view or _gh_view
+    out: dict[str, str] = {}
+    root = reservations_root()
+    if not root.is_dir():
+        return out
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        cur = current(d.name)
+        if cur is None or cur[1]["state"] in TERMINAL:
+            continue
+        try:
+            out[d.name] = reconcile(d.name, gh_view=view, now=now)
+        except ReservationError as exc:
+            out[d.name] = f"ERROR: {exc}"
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="reservations", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -771,6 +915,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gc")
     ml = sub.add_parser("mint-lane-id")
     ml.add_argument("--worktree", default=".")
+    rc = sub.add_parser("reconcile")
+    rc.add_argument("--arc-id", required=True)
+    rc.add_argument("--superseded-by")
+    sub.add_parser("reconcile-all")
     args = p.parse_args(argv)
 
     def coerce(v: str):
@@ -822,6 +970,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if selectable(args.arc_id) else 1
         elif args.cmd == "gc":
             out = [str(x) for x in gc()]
+        elif args.cmd == "reconcile":
+            out = reconcile(args.arc_id, gh_view=_gh_view, superseded_by=args.superseded_by)
+            print(json.dumps(out, sort_keys=True))
+            return 0
+        elif args.cmd == "reconcile-all":
+            out = reconcile_all()
+            print(json.dumps(out, sort_keys=True))
+            return 2 if any(v.startswith("ERROR") for v in out.values()) else 0
         else:
             print(mint_lane_id(Path(args.worktree).resolve()))
             return 0

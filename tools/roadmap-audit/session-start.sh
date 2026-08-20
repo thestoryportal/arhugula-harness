@@ -42,10 +42,30 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   [ -n "$_h" ] && _HIL=" $_h"
 fi
 
+# C-HE-03 §5 (U-HE-18): one ground-truth reconcile pass over every non-terminal arc
+# reservation at session start (the merge lane is the other caller, U-HE-22). Best-effort +
+# bounded: the hook always exits 0, so a failure is surfaced in the context token, never a
+# blocked session. The bash-side dir pre-probe mirrors arc_metrics.py's QUEUE_DIR default
+# so sessions without any reservation store skip the interpreter spawn entirely; if the
+# defaults ever drift the only cost is a skipped best-effort pass (the merge lane re-runs it).
+_RESV=""
+_QROOT="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
+if [ -d "${_QROOT}/reservations" ] && [ -f tools/reservations.py ] \
+  && command -v uv >/dev/null 2>&1; then
+  _r=$(hook_bounded 60 uv run python tools/reservations.py reconcile-all 2>&1)
+  _rrc=$?
+  if [ "$_rrc" -ne 0 ]; then
+    # exit 2 = per-arc ERROR values in-band (or a harness failure): surface, don't block.
+    _RESV=" resv=ERR $(echo "$_r" | tr -d '\n' | tail -c 160)"
+  elif [ -n "$_r" ] && [ "$_r" != "{}" ]; then
+    _RESV=" resv=$(echo "$_r" | tr -d '[:space:]' | head -c 160)"
+  fi
+fi
+
 # Single-line additionalContext for the SessionStart event (wraps the lib helper). The
 # pending-HIL summary is appended so an operator opening a fresh session always sees what
 # the last unattended loop run deferred for them.
-emit() { hook_emit "SessionStart" "$1${_HIL}"; }
+emit() { hook_emit "SessionStart" "$1${_HIL}${_RESV}"; }
 
 [ -f "$ROADMAP_STATUS" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
 [ -f "$ROADMAP" ] || emit "[ROADMAP] roadmap_status.md exists but roadmap absent"

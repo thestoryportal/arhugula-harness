@@ -3392,6 +3392,8 @@ git commit -m "feat(he-lanes): U-HE-17 generation-CAS arc reservation record (C-
 
 **Depends on.** U-HE-17, U-HE-29 (structured `NOTIFY` row shape; tests monkeypatch `emit_loop_row`).
 
+**Rev 2026-08-20 (U-HE-18 execution corrections, as-built).** *(i) Superseder-must-exist:* the Step-1 literal test abandons `pr-22` with `superseded_by="pr-23"` never reserved; U-HE-17's landed round-6 validation (`transition.build` raises on a missing superseding reservation, C-HE-03 §2 chain resolvability) rejects that — the as-built test reserves `pr-23` first. *(ii) Probe substitution:* the Step-1 annotation ("add a reclaim-on-age") and Step 4's discussion name a positive mutation the deletion-only probe tool cannot express; the as-built deletion-expressible pins are: ground-truth test → drop the pending-aged `NOTIFY`/`DEFERRED-HIL` emission (rows assertions red); `test_ttl_never_reclaims` → drop `reconcile()`'s final stuck-open `return "open"` (terminus pinned); sensor test → drop the `sibling_open_count` snapshot line. *(iii) Hook path:* the session-start caller is `tools/roadmap-audit/session-start.sh` (Step 5's `tools/hooks/session-start.sh` does not exist); the pass is bounded (60 s), best-effort (failures surface in the hook's additionalContext token, never a blocked session — the hook's standing exit-0 contract), and pre-probed on the reservations dir mirroring `arc_metrics.QUEUE_DIR`'s default. *(iv) Fault isolation:* `reconcile_all` isolates per-arc `ReservationError`s in-band (`ERROR: ...` value; CLI exit 2) so one arc's fail-closed `emit_loop_row` (loud until U-HE-29 lands `loop_log_structured`) cannot abandon the remaining pass; the merge-lane call lands with U-HE-22.*
+
 - [ ] **Step 1: Failing tests**
 ```python
 def _gh_raises(pr):
