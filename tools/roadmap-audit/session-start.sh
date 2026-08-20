@@ -71,7 +71,7 @@ if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ]; then
   # would false-positive on an arc id containing "ERROR"); jq is already a hard
   # dependency of hook_emit. A corrupt/unparseable log reads as non-zero -- fail closed.
   if [ -f "${_RROOT}/.reconcile.log" ] && [ ! -L "${_RROOT}/.reconcile.log" ] \
-    && [ "$(jq -r '.rc // 0' "${_RROOT}/.reconcile.log" 2>/dev/null)" != "0" ]; then
+    && [ "$(jq -r '.rc' "${_RROOT}/.reconcile.log" 2>/dev/null)" != "0" ]; then
     _RESV=" resv=ERR(last reconcile pass; see ${_RROOT}/.reconcile.log)"
   fi
   if [ -f tools/reservations.py ] && command -v uv >/dev/null 2>&1 \

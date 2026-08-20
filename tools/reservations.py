@@ -870,14 +870,20 @@ def reconcile(
                 superseded_by=superseded_by if to_state == "abandoned" else None,
                 expect={"pr": head["pr"]},
             )
-        except IllegalTransition:
-            # Lost a race since the ground-truth check (codex U-HE-18 r1 P1/P2): the head
-            # terminalized concurrently (another reconcile pass won -- idempotent, return
-            # its terminal state), the holder transferred, or `pr` was re-bound. All
-            # resolve fail-safe: report the CURRENT head; a live head re-reconciles on
-            # the next pass against the new ground truth.
+        except IllegalTransition as exc:
+            # Lost a race since the ground-truth check (codex r1 P1/P2, classified r9 P2):
+            # only the IDENTICAL terminal outcome is clean idempotency. A different
+            # terminal state, or a live head whose pr/holder moved, reports the CURRENT
+            # head but marks the pass UNCONFIRMED -- this arc's intended outcome was
+            # never applied, so the pass must not read clean (the next pass re-checks).
             cur2 = current(arc_id)
             head2 = cur2[1] if cur2 else None
+            if head2 is not None and head2["state"] == to_state:
+                return to_state
+            msg = f"transition race for {arc_id}: {exc}"
+            print(f"reservations: {msg}", file=sys.stderr)
+            if on_unconfirmed is not None:
+                on_unconfirmed(msg)
             if head2 is not None and head2["state"] in TERMINAL:
                 return head2["state"]
             return "open"
@@ -917,6 +923,10 @@ def reconcile_all(
     view = gh_view or _gh_view
     out: dict[str, str] = {}
     root = reservations_root()
+    if root.exists() and not root.is_dir():
+        # A regular file where the authoritative store dir belongs is corruption, not an
+        # absent store (codex r9 P2): only a genuinely absent path reads clean.
+        raise ReservationError(f"{root}: reservations root exists but is not a directory")
     if not root.is_dir():
         return out
     for d in sorted(root.iterdir()):
@@ -928,7 +938,12 @@ def reconcile_all(
                 # non-directory symlink is the same planted-link class _dir refuses.
                 raise ReservationError(f"{d.name}: reservation path is a symlink -- refused")
             if not d.is_dir():
-                continue
+                # Valid arc records are directories; infrastructure is dot-prefixed. A
+                # stray non-dot regular file is malformed authoritative state (codex r9
+                # P2) -- in-band, never a silent skip.
+                raise ReservationError(
+                    f"{d.name}: not a reservation directory -- malformed store entry"
+                )
             # The head read is inside the guarded region too (codex U-HE-18 r1 P2): one
             # symlinked/corrupt reservation must not abort the pass before later arcs.
             cur = current(d.name)
@@ -955,7 +970,7 @@ def _write_store_log(result: dict[str, str], rc: int) -> None:
     truncating an arbitrary file. Overwrite-in-place: one file, last pass wins."""
     root = reservations_root()
     path = root / ".reconcile.log"
-    tmp = root / f".reconcile.log.{os.getpid()}.tmp"
+    tmp = root / f".reconcile.log.{os.getpid()}.{secrets.token_hex(4)}.tmp"
     payload = json.dumps({"ts": now_iso(), "rc": rc, "result": result}, sort_keys=True) + "\n"
     # Exclusive-create stager + atomic os.rename (codex r3 P2 x2): rename never follows a
     # final-component symlink, so a planted `.reconcile.log` symlink is REPLACED by the
