@@ -2116,3 +2116,96 @@ def test_local_row_reconciliation_keeps_merged_without_committed_row(
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     am._reconcile_local_rows()
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-62"], "sole capture survives"
+
+
+def test_merged_holder_own_capture_drains_normally(tmp_path, monkeypatch):
+    """codex U-HE-19 r3 P1: post-U-HE-22 the merge door flips open->merged BEFORE the
+    closure capture drains -- the merged HOLDER's own first append is the ordinary
+    capture path (C-HE-03 §6 forbids re-append, not the holder's first capture)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
+    rs.open_with_sensor("pr-1", "A")
+    rs.record_phase("pr-1", "execute", "start", ts="2026-08-20T00:00:00Z")
+    rs.transition("pr-1", "merged", lane_id="A")
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    monkeypatch.setattr(
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+    )
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1, "appended, held pending commit"
+    row = am.read_ledger()[0]
+    assert row["arc_id"] == "pr-1" and row["lane_id"] == "A"
+    assert row["phases"]["execute"]["start"] == "2026-08-20T00:00:00Z", "fold still runs"
+    assert (q / "pr-1.json").exists(), "entry held until the row commits"
+
+
+def test_fallback_lane_id_keeps_digest_under_long_names():
+    """codex U-HE-19 r3 P2: the ≤64 budget must trim the NAME, never the path digest --
+    two long-common-prefix worktrees must not collide into one lane identity."""
+    a = am._fallback_lane_id("host.example.com", Path("/tmp/w/" + "x" * 80 + "-one"))
+    b = am._fallback_lane_id("host.example.com", Path("/tmp/w/" + "x" * 80 + "-two"))
+    assert a != b, "distinct worktrees keep distinct identities"
+    assert len(a) <= 64 and len(b) <= 64
+    assert ":" not in a and a
+
+
+def test_local_row_reconciliation_drops_divergent_committed_duplicate(
+    tmp_path, monkeypatch, qdir_res
+):
+    """codex U-HE-19 r3 P2: once a replacement row for the arc is in COMMITTED history,
+    a divergent local duplicate is provably stale -- dropped; a row that IS the
+    committed content is kept."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    committed_row = {"arc_id": "pr-80", "record_kind": "arc", "notes": "committed"}
+    stale_row = {"arc_id": "pr-81", "record_kind": "arc", "notes": "stale divergent"}
+    ledger.write_text(
+        json.dumps(committed_row, sort_keys=True)
+        + "\n"
+        + json.dumps(stale_row, sort_keys=True)
+        + "\n"
+    )
+    replacement = {"arc_id": "pr-81", "record_kind": "arc", "notes": "the real one"}
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-80", "pr-81"})
+    monkeypatch.setattr(
+        am,
+        "_committed_ledger_lines",
+        lambda: {
+            json.dumps(committed_row, sort_keys=True),
+            json.dumps(replacement, sort_keys=True),
+        },
+    )
+    am._reconcile_local_rows()
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-80"], (
+        "committed content kept, divergent duplicate dropped"
+    )
+
+
+def test_cmd_extract_rolls_back_when_a_reservation_appears_mid_backfill(
+    tmp_path, monkeypatch, qdir_res
+):
+    """codex U-HE-19 r3 P2: the backfill's check-then-act loss is COMPENSATED -- the
+    row is rolled back and the command aborts loudly, so the legitimate holder's drain
+    is never blocked by the duplicate guard."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-90", 90))
+    real_current = rs.current
+    calls = {"n": 0}
+
+    def reserve_lands_after_first_check(arc_id):
+        out = real_current(arc_id)
+        calls["n"] += 1
+        if calls["n"] == 1 and out is None:
+            rs.reserve("pr-90", lane_id="A", branch="b", arc_type="inventing")
+        return out
+
+    monkeypatch.setattr(rs, "current", reserve_lands_after_first_check)
+    with pytest.raises(am.AbortError, match="rolled back"):
+        am.cmd_extract(argparse.Namespace(dry_run=False))
+    monkeypatch.setattr(rs, "current", real_current)
+    assert am.read_ledger() == [], "the unauthorized backfill row did not survive"
