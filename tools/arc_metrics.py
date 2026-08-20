@@ -1324,6 +1324,16 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         _kill_after("extract")
         append(row)
         _kill_after("append")
+        if res.get("state") == "open":
+            # Terminalize the open head this lane holds: the appended row PROVES the
+            # merge (merged_at/merge_sha are append's precondition -- C-HE-03 §4's
+            # "confirmed merge"). Without this a legacy bootstrap leaks a
+            # permanently-open pr=null reservation that reconcile can only
+            # HITL-escalate (codex U-HE-19 r5 P2). Post-U-HE-22 heads arrive merged
+            # and skip this. A failure here is per-arc: the row is appended and the
+            # entry restores; reconcile's ground-truth pass owns the leftover head.
+            updates = {"pr": entry["pr"]} if res.get("pr") is None and "pr" in entry else None
+            rs.transition(arc_id, "merged", lane_id=LANE_ID, updates=updates)
     except (AbortError, KeyError, TypeError, ValueError, OSError, rs.ReservationError):
         # Durable restore BEFORE the caller reports KEPT QUEUED (C-HE-04 SS7) --
         # OSError included (EMFILE from append, ...): drain() re-classifies it
@@ -1736,7 +1746,8 @@ def cmd_extract(args: argparse.Namespace) -> int:
     # `merged` (append already proved merged_at/merge_sha), leaving an audit record.
     import reservations as rs
 
-    if rs.current(row.arc_id) is None:
+    cur = rs.current(row.arc_id)
+    if cur is None:
         if not row.arc_type:
             raise AbortError(
                 f"{row.arc_id}: historical backfill now mints its reservation and "
@@ -1755,12 +1766,22 @@ def cmd_extract(args: argparse.Namespace) -> int:
                 f"{row.arc_id}: lost the backfill reservation race ({exc}); the "
                 "reserving lane's drain will capture this arc"
             ) from exc
-        rs.open_with_sensor(row.arc_id, LANE_ID)
-        append(row)
+        cur = rs.current(row.arc_id)
+        print("note: historical backfill reserved by this lane")
+    state, owner = cur[1]["state"], cur[1]["lane_id"]
+    if owner == LANE_ID and state in ("pending", "open"):
+        # Terminalize BEFORE append (codex U-HE-19 r5 P2): a crash between the two
+        # leaves a merged head whose retry falls straight through to append() below via
+        # the merged-holder gate -- self-healing, never an open/pr=null wedge deadlocked
+        # behind the duplicate guard. The extract() precondition (merged_at/merge_sha)
+        # is the C-HE-03 §4 confirmed-merge witness for this flip.
+        if state == "pending":
+            rs.open_with_sensor(row.arc_id, LANE_ID)
+        if row.pr is not None and cur[1].get("pr") is None:
+            rs.update_payload(row.arc_id, {"pr": row.pr})
         rs.transition(row.arc_id, "merged", lane_id=LANE_ID)
-        print("note: historical backfill reserved, appended and terminalized by this lane")
-    else:
-        append(row)
+        print("note: backfill reservation terminalized merged; appending the row")
+    append(row)
     print(f"appended {row.arc_id} -> {LEDGER}")
     return 0
 

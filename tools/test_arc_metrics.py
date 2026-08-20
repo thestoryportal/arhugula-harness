@@ -2061,7 +2061,8 @@ def test_cmd_extract_backfill_reserves_first_and_holder_rule_stands(
     classified = am.ArcRow(arc_id="pr-70", pr=70, merged_at="t", merge_sha="s", arc_type="applying")
     monkeypatch.setattr(am, "extract", lambda a: classified)
     assert am.cmd_extract(ns) == 0
-    assert "reserved, appended and terminalized" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "reserved by this lane" in out and "terminalized merged" in out
     assert rs.current("pr-70")[1]["state"] == "merged"
     assert rs.current("pr-70")[1]["lane_id"] == "B"
     # unclassified backfill is refused (C-HE-26 §1: the minted reservation needs a label)
@@ -2229,3 +2230,27 @@ def test_cmd_extract_backfill_loses_the_reservation_race_loudly(tmp_path, monkey
         am.cmd_extract(argparse.Namespace(dry_run=False))
     assert am.read_ledger() == [], "nothing appended after the lost race"
     assert rs.current("pr-90")[1]["lane_id"] == "A", "the peer's reservation stands"
+
+
+# mutation-probe: drop _transfer_reservation_to_recoverer() from the orphaned-aside route
+def test_recovery_transfers_holder_on_the_orphaned_aside_route(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r5 P3: the SECOND dead-owner restore site -- an aside orphaned by a
+    recoverer that died between rename and restore -- must also run the C-HE-04 §4
+    holder transfer when the embedded dead claimant was the holder."""
+    q = qdir_res
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-53", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-53", "A")
+    (q / f"pr-53.taken.recover.{socket.gethostname()}.999999").write_text(
+        json.dumps(
+            {
+                "pr": 53,
+                "arc_id": "pr-53",
+                "_claim": {"pid": 999998, "host": socket.gethostname(), "lane_id": "A"},
+            }
+        )
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    am._recover_dead_claims()
+    assert (q / "pr-53.json").exists(), "orphaned aside restored to the queue"
+    assert rs.holder("pr-53") == "B", "the dead holder's reservation transferred"
