@@ -6,13 +6,12 @@ case asserts over the UNION of the lane ledgers: exactly one row per arc_id, and
 C-HE-04 two-state invariant (entry still queued while the row is uncommitted).
 
 Deviations from the plan's inline sketch, each grounded at HEAD (see PR body):
-- each lane worktree publishes ``refs/remotes/origin/main`` at its init commit with a
-  one-baseline-row ledger committed, so the entry arc is uncommitted through the real
-  ``git show`` path (the spec's RED property: nothing releases it) AND
-  ``_committed_ledger_lines()`` is KNOWN content rather than None -- (vi)'s local-row
-  reconciliation refuses to judge against unreadable committed history (tri-state,
-  codex U-HE-19 r21 P2), and ``run()``'s non-empty-output validation makes an EMPTY
-  committed ledger read as exactly that;
+- lane worktrees are FRESH repos with no origin/main (the spec's prescribed shape --
+  ``committed_arc_ids()`` returns ``set()`` through the real unreadable-``MERGED_REF``
+  path); (vi) ALONE publishes a one-baseline-row committed ledger at origin/main via
+  ``_publish_baseline``, because its final legs judge local rows against committed
+  content and the tri-state reconciliation refuses to judge unreadable committed
+  history (codex U-HE-19 r21 P2);
 - the fake ``gh`` returns a 40-char ``mergeCommit.oid`` (``ci_metrics`` refuses short
   SHAs) and a full ``round_snapshot`` (extract reads ``round_log_source`` /
   ``first_round_at`` / ``last_round_at`` unconditionally);
@@ -58,14 +57,22 @@ esac
 
 
 def _git_init(wt: Path) -> None:
-    """A git worktree whose ledger is committed and visible at origin/main with one
-    BASELINE row for a sibling arc, so committed history is KNOWN content (never
-    unreadable-None) through the real path. The baseline cannot be an empty file:
-    ``run()`` validates non-empty output, so ``git show`` of an empty committed
-    ledger reads as unreadable and reconciliation (correctly, fail-safe) holds."""
+    """A FRESH git worktree with NO origin/main -- the spec's prescribed shape for
+    AC#2 (C-HE-03 Verification: ``committed_arc_ids()`` returns ``set()`` through the
+    real unreadable-``MERGED_REF`` path, so nothing releases the entry and a lane that
+    crashed on that path would surface through ``_finish``'s termination check)."""
     wt.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(wt)], check=True)
     (wt / ".harness").mkdir()
+
+
+def _publish_baseline(wt: Path) -> None:
+    """(vi) only: give the worktree KNOWN committed history at origin/main -- one
+    BASELINE row for a sibling arc. The final (vi) legs judge local rows against
+    committed content, and the tri-state reconciliation refuses to judge when
+    committed history is unreadable. The baseline cannot be an empty file: ``run()``
+    validates non-empty output, so ``git show`` of an empty committed ledger reads
+    as unreadable and reconciliation (correctly, fail-safe) holds."""
     (wt / ".harness" / "arc-metrics.jsonl").write_text(BASELINE_ROW)
     subprocess.run(["git", "-C", str(wt), "add", ".harness"], check=True)
     subprocess.run(
@@ -247,8 +254,12 @@ def test_ac2_a_same_instant(lanes, interleaving):
         (q / "pr-1.json").rename(q / "pr-1.taken")
         d = json.loads((q / "pr-1.taken").read_text())
         # a dead claim is transferable only when it PROVABLY belonged to the holder:
-        # pid+host say dead, lane_id says which lane (codex U-HE-19 r1 P1)
-        d["_claim"] = {"pid": 999999, "host": socket.gethostname(), "lane_id": "dead-lane"}
+        # pid+host say dead, lane_id says which lane (codex U-HE-19 r1 P1). The pid is
+        # a REAPED child's -- provably dead on every platform (codex U-HE-20 r2 P3;
+        # a fixed sentinel like 999999 can be a live pid where pid_max exceeds it).
+        reaped = subprocess.Popen([sys.executable, "-c", "pass"])
+        reaped.wait(timeout=30)
+        d["_claim"] = {"pid": reaped.pid, "host": socket.gethostname(), "lane_id": "dead-lane"}
         (q / "pr-1.taken").write_text(json.dumps(d))
         # same-instant leg: both lanes judge the same dead .taken recoverable
         pa, pb = _spawn(a, q, "lane-a", barrier), _spawn(b, q, "lane-b", barrier)
@@ -316,6 +327,8 @@ def test_ac2_a_same_instant(lanes, interleaving):
         _union_ok(a, b, q)
 
     else:  # vi-killed-after-append
+        _publish_baseline(a)
+        _publish_baseline(b)
         _reserve(q)
         pa = _spawn(a, q, "lane-a", ARC_METRICS_TEST_KILL_AFTER="append")
         _finish(pa, expect_rc=(137,))  # a real death, not an exception
