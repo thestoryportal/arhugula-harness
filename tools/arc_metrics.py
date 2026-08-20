@@ -962,7 +962,16 @@ def drain(_args: argparse.Namespace) -> int:
     different file and is picked up by this drain or the next one -- there is no
     window in which it can be erased, and no lock is needed to say so.
     """
-    _recover_dead_claims()
+    try:
+        _recover_dead_claims()
+    except OSError as exc:
+        if _is_systemic(exc):
+            # Same single-message abort as an in-loop systemic fault (C-HE-04
+            # SS3) -- a read-only queue dir during recovery must not surface as
+            # a raw traceback.
+            print(f"ABORT: systemic queue fault on {QUEUE_DIR}: {exc}", file=sys.stderr)
+            return 2
+        raise
 
     # Claims left behind by a live or unverifiable owner are outstanding work.
     # Reporting "nothing to drain" while they sit there would let automation

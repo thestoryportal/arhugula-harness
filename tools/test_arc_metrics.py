@@ -1353,12 +1353,65 @@ def test_recover_dead_claims_fnf_guarded(tmp_path, monkeypatch):
     monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
     real_replace = os.replace
 
-    def vanish(src, dst):
-        Path(src).unlink()  # a peer restored it first
+    def peer_restored_first(src, dst):
+        # The real race (C-HE-04 SS1): a peer's _recover_dead_claims won the
+        # os.replace, so the destination .json EXISTS and src is gone by the
+        # time this call runs -- the losing racer's replace raises FNF.
+        real_replace(src, dst)
         return real_replace(src, dst)  # raises FileNotFoundError
 
-    monkeypatch.setattr(am.os, "replace", vanish)
+    monkeypatch.setattr(am.os, "replace", peer_restored_first)
     am._recover_dead_claims()  # must NOT raise
+    assert (q / "pr-7.json").exists(), "the capture is held by the winning racer"
+
+
+def test_recover_dead_claims_systemic_fault_aborts_drain(tmp_path, monkeypatch, capsys):
+    """A systemic queue-dir fault during pre-loop recovery aborts drain with the same
+    single message + exit 2 as an in-loop systemic fault -- never a raw traceback."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+
+    def perm(src, dst):
+        raise PermissionError(13, "queue dir read-only")
+
+    monkeypatch.setattr(am.os, "replace", perm)
+    rc = am.drain(argparse.Namespace())
+    out = capsys.readouterr()
+    assert rc == 2
+    assert (out.out + out.err).count("ABORT: systemic queue fault") == 1
+
+
+def test_kill_after_claim_is_wired_into_drain(tmp_path):
+    """ARC_METRICS_TEST_KILL_AFTER=claim kills a REAL drain right after _claim_arc:
+    exit 137, the claim held (.taken exists), the entry taken (.json gone). Witnesses
+    the production call-site wiring, not just the seam helper."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    (q / "pr-1.json").write_text(
+        json.dumps({"pr": 1, "arc_id": "pr-1", "arc_type": "inventing", "decisions": 1})
+    )
+    code = "import arc_metrics as am, argparse; am.drain(argparse.Namespace())"
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        env={
+            **os.environ,
+            "PYTHONPATH": str(_TOOLS_DIR),
+            "ARC_METRICS_TEST_KILL_AFTER": "claim",
+            "ARC_METRICS_QUEUE_DIR": str(q),
+            "ARC_METRICS_REPO": str(tmp_path),
+            "ARC_METRICS_LEDGER": str(tmp_path / "l.jsonl"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 137, r.stderr
+    assert (q / "pr-1.taken").exists(), "killed AFTER the claim: the claim survives"
+    assert not (q / "pr-1.json").exists()
 
 
 # mutation-probe: replace _restore_or_republish's publish_exclusive fallback with a bare os.replace
@@ -1427,6 +1480,11 @@ def test_takeover_token_compare(tmp_path, monkeypatch):
     monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid == os.getpid())
     wins = [am._claim_arc(q / "pr-5.json", entry), am._claim_arc(q / "pr-5.json", entry)]
     assert sum(w is not None for w in wins) == 1
+    # Exactly one claim file remains and it is stamped by the WINNER (this pid) --
+    # a non-exclusive second write would have restamped it.
+    takens = list(q.glob("*.taken"))
+    assert [t.name for t in takens] == ["pr-5.taken"]
+    assert json.loads(takens[0].read_text())["_claim"]["pid"] == os.getpid()
     assert am._claim_owner_is_dead(q / "pr-5.taken") is False  # the winner (this pid) is alive
     # A foreign-host claim is unverifiable from here: NEVER dead, even with a dead pid.
     (q / "pr-9.taken").write_text(
