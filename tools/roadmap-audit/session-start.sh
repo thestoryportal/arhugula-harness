@@ -63,8 +63,10 @@ if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ] && [ -f tools/reservations.py ] \
   # the durable venue until U-HE-29 lands the loop-ledger emitter. Local grep -- no budget
   # risk. The log write itself is store-owned + O_NOFOLLOW inside reservations.py (codex
   # r2 P1: a shell redirect here would truncate through a planted symlink).
+  # jq on the authoritative rc field (codex r4 P3: a substring grep would false-positive
+  # on an arc id containing "ERROR"); jq is already a hard dependency of hook_emit.
   if [ -f "${_RROOT}/.reconcile.log" ] && [ ! -L "${_RROOT}/.reconcile.log" ] \
-    && grep -q 'ERROR' "${_RROOT}/.reconcile.log" 2>/dev/null; then
+    && [ "$(jq -r '.rc // 0' "${_RROOT}/.reconcile.log" 2>/dev/null)" != "0" ]; then
     _RESV=" resv=ERR(last reconcile pass; see ${_RROOT}/.reconcile.log)"
   fi
   nohup uv run python tools/reservations.py reconcile-all --log-to-store \

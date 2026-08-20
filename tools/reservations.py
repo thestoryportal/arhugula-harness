@@ -796,6 +796,10 @@ def reconcile(
         raise ReservationError(f"{arc_id}: no reservation")
     head = cur[1]
     lane = head["lane_id"]
+    if head["state"] not in STATES:
+        # A semantically corrupt head must isolate in-band at reconcile_all, never fall
+        # through to the open branch as a clean "open"/rc 0 (codex r4 P2).
+        raise ReservationError(f"{arc_id}: corrupt head state {head['state']!r}")
     if head["state"] in TERMINAL:
         return head["state"]
     if head["state"] == "pending":
@@ -835,13 +839,17 @@ def reconcile(
         return "open"
     try:
         view = gh_view(int(head["pr"]))
+        # Shape-validate INSIDE the protected boundary (codex r4 P2): a non-object or
+        # unknown-state response is the same not-confirmed ground truth as a gh failure.
+        state = view.get("state") if isinstance(view, dict) else None
+        if state not in ("MERGED", "CLOSED", "OPEN"):
+            state = None
     except Exception as exc:  # ANY gh failure fails safe (C-HE-03 §5)
         print(
             f"reservations: gh transient for {arc_id}: {exc}; still open, not reclaimable",
             file=sys.stderr,
         )
         return "open"
-    state = (view or {}).get("state")
     if state in ("MERGED", "CLOSED") and (state == "MERGED" or superseded_by):
         to_state = "merged" if state == "MERGED" else "abandoned"
         try:

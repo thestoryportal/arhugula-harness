@@ -880,3 +880,22 @@ def test_cli_reconcile_all_log_to_store_writes_and_refuses_symlink(qdir, monkeyp
     assert target.read_text() == "precious"
     assert not log.is_symlink() and json.loads(log.read_text())["rc"] == 0
     assert not list((qdir / "reservations").glob(".reconcile.log.*.tmp"))  # stager cleaned
+
+
+def test_reconcile_corrupt_state_isolates_in_band(qdir, monkeypatch):
+    """r4 P2: state='bogus' must be an in-band ERROR at reconcile_all, never a clean
+    'open'; a non-dict gh_view payload fails safe like a gh failure."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-99", lane_id="A", branch="b", arc_type="inventing")
+    bad = qdir / "reservations" / "pr-99" / "2.json"
+    head = json.loads((qdir / "reservations" / "pr-99" / "1.json").read_text())
+    head.update(state="bogus", generation=2, prev_generation=1)
+    bad.write_text(json.dumps(head))
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    assert out["pr-99"].startswith("ERROR") and "bogus" in out["pr-99"]
+    # non-dict gh payload: fail safe to open, no crash, no transition
+    rs.reserve("pr-100", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-100", "A")
+    rs.update_payload("pr-100", {"pr": 100})
+    assert rs.reconcile("pr-100", gh_view=lambda pr: ["not", "a", "dict"]) == "open"
+    assert rs.current("pr-100")[1]["state"] == "open"
