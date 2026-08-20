@@ -2059,9 +2059,10 @@ def test_cmd_extract_backfill_reserves_first_and_holder_rule_stands(
     assert rs.current("pr-70")[1]["state"] == "merged"
     assert rs.current("pr-70")[1]["lane_id"] == "B"
     folded = am.read_ledger()[0]
-    assert folded["lane_id"] == "B", "the backfill row folds its minted reservation"
-    assert folded["concurrent_lanes_at_open"] is not None, (
-        "sensor folded -- never a historical-null cohort for a NEW capture (codex r16 P2)"
+    assert folded["lane_id"] is None and folded["concurrent_lanes_at_open"] is None, (
+        "historical fields stay NULL (codex r16/r18 flip adjudicated: a synthetic"
+        " backfill reservation's lane/sensor would be false derived data -- C-HE-25's"
+        " additive-null model governs historical rows)"
     )
     # unclassified backfill is refused (C-HE-26 §1: the minted reservation needs a label)
     monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-72", 72))

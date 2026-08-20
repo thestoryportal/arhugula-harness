@@ -2066,12 +2066,13 @@ def cmd_extract(args: argparse.Namespace) -> int:
             ) from exc
         print("note: backfill reservation terminalized merged; appending the row")
     if owner == LANE_ID:
-        # The backfill row folds its minted reservation exactly as drain folds a real
-        # one (codex r16 P2): lane_id / sensor / open-time label land on the row --
-        # a null-lane backfill row would contaminate the historical-null cohorts.
+        # Adjudicated reviewer flip (codex r16 vs r18): the row does NOT fold the
+        # synthetic backfill reservation's lane_id / sensor -- those would be false
+        # derived data measured long after the historical arc ran; C-HE-25's own model
+        # is "all additive; historical rows read as null". Only the operator-declared
+        # classification is adopted from the minted reservation.
         head = rs.current(row.arc_id)
         if head:
-            _fold_head_onto(row, head[1])
             if not row.arc_type and head[1].get("arc_type"):
                 # A crash-retry without --arc-type still records the reservation's
                 # close-declared classification (codex r17 P2): the minted reservation
