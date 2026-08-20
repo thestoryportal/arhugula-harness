@@ -455,3 +455,6 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-19T21:51:08Z | #1401 | 7c25936e363d | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
 | 2026-08-19T21:51:08Z | #1401 | 7c25936e363d | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | 2026-08-19T21:51:09Z | #1401 | 7c25936e363d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-20T02:38:39Z | #1403 | 493dbf250cd1 | merge-gate-concurrency | BLOCK | 1 finding(s) | r1 |
+| 2026-08-20T02:39:44Z | #1403 | 493dbf250cd1 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+| 2026-08-20T02:40:13Z | #1403 | 493dbf250cd1 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |

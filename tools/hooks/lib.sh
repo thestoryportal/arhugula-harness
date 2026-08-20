@@ -507,8 +507,15 @@ EOF
     residue="${residue}${residue:+
 }detached HEAD (commits would lose their only ref)"
   fi
-  local ahead
-  if git -C "$wt" rev-parse --verify -q '@{u}' >/dev/null 2>&1; then
+  # The presence gate is the CONFIG (branch.<name>.merge), never @{u} resolution:
+  # the remote-tracking ref is pruned by this repo's own post-merge branch-prune
+  # flow while the config persists, and a resolution-gated check would then fail
+  # OPEN on genuinely unpushed commits (merge-gate L1, PR #1403).
+  local ahead branch upstream_cfg
+  branch=$(git -C "$wt" symbolic-ref --short -q HEAD) || branch=""
+  upstream_cfg=""
+  [ -n "$branch" ] && upstream_cfg=$(git -C "$wt" config --get "branch.${branch}.merge" 2>/dev/null) || true
+  if [ -n "$upstream_cfg" ]; then
     if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
       if [ "${ahead:-0}" -gt 0 ]; then
         residue="${residue}${residue:+
@@ -516,7 +523,7 @@ EOF
       fi
     else
       residue="${residue}${residue:+
-}cannot count ahead-of-upstream (fail-closed)"
+}upstream configured but unresolvable (cannot verify pushed; fail-closed)"
     fi
   fi
   [ -n "$residue" ] || return 1

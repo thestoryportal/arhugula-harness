@@ -841,6 +841,21 @@ NO_UPSTREAM_WT="$REPO-no-upstream"
 git -C "$REPO" worktree add -q -b no-upstream-branch "$NO_UPSTREAM_WT"
 hook_worktree_local_state "$NO_UPSTREAM_WT" >/dev/null
 eq "no-upstream worktree keeps today's clean verdict" "$?" "1"
+# Merge-gate L1 (PR #1403): a pruned remote-tracking ref must not fail OPEN --
+# the branch CONFIG persists after `fetch --prune`, so an upstream-configured
+# branch whose @{u} no longer resolves is fail-closed residue.
+PRUNED_WT="$REPO-pruned-upstream"
+git -C "$REPO" worktree add -q -b pruned-branch "$PRUNED_WT"
+git -C "$PRUNED_WT" push -qu origin pruned-branch 2>/dev/null
+git -C "$PRUNED_WT" commit -q --allow-empty -m "committed after last push"
+git -C "$REPO" update-ref -d refs/remotes/origin/pruned-branch
+PRUNED_OUT=$(hook_worktree_local_state "$PRUNED_WT")
+PRUNED_RC=$?
+eq "pruned-upstream worktree is fail-closed residue" "$PRUNED_RC" "0"
+case "$PRUNED_OUT" in
+  *"upstream configured but unresolvable"*) ok "residue names the unresolvable upstream" ;;
+  *) bad "residue missing unresolvable-upstream line: '$PRUNED_OUT'" ;;
+esac
 DETACHED_WT="$REPO-detached"
 git -C "$REPO" worktree add -q --detach "$DETACHED_WT"
 DETACHED_OUT=$(hook_worktree_local_state "$DETACHED_WT")
