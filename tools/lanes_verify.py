@@ -62,6 +62,8 @@ MANIFEST: list[Row] = [
         "local + CI",
         False,
     ),
+    # C-HE-03 (U-HE-17)
+    Row("C-HE-03", "pytest:tools/test_reservations.py", "phase0", "local + CI", True),
     # C-HE-04 (U-HE-15); the shell row carries the §6 teardown ahead-of-@{u} guard
     Row(
         "C-HE-04",
