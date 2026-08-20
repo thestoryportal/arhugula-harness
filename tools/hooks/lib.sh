@@ -497,12 +497,19 @@ EOF
   # prune could lose -- with an upstream, ahead-of-@{u} is refusal residue. A
   # worktree with NO upstream keeps today's behavior (the spec scopes this check
   # to `rev-list @{u}..HEAD`; the never-pushed-branch composition is a registered
-  # residual -- refusing it would refuse every local-only scratch worktree).
+  # residual -- refusing it would refuse every local-only scratch worktree; plan
+  # U-HE-15 Step 4b rev 2026-08-19). An upstream that RESOLVES but whose ahead
+  # count cannot be computed is fail-closed residue, never a clean verdict.
   local ahead
-  if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
-    if [ "${ahead:-0}" -gt 0 ]; then
-      residue="${residue}${residue:+
+  if git -C "$wt" rev-parse --verify -q '@{u}' >/dev/null 2>&1; then
+    if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
+      if [ "${ahead:-0}" -gt 0 ]; then
+        residue="${residue}${residue:+
 }ahead-of-upstream: ${ahead} commit(s)"
+      fi
+    else
+      residue="${residue}${residue:+
+}cannot count ahead-of-upstream (fail-closed)"
     fi
   fi
   [ -n "$residue" ] || return 1

@@ -35,7 +35,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | Field | Value |
 |---|---|
 | Status | **Accepted on merge of PR #1393, with the review record in §7 items 4–8** — exit gate = five out-of-family `just codex-review` rounds on the PR (40 P1 / 22 P2 in total, every finding absorbed in-plan before the next round; one spec-internal tension registered, not absorbed); item 8 is the terminal record and states the residual classes honestly (yield did NOT converge to zero — it is carried by unit execution's RED-first + per-PR codex + merge-gate). The spec's clearance marker (same PR) admits the plan only under this recorded gate. |
-| Version | v1.0 + **rev 2026-08-19 (spec v1.3 X3 absorption, U-HE-14 only)**: the U-HE-14 audit template's family table is re-headed "Derived families + new-fact carriers" with a `Relation` column (`derived` / `part of store N` / `sole carrier (new fact)`) and the `.seq` allocator, transition-marker `fresh_lease`, and LEASE sidecars are classified per the as-landed audit — the S4 units (U-HE-17/22/23/30) land against that classification, not the v1.0 "no new authority" template. No other unit changed. |
+| Version | v1.0 + **rev 2026-08-19 (spec v1.3 X3 absorption, U-HE-14 only)**: the U-HE-14 audit template's family table is re-headed "Derived families + new-fact carriers" with a `Relation` column (`derived` / `part of store N` / `sole carrier (new fact)`) and the `.seq` allocator, transition-marker `fresh_lease`, and LEASE sidecars are classified per the as-landed audit — the S4 units (U-HE-17/22/23/30) land against that classification, not the v1.0 "no new authority" template. No other unit changed. + **rev 2026-08-19 (S4a execution correction, U-HE-15 Step 4b only)**: no-upstream teardown residue clause replaced by spec-exact `@{u}..HEAD` scope with the no-upstream composition registered as a residual (rationale at Step 4b). |
 | Date | 2026-08-18 |
 | Repo | `17011f89c` (every `file:line` below is pinned there, matching the spec's `[V]` set; re-verified in this authoring session) |
 | Path | `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` |
@@ -2707,17 +2707,20 @@ and the loop in `drain()` becomes:
 ```
 (`import errno` at top. `_claim_arc` already converts non-race `OSError` into `AbortError` at `:629-633`; the systemic classification therefore has to happen **before** that conversion — change `_claim_arc`'s `except OSError as exc:` to `if _is_systemic(exc): raise` first, then the existing `raise AbortError(...)`.)
 - [ ] **Step 4: GREEN**, probes: fault-isolation (`--lines` = the `except AbortError` clause in the loop) → PINNED; E9 (`--lines` = the `publish_exclusive` fallback in `_restore_or_republish`) → PINNED. Register `Row("C-HE-04", "pytest:tools/test_arc_metrics.py::test_drain_fault_isolation", "phase0", "local + CI", True)` and `Row("C-HE-04", "pytest:tools/test_arc_metrics.py::test_e9_capture_republish", "phase0", "local + CI", True)`.
-- [ ] **Step 4b: Teardown guard (C-HE-04 §6).** Failing test in `tools/hooks/test_lib.sh` (the file's scratch-repo idiom): create a worktree with an upstream, commit locally without pushing → `hook_worktree_local_state <wt>` returns 0 with a residue line `ahead-of-upstream: 1 commit(s)`; push → returns 1 (clean); a worktree with NO upstream returns 0 with `no-upstream` (fail-closed: unverifiable ⇒ refuse). Then implement in `lib.sh` `hook_worktree_local_state`, after the porcelain loop and before `[ -n "$residue" ] || return 1`:
+- [ ] **Step 4b: Teardown guard (C-HE-04 §6) — rev 2026-08-19 (S4a execution correction, spec-exact scope).** Failing test in `tools/hooks/test_lib.sh` (the file's scratch-repo idiom): create a worktree with an upstream, commit locally without pushing → `hook_worktree_local_state <wt>` returns 0 with a residue line `ahead-of-upstream: 1 commit(s)`; push → returns 1 (clean); a worktree with NO upstream keeps today's clean verdict. *The v1.0 body additionally prescribed `no-upstream` as unconditional fail-closed residue; grounded at S4a execution that clause is unimplementable without flipping five existing safe-removal witnesses (test_lib.sh POST_SCAN rc 0 / HELD_CWD rc 7 / OPEN_UNKNOWN rc 9 / POST_IDENTITY rc 10 / the signal-recovery cases — `hook_worktree_local_state` gates removal before each of those paths) and without refusing every local-only scratch worktree in production. Spec C-HE-04 §6's MUST is scoped to `rev-list @{u}..HEAD` non-empty and is implemented exactly; the never-pushed-branch composition (unpushed local branch + a later manual branch delete — worktree disposal itself never deletes the branch, and branch-prune only prunes gh-merged head-refs) is a REGISTERED RESIDUAL of this unit. An upstream that RESOLVES but whose ahead-count fails stays fail-closed residue.* Implement in `lib.sh` `hook_worktree_local_state`, after the porcelain loop and before `[ -n "$residue" ] || return 1`:
 ```bash
-  # C-HE-04 §6: committed-but-unpushed work is capture that would be lost with the worktree.
-  # Fail closed on "no upstream" (cannot prove pushed).
+  # C-HE-04 §6: committed-but-unpushed commits are capture a later branch prune
+  # could lose -- with an upstream, ahead-of-@{u} is refusal residue. No upstream
+  # keeps today's behavior (spec scopes the check to @{u}; residual registered).
   local ahead
-  if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
-    [ "${ahead:-0}" -gt 0 ] && residue="${residue}${residue:+
+  if git -C "$wt" rev-parse --verify -q '@{u}' >/dev/null 2>&1; then
+    if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
+      [ "${ahead:-0}" -gt 0 ] && residue="${residue}${residue:+
 }ahead-of-upstream: ${ahead} commit(s)"
-  else
-    residue="${residue}${residue:+
-}no-upstream (cannot verify pushed)"
+    else
+      residue="${residue}${residue:+
+}cannot count ahead-of-upstream (fail-closed)"
+    fi
   fi
 ```
 `safe-worktree-remove.sh` already refuses on any residue (rc 4/5 paths) — no change there. Mutation-probe: `just mutation-probe --file tools/hooks/lib.sh --lines <the ahead block> --test "bash tools/hooks/test_lib.sh"` → PINNED (committed-unpushed worktree would be removed). Register `Row("C-HE-04", "shell:tools/hooks/test_lib.sh", "phase0", "local + CI", True)`.
