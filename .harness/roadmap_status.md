@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `cfa1e912ce29` |
+| `workspace_state_hash` | `f94416f66b60` |
 | `last_refreshed` | 2026-08-19T00:00:00Z |
-| `git_head` | `47d4428f` —  |
+| `git_head` | `f0e64f21` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1401).** **S3 is on main (PR #1401, squash `47d4428f`)** — `U-HE-14` durable store audit: `.harness/spec/store-audit-he-loop-lanes.md` (eight C-HE-30 stores, one authority each; families classified `derived` / `part of store N` / `sole carrier (new fact)`; transient non-stores) + `tools/test_store_audit.py` (6-test phase0 witness; idiom-complete literal extractor — pathlib chains, chained/single-quoted/call-root joins, glob/with_suffix/.tmp, templated shapes → `*.*`, shell `$(..)/x` + `${VAR:-d}/x`; segment-bound listing; LANDED/PENDING promotion contract) wired into §8.1 (`Row C-HE-30`, 18 phase0 rows PASS) and `codex-parity-check.sh`. The audit forced **spec v1.3 X3** (three wording edits inside C-HE-30: clearance-fold parenthetical → "derived OR sole carrier of a NEW coordination fact, never a second authority for an existing fact"; count sentence; Verification wording) — marker `spec-he-loop-lanes-v1.3-cleared-2026-08-19.md`, artifact-heads v1.3/4, plan U-HE-14 body revised to match (rev note at Status block). 11 `review-with-failover` rounds (r11 APPROVE) + 3-lens merge-gate 3× APPROVE recorded through U-HE-13 machinery (landing-delta TRANSFER). **Residuals registered:** U-HE-30 HIL claim-before-delivery crash window (claim ≠ delivery — audit HIL row); extractor covers named idioms only (a genuinely novel path idiom in S4 needs a pattern row — the per-module non-vacuity assert is the tripwire). The recommended next action / next implementable unit is `U-HE-15` (S4a drain fault isolation: per-arc `_drain_one`, three FNF guards, systemic-abort split, restore-or-republish, `ARC_METRICS_TEST_KILL_AFTER` seam, teardown ahead-of-`@{u}` refusal), then S4a `U-HE-16` per plan §3. Alternatives if the operator defers the lanes program: B-186 step (1), B-160, B-148 (unchanged).
+**Current next action (post-#1403).** S4a is on main. The recommended next action / next implementable unit is `U-HE-17` (S4b arc reservation: tools/reservations.py generation-CAS record, alloc_seq, reserve with required arc_type, transition re-validate, walk_terminal, gc, mint_lane_id — C-HE-03 §1-4/§8, C-HE-26 §1), then S4b U-HE-18/19/20/21 per plan §3. Registered S4a residuals close in S4b: the drain⇄reservation integration (U-HE-19) owns the displaced-owner fence + claim-in-flight recovery window + exit-0 scan-window; U-HE-20 owns the concurrent takeover + kill-after-append certificates. Alternatives if the operator defers the lanes program: B-186 step (1), B-160, B-148 (unchanged).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1403 | 2026-08-19 | S3->S4a: S4a cluster U-HE-15/16 on main (#1403, squash f0e64f21): drain fault isolation (_drain_one, systemic split, exclusive restore-or-republish, kill seam, atomic-rename takeover, KEPT-QUEUED-verified/CAPTURE-AT-RISK accounting), teardown guard (ahead-of-@{u} config-gated + detached-HEAD + pruned-upstream fail-closed), C-HE-02 witnesses; plan U-HE-15 Step 4b rev + clearance marker; 12 review-with-failover rounds + 2 merge-gate rounds (r1 concurrency BLOCK fixed, r2 3x APPROVE); 12 probe pins live; 6 residuals registered to S4b/U-HE-20 |
 | 1401 | 2026-08-19 | S3 U-HE-14 durable store audit (C-HE-30) + phase0 witness + §8.1 row + parity wiring; spec v1.3 X3 with marker + artifact-heads; plan body revised; 11 review rounds (r11 APPROVE) + 3-lens gate 3x APPROVE; U-HE-30 HIL claim-ordering residual registered |
 | PR #1399 | 2026-08-19 | S2 cluster U-HE-10/11/12/05/13 (spec-he-loop-lanes v1.2): arc_metrics ARC_METRICS_REPO/LEDGER overrides + C-HE-25 fields + arc_type open/close relabel (QUEUE_DIR-adjacent CAS writer claim); §8.1 lanes_verify manifest (17 rows) + digest-bound mutation-probe log (25 live pins); merge-gate JSONL-first sibling + per-emission reducer + lens binding + landing-delta predicate (U-HE-23 landed early); 10 review-with-failover rounds + 3-lens gate recorded through the new machinery |
 | PR #1397 | 2026-08-19 | S1 cluster U-HE-03/02/04/06/07/08/09 on main (#1397, merge 3b3e3a10): review_schemas/{codex,gemini,merge-gate}, review_wrapper_common (fail-closed core), codex_review (codex exec wrapper + session-artifact fallback + D-C failover + HITL routing), agy_review under the core (bound-bytes payload, --outcome-json envelope), ci_is_green, loop_hil_ttl_resurface; spec v1.2 X2 (1200 s per-attempt cap); 13 live review rounds, 3-lens unanimous APPROVE |
 | PR #1395 | 2026-08-18 | U-HE-01 finding record (C-HE-24): tools/finding_record.py + closed schema + 36-test witness suite, 15 mutation probes PINNED; spec v1.1 change-note X1 (C-HE-23 §2 PIPE_BUF parenthetical corrected, successor marker, heads regenerated); 10 codex rounds + 3-lens merge-gate (L3 BLOCK→fixed→APPROVE); jsonschema declared in root dev group; post-#1390 round archived |
-| PR #1393 | 2026-08-18 | H_E loop+lanes: ADR-HE-1..4, Spec_HE_Loop_Lanes_v1 (35 C-HE-*, council-cleared, marker filed), Implementation_Plan_HE_Loop_Lanes_v1 (45 U-HE-* units; 5 codex rounds absorbed), both council ledgers |
 
 ---
 
