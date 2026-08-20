@@ -837,7 +837,7 @@ def test_codex_review_failover_flag_runs_gemini_once_and_blocks(monkeypatch, tmp
         cr,
         "_run_gemini_failover",
         lambda repo, base, chain_round=None: (
-            calls.append(1)
+            calls.append(chain_round)
             or rw.ReviewOutcome(
                 "BLOCK",
                 "gemini",

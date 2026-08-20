@@ -503,10 +503,15 @@ def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> d
         slot = head.setdefault("phases", {}).setdefault(phase, {})
         val = ts or now_iso()
         existing = slot.get(edge)
-        if existing is not None and existing != val:
-            # phase edges are append-only durable measurements (C-HE-27 §3): a resumed or
-            # duplicate emitter must never rewrite a recorded start/end -- N6 reads only the
-            # folded head (codex round-14 P2). Identical re-record is idempotent.
+        if existing is not None:
+            if ts is None or ts == existing:
+                # replay-idempotent (codex round-14/15 P2): the edge is already durably
+                # recorded; a retry without an explicit timestamp (the CLI's only form)
+                # or with the identical one is a no-op, so a crash after publication has
+                # a usable resume path.
+                return head
+            # an EXPLICIT different timestamp is a rewrite of a durable measurement
+            # (C-HE-27 §3) -- N6 reads only the folded head; refuse.
             raise ReservationError(
                 f"{arc_id}: phase {phase}.{edge} already recorded ({existing}); "
                 f"refusing rewrite to {val}"

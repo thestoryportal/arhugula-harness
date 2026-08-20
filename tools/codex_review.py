@@ -556,10 +556,21 @@ def main(argv: list[str] | None = None) -> int:
     invoke = (lambda timeout: rw.Attempt("", "", 0, False)) if args.invoke_test_empty else None
 
     chain: dict[str, int] = {}
+    if args.failover:
+        # Joint chain allocation (codex round-15 P2): the failover pair shares ONE round
+        # number that is fresh for BOTH producers -- max of each producer's next round --
+        # so neither leg can duplicate an earlier round of its own channel in the gate log
+        # or collide with a stale same-number reservation entry.
+        arc_id, _ = rw.env_arc_and_lane()
+        chain["round"] = max(
+            rw.round_n_for(arc_id, PRODUCER), rw.round_n_for(arc_id, GEMINI_PRODUCER)
+        )
 
     def primary() -> rw.ReviewOutcome:
         outcome = run_codex_review(Path.cwd(), args.base, invoke=invoke)
-        chain["round"] = _emit_rows(outcome)  # the primary's row lands before the failover runs
+        # the primary's row lands before the failover runs, at the chain round when one
+        # was allocated
+        chain["round"] = _emit_rows(outcome, round_n=chain.get("round"))
         _report(outcome, label="codex-review")
         return outcome
 

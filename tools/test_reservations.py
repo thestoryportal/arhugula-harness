@@ -454,6 +454,9 @@ def test_record_phase_accretes(qdir):
     rs.record_phase("pr-10", "execute", "end", ts="2026-08-18T00:10:00Z")
     with pytest.raises(rs.ReservationError, match="already recorded"):
         rs.record_phase("pr-10", "execute", "end", ts="2026-08-18T00:20:00Z")
+    # replay-idempotent resume: a retry WITHOUT an explicit ts (the CLI's only form) is a
+    # no-op, never a raise (codex round-15 P2)
+    rs.record_phase("pr-10", "execute", "end")
     assert rs.current("pr-10")[1]["phases"]["execute"]["end"] == "2026-08-18T00:10:00Z"
 
 
