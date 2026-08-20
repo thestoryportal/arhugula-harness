@@ -598,7 +598,7 @@ def test_a_claimed_arc_is_skipped_by_a_concurrent_drain(monkeypatch, tmp_path: P
     # A peer drain claimed AND finished this arc after we listed it, so our
     # rename finds nothing. Losing that race must be a skip, not a re-capture.
     path.unlink()
-    monkeypatch.setattr(am, "read_queue", lambda: stale_listing)
+    monkeypatch.setattr(am, "read_queue", lambda invalid=None: stale_listing)
 
     calls = []
     monkeypatch.setattr(am, "extract", lambda a: calls.append(a) or _merged_row())
@@ -1472,13 +1472,77 @@ def test_recovery_restores_an_orphaned_aside_from_a_dead_recoverer(tmp_path, mon
     q = tmp_path / "queue"
     q.mkdir()
     monkeypatch.setattr(am, "QUEUE_DIR", q)
-    (q / "pr-7.taken.recover.999999").write_text(
+    (q / f"pr-7.taken.recover.{socket.gethostname()}.999999").write_text(
         json.dumps({"pr": 7, "_claim": {"pid": 999998, "host": socket.gethostname()}})
+    )
+    # A FOREIGN-host recoverer's aside is unjudgeable from here: left alone.
+    (q / "pr-8.taken.recover.elsewhere.invalid.999999").write_text(
+        json.dumps({"pr": 8, "_claim": {"pid": 999998, "host": "elsewhere.invalid"}})
     )
     monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
     am._recover_dead_claims()
     assert (q / "pr-7.json").exists(), "orphaned aside restored to the queue"
-    assert not list(q.glob("*.taken.recover.*"))
+    assert not (q / "pr-8.json").exists(), "foreign-host aside never judged dead"
+    assert list(q.glob("*.taken.recover.*")) == [q / "pr-8.taken.recover.elsewhere.invalid.999999"]
+
+
+# mutation-probe: replace _restore_or_republish's os.link with os.replace (clobbering restore)
+def test_restore_never_clobbers_a_newer_requeue(tmp_path, monkeypatch):
+    """While an arc is claimed its .json name is free; a concurrent re-queue that
+    published UPDATED declarations there must survive the stale restore (C-HE-04 SS4)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    stale = {"pr": 3, "arc_id": "pr-3", "decisions": 1}
+    taken = q / "pr-3.taken"
+    taken.write_text(json.dumps({**stale, "_claim": {"pid": os.getpid(), "host": "h"}}))
+    newer = json.dumps({"pr": 3, "arc_id": "pr-3", "decisions": 9, "notes": "corrected"})
+    (q / "pr-3.json").write_text(newer)  # concurrent queue_capture during the claim window
+    am._restore_or_republish(taken, q / "pr-3.json", stale)
+    assert (q / "pr-3.json").read_text() == newer, "newer capture survives"
+    assert not taken.exists(), "the stale claimed copy is dropped"
+
+
+def test_malformed_entry_after_claim_restores_before_kept(tmp_path, monkeypatch):
+    """A field fault surfacing AFTER the claim (Namespace construction) must restore
+    the entry -- never leave a wedged .taken under a live pid (codex r4 P2)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    # arc_id present (so the pre-claim derivation succeeds); pr missing (raises
+    # KeyError in the post-claim Namespace construction).
+    (q / "pr-4.json").write_text(json.dumps({"arc_id": "pr-4"}))
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1
+    assert (q / "pr-4.json").exists(), "entry restored despite the post-claim fault"
+    assert not list(q.glob("*.taken")), "no wedged claim left behind"
+
+
+def test_one_invalid_json_entry_does_not_abandon_the_rest(tmp_path, monkeypatch, capsys):
+    """A truncated queue file is a per-arc content fault: reported + kept, the other
+    entries still drain, and the run exits nonzero for attention (C-HE-04 SS3)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    (q / "pr-0-bad.json").write_text('{"pr": 1, TRUNC')
+    (q / "pr-0-list.json").write_text("[]")  # valid JSON, not an object
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    err = capsys.readouterr().err
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"], "the valid entry drained"
+    assert rc == 1
+    assert (q / "pr-0-bad.json").exists() and (q / "pr-0-list.json").exists()
+    assert "needs human repair" in err
 
 
 def test_kill_after_claim_is_wired_into_drain(tmp_path):
