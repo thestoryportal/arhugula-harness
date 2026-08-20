@@ -47,6 +47,37 @@ class Result:
 
 #: Rows are appended by the unit that lands each artifact. Keep in §8.1 order.
 MANIFEST: list[Row] = [
+    # C-HE-02 (U-HE-16)
+    Row(
+        "C-HE-02",
+        "pytest:tools/test_arc_metrics.py::test_takeover_token_compare",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-02",
+        "pytest:tools/test_arc_metrics.py::test_no_flock_fcntl_in_coordination_modules",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    # C-HE-04 (U-HE-15); the shell row carries the §6 teardown ahead-of-@{u} guard
+    Row(
+        "C-HE-04",
+        "pytest:tools/test_arc_metrics.py::test_drain_fault_isolation",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-04",
+        "pytest:tools/test_arc_metrics.py::test_e9_capture_republish",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row("C-HE-04", "shell:tools/hooks/test_lib.sh", "phase0", "local + CI", True),
     # C-HE-05 (U-HE-10)
     Row(
         "C-HE-05",

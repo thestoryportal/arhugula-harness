@@ -33,7 +33,7 @@ LANDED = [
     "tools/lanes_verify.py",  # C-HE-31 §4d evaluator site; reads the probe log today
 ]
 #: Planned store creators -- skipped until they land; the landing unit (U-HE-17 / U-HE-22 /
-#: U-HE-15 lane-init) MUST move its module into LANDED in the same change.
+#: U-HE-31 lane-init) MUST move its module into LANDED in the same change.
 PENDING = [
     "tools/merge_door.py",
     "tools/reservations.py",

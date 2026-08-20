@@ -50,6 +50,7 @@ Locks and stagers that carry no durable fact — never read for state, never an 
 | Gate emission lock | `.harness/merge-gate-log.jsonl.emit.lock` (`flock`; emissions + reconcile serialized) | one emission |
 | Lens scratch (binding input) | `.harness/tmp/` (`LENS_SCRATCH`; a lens's fenced JSON must RESOLVE under it) | one gate round |
 | Atomic-write stagers | `.<name>.<pid>.tmp` next to the target (`LEDGER`, queue entries; `arc_metrics.py` only — `loop_status.md` is appended in place under the mutex below) | one `os.replace` |
+| Recovery aside (queue claim) | `QUEUE_DIR/<arc>.taken.recover.<pid>` (`*.taken.recover.*`; move-aside re-judge in `_recover_dead_claims`, U-HE-15 r3 — orphans from a dead recoverer are swept and restored on the next recovery pass) | one recovery step |
 | Status-ledger mutex | `.harness/.loop-status.lock` (fd 8; lib.sh worktree-mutex pattern) | one append |
 
 ## Referenced pre-existing workspace stores (not created or extended by this spec)

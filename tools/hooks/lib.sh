@@ -493,6 +493,39 @@ hook_worktree_local_state() {
   done <<EOF
 $raw
 EOF
+  # C-HE-04 §6: committed-but-unpushed commits are capture that a later branch
+  # prune could lose -- with an upstream, ahead-of-@{u} is refusal residue. A
+  # worktree with NO upstream keeps today's behavior (the spec scopes this check
+  # to `rev-list @{u}..HEAD`; the never-pushed-branch composition is a registered
+  # residual -- refusing it would refuse every local-only scratch worktree; plan
+  # U-HE-15 Step 4b rev 2026-08-19). An upstream that RESOLVES but whose ahead
+  # count cannot be computed is fail-closed residue, never a clean verdict.
+  # A DETACHED HEAD is refusal residue outright: no branch ref survives the
+  # worktree, so disposal would drop the commits' only reference -- the branch-
+  # survives rationale above does not cover it.
+  if ! git -C "$wt" symbolic-ref -q HEAD >/dev/null 2>&1; then
+    residue="${residue}${residue:+
+}detached HEAD (commits would lose their only ref)"
+  fi
+  # The presence gate is the CONFIG (branch.<name>.merge), never @{u} resolution:
+  # the remote-tracking ref is pruned by this repo's own post-merge branch-prune
+  # flow while the config persists, and a resolution-gated check would then fail
+  # OPEN on genuinely unpushed commits (merge-gate L1, PR #1403).
+  local ahead branch upstream_cfg
+  branch=$(git -C "$wt" symbolic-ref --short -q HEAD) || branch=""
+  upstream_cfg=""
+  [ -n "$branch" ] && upstream_cfg=$(git -C "$wt" config --get "branch.${branch}.merge" 2>/dev/null) || true
+  if [ -n "$upstream_cfg" ]; then
+    if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
+      if [ "${ahead:-0}" -gt 0 ]; then
+        residue="${residue}${residue:+
+}ahead-of-upstream: ${ahead} commit(s)"
+      fi
+    else
+      residue="${residue}${residue:+
+}upstream configured but unresolvable (cannot verify pushed; fail-closed)"
+    fi
+  fi
   [ -n "$residue" ] || return 1
   printf '%s\n' "$residue"
   return 0

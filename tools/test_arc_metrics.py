@@ -8,9 +8,12 @@ noted -- revert the guard it covers and the test must red.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -595,7 +598,7 @@ def test_a_claimed_arc_is_skipped_by_a_concurrent_drain(monkeypatch, tmp_path: P
     # A peer drain claimed AND finished this arc after we listed it, so our
     # rename finds nothing. Losing that race must be a skip, not a re-capture.
     path.unlink()
-    monkeypatch.setattr(am, "read_queue", lambda: stale_listing)
+    monkeypatch.setattr(am, "read_queue", lambda invalid=None: stale_listing)
 
     calls = []
     monkeypatch.setattr(am, "extract", lambda a: calls.append(a) or _merged_row())
@@ -655,6 +658,15 @@ def test_a_non_race_claim_failure_aborts_rather_than_reporting_a_lost_race(
         raise PermissionError(13, "read-only file system")
 
     monkeypatch.setattr(Path, "open", unwritable)
+    # A SYSTEMIC fault (permission/I/O, C-HE-04 SS3) keeps its OSError identity so
+    # drain() can abort the whole loop once -- it must not be softened per-arc.
+    with pytest.raises(PermissionError):
+        am._claim_arc(path, entry)
+
+    def transient(*_a, **_k):
+        raise OSError(24, "too many open files")  # EMFILE: per-arc, not systemic
+
+    monkeypatch.setattr(Path, "open", transient)
     with pytest.raises(am.AbortError) as exc:
         am._claim_arc(path, entry)
     assert "cannot claim" in str(exc.value)
@@ -977,8 +989,6 @@ def test_ci_green_timing_uses_the_one_predicate(monkeypatch):
 def test_env_overrides(tmp_path: Path):
     """Two subprocesses with different ARC_METRICS_REPO observe different LEDGER paths and
     one QUEUE_DIR (C-HE-05 Verification)."""
-    import subprocess
-
     q = tmp_path / "queue"
     code = (
         "import arc_metrics as am, json; "
@@ -1004,8 +1014,6 @@ def test_env_overrides(tmp_path: Path):
 
 def test_env_override_ledger_wins_over_repo(tmp_path: Path):
     """ARC_METRICS_LEDGER names the file directly; ARC_METRICS_REPO only supplies the default."""
-    import subprocess
-
     code = "import arc_metrics as am; print(am.LEDGER)"
     env = {
         **os.environ,
@@ -1074,8 +1082,6 @@ def test_ledger_rows_are_all_record_kind_arc():
 
 # mutation-probe: drop the `by_lanes` grouping block in summary()
 def test_cohort_split_null_safe(monkeypatch, tmp_path: Path, capsys):
-    import argparse
-
     ledger = tmp_path / "l.jsonl"
     rows = [
         {
@@ -1144,8 +1150,6 @@ def test_relabel_leaves_every_other_row_byte_identical(monkeypatch, tmp_path: Pa
 
 
 def test_extract_records_which_side_declared_the_label(monkeypatch):
-    import argparse
-
     monkeypatch.setattr(
         am,
         "gh_pr",
@@ -1274,3 +1278,573 @@ def test_relabel_cli_is_wired(monkeypatch, tmp_path: Path, capsys):
     assert am.read_ledger()[0]["arc_type_close"] == "inventing"
     assert am.main(["relabel", "--arc-id", "pr-3", "--arc-type-close", "inventing"]) == 0
     assert len(am.read_ledger()) == 1
+
+
+# ─── U-HE-15: drain fault isolation + capture durability (C-HE-04 §1/§3/§4/§7) ──
+
+
+def _queue_entries(am_mod, tmp_path, monkeypatch, n):
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am_mod, "QUEUE_DIR", q)
+    monkeypatch.setattr(am_mod, "LEDGER", tmp_path / "l.jsonl")
+    for i in range(1, n + 1):
+        (q / f"pr-{i}.json").write_text(
+            json.dumps({"pr": i, "arc_id": f"pr-{i}", "arc_type": "inventing", "decisions": 1})
+        )
+    return q
+
+
+# mutation-probe: remove the `except AbortError` clause in drain()'s loop (let the exception escape)
+def test_drain_fault_isolation(tmp_path, monkeypatch):
+    """Entry 1 raises INSIDE _claim_arc; entries 2..n are still processed (C-HE-04 §3)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 3)
+    real_claim = am._claim_arc
+
+    def boom(path, entry):
+        if entry["pr"] == 1:
+            raise am.AbortError("cannot claim pr-1: injected")
+        return real_claim(path, entry)
+
+    monkeypatch.setattr(am, "_claim_arc", boom)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    ledger = [r["arc_id"] for r in am.read_ledger()]
+    assert ledger == ["pr-2", "pr-3"], "the fault in pr-1 must not abandon pr-2/pr-3"
+    assert rc == 1  # pr-1 kept; two appended rows are held pending commit
+    assert (q / "pr-1.json").exists(), "the faulted entry stays queued for retry"
+
+
+def test_drain_systemic_oserror_aborts_once(tmp_path, monkeypatch, capsys):
+    """A queue-dir permission fault aborts the loop with ONE message (C-HE-04 §3)."""
+    _queue_entries(am, tmp_path, monkeypatch, 3)
+
+    def perm(path, entry):
+        raise PermissionError(13, "queue dir read-only")
+
+    monkeypatch.setattr(am, "_claim_arc", perm)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    rc = am.drain(argparse.Namespace())
+    out = capsys.readouterr()
+    assert rc == 2
+    # Count the full marker phrase: tmp_path embeds this test's own name, which
+    # itself contains "systemic" -- the bare token would self-match via QUEUE_DIR.
+    n = (out.out + out.err).count("ABORT: systemic queue fault")
+    assert n == 1, "one abort message, no per-entry repeats"
+
+
+def test_recover_dead_claims_fnf_guarded(tmp_path, monkeypatch):
+    """A peer restoring the same dead claim first must not raise (C-HE-04 §1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    real_rename = os.rename
+
+    def peer_restored_first(src, dst):
+        # The real race (C-HE-04 SS1): a peer's _recover_dead_claims restored the
+        # entry (json published, .taken gone) between our scan and the move-aside
+        # rename -- the losing racer's rename raises FNF and must log-and-yield.
+        (q / "pr-7.json").write_text(json.dumps({"pr": 7}))
+        Path(src).unlink()
+        return real_rename(src, dst)  # raises FileNotFoundError
+
+    monkeypatch.setattr(am.os, "rename", peer_restored_first)
+    am._recover_dead_claims()  # must NOT raise
+    assert (q / "pr-7.json").exists(), "the capture is held by the winning racer"
+
+
+def test_recover_dead_claims_systemic_fault_aborts_drain(tmp_path, monkeypatch, capsys):
+    """A systemic queue-dir fault during pre-loop recovery aborts drain with the same
+    single message + exit 2 as an in-loop systemic fault -- never a raw traceback."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+
+    def perm(src, dst):
+        raise PermissionError(13, "queue dir read-only")
+
+    monkeypatch.setattr(am.os, "link", perm)  # recovery's restore is an exclusive link
+    rc = am.drain(argparse.Namespace())
+    out = capsys.readouterr()
+    assert rc == 2
+    assert (out.out + out.err).count("ABORT: systemic queue fault") == 1
+
+
+def test_read_queue_skips_an_entry_a_peer_released_mid_scan(tmp_path, monkeypatch):
+    """FNF between the glob and the read = no longer pending; skipped, never raised."""
+    _queue_entries(am, tmp_path, monkeypatch, 2)
+    real_read = Path.read_text
+
+    def vanish_first(self, *a, **k):
+        if self.name == "pr-1.json":
+            self.unlink()
+            raise FileNotFoundError(str(self))
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", vanish_first)
+    assert [e["arc_id"] for _p, e in am.read_queue()] == ["pr-2"]
+
+
+def test_read_queue_systemic_fault_aborts_drain_once(tmp_path, monkeypatch, capsys):
+    """A permission fault reading the queue aborts with ONE message + exit 2."""
+    _queue_entries(am, tmp_path, monkeypatch, 2)
+
+    def perm(self, *a, **k):
+        raise PermissionError(13, "queue dir unreadable")
+
+    monkeypatch.setattr(Path, "read_text", perm)
+    monkeypatch.setattr(am.os, "access", lambda *a, **k: False)  # the DIR itself unreadable
+    rc = am.drain(argparse.Namespace())
+    out = capsys.readouterr()
+    assert rc == 2
+    assert (out.out + out.err).count("ABORT: systemic queue fault") == 1
+
+
+def test_malformed_entry_is_kept_and_does_not_abort_the_loop(tmp_path, monkeypatch):
+    """Valid JSON with missing fields is a per-arc content fault (C-HE-04 SS3)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 2)
+    (q / "pr-0.json").write_text(json.dumps({"note": "no pr field"}))  # sorts first
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1", "pr-2"]
+    assert rc == 1 and (q / "pr-0.json").exists(), "malformed entry kept, others drained"
+
+
+def test_recovery_rejudges_after_move_aside_and_returns_a_live_reclaim(tmp_path, monkeypatch):
+    """Between the liveness check and the restore a live drain re-claims under the
+    same .taken name: recovery must put the LIVE claim straight back (C-HE-04 SS1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    live = json.dumps({"pr": 7, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    real_dead = am._claim_owner_is_dead
+    calls = {"n": 0}
+
+    def dead_then_restamped(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            verdict = real_dead(path)  # True: the on-disk stamp is dead
+            taken.write_text(live)  # ...but a live drain re-claims the NAME now
+            return verdict
+        return real_dead(path)  # re-judge of the moved bytes
+
+    monkeypatch.setattr(am, "_claim_owner_is_dead", dead_then_restamped)
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid == os.getpid())
+    am._recover_dead_claims()
+    # The restamp landed before the rename, so the aside held LIVE bytes; the
+    # re-judge must return them to the .taken name untouched -- a live claim is
+    # never yanked to .json (the pathname-keyed-replace defect this pins).
+    assert taken.exists(), "the live claim is back under its name"
+    assert json.loads(taken.read_text())["_claim"]["pid"] == os.getpid()
+    assert not (q / "pr-7.json").exists(), "no restore of a live claim"
+    assert not list(q.glob("*.taken.recover.*")), "no aside left behind"
+
+
+def test_recovery_restores_an_orphaned_aside_from_a_dead_recoverer(tmp_path, monkeypatch):
+    """A recoverer that died between rename-aside and restore must not strand the arc."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    (q / f"pr-7.taken.recover.{socket.gethostname()}.999999").write_text(
+        json.dumps({"pr": 7, "_claim": {"pid": 999998, "host": socket.gethostname()}})
+    )
+    # A FOREIGN-host recoverer's aside is unjudgeable from here: left alone.
+    (q / "pr-8.taken.recover.elsewhere.invalid.999999").write_text(
+        json.dumps({"pr": 8, "_claim": {"pid": 999998, "host": "elsewhere.invalid"}})
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    am._recover_dead_claims()
+    assert (q / "pr-7.json").exists(), "orphaned aside restored to the queue"
+    assert not (q / "pr-8.json").exists(), "foreign-host aside never judged dead"
+    assert list(q.glob("*.taken.recover.*")) == [q / "pr-8.taken.recover.elsewhere.invalid.999999"]
+
+
+# mutation-probe: comment out the `except FileExistsError` drop-stale tail in _restore_or_republish
+def test_restore_never_clobbers_a_newer_requeue(tmp_path, monkeypatch):
+    """While an arc is claimed its .json name is free; a concurrent re-queue that
+    published UPDATED declarations there must survive the stale restore (C-HE-04 SS4)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    stale = {"pr": 3, "arc_id": "pr-3", "decisions": 1}
+    taken = q / "pr-3.taken"
+    taken.write_text(json.dumps({**stale, "_claim": {"pid": os.getpid(), "host": "h"}}))
+    newer = json.dumps({"pr": 3, "arc_id": "pr-3", "decisions": 9, "notes": "corrected"})
+    (q / "pr-3.json").write_text(newer)  # concurrent queue_capture during the claim window
+    am._restore_or_republish(taken, q / "pr-3.json", stale)
+    assert (q / "pr-3.json").read_text() == newer, "newer capture survives"
+    assert not taken.exists(), "the stale claimed copy is dropped"
+
+
+def test_malformed_entry_after_claim_restores_before_kept(tmp_path, monkeypatch):
+    """A field fault surfacing AFTER the claim (Namespace construction) must restore
+    the entry -- never leave a wedged .taken under a live pid (codex r4 P2)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    # arc_id present (so the pre-claim derivation succeeds); pr missing (raises
+    # KeyError in the post-claim Namespace construction).
+    (q / "pr-4.json").write_text(json.dumps({"arc_id": "pr-4"}))
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1
+    assert (q / "pr-4.json").exists(), "entry restored despite the post-claim fault"
+    assert not list(q.glob("*.taken")), "no wedged claim left behind"
+
+
+def test_one_invalid_json_entry_does_not_abandon_the_rest(tmp_path, monkeypatch, capsys):
+    """A truncated queue file is a per-arc content fault: reported + kept, the other
+    entries still drain, and the run exits nonzero for attention (C-HE-04 SS3)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    (q / "pr-0-bad.json").write_text('{"pr": 1, TRUNC')
+    (q / "pr-0-list.json").write_text("[]")  # valid JSON, not an object
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    err = capsys.readouterr().err
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"], "the valid entry drained"
+    assert rc == 1
+    assert (q / "pr-0-bad.json").exists() and (q / "pr-0-list.json").exists()
+    assert "needs human repair" in err
+
+
+def _queue_args(arc_id):
+    return argparse.Namespace(
+        pr=1,
+        arc_id=arc_id,
+        arc_type="inventing",
+        decisions=1,
+        round_logs=None,
+        levers=None,
+        notes="",
+    )
+
+
+def test_arc_id_length_capped_for_recovery_suffix_budget(tmp_path, monkeypatch):
+    """An arc_id accepted at queue time must survive recovery's host+pid suffix --
+    measured in BYTES (multi-byte UTF-8 counts), not characters."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    with pytest.raises(am.AbortError, match="too long"):
+        am.queue_capture(_queue_args("x" * 300))
+    with pytest.raises(am.AbortError, match="too long"):
+        am.queue_capture(_queue_args("\u00e9" * 130))  # 260 bytes in 130 chars
+
+
+def test_arc_id_rejects_the_reserved_taken_namespace(tmp_path, monkeypatch):
+    """'.taken' inside an arc_id would collide with / misparse claim + recovery names."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    with pytest.raises(am.AbortError, match="reserved"):
+        am.queue_capture(_queue_args("a.taken.recover.b"))
+
+
+def test_capture_at_risk_reported_when_restore_itself_fails(tmp_path, monkeypatch, capsys):
+    """If the .taken vanished AND the exclusive re-publish fails, drain must say
+    CAPTURE AT RISK with the payload -- never a false KEPT QUEUED (C-HE-04 SS7)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+
+    def steal_then_abort(a):
+        (q / "pr-1.taken").unlink()
+        raise am.AbortError("no round logs")
+
+    monkeypatch.setattr(am, "extract", steal_then_abort)
+    real_publish = am.publish_exclusive
+
+    def emfile_on_republish(path, payload):
+        if path.suffix == ".json":  # the restore's re-publish; the claim still works
+            raise OSError(24, "EMFILE")
+        return real_publish(path, payload)
+
+    monkeypatch.setattr(am, "publish_exclusive", emfile_on_republish)
+    rc = am.drain(argparse.Namespace())
+    err = capsys.readouterr().err
+    assert rc == 2, "a lost capture is exit 2, never a routine 'still queued' 1"
+    assert "CAPTURE AT RISK" in err and '"arc_id": "pr-1"' in err
+    assert "KEPT QUEUED" not in err
+    assert "CAPTURE(S) AT RISK" in err, "the summary names the loss, not a false kept-count"
+
+
+def test_a_directory_named_like_an_entry_is_isolated(tmp_path, monkeypatch, capsys):
+    """A directory matching *.json is a per-path fault: reported + kept, rest drained."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    (q / "pr-0-dir.json").mkdir()
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    err = capsys.readouterr().err
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]
+    assert rc == 1 and "unreadable" in err
+
+
+def test_rejudge_return_never_overwrites_a_newer_claim(tmp_path, monkeypatch):
+    """Returning a live aside must not clobber a NEWER claim created meanwhile."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    newer = json.dumps({"pr": 7, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    live = json.dumps({"pr": 7, "_claim": {"pid": os.getpid() + 1, "host": socket.gethostname()}})
+    real_dead = am._claim_owner_is_dead
+    calls = {"n": 0}
+
+    def dead_then_two_claims(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            verdict = real_dead(path)  # True on the on-disk dead stamp
+            taken.write_text(live)  # a live drain re-claims the name...
+            return verdict
+        # ...and while the aside is out, ANOTHER claim lands under the name.
+        if calls["n"] == 2:
+            taken.write_text(newer)
+        return real_dead(path)
+
+    monkeypatch.setattr(am, "_claim_owner_is_dead", dead_then_two_claims)
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid in (os.getpid(), os.getpid() + 1))
+    am._recover_dead_claims()
+    assert json.loads(taken.read_text()) == json.loads(newer), "the newer claim survives"
+    assert not list(q.glob("*.taken.recover.*")), "the displaced aside is dropped"
+
+
+def test_kill_after_claim_is_wired_into_drain(tmp_path):
+    """ARC_METRICS_TEST_KILL_AFTER=claim kills a REAL drain right after _claim_arc:
+    exit 137, the claim held (.taken exists), the entry taken (.json gone). Witnesses
+    the production call-site wiring, not just the seam helper."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    (q / "pr-1.json").write_text(
+        json.dumps({"pr": 1, "arc_id": "pr-1", "arc_type": "inventing", "decisions": 1})
+    )
+    code = "import arc_metrics as am, argparse; am.drain(argparse.Namespace())"
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        env={
+            **os.environ,
+            "PYTHONPATH": str(_TOOLS_DIR),
+            "ARC_METRICS_TEST_KILL_AFTER": "claim",
+            "ARC_METRICS_QUEUE_DIR": str(q),
+            "ARC_METRICS_REPO": str(tmp_path),
+            "ARC_METRICS_LEDGER": str(tmp_path / "l.jsonl"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 137, r.stderr
+    assert (q / "pr-1.taken").exists(), "killed AFTER the claim: the claim survives"
+    assert not (q / "pr-1.json").exists()
+
+
+# mutation-probe: replace _restore_or_republish's publish_exclusive fallback with a bare os.replace
+def test_e9_capture_republish(tmp_path, monkeypatch):
+    """A drain that appended must not return with the arc's queue entry absent (C-HE-04 §4)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+
+    def extract_and_steal(a):
+        # peer removes the winner's .taken between append and restore (E9)
+        (q / "pr-1.taken").unlink()
+        return am.ArcRow(
+            arc_id="pr-1",
+            pr=1,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        )
+
+    monkeypatch.setattr(am, "extract", extract_and_steal)
+    am.drain(argparse.Namespace())
+    assert (q / "pr-1.json").exists(), "entry re-published from the in-memory capture"
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]
+
+
+def test_abort_branch_restores_before_kept_queued(tmp_path, monkeypatch, capsys):
+    """On AbortError the entry is durably back BEFORE `KEPT QUEUED` is reported (C-HE-04 §7)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+
+    def abort(a):
+        (q / "pr-1.taken").unlink()
+        raise am.AbortError("no round logs")
+
+    monkeypatch.setattr(am, "extract", abort)
+    am.drain(argparse.Namespace())
+    assert (q / "pr-1.json").exists(), "restore-or-republish ran on the abort branch"
+    assert "KEPT QUEUED" in capsys.readouterr().err
+
+
+# ─── U-HE-16: C-HE-02 witnesses — lock-free grep, takeover, kill seam ───────────
+
+_TOOLS_DIR = Path(__file__).resolve().parent
+COORD_MODULES = ["tools/arc_metrics.py", "tools/merge_door.py", "tools/reservations.py"]
+
+
+def test_no_flock_fcntl_in_coordination_modules():
+    """C-HE-02 §1 invariant: no flock/fcntl in the three lane-coordination modules."""
+    for m in COORD_MODULES:
+        p = _TOOLS_DIR.parent / m
+        if p.exists():
+            assert not re.search(r"flock|fcntl", p.read_text()), m
+
+
+# mutation-probe: comment out the unknown-is-live guard in _claim_owner_is_dead()
+def test_takeover_token_compare(tmp_path, monkeypatch):
+    """Two dead-owner takeovers on one claim: exactly one wins the second publish_exclusive;
+    the loser yields; unverifiable ownership is never judged dead (C-HE-02 §6)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    entry = {"pr": 5, "arc_id": "pr-5"}
+    (q / "pr-5.json").write_text(json.dumps(entry))
+    (q / "pr-5.taken").write_text(
+        json.dumps({**entry, "_claim": {"pid": 999999, "host": socket.gethostname()}})
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid == os.getpid())
+    wins = [am._claim_arc(q / "pr-5.json", entry), am._claim_arc(q / "pr-5.json", entry)]
+    assert sum(w is not None for w in wins) == 1
+    # Exactly one claim file remains and it is stamped by the WINNER (this pid) --
+    # a non-exclusive second write would have restamped it.
+    takens = list(q.glob("*.taken"))
+    assert [t.name for t in takens] == ["pr-5.taken"]
+    assert json.loads(takens[0].read_text())["_claim"]["pid"] == os.getpid()
+    assert am._claim_owner_is_dead(q / "pr-5.taken") is False  # the winner (this pid) is alive
+    # A foreign-host claim is unverifiable from here: NEVER dead, even with a dead pid.
+    (q / "pr-9.taken").write_text(
+        json.dumps({"pr": 9, "_claim": {"pid": 999999, "host": "elsewhere.invalid"}})
+    )
+    assert am._claim_owner_is_dead(q / "pr-9.taken") is False
+
+
+# mutation-probe: comment out the stale-judgment re-judge guard in _claim_arc's takeover
+def test_stale_dead_judgment_cannot_delete_a_fresh_live_claim(tmp_path, monkeypatch):
+    """Two contenders both judged the dead owner; the slower one's takeover runs
+    AFTER the winner published a live claim. The atomic-rename + re-judge must
+    return the live claim untouched and yield (codex r8 P1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    entry = {"pr": 5, "arc_id": "pr-5"}
+    (q / "pr-5.json").write_text(json.dumps(entry))
+    (q / "pr-5.taken").write_text(
+        json.dumps({**entry, "_claim": {"pid": 999999, "host": socket.gethostname()}})
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid == os.getpid())
+    first = am._claim_arc(q / "pr-5.json", entry)
+    assert first is not None, "the winner's takeover succeeds"
+    # The entry is re-published (as a concurrent queue_capture legitimately can),
+    # and contender B arrives carrying a STALE dead-judgment of the claim name.
+    (q / "pr-5.json").write_text(json.dumps(entry))
+    real_dead = am._claim_owner_is_dead
+    calls = {"n": 0}
+
+    def stale_once(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return True  # B's stale judgment of the now-live claim
+        return real_dead(path)
+
+    monkeypatch.setattr(am, "_claim_owner_is_dead", stale_once)
+    second = am._claim_arc(q / "pr-5.json", entry)
+    assert second is None, "the stale judge yields"
+    taken = q / "pr-5.taken"
+    assert taken.exists(), "the winner's live claim survived the stale takeover"
+    assert json.loads(taken.read_text())["_claim"]["pid"] == os.getpid()
+    assert not list(q.glob("*.taken.recover.*")), "no aside left behind"
+
+
+def test_vanished_entry_under_claim_is_republished_not_deleted(tmp_path, monkeypatch):
+    """If the .json vanished between listing and claiming, the claimer must re-publish
+    the capture it holds and yield -- never delete the only copy (codex r10 P1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    entry = {"pr": 6, "arc_id": "pr-6"}
+    path = q / "pr-6.json"
+    # listed, then gone before the claim ran (a dead claimer consumed it)
+    result = am._claim_arc(path, entry)
+    assert result is None
+    assert path.exists(), "the capture is durably back in the queue"
+    assert json.loads(path.read_text())["pr"] == 6
+
+
+# mutation-probe: comment out the `if current != entry` corrected-declarations guard in _claim_arc
+def test_corrected_declarations_survive_a_stale_claimer(tmp_path, monkeypatch):
+    """A producer that re-queued corrected declarations after this drain's listing
+    must not have them consumed by the stale listing (codex r10 P1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    stale = {"pr": 6, "arc_id": "pr-6", "decisions": 1}
+    corrected = {"pr": 6, "arc_id": "pr-6", "decisions": 9}
+    path = q / "pr-6.json"
+    path.write_text(json.dumps(corrected))
+    result = am._claim_arc(path, stale)
+    assert result is None, "the stale claimer yields"
+    assert json.loads(path.read_text()) == corrected, "corrected declarations intact"
+    assert not list(q.glob("*.taken")), "no stale claim left behind"
+
+
+def test_kill_after_seam_exits_137():
+    """ARC_METRICS_TEST_KILL_AFTER=<step> is a real process death (C-HE-04 verification (vi))."""
+    code = (
+        "import os; os.environ['ARC_METRICS_TEST_KILL_AFTER']='x'; "
+        "import arc_metrics as am; am._kill_after('x'); print('alive')"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        env={**os.environ, "PYTHONPATH": str(_TOOLS_DIR)},
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 137
+    assert "alive" not in r.stdout

@@ -28,6 +28,7 @@ a measured zero.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import itertools
 import json
@@ -453,7 +454,7 @@ def _ledger_claim_path(ledger: Path) -> Path:
 def claim_ledger(ledger: Path) -> None:
     """Take exclusive ownership of the ledger for one write, by CAS on a claim file.
 
-    C-HE-02 §1 bans `flock`/`fcntl` in this module, so the mutual exclusion
+    C-HE-02 §1 bans kernel file locks in this module, so the mutual exclusion
     between the ledger's two writers -- `append` (drain) and
     `relabel_arc_type_close` (whole-file rewrite) -- is the same primitive the
     queue uses: `publish_exclusive` (atomic `os.link`, fails when taken) with a
@@ -551,7 +552,7 @@ def relabel_arc_type_close(arc_id: str, arc_type_close: str) -> None:
     (temp + os.replace) and touches only this arc's row.
 
     Mutual exclusion with `append` is the `claim_ledger` CAS claim (C-HE-02 §1 bans
-    `flock`/`fcntl` here). Inside the claim a byte-compare of the ledger against the
+    kernel file locks here). Inside the claim a byte-compare of the ledger against the
     snapshot the rewrite was derived from still guards against a writer that does not
     take the claim (an older tool, a hand edit): the relabel then aborts (retry) rather
     than silently discarding that write under the whole-file rewrite (codex R2/R3 P2)."""
@@ -616,6 +617,21 @@ def queue_capture(args: argparse.Namespace) -> int:
             "(no '/', no '..', no leading '.') or the queued file lands where "
             "no drain will find it"
         )
+    # `.taken` (and everything built on it: `.taken.recover.<host>.<pid>`) is the
+    # claim/recovery namespace next to the entry -- an arc_id carrying it would
+    # collide with or misparse those coordination names (codex r6/r7 P3).
+    if ".taken" in arc_id:
+        raise AbortError(f"--arc-id {arc_id!r} contains '.taken', a reserved coordination suffix")
+    # Recovery appends `.taken.recover.<hostname>.<pid>` to this name; an arc_id
+    # accepted here must keep the WORST-CASE recovery filename under NAME_MAX in
+    # BYTES (multi-byte UTF-8 counts) or the dead-claim recovery path fails
+    # ENAMETOOLONG and strands the capture (codex r6 P2, r7 P2).
+    worst = f"{arc_id}.taken.recover.{socket.gethostname()}.{os.getpid()}".encode()
+    if len(worst) > 240:
+        raise AbortError(
+            f"--arc-id too long ({len(worst)} bytes with the recovery suffix, max 240): "
+            "recovery filenames must stay under the filesystem NAME_MAX"
+        )
 
     # Resolve the globs HERE, at closure, and store concrete paths. A pattern
     # stored live would be re-expanded by the next arc's drain, so any file
@@ -671,15 +687,39 @@ def queue_capture(args: argparse.Namespace) -> int:
     return 0
 
 
-def read_queue() -> list[tuple[Path, dict]]:
+def read_queue(invalid: list[Path] | None = None) -> list[tuple[Path, dict]]:
+    """Pending queue entries. An unreadable or malformed FILE is a per-arc content
+    fault (C-HE-04 SS3): it is reported, collected into ``invalid`` when given, and
+    skipped -- one truncated entry must not abandon every other pending arc. drain()
+    counts collected files as kept, so the run still exits nonzero for attention."""
     if not QUEUE_DIR.is_dir():
         return []
     out = []
     for path in sorted(QUEUE_DIR.glob("*.json")):
         try:
-            out.append((path, json.loads(path.read_text())))
-        except json.JSONDecodeError as exc:
-            raise AbortError(f"queued file {path} is not valid JSON: {exc}") from exc
+            entry = json.loads(path.read_text())
+        except FileNotFoundError:
+            # A peer claimed or released this entry between the glob and the
+            # read -- it is no longer pending. Skip, never propagate (C-HE-04
+            # Invariants: no FileNotFoundError escapes drain()).
+            continue
+        except OSError as exc:
+            if _is_systemic(exc) and not os.access(QUEUE_DIR, os.R_OK | os.X_OK):
+                raise  # the DIRECTORY is unreadable: queue-wide, abort once
+            # EISDIR, ENAMETOOLONG, a mode-000 FILE, ... -- a per-path content
+            # fault (the glob itself succeeded, so the directory reads): report
+            # + keep, drain the rest (codex r7 P2, r9 P2).
+            msg = f"  {path.name}: unreadable ({exc}) -- kept, needs human repair"
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            msg = f"  {path.name}: not valid JSON ({exc}) -- kept, needs human repair"
+        else:
+            if isinstance(entry, dict):
+                out.append((path, entry))
+                continue
+            msg = f"  {path.name}: queued value is not an object -- kept, needs human repair"
+        print(msg, file=sys.stderr)
+        if invalid is not None:
+            invalid.append(path)
     return out
 
 
@@ -792,22 +832,124 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
             publish_exclusive(taken, payload)
         except FileExistsError:
             if _attempt == 1 and _claim_owner_is_dead(taken):
-                taken.unlink(missing_ok=True)
-                continue  # the owner is gone; retry once against the freed name
+                # Take over by ATOMIC RENAME, never unlink-then-publish: two
+                # contenders can both judge the same dead owner, and with a
+                # bare unlink the slower one deletes the faster one's freshly
+                # published LIVE claim (codex r8 P1). Exactly one rename wins;
+                # the loser's rename raises FNF and its retry-publish then sees
+                # the winner's live claim.
+                aside = taken.with_name(_aside_suffix(taken.name))
+                try:
+                    os.rename(taken, aside)
+                except FileNotFoundError:
+                    continue  # a contender took over first; the retry sees its claim
+                if not _claim_owner_is_dead(aside):
+                    # Our judgment was STALE -- the aside holds a live claim
+                    # restamped meanwhile. Return it (exclusively) and yield.
+                    try:
+                        os.link(aside, taken)
+                    except FileExistsError:
+                        pass
+                    aside.unlink(missing_ok=True)
+                    return None
+                aside.unlink(missing_ok=True)
+                continue  # the owner is provably gone; retry once against the freed name
             return None
         except OSError as exc:
             # A read-only queue, a permission problem, an I/O error -- none of
             # these are a lost race, and reporting them as one would let an
-            # incomplete drain exit 0.
+            # incomplete drain exit 0. A SYSTEMIC fault (C-HE-04 SS3) must keep
+            # its OSError identity so drain() can abort the whole loop once
+            # rather than re-logging the identical failure per entry -- the
+            # classification has to happen before the AbortError conversion.
+            if _is_systemic(exc):
+                raise
             raise AbortError(f"cannot claim {path.name}: {exc}") from exc
+        # Verify the entry on disk is still the bytes this drain LISTED before
+        # consuming it: a producer can have published corrected declarations
+        # (remove + re-queue) after our read_queue() -- unlinking blindly would
+        # discard the correction and capture the stale payload (codex r10 P1).
+        try:
+            current = json.loads(path.read_text())
+        except FileNotFoundError:
+            # The .json vanished between listing and claiming. The classic
+            # cause is a live peer that finished the arc -- but it can also be
+            # a dead claimer whose entry only WE now hold (codex r10 P1), so
+            # never delete the only copy: re-publish the capture durably
+            # (exclusive; a peer's restore wins harmlessly) and yield.
+            _restore_or_republish(taken, path, entry)
+            return None
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            current = None  # unreadable now = not verifiably ours to consume
+        if current != entry:
+            # Corrected (or unverifiable) declarations: leave them; drop our
+            # stale claim and let a fresh drain list the new bytes.
+            taken.unlink(missing_ok=True)
+            return None
         try:
             path.unlink()
         except FileNotFoundError:
-            # A peer finished this arc between listing and claiming it.
-            taken.unlink(missing_ok=True)
+            _restore_or_republish(taken, path, entry)
             return None
         return taken
     return None
+
+
+def _kill_after(step: str) -> None:
+    """Test seam (C-HE-04 verification (vi)): ARC_METRICS_TEST_KILL_AFTER=<step> exits 137
+    right after the named step -- a real process death, not an exception a ``finally``
+    could tidy. Steps: claim, extract, append, restore, restore-abort (used by U-HE-20)."""
+    if os.environ.get("ARC_METRICS_TEST_KILL_AFTER") == step:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(137)
+
+
+def _is_systemic(exc: OSError) -> bool:
+    """A queue-dir permission / I/O / disk fault -- not a per-arc content fault, not a
+    lost race (C-HE-04 SS3). One such fault dooms every remaining entry identically, so
+    drain() aborts once instead of re-logging the same failure per arc."""
+    return isinstance(exc, PermissionError) or exc.errno in {
+        errno.EACCES,
+        errno.EROFS,
+        errno.EIO,
+        errno.ENOSPC,
+    }
+
+
+def _restore_or_republish(taken: Path, path: Path, entry: dict) -> None:
+    """Put the queue entry back DURABLY (C-HE-04 SS4/SS7, E9/E21).
+
+    The held ``.taken`` can vanish under us (a peer judged us dead and took over,
+    ``_claim_arc``'s dead-owner retry); a bare rename then raises and the
+    appended-but-uncommitted row's declarations exist nowhere else. Re-publish from the
+    in-memory capture instead. Every path here is EXCLUSIVE (``os.link`` /
+    ``publish_exclusive``): while an arc is claimed its ``.json`` name is free, so a
+    concurrent ``queue`` can legitimately publish UPDATED declarations there -- a
+    clobbering ``os.replace`` would silently revert them to the stale claimed payload.
+    ``FileExistsError`` therefore means the queue name is already durably held (a newer
+    capture, or a peer's restore) and this stale copy is simply dropped."""
+    try:
+        os.link(taken, path)
+    except FileNotFoundError:
+        payload = json.dumps({k: v for k, v in entry.items() if k != "_claim"}, sort_keys=True)
+        try:
+            publish_exclusive(path, payload)
+        except FileExistsError:
+            pass
+        return
+    except FileExistsError:
+        pass
+    taken.unlink(missing_ok=True)
+
+
+def _aside_suffix(name: str) -> str:
+    """A recovery-aside name that can NEVER collide with an existing aside:
+    `os.rename` overwrites its destination, so a deterministic host+pid name
+    could destroy a crashed recoverer's orphaned capture once the pid is
+    reused (codex r9 P2). The random token keeps the parse shape
+    `<base>.recover.<host>.<pid>[-token]` -- liveness reads the pid half."""
+    return f"{name}.recover.{socket.gethostname()}.{os.getpid()}-{os.urandom(4).hex()}"
 
 
 def _recover_dead_claims() -> None:
@@ -826,78 +968,143 @@ def _recover_dead_claims() -> None:
     """
     if not QUEUE_DIR.is_dir():
         return
+    # Sweep asides orphaned by a recoverer that died between its rename and its
+    # restore: the pid suffix names the recoverer, so deadness is exact. A live
+    # recoverer's aside is in flight -- leave it.
+    for orphan in sorted(QUEUE_DIR.glob("*.taken.recover.*")):
+        # rpartition parses from the RIGHT so an arc_id that itself contains
+        # ".taken.recover." cannot shift the host/pid fields (codex r5 P3).
+        base, _, rest = orphan.name.rpartition(".recover.")
+        if not base.endswith(".taken"):
+            continue  # a queue entry that merely matches the glob, not an aside
+        host, _, pid_field = rest.rpartition(".")
+        pid_s = pid_field.split("-", 1)[0]  # `<pid>-<token>`; legacy bare pid also parses
+        if host != socket.gethostname() or not pid_s.isdigit():
+            # A foreign-host (or unparseable) recoverer cannot be judged from
+            # here: unknown owner is LIVE, never dead (C-HE-02 SS6).
+            print(f"  {orphan.name}: recoverer not judgeable from this host; leaving it")
+            continue
+        if _process_is_alive(int(pid_s)):
+            continue
+        # The recoverer is dead, but the aside may hold a LIVE re-claim it had
+        # moved just before dying (codex r5 P2): re-judge the EMBEDDED owner and
+        # route accordingly -- live back to its .taken name, dead to .json. Both
+        # routes are exclusive links so a name published meanwhile is never
+        # clobbered; the aside copy is then superseded either way.
+        if _claim_owner_is_dead(orphan):
+            target = orphan.with_name(base[: -len(".taken")] + ".json")
+            what = "restored orphaned recovery file"
+        else:
+            target = orphan.with_name(base)
+            what = "returned live claim from a dead recoverer"
+        try:
+            os.link(orphan, target)
+            print(f"  {what} -> {target.name}")
+        except FileExistsError:
+            pass  # the name is already durably held; the aside is redundant
+        except FileNotFoundError:
+            continue
+        orphan.unlink(missing_ok=True)
     for claim in sorted(QUEUE_DIR.glob("*.taken")):
         restored = claim.with_suffix(".json")
         if restored.exists():
+            # The entry is already durably back. A DEAD owner's leftover claim
+            # (e.g. the exclusive-restore link crashed before its unlink) would
+            # otherwise count as outstanding forever; sweep it through the same
+            # move-aside re-judge so a live claim is never touched.
+            if _claim_owner_is_dead(claim):
+                gone = claim.with_name(_aside_suffix(claim.name))
+                try:
+                    os.rename(claim, gone)
+                except FileNotFoundError:
+                    continue
+                if _claim_owner_is_dead(gone):
+                    gone.unlink(missing_ok=True)
+                    print(f"  {claim.name}: dead leftover claim swept (entry already back)")
+                else:
+                    try:
+                        os.link(gone, claim)  # exclusive: never overwrite a newer claim
+                    except FileExistsError:
+                        pass
+                    gone.unlink(missing_ok=True)
             continue
         if not _claim_owner_is_dead(claim):
             print(f"  {claim.name} is held by a live or unverifiable owner; leaving it")
             continue
-        os.replace(claim, restored)
-        print(f"  recovered claim from a dead owner -> {restored.name}")
+        # Move the file ASIDE, then RE-JUDGE the moved bytes (the
+        # _reclaim_dead_claim idiom, adapted): between the first liveness check
+        # and the restore a peer can restore the entry AND a live drain can
+        # re-claim it under the same .taken name -- a pathname-keyed replace
+        # would then yank the LIVE owner's claim back to .json. Once moved to
+        # a pid-suffixed aside name no peer can restamp it, so judging the
+        # aside bytes is race-free; a live verdict puts the claim straight back.
+        aside = claim.with_name(_aside_suffix(claim.name))
+        try:
+            os.rename(claim, aside)
+        except FileNotFoundError:
+            # C-HE-04 SS1: a peer restored it between our scan and this rename.
+            # The losing racer logs and yields; it must not propagate.
+            print(f"  {claim.name}: a peer recovered it first; leaving it")
+            continue
+        if not _claim_owner_is_dead(aside):
+            # A live drain re-claimed under this name meanwhile -- not ours.
+            # Exclusive return: a NEWER claim can have been created from a
+            # republished entry while the aside was out; never overwrite it
+            # (the displaced owner's restore republishes from memory, E9).
+            try:
+                os.link(aside, claim)
+            except FileExistsError:
+                pass
+            aside.unlink(missing_ok=True)
+            print(f"  {claim.name}: re-claimed by a live owner meanwhile; leaving it")
+            continue
+        # Exclusive restore: a concurrent queue_capture can have published an
+        # UPDATED .json after the exists() check above -- a clobbering replace
+        # would silently revert it to the stale dead-claim payload (codex r5
+        # P1). FileExistsError therefore means the queue name is durably held
+        # and this stale copy is dropped.
+        try:
+            os.link(aside, restored)
+            print(f"  recovered claim from a dead owner -> {restored.name}")
+        except FileExistsError:
+            print(f"  {claim.name}: a newer capture holds the queue name; dropping the stale copy")
+        aside.unlink(missing_ok=True)
 
 
-def drain(_args: argparse.Namespace) -> int:
-    """Fold every queued arc into the tracked ledger.
+def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local: set[str]) -> str:
+    """Process ONE queued arc; return its outcome (released|held|outstanding|added).
 
-    Each queued arc is its own file, so this never rewrites shared state: an
-    entry is unlinked only once its row is safely in the ledger, and one whose
-    capture fails is simply left where it is. A concurrent ``queue`` writes a
-    different file and is picked up by this drain or the next one -- there is no
-    window in which it can be erased, and no lock is needed to say so.
+    Extracted from drain()'s loop body so a fault in one entry -- including inside
+    _claim_arc -- surfaces as an exception drain() can isolate per arc (C-HE-04 SS3)
+    instead of abandoning every remaining pending entry.
     """
-    _recover_dead_claims()
+    if arc_id in committed:
+        print(f"  {arc_id}: in committed ledger, releasing queue entry")
+        path.unlink(missing_ok=True)
+        return "released"
+    if arc_id in local:
+        # Appended, but only into the working tree. Hold the capture until
+        # the row actually reaches history -- this arc can still be reset or
+        # its worktree disposed, and nothing else holds the declarations.
+        print(f"  {arc_id}: row appended locally, awaiting commit -- entry held")
+        return "held"
 
-    # Claims left behind by a live or unverifiable owner are outstanding work.
-    # Reporting "nothing to drain" while they sit there would let automation
-    # move on before a peer has finished, and would strand a foreign-host claim
-    # silently forever.
-    outstanding = sorted(QUEUE_DIR.glob("*.taken")) if QUEUE_DIR.is_dir() else []
+    # CLAIM this arc by renaming its queued file before capturing it. Two
+    # parallel next-arc sessions can otherwise both pass the ledger's
+    # read-then-check duplicate guard and append the same arc twice, which
+    # breaks one-row-per-arc and biases every cohort. Exactly one drain wins
+    # the claim, the other sees it vanish and moves on. Same structural fix as
+    # the queue itself -- no lock required.
+    taken = _claim_arc(path, entry)
+    _kill_after("claim")
+    if taken is None:
+        print(f"  {arc_id}: claimed by a concurrent drain, still outstanding")
+        return "outstanding"
 
-    pending = read_queue()
-    if not pending:
-        if outstanding:
-            names = ", ".join(p.name for p in outstanding)
-            print(f"nothing drainable; {len(outstanding)} claim(s) still held: {names}")
-            return 1
-        print("arc-metrics queue is empty -- nothing to drain")
-        return 0
-
-    committed = committed_arc_ids()
-    local = {r.get("arc_id") for r in read_ledger()}
-    kept = len(outstanding)
-    added = 0
-    for path, entry in pending:
-        arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
-        if arc_id in committed:
-            print(f"  {arc_id}: in committed ledger, releasing queue entry")
-            path.unlink(missing_ok=True)
-            continue
-        if arc_id in local:
-            # Appended, but only into the working tree. Hold the capture until
-            # the row actually reaches history -- this arc can still be reset or
-            # its worktree disposed, and nothing else holds the declarations.
-            print(f"  {arc_id}: row appended locally, awaiting commit -- entry held")
-            kept += 1
-            continue
-
-        # CLAIM this arc by renaming its queued file before capturing it. Two
-        # parallel next-arc sessions can otherwise both pass the ledger's
-        # read-then-check duplicate guard and append the same arc twice, which
-        # breaks one-row-per-arc and biases every cohort. os.rename is atomic:
-        # exactly one drain wins the claim, the other sees it vanish and moves
-        # on. Same structural fix as the queue itself -- no lock required.
-        taken = _claim_arc(path, entry)
-        if taken is None:
-            # Outstanding, not done: a peer holds it and this drain has no idea
-            # whether that peer will succeed. `outstanding` was snapshotted
-            # before the loop, so without counting it here the run could exit 0
-            # with a live claim on disk -- contradicting the documented contract
-            # that exit 0 means nothing is left to fold.
-            print(f"  {arc_id}: claimed by a concurrent drain, still outstanding")
-            kept += 1
-            continue
-
+    try:
+        # Namespace construction reads entry fields, so a malformed entry can
+        # raise HERE, after the claim -- it must restore before propagating or
+        # the claim wedges under a live pid (codex r4 P2).
         args = argparse.Namespace(
             pr=entry["pr"],
             arc_id=entry.get("arc_id"),
@@ -910,23 +1117,153 @@ def drain(_args: argparse.Namespace) -> int:
             levers=entry.get("levers"),
             notes=entry.get("notes", ""),
         )
-        try:
-            append(extract(args))
-        except AbortError as exc:
-            # Release the claim so the next drain can retry this arc.
-            os.replace(taken, path)
-            print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
-            kept += 1
-            continue
-        # Restore the capture to the queue rather than deleting it: the row is
-        # only in the working tree so far, and the declarations it carries exist
-        # nowhere else. It is released on a later drain, once the row is in
-        # committed history.
-        os.replace(taken, path)
-        print(f"  {arc_id}: appended (entry held until the row is committed)")
-        added += 1
-        kept += 1
+        row = extract(args)
+        _kill_after("extract")
+        append(row)
+        _kill_after("append")
+    except (AbortError, KeyError, TypeError, ValueError, OSError):
+        # Durable restore BEFORE the caller reports KEPT QUEUED (C-HE-04 SS7) --
+        # OSError included (EMFILE from append, ...): drain() re-classifies it
+        # after the entry is durably back (codex r5 P2). If the fault is
+        # systemic the restore may itself raise; that escapes to the same
+        # systemic abort.
+        _restore_or_republish(taken, path, entry)
+        _kill_after("restore-abort")
+        raise
+    # Restore the capture to the queue rather than deleting it: the row is
+    # only in the working tree so far, and the declarations it carries exist
+    # nowhere else. It is released on a later drain, once the row is in
+    # committed history.
+    _restore_or_republish(taken, path, entry)
+    _kill_after("restore")
+    print(f"  {arc_id}: appended (entry held until the row is committed)")
+    return "added"
 
+
+def _report_kept(path: Path, arc_id: str, entry: dict, exc: BaseException) -> bool:
+    """`KEPT QUEUED` only when the entry is verifiably back on disk (C-HE-04 SS7).
+
+    A restore can itself fail (the .taken vanished AND the exclusive re-publish
+    hit EMFILE / ENAMETOOLONG): claiming "kept" then would be false. When neither
+    name exists, say so LOUDLY and print the in-memory payload -- stderr is the
+    last carrier of the operator's declarations at that point."""
+    if path.exists() or path.with_suffix(".taken").exists():
+        print(f"  {arc_id}: KEPT QUEUED -- {exc!r}", file=sys.stderr)
+        return True
+    payload = json.dumps({k: v for k, v in entry.items() if k != "_claim"}, sort_keys=True)
+    print(
+        f"  {arc_id}: CAPTURE AT RISK -- entry could not be restored ({exc!r}); "
+        f"re-queue it by hand from this payload: {payload}",
+        file=sys.stderr,
+    )
+    return False
+
+
+def drain(_args: argparse.Namespace) -> int:
+    """Fold every queued arc into the tracked ledger.
+
+    Each queued arc is its own file, so this never rewrites shared state: an
+    entry is unlinked only once its row is safely in the ledger, and one whose
+    capture fails is simply left where it is. A concurrent ``queue`` writes a
+    different file and is picked up by this drain or the next one -- there is no
+    window in which it can be erased, and no lock is needed to say so.
+    """
+    try:
+        _recover_dead_claims()
+
+        invalid: list[Path] = []
+        pending = read_queue(invalid)
+
+        # Claims left behind by a live or unverifiable owner are outstanding
+        # work. Reporting "nothing to drain" while they sit there would let
+        # automation move on before a peer has finished, and would strand a
+        # foreign-host claim silently forever. Globbed AFTER read_queue: a peer
+        # that claimed an entry between the two scans (its .json vanished from
+        # pending) is then visible as a .taken here, so drain cannot exit 0
+        # while that fresh claim exists (codex r6 P1).
+        outstanding = (
+            sorted(QUEUE_DIR.glob("*.taken")) + sorted(QUEUE_DIR.glob("*.taken.recover.*"))
+            if QUEUE_DIR.is_dir()
+            else []
+        )
+    except OSError as exc:
+        if _is_systemic(exc):
+            # Same single-message abort as an in-loop systemic fault (C-HE-04
+            # SS3) -- a read-only queue dir during recovery or the queue read
+            # must not surface as a raw traceback.
+            print(f"ABORT: systemic queue fault on {QUEUE_DIR}: {exc}", file=sys.stderr)
+            return 2
+        raise
+    if not pending:
+        if outstanding:
+            names = ", ".join(p.name for p in outstanding)
+            print(f"nothing drainable; {len(outstanding)} claim(s) still held: {names}")
+            return 1
+        if invalid:
+            return 1  # unreadable entries were reported by read_queue -- attention owed
+        print("arc-metrics queue is empty -- nothing to drain")
+        return 0
+
+    committed = committed_arc_ids()
+    local = {r.get("arc_id") for r in read_ledger()}
+    kept = len(outstanding) + len(invalid)
+    added = 0
+    lost = 0
+    for i, (path, entry) in enumerate(pending):
+        arc_id = path.stem  # safe fallback name; refined inside the try
+        try:
+            # arc_id derivation reads entry fields, so it is a per-arc content
+            # fault when the entry is malformed -- it must not abort the loop.
+            arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
+            outcome = _drain_one(path, entry, arc_id, committed, local)
+        except (AbortError, KeyError, TypeError, ValueError) as exc:
+            # Per-arc fault -- AbortError from capture, or a malformed entry
+            # (missing/mistyped fields) raising in the arc_id expression or
+            # extract(). This entry stays queued (already durably restored by
+            # _drain_one where a claim was held); the rest still drain
+            # (C-HE-04 SS3).
+            if _report_kept(path, arc_id, entry, exc):
+                kept += 1
+            else:
+                lost += 1
+            continue
+        except OSError as exc:
+            if _is_systemic(exc):
+                # One systemic queue-dir fault dooms every remaining entry the
+                # same way: abort once with one message (C-HE-04 SS3) -- but
+                # report THIS entry's disposition first: a systemic fault after
+                # its .taken vanished would otherwise discard the only
+                # in-memory payload silently (codex r9 P1).
+                _report_kept(path, arc_id, entry, exc)
+                remaining = len(pending) - i
+                print(
+                    f"ABORT: systemic queue fault on {QUEUE_DIR}: {exc}; "
+                    f"{remaining} entr(y/ies) not processed",
+                    file=sys.stderr,
+                )
+                return 2
+            if _report_kept(path, arc_id, entry, exc):
+                kept += 1
+            else:
+                lost += 1
+            continue
+        if outcome == "added":
+            added += 1
+            kept += 1
+        elif outcome in ("held", "outstanding"):
+            # Outstanding, not done: a peer holds it and this drain has no idea
+            # whether that peer will succeed. Without counting it here the run
+            # could exit 0 with a live claim on disk -- contradicting the
+            # documented contract that exit 0 means nothing is left to fold.
+            kept += 1
+
+    if lost:
+        print(
+            f"drained {added} arc(s); {kept} entr(y/ies) still queued; "
+            f"{lost} CAPTURE(S) AT RISK (payload printed above)",
+            file=sys.stderr,
+        )
+        return 2
     print(f"drained {added} arc(s); {kept} entr(y/ies) still queued")
     # Non-zero on a retained entry, so automation cannot read a pending retry
     # as a completed fold.

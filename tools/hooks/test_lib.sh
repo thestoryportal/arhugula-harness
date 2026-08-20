@@ -811,5 +811,60 @@ wait "$LOCK_HOLDER_PID"
   && ok "checkpoint publisher lock wait is bounded" \
   || bad "checkpoint publisher blocked: elapsed=${BOUNDED_PUBLISH_ELAPSED}s rc=${BOUNDED_PUBLISH_RC}"
 
+# C-HE-04 §6 (U-HE-15): committed-but-unpushed commits are capture that would be
+# lost with the worktree's branch. With an upstream set, ahead-of-@{u} is refusal
+# residue; pushed = clean; NO upstream keeps today's behavior (spec scopes the
+# check to `rev-list @{u}..HEAD` -- refusing no-upstream would refuse every
+# local-only scratch worktree; see the five rc-0/7/9/10 witnesses above).
+AHEAD_ORIGIN="$REPO-ahead-origin.git"
+git init -q --bare "$AHEAD_ORIGIN"
+git -C "$REPO" remote add origin "$AHEAD_ORIGIN"
+AHEAD_WT="$REPO-ahead-of-upstream"
+git -C "$REPO" worktree add -q -b ahead-branch "$AHEAD_WT"
+git -C "$AHEAD_WT" push -qu origin ahead-branch 2>/dev/null
+git -C "$AHEAD_WT" commit -q --allow-empty -m "committed but unpushed"
+AHEAD_OUT=$(hook_worktree_local_state "$AHEAD_WT")
+AHEAD_RC=$?
+eq "ahead-of-upstream worktree is refusal residue" "$AHEAD_RC" "0"
+case "$AHEAD_OUT" in
+  *"ahead-of-upstream: 1 commit(s)"*) ok "residue names the unpushed commit count" ;;
+  *) bad "residue missing ahead-of-upstream line: '$AHEAD_OUT'" ;;
+esac
+hook_safe_worktree_remove "$REPO" "$AHEAD_WT" >/dev/null
+eq "safe removal refuses a committed-but-unpushed worktree" "$?" "4"
+[ -d "$AHEAD_WT" ] && ok "ahead-of-upstream worktree preserved" \
+  || bad "ahead-of-upstream worktree was removed"
+git -C "$AHEAD_WT" push -q origin ahead-branch 2>/dev/null
+hook_worktree_local_state "$AHEAD_WT" >/dev/null
+eq "pushed-to-upstream worktree is clean" "$?" "1"
+NO_UPSTREAM_WT="$REPO-no-upstream"
+git -C "$REPO" worktree add -q -b no-upstream-branch "$NO_UPSTREAM_WT"
+hook_worktree_local_state "$NO_UPSTREAM_WT" >/dev/null
+eq "no-upstream worktree keeps today's clean verdict" "$?" "1"
+# Merge-gate L1 (PR #1403): a pruned remote-tracking ref must not fail OPEN --
+# the branch CONFIG persists after `fetch --prune`, so an upstream-configured
+# branch whose @{u} no longer resolves is fail-closed residue.
+PRUNED_WT="$REPO-pruned-upstream"
+git -C "$REPO" worktree add -q -b pruned-branch "$PRUNED_WT"
+git -C "$PRUNED_WT" push -qu origin pruned-branch 2>/dev/null
+git -C "$PRUNED_WT" commit -q --allow-empty -m "committed after last push"
+git -C "$REPO" update-ref -d refs/remotes/origin/pruned-branch
+PRUNED_OUT=$(hook_worktree_local_state "$PRUNED_WT")
+PRUNED_RC=$?
+eq "pruned-upstream worktree is fail-closed residue" "$PRUNED_RC" "0"
+case "$PRUNED_OUT" in
+  *"upstream configured but unresolvable"*) ok "residue names the unresolvable upstream" ;;
+  *) bad "residue missing unresolvable-upstream line: '$PRUNED_OUT'" ;;
+esac
+DETACHED_WT="$REPO-detached"
+git -C "$REPO" worktree add -q --detach "$DETACHED_WT"
+DETACHED_OUT=$(hook_worktree_local_state "$DETACHED_WT")
+DETACHED_RC=$?
+eq "detached-HEAD worktree is refusal residue" "$DETACHED_RC" "0"
+case "$DETACHED_OUT" in
+  *"detached HEAD"*) ok "residue names the detached HEAD" ;;
+  *) bad "residue missing detached-HEAD line: '$DETACHED_OUT'" ;;
+esac
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
