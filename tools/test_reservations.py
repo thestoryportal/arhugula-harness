@@ -789,8 +789,10 @@ def test_reconcile_terminal_bound_to_checked_pr(qdir, monkeypatch):
         rs.update_payload("pr-60", {"pr": 61})  # concurrent ship-pr backfill wins the race
         return {"state": "MERGED"}
 
-    assert rs.reconcile("pr-60", gh_view=gh_rebinds) == "open"  # NOT terminalized
+    marks = []
+    assert rs.reconcile("pr-60", gh_view=gh_rebinds, on_unconfirmed=marks.append) == "open"
     assert rs.current("pr-60")[1]["state"] == "open" and rs.current("pr-60")[1]["pr"] == 61
+    assert marks  # the intended outcome was never applied -- the pass must not read clean
 
 
 def test_reconcile_concurrent_pass_is_idempotent_not_error(qdir, monkeypatch):
@@ -805,7 +807,10 @@ def test_reconcile_concurrent_pass_is_idempotent_not_error(qdir, monkeypatch):
         rs.transition("pr-70", "merged", lane_id="A")  # the sibling pass lands first
         return {"state": "MERGED"}
 
-    assert rs.reconcile("pr-70", gh_view=gh_and_sibling_wins) == "merged"
+    marks = []
+    merged = rs.reconcile("pr-70", gh_view=gh_and_sibling_wins, on_unconfirmed=marks.append)
+    assert merged == "merged"
+    assert marks == []  # gate r1: an IDENTICAL terminal outcome is clean -- never UNCONFIRMED
 
 
 def test_reconcile_all_isolates_corrupt_head_read(qdir, monkeypatch):
@@ -952,3 +957,68 @@ def test_cli_single_arc_reconcile_unconfirmed_exits_2(qdir, monkeypatch, capsys)
     assert rs.main(["reconcile", "--arc-id", "pr-120"]) == 2
     assert "UNCONFIRMED (open)" in capsys.readouterr().out
     assert rs.current("pr-120")[1]["state"] == "open"
+
+
+def test_reconcile_losing_superseder_race_is_unconfirmed(qdir, monkeypatch):
+    """gate r1 concurrency P1: two racers abandon the same arc with DIFFERENT superseders;
+    the loser must NOT report clean success -- the persisted chain carries the winner's
+    pointer."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-130", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-130", "A")
+    rs.update_payload("pr-130", {"pr": 130})
+    rs.reserve("y1", lane_id="A", branch="b", arc_type="inventing")
+    rs.reserve("y2", lane_id="A", branch="b", arc_type="inventing")
+
+    def gh_and_rival_abandons(pr):
+        rs.transition("pr-130", "abandoned", lane_id="A", superseded_by="y1")  # rival wins
+        return {"state": "CLOSED"}
+
+    marks = []
+    out = rs.reconcile(
+        "pr-130", gh_view=gh_and_rival_abandons, superseded_by="y2", on_unconfirmed=marks.append
+    )
+    assert out == "abandoned"  # reports the CURRENT head truthfully...
+    assert marks  # ...but marked UNCONFIRMED: y2 was never written
+    assert rs.current("pr-130")[1]["superseded_by"] == "y1"
+
+
+def test_pending_aged_emits_durable_hil_row_first(qdir, monkeypatch):
+    """gate r1 witness P3: the emission ORDER is load-bearing (emit fails closed pre-U-HE-29;
+    if NOTIFY went first and raised, the recoverable escalation row would never be attempted)."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, lane, c, d: rows.append(k))
+    rs.reserve("pr-140", lane_id="A", branch="b", arc_type="inventing")
+    later = datetime.now(UTC) + timedelta(hours=25)
+    assert rs.reconcile("pr-140", gh_view=_gh_raises, now=later) == "pending"
+    assert rows == ["DEFERRED-HIL", "NOTIFY"]
+
+
+def test_reconcile_all_isolates_malformed_timestamp(qdir, monkeypatch):
+    """gate r1 witness P3: the ValueError arm of the isolation catch is load-bearing (a
+    hand-corrupted timestamp reaching _aged()'s strptime must isolate in-band)."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-150", lane_id="A", branch="b", arc_type="inventing")
+    head = json.loads((qdir / "reservations" / "pr-150" / "1.json").read_text())
+    head.update(reserved_at="not-a-timestamp", generation=2, prev_generation=1)
+    (qdir / "reservations" / "pr-150" / "2.json").write_text(json.dumps(head))
+    later = datetime.now(UTC) + timedelta(hours=25)
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "OPEN"}, now=later)
+    assert out["pr-150"].startswith("ERROR")
+
+
+def test_gc_sweeps_orphaned_root_level_reconcile_stager(qdir, monkeypatch):
+    """gate r1 concurrency P2: an interrupted _write_store_log leaves a root-level stager;
+    gc must sweep it under the same age + pid-liveness rule as per-arc stagers."""
+    root = qdir / "reservations"
+    root.mkdir()
+    orphan = root / ".reconcile.log.12345.abcd1234.tmp"
+    orphan.write_text("{}")
+    old = datetime.now(UTC) - timedelta(hours=2)
+    os.utime(orphan, (old.timestamp(), old.timestamp()))
+    fresh = root / ".reconcile.log.12345.beef5678.tmp"
+    fresh.write_text("{}")  # too young -- must survive
+    monkeypatch.setattr(rs, "_process_is_alive", lambda pid: False)
+    removed = rs.gc()
+    assert orphan in removed and not orphan.exists()
+    assert fresh.exists()

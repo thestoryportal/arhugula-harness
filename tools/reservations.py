@@ -672,6 +672,20 @@ def gc(*, now: datetime | None = None) -> list[Path]:
     if not root.is_dir():
         return removed
     resolved_root = root.resolve()
+    # Root-level reconcile-log stagers (.reconcile.log.<pid>.<hex>.tmp) are invisible to
+    # the per-arc sweep below (dot-prefixed root entries are skipped there) -- sweep them
+    # here under the same age + pid-liveness rule (gate r1 concurrency P2: the detached
+    # session-start writer makes an interrupted create->rename window realistic).
+    for tmp in root.glob(".reconcile.log.*.tmp"):
+        parts = tmp.name.split(".")
+        pid = int(parts[-3]) if len(parts) >= 5 and parts[-3].isdigit() else None
+        try:
+            old = datetime.fromtimestamp(tmp.stat().st_mtime, UTC) < now - timedelta(hours=1)
+            if old and (pid is None or not _process_is_alive(pid)):
+                tmp.unlink()
+                removed.append(tmp)
+        except FileNotFoundError:
+            continue
     for d in root.iterdir():
         if not d.is_dir() or d.name.startswith("."):
             continue
@@ -883,7 +897,16 @@ def reconcile(
             # never applied, so the pass must not read clean (the next pass re-checks).
             cur2 = current(arc_id)
             head2 = cur2[1] if cur2 else None
-            if head2 is not None and head2["state"] == to_state:
+            same_outcome = (
+                head2 is not None
+                and head2["state"] == to_state
+                # For an abandonment the supersession POINTER is part of the outcome
+                # (gate r1 concurrency P1): a loser whose superseded_by differs from
+                # the winner's must not report clean success -- the persisted chain
+                # carries the winner's pointer, not this caller's.
+                and (to_state != "abandoned" or head2.get("superseded_by") == superseded_by)
+            )
+            if same_outcome:
                 return to_state
             msg = f"transition race for {arc_id}: {exc}"
             print(f"reservations: {msg}", file=sys.stderr)

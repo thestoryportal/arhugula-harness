@@ -105,5 +105,45 @@ rm -f "$REPO/.harness/loop_status.md"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
 
+# 6) Reservation reconcile-log surfacing (U-HE-18, gate r1 witness P2): the log-READER
+#    block is UNGATED by the U-HE-29 activation gate, so its behavior needs witnesses now.
+#    The fixture repo has no tools/reservations.py, so the spawn gate stays cold -- only
+#    the reader runs. Restore the clean-hash dashboard so the audit branch is stable.
+git -C "$REPO" checkout -q main 2>/dev/null || true
+HEAD8=$(git -C "$REPO" rev-parse HEAD | head -c 8)
+EXP_HASH=$(hook_state_hash "$HEAD8" "" "0" "")
+write_dashboard "$EXP_HASH"
+QDIR="$(mktemp -d)"; trap 'rm -rf "$REPO" "$QDIR"' EXIT
+run_q() { ARC_METRICS_QUEUE_DIR="$QDIR" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null; }
+
+# 6a) rc=2 log -> resv=ERR surfaced on every audit branch.
+mkdir -p "$QDIR/reservations"
+printf '%s\n' '{"rc": 2, "result": {"pr-1": "ERROR: boom"}, "ts": "t"}' > "$QDIR/reservations/.reconcile.log"
+OUT=$(run_q)
+printf '%s' "$OUT" | grep -q "resv=ERR" && ok "rc=2 log surfaces resv=ERR ($OUT)" || bad "expected resv=ERR for rc=2 log, got: $OUT"
+
+# 6b) rc=0 log -> NO resv token.
+printf '%s\n' '{"rc": 0, "result": {}, "ts": "t"}' > "$QDIR/reservations/.reconcile.log"
+OUT=$(run_q)
+printf '%s' "$OUT" | grep -q "resv=" && bad "resv token present for clean rc=0 log: $OUT" || ok "clean rc=0 log stays silent"
+
+# 6c) corrupt log (not JSON / missing rc) -> resv=ERR (fail closed, never fail open).
+printf '%s\n' 'not json at all' > "$QDIR/reservations/.reconcile.log"
+OUT=$(run_q)
+printf '%s' "$OUT" | grep -q "resv=ERR" && ok "corrupt log fails closed to resv=ERR ($OUT)" || bad "corrupt log did not surface resv=ERR: $OUT"
+
+# 6d) log path is a DIRECTORY -> structural corruption surfaced.
+rm -f "$QDIR/reservations/.reconcile.log"
+mkdir "$QDIR/reservations/.reconcile.log"
+OUT=$(run_q)
+printf '%s' "$OUT" | grep -q "resv=ERR(reconcile log path corrupt" && ok "directory log path surfaced as corrupt ($OUT)" || bad "directory log path not surfaced: $OUT"
+rmdir "$QDIR/reservations/.reconcile.log"
+
+# 6e) reservations root is a regular FILE -> store corruption surfaced.
+rm -rf "$QDIR/reservations"
+: > "$QDIR/reservations"
+OUT=$(run_q)
+printf '%s' "$OUT" | grep -q "resv=ERR(reservations store corrupt" && ok "file store root surfaced as corrupt ($OUT)" || bad "file store root not surfaced: $OUT"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
