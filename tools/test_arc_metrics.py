@@ -2178,6 +2178,11 @@ def test_local_row_reconciliation_drops_divergent_committed_duplicate(
         + "\n"
     )
     replacement = {"arc_id": "pr-81", "record_kind": "arc", "notes": "the real one"}
+    # the discriminator (codex r10 P2): replacement fires only when a PEER's
+    # reservation shows the arc was superseded -- reserve pr-81 as another lane's
+    rs.reserve("pr-81", lane_id="B", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-81", "B")
+    rs.transition("pr-81", "merged", lane_id="B")
     monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-80", "pr-81"})
     monkeypatch.setattr(
         am,
@@ -2344,3 +2349,82 @@ def test_late_accretion_is_refolded_into_the_local_row(tmp_path, monkeypatch):
         "the late accretion reached the row via the re-fold"
     )
     assert rs.current("pr-1")[1]["state"] == "merged"
+
+
+def test_reconciliation_keeps_a_legit_local_update_to_a_committed_row(
+    tmp_path, monkeypatch, qdir_res
+):
+    """codex U-HE-19 r10 P2: a local line differing from committed history with NO
+    superseding peer reservation is a legitimate pending update (e.g. a relabel) or
+    pre-rebase baseline content -- kept untouched, never overwritten."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    local_update = {"arc_id": "pr-82", "record_kind": "arc", "arc_type_close": "applying"}
+    ledger.write_text(json.dumps(local_update, sort_keys=True) + "\n")
+    committed_version = {"arc_id": "pr-82", "record_kind": "arc"}
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-82"})
+    monkeypatch.setattr(
+        am,
+        "_committed_ledger_lines",
+        lambda: {json.dumps(committed_version, sort_keys=True)},
+    )
+    am._reconcile_local_rows()
+    assert am.read_ledger() == [local_update], "the pending relabel survived"
+
+
+def test_reconciliation_never_leaves_two_rows_for_one_committed_arc(
+    tmp_path, monkeypatch, qdir_res
+):
+    """codex U-HE-19 r10 P2: a canonical FIRST occurrence must still mark the aid, so
+    a divergent second occurrence is dropped -- never replaced into a second copy."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    canonical = {"arc_id": "pr-83", "record_kind": "arc"}
+    divergent = {"arc_id": "pr-83", "record_kind": "arc", "notes": "stale duplicate"}
+    ledger.write_text(
+        json.dumps(canonical, sort_keys=True) + "\n" + json.dumps(divergent, sort_keys=True) + "\n"
+    )
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-83"})
+    monkeypatch.setattr(
+        am, "_committed_ledger_lines", lambda: {json.dumps(canonical, sort_keys=True)}
+    )
+    am._reconcile_local_rows()
+    assert am.read_ledger() == [canonical], "exactly one row survives"
+
+
+def test_merged_append_holds_on_unparseable_committed_history(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r10 P2: corruption in committed history reads as UNREADABLE, never
+    as absence -- the merged-path append holds."""
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve("pr-97", lane_id="A", branch="b", arc_type="applying")
+    rs.open_with_sensor("pr-97", "A")
+    rs.transition("pr-97", "merged", lane_id="A")
+    monkeypatch.setattr(am, "_committed_ledger_lines", lambda: {'{"arc_id": TRUNC'})
+    with pytest.raises(am.AbortError, match="unparseable"):
+        am.append(am.ArcRow(arc_id="pr-97", merged_at="t", merge_sha="s"))
+
+
+def test_failed_refold_heals_on_the_next_held_pass(tmp_path, monkeypatch):
+    """codex U-HE-19 r10 P2: a refold that failed after the terminal flip heals on the
+    next drain's held pass -- the merged-ours branch re-projects idempotently."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
+    rs.open_with_sensor("pr-1", "A")
+    rs.record_phase("pr-1", "execute", "start", ts="2026-08-20T00:00:00Z")
+    rs.transition("pr-1", "merged", lane_id="A")
+    # the crashed drain appended a PRE-accretion row and never refolded
+    (tmp_path / "l.jsonl").write_text(
+        json.dumps({"arc_id": "pr-1", "record_kind": "arc", "phases": {}}) + "\n"
+    )
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1 and (q / "pr-1.json").exists(), "entry held pending commit"
+    row = am.read_ledger()[0]
+    assert row["phases"]["execute"]["start"] == "2026-08-20T00:00:00Z", (
+        "the held pass re-projected the terminal head onto the local row"
+    )

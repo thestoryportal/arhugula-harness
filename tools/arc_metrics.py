@@ -579,8 +579,13 @@ def _require_reservation_holder(row: ArcRow) -> None:
                         f"{row.arc_id}: reservation is merged and a row is already "
                         "in committed history -- re-append refused (C-HE-03 §6)"
                     )
-            except json.JSONDecodeError:
-                continue
+            except json.JSONDecodeError as exc:
+                # An unparseable committed line could BE this arc's row: corruption
+                # reads as UNREADABLE, never as absence (codex r10 P2) -- hold.
+                raise AbortError(
+                    f"{row.arc_id}: committed ledger history contains an unparseable "
+                    "line -- holding the merged-path append (fail closed)"
+                ) from exc
 
 
 def append(row: ArcRow) -> None:
@@ -1260,6 +1265,11 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
                     # still-uncommitted row from the now-terminal head (codex r9)
                     _refold_local_row(arc_id, head[1])
                 print(f"  {arc_id}: completed deferred reservation terminalization")
+            elif cur and cur[1]["state"] == "merged" and cur[1]["lane_id"] == LANE_ID:
+                # A refold that failed after the terminal flip (ledger claimed, I/O --
+                # codex r10 P2) heals here: idempotent re-projection from the terminal
+                # head on every held pass while the row is uncommitted.
+                _refold_local_row(arc_id, cur[1])
         except (KeyError, TypeError, AttributeError, ValueError, rs.ReservationError) as exc:
             print(f"  {arc_id}: deferred terminalization not completed ({exc})")
         print(f"  {arc_id}: row appended locally, awaiting commit -- entry held")
@@ -1457,26 +1467,43 @@ def _reconcile_local_rows() -> None:
                 # corrupt reservation head raising anywhere here -- read, shape access,
                 # missing keys -- must not abort the drain. Fail SAFE: keep the row.
                 if aid and aid in committed:
+                    if aid in replaced:
+                        # every LATER occurrence of a committed aid is a duplicate,
+                        # whatever its bytes (codex r10 P2: a canonical first line must
+                        # not let a divergent second one mint another canonical copy)
+                        dropped.append(f"{aid} (duplicate of a committed arc)")
+                        continue
+                    replaced.add(aid)
                     line = json.dumps(r, sort_keys=True)
                     if committed_lines is not None and line not in committed_lines:
                         # The arc IS in committed history but THIS row is not that
-                        # content. It can be a stale divergent local duplicate (codex
-                        # r3 P2) OR pre-rebase baseline content from before a peer's
-                        # relabel merged (codex r9 P2: deleting THAT would carry a
-                        # baseline deletion into the next PR). Both converge the same
-                        # way: REPLACE with the committed canonical line; a repeated
-                        # aid keeps only its first (canonical) occurrence.
-                        canonical = next(
-                            (cl for cl in committed_lines if json.loads(cl).get("arc_id") == aid),
-                            None,
-                        )
-                        if canonical is None or aid in replaced:
-                            dropped.append(aid)
+                        # content. Discriminate by the reservation (codex r9/r10 P2):
+                        # superseded-by-a-peer (open/merged held by another lane) means
+                        # ours is the stale bytes -- converge to the committed
+                        # canonical line, never a bare deletion. NO such reservation
+                        # means the divergence is a legitimate local update to a
+                        # committed row (a pending relabel) or pre-rebase baseline
+                        # content -- ours to keep untouched.
+                        cur = rs.current(aid)
+                        if (
+                            cur
+                            and cur[1].get("lane_id") != LANE_ID
+                            and cur[1].get("state") in ("open", "merged")
+                        ):
+                            canonical = next(
+                                (
+                                    cl
+                                    for cl in committed_lines
+                                    if json.loads(cl).get("arc_id") == aid
+                                ),
+                                None,
+                            )
+                            if canonical is None:
+                                dropped.append(aid)
+                                continue
+                            keep.append(json.loads(canonical))
+                            dropped.append(f"{aid} (replaced with committed content)")
                             continue
-                        replaced.add(aid)
-                        keep.append(json.loads(canonical))
-                        dropped.append(f"{aid} (replaced with committed content)")
-                        continue
                     keep.append(r)
                     continue
                 cur = rs.current(aid) if aid else None
