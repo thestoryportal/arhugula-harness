@@ -2428,3 +2428,22 @@ def test_failed_refold_heals_on_the_next_held_pass(tmp_path, monkeypatch):
     assert row["phases"]["execute"]["start"] == "2026-08-20T00:00:00Z", (
         "the held pass re-projected the terminal head onto the local row"
     )
+
+
+def test_backfill_resume_refuses_a_mismatched_reservation_payload(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r11 P2: lane+branch alone do not bind a backfill reservation to
+    THIS invocation -- a mismatched recorded pr/arc_type is refused, not consumed."""
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-98", lane_id="B", branch="historical-backfill", arc_type="inventing")
+    rs.update_payload("pr-98", {"pr": 998})
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id="pr-98", pr=99, merged_at="t", merge_sha="s", arc_type="applying"
+        ),
+    )
+    with pytest.raises(am.AbortError, match="not this command's reservation"):
+        am.cmd_extract(argparse.Namespace(dry_run=False))
+    assert not (tmp_path / "l.jsonl").exists() and rs.current("pr-98")[1]["state"] == "pending"

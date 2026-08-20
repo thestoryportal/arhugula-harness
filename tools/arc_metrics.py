@@ -1971,6 +1971,21 @@ def cmd_extract(args: argparse.Namespace) -> int:
             f"(state={state!r}) -- capture it through `queue` + `drain` (the drain "
             "folds the reservation); extract-backfill is for reservation-less history"
         )
+    if owner == LANE_ID and cur[1].get("branch") == "historical-backfill":
+        # A lane+branch match alone does not make it THIS invocation's reservation
+        # (codex r11 P2): a concurrent/retried backfill in the same worktree could
+        # terminalize one reservation and append the other's payload. The recorded
+        # pr/arc_type must agree with what THIS invocation extracted.
+        res_pr, res_type = cur[1].get("pr"), cur[1].get("arc_type")
+        if (res_pr is not None and row.pr is not None and res_pr != row.pr) or (
+            row.arc_type and res_type and res_type != row.arc_type
+        ):
+            raise AbortError(
+                f"{row.arc_id}: the existing backfill reservation records "
+                f"pr={res_pr!r}/arc_type={res_type!r} but this invocation extracted "
+                f"pr={row.pr!r}/arc_type={row.arc_type!r} -- not this command's "
+                "reservation to consume"
+            )
     if owner == LANE_ID and state in ("pending", "open"):
         # Terminalize BEFORE append (codex U-HE-19 r5 P2): a crash between the two
         # leaves a merged head whose retry falls straight through to append() below via
