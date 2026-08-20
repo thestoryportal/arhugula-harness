@@ -1054,6 +1054,61 @@ def test_failover_reads_the_gemini_wrapper_envelope_not_raw_stdout(monkeypatch, 
     assert out.terminal == "REVIEWER_UNAVAILABLE" and "different invocation" in out.reason
 
 
+def test_failover_child_env_set_and_parent_records_reservation_outcome(monkeypatch, tmp_path):
+    """codex r17 / merge-gate spec-conformance P2: the child skips reservation persistence
+    (HARNESS_FAILOVER_CHILD=1); the PARENT records the C-HE-25 outcome from the envelope it
+    ACCEPTED -- including the synthetic REVIEWER_UNAVAILABLE on a binding mismatch -- so the
+    reservation always matches what the caller acts on."""
+    import reservations as real_rs
+
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(real_rs, "QUEUE_DIR", q)
+    monkeypatch.setitem(sys.modules, "reservations", real_rs)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    monkeypatch.setenv("HARNESS_ARC_ID", "pr-chain")  # a reservable id (no '/')
+    arc_id, _ = rw.env_arc_and_lane()
+    real_rs.reserve(arc_id, lane_id="A", branch="b", arc_type="inventing")
+    gem = {**EXPECTED, "reviewer_identity": "gemini-review"}
+    monkeypatch.setattr(
+        rw, "compute_binding", lambda *a, **k: {**gem, "config_hash": k["config_hash"]}
+    )
+    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: EXPECTED["config_hash"])
+    seen_env = {}
+    body = {
+        "terminal": "BLOCK",
+        "channel": "gemini",
+        "failure_class": None,
+        "reason": "",
+        "findings": [{"severity": "P1", "location": "l", "message": "m"}],
+        "binding": gem,
+        "source": "stdout",
+    }
+
+    def fake_run(cmd, *, cwd, timeout, env):
+        import subprocess as sp
+
+        seen_env.update(env)
+        Path(cmd[3]).write_text(json.dumps(body))
+        return sp.CompletedProcess(cmd, 1, "", "")
+
+    monkeypatch.setattr(cr, "run_bounded", fake_run)
+    out = cr._run_gemini_failover(Path("."), "main", chain_round=2)
+    assert out.terminal == "BLOCK"
+    assert seen_env.get("HARNESS_FAILOVER_CHILD") == "1"
+    assert seen_env.get("HARNESS_ROUND_N") == "2"
+    outcomes = real_rs.current(arc_id)[1]["round_outcomes"]
+    assert outcomes == {"2/gemini": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 1}}
+    # rejected envelope (binding mismatch): the PARENT records the synthetic UNAVAILABLE the
+    # caller acts on -- same-key conflict with the accepted row above would raise, so use a
+    # fresh chain round as the production flow would
+    body["binding"] = {**gem, "head_sha": "d" * 40}
+    out = cr._run_gemini_failover(Path("."), "main", chain_round=3)
+    assert out.terminal == "REVIEWER_UNAVAILABLE"
+    outcomes = real_rs.current(arc_id)[1]["round_outcomes"]
+    assert outcomes["3/gemini"]["terminal"] == "REVIEWER_UNAVAILABLE"
+
+
 def test_failover_without_envelope_is_recorded_here_once(monkeypatch, tmp_path):
     """No envelope = the wrapper never reached a terminal (preflight death / missing `just`):
     classify from stderr, emit exactly one row here."""

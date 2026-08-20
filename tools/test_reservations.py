@@ -60,12 +60,119 @@ def test_reserve_requires_arc_type(qdir):
 # mutation-probe: drop the pending/open refusal in reserve()
 def test_second_lane_selection_refused_while_pending_or_open(qdir):
     rs.reserve("pr-3", lane_id="A", branch="b", arc_type="applying")
-    with pytest.raises(rs.ReservationHeld):
+    # match the STATE CHECK's own message: the gen-1 FileExistsError fallback raises
+    # ReservationHeld too, so a bare type assertion would not pin the check
+    # (merge-gate witness-adequacy P2)
+    with pytest.raises(rs.ReservationHeld, match="selection refused"):
         rs.reserve("pr-3", lane_id="B", branch="b2", arc_type="applying")
     rs.transition("pr-3", "open", lane_id="A")
-    with pytest.raises(rs.ReservationHeld):
+    with pytest.raises(rs.ReservationHeld, match="selection refused"):
         rs.reserve("pr-3", lane_id="B", branch="b2", arc_type="applying")
     assert rs.selectable("pr-3") is False and rs.selectable("pr-new") is True
+
+
+# mutation-probe: drop the terminal-reuse refusal in reserve() (the `already terminal` raise)
+def test_terminal_arc_id_reuse_refused_even_after_gc(qdir):
+    """merge-gate witness-adequacy P2: after gc() prunes gen 1 of a 30d-terminal
+    reservation, the explicit terminal-state check is the ONLY guard against silent arc_id
+    reuse -- the gen-1 exclusive-create fallback no longer collides."""
+    rs.reserve("pr-31", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-31", "open", lane_id="A")
+    rs.transition("pr-31", "merged", lane_id="A")
+    with pytest.raises(rs.ReservationError, match="already terminal"):
+        rs.reserve("pr-31", lane_id="B", branch="b2", arc_type="inventing")
+    # simulate the post-GC state: below-head gens pruned, only the terminal head remains
+    d = qdir / "reservations" / "pr-31"
+    (d / "1.json").unlink()
+    (d / "2.json").unlink()
+    with pytest.raises(rs.ReservationError, match="already terminal"):
+        rs.reserve("pr-31", lane_id="B", branch="b2", arc_type="inventing")
+    assert not (d / "1.json").exists(), "no fabricated fresh gen 1 under a terminal head"
+
+
+def test_cli_dispatch_round_trip(qdir, capsys):
+    """merge-gate witness-adequacy P3: every CLI subcommand dispatches through main() --
+    the production entry point future shell callers use."""
+    assert (
+        rs.main(
+            [
+                "reserve",
+                "--arc-id",
+                "a1",
+                "--lane-id",
+                "L",
+                "--branch",
+                "b",
+                "--arc-type",
+                "inventing",
+            ]
+        )
+        == 0
+    )
+    assert (
+        rs.main(
+            [
+                "transition",
+                "--arc-id",
+                "a1",
+                "--to",
+                "open",
+                "--lane-id",
+                "L",
+                "--set",
+                "concurrent_lanes_at_open=0",
+            ]
+        )
+        == 0
+    )
+    assert rs.main(["phase", "--arc-id", "a1", "--phase", "execute", "--edge", "start"]) == 0
+    assert (
+        rs.main(
+            [
+                "round",
+                "--arc-id",
+                "a1",
+                "--round",
+                "1",
+                "--channel",
+                "codex",
+                "--terminal",
+                "APPROVE",
+                "--findings",
+                "0",
+            ]
+        )
+        == 0
+    )
+    assert rs.main(["holder", "--arc-id", "a1"]) == 0
+    assert capsys.readouterr().out.strip().endswith("L")
+    assert rs.main(["selectable", "--arc-id", "a1"]) == 1
+    assert rs.main(["show", "--arc-id", "a1"]) == 0
+    shown = json.loads(capsys.readouterr().out)
+    assert shown["state"] == "open" and shown["round_outcomes"]["1/codex"]["terminal"] == "APPROVE"
+    assert shown["phases"]["execute"]["start"]
+    assert rs.main(["gc"]) == 0
+    capsys.readouterr()
+    assert rs.main(["mint-lane-id", "--worktree", "."]) == 0
+    assert ":" not in capsys.readouterr().out
+    # error path exits 2 with ABORT on stderr
+    assert (
+        rs.main(
+            [
+                "reserve",
+                "--arc-id",
+                "a1",
+                "--lane-id",
+                "L",
+                "--branch",
+                "b",
+                "--arc-type",
+                "inventing",
+            ]
+        )
+        == 2
+    )
+    assert "ABORT" in capsys.readouterr().err
 
 
 def test_transition_is_new_gen_never_rename(qdir):

@@ -465,6 +465,7 @@ def _run_gemini_failover(repo: Path, base: str, chain_round: int | None = None) 
         # state after this process recorded the failover unavailable (codex round 4). A missing
         # `just` surfaces as its rc-127 CompletedProcess (gemini round 3), never an exception.
         env = dict(os.environ)  # the gemini wrapper strips its own provider env + hooks
+        env["HARNESS_FAILOVER_CHILD"] = "1"  # parent records the reservation outcome (below)
         if chain_round is not None:
             # Failover-chain round identity (codex round-14 P1): the two legs of ONE failover
             # share the primary's round number, in BOTH the gate log (round_n_for honors
@@ -481,7 +482,21 @@ def _run_gemini_failover(repo: Path, base: str, chain_round: int | None = None) 
         stdout, stderr = proc.stdout or "", proc.stderr or ""
         outcome = _read_envelope(envelope, binding)
     if outcome is not None:
-        return outcome  # the wrapper reached a terminal and recorded its own rows
+        # The child recorded its own GATE-LOG rows (write-first); the reservation's C-HE-25
+        # outcome is recorded HERE, from the envelope the parent ACCEPTED -- including
+        # _read_envelope's synthetic REVIEWER_UNAVAILABLE on a binding mismatch -- so the
+        # reservation always matches what the caller acts on (codex r17 / merge-gate
+        # spec-conformance P2; the child skips it under HARNESS_FAILOVER_CHILD=1).
+        arc_id, _lane = rw.env_arc_and_lane()
+        if chain_round is not None:
+            rw.record_round_outcome_if_reserved(
+                arc_id,
+                chain_round,
+                channel="gemini",
+                terminal=outcome.terminal,
+                finding_count=len(outcome.findings),
+            )
+        return outcome
     outcome = rw.ReviewOutcome(
         "REVIEWER_UNAVAILABLE",
         "gemini",

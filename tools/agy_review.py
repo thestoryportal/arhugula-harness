@@ -530,13 +530,20 @@ def _emit(outcome: rw.ReviewOutcome) -> None:
         outcome, producer=PRODUCER, arc_id=arc_id, lane_id=lane_id, round_n=None
     )  # the round is minted under the log lock (codex round 7); every terminal yields >= 1 row
     round_n = written[0]["round_n"]
-    rw.record_round_outcome_if_reserved(
-        arc_id,
-        round_n,
-        channel=CHANNEL,
-        terminal=outcome.terminal,
-        finding_count=len(outcome.findings),
-    )
+    if os.environ.get("HARNESS_FAILOVER_CHILD") != "1":
+        # As a failover CHILD the reservation's C-HE-25 outcome is recorded by the PARENT
+        # after it ACCEPTS the envelope (binding-matched): a parent-rejected envelope must
+        # not leave the child's verdict standing as the arc's deciding leg while the caller
+        # acted on REVIEWER_UNAVAILABLE (codex r17 / merge-gate spec-conformance P2). The
+        # gate-log rows above stay write-first regardless -- the VERDICT record is never
+        # deferred, only the reservation summary.
+        rw.record_round_outcome_if_reserved(
+            arc_id,
+            round_n,
+            channel=CHANNEL,
+            terminal=outcome.terminal,
+            finding_count=len(outcome.findings),
+        )
     _sink(outcome)
 
 
