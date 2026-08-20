@@ -139,7 +139,14 @@ def _dir(arc_id: str) -> Path:
     # coordination and retention (codex round-2 P3).
     if "/" in arc_id or arc_id in ("", "..") or arc_id.startswith("."):
         raise ReservationError(f"bad arc_id {arc_id!r}")
-    return reservations_root() / arc_id
+    d = reservations_root() / arc_id
+    # A pre-planted symlink at reservations/<arc_id> would let every read follow forged
+    # state and every write escape QUEUE_DIR (mkdir(exist_ok=True) accepts a link to a
+    # directory; publish_exclusive would then create gens at its target) -- refuse at the
+    # single path funnel, not only in gc (codex round-8 P2).
+    if d.is_symlink():
+        raise ReservationError(f"{arc_id}: reservation path is a symlink -- refused")
+    return d
 
 
 def _check_updates(fn: str, updates: dict, allowed: frozenset[str]) -> None:
@@ -314,14 +321,26 @@ def transition(
                 f"{arc_id}: {head['state']}->{to_state} requires the holder "
                 f"({head['lane_id']}), not {lane_id}"
             )
-        if superseded_by and current(superseded_by) is None:
-            # the chain walks reservation-to-reservation (C-HE-03 §2); committing a pointer
-            # at a missing reservation into an IMMUTABLE terminal head would make
-            # walk_terminal raise forever with no legal repair transition (codex round-6 P2).
-            raise ReservationError(
-                f"{arc_id}: superseded_by names a missing reservation {superseded_by!r}; "
-                "reserve the superseding arc first (C-HE-03 §2)"
-            )
+        if superseded_by:
+            sup = current(superseded_by)
+            if sup is None:
+                # the chain walks reservation-to-reservation (C-HE-03 §2); committing a
+                # pointer at a missing reservation into an IMMUTABLE terminal head would
+                # make walk_terminal raise forever with no repair (codex round-6 P2).
+                raise ReservationError(
+                    f"{arc_id}: superseded_by names a missing reservation "
+                    f"{superseded_by!r}; reserve the superseding arc first (C-HE-03 §2)"
+                )
+            if sup[1]["lane_id"] != lane_id:
+                # C-HE-03 §5: pending->abandoned happens only via an operator RESOLVED-HIL
+                # or a superseding arc -- both resolve through a superseder the resolving
+                # lane OWNS. Without this, any lane could terminalize another lane's
+                # selected unit and remove its scheduling fence (codex round-8 P1).
+                raise IllegalTransition(
+                    f"{arc_id}: abandonment requires the caller to hold the superseding "
+                    f"reservation {superseded_by!r} (held by {sup[1]['lane_id']}, "
+                    f"not {lane_id}) -- C-HE-03 §5"
+                )
         head["state"] = to_state
         head["transitioned_at"] = now_iso()
         if superseded_by:
@@ -396,6 +415,18 @@ def _refuse_terminal_accretion(arc_id: str, fn: str, head: dict) -> None:
         )
 
 
+def _outcome_row(channel: str, terminal: str, finding_count: int) -> dict:
+    """C-HE-25 outcome value with domains enforced at the write funnel: terminal from the
+    C-HE-16 §3 triple; finding_count a nonnegative int, bool excluded (codex round-8 P3)."""
+    if terminal not in ("APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE"):
+        raise ReservationError(
+            f"terminal must be APPROVE|BLOCK|REVIEWER_UNAVAILABLE, got {terminal!r}"
+        )
+    if isinstance(finding_count, bool) or not isinstance(finding_count, int) or finding_count < 0:
+        raise ReservationError(f"finding_count must be a nonnegative int, got {finding_count!r}")
+    return {"channel": channel, "terminal": terminal, "finding_count": finding_count}
+
+
 def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> dict:
     if phase not in PHASES or edge not in ("start", "end"):
         raise ReservationError(f"bad phase/edge {phase!r}/{edge!r}")
@@ -420,11 +451,7 @@ def record_round_outcome(
     the codex REVIEWER_UNAVAILABLE row would corrupt the durable audit and the C-HE-27 §4
     N6 denominator exclusion. Callers allocate a fresh round_n per recorded outcome; an
     identical re-record is idempotent."""
-    if terminal not in ("APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE"):
-        raise ReservationError(
-            f"terminal must be APPROVE|BLOCK|REVIEWER_UNAVAILABLE, got {terminal!r}"
-        )
-    row = {"channel": channel, "terminal": terminal, "finding_count": int(finding_count)}
+    row = _outcome_row(channel, terminal, finding_count)
 
     def build(head: dict) -> dict:
         _refuse_terminal_accretion(arc_id, "record_round_outcome", head)
@@ -451,15 +478,17 @@ def record_round_outcome_next(
     by a DIFFERENT channel: gate-log rounds are per (arc, producer) (`round_n_for`), so a
     D-C failover's two legs can both carry the same number arc-level (codex round-5 P2).
     Allocation happens inside the CAS build, so a lost CAS re-reads and re-allocates."""
-    if terminal not in ("APPROVE", "BLOCK", "REVIEWER_UNAVAILABLE"):
-        raise ReservationError(
-            f"terminal must be APPROVE|BLOCK|REVIEWER_UNAVAILABLE, got {terminal!r}"
-        )
-    row = {"channel": channel, "terminal": terminal, "finding_count": int(finding_count)}
+    row = _outcome_row(channel, terminal, finding_count)
 
     def build(head: dict) -> dict:
         _refuse_terminal_accretion(arc_id, "record_round_outcome_next", head)
         outcomes = head.setdefault("round_outcomes", {})
+        if any(v == row for v in outcomes.values()):
+            # CAS-retry / twin-process idempotence (codex round-8 P2): a failover outcome is
+            # ONE fact -- if the re-read head already carries this exact row (the winner's
+            # write, or our own attempt that lost only the gen race), do not record a
+            # duplicate under a fresh key.
+            return head
         nxt = max((int(k) for k in outcomes if k.isdigit()), default=0) + 1
         outcomes[str(nxt)] = dict(row)
         return head

@@ -114,9 +114,11 @@ def test_only_holder_terminalizes_open_reservation(qdir):
         rs.transition("pr-7b", "abandoned", lane_id="B", superseded_by="pr-8")
     assert rs.transition("pr-7b", "merged", lane_id="A")["state"] == "merged"
     rs.reserve("pr-7c", lane_id="A", branch="b", arc_type="inventing")
-    # pending: any lane
+    # pending->abandoned: legal for a lane that HOLDS the superseding reservation
+    # (C-HE-03 §5; codex round-8 P1) -- OTHER owns pr-9y, so OTHER may abandon pr-7c to it
+    rs.reserve("pr-9y", lane_id="OTHER", branch="b", arc_type="inventing")
     assert (
-        rs.transition("pr-7c", "abandoned", lane_id="OTHER", superseded_by="pr-9x")["state"]
+        rs.transition("pr-7c", "abandoned", lane_id="OTHER", superseded_by="pr-9y")["state"]
         == "abandoned"
     )
 
@@ -136,6 +138,59 @@ def test_abandoned_requires_existing_superseder(qdir):
         rs.transition("pr-21", "abandoned", lane_id="A", superseded_by="pr-22")["state"]
         == "abandoned"
     )
+
+
+# mutation-probe: drop the superseder-holder check for pending->abandoned in transition.build
+def test_pending_abandonment_requires_holding_the_superseder(qdir):
+    """codex round-8 P1: a competing lane must not terminalize another lane's selected unit
+    by naming a superseder it does not own (C-HE-03 §5)."""
+    rs.reserve("pr-24", lane_id="A", branch="b", arc_type="inventing")
+    rs.reserve("pr-25", lane_id="A", branch="b", arc_type="inventing")  # A's superseder
+    with pytest.raises(rs.IllegalTransition, match="hold the superseding"):
+        rs.transition("pr-24", "abandoned", lane_id="HIJACKER", superseded_by="pr-25")
+    assert rs.current("pr-24")[1]["state"] == "pending"
+    assert (
+        rs.transition("pr-24", "abandoned", lane_id="A", superseded_by="pr-25")["state"]
+        == "abandoned"
+    )
+
+
+# mutation-probe: drop the symlink refusal in _dir
+def test_symlinked_reservation_path_refused_at_read_and_write(qdir, tmp_path):
+    """codex round-8 P2: a pre-planted symlink at reservations/<arc_id> must not let reads
+    follow forged state or writes escape QUEUE_DIR."""
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    root = qdir / "reservations"
+    root.mkdir(parents=True)
+    (root / "pr-sym").symlink_to(outside)
+    with pytest.raises(rs.ReservationError, match="symlink"):
+        rs.reserve("pr-sym", lane_id="A", branch="b", arc_type="inventing")
+    with pytest.raises(rs.ReservationError, match="symlink"):
+        rs.current("pr-sym")
+    assert not list(outside.iterdir())  # nothing was written through the link
+
+
+def test_round_outcome_next_is_idempotent_for_identical_row(qdir):
+    """codex round-8 P2: a twin failover writer records the same fact once."""
+    rs.reserve("pr-26", lane_id="A", branch="b", arc_type="inventing")
+    rs.record_round_outcome_next("pr-26", channel="gemini", terminal="BLOCK", finding_count=2)
+    p = rs.record_round_outcome_next("pr-26", channel="gemini", terminal="BLOCK", finding_count=2)
+    assert list(p["round_outcomes"]) == ["1"]
+
+
+def test_finding_count_domain_enforced(qdir):
+    """codex round-8 P3: nonnegative int, bool excluded."""
+    rs.reserve("pr-27", lane_id="A", branch="b", arc_type="inventing")
+    for bad in (-1, True, "2"):
+        with pytest.raises(rs.ReservationError, match="finding_count"):
+            rs.record_round_outcome(
+                "pr-27", 1, channel="codex", terminal="BLOCK", finding_count=bad
+            )
+        with pytest.raises(rs.ReservationError, match="finding_count"):
+            rs.record_round_outcome_next(
+                "pr-27", channel="codex", terminal="BLOCK", finding_count=bad
+            )
 
 
 def test_reserve_requires_declared_at_open(qdir):
