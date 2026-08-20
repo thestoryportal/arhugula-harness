@@ -126,6 +126,10 @@ def _check_id(name: str, value: str | None) -> None:
         raise ReservationError(
             f"{name} must not contain ':' (finding_id/code delimiter): {value!r}"
         )
+    if value == "":
+        # an empty authority-bearing id is indistinguishable from "no holder" in every
+        # reader (codex round-9 P3)
+        raise ReservationError(f"{name} must be a nonempty identifier")
 
 
 def mint_lane_id(worktree: Path) -> str:
@@ -198,6 +202,13 @@ def _provenance() -> dict:
 def _write_gen(arc_id: str, gen: int, payload: dict) -> None:
     d = _dir(arc_id)
     d.mkdir(parents=True, exist_ok=True)
+    # Re-check AFTER mkdir, immediately before publish: _dir()'s check alone is TOCTOU --
+    # a link installed between check and write would be followed by mkdir(exist_ok=True)
+    # (codex round-9 P2). Cooperative-lane model (X-AL-1): this narrows the window to the
+    # syscall gap; a hostile-adversary fence is the merge-door's C-HE-08 concern, not this
+    # record's.
+    if d.is_symlink() or not d.resolve().is_relative_to(reservations_root().resolve()):
+        raise ReservationError(f"{arc_id}: reservation path escaped QUEUE_DIR -- refused")
     publish_exclusive(d / f"{gen}.json", json.dumps(payload, sort_keys=True))
 
 
@@ -331,15 +342,18 @@ def transition(
                     f"{arc_id}: superseded_by names a missing reservation "
                     f"{superseded_by!r}; reserve the superseding arc first (C-HE-03 §2)"
                 )
-            if sup[1]["lane_id"] != lane_id:
+            if head["state"] == "pending" and sup[1]["lane_id"] != lane_id:
                 # C-HE-03 §5: pending->abandoned happens only via an operator RESOLVED-HIL
                 # or a superseding arc -- both resolve through a superseder the resolving
-                # lane OWNS. Without this, any lane could terminalize another lane's
-                # selected unit and remove its scheduling fence (codex round-8 P1).
+                # lane OWNS; without this any lane could remove another lane's scheduling
+                # fence (codex round-8 P1). Scoped to PENDING heads only: open->abandoned
+                # is already gated by the §6 open-holder rule above, and the open holder
+                # may legitimately point at a superseder another lane owns
+                # (codex round-9 P2).
                 raise IllegalTransition(
-                    f"{arc_id}: abandonment requires the caller to hold the superseding "
-                    f"reservation {superseded_by!r} (held by {sup[1]['lane_id']}, "
-                    f"not {lane_id}) -- C-HE-03 §5"
+                    f"{arc_id}: pending abandonment requires the caller to hold the "
+                    f"superseding reservation {superseded_by!r} (held by "
+                    f"{sup[1]['lane_id']}, not {lane_id}) -- C-HE-03 §5"
                 )
         head["state"] = to_state
         head["transitioned_at"] = now_iso()
@@ -424,6 +438,8 @@ def _outcome_row(channel: str, terminal: str, finding_count: int) -> dict:
         )
     if isinstance(finding_count, bool) or not isinstance(finding_count, int) or finding_count < 0:
         raise ReservationError(f"finding_count must be a nonnegative int, got {finding_count!r}")
+    if not channel or "/" in channel or ":" in channel:
+        raise ReservationError(f"channel must be a nonempty '/'-free, ':'-free id, got {channel!r}")
     return {"channel": channel, "terminal": terminal, "finding_count": finding_count}
 
 
@@ -446,51 +462,31 @@ def record_round_outcome(
     (like phases) and folded into the arc row at drain. `terminal` MUST be one of the
     C-HE-16 §3 triple.
 
-    The map is APPEND-ONLY per round (codex round-3 P2): a conflicting re-record of an
-    existing round_n RAISES instead of silently overwriting — a D-C failover leg that erased
-    the codex REVIEWER_UNAVAILABLE row would corrupt the durable audit and the C-HE-27 §4
-    N6 denominator exclusion. Callers allocate a fresh round_n per recorded outcome; an
-    identical re-record is idempotent."""
+    Keying (codex rounds 3/5/6/7/8/9 P2 -- this composite key dissolves the whole class):
+    the map key is `"<round_n>/<channel>"`. Gate-log rounds are scoped per (arc, producer)
+    (`round_n_for`), so a D-C failover's two legs legitimately share a round NUMBER --
+    (round, channel) is the stable identity: no cross-channel collision, no renumbering,
+    exact joins back to the gate log, and CAS-retry idempotence for free (same key, same
+    content). The map stays APPEND-ONLY: a same-key re-record with DIFFERENT content
+    raises RoundOutcomeConflict (never a silent overwrite); an identical re-record is
+    idempotent. The C-HE-25 `{round_n: ...}` ARC-ROW shape is owed by the drain fold
+    (U-HE-19), which projects these keys; the reservation-side carrier shape is plan-level
+    (`round_outcomes` is not in the C-HE-03 §3 payload enumeration)."""
     row = _outcome_row(channel, terminal, finding_count)
+    key = f"{int(round_n)}/{channel}"
 
     def build(head: dict) -> dict:
         _refuse_terminal_accretion(arc_id, "record_round_outcome", head)
         outcomes = head.setdefault("round_outcomes", {})
-        existing = outcomes.get(str(int(round_n)))
+        existing = outcomes.get(key)
         if existing is not None and existing != row:
             raise RoundOutcomeConflict(
-                f"{arc_id}: round {round_n} already recorded "
+                f"{arc_id}: round {key} already recorded "
                 f"({existing['channel']}/{existing['terminal']}); the audit map is "
-                "append-only — allocate a new round_n (C-HE-25)",
+                "append-only (C-HE-25)",
                 existing,
             )
-        outcomes[str(int(round_n))] = dict(row)
-        return head
-
-    return _cas_next(arc_id, build)
-
-
-def record_round_outcome_next(
-    arc_id: str, *, channel: str, terminal: str, finding_count: int
-) -> dict:
-    """Record at the smallest unused integer round key — arc-level allocation preserving the
-    C-HE-25 map shape. Used when the caller's producer-scoped round number is already taken
-    by a DIFFERENT channel: gate-log rounds are per (arc, producer) (`round_n_for`), so a
-    D-C failover's two legs can both carry the same number arc-level (codex round-5 P2).
-    Allocation happens inside the CAS build, so a lost CAS re-reads and re-allocates."""
-    row = _outcome_row(channel, terminal, finding_count)
-
-    def build(head: dict) -> dict:
-        _refuse_terminal_accretion(arc_id, "record_round_outcome_next", head)
-        outcomes = head.setdefault("round_outcomes", {})
-        if any(v == row for v in outcomes.values()):
-            # CAS-retry / twin-process idempotence (codex round-8 P2): a failover outcome is
-            # ONE fact -- if the re-read head already carries this exact row (the winner's
-            # write, or our own attempt that lost only the gen race), do not record a
-            # duplicate under a fresh key.
-            return head
-        nxt = max((int(k) for k in outcomes if k.isdigit()), default=0) + 1
-        outcomes[str(nxt)] = dict(row)
+        outcomes[key] = dict(row)
         return head
 
     return _cas_next(arc_id, build)

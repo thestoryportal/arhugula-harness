@@ -153,6 +153,15 @@ def test_pending_abandonment_requires_holding_the_superseder(qdir):
         rs.transition("pr-24", "abandoned", lane_id="A", superseded_by="pr-25")["state"]
         == "abandoned"
     )
+    # OPEN holder may abandon toward a superseder ANOTHER lane owns (codex round-9 P2):
+    # the §6 open-holder rule is the gate there, not superseder ownership
+    rs.reserve("pr-28", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-28", "open", lane_id="A")
+    rs.reserve("pr-29", lane_id="B", branch="b", arc_type="inventing")
+    assert (
+        rs.transition("pr-28", "abandoned", lane_id="A", superseded_by="pr-29")["state"]
+        == "abandoned"
+    )
 
 
 # mutation-probe: drop the symlink refusal in _dir
@@ -171,14 +180,6 @@ def test_symlinked_reservation_path_refused_at_read_and_write(qdir, tmp_path):
     assert not list(outside.iterdir())  # nothing was written through the link
 
 
-def test_round_outcome_next_is_idempotent_for_identical_row(qdir):
-    """codex round-8 P2: a twin failover writer records the same fact once."""
-    rs.reserve("pr-26", lane_id="A", branch="b", arc_type="inventing")
-    rs.record_round_outcome_next("pr-26", channel="gemini", terminal="BLOCK", finding_count=2)
-    p = rs.record_round_outcome_next("pr-26", channel="gemini", terminal="BLOCK", finding_count=2)
-    assert list(p["round_outcomes"]) == ["1"]
-
-
 def test_finding_count_domain_enforced(qdir):
     """codex round-8 P3: nonnegative int, bool excluded."""
     rs.reserve("pr-27", lane_id="A", branch="b", arc_type="inventing")
@@ -186,10 +187,6 @@ def test_finding_count_domain_enforced(qdir):
         with pytest.raises(rs.ReservationError, match="finding_count"):
             rs.record_round_outcome(
                 "pr-27", 1, channel="codex", terminal="BLOCK", finding_count=bad
-            )
-        with pytest.raises(rs.ReservationError, match="finding_count"):
-            rs.record_round_outcome_next(
-                "pr-27", channel="codex", terminal="BLOCK", finding_count=bad
             )
 
 
@@ -230,9 +227,11 @@ def test_seq_is_filesystem_derived_and_monotonic(qdir):
     assert a < b < c and (qdir / "reservations" / ".seq" / str(c)).exists()
 
 
-def test_identifiers_reject_colon(qdir):
+def test_identifiers_reject_colon_and_empty(qdir):
     with pytest.raises(rs.ReservationError, match=":"):
         rs.reserve("pr-8", lane_id="bad:lane", branch="b", arc_type="inventing")
+    with pytest.raises(rs.ReservationError, match="nonempty"):
+        rs.reserve("pr-8", lane_id="", branch="b", arc_type="inventing")  # codex round-9 P3
     assert ":" not in rs.mint_lane_id(Path("/tmp/wt-x"))
 
 
@@ -307,31 +306,37 @@ def test_record_round_outcome_accretes(qdir):
     )
     p = rs.record_round_outcome("pr-10b", 2, channel="gemini", terminal="BLOCK", finding_count=3)
     assert p["round_outcomes"] == {
-        "1": {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0},
-        "2": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3},
+        "1/codex": {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0},
+        "2/gemini": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3},
     }
     with pytest.raises(rs.ReservationError):
         rs.record_round_outcome("pr-10b", 3, channel="codex", terminal="MAYBE", finding_count=0)
 
 
 # mutation-probe: drop the append-only conflict check in record_round_outcome.build
-def test_round_outcome_map_is_append_only(qdir):
-    """codex round-3 P2: a conflicting re-record of an existing round_n raises — a failover
-    leg must never erase the codex REVIEWER_UNAVAILABLE row (C-HE-25; C-HE-27 §4 N6
-    exclusion). Identical re-record is idempotent."""
+def test_round_outcome_map_is_append_only_and_composite_keyed(qdir):
+    """codex rounds 3-9 P2: the (round, channel) composite key gives failover legs sharing
+    a round NUMBER distinct keys; a SAME-key re-record with different content raises —
+    never a silent overwrite; identical re-record is idempotent (CAS-retry safe)."""
     rs.reserve("pr-15", lane_id="A", branch="b", arc_type="inventing")
     rs.record_round_outcome(
         "pr-15", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
     )
-    with pytest.raises(rs.ReservationError, match="append-only"):
-        rs.record_round_outcome("pr-15", 1, channel="gemini", terminal="BLOCK", finding_count=2)
-    # idempotent identical re-record
-    rs.record_round_outcome(
+    # cross-channel same round NUMBER: distinct keys, both persist
+    rs.record_round_outcome("pr-15", 1, channel="gemini", terminal="BLOCK", finding_count=2)
+    # same-channel next producer round: its own key, no collision (codex round-9 P2)
+    rs.record_round_outcome("pr-15", 2, channel="gemini", terminal="APPROVE", finding_count=0)
+    # identical re-record is idempotent
+    p = rs.record_round_outcome(
         "pr-15", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
     )
-    p = rs.record_round_outcome("pr-15", 2, channel="gemini", terminal="BLOCK", finding_count=2)
-    assert p["round_outcomes"]["1"]["terminal"] == "REVIEWER_UNAVAILABLE"
-    assert p["round_outcomes"]["2"]["channel"] == "gemini"
+    assert set(p["round_outcomes"]) == {"1/codex", "1/gemini", "2/gemini"}
+    assert p["round_outcomes"]["1/codex"]["terminal"] == "REVIEWER_UNAVAILABLE"
+    # same-key different content: append-only conflict
+    with pytest.raises(rs.RoundOutcomeConflict, match="append-only"):
+        rs.record_round_outcome("pr-15", 1, channel="codex", terminal="APPROVE", finding_count=0)
+    with pytest.raises(rs.ReservationError, match="channel"):
+        rs.record_round_outcome("pr-15", 3, channel="a/b", terminal="APPROVE", finding_count=0)
 
 
 def test_gc_sweeps_tmp_in_headless_dir(qdir, monkeypatch):
@@ -445,26 +450,6 @@ def test_accretion_refused_on_terminal_reservation(qdir):
     # head must never stamp stale SHAs over the terminal audit.
     with pytest.raises(rs.IllegalTransition, match="open window"):
         rs.update_payload("pr-19", {"head_sha": "stale" + "0" * 35})
-
-
-# mutation-probe: drop the arc-level next-key allocation in record_round_outcome_next.build
-def test_round_outcome_next_lands_failover_leg_at_free_key(qdir):
-    """codex round-5 P2: gate-log rounds are per (arc, producer); a failover's two legs can
-    both carry round 1 arc-level. `_next` lands the second leg at the next free key — both
-    channels persist, nothing erased."""
-    rs.reserve("pr-20", lane_id="A", branch="b", arc_type="inventing")
-    rs.record_round_outcome(
-        "pr-20", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
-    )
-    p = rs.record_round_outcome_next("pr-20", channel="gemini", terminal="BLOCK", finding_count=2)
-    assert p["round_outcomes"]["1"]["channel"] == "codex"
-    assert p["round_outcomes"]["2"] == {
-        "channel": "gemini",
-        "terminal": "BLOCK",
-        "finding_count": 2,
-    }
-    with pytest.raises(rs.ReservationError, match="terminal must be"):
-        rs.record_round_outcome_next("pr-20", channel="x", terminal="NOPE", finding_count=0)
 
 
 # mutation-probe: cut off by each file's mtime instead of the terminal head's transitioned_at

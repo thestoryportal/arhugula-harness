@@ -701,17 +701,18 @@ def test_wrapper_failover_collision_persists_both_channels(tmp_path, monkeypatch
     )
     assert capsys.readouterr().err == ""
     outcomes = real_rs.current("pr-fo")[1]["round_outcomes"]
-    assert outcomes["1"]["channel"] == "codex"
-    assert outcomes["1"]["terminal"] == "REVIEWER_UNAVAILABLE"
-    assert outcomes["2"] == {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3}
-    # SAME-channel conflict is an anomaly: reported to stderr, never silently renumbered
-    # (codex round-6/7 P2)
+    # composite (round/channel) keys: both legs of the failover persist under their own
+    # key, joins to the gate log stay exact (codex rounds 5-9 P2)
+    assert outcomes["1/codex"]["terminal"] == "REVIEWER_UNAVAILABLE"
+    assert outcomes["1/gemini"] == {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3}
+    # SAME-key conflict (same round, same channel, different content) is an anomaly:
+    # reported to stderr, never overwritten (codex round-6/7 P2)
     rw.record_round_outcome_if_reserved(
         "pr-fo", 1, channel="codex", terminal="APPROVE", finding_count=0
     )
     assert "not persisted" in capsys.readouterr().err
     after = real_rs.current("pr-fo")[1]["round_outcomes"]
-    assert after["1"]["terminal"] == "REVIEWER_UNAVAILABLE" and "3" not in after
+    assert after["1/codex"]["terminal"] == "REVIEWER_UNAVAILABLE"
 
 
 def test_wrapper_round_outcome_noop_without_reservation_substrate(monkeypatch, capsys):

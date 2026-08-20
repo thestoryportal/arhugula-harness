@@ -399,26 +399,15 @@ def record_round_outcome_if_reserved(
         return
     try:
         if rs.current(arc_id) is not None:
-            # Preserve the caller's round_n whenever it is free or identical, so the folded
-            # reservation still joins to the gate-log round (codex round-7 P2). Only a
-            # genuine CROSS-CHANNEL collision -- a D-C failover's two legs both carrying the
-            # same producer-scoped number (`round_n_for`) -- falls back to the next free
-            # arc-level key (codex round-5 P2). A SAME-channel conflict is an anomaly:
-            # re-raised and reported below, never silently renumbered (codex round-6 P2).
-            try:
-                rs.record_round_outcome(
-                    arc_id,
-                    round_n,
-                    channel=channel,
-                    terminal=terminal,
-                    finding_count=finding_count,
-                )
-            except rs.RoundOutcomeConflict as conflict:
-                if conflict.existing.get("channel") == channel:
-                    raise
-                rs.record_round_outcome_next(
-                    arc_id, channel=channel, terminal=terminal, finding_count=finding_count
-                )
+            # The reservation map keys by the composite ("<round>/<channel>"), so the two
+            # legs of a D-C failover -- which legitimately share a producer-scoped round
+            # NUMBER (`round_n_for`) -- land under distinct keys with no renumbering and
+            # exact joins back to the gate log (codex rounds 5-9 P2). A same-key conflict
+            # (same round, same channel, different content) is a genuine anomaly: reported
+            # below, never overwritten.
+            rs.record_round_outcome(
+                arc_id, round_n, channel=channel, terminal=terminal, finding_count=finding_count
+            )
     except Exception as exc:
         print(f"review wrapper: round outcome not persisted ({exc})", file=sys.stderr)
 
