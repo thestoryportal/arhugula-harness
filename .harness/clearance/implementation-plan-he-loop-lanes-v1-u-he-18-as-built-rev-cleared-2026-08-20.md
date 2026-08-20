@@ -22,7 +22,7 @@ The U-HE-18 landing revises exactly one plan body (U-HE-18) with a dated as-buil
 of four execution corrections: the superseder-must-exist test adaptation (landed U-HE-17
 round-6 validation), the deletion-expressible mutation-probe substitutions (the plan's own
 Step-4 discussion anticipates the positive-mutation gap), the session-start caller path
-(`tools/roadmap-audit/session-start.sh`, bounded + best-effort + dir-pre-probed), and
+(`tools/roadmap-audit/session-start.sh`, detached + dir-pre-probed per codex r1 P1), and
 `reconcile_all`'s per-arc fault isolation with in-band `ERROR:` values (CLI exit 2). Spec
 contracts C-HE-03 §5/§7 and C-HE-20 §1–2 are implemented exactly as written; no
 design-substrate or spec surface is touched.

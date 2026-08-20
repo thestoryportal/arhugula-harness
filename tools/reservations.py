@@ -340,6 +340,7 @@ def transition(
     lane_id: str,
     updates: dict | None = None,
     superseded_by: str | None = None,
+    expect: dict | None = None,
 ) -> dict:
     _check_id("lane_id", lane_id)
     if to_state == "abandoned" and not superseded_by:
@@ -366,6 +367,17 @@ def transition(
                 f"{arc_id}: {head['state']}->{to_state} is illegal from head gen "
                 f"{head['generation']}"
             )
+        if expect:
+            # Bind the transition to the head the caller's decision was made against
+            # (codex U-HE-18 r1 P1): a reconcile that confirmed PR N merged must not
+            # terminalize a head whose `pr` was concurrently re-bound to N+1. Validated
+            # INSIDE the CAS build so a lost race re-validates against the new head.
+            for k, v in expect.items():
+                if head.get(k) != v:
+                    raise IllegalTransition(
+                        f"{arc_id}: {k} changed since the ground-truth check "
+                        f"({head.get(k)!r} != {v!r}); re-reconcile against the new head"
+                    )
         if head["state"] == "open" and head["lane_id"] != lane_id:
             # holder-only: an `open` reservation is terminalized only by the lane that holds
             # it (C-HE-03 §6; Codex round-3 P1). pending->abandoned by a superseding arc has
@@ -782,12 +794,9 @@ def reconcile(
         return head["state"]
     if head["state"] == "pending":
         if _aged(head["reserved_at"], now):
-            emit_loop_row(
-                "NOTIFY",
-                lane,
-                "reservation-stale:HITL-recoverable:pending_aged",
-                f"{arc_id} pending > 24h; state unchanged",
-            )
+            # Durable HITL row FIRST (C-HE-20 §1): emit_loop_row fails closed, so if the
+            # informational NOTIFY went first and raised, the recoverable escalation row
+            # would never be attempted (codex U-HE-18 r1 P2).
             emit_loop_row(
                 "DEFERRED-HIL",
                 lane,
@@ -795,21 +804,27 @@ def reconcile(
                 f"{arc_id} -- aged pending reservation needs operator disposition "
                 f"(RESOLVED-HIL or superseding arc)",
             )
+            emit_loop_row(
+                "NOTIFY",
+                lane,
+                "reservation-stale:HITL-recoverable:pending_aged",
+                f"{arc_id} pending > 24h; state unchanged",
+            )
         return "pending"
     # open
     if head["pr"] is None:
         if _aged(head["transitioned_at"], now):
             emit_loop_row(
-                "NOTIFY",
-                lane,
-                "reservation-stale:HITL-recoverable:open_no_pr",
-                f"{arc_id} open > 24h with no PR; state unchanged",
-            )
-            emit_loop_row(
                 "DEFERRED-HIL",
                 lane,
                 "reservation-stale:HITL-recoverable:open_no_pr",
                 f"{arc_id} -- open reservation with no PR needs operator disposition",
+            )
+            emit_loop_row(
+                "NOTIFY",
+                lane,
+                "reservation-stale:HITL-recoverable:open_no_pr",
+                f"{arc_id} open > 24h with no PR; state unchanged",
             )
         return "open"
     try:
@@ -821,13 +836,29 @@ def reconcile(
         )
         return "open"
     state = (view or {}).get("state")
-    if state == "MERGED":
-        transition(arc_id, "merged", lane_id=lane)
-        return "merged"
+    if state in ("MERGED", "CLOSED") and (state == "MERGED" or superseded_by):
+        to_state = "merged" if state == "MERGED" else "abandoned"
+        try:
+            transition(
+                arc_id,
+                to_state,
+                lane_id=lane,
+                superseded_by=superseded_by if to_state == "abandoned" else None,
+                expect={"pr": head["pr"]},
+            )
+        except IllegalTransition:
+            # Lost a race since the ground-truth check (codex U-HE-18 r1 P1/P2): the head
+            # terminalized concurrently (another reconcile pass won -- idempotent, return
+            # its terminal state), the holder transferred, or `pr` was re-bound. All
+            # resolve fail-safe: report the CURRENT head; a live head re-reconciles on
+            # the next pass against the new ground truth.
+            cur2 = current(arc_id)
+            head2 = cur2[1] if cur2 else None
+            if head2 is not None and head2["state"] in TERMINAL:
+                return head2["state"]
+            return "open"
+        return to_state
     if state == "CLOSED":
-        if superseded_by:
-            transition(arc_id, "abandoned", lane_id=lane, superseded_by=superseded_by)
-            return "abandoned"
         emit_loop_row(
             "DEFERRED-HIL",
             lane,
@@ -838,16 +869,16 @@ def reconcile(
         return "open"
     if _aged(head["transitioned_at"], now):
         emit_loop_row(
-            "NOTIFY",
-            lane,
-            "reservation-stale:HITL-recoverable:open_stuck",
-            f"{arc_id} open > 24h, PR #{head['pr']} still OPEN; state unchanged",
-        )
-        emit_loop_row(
             "DEFERRED-HIL",
             lane,
             "reservation-stale:HITL-recoverable:open_stuck",
             f"{arc_id} -- stuck open reservation; operator disposition needed",
+        )
+        emit_loop_row(
+            "NOTIFY",
+            lane,
+            "reservation-stale:HITL-recoverable:open_stuck",
+            f"{arc_id} open > 24h, PR #{head['pr']} still OPEN; state unchanged",
         )
     return "open"
 
@@ -865,14 +896,16 @@ def reconcile_all(
     if not root.is_dir():
         return out
     for d in sorted(root.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
-            continue
-        cur = current(d.name)
-        if cur is None or cur[1]["state"] in TERMINAL:
+        if d.name.startswith(".") or not d.is_dir():
             continue
         try:
+            # The head read is inside the guarded region too (codex U-HE-18 r1 P2): one
+            # symlinked/corrupt reservation must not abort the pass before later arcs.
+            cur = current(d.name)
+            if cur is None or cur[1]["state"] in TERMINAL:
+                continue
             out[d.name] = reconcile(d.name, gh_view=view, now=now)
-        except ReservationError as exc:
+        except (ReservationError, OSError, ValueError) as exc:
             out[d.name] = f"ERROR: {exc}"
     return out
 

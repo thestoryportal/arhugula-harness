@@ -773,3 +773,50 @@ def test_cli_reconcile_all(qdir, monkeypatch, capsys):
     rs.update_payload("pr-50", {"pr": 50})
     assert rs.main(["reconcile-all"]) == 0
     assert json.loads(capsys.readouterr().out) == {"pr-50": "merged"}
+
+
+# mutation-probe: drop the expect-mismatch check in transition.build
+def test_reconcile_terminal_bound_to_checked_pr(qdir, monkeypatch):
+    """r1 P1: the terminal CAS is bound to the PR whose ground truth was checked -- a
+    concurrent update_payload re-binding `pr` must NOT be terminalized on the old PR's
+    ground truth."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-60", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-60", "A")
+    rs.update_payload("pr-60", {"pr": 60})
+
+    def gh_rebinds(pr):
+        rs.update_payload("pr-60", {"pr": 61})  # concurrent ship-pr backfill wins the race
+        return {"state": "MERGED"}
+
+    assert rs.reconcile("pr-60", gh_view=gh_rebinds) == "open"  # NOT terminalized
+    assert rs.current("pr-60")[1]["state"] == "open" and rs.current("pr-60")[1]["pr"] == 61
+
+
+def test_reconcile_concurrent_pass_is_idempotent_not_error(qdir, monkeypatch):
+    """r1 P2: two passes both observe open/MERGED; the loser's replay against the terminal
+    head reports `merged`, never an IllegalTransition ERROR."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-70", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-70", "A")
+    rs.update_payload("pr-70", {"pr": 70})
+
+    def gh_and_sibling_wins(pr):
+        rs.transition("pr-70", "merged", lane_id="A")  # the sibling pass lands first
+        return {"state": "MERGED"}
+
+    assert rs.reconcile("pr-70", gh_view=gh_and_sibling_wins) == "merged"
+
+
+def test_reconcile_all_isolates_corrupt_head_read(qdir, monkeypatch):
+    """r1 P2: a symlinked/corrupt reservation dir is isolated in-band; later arcs still
+    reconcile."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-80", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-80", "A")
+    rs.update_payload("pr-80", {"pr": 80})
+    outside = qdir / "outside-root"
+    outside.mkdir()
+    (qdir / "reservations" / "aa-bad").symlink_to(outside)  # sorts before pr-80
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    assert out["aa-bad"].startswith("ERROR") and out["pr-80"] == "merged"
