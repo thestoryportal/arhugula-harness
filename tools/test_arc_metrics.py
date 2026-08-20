@@ -2537,3 +2537,40 @@ def test_non_object_reservation_head_is_isolated_at_reconciliation(tmp_path, mon
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     am._reconcile_local_rows()  # must NOT raise
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-86"], "row kept"
+
+
+def test_backfill_retry_without_arc_type_takes_the_reservations_label(
+    tmp_path, monkeypatch, qdir_res
+):
+    """codex U-HE-19 r17 P2: a crash-retry that omits --arc-type still records the
+    minted reservation's close-declared classification, never a null label."""
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve(
+        "pr-73",
+        lane_id="B",
+        branch=am.BACKFILL_BRANCH,
+        arc_type="applying",
+        arc_type_declared_at="close",  # exactly as the backfill mints it
+    )
+    monkeypatch.setattr(
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-73", pr=73, merged_at="t", merge_sha="s")
+    )
+    assert am.cmd_extract(argparse.Namespace(dry_run=False)) == 0
+    row = am.read_ledger()[0]
+    assert row["arc_type"] == "applying" and row["arc_type_close"] == "applying"
+    assert row["arc_type_declared_at"] == "close"
+
+
+def test_directory_shaped_generation_is_isolated_at_reconciliation(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r17 P2: IsADirectoryError from a corrupt generation is per-row --
+    the drain start must not abort on it."""
+    q = qdir_res
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    ledger.write_text(json.dumps({"arc_id": "pr-87", "record_kind": "arc"}) + "\n")
+    (q / "reservations" / "pr-87" / "1.json").mkdir(parents=True)
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    am._reconcile_local_rows()  # must NOT raise
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-87"], "row kept"

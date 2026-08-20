@@ -1121,6 +1121,15 @@ def _transfer_from_dead_claim(entry: dict) -> None:
                 f"  {arc_id}: dead claim belonged to {claim_lane!r}, not the holder "
                 f"({dead_lane!r}); holder transfer refused"
             )
+    except OSError as exc:
+        if _is_systemic(exc):
+            raise  # queue-dir permission / I/O faults keep their whole-drain abort semantics
+        # a directory-shaped or unreadable generation (IsADirectoryError -- codex r17
+        # P2) is a per-arc condition, same disposition as a malformed head
+        print(
+            f"  {arc_id}: holder transfer skipped ({exc}); "
+            "stuck-open heads escalate via the C-HE-03 §5 reconcile pass"
+        )
     except (KeyError, TypeError, ValueError, AttributeError, rs.ReservationError) as exc:
         # A stale precondition (a peer transferred first, the state moved on) OR an
         # unreadable/malformed reservation head (JSONDecodeError is a ValueError; a
@@ -1564,6 +1573,12 @@ def _reconcile_local_rows() -> None:
                         f"  {aid}: reservation merged by {cur[1]['lane_id']} but no "
                         "committed row yet; local row kept pending reconciliation"
                     )
+            except OSError as exc:
+                if _is_systemic(exc):
+                    raise
+                # per-row (codex r17 P2): a directory-shaped generation raises
+                # IsADirectoryError from rs.current -- keep the row, keep draining
+                print(f"  {aid}: reservation unreadable during reconciliation ({exc}); row kept")
             except (KeyError, TypeError, AttributeError, ValueError, rs.ReservationError) as exc:
                 # AttributeError included: a syntactically valid NON-OBJECT head makes
                 # cur[1].get raise it (codex r13 P2) -- per-row, never a drain abort
@@ -2057,6 +2072,14 @@ def cmd_extract(args: argparse.Namespace) -> int:
         head = rs.current(row.arc_id)
         if head:
             _fold_head_onto(row, head[1])
+            if not row.arc_type and head[1].get("arc_type"):
+                # A crash-retry without --arc-type still records the reservation's
+                # close-declared classification (codex r17 P2): the minted reservation
+                # is the authoritative carrier; a null row label would misfile a NEW
+                # capture into the historical-null cohorts.
+                row.arc_type = head[1]["arc_type"]
+                row.arc_type_close = head[1]["arc_type"]
+                row.arc_type_declared_at = "close"
     append(row)
     print(f"appended {row.arc_id} -> {LEDGER}")
     return 0
