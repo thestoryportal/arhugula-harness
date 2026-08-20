@@ -1386,6 +1386,101 @@ def test_recover_dead_claims_systemic_fault_aborts_drain(tmp_path, monkeypatch, 
     assert (out.out + out.err).count("ABORT: systemic queue fault") == 1
 
 
+def test_read_queue_skips_an_entry_a_peer_released_mid_scan(tmp_path, monkeypatch):
+    """FNF between the glob and the read = no longer pending; skipped, never raised."""
+    _queue_entries(am, tmp_path, monkeypatch, 2)
+    real_read = Path.read_text
+
+    def vanish_first(self, *a, **k):
+        if self.name == "pr-1.json":
+            self.unlink()
+            raise FileNotFoundError(str(self))
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", vanish_first)
+    assert [e["arc_id"] for _p, e in am.read_queue()] == ["pr-2"]
+
+
+def test_read_queue_systemic_fault_aborts_drain_once(tmp_path, monkeypatch, capsys):
+    """A permission fault reading the queue aborts with ONE message + exit 2."""
+    _queue_entries(am, tmp_path, monkeypatch, 2)
+
+    def perm(self, *a, **k):
+        raise PermissionError(13, "queue dir unreadable")
+
+    monkeypatch.setattr(Path, "read_text", perm)
+    rc = am.drain(argparse.Namespace())
+    out = capsys.readouterr()
+    assert rc == 2
+    assert (out.out + out.err).count("ABORT: systemic queue fault") == 1
+
+
+def test_malformed_entry_is_kept_and_does_not_abort_the_loop(tmp_path, monkeypatch):
+    """Valid JSON with missing fields is a per-arc content fault (C-HE-04 SS3)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 2)
+    (q / "pr-0.json").write_text(json.dumps({"note": "no pr field"}))  # sorts first
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1", "pr-2"]
+    assert rc == 1 and (q / "pr-0.json").exists(), "malformed entry kept, others drained"
+
+
+def test_recovery_rejudges_after_move_aside_and_returns_a_live_reclaim(tmp_path, monkeypatch):
+    """Between the liveness check and the restore a live drain re-claims under the
+    same .taken name: recovery must put the LIVE claim straight back (C-HE-04 SS1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    live = json.dumps({"pr": 7, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    real_dead = am._claim_owner_is_dead
+    calls = {"n": 0}
+
+    def dead_then_restamped(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            verdict = real_dead(path)  # True: the on-disk stamp is dead
+            taken.write_text(live)  # ...but a live drain re-claims the NAME now
+            return verdict
+        return real_dead(path)  # re-judge of the moved bytes
+
+    monkeypatch.setattr(am, "_claim_owner_is_dead", dead_then_restamped)
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid == os.getpid())
+    am._recover_dead_claims()
+    # The restamp landed before the rename, so the aside held LIVE bytes; the
+    # re-judge must return them to the .taken name untouched -- a live claim is
+    # never yanked to .json (the pathname-keyed-replace defect this pins).
+    assert taken.exists(), "the live claim is back under its name"
+    assert json.loads(taken.read_text())["_claim"]["pid"] == os.getpid()
+    assert not (q / "pr-7.json").exists(), "no restore of a live claim"
+    assert not list(q.glob("*.taken.recover.*")), "no aside left behind"
+
+
+def test_recovery_restores_an_orphaned_aside_from_a_dead_recoverer(tmp_path, monkeypatch):
+    """A recoverer that died between rename-aside and restore must not strand the arc."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    (q / "pr-7.taken.recover.999999").write_text(
+        json.dumps({"pr": 7, "_claim": {"pid": 999998, "host": socket.gethostname()}})
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    am._recover_dead_claims()
+    assert (q / "pr-7.json").exists(), "orphaned aside restored to the queue"
+    assert not list(q.glob("*.taken.recover.*"))
+
+
 def test_kill_after_claim_is_wired_into_drain(tmp_path):
     """ARC_METRICS_TEST_KILL_AFTER=claim kills a REAL drain right after _claim_arc:
     exit 137, the claim held (.taken exists), the entry taken (.json gone). Witnesses

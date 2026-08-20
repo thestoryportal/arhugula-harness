@@ -679,6 +679,11 @@ def read_queue() -> list[tuple[Path, dict]]:
     for path in sorted(QUEUE_DIR.glob("*.json")):
         try:
             out.append((path, json.loads(path.read_text())))
+        except FileNotFoundError:
+            # A peer claimed or released this entry between the glob and the
+            # read -- it is no longer pending. Skip, never propagate (C-HE-04
+            # Invariants: no FileNotFoundError escapes drain()).
+            continue
         except json.JSONDecodeError as exc:
             raise AbortError(f"queued file {path} is not valid JSON: {exc}") from exc
     return out
@@ -874,6 +879,22 @@ def _recover_dead_claims() -> None:
     """
     if not QUEUE_DIR.is_dir():
         return
+    # Sweep asides orphaned by a recoverer that died between its rename and its
+    # restore: the pid suffix names the recoverer, so deadness is exact. A live
+    # recoverer's aside is in flight -- leave it.
+    for orphan in sorted(QUEUE_DIR.glob("*.taken.recover.*")):
+        pid_s = orphan.name.rsplit(".", 1)[-1]
+        if not pid_s.isdigit() or _process_is_alive(int(pid_s)):
+            continue
+        orphan_restored = orphan.with_name(orphan.name.split(".taken.recover.")[0] + ".json")
+        try:
+            if orphan_restored.exists():
+                orphan.unlink()  # entry already back; the aside copy is redundant
+            else:
+                os.replace(orphan, orphan_restored)
+                print(f"  restored orphaned recovery file -> {orphan_restored.name}")
+        except FileNotFoundError:
+            continue
     for claim in sorted(QUEUE_DIR.glob("*.taken")):
         restored = claim.with_suffix(".json")
         if restored.exists():
@@ -881,11 +902,29 @@ def _recover_dead_claims() -> None:
         if not _claim_owner_is_dead(claim):
             print(f"  {claim.name} is held by a live or unverifiable owner; leaving it")
             continue
+        # Move the file ASIDE, then RE-JUDGE the moved bytes (the
+        # _reclaim_dead_claim idiom, adapted): between the first liveness check
+        # and the restore a peer can restore the entry AND a live drain can
+        # re-claim it under the same .taken name -- a pathname-keyed replace
+        # would then yank the LIVE owner's claim back to .json. Once moved to
+        # a pid-suffixed aside name no peer can restamp it, so judging the
+        # aside bytes is race-free; a live verdict puts the claim straight back.
+        aside = claim.with_name(f"{claim.name}.recover.{os.getpid()}")
         try:
-            os.replace(claim, restored)
+            os.rename(claim, aside)
         except FileNotFoundError:
-            # C-HE-04 SS1: a peer restored it between our scan and this replace.
+            # C-HE-04 SS1: a peer restored it between our scan and this rename.
             # The losing racer logs and yields; it must not propagate.
+            print(f"  {claim.name}: a peer recovered it first; leaving it")
+            continue
+        if not _claim_owner_is_dead(aside):
+            # A live drain re-claimed under this name meanwhile -- not ours.
+            os.rename(aside, claim)
+            print(f"  {claim.name}: re-claimed by a live owner meanwhile; leaving it")
+            continue
+        try:
+            os.replace(aside, restored)
+        except FileNotFoundError:
             print(f"  {claim.name}: a peer recovered it first; leaving it")
             continue
         print(f"  recovered claim from a dead owner -> {restored.name}")
@@ -964,22 +1003,22 @@ def drain(_args: argparse.Namespace) -> int:
     """
     try:
         _recover_dead_claims()
+
+        # Claims left behind by a live or unverifiable owner are outstanding
+        # work. Reporting "nothing to drain" while they sit there would let
+        # automation move on before a peer has finished, and would strand a
+        # foreign-host claim silently forever.
+        outstanding = sorted(QUEUE_DIR.glob("*.taken")) if QUEUE_DIR.is_dir() else []
+
+        pending = read_queue()
     except OSError as exc:
         if _is_systemic(exc):
             # Same single-message abort as an in-loop systemic fault (C-HE-04
-            # SS3) -- a read-only queue dir during recovery must not surface as
-            # a raw traceback.
+            # SS3) -- a read-only queue dir during recovery or the queue read
+            # must not surface as a raw traceback.
             print(f"ABORT: systemic queue fault on {QUEUE_DIR}: {exc}", file=sys.stderr)
             return 2
         raise
-
-    # Claims left behind by a live or unverifiable owner are outstanding work.
-    # Reporting "nothing to drain" while they sit there would let automation
-    # move on before a peer has finished, and would strand a foreign-host claim
-    # silently forever.
-    outstanding = sorted(QUEUE_DIR.glob("*.taken")) if QUEUE_DIR.is_dir() else []
-
-    pending = read_queue()
     if not pending:
         if outstanding:
             names = ", ".join(p.name for p in outstanding)
@@ -993,13 +1032,19 @@ def drain(_args: argparse.Namespace) -> int:
     kept = len(outstanding)
     added = 0
     for i, (path, entry) in enumerate(pending):
-        arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
+        arc_id = path.stem  # safe fallback name; refined inside the try
         try:
+            # arc_id derivation reads entry fields, so it is a per-arc content
+            # fault when the entry is malformed -- it must not abort the loop.
+            arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
             outcome = _drain_one(path, entry, arc_id, committed, local)
-        except AbortError as exc:
-            # Per-arc fault: this entry stays queued (already durably restored
-            # by _drain_one where a claim was held); the rest still drain.
-            print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
+        except (AbortError, KeyError, TypeError, ValueError) as exc:
+            # Per-arc fault -- AbortError from capture, or a malformed entry
+            # (missing/mistyped fields) raising in the arc_id expression or
+            # extract(). This entry stays queued (already durably restored by
+            # _drain_one where a claim was held); the rest still drain
+            # (C-HE-04 SS3).
+            print(f"  {arc_id}: KEPT QUEUED -- {exc!r}", file=sys.stderr)
             kept += 1
             continue
         except OSError as exc:

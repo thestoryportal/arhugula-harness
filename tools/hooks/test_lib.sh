@@ -841,6 +841,15 @@ NO_UPSTREAM_WT="$REPO-no-upstream"
 git -C "$REPO" worktree add -q -b no-upstream-branch "$NO_UPSTREAM_WT"
 hook_worktree_local_state "$NO_UPSTREAM_WT" >/dev/null
 eq "no-upstream worktree keeps today's clean verdict" "$?" "1"
+DETACHED_WT="$REPO-detached"
+git -C "$REPO" worktree add -q --detach "$DETACHED_WT"
+DETACHED_OUT=$(hook_worktree_local_state "$DETACHED_WT")
+DETACHED_RC=$?
+eq "detached-HEAD worktree is refusal residue" "$DETACHED_RC" "0"
+case "$DETACHED_OUT" in
+  *"detached HEAD"*) ok "residue names the detached HEAD" ;;
+  *) bad "residue missing detached-HEAD line: '$DETACHED_OUT'" ;;
+esac
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

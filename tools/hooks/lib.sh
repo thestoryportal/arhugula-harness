@@ -500,6 +500,13 @@ EOF
   # residual -- refusing it would refuse every local-only scratch worktree; plan
   # U-HE-15 Step 4b rev 2026-08-19). An upstream that RESOLVES but whose ahead
   # count cannot be computed is fail-closed residue, never a clean verdict.
+  # A DETACHED HEAD is refusal residue outright: no branch ref survives the
+  # worktree, so disposal would drop the commits' only reference -- the branch-
+  # survives rationale above does not cover it.
+  if ! git -C "$wt" symbolic-ref -q HEAD >/dev/null 2>&1; then
+    residue="${residue}${residue:+
+}detached HEAD (commits would lose their only ref)"
+  fi
   local ahead
   if git -C "$wt" rev-parse --verify -q '@{u}' >/dev/null 2>&1; then
     if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
