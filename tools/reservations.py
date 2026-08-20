@@ -630,9 +630,15 @@ def sibling_open_count(exclude_arc_id: str) -> int:
     for d in root.iterdir():
         if d.name.startswith(".") or d.name == exclude_arc_id:
             continue
-        cur = current(d.name)
-        if cur and cur[1]["state"] == "open":
-            n += 1
+        try:
+            cur = current(d.name)
+            if cur and cur[1]["state"] == "open":
+                n += 1
+        except (ReservationError, OSError, ValueError, KeyError, TypeError):
+            # Best-effort snapshot (C-HE-03 §7, `derived`, codex r2 P2 sibling): a corrupt
+            # or symlinked sibling is not countable and must not crash the pending->open
+            # flip it decorates.
+            continue
     return n
 
 
@@ -905,9 +911,24 @@ def reconcile_all(
             if cur is None or cur[1]["state"] in TERMINAL:
                 continue
             out[d.name] = reconcile(d.name, gh_view=view, now=now)
-        except (ReservationError, OSError, ValueError) as exc:
-            out[d.name] = f"ERROR: {exc}"
+        except (ReservationError, OSError, ValueError, KeyError, TypeError) as exc:
+            # KeyError/TypeError: a syntactically-valid but schema-malformed head ({} or a
+            # non-object) must isolate like any other corrupt reservation (codex r2 P2).
+            out[d.name] = f"ERROR: {exc!r}"
     return out
+
+
+def _write_store_log(result: dict[str, str], rc: int) -> None:
+    """Record the pass at <reservations_root>/.reconcile.log -- the durable venue the NEXT
+    session-start surfaces until U-HE-29 lands the loop-ledger emitter (codex r2 P2). The
+    write is store-owned and O_NOFOLLOW (codex r2 P1): reservations_root() refuses a
+    symlinked store, and a planted symlink at the log path itself raises instead of
+    truncating an arbitrary file. Overwrite-in-place: one file, last pass wins."""
+    path = reservations_root() / ".reconcile.log"
+    payload = json.dumps({"ts": now_iso(), "rc": rc, "result": result}, sort_keys=True) + "\n"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(payload)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -951,7 +972,8 @@ def main(argv: list[str] | None = None) -> int:
     rc = sub.add_parser("reconcile")
     rc.add_argument("--arc-id", required=True)
     rc.add_argument("--superseded-by")
-    sub.add_parser("reconcile-all")
+    ra = sub.add_parser("reconcile-all")
+    ra.add_argument("--log-to-store", action="store_true")
     args = p.parse_args(argv)
 
     def coerce(v: str):
@@ -1009,8 +1031,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         elif args.cmd == "reconcile-all":
             out = reconcile_all()
+            rc_all = 2 if any(v.startswith("ERROR") for v in out.values()) else 0
+            if args.log_to_store:
+                try:
+                    _write_store_log(out, rc_all)
+                except OSError as exc:
+                    # a refused/failed store log is a LOST durable signal pre-U-HE-29:
+                    # loud + nonzero, never silent (codex r2 P1).
+                    print(f"ABORT: store log not written: {exc}", file=sys.stderr)
+                    rc_all = 2
             print(json.dumps(out, sort_keys=True))
-            return 2 if any(v.startswith("ERROR") for v in out.values()) else 0
+            return rc_all
         else:
             print(mint_lane_id(Path(args.worktree).resolve()))
             return 0

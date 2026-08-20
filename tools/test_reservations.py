@@ -820,3 +820,57 @@ def test_reconcile_all_isolates_corrupt_head_read(qdir, monkeypatch):
     (qdir / "reservations" / "aa-bad").symlink_to(outside)  # sorts before pr-80
     out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
     assert out["aa-bad"].startswith("ERROR") and out["pr-80"] == "merged"
+
+
+def test_stale_open_branches_emit_hil_rows(qdir, monkeypatch):
+    """r2 P3: the open-stuck and open-no-pr aged branches must emit BOTH row kinds --
+    deleting either emission block goes red here, not only in the return-value tests."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, lane, c, d: rows.append((k, c)))
+    rs.reserve("pr-90", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-90", "A")
+    rs.update_payload("pr-90", {"pr": 90})
+    rs.reserve("pr-91", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-91", "A")  # open, pr stays null
+    far = datetime.now(UTC) + timedelta(hours=25)
+    assert rs.reconcile("pr-90", gh_view=lambda pr: {"state": "OPEN"}, now=far) == "open"
+    assert rs.reconcile("pr-91", gh_view=_gh_raises, now=far) == "open"
+    for cause in (
+        "reservation-stale:HITL-recoverable:open_stuck",
+        "reservation-stale:HITL-recoverable:open_no_pr",
+    ):
+        kinds = {k for k, c in rows if c == cause}
+        assert kinds == {"DEFERRED-HIL", "NOTIFY"}, (cause, rows)
+
+
+def test_reconcile_all_isolates_schema_malformed_head(qdir, monkeypatch):
+    """r2 P2: a syntactically-valid but schema-malformed head ({}) isolates in-band."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    bad = qdir / "reservations" / "ab-empty"
+    bad.mkdir(parents=True)
+    (bad / "1.json").write_text("{}")
+    rs.reserve("pr-95", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-95", "A")
+    rs.update_payload("pr-95", {"pr": 95})
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    assert out["ab-empty"].startswith("ERROR") and out["pr-95"] == "merged"
+
+
+def test_cli_reconcile_all_log_to_store_writes_and_refuses_symlink(qdir, monkeypatch, capsys):
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    monkeypatch.setattr(rs, "_gh_view", lambda pr: {"state": "MERGED"})
+    rs.reserve("pr-97", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-97", "A")
+    rs.update_payload("pr-97", {"pr": 97})
+    assert rs.main(["reconcile-all", "--log-to-store"]) == 0
+    log = qdir / "reservations" / ".reconcile.log"
+    entry = json.loads(log.read_text())
+    assert entry["rc"] == 0 and entry["result"] == {"pr-97": "merged"}
+    # planted symlink at the log path: O_NOFOLLOW refuses; the target is never truncated
+    target = qdir / "victim.txt"
+    target.write_text("precious")
+    log.unlink()
+    log.symlink_to(target)
+    capsys.readouterr()
+    assert rs.main(["reconcile-all", "--log-to-store"]) == 2
+    assert target.read_text() == "precious"

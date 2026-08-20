@@ -55,16 +55,26 @@ fi
 # store skip the interpreter spawn entirely; if the defaults ever drift the only cost is
 # a skipped best-effort pass (the merge lane re-runs it).
 _QROOT="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
-if [ -d "${_QROOT}/reservations" ] && [ -f tools/reservations.py ] \
+_RROOT="${_QROOT}/reservations"
+_RESV=""
+if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ] && [ -f tools/reservations.py ] \
   && command -v uv >/dev/null 2>&1; then
-  nohup uv run python tools/reservations.py reconcile-all \
-    > "${_QROOT}/reservations/.reconcile.log" 2>&1 &
+  # Surface the LAST detached pass's outcome first (codex r2 P2): the store-local log is
+  # the durable venue until U-HE-29 lands the loop-ledger emitter. Local grep -- no budget
+  # risk. The log write itself is store-owned + O_NOFOLLOW inside reservations.py (codex
+  # r2 P1: a shell redirect here would truncate through a planted symlink).
+  if [ -f "${_RROOT}/.reconcile.log" ] && [ ! -L "${_RROOT}/.reconcile.log" ] \
+    && grep -q 'ERROR' "${_RROOT}/.reconcile.log" 2>/dev/null; then
+    _RESV=" resv=ERR(last reconcile pass; see ${_RROOT}/.reconcile.log)"
+  fi
+  nohup uv run python tools/reservations.py reconcile-all --log-to-store \
+    >/dev/null 2>&1 &
 fi
 
 # Single-line additionalContext for the SessionStart event (wraps the lib helper). The
 # pending-HIL summary is appended so an operator opening a fresh session always sees what
 # the last unattended loop run deferred for them.
-emit() { hook_emit "SessionStart" "$1${_HIL}"; }
+emit() { hook_emit "SessionStart" "$1${_HIL}${_RESV}"; }
 
 [ -f "$ROADMAP_STATUS" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
 [ -f "$ROADMAP" ] || emit "[ROADMAP] roadmap_status.md exists but roadmap absent"
