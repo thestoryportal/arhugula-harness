@@ -2268,11 +2268,16 @@ def test_merged_append_refused_once_a_row_is_in_committed_history(tmp_path, monk
     rs.reserve("pr-95", lane_id="A", branch="b", arc_type="applying")
     rs.open_with_sensor("pr-95", "A")
     rs.transition("pr-95", "merged", lane_id="A")
-    monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-95"})
+    committed_line = json.dumps({"arc_id": "pr-95", "record_kind": "arc"}, sort_keys=True)
+    monkeypatch.setattr(am, "_committed_ledger_lines", lambda: {committed_line})
     with pytest.raises(am.AbortError, match="re-append refused"):
         am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
-    # the same shape with NO committed row is the legitimate first capture
-    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    # UNREADABLE history is a tri-state unknown: HOLD, never fail open (codex r7 P1)
+    monkeypatch.setattr(am, "_committed_ledger_lines", lambda: None)
+    with pytest.raises(am.AbortError, match="unreadable"):
+        am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
+    # KNOWN-empty committed history is the legitimate first capture
+    monkeypatch.setattr(am, "_committed_ledger_lines", lambda: set())
     am.append(am.ArcRow(arc_id="pr-95", merged_at="t", merge_sha="s"))
 
 
