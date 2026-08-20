@@ -487,3 +487,7 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-20T19:06:55Z | #1409 | 9538ecfb0223 | merge-gate-concurrency | BLOCK | 1 finding(s) | r2 |
 | 2026-08-20T19:07:07Z | #1409 | 9538ecfb0223 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-08-20T19:07:27Z | #1409 | 9538ecfb0223 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r2 |
+| 2026-08-20T19:15:26Z | #1409 | a078af05baf2 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| 2026-08-20T19:16:05Z | #1409 | a078af05baf2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-08-20T19:18:27Z | #1409 | a078af05baf2 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+- PR #1409 | 2026-08-20 | feat/he-lanes-u-he-19 | r1: concurrency BLOCK (backfill-pending hijack) / spec APPROVE / witness BLOCK (4th transfer site unwitnessed) → fixed; r2: concurrency BLOCK (hold only pending-state) / spec BLOCK (rev item xii owed) / witness APPROVE → fixed; r3 @ a078af05: concurrency APPROVE / spec APPROVE / witness APPROVE → MERGE. blast-radius: 4 production consumers (justfile arc-metrics CLI; reservations.py imports; session-start.sh reconcile; internal drain chain) via graft callers; static-edge floor, not ceiling.
