@@ -2491,3 +2491,44 @@ def test_claim_arc_takeover_transfers_the_dead_holders_reservation(tmp_path, mon
     taken = am._claim_arc(path, entry)
     assert taken is not None and taken.exists(), "the takeover claimed the entry"
     assert rs.holder("pr-54") == "B", "the dead holder's reservation transferred"
+
+
+def test_bootstrap_honors_the_entrys_declared_at(tmp_path, monkeypatch):
+    """codex U-HE-19 r13 P2: a legacy entry declared at OPEN must bootstrap an
+    open-declared reservation -- row provenance and reservation must agree."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    (q / "pr-1.json").write_text(
+        json.dumps(
+            {"pr": 1, "arc_id": "pr-1", "arc_type": "applying", "arc_type_declared_at": "open"}
+        )
+    )
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    monkeypatch.setattr(
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+    )
+    am.drain(argparse.Namespace())
+    head = rs.current("pr-1")[1]
+    assert head["arc_type_declared_at"] == "open"
+    row = am.read_ledger()[0]
+    assert row["arc_type_declared_at"] == "open" and row["arc_type_open"] == "applying"
+
+
+def test_non_object_reservation_head_is_isolated_at_reconciliation(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r13 P2: a syntactically valid NON-OBJECT head must not abort the
+    drain -- the row is kept per-row, loudly."""
+    q = qdir_res
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    ledger.write_text(json.dumps({"arc_id": "pr-86", "record_kind": "arc"}) + "\n")
+    d = q / "reservations" / "pr-86"
+    d.mkdir(parents=True)
+    (d / "1.json").write_text("[1, 2]")  # valid JSON, not an object
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    am._reconcile_local_rows()  # must NOT raise
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-86"], "row kept"

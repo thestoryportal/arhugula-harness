@@ -1323,7 +1323,10 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
                 lane_id=LANE_ID,
                 branch=entry.get("branch", "unknown"),
                 arc_type=entry["arc_type"],
-                arc_type_declared_at="close",
+                # honor the entry's own declaration (codex r13 P2: hard-coding "close"
+                # here while extract() preserves the queue's "open" value would stamp
+                # a row whose provenance disagrees with its authoritative reservation)
+                arc_type_declared_at=entry.get("arc_type_declared_at") or "close",
             )
             rs.emit_loop_row(
                 "NOTIFY",
@@ -1536,7 +1539,9 @@ def _reconcile_local_rows() -> None:
                         f"  {aid}: reservation merged by {cur[1]['lane_id']} but no "
                         "committed row yet; local row kept pending reconciliation"
                     )
-            except (KeyError, TypeError, ValueError, rs.ReservationError) as exc:
+            except (KeyError, TypeError, AttributeError, ValueError, rs.ReservationError) as exc:
+                # AttributeError included: a syntactically valid NON-OBJECT head makes
+                # cur[1].get raise it (codex r13 P2) -- per-row, never a drain abort
                 print(f"  {aid}: reservation unreadable during reconciliation ({exc}); row kept")
             keep.append(r)
         if dropped:
