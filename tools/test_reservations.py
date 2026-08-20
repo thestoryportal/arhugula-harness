@@ -915,3 +915,28 @@ def test_cli_single_arc_reconcile_malformed_head_aborts(qdir, monkeypatch, capsy
     )
     assert rs.main(["reconcile", "--arc-id", "pr-101"]) == 2
     assert "ABORT" in capsys.readouterr().err
+
+
+def test_reconcile_all_marks_unreachable_ground_truth_unconfirmed(qdir, monkeypatch, capsys):
+    """r6 P2: a pass that could not look must never report clean -- UNCONFIRMED value,
+    CLI exit 2 (the gate-cannot-tell-empty-from-unlooked class)."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-110", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-110", "A")
+    rs.update_payload("pr-110", {"pr": 110})
+    out = rs.reconcile_all(gh_view=_gh_raises)
+    assert out["pr-110"].startswith("UNCONFIRMED (open)")
+    assert rs.current("pr-110")[1]["state"] == "open"  # state semantics unchanged
+    monkeypatch.setattr(rs, "_gh_view", _gh_raises)
+    assert rs.main(["reconcile-all"]) == 2
+    capsys.readouterr()
+
+
+def test_hook_activation_gate_names_the_emitters_function(qdir):
+    """r6 P2 sibling: the session-start activation gate greps for EXACTLY the bash function
+    emit_loop_row invokes -- if U-HE-29 lands the writer under any other name, this pins
+    the drift (the gated hook path would otherwise stay silently dormant)."""
+    hook = (Path(__file__).parent / "roadmap-audit" / "session-start.sh").read_text()
+    assert "grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh" in hook
+    src = (Path(__file__).parent / "reservations.py").read_text()
+    assert 'loop_log_structured "$1" "$2" "$3" "$4"' in src

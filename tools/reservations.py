@@ -785,6 +785,7 @@ def reconcile(
     gh_view: Callable[[int], dict],
     superseded_by: str | None = None,
     now: datetime | None = None,
+    on_unconfirmed: Callable[[str], None] | None = None,
 ) -> str:
     """Staleness by GROUND TRUTH -- HITL, never TTL (C-HE-03 §5, C-HE-20, D8). Returns the
     head state after the pass; a stuck/aged head emits NOTIFY + DEFERRED-HIL (C-HE-20 §1)
@@ -846,17 +847,18 @@ def reconcile(
             # Unrecognized shape/state is NOT confirmation the PR is still OPEN: return
             # through the same fail-safe as a gh failure -- no transition AND no aged
             # open-stuck rows whose detail would falsely assert "still OPEN" (codex r5 P2).
-            print(
-                f"reservations: unrecognized gh view for {arc_id}: {view!r}; "
-                f"still open, not reclaimable",
-                file=sys.stderr,
-            )
+            msg = f"unrecognized gh view for {arc_id}: {view!r}; still open, not reclaimable"
+            print(f"reservations: {msg}", file=sys.stderr)
+            if on_unconfirmed is not None:
+                on_unconfirmed(msg)
             return "open"
     except Exception as exc:  # ANY gh failure fails safe (C-HE-03 §5)
-        print(
-            f"reservations: gh transient for {arc_id}: {exc}; still open, not reclaimable",
-            file=sys.stderr,
-        )
+        msg = f"gh transient for {arc_id}: {exc}; still open, not reclaimable"
+        print(f"reservations: {msg}", file=sys.stderr)
+        if on_unconfirmed is not None:
+            # "couldn't look" must never report as a clean pass (codex r6 P2): the state
+            # stays open (fail-safe), but the caller's summary marks it UNCONFIRMED.
+            on_unconfirmed(msg)
         return "open"
     if state in ("MERGED", "CLOSED") and (state == "MERGED" or superseded_by):
         to_state = "merged" if state == "MERGED" else "abandoned"
@@ -932,7 +934,12 @@ def reconcile_all(
             cur = current(d.name)
             if cur is None or cur[1]["state"] in TERMINAL:
                 continue
-            out[d.name] = reconcile(d.name, gh_view=view, now=now)
+            marks: list[str] = []
+            state = reconcile(d.name, gh_view=view, now=now, on_unconfirmed=marks.append)
+            # An unreachable/unrecognizable ground truth is NOT a clean result (codex r6
+            # P2): the pass summary carries UNCONFIRMED and the CLI exits 2, so the
+            # surfaced log can never report "all clean" for a pass that could not look.
+            out[d.name] = f"UNCONFIRMED ({state}): {marks[0]}" if marks else state
         except (ReservationError, OSError, ValueError, KeyError, TypeError) as exc:
             # KeyError/TypeError: a syntactically-valid but schema-malformed head ({} or a
             # non-object) must isolate like any other corrupt reservation (codex r2 P2).
@@ -1067,7 +1074,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         elif args.cmd == "reconcile-all":
             out = reconcile_all()
-            rc_all = 2 if any(v.startswith("ERROR") for v in out.values()) else 0
+            rc_all = 2 if any(v.startswith(("ERROR", "UNCONFIRMED")) for v in out.values()) else 0
             if args.log_to_store:
                 try:
                     _write_store_log(out, rc_all)
