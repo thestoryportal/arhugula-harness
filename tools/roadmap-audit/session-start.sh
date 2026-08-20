@@ -62,6 +62,12 @@ _RESV=""
 # reservation pass could only fail closed into the log -- so the spawn stays dormant and
 # SELF-ACTIVATES the moment U-HE-29 lands. Synchronous callers (CLI, U-HE-22 merge lane)
 # are unaffected: their exit codes surface directly.
+if [ -e "$_RROOT" ] || [ -L "$_RROOT" ]; then if [ ! -d "$_RROOT" ] || [ -L "$_RROOT" ]; then
+  # The store root exists but is not a plain directory: corruption of authoritative
+  # state, never an absent-store clean skip (codex r10 P2) -- fail open here would hide
+  # exactly what reconcile_all classifies as corrupt.
+  _RESV=" resv=ERR(reservations store corrupt: ${_RROOT} is not a directory)"
+fi; fi
 if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ]; then
   # Surface the LAST pass's outcome (codex r2 P2) UNGATED by the U-HE-29 activation gate
   # below (codex r7 P2): the store-local log can already exist from the CLI / merge-lane
@@ -70,9 +76,15 @@ if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ]; then
   # (codex r2 P1/r3 P2). jq on the authoritative rc field (codex r4 P3: a substring grep
   # would false-positive on an arc id containing "ERROR"); jq is already a hard
   # dependency of hook_emit. A corrupt/unparseable log reads as non-zero -- fail closed.
-  if [ -f "${_RROOT}/.reconcile.log" ] && [ ! -L "${_RROOT}/.reconcile.log" ] \
-    && [ "$(jq -r '.rc' "${_RROOT}/.reconcile.log" 2>/dev/null)" != "0" ]; then
-    _RESV=" resv=ERR(last reconcile pass; see ${_RROOT}/.reconcile.log)"
+  if [ -f "${_RROOT}/.reconcile.log" ] && [ ! -L "${_RROOT}/.reconcile.log" ]; then
+    if [ "$(jq -r '.rc' "${_RROOT}/.reconcile.log" 2>/dev/null)" != "0" ]; then
+      _RESV=" resv=ERR(last reconcile pass; see ${_RROOT}/.reconcile.log)"
+    fi
+  elif [ -e "${_RROOT}/.reconcile.log" ] || [ -L "${_RROOT}/.reconcile.log" ]; then
+    # Log path exists but is not a regular file (directory/symlink/other): a structural
+    # store fault the detached pass cannot repair or report -- surface it here (codex
+    # r10 P2), never a silent skip.
+    _RESV=" resv=ERR(reconcile log path corrupt: not a regular file)"
   fi
   if [ -f tools/reservations.py ] && command -v uv >/dev/null 2>&1 \
     && grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh 2>/dev/null; then

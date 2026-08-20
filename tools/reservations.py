@@ -838,8 +838,13 @@ def reconcile(
                 f"{arc_id} open > 24h with no PR; state unchanged",
             )
         return "open"
+    if isinstance(head["pr"], bool) or not isinstance(head["pr"], int):
+        # The write funnel (_check_updates) enforces pr: int|null; a head that carries any
+        # other type is hand-corrupted store state (codex r10 P2) -- in-band, never coerced
+        # into a live gh lookup and a terminalization that retains the malformed payload.
+        raise ReservationError(f"{arc_id}: corrupt head pr {head['pr']!r} (int|null required)")
     try:
-        view = gh_view(int(head["pr"]))
+        view = gh_view(head["pr"])
         # Shape-validate INSIDE the protected boundary (codex r4 P2): a non-object or
         # unknown-state response is the same not-confirmed ground truth as a gh failure.
         state = view.get("state") if isinstance(view, dict) else None
