@@ -178,6 +178,36 @@ def test_update_and_transition_allowlists(qdir):
     )
 
 
+# mutation-probe: drop the value-domain loop in _check_updates (types no longer enforced)
+def test_payload_value_domains_enforced(qdir):
+    """codex round-2 P2: C-HE-03 §3 value domains at the write funnel — int|null, str|null,
+    nonnegative lane counts; bool is not an int here."""
+    rs.reserve("pr-14", lane_id="A", branch="b", arc_type="inventing")
+    for bad in (
+        {"pr": {}},
+        {"pr": True},
+        {"head_sha": []},
+        {"attested_merge_tree": 7},
+        {"concurrent_lanes_min": -1},
+        {"concurrent_lanes_max": "3"},
+    ):
+        with pytest.raises(rs.ReservationError, match="must be"):
+            rs.update_payload("pr-14", bad)
+    with pytest.raises(rs.ReservationError, match="must be"):
+        rs.transition("pr-14", "open", lane_id="A", updates={"concurrent_lanes_at_open": -2})
+    rs.update_payload("pr-14", {"pr": None, "head_sha": None})  # null is always legal
+    p = rs.transition("pr-14", "open", lane_id="A", updates={"concurrent_lanes_at_open": 0})
+    assert p["concurrent_lanes_at_open"] == 0
+
+
+def test_dot_prefixed_arc_id_refused(qdir):
+    """codex round-2 P3: a dot-prefixed arc_id would collide with `.seq` and be invisible
+    to sibling_open_count/gc."""
+    for bad in (".seq", ".hidden", "."):
+        with pytest.raises(rs.ReservationError, match="bad arc_id"):
+            rs.reserve(bad, lane_id="A", branch="b", arc_type="inventing")
+
+
 def test_transfer_holder_only_from_named_lane(qdir):
     rs.reserve("pr-9", lane_id="DEAD", branch="b", arc_type="inventing")
     rs.transition("pr-9", "open", lane_id="DEAD")

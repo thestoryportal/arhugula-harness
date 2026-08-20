@@ -69,6 +69,16 @@ PAYLOAD_MUTABLE = frozenset(
     }
 )
 TRANSITION_MUTABLE = PAYLOAD_MUTABLE | {"concurrent_lanes_at_open"}
+#: C-HE-03 §3 value domains for the mutable fields (codex round-2 P2): int-typed fields are
+#: `<int|null>` (bool excluded — it IS an int subclass), sha/oid/tag fields `<str|null>`,
+#: lane-count sensors nonnegative. Enforced at the single write funnel (`_check_updates`).
+_INT_FIELDS = frozenset({"pr"})
+_COUNT_FIELDS = frozenset(
+    {"concurrent_lanes_min", "concurrent_lanes_max", "concurrent_lanes_at_open"}
+)
+_STR_FIELDS = frozenset(
+    {"head_sha", "base_sha", "attested_merge_tree", "merge_sha", "pilot_run_id"}
+)
 
 
 class ReservationError(RuntimeError):
@@ -113,9 +123,28 @@ def mint_lane_id(worktree: Path) -> str:
 
 
 def _dir(arc_id: str) -> Path:
-    if "/" in arc_id or arc_id in ("", ".", ".."):
+    # dot-prefixed ids are reserved for infrastructure (`.seq`, `.<gen>.<pid>.tmp` stagers)
+    # and are skipped by sibling_open_count/gc -- a reservation there would be invisible to
+    # coordination and retention (codex round-2 P3).
+    if "/" in arc_id or arc_id in ("", "..") or arc_id.startswith("."):
         raise ReservationError(f"bad arc_id {arc_id!r}")
     return reservations_root() / arc_id
+
+
+def _check_updates(fn: str, updates: dict, allowed: frozenset[str]) -> None:
+    """Allowlist + C-HE-03 §3 value-domain check at the single write funnel."""
+    bad = set(updates) - allowed
+    if bad:
+        raise ReservationError(f"{fn} may not set {sorted(bad)}; allowed: {sorted(allowed)}")
+    for k, v in updates.items():
+        if v is None:
+            continue
+        if k in _INT_FIELDS and (isinstance(v, bool) or not isinstance(v, int)):
+            raise ReservationError(f"{fn}: {k} must be int|null (C-HE-03 §3), got {v!r}")
+        if k in _COUNT_FIELDS and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
+            raise ReservationError(f"{fn}: {k} must be a nonnegative int|null, got {v!r}")
+        if k in _STR_FIELDS and not isinstance(v, str):
+            raise ReservationError(f"{fn}: {k} must be str|null (C-HE-03 §3), got {v!r}")
 
 
 def alloc_seq() -> int:
@@ -259,11 +288,7 @@ def transition(
         if to_state == "open":
             head["lane_id"] = lane_id  # the holder = the draining lane
         if updates:
-            bad = set(updates) - TRANSITION_MUTABLE
-            if bad:
-                raise ReservationError(
-                    f"transition() may not set {sorted(bad)}; allowed: {sorted(TRANSITION_MUTABLE)}"
-                )
+            _check_updates("transition()", updates, TRANSITION_MUTABLE)
             head.update(updates)
         return head
 
@@ -273,14 +298,17 @@ def transition(
 def update_payload(arc_id: str, updates: dict) -> dict:
     """Payload-only CAS restricted to PAYLOAD_MUTABLE (pr / head_sha / base_sha /
     attested_merge_tree / concurrent_lanes_min|max / pilot_run_id). Never a state change,
-    never the holder, never the open-time labels."""
+    never the holder, never the open-time labels.
+
+    Concurrency note (codex round-2 P2, registered): on a CAS loss the re-applied field
+    values are last-writer-wins. The merge-door tuple fields (`head_sha`/`base_sha`/
+    `attested_merge_tree`) are single-writer by flow -- the holder lane's own ship-pr
+    back-fills them (C-HE-03 §3) -- and C-HE-06 step (ii) re-confirms head/base against
+    `gh` and byte-compares the merge tree at the door, so a stale tuple cannot merge.
+    The flow-level wiring lands at U-HE-19/U-HE-21."""
 
     def build(head: dict) -> dict:
-        bad = set(updates) - PAYLOAD_MUTABLE
-        if bad:
-            raise ReservationError(
-                f"update_payload may not set {sorted(bad)}; allowed: {sorted(PAYLOAD_MUTABLE)}"
-            )
+        _check_updates("update_payload", updates, PAYLOAD_MUTABLE)
         head.update(updates)
         return head
 
@@ -290,7 +318,13 @@ def update_payload(arc_id: str, updates: dict) -> dict:
 def transfer_holder(arc_id: str, *, from_lane_id: str, to_lane_id: str) -> dict:
     """The NAMED D2 exception (C-HE-03 §6): dead-claim recovery transfers an `open`
     reservation's holder to the recovering lane in the same recovery step. Precondition
-    re-validated on the head."""
+    re-validated on the head.
+
+    Authorization boundary (codex round-2 P2, registered): the DEADNESS adjudication --
+    `_recover_dead_claims()`'s pid+host liveness check on the restored `.taken` -- lives at
+    the recovery call site (C-HE-03 §6 [V]; lands with the drain integration, U-HE-19).
+    This primitive records the transfer; it is a cooperative-coordination CAS, not a
+    security fence -- exactly as `transition()` trusts its caller's `lane_id`."""
     _check_id("lane_id", to_lane_id)
 
     def build(head: dict) -> dict:
