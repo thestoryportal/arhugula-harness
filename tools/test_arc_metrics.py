@@ -2602,6 +2602,16 @@ def test_drain_never_hijacks_a_backfill_pending_reservation(tmp_path, monkeypatc
     assert rc == 1 and (q / "pr-1.json").exists(), "entry held, not consumed"
     assert am.read_ledger() == [], "drain appended nothing"
     assert rs.current("pr-1")[1]["state"] == "pending", "the backfill's head untouched"
+    # merge-gate r2: the SAME hold applies in every state -- the open and merged
+    # windows of the backfill are equally not drain's to consume
+    rs.open_with_sensor("pr-1", "A")
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1 and (q / "pr-1.json").exists() and am.read_ledger() == []
+    assert rs.current("pr-1")[1]["state"] == "open", "open backfill head untouched"
+    rs.transition("pr-1", "merged", lane_id="A")
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1 and (q / "pr-1.json").exists() and am.read_ledger() == []
+    assert rs.current("pr-1")[1]["state"] == "merged", "merged backfill head untouched"
 
 
 # mutation-probe: drop _transfer_reservation_to_recoverer() from the swept-leftover-claim branch

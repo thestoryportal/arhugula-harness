@@ -1377,16 +1377,18 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             )
             cur = rs.current(arc_id)
         state = cur[1]["state"]
-        if state == "pending" and cur[1].get("branch") == BACKFILL_BRANCH:
-            # merge-gate r1 concurrency P2: a pending head minted by cmd_extract's
-            # backfill belongs to THAT invocation -- flipping it here would hijack the
-            # reservation and silently discard whichever flow's declared capture loses
-            # the append race. Hold the entry; the backfill completes (or its aged
-            # pending head escalates via C-HE-03 §5).
+        if cur[1].get("branch") == BACKFILL_BRANCH:
+            # merge-gate r1/r2 concurrency P2: a head minted by cmd_extract's backfill
+            # belongs to THAT invocation in EVERY state -- pending, open, or merged
+            # (same-worktree lane_id matches, so the state elifs below cannot
+            # distinguish ownership). Consuming it here would fold the backfill's
+            # placeholder head over the drain's row AND discard the backfill's own
+            # capture at its transition/append. Hold the entry; the backfill completes
+            # (or its aged head escalates via C-HE-03 §5).
             _restore_or_republish(taken, path, entry)
             print(
-                f"  {arc_id}: pending reservation belongs to a cmd_extract backfill; "
-                "entry held for that flow"
+                f"  {arc_id}: reservation belongs to a cmd_extract backfill "
+                f"(state={state!r}); entry held for that flow"
             )
             return "held"
         if state == "pending":
