@@ -2049,18 +2049,33 @@ def test_recovery_never_transfers_from_a_live_holder_via_a_non_holder_claim(
     assert rs.holder("pr-52") == "A", "no lane identity in the claim -> no transfer"
 
 
-def test_cmd_extract_bypasses_holder_only_without_reservation(
+def test_cmd_extract_backfill_reserves_first_and_holder_rule_stands(
     tmp_path, monkeypatch, qdir_res, capsys
 ):
-    """codex U-HE-19 r1 P2: the manual extract command may skip the holder gate only for
-    an arc NO reservation has ever named; a reserved arc keeps the C-HE-04 §2 rule."""
+    """codex U-HE-19 r1-r4 P2 lineage: the manual backfill mints its own reservation
+    (reserve's exclusive-create CAS is the race fence -- no holder bypass exists), and
+    an arc already reserved by another lane keeps the C-HE-04 §2 holder rule."""
     monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
     monkeypatch.setattr(am, "LANE_ID", "B")
     ns = argparse.Namespace(dry_run=False)
-    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-70", 70))
-    assert am.cmd_extract(ns) == 0  # no reservation: historical backfill
-    assert "holder check bypassed" in capsys.readouterr().out
-    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-71", 71))
+    classified = am.ArcRow(arc_id="pr-70", pr=70, merged_at="t", merge_sha="s", arc_type="applying")
+    monkeypatch.setattr(am, "extract", lambda a: classified)
+    assert am.cmd_extract(ns) == 0
+    assert "reserved, appended and terminalized" in capsys.readouterr().out
+    assert rs.current("pr-70")[1]["state"] == "merged"
+    assert rs.current("pr-70")[1]["lane_id"] == "B"
+    # unclassified backfill is refused (C-HE-26 §1: the minted reservation needs a label)
+    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-72", 72))
+    with pytest.raises(am.AbortError, match="arc-type"):
+        am.cmd_extract(ns)
+    # an arc reserved+opened by another lane keeps the holder rule
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id="pr-71", pr=71, merged_at="t", merge_sha="s", arc_type="applying"
+        ),
+    )
     rs.reserve("pr-71", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-71", "A")
     with pytest.raises(am.AbortError, match="holder"):
@@ -2184,28 +2199,33 @@ def test_local_row_reconciliation_drops_divergent_committed_duplicate(
     )
 
 
-def test_cmd_extract_rolls_back_when_a_reservation_appears_mid_backfill(
-    tmp_path, monkeypatch, qdir_res
-):
-    """codex U-HE-19 r3 P2: the backfill's check-then-act loss is COMPENSATED -- the
-    row is rolled back and the command aborts loudly, so the legitimate holder's drain
-    is never blocked by the duplicate guard."""
+def test_cmd_extract_backfill_loses_the_reservation_race_loudly(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r4 P2: a peer reserving between the backfill's check and its own
+    reserve() loses NOTHING to a window -- the store's exclusive-create CAS refuses,
+    the command aborts loudly, and no row is appended."""
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)
     monkeypatch.setattr(am, "LANE_ID", "B")
-    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-90", 90))
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id="pr-90", pr=90, merged_at="t", merge_sha="s", arc_type="applying"
+        ),
+    )
     real_current = rs.current
     calls = {"n": 0}
 
-    def reserve_lands_after_first_check(arc_id):
+    def peer_reserves_after_the_check(arc_id):
         out = real_current(arc_id)
         calls["n"] += 1
         if calls["n"] == 1 and out is None:
+            monkeypatch.setattr(rs, "current", real_current)
             rs.reserve("pr-90", lane_id="A", branch="b", arc_type="inventing")
         return out
 
-    monkeypatch.setattr(rs, "current", reserve_lands_after_first_check)
-    with pytest.raises(am.AbortError, match="rolled back"):
+    monkeypatch.setattr(rs, "current", peer_reserves_after_the_check)
+    with pytest.raises(am.AbortError, match="reservation race"):
         am.cmd_extract(argparse.Namespace(dry_run=False))
-    monkeypatch.setattr(rs, "current", real_current)
-    assert am.read_ledger() == [], "the unauthorized backfill row did not survive"
+    assert am.read_ledger() == [], "nothing appended after the lost race"
+    assert rs.current("pr-90")[1]["lane_id"] == "A", "the peer's reservation stands"

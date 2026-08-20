@@ -26,9 +26,12 @@ fail-closed `emit_loop_row` interplay the landing order creates until U-HE-29), 
 transfer applied at both dead-owner restore sites (C-HE-04 §4's MUST enumerates restores,
 not one code path), a behavior-equal `_reconcile_local_rows` ordering, and the test-suite
 adaptation (fixture `arc_type`, autouse reservation-store isolation, `require_holder=False`
-on pre-reservation-era direct-append unit tests). Spec contracts C-HE-04 §2/§4/§5,
-C-HE-03 §4/§6, C-HE-27 §3, C-HE-25 and C-HE-26 §1 are implemented exactly as written; no
-design-substrate or spec surface is touched.
+on pre-reservation-era direct-append unit tests). Spec contracts C-HE-04 §4/§5, C-HE-03 §4, C-HE-27 §3, C-HE-25 and C-HE-26 §1 are
+implemented as written; C-HE-04 §2(ii)/C-HE-03 §6's open-only append gate is implemented
+under the registered re-append reading (rev note item vii): the merged HOLDER's own first
+capture is admitted, because C-HE-06 §4(vi) flips open→merged at the merge door BEFORE the
+closure capture drains — a spec-internal timeline contradiction REGISTERED for spec-side
+reconciliation at the U-HE-22 merge-lane landing. No design-substrate surface is touched.
 
 This is a bundled-absorption of execution-time corrections at the landing PR, per CLAUDE.md
 §11.4 — this marker is the ratifying back-flow signal the X-AL-3 guard and the codex context

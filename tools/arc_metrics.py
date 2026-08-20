@@ -93,13 +93,14 @@ def _fallback_lane_id(host: str, repo: Path) -> str:
     pid-bearing fallback makes every retrying CLI invocation look like another lane,
     wedging held entries and orphaning valid local rows; processes sharing one worktree
     share its ledger and ARE one lane, C-HE-03 §3). The path digest is the
-    distinguishing component, so the ≤64 budget trims the NAME, never the digest (codex
-    r2 P2: truncating after concatenation let two long-named worktrees collide). Never
-    ':'-bearing or empty (reservations._check_id refuses both)."""
-    short_host = host.split(".")[0]
+    distinguishing component, so the ≤64 budget trims the NAME and the HOST, never the
+    digest (codex r2/r4 P2: truncating after concatenation let two long-named worktrees
+    -- or any two worktrees on a 63-char host label -- collide). Never ':'-bearing or
+    empty (reservations._check_id refuses both)."""
+    short_host = host.split(".")[0][:22]
     digest = hashlib.sha256(str(repo.resolve()).encode()).hexdigest()[:8]
     name_budget = max(1, 64 - len(short_host) - len(digest) - 2)
-    return f"{short_host}-{repo.name[:name_budget]}-{digest}"[:64].replace(":", "-")
+    return f"{short_host}-{repo.name[:name_budget]}-{digest}".replace(":", "-")
 
 
 #: This process's lane identity (C-HE-03 §3). Lane-init (U-HE-31) exports HARNESS_LANE_ID;
@@ -1301,13 +1302,22 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         # composite "<round>/<channel>" carrier into the C-HE-25 numeric arc-row shape
         # (plan rev 2026-08-20, clearance marker
         # implementation-plan-he-loop-lanes-v1-s4b-u-he-19-fold-rev-cleared-2026-08-20).
+        # Fold from a FRESH head (codex r4 P2): extract() spans external calls, and a
+        # record_phase/record_round_outcome CAS landing during that window would be
+        # permanently omitted from the one row a stale snapshot folds.
+        fresh = rs.current(arc_id)
+        res = fresh[1] if fresh else res
         row.phases = res.get("phases", {})
         row.round_outcomes = rs.fold_round_outcomes(res.get("round_outcomes", {}))
         row.concurrent_lanes_at_open = res.get("concurrent_lanes_at_open")
         if res.get("arc_type_declared_at") == "open":
-            # C-HE-26 §1: the open-time label joins via arc_id from the reservation;
-            # a close-declared (bootstrap) reservation leaves the entry-derived label.
+            # C-HE-26 §1: the reservation IS the open-time capture point -- the label
+            # joins via arc_id AND the row's provenance says so (codex r4 P2: extract()
+            # defaulted declared_at to "close" from the closure entry, stamping false
+            # close-time provenance on every reserved arc). The close-time queue label,
+            # when the entry carried one, stays visible beside it (C-HE-26 §2).
             row.arc_type_open = res.get("arc_type")
+            row.arc_type_declared_at = "open"
         row.lane_id = LANE_ID
         row.head_sha = res.get("head_sha")
         row.base_sha = res.get("base_sha")
@@ -1402,22 +1412,6 @@ def _reconcile_local_rows() -> None:
                 f"  dropped {len(dropped)} orphaned local row(s) superseded by another lane: "
                 f"{', '.join(dropped)}"
             )
-    finally:
-        release_ledger(LEDGER)
-
-
-def _remove_local_row(arc_id: str) -> None:
-    """Compensating removal of a just-appended local row (codex U-HE-19 r3 P2: the
-    backfill lost its check-then-act race). Under the ledger claim; atomic rewrite."""
-    claim_ledger(LEDGER)
-    try:
-        rows = read_ledger()
-        kept = [r for r in rows if r.get("arc_id") != arc_id]
-        if len(kept) == len(rows):
-            return
-        tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
-        tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in kept))
-        os.replace(tmp, LEDGER)
     finally:
         release_ledger(LEDGER)
 
@@ -1734,27 +1728,37 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(json.dumps(asdict(row), indent=2, sort_keys=True))
         return 0
-    # Manual/historical backfill: the holder gate is bypassed ONLY for an arc no
-    # reservation has ever named (codex U-HE-19 r1 P2: an unconditional bypass would let
-    # a non-holder route around C-HE-04 §2 through the ordinary extract command). An arc
-    # with a live reservation goes through the same holder rule as drain.
+    # Manual/historical backfill: no check-then-act bypass at all (codex U-HE-19
+    # r1/r2/r3/r4 P2 -- every recheck variant left a window). The backfill RESERVES the
+    # arc first: reserve()'s exclusive-create CAS is the fence, so either this command
+    # owns the reservation end-to-end or it loses the race loudly and appends nothing.
+    # The reservation is minted with the truthful close-time label and terminalized
+    # `merged` (append already proved merged_at/merge_sha), leaving an audit record.
     import reservations as rs
 
     if rs.current(row.arc_id) is None:
-        append(row, require_holder=False)
-        if rs.current(row.arc_id) is not None:
-            # Check-then-act window (codex U-HE-19 r2/r3 P2): a lane reserved this arc
-            # while the backfill was in flight. A stranded warning is not enough -- the
-            # unauthorized row would block the legitimate holder at the duplicate guard.
-            # Roll the backfilled row back and abort loudly; the reserving lane's drain
-            # captures the arc through the ordinary holder-gated path.
-            _remove_local_row(row.arc_id)
+        if not row.arc_type:
             raise AbortError(
-                f"{row.arc_id}: a reservation appeared while the backfill ran -- the "
-                "backfilled row was rolled back; the reserving lane's drain will "
-                "capture this arc"
+                f"{row.arc_id}: historical backfill now mints its reservation and "
+                "C-HE-26 §1 requires an arc_type -- pass --arc-type (same rule as queue)"
             )
-        print("note: historical backfill (no reservation exists), holder check bypassed")
+        try:
+            rs.reserve(
+                row.arc_id,
+                lane_id=LANE_ID,
+                branch="historical-backfill",
+                arc_type=row.arc_type,
+                arc_type_declared_at="close",
+            )
+        except rs.ReservationError as exc:
+            raise AbortError(
+                f"{row.arc_id}: lost the backfill reservation race ({exc}); the "
+                "reserving lane's drain will capture this arc"
+            ) from exc
+        rs.open_with_sensor(row.arc_id, LANE_ID)
+        append(row)
+        rs.transition(row.arc_id, "merged", lane_id=LANE_ID)
+        print("note: historical backfill reserved, appended and terminalized by this lane")
     else:
         append(row)
     print(f"appended {row.arc_id} -> {LEDGER}")
