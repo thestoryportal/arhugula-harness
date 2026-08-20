@@ -661,16 +661,17 @@ def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
     calls = []
     stub = types.SimpleNamespace(
         current=lambda arc_id: (1, {"state": "open"}),
-        record_round_outcome_next=lambda arc_id, **kw: calls.append((arc_id, kw)),
+        record_round_outcome=lambda arc_id, n, **kw: calls.append((arc_id, n, kw)),
+        RoundOutcomeConflict=type("RoundOutcomeConflict", (RuntimeError,), {}),
     )
     monkeypatch.setitem(sys.modules, "reservations", stub)
     rw.record_round_outcome_if_reserved(
         "pr-1", 2, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
     )
-    # the reservation round is an ARC-LEVEL ordinal minted by the allocator, never the
-    # caller's producer-scoped gate-log round (codex round-5/6 P2)
+    # the caller's round_n is preserved when free, so the folded reservation joins to the
+    # gate-log round (codex round-7 P2)
     assert calls == [
-        ("pr-1", {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0})
+        ("pr-1", 2, {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0})
     ]
     # no reservation for this arc → no-op
     stub.current = lambda arc_id: None
@@ -703,6 +704,14 @@ def test_wrapper_failover_collision_persists_both_channels(tmp_path, monkeypatch
     assert outcomes["1"]["channel"] == "codex"
     assert outcomes["1"]["terminal"] == "REVIEWER_UNAVAILABLE"
     assert outcomes["2"] == {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3}
+    # SAME-channel conflict is an anomaly: reported to stderr, never silently renumbered
+    # (codex round-6/7 P2)
+    rw.record_round_outcome_if_reserved(
+        "pr-fo", 1, channel="codex", terminal="APPROVE", finding_count=0
+    )
+    assert "not persisted" in capsys.readouterr().err
+    after = real_rs.current("pr-fo")[1]["round_outcomes"]
+    assert after["1"]["terminal"] == "REVIEWER_UNAVAILABLE" and "3" not in after
 
 
 def test_wrapper_round_outcome_noop_without_reservation_substrate(monkeypatch, capsys):

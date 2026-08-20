@@ -98,7 +98,14 @@ class ChainError(ReservationError):
 
 
 class RoundOutcomeConflict(ReservationError):  # noqa: N818 — Conflict IS the condition named
-    """The requested round_n is already recorded with different content (append-only map)."""
+    """The requested round_n is already recorded with different content (append-only map).
+    Carries the existing row as `.existing` so callers can distinguish a cross-channel
+    collision (failover leg -> allocate a fallback key) from a same-channel anomaly
+    (report loudly, never renumber) — codex round-7 P2."""
+
+    def __init__(self, msg: str, existing: dict | None = None) -> None:
+        super().__init__(msg)
+        self.existing = existing or {}
 
 
 class LoopStatusWriteError(ReservationError):
@@ -427,7 +434,8 @@ def record_round_outcome(
             raise RoundOutcomeConflict(
                 f"{arc_id}: round {round_n} already recorded "
                 f"({existing['channel']}/{existing['terminal']}); the audit map is "
-                "append-only — allocate a new round_n (C-HE-25)"
+                "append-only — allocate a new round_n (C-HE-25)",
+                existing,
             )
         outcomes[str(int(round_n))] = dict(row)
         return head
@@ -512,8 +520,14 @@ def gc(*, now: datetime | None = None) -> list[Path]:
     root = reservations_root()
     if not root.is_dir():
         return removed
+    resolved_root = root.resolve()
     for d in root.iterdir():
         if not d.is_dir() or d.name.startswith("."):
+            continue
+        if d.is_symlink() or not d.resolve().is_relative_to(resolved_root):
+            # Path.is_dir() follows symlinks: a link planted under the shared writable root
+            # could make GC read a forged terminal head and unlink files OUTSIDE QUEUE_DIR.
+            # GC never traverses a symlink or leaves the resolved root (codex round-7 P2).
             continue
         # Sweep tmps BEFORE the head check: a crash during first-generation publication
         # leaves a directory with only `.1.json.<pid>.tmp` and no head at all — skipping it

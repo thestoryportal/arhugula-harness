@@ -399,16 +399,26 @@ def record_round_outcome_if_reserved(
         return
     try:
         if rs.current(arc_id) is not None:
-            # The reservation map's keys are ARC-LEVEL emission ordinals, always minted by
-            # the CAS-safe allocator -- never the caller's gate-log round, which is scoped
-            # per (arc, producer) (`round_n_for`) and therefore collides across a D-C
-            # failover's two legs (codex round-5/6 P2). The gate log stays the sole
-            # authority for producer-scoped rounds (C-HE-30 one-authority rule); the
-            # reservation map is the arc's ordered outcome summary, joined by
-            # (channel, terminal, finding_count), not by key.
-            rs.record_round_outcome_next(
-                arc_id, channel=channel, terminal=terminal, finding_count=finding_count
-            )
+            # Preserve the caller's round_n whenever it is free or identical, so the folded
+            # reservation still joins to the gate-log round (codex round-7 P2). Only a
+            # genuine CROSS-CHANNEL collision -- a D-C failover's two legs both carrying the
+            # same producer-scoped number (`round_n_for`) -- falls back to the next free
+            # arc-level key (codex round-5 P2). A SAME-channel conflict is an anomaly:
+            # re-raised and reported below, never silently renumbered (codex round-6 P2).
+            try:
+                rs.record_round_outcome(
+                    arc_id,
+                    round_n,
+                    channel=channel,
+                    terminal=terminal,
+                    finding_count=finding_count,
+                )
+            except rs.RoundOutcomeConflict as conflict:
+                if conflict.existing.get("channel") == channel:
+                    raise
+                rs.record_round_outcome_next(
+                    arc_id, channel=channel, terminal=terminal, finding_count=finding_count
+                )
     except Exception as exc:
         print(f"review wrapper: round outcome not persisted ({exc})", file=sys.stderr)
 

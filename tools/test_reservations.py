@@ -311,6 +311,23 @@ def test_cli_update_accepts_digit_leading_sha_and_parses_ints(qdir, capsys):
     assert head["head_sha"] == "4be86eec1abc" and head["pr"] == 8
 
 
+# mutation-probe: drop the symlink/resolved-root refusal in gc()
+def test_gc_never_traverses_symlinked_reservation_dir(qdir, tmp_path, monkeypatch):
+    """codex round-7 P2: a symlink planted under the shared writable reservations root must
+    never let GC read a forged terminal head and unlink files OUTSIDE QUEUE_DIR."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    old_ts = "2020-01-01T00:00:00Z"
+    (outside / "1.json").write_text(json.dumps({"state": "merged", "transitioned_at": old_ts}))
+    (outside / "2.json").write_text(json.dumps({"state": "merged", "transitioned_at": old_ts}))
+    root = qdir / "reservations"
+    root.mkdir(parents=True)
+    (root / "pr-link").symlink_to(outside)
+    monkeypatch.setattr(rs, "_process_is_alive", lambda pid: False)
+    rs.gc()
+    assert (outside / "1.json").exists() and (outside / "2.json").exists()
+
+
 # hand-witness (probe not deletion-expressible: commenting a bare try/except breaks syntax):
 # swap the tmp-sweep `except FileNotFoundError` to another type and this test reds.
 def test_gc_survives_tmp_vanishing_mid_sweep(qdir, monkeypatch):
