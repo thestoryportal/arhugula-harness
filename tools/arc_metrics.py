@@ -865,11 +865,31 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
             if _is_systemic(exc):
                 raise
             raise AbortError(f"cannot claim {path.name}: {exc}") from exc
+        # Verify the entry on disk is still the bytes this drain LISTED before
+        # consuming it: a producer can have published corrected declarations
+        # (remove + re-queue) after our read_queue() -- unlinking blindly would
+        # discard the correction and capture the stale payload (codex r10 P1).
+        try:
+            current = json.loads(path.read_text())
+        except FileNotFoundError:
+            # The .json vanished between listing and claiming. The classic
+            # cause is a live peer that finished the arc -- but it can also be
+            # a dead claimer whose entry only WE now hold (codex r10 P1), so
+            # never delete the only copy: re-publish the capture durably
+            # (exclusive; a peer's restore wins harmlessly) and yield.
+            _restore_or_republish(taken, path, entry)
+            return None
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            current = None  # unreadable now = not verifiably ours to consume
+        if current != entry:
+            # Corrected (or unverifiable) declarations: leave them; drop our
+            # stale claim and let a fresh drain list the new bytes.
+            taken.unlink(missing_ok=True)
+            return None
         try:
             path.unlink()
         except FileNotFoundError:
-            # A peer finished this arc between listing and claiming it.
-            taken.unlink(missing_ok=True)
+            _restore_or_republish(taken, path, entry)
             return None
         return taken
     return None

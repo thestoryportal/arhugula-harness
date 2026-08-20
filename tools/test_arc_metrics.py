@@ -1802,6 +1802,38 @@ def test_stale_dead_judgment_cannot_delete_a_fresh_live_claim(tmp_path, monkeypa
     assert not list(q.glob("*.taken.recover.*")), "no aside left behind"
 
 
+def test_vanished_entry_under_claim_is_republished_not_deleted(tmp_path, monkeypatch):
+    """If the .json vanished between listing and claiming, the claimer must re-publish
+    the capture it holds and yield -- never delete the only copy (codex r10 P1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    entry = {"pr": 6, "arc_id": "pr-6"}
+    path = q / "pr-6.json"
+    # listed, then gone before the claim ran (a dead claimer consumed it)
+    result = am._claim_arc(path, entry)
+    assert result is None
+    assert path.exists(), "the capture is durably back in the queue"
+    assert json.loads(path.read_text())["pr"] == 6
+
+
+# mutation-probe: comment out the `if current != entry` corrected-declarations guard in _claim_arc
+def test_corrected_declarations_survive_a_stale_claimer(tmp_path, monkeypatch):
+    """A producer that re-queued corrected declarations after this drain's listing
+    must not have them consumed by the stale listing (codex r10 P1)."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    stale = {"pr": 6, "arc_id": "pr-6", "decisions": 1}
+    corrected = {"pr": 6, "arc_id": "pr-6", "decisions": 9}
+    path = q / "pr-6.json"
+    path.write_text(json.dumps(corrected))
+    result = am._claim_arc(path, stale)
+    assert result is None, "the stale claimer yields"
+    assert json.loads(path.read_text()) == corrected, "corrected declarations intact"
+    assert not list(q.glob("*.taken")), "no stale claim left behind"
+
+
 def test_kill_after_seam_exits_137():
     """ARC_METRICS_TEST_KILL_AFTER=<step> is a real process death (C-HE-04 verification (vi))."""
     code = (
