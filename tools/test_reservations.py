@@ -178,6 +178,25 @@ def test_symlinked_reservation_path_refused_at_read_and_write(qdir, tmp_path):
     with pytest.raises(rs.ReservationError, match="symlink"):
         rs.current("pr-sym")
     assert not list(outside.iterdir())  # nothing was written through the link
+    # per-FILE symlink: a planted 999.json link must fail loudly, never inject a forged
+    # head or be silently skipped (codex round-10 P2)
+    rs.reserve("pr-real", lane_id="A", branch="b", arc_type="inventing")
+    forged = tmp_path / "forged.json"
+    forged.write_text(json.dumps({"state": "merged"}))
+    (root / "pr-real" / "999.json").symlink_to(forged)
+    with pytest.raises(rs.ReservationError, match=r"999\.json is a symlink"):
+        rs.current("pr-real")
+    # .seq allocator containment (codex round-10 P2)
+    import shutil
+
+    seq = root / ".seq"
+    if seq.exists():
+        shutil.rmtree(seq)
+    elsewhere = tmp_path / "seq-elsewhere"
+    elsewhere.mkdir()
+    seq.symlink_to(elsewhere)
+    with pytest.raises(rs.ReservationError, match=r"\.seq allocator"):
+        rs.alloc_seq()
 
 
 def test_finding_count_domain_enforced(qdir):

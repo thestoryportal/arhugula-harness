@@ -173,6 +173,10 @@ def alloc_seq() -> int:
     """Filesystem-derived monotonic counter (never date-sourced, C-HE-03 §3)."""
     d = reservations_root() / ".seq"
     d.mkdir(parents=True, exist_ok=True)
+    # same containment fence as _write_gen: a pre-planted `.seq` symlink would let external
+    # contents control the ordering authority (codex round-10 P2)
+    if d.is_symlink() or not d.resolve().is_relative_to(reservations_root().resolve()):
+        raise ReservationError(".seq allocator path escaped QUEUE_DIR -- refused")
     for _ in range(SEQ_RETRIES):
         existing = [int(p.name) for p in d.iterdir() if p.name.isdigit()]
         n = (max(existing) if existing else 0) + 1
@@ -188,10 +192,20 @@ def current(arc_id: str) -> tuple[int, dict] | None:
     d = _dir(arc_id)
     if not d.is_dir():
         return None
-    gens = sorted((int(p.stem) for p in d.glob("*.json") if p.stem.isdigit()), reverse=True)
+    gens = []
+    for gp in d.glob("*.json"):
+        if not gp.stem.isdigit():
+            continue
+        if gp.is_symlink():
+            # a planted per-FILE symlink (e.g. 999.json -> outside) must never inject a
+            # forged head that CAS operations would treat as authoritative, and must never
+            # be silently ignored either -- fail loudly at the single read funnel
+            # (codex round-10 P2).
+            raise ReservationError(f"{arc_id}: generation file {gp.name} is a symlink -- refused")
+        gens.append(int(gp.stem))
     if not gens:
         return None
-    head = gens[0]
+    head = max(gens)
     return head, json.loads((d / f"{head}.json").read_text())
 
 
