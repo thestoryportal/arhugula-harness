@@ -88,11 +88,15 @@ CI_TERMINAL = ("SUCCESS", "FAILURE", "CANCELLED")
 CI_GREEN = frozenset({"SUCCESS"})
 
 #: This process's lane identity (C-HE-03 §3). Lane-init (U-HE-31) exports HARNESS_LANE_ID;
-#: the fallback mints a stable per-process id so a lane never appears as ':'-bearing or
-#: empty (reservations._check_id refuses ':' and '').
-LANE_ID = os.environ.get(
-    "HARNESS_LANE_ID"
-) or f"{socket.gethostname().split('.')[0]}-{REPO.name}-{os.getpid():08x}"[:64].replace(":", "-")
+#: the fallback derives a STABLE per-(host, worktree) id -- never the pid (codex U-HE-19
+#: r1 P2: a pid-bearing fallback makes every retrying CLI invocation look like another
+#: lane, wedging held entries and orphaning valid local rows; processes sharing one
+#: worktree share its ledger and ARE one lane, C-HE-03 §3). Never ':'-bearing or empty
+#: (reservations._check_id refuses both).
+LANE_ID = os.environ.get("HARNESS_LANE_ID") or (
+    f"{socket.gethostname().split('.')[0]}-{REPO.name}-"
+    f"{hashlib.sha256(str(REPO.resolve()).encode()).hexdigest()[:8]}"
+)[:64].replace(":", "-")
 
 
 def ci_is_green(conclusion: str | None) -> bool:
@@ -840,8 +844,11 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
     unstamped, and only one drain can create it.
     """
     taken = path.with_suffix(".taken")
+    # lane_id in the stamp is the D2-transfer witness (codex U-HE-19 r1 P1): recovery may
+    # move a reservation's holder only when the DEAD claimant provably was that holder --
+    # pid/host alone cannot say which lane the claimant belonged to.
     payload = json.dumps(
-        {**entry, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}},
+        {**entry, "_claim": {"pid": os.getpid(), "host": socket.gethostname(), "lane_id": LANE_ID}},
         sort_keys=True,
     )
     for _attempt in (1, 2):
@@ -987,12 +994,30 @@ def _transfer_reservation_to_recoverer(restored: Path) -> None:
     arc_id = entry.get("arc_id") or (f"pr-{entry['pr']}" if "pr" in entry else None)
     if not arc_id:
         return
+    # The dead CLAIMANT's lane, from the claim stamp the restore preserved. Transfer only
+    # when that lane IS the reservation holder (codex U-HE-19 r1 P1): a non-holder can
+    # claim a held entry and die -- moving the LIVE holder's reservation to the recoverer
+    # would authorize a second append. An unstamped (legacy/foreign) claim proves nothing.
+    claim_lane = (entry.get("_claim") or {}).get("lane_id")
+    if not claim_lane:
+        print(f"  {arc_id}: dead claim carries no lane identity; holder transfer skipped")
+        return
     try:
         cur = rs.current(arc_id)
         dead_lane = cur[1].get("lane_id") if cur else None
-        if dead_lane and rs.holder(arc_id) == dead_lane and dead_lane != LANE_ID:
+        if (
+            dead_lane
+            and claim_lane == dead_lane
+            and rs.holder(arc_id) == dead_lane
+            and dead_lane != LANE_ID
+        ):
             rs.transfer_holder(arc_id, from_lane_id=dead_lane, to_lane_id=LANE_ID)
             print(f"  {arc_id}: reservation holder transferred {dead_lane} -> {LANE_ID}")
+        elif dead_lane and claim_lane != dead_lane:
+            print(
+                f"  {arc_id}: dead claim belonged to {claim_lane!r}, not the holder "
+                f"({dead_lane!r}); holder transfer refused"
+            )
     except rs.ReservationError as exc:
         # A stale precondition (a peer transferred first, or the state moved on) is a
         # lost race, not a fault: the entry is safely back; the holder gate at append
@@ -1261,26 +1286,39 @@ def _reconcile_local_rows() -> None:
     along in the next PR" path (ADV-F6) before SPLIT_BRAIN_LEDGER would catch it at CI."""
     import reservations as rs
 
-    rows = read_ledger()
-    if not rows:
+    if not LEDGER.exists():
         return
-    committed = committed_arc_ids()
-    keep, dropped = [], []
-    for r in rows:
-        aid = r.get("arc_id")
-        cur = rs.current(aid) if aid and aid not in committed else None
-        if cur and cur[1]["state"] in ("open", "merged") and cur[1]["lane_id"] != LANE_ID:
-            dropped.append(aid)
-            continue
-        keep.append(r)
-    if dropped:
-        tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
-        tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in keep))
-        os.replace(tmp, LEDGER)
-        print(
-            f"  dropped {len(dropped)} orphaned local row(s) superseded by another lane: "
-            f"{', '.join(dropped)}"
-        )
+    # Under the ledger claim (codex U-HE-19 r1 P2): an append/relabel landing between an
+    # unclaimed read and the whole-file replace would be silently discarded. A live peer
+    # holding the claim means yield loudly -- reconciliation re-runs at every drain start.
+    try:
+        claim_ledger(LEDGER)
+    except AbortError as exc:
+        print(f"  local-row reconciliation skipped: {exc}")
+        return
+    try:
+        rows = read_ledger()
+        if not rows:
+            return
+        committed = committed_arc_ids()
+        keep, dropped = [], []
+        for r in rows:
+            aid = r.get("arc_id")
+            cur = rs.current(aid) if aid and aid not in committed else None
+            if cur and cur[1]["state"] in ("open", "merged") and cur[1]["lane_id"] != LANE_ID:
+                dropped.append(aid)
+                continue
+            keep.append(r)
+        if dropped:
+            tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
+            tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in keep))
+            os.replace(tmp, LEDGER)
+            print(
+                f"  dropped {len(dropped)} orphaned local row(s) superseded by another lane: "
+                f"{', '.join(dropped)}"
+            )
+    finally:
+        release_ledger(LEDGER)
 
 
 def _report_kept(path: Path, arc_id: str, entry: dict, exc: BaseException) -> bool:
@@ -1595,10 +1633,17 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(json.dumps(asdict(row), indent=2, sort_keys=True))
         return 0
-    # Manual/historical backfill: no reservation ever existed for a pre-lanes arc, so the
-    # C-HE-04 §2 holder gate stays on the DRAIN path only (plan U-HE-19).
-    append(row, require_holder=False)
-    print("note: historical backfill, reservation holder check bypassed")
+    # Manual/historical backfill: the holder gate is bypassed ONLY for an arc no
+    # reservation has ever named (codex U-HE-19 r1 P2: an unconditional bypass would let
+    # a non-holder route around C-HE-04 §2 through the ordinary extract command). An arc
+    # with a live reservation goes through the same holder rule as drain.
+    import reservations as rs
+
+    if rs.current(row.arc_id) is None:
+        append(row, require_holder=False)
+        print("note: historical backfill (no reservation exists), holder check bypassed")
+    else:
+        append(row)
     print(f"appended {row.arc_id} -> {LEDGER}")
     return 0
 

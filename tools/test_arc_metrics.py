@@ -1955,7 +1955,11 @@ def test_recover_transfers_holder_to_recoverer(tmp_path, monkeypatch, qdir_res):
     rs.open_with_sensor("pr-50", "A")
     (q / "pr-50.taken").write_text(
         json.dumps(
-            {"pr": 50, "arc_id": "pr-50", "_claim": {"pid": 999999, "host": socket.gethostname()}}
+            {
+                "pr": 50,
+                "arc_id": "pr-50",
+                "_claim": {"pid": 999999, "host": socket.gethostname(), "lane_id": "A"},
+            }
         )
     )
     monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
@@ -2006,3 +2010,71 @@ def test_bootstrap_emit_failure_is_per_arc_and_next_drain_proceeds(tmp_path, mon
     rc = am.drain(argparse.Namespace())
     assert rc == 1, "added row held pending commit"
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]
+
+
+def test_recovery_never_transfers_from_a_live_holder_via_a_non_holder_claim(
+    tmp_path, monkeypatch, qdir_res
+):
+    """codex U-HE-19 r1 P1: a NON-holder lane can claim a held entry and die; recovering
+    its claim must NOT move the live holder's reservation -- the transfer requires the
+    dead claimant's stamped lane to BE the holder. An unstamped claim proves nothing."""
+    q = qdir_res
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-51", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-51", "A")  # holder A is alive elsewhere
+    (q / "pr-51.taken").write_text(
+        json.dumps(
+            {
+                "pr": 51,
+                "arc_id": "pr-51",
+                "_claim": {"pid": 999999, "host": socket.gethostname(), "lane_id": "C"},
+            }
+        )
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    am._recover_dead_claims()
+    assert (q / "pr-51.json").exists(), "the entry itself is still recovered"
+    assert rs.holder("pr-51") == "A", "the live holder keeps the reservation"
+    # an UNSTAMPED dead claim (legacy shape) likewise proves nothing
+    (q / "pr-52.taken").write_text(
+        json.dumps(
+            {"pr": 52, "arc_id": "pr-52", "_claim": {"pid": 999999, "host": socket.gethostname()}}
+        )
+    )
+    rs.reserve("pr-52", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-52", "A")
+    am._recover_dead_claims()
+    assert rs.holder("pr-52") == "A", "no lane identity in the claim -> no transfer"
+
+
+def test_cmd_extract_bypasses_holder_only_without_reservation(
+    tmp_path, monkeypatch, qdir_res, capsys
+):
+    """codex U-HE-19 r1 P2: the manual extract command may skip the holder gate only for
+    an arc NO reservation has ever named; a reserved arc keeps the C-HE-04 §2 rule."""
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    ns = argparse.Namespace(dry_run=False)
+    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-70", 70))
+    assert am.cmd_extract(ns) == 0  # no reservation: historical backfill
+    assert "holder check bypassed" in capsys.readouterr().out
+    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-71", 71))
+    rs.reserve("pr-71", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-71", "A")
+    with pytest.raises(am.AbortError, match="holder"):
+        am.cmd_extract(ns)
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-70"]
+
+
+def test_lane_id_fallback_is_stable_across_invocations():
+    """codex U-HE-19 r1 P2: the fallback lane id must not embed the pid -- a retrying
+    CLI invocation is the SAME lane. Stable per (host, worktree), ':'-free, non-empty."""
+    expected = (
+        f"{socket.gethostname().split('.')[0]}-{am.REPO.name}-"
+        f"{__import__('hashlib').sha256(str(am.REPO.resolve()).encode()).hexdigest()[:8]}"
+    )[:64].replace(":", "-")
+    if os.environ.get("HARNESS_LANE_ID"):
+        assert am.LANE_ID == os.environ["HARNESS_LANE_ID"]
+    else:
+        assert am.LANE_ID == expected
+    assert am.LANE_ID and ":" not in am.LANE_ID
