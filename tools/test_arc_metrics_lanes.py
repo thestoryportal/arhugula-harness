@@ -291,17 +291,31 @@ def test_ac2_a_same_instant(lanes, interleaving):
     elif interleaving == "iv-restore-vs-claim":
         _reserve(q)
         pa = _spawn(
-            a, q, "lane-a", ARC_METRICS_TEST_HOLD_AFTER="restore", ARC_METRICS_TEST_HOLD_DIR=hold
+            a,
+            q,
+            "lane-a",
+            ARC_METRICS_TEST_HOLD_AFTER="restore-link",
+            ARC_METRICS_TEST_HOLD_DIR=hold,
         )
-        _wait_for(hold / "restore.reached")  # A appended + restored; entry is back
+        # A is held MID-restore (codex U-HE-20 r3 P2): the exclusive re-link has run,
+        # the claim unlink has not -- both names exist and A's claim is live.
+        _wait_for(hold / "restore-link.reached")
+        assert (q / "pr-1.json").exists() and (q / "pr-1.taken").exists()
         pb = _spawn(b, q, "lane-b")
         out_b, _ = _finish(pb)
-        # by the restore hold-point A has already terminalized open->merged, so B's
-        # guard is the merged-held-by-other elif; the message witnesses THAT guard
-        # (append()'s holder gate is a second serial guard that would mask its removal)
-        assert "reservation merged by lane-a" in out_b, out_b
-        (hold / "restore.go").touch()
+        # B claims DURING A's restore: refused by A's LIVE claim (exclusive create,
+        # never timing) -- the losing racer classifies it outstanding and yields.
+        assert "still outstanding" in out_b, out_b
+        assert _rows(b) == []
+        (hold / "restore-link.go").touch()
         _finish(pa)
+        assert (q / "pr-1.json").exists(), "A completed the restore"
+        pb2 = _spawn(b, q, "lane-b")
+        out_b2, _ = _finish(pb2)
+        # B claims the restored entry: A terminalized open->merged before restoring,
+        # so B's guard is the merged-held-by-other elif; the message witnesses THAT
+        # guard (append()'s holder gate is a second serial guard masking its removal)
+        assert "reservation merged by lane-a" in out_b2, out_b2
         _union_ok(a, b, q)
 
     elif interleaving == "v-abort-vs-claim":

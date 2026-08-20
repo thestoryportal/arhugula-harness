@@ -1032,7 +1032,8 @@ def _hold_after(step: str) -> None:
     """Test seam (U-HE-20, sibling of ``_kill_after``): ``ARC_METRICS_TEST_HOLD_AFTER=<step>``
     -> touch ``<ARC_METRICS_TEST_HOLD_DIR>/<step>.reached`` and wait (<= 30 s) for
     ``<step>.go``. Lets a test interleave a peer action at an exact point
-    (C-HE-04 verification (iii)/(iv)/(v)). Same step names as ``_kill_after``."""
+    (C-HE-04 verification (iii)/(iv)/(v)). Steps: the ``_kill_after`` names plus
+    ``restore-link`` (mid-restore, between the exclusive re-link and the claim unlink)."""
     if os.environ.get("ARC_METRICS_TEST_HOLD_AFTER") != step:
         return
     hold = Path(os.environ["ARC_METRICS_TEST_HOLD_DIR"])
@@ -1070,6 +1071,9 @@ def _restore_or_republish(taken: Path, path: Path, entry: dict) -> None:
     capture, or a peer's restore) and this stale copy is simply dropped."""
     try:
         os.link(taken, path)
+        # U-HE-20 (iv) mid-restore hold: BOTH names exist here; a peer's takeover is
+        # refused by this drain's live claim (exclusive create), never by timing.
+        _hold_after("restore-link")
     except FileNotFoundError:
         payload = json.dumps({k: v for k, v in entry.items() if k != "_claim"}, sort_keys=True)
         try:
