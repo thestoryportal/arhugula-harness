@@ -39,6 +39,7 @@ import socket
 import statistics
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1027,6 +1028,22 @@ def _kill_after(step: str) -> None:
         os._exit(137)
 
 
+def _hold_after(step: str) -> None:
+    """Test seam (U-HE-20, sibling of ``_kill_after``): ``ARC_METRICS_TEST_HOLD_AFTER=<step>``
+    -> touch ``<ARC_METRICS_TEST_HOLD_DIR>/<step>.reached`` and wait (<= 30 s) for
+    ``<step>.go``. Lets a test interleave a peer action at an exact point
+    (C-HE-04 verification (iii)/(iv)/(v)). Same step names as ``_kill_after``."""
+    if os.environ.get("ARC_METRICS_TEST_HOLD_AFTER") != step:
+        return
+    hold = Path(os.environ["ARC_METRICS_TEST_HOLD_DIR"])
+    (hold / f"{step}.reached").touch()
+    deadline = time.monotonic() + 30
+    while not (hold / f"{step}.go").exists():
+        if time.monotonic() > deadline:
+            raise AbortError(f"hold seam timeout at {step}")
+        time.sleep(0.02)
+
+
 def _is_systemic(exc: OSError) -> bool:
     """A queue-dir permission / I/O / disk fault -- not a per-arc content fault, not a
     lost race (C-HE-04 SS3). One such fault dooms every remaining entry identically, so
@@ -1337,6 +1354,7 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
     # the queue itself -- no lock required.
     taken = _claim_arc(path, entry)
     _kill_after("claim")
+    _hold_after("claim")
     if taken is None:
         print(f"  {arc_id}: claimed by a concurrent drain, still outstanding")
         return "outstanding"
@@ -1433,6 +1451,8 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             levers=entry.get("levers"),
             notes=entry.get("notes", ""),
         )
+        if os.environ.get("ARC_METRICS_TEST_ABORT_EXTRACT"):
+            raise AbortError("test: extract abort (U-HE-20 (v))")
         row = extract(args)
 
         # C-HE-27 §3 fold at drain, after the flip: the reservation's accreted facts land
@@ -1456,8 +1476,10 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             res = fresh[1]
         _fold_head_onto(row, res)
         _kill_after("extract")
+        _hold_after("extract")
         append(row)
         _kill_after("append")
+        _hold_after("append")
         if res.get("state") == "open":
             updates = {"pr": entry["pr"]} if res.get("pr") is None and "pr" in entry else None
             try:
@@ -1495,6 +1517,7 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         # systemic abort.
         _restore_or_republish(taken, path, entry)
         _kill_after("restore-abort")
+        _hold_after("restore-abort")
         raise
     # Restore the capture to the queue rather than deleting it: the row is
     # only in the working tree so far, and the declarations it carries exist
@@ -1502,6 +1525,7 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
     # committed history.
     _restore_or_republish(taken, path, entry)
     _kill_after("restore")
+    _hold_after("restore")
     print(f"  {arc_id}: appended (entry held until the row is committed)")
     return "added"
 
