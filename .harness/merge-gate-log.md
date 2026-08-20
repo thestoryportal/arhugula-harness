@@ -466,3 +466,7 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-20T09:13:42Z | #1405 | 6c3bf27d1109 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
 | 2026-08-20T09:15:56Z | #1405 | 6c3bf27d1109 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
 | #1405 | 2026-08-20 | feat/he-lanes-s4b-u-he-17 | concurrency: APPROVE / spec-conformance: APPROVE / witness-adequacy: APPROVE | MERGE (gate r2; r1 BLOCKs fixed: terminal-reuse witness + probe mask, parent-recorded failover reservation outcome; 20 codex rounds; residuals R17-a + fold-projection registered to U-HE-19/21) | blast-radius: 6 consumers (agy_review._emit, codex_review._emit_rows/_run_gemini_failover/main, round_n_for/env_arc_and_lane, merge_gate_log emit, lanes_verify MANIFEST, test_store_audit LANDED) |
+| 2026-08-20T09:26:41Z | #1405 | 342e023a0238 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-20T09:26:50Z | #1405 | 342e023a0238 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-20T09:27:05Z | #1405 | 342e023a0238 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| #1405 | 2026-08-20 | feat/he-lanes-s4b-u-he-17 | concurrency: APPROVE / spec-conformance: APPROVE / witness-adequacy: APPROVE | MERGE (gate r3 delta re-gate at marker head 342e023a: delta = clearance marker + gate rows only, claims verified) | blast-radius: delta-only (doc marker) |
