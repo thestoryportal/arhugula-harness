@@ -42,10 +42,61 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   [ -n "$_h" ] && _HIL=" $_h"
 fi
 
+# C-HE-03 §5 (U-HE-18): one ground-truth reconcile pass over every non-terminal arc
+# reservation at session start (the merge lane is the other caller, U-HE-22). DETACHED --
+# codex-session-start wraps this whole script in an 8 s hook_bounded slice and discards
+# failures (codex U-HE-18 r1 P1), so an inline gh-backed pass could starve the audit emit
+# below; the spawn costs milliseconds and never consumes the parent's budget. Durable
+# outcomes surface through the loop ledger (DEFERRED-HIL / NOTIFY rows read by
+# loop_pending_hil_summary at the NEXT engagement, C-HE-20 §1); until U-HE-29 lands
+# loop_log_structured, the pass records to the store-local .reconcile.log only (in-band
+# ERROR values, CLI exit 2 -- registered residual, plan U-HE-18 rev note). The dir
+# pre-probe mirrors arc_metrics.py's QUEUE_DIR default so sessions without a reservation
+# store skip the interpreter spawn entirely; if the defaults ever drift the only cost is
+# a skipped best-effort pass (the merge lane re-runs it).
+_QROOT="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
+_RROOT="${_QROOT}/reservations"
+_RESV=""
+# Activation gate (codex r5 P2): the pass's C-HE-20 escalation rows need loop_lib.sh's
+# `loop_log_structured` (U-HE-29). Until that writer exists at HEAD, an unattended aged-
+# reservation pass could only fail closed into the log -- so the spawn stays dormant and
+# SELF-ACTIVATES the moment U-HE-29 lands. Synchronous callers (CLI, U-HE-22 merge lane)
+# are unaffected: their exit codes surface directly.
+if [ -e "$_RROOT" ] || [ -L "$_RROOT" ]; then if [ ! -d "$_RROOT" ] || [ -L "$_RROOT" ]; then
+  # The store root exists but is not a plain directory: corruption of authoritative
+  # state, never an absent-store clean skip (codex r10 P2) -- fail open here would hide
+  # exactly what reconcile_all classifies as corrupt.
+  _RESV=" resv=ERR(reservations store corrupt: ${_RROOT} is not a directory)"
+fi; fi
+if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ]; then
+  # Surface the LAST pass's outcome (codex r2 P2) UNGATED by the U-HE-29 activation gate
+  # below (codex r7 P2): the store-local log can already exist from the CLI / merge-lane
+  # callers pre-U-HE-29, and an rc!=0 pass must surface regardless of which caller wrote
+  # it. The log write itself is store-owned + atomically renamed inside reservations.py
+  # (codex r2 P1/r3 P2). jq on the authoritative rc field (codex r4 P3: a substring grep
+  # would false-positive on an arc id containing "ERROR"); jq is already a hard
+  # dependency of hook_emit. A corrupt/unparseable log reads as non-zero -- fail closed.
+  if [ -f "${_RROOT}/.reconcile.log" ] && [ ! -L "${_RROOT}/.reconcile.log" ]; then
+    if [ "$(jq -r '.rc' "${_RROOT}/.reconcile.log" 2>/dev/null)" != "0" ]; then
+      _RESV=" resv=ERR(last reconcile pass; see ${_RROOT}/.reconcile.log)"
+    fi
+  elif [ -e "${_RROOT}/.reconcile.log" ] || [ -L "${_RROOT}/.reconcile.log" ]; then
+    # Log path exists but is not a regular file (directory/symlink/other): a structural
+    # store fault the detached pass cannot repair or report -- surface it here (codex
+    # r10 P2), never a silent skip.
+    _RESV=" resv=ERR(reconcile log path corrupt: not a regular file)"
+  fi
+  if [ -f tools/reservations.py ] && command -v uv >/dev/null 2>&1 \
+    && grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh 2>/dev/null; then
+    nohup uv run python tools/reservations.py reconcile-all --log-to-store \
+      >/dev/null 2>&1 &
+  fi
+fi
+
 # Single-line additionalContext for the SessionStart event (wraps the lib helper). The
 # pending-HIL summary is appended so an operator opening a fresh session always sees what
 # the last unattended loop run deferred for them.
-emit() { hook_emit "SessionStart" "$1${_HIL}"; }
+emit() { hook_emit "SessionStart" "$1${_HIL}${_RESV}"; }
 
 [ -f "$ROADMAP_STATUS" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
 [ -f "$ROADMAP" ] || emit "[ROADMAP] roadmap_status.md exists but roadmap absent"

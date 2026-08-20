@@ -682,3 +682,343 @@ def test_gc_prunes_below_head_only_after_terminal_plus_30d_and_sweeps_tmp(qdir, 
     removed_later = rs.gc(now=datetime.now(UTC) + timedelta(days=31))
     assert removed_later and not (d / "1.json").exists() and (d / "3.json").exists()
     assert rs.current("pr-11")[1]["state"] == "merged"
+
+
+# ---------------------------------------------------------------------------
+# U-HE-18: ground-truth reconcile + staleness (C-HE-03 §5, C-HE-20) + sensor (C-HE-03 §7)
+
+
+def _gh_raises(pr):
+    raise RuntimeError("gh transient")
+
+
+# mutation-probe: drop the pending-aged NOTIFY/DEFERRED-HIL emission in reconcile()
+def test_reservation_ground_truth(qdir, monkeypatch):
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, lane, c, d: rows.append((k, c, d)))
+    rs.reserve("pr-20", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-20", "A")
+    rs.update_payload("pr-20", {"pr": 20})
+    assert rs.reconcile("pr-20", gh_view=_gh_raises) == "open"  # fail safe: not reclaimable
+    assert rs.reconcile("pr-20", gh_view=lambda pr: {"state": "MERGED"}) == "merged"
+    gen_after_merge = rs.current("pr-20")[0]
+    # idempotent: a terminal head short-circuits -- no second transition, same gen
+    assert rs.reconcile("pr-20", gh_view=lambda pr: {"state": "MERGED"}) == "merged"
+    assert rs.current("pr-20")[0] == gen_after_merge
+    rs.reserve("pr-21", lane_id="A", branch="b", arc_type="inventing")
+    later = datetime.now(UTC) + timedelta(hours=25)
+    assert rs.reconcile("pr-21", gh_view=lambda pr: {"state": "OPEN"}, now=later) == "pending"
+    assert rs.current("pr-21")[1]["state"] == "pending"  # aged; state unchanged (never TTL)
+    assert any(k == "NOTIFY" for k, _, _ in rows)
+    assert any(k == "DEFERRED-HIL" for k, _, _ in rows)
+    rs.reserve("pr-22", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-22", "A")
+    rs.update_payload("pr-22", {"pr": 22})
+    # CLOSED with no superseding pointer -> HITL escalation, state unchanged
+    assert rs.reconcile("pr-22", gh_view=lambda pr: {"state": "CLOSED"}) == "open"
+    assert any(c == "reservation-stale:HITL-recoverable:closed_no_pointer" for _, c, _ in rows)
+    # U-HE-17 round-6 validation (transition.build): the superseding reservation must EXIST
+    # before an abandonment may point at it (C-HE-03 §2 chain resolvability) -- the plan's
+    # literal test is adapted to reserve the superseder first.
+    rs.reserve("pr-23", lane_id="A", branch="b", arc_type="inventing")
+    closed = rs.reconcile("pr-22", gh_view=lambda pr: {"state": "CLOSED"}, superseded_by="pr-23")
+    assert closed == "abandoned"
+
+
+# mutation-probe: drop the sibling_open_count snapshot in open_with_sensor()
+def test_concurrent_lanes_at_open_sensor(qdir):
+    for i, lane in enumerate(("A", "B", "C")):
+        rs.reserve(f"s-{i}", lane_id=lane, branch="b", arc_type="inventing")
+    rs.open_with_sensor("s-0", "A")
+    rs.open_with_sensor("s-1", "B")
+    p = rs.open_with_sensor("s-2", "C")
+    assert p["concurrent_lanes_at_open"] == 2
+    assert rs.current("s-0")[1]["concurrent_lanes_at_open"] == 0
+
+
+# mutation-probe: drop reconcile()'s final stuck-open return (state-unchanged terminus)
+def test_ttl_never_reclaims(qdir, monkeypatch):
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-30", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-30", "A")
+    rs.update_payload("pr-30", {"pr": 30})
+    far = datetime.now(UTC) + timedelta(days=30)
+    assert rs.reconcile("pr-30", gh_view=lambda pr: {"state": "OPEN"}, now=far) == "open"
+    assert rs.current("pr-30")[1]["state"] == "open"
+
+
+def test_reconcile_all_isolates_per_arc_faults(qdir, monkeypatch):
+    """Until U-HE-29 lands loop_log_structured, emit_loop_row fails CLOSED; one arc's emit
+    failure must not abandon the remaining reconcile pass (C-HE-04 §3 fault-isolation analog)."""
+
+    def emit(k, lane, c, d):
+        raise rs.LoopStatusWriteError("loop_log_structured not landed (U-HE-29)")
+
+    monkeypatch.setattr(rs, "emit_loop_row", emit)
+    rs.reserve("pr-40", lane_id="A", branch="b", arc_type="inventing")  # aged pending -> raises
+    rs.reserve("pr-41", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-41", "A")
+    rs.update_payload("pr-41", {"pr": 41})
+    later = datetime.now(UTC) + timedelta(hours=25)
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"}, now=later)
+    assert out["pr-40"].startswith("ERROR") and out["pr-41"] == "merged"
+    assert rs.current("pr-40")[1]["state"] == "pending"  # fault surfaced, state untouched
+
+
+def test_cli_reconcile_all(qdir, monkeypatch, capsys):
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    monkeypatch.setattr(rs, "_gh_view", lambda pr: {"state": "MERGED"})
+    rs.reserve("pr-50", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-50", "A")
+    rs.update_payload("pr-50", {"pr": 50})
+    assert rs.main(["reconcile-all"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"pr-50": "merged"}
+
+
+# mutation-probe: drop the expect-mismatch check in transition.build
+def test_reconcile_terminal_bound_to_checked_pr(qdir, monkeypatch):
+    """r1 P1: the terminal CAS is bound to the PR whose ground truth was checked -- a
+    concurrent update_payload re-binding `pr` must NOT be terminalized on the old PR's
+    ground truth."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-60", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-60", "A")
+    rs.update_payload("pr-60", {"pr": 60})
+
+    def gh_rebinds(pr):
+        rs.update_payload("pr-60", {"pr": 61})  # concurrent ship-pr backfill wins the race
+        return {"state": "MERGED"}
+
+    marks = []
+    assert rs.reconcile("pr-60", gh_view=gh_rebinds, on_unconfirmed=marks.append) == "open"
+    assert rs.current("pr-60")[1]["state"] == "open" and rs.current("pr-60")[1]["pr"] == 61
+    assert marks  # the intended outcome was never applied -- the pass must not read clean
+
+
+def test_reconcile_concurrent_pass_is_idempotent_not_error(qdir, monkeypatch):
+    """r1 P2: two passes both observe open/MERGED; the loser's replay against the terminal
+    head reports `merged`, never an IllegalTransition ERROR."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-70", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-70", "A")
+    rs.update_payload("pr-70", {"pr": 70})
+
+    def gh_and_sibling_wins(pr):
+        rs.transition("pr-70", "merged", lane_id="A")  # the sibling pass lands first
+        return {"state": "MERGED"}
+
+    marks = []
+    merged = rs.reconcile("pr-70", gh_view=gh_and_sibling_wins, on_unconfirmed=marks.append)
+    assert merged == "merged"
+    assert marks == []  # gate r1: an IDENTICAL terminal outcome is clean -- never UNCONFIRMED
+
+
+def test_reconcile_all_isolates_corrupt_head_read(qdir, monkeypatch):
+    """r1 P2: a symlinked/corrupt reservation dir is isolated in-band; later arcs still
+    reconcile."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-80", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-80", "A")
+    rs.update_payload("pr-80", {"pr": 80})
+    outside = qdir / "outside-root"
+    outside.mkdir()
+    (qdir / "reservations" / "aa-bad").symlink_to(outside)  # sorts before pr-80
+    # r3: a DANGLING symlink must be in-band ERROR too, never silently skipped
+    (qdir / "reservations" / "ab-dangling").symlink_to(qdir / "no-such-target")
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    assert out["aa-bad"].startswith("ERROR") and out["ab-dangling"].startswith("ERROR")
+    assert out["pr-80"] == "merged"
+
+
+def test_stale_open_branches_emit_hil_rows(qdir, monkeypatch):
+    """r2 P3: the open-stuck and open-no-pr aged branches must emit BOTH row kinds --
+    deleting either emission block goes red here, not only in the return-value tests."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, lane, c, d: rows.append((k, c)))
+    rs.reserve("pr-90", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-90", "A")
+    rs.update_payload("pr-90", {"pr": 90})
+    rs.reserve("pr-91", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-91", "A")  # open, pr stays null
+    far = datetime.now(UTC) + timedelta(hours=25)
+    assert rs.reconcile("pr-90", gh_view=lambda pr: {"state": "OPEN"}, now=far) == "open"
+    assert rs.reconcile("pr-91", gh_view=_gh_raises, now=far) == "open"
+    for cause in (
+        "reservation-stale:HITL-recoverable:open_stuck",
+        "reservation-stale:HITL-recoverable:open_no_pr",
+    ):
+        kinds = {k for k, c in rows if c == cause}
+        assert kinds == {"DEFERRED-HIL", "NOTIFY"}, (cause, rows)
+
+
+def test_reconcile_all_isolates_schema_malformed_head(qdir, monkeypatch):
+    """r2 P2: a syntactically-valid but schema-malformed head ({}) isolates in-band."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    bad = qdir / "reservations" / "ab-empty"
+    bad.mkdir(parents=True)
+    (bad / "1.json").write_text("{}")
+    rs.reserve("pr-95", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-95", "A")
+    rs.update_payload("pr-95", {"pr": 95})
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    assert out["ab-empty"].startswith("ERROR") and out["pr-95"] == "merged"
+
+
+def test_cli_reconcile_all_log_to_store_writes_and_refuses_symlink(qdir, monkeypatch, capsys):
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    monkeypatch.setattr(rs, "_gh_view", lambda pr: {"state": "MERGED"})
+    rs.reserve("pr-97", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-97", "A")
+    rs.update_payload("pr-97", {"pr": 97})
+    assert rs.main(["reconcile-all", "--log-to-store"]) == 0
+    log = qdir / "reservations" / ".reconcile.log"
+    entry = json.loads(log.read_text())
+    assert entry["rc"] == 0 and entry["result"] == {"pr-97": "merged"}
+    # planted symlink at the log path (r3): the atomic rename REPLACES the symlink inode;
+    # the target is never truncated and the fresh log is a regular file
+    target = qdir / "victim.txt"
+    target.write_text("precious")
+    log.unlink()
+    log.symlink_to(target)
+    capsys.readouterr()
+    assert rs.main(["reconcile-all", "--log-to-store"]) == 0
+    assert target.read_text() == "precious"
+    assert not log.is_symlink() and json.loads(log.read_text())["rc"] == 0
+    assert not list((qdir / "reservations").glob(".reconcile.log.*.tmp"))  # stager cleaned
+
+
+def test_reconcile_corrupt_state_isolates_in_band(qdir, monkeypatch):
+    """r4 P2: state='bogus' must be an in-band ERROR at reconcile_all, never a clean
+    'open'; a non-dict gh_view payload fails safe like a gh failure."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-99", lane_id="A", branch="b", arc_type="inventing")
+    bad = qdir / "reservations" / "pr-99" / "2.json"
+    head = json.loads((qdir / "reservations" / "pr-99" / "1.json").read_text())
+    head.update(state="bogus", generation=2, prev_generation=1)
+    bad.write_text(json.dumps(head))
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
+    assert out["pr-99"].startswith("ERROR") and "bogus" in out["pr-99"]
+    # non-dict gh payload: fail safe to open -- no crash, no transition, and NO stale rows
+    # whose detail would falsely assert the PR is still OPEN (r5 P2)
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, lane, c, d: rows.append((k, c)))
+    rs.reserve("pr-100", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-100", "A")
+    rs.update_payload("pr-100", {"pr": 100})
+    far = datetime.now(UTC) + timedelta(days=30)
+    assert rs.reconcile("pr-100", gh_view=lambda pr: ["not", "a", "dict"], now=far) == "open"
+    assert rs.current("pr-100")[1]["state"] == "open" and rows == []
+
+
+def test_cli_single_arc_reconcile_malformed_head_aborts(qdir, monkeypatch, capsys):
+    """r5 P3: a schema-malformed head through the single-arc CLI is ABORT/exit-2, never
+    an uncontrolled traceback."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-101", lane_id="A", branch="b", arc_type="inventing")
+    (qdir / "reservations" / "pr-101" / "2.json").write_text(
+        json.dumps({"state": "open", "generation": 2})
+    )
+    assert rs.main(["reconcile", "--arc-id", "pr-101"]) == 2
+    assert "ABORT" in capsys.readouterr().err
+
+
+def test_reconcile_all_marks_unreachable_ground_truth_unconfirmed(qdir, monkeypatch, capsys):
+    """r6 P2: a pass that could not look must never report clean -- UNCONFIRMED value,
+    CLI exit 2 (the gate-cannot-tell-empty-from-unlooked class)."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-110", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-110", "A")
+    rs.update_payload("pr-110", {"pr": 110})
+    out = rs.reconcile_all(gh_view=_gh_raises)
+    assert out["pr-110"].startswith("UNCONFIRMED (open)")
+    assert rs.current("pr-110")[1]["state"] == "open"  # state semantics unchanged
+    monkeypatch.setattr(rs, "_gh_view", _gh_raises)
+    assert rs.main(["reconcile-all"]) == 2
+    capsys.readouterr()
+
+
+def test_hook_activation_gate_names_the_emitters_function(qdir):
+    """r6 P2 sibling: the session-start activation gate greps for EXACTLY the bash function
+    emit_loop_row invokes -- if U-HE-29 lands the writer under any other name, this pins
+    the drift (the gated hook path would otherwise stay silently dormant)."""
+    hook = (Path(__file__).parent / "roadmap-audit" / "session-start.sh").read_text()
+    assert "grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh" in hook
+    src = (Path(__file__).parent / "reservations.py").read_text()
+    assert 'loop_log_structured "$1" "$2" "$3" "$4"' in src
+
+
+def test_cli_single_arc_reconcile_unconfirmed_exits_2(qdir, monkeypatch, capsys):
+    """r7 P2: the single-arc CLI marks unreachable ground truth UNCONFIRMED and exits 2."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    monkeypatch.setattr(rs, "_gh_view", _gh_raises)
+    rs.reserve("pr-120", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-120", "A")
+    rs.update_payload("pr-120", {"pr": 120})
+    assert rs.main(["reconcile", "--arc-id", "pr-120"]) == 2
+    assert "UNCONFIRMED (open)" in capsys.readouterr().out
+    assert rs.current("pr-120")[1]["state"] == "open"
+
+
+def test_reconcile_losing_superseder_race_is_unconfirmed(qdir, monkeypatch):
+    """gate r1 concurrency P1: two racers abandon the same arc with DIFFERENT superseders;
+    the loser must NOT report clean success -- the persisted chain carries the winner's
+    pointer."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-130", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-130", "A")
+    rs.update_payload("pr-130", {"pr": 130})
+    rs.reserve("y1", lane_id="A", branch="b", arc_type="inventing")
+    rs.reserve("y2", lane_id="A", branch="b", arc_type="inventing")
+
+    def gh_and_rival_abandons(pr):
+        rs.transition("pr-130", "abandoned", lane_id="A", superseded_by="y1")  # rival wins
+        return {"state": "CLOSED"}
+
+    marks = []
+    out = rs.reconcile(
+        "pr-130", gh_view=gh_and_rival_abandons, superseded_by="y2", on_unconfirmed=marks.append
+    )
+    assert out == "abandoned"  # reports the CURRENT head truthfully...
+    assert marks  # ...but marked UNCONFIRMED: y2 was never written
+    assert rs.current("pr-130")[1]["superseded_by"] == "y1"
+
+
+def test_pending_aged_emits_durable_hil_row_first(qdir, monkeypatch):
+    """gate r1 witness P3: the emission ORDER is load-bearing (emit fails closed pre-U-HE-29;
+    if NOTIFY went first and raised, the recoverable escalation row would never be attempted)."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, lane, c, d: rows.append(k))
+    rs.reserve("pr-140", lane_id="A", branch="b", arc_type="inventing")
+    later = datetime.now(UTC) + timedelta(hours=25)
+    assert rs.reconcile("pr-140", gh_view=_gh_raises, now=later) == "pending"
+    assert rows == ["DEFERRED-HIL", "NOTIFY"]
+
+
+def test_reconcile_all_isolates_malformed_timestamp(qdir, monkeypatch):
+    """gate r1 witness P3: the ValueError arm of the isolation catch is load-bearing (a
+    hand-corrupted timestamp reaching _aged()'s strptime must isolate in-band)."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    rs.reserve("pr-150", lane_id="A", branch="b", arc_type="inventing")
+    head = json.loads((qdir / "reservations" / "pr-150" / "1.json").read_text())
+    head.update(reserved_at="not-a-timestamp", generation=2, prev_generation=1)
+    (qdir / "reservations" / "pr-150" / "2.json").write_text(json.dumps(head))
+    later = datetime.now(UTC) + timedelta(hours=25)
+    out = rs.reconcile_all(gh_view=lambda pr: {"state": "OPEN"}, now=later)
+    assert out["pr-150"].startswith("ERROR")
+
+
+def test_gc_sweeps_orphaned_root_level_reconcile_stager(qdir, monkeypatch):
+    """gate r1 concurrency P2: an interrupted _write_store_log leaves a root-level stager;
+    gc must sweep it under the same age + pid-liveness rule as per-arc stagers."""
+    root = qdir / "reservations"
+    root.mkdir()
+    orphan = root / ".reconcile.log.12345.abcd1234.tmp"
+    orphan.write_text("{}")
+    old = datetime.now(UTC) - timedelta(hours=2)
+    os.utime(orphan, (old.timestamp(), old.timestamp()))
+    fresh = root / ".reconcile.log.12345.beef5678.tmp"
+    fresh.write_text("{}")  # too young -- must survive
+    monkeypatch.setattr(rs, "_process_is_alive", lambda pid: False)
+    removed = rs.gc()
+    assert orphan in removed and not orphan.exists()
+    assert fresh.exists()

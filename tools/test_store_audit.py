@@ -72,6 +72,7 @@ SOLE = "sole carrier (new fact)"
 FAMILY_RELATION: list[tuple[str, str]] = [
     ("reservations/<arc_id>/<gen>.json", "part of store 2"),
     ("reservations/.seq/<n>", SOLE),
+    ("reservations/.reconcile.log", SOLE),
     ("transition.<lease_token>", SOLE),
     ("LEASE.<token>.<suffix>", "part of store 3"),
     ("released.<token>", "part of store 3"),
@@ -89,6 +90,7 @@ FAMILY_RELATION: list[tuple[str, str]] = [
 #: reworded/nonsense cell cannot pass on quoting + uniqueness alone.
 SOLE_FACTS: list[tuple[str, str]] = [
     ("reservations/.seq/<n>", "highest `seq`"),
+    ("reservations/.reconcile.log", "what the last `reconcile_all` pass observed"),
     ("transition.<lease_token>", "who won the transition"),
     ("attempts/<lane_id>", "attempts"),
     ("tier-clean-cycles", "clean cycles"),

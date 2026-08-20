@@ -340,6 +340,7 @@ def transition(
     lane_id: str,
     updates: dict | None = None,
     superseded_by: str | None = None,
+    expect: dict | None = None,
 ) -> dict:
     _check_id("lane_id", lane_id)
     if to_state == "abandoned" and not superseded_by:
@@ -366,6 +367,17 @@ def transition(
                 f"{arc_id}: {head['state']}->{to_state} is illegal from head gen "
                 f"{head['generation']}"
             )
+        if expect:
+            # Bind the transition to the head the caller's decision was made against
+            # (codex U-HE-18 r1 P1): a reconcile that confirmed PR N merged must not
+            # terminalize a head whose `pr` was concurrently re-bound to N+1. Validated
+            # INSIDE the CAS build so a lost race re-validates against the new head.
+            for k, v in expect.items():
+                if head.get(k) != v:
+                    raise IllegalTransition(
+                        f"{arc_id}: {k} changed since the ground-truth check "
+                        f"({head.get(k)!r} != {v!r}); re-reconcile against the new head"
+                    )
         if head["state"] == "open" and head["lane_id"] != lane_id:
             # holder-only: an `open` reservation is terminalized only by the lane that holds
             # it (C-HE-03 §6; Codex round-3 P1). pending->abandoned by a superseding arc has
@@ -618,9 +630,15 @@ def sibling_open_count(exclude_arc_id: str) -> int:
     for d in root.iterdir():
         if d.name.startswith(".") or d.name == exclude_arc_id:
             continue
-        cur = current(d.name)
-        if cur and cur[1]["state"] == "open":
-            n += 1
+        try:
+            cur = current(d.name)
+            if cur and cur[1]["state"] == "open":
+                n += 1
+        except (ReservationError, OSError, ValueError, KeyError, TypeError):
+            # Best-effort snapshot (C-HE-03 §7, `derived`, codex r2 P2 sibling): a corrupt
+            # or symlinked sibling is not countable and must not crash the pending->open
+            # flip it decorates.
+            continue
     return n
 
 
@@ -654,6 +672,20 @@ def gc(*, now: datetime | None = None) -> list[Path]:
     if not root.is_dir():
         return removed
     resolved_root = root.resolve()
+    # Root-level reconcile-log stagers (.reconcile.log.<pid>.<hex>.tmp) are invisible to
+    # the per-arc sweep below (dot-prefixed root entries are skipped there) -- sweep them
+    # here under the same age + pid-liveness rule (gate r1 concurrency P2: the detached
+    # session-start writer makes an interrupted create->rename window realistic).
+    for tmp in root.glob(".reconcile.log.*.tmp"):
+        parts = tmp.name.split(".")
+        pid = int(parts[-3]) if len(parts) >= 5 and parts[-3].isdigit() else None
+        try:
+            old = datetime.fromtimestamp(tmp.stat().st_mtime, UTC) < now - timedelta(hours=1)
+            if old and (pid is None or not _process_is_alive(pid)):
+                tmp.unlink()
+                removed.append(tmp)
+        except FileNotFoundError:
+            continue
     for d in root.iterdir():
         if not d.is_dir() or d.name.startswith("."):
             continue
@@ -733,6 +765,258 @@ def emit_loop_row(kind: str, lane_id: str, cause: str, detail: str) -> None:
         )
 
 
+def open_with_sensor(arc_id: str, lane_id: str) -> dict:
+    """pending -> open at drain start, recording the best-effort sibling-open snapshot
+    (C-HE-03 §7: `derived`, never `declared` -- D7/M8)."""
+    n = sibling_open_count(arc_id)
+    return transition(arc_id, "open", lane_id=lane_id, updates={"concurrent_lanes_at_open": n})
+
+
+def _aged(ts: str, now: datetime) -> bool:
+    dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    return (now - dt).total_seconds() > STALE_AFTER_S
+
+
+def _gh_view(pr: int) -> dict:
+    """`gh pr view`-backed ground truth (C-HE-03 §5), bounded 30 s. ANY failure raises;
+    reconcile() catches it and fails safe to "still open, not reclaimable"."""
+    proc = subprocess.run(
+        ["gh", "pr", "view", str(pr), "--json", "state,mergedAt"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise ReservationError(f"gh pr view {pr} failed: {proc.stderr.strip()}")
+    return json.loads(proc.stdout)
+
+
+def reconcile(
+    arc_id: str,
+    *,
+    gh_view: Callable[[int], dict],
+    superseded_by: str | None = None,
+    now: datetime | None = None,
+    on_unconfirmed: Callable[[str], None] | None = None,
+) -> str:
+    """Staleness by GROUND TRUTH -- HITL, never TTL (C-HE-03 §5, C-HE-20, D8). Returns the
+    head state after the pass; a stuck/aged head emits NOTIFY + DEFERRED-HIL (C-HE-20 §1)
+    and stays UNCHANGED -- `pending`/`open` leave only by operator RESOLVED-HIL, a
+    superseding arc (`superseded_by`), or confirmed ground truth."""
+    now = now or datetime.now(UTC)
+    cur = current(arc_id)
+    if cur is None:
+        raise ReservationError(f"{arc_id}: no reservation")
+    head = cur[1]
+    lane = head["lane_id"]
+    if head["state"] not in STATES:
+        # A semantically corrupt head must isolate in-band at reconcile_all, never fall
+        # through to the open branch as a clean "open"/rc 0 (codex r4 P2).
+        raise ReservationError(f"{arc_id}: corrupt head state {head['state']!r}")
+    if head["state"] in TERMINAL:
+        return head["state"]
+    if head["state"] == "pending":
+        if _aged(head["reserved_at"], now):
+            # Durable HITL row FIRST (C-HE-20 §1): emit_loop_row fails closed, so if the
+            # informational NOTIFY went first and raised, the recoverable escalation row
+            # would never be attempted (codex U-HE-18 r1 P2).
+            emit_loop_row(
+                "DEFERRED-HIL",
+                lane,
+                "reservation-stale:HITL-recoverable:pending_aged",
+                f"{arc_id} -- aged pending reservation needs operator disposition "
+                f"(RESOLVED-HIL or superseding arc)",
+            )
+            emit_loop_row(
+                "NOTIFY",
+                lane,
+                "reservation-stale:HITL-recoverable:pending_aged",
+                f"{arc_id} pending > 24h; state unchanged",
+            )
+        return "pending"
+    # open
+    if head["pr"] is None:
+        if _aged(head["transitioned_at"], now):
+            emit_loop_row(
+                "DEFERRED-HIL",
+                lane,
+                "reservation-stale:HITL-recoverable:open_no_pr",
+                f"{arc_id} -- open reservation with no PR needs operator disposition",
+            )
+            emit_loop_row(
+                "NOTIFY",
+                lane,
+                "reservation-stale:HITL-recoverable:open_no_pr",
+                f"{arc_id} open > 24h with no PR; state unchanged",
+            )
+        return "open"
+    if isinstance(head["pr"], bool) or not isinstance(head["pr"], int):
+        # The write funnel (_check_updates) enforces pr: int|null; a head that carries any
+        # other type is hand-corrupted store state (codex r10 P2) -- in-band, never coerced
+        # into a live gh lookup and a terminalization that retains the malformed payload.
+        raise ReservationError(f"{arc_id}: corrupt head pr {head['pr']!r} (int|null required)")
+    try:
+        view = gh_view(head["pr"])
+        # Shape-validate INSIDE the protected boundary (codex r4 P2): a non-object or
+        # unknown-state response is the same not-confirmed ground truth as a gh failure.
+        state = view.get("state") if isinstance(view, dict) else None
+        if state not in ("MERGED", "CLOSED", "OPEN"):
+            # Unrecognized shape/state is NOT confirmation the PR is still OPEN: return
+            # through the same fail-safe as a gh failure -- no transition AND no aged
+            # open-stuck rows whose detail would falsely assert "still OPEN" (codex r5 P2).
+            msg = f"unrecognized gh view for {arc_id}: {view!r}; still open, not reclaimable"
+            print(f"reservations: {msg}", file=sys.stderr)
+            if on_unconfirmed is not None:
+                on_unconfirmed(msg)
+            return "open"
+    except Exception as exc:  # ANY gh failure fails safe (C-HE-03 §5)
+        msg = f"gh transient for {arc_id}: {exc}; still open, not reclaimable"
+        print(f"reservations: {msg}", file=sys.stderr)
+        if on_unconfirmed is not None:
+            # "couldn't look" must never report as a clean pass (codex r6 P2): the state
+            # stays open (fail-safe), but the caller's summary marks it UNCONFIRMED.
+            on_unconfirmed(msg)
+        return "open"
+    if state in ("MERGED", "CLOSED") and (state == "MERGED" or superseded_by):
+        to_state = "merged" if state == "MERGED" else "abandoned"
+        try:
+            transition(
+                arc_id,
+                to_state,
+                lane_id=lane,
+                superseded_by=superseded_by if to_state == "abandoned" else None,
+                expect={"pr": head["pr"]},
+            )
+        except IllegalTransition as exc:
+            # Lost a race since the ground-truth check (codex r1 P1/P2, classified r9 P2):
+            # only the IDENTICAL terminal outcome is clean idempotency. A different
+            # terminal state, or a live head whose pr/holder moved, reports the CURRENT
+            # head but marks the pass UNCONFIRMED -- this arc's intended outcome was
+            # never applied, so the pass must not read clean (the next pass re-checks).
+            cur2 = current(arc_id)
+            head2 = cur2[1] if cur2 else None
+            same_outcome = (
+                head2 is not None
+                and head2["state"] == to_state
+                # For an abandonment the supersession POINTER is part of the outcome
+                # (gate r1 concurrency P1): a loser whose superseded_by differs from
+                # the winner's must not report clean success -- the persisted chain
+                # carries the winner's pointer, not this caller's.
+                and (to_state != "abandoned" or head2.get("superseded_by") == superseded_by)
+            )
+            if same_outcome:
+                return to_state
+            msg = f"transition race for {arc_id}: {exc}"
+            print(f"reservations: {msg}", file=sys.stderr)
+            if on_unconfirmed is not None:
+                on_unconfirmed(msg)
+            if head2 is not None and head2["state"] in TERMINAL:
+                return head2["state"]
+            return "open"
+        return to_state
+    if state == "CLOSED":
+        emit_loop_row(
+            "DEFERRED-HIL",
+            lane,
+            "reservation-stale:HITL-recoverable:closed_no_pointer",
+            f"{arc_id} -- PR #{head['pr']} CLOSED without a superseding pointer; "
+            f"confirm abandonment",
+        )
+        return "open"
+    if _aged(head["transitioned_at"], now):
+        emit_loop_row(
+            "DEFERRED-HIL",
+            lane,
+            "reservation-stale:HITL-recoverable:open_stuck",
+            f"{arc_id} -- stuck open reservation; operator disposition needed",
+        )
+        emit_loop_row(
+            "NOTIFY",
+            lane,
+            "reservation-stale:HITL-recoverable:open_stuck",
+            f"{arc_id} open > 24h, PR #{head['pr']} still OPEN; state unchanged",
+        )
+    return "open"
+
+
+def reconcile_all(
+    *, gh_view: Callable[[int], dict] | None = None, now: datetime | None = None
+) -> dict[str, str]:
+    """One ground-truth pass over every non-terminal reservation (session start + the merge
+    lane). Per-arc fault isolation (C-HE-04 §3 analog): one arc's failure -- e.g. the
+    fail-closed emit_loop_row before U-HE-29 lands `loop_log_structured` -- must not abandon
+    the remaining pass; it lands in-band as an `ERROR: ...` value and the CLI exits 2."""
+    view = gh_view or _gh_view
+    out: dict[str, str] = {}
+    root = reservations_root()
+    if root.exists() and not root.is_dir():
+        # A regular file where the authoritative store dir belongs is corruption, not an
+        # absent store (codex r9 P2): only a genuinely absent path reads clean.
+        raise ReservationError(f"{root}: reservations root exists but is not a directory")
+    if not root.is_dir():
+        return out
+    for d in sorted(root.iterdir()):
+        if d.name.startswith("."):
+            continue
+        try:
+            if d.is_symlink():
+                # In-band, never silently skipped (codex r3 P2): a dangling or
+                # non-directory symlink is the same planted-link class _dir refuses.
+                raise ReservationError(f"{d.name}: reservation path is a symlink -- refused")
+            if not d.is_dir():
+                # Valid arc records are directories; infrastructure is dot-prefixed. A
+                # stray non-dot regular file is malformed authoritative state (codex r9
+                # P2) -- in-band, never a silent skip.
+                raise ReservationError(
+                    f"{d.name}: not a reservation directory -- malformed store entry"
+                )
+            # The head read is inside the guarded region too (codex U-HE-18 r1 P2): one
+            # symlinked/corrupt reservation must not abort the pass before later arcs.
+            cur = current(d.name)
+            if cur is None or cur[1]["state"] in TERMINAL:
+                continue
+            marks: list[str] = []
+            state = reconcile(d.name, gh_view=view, now=now, on_unconfirmed=marks.append)
+            # An unreachable/unrecognizable ground truth is NOT a clean result (codex r6
+            # P2): the pass summary carries UNCONFIRMED and the CLI exits 2, so the
+            # surfaced log can never report "all clean" for a pass that could not look.
+            out[d.name] = f"UNCONFIRMED ({state}): {marks[0]}" if marks else state
+        except (ReservationError, OSError, ValueError, KeyError, TypeError) as exc:
+            # KeyError/TypeError: a syntactically-valid but schema-malformed head ({} or a
+            # non-object) must isolate like any other corrupt reservation (codex r2 P2).
+            out[d.name] = f"ERROR: {exc!r}"
+    return out
+
+
+def _write_store_log(result: dict[str, str], rc: int) -> None:
+    """Record the pass at <reservations_root>/.reconcile.log -- the durable venue the NEXT
+    session-start surfaces until U-HE-29 lands the loop-ledger emitter (codex r2 P2). The
+    write is store-owned and O_NOFOLLOW (codex r2 P1): reservations_root() refuses a
+    symlinked store, and a planted symlink at the log path itself raises instead of
+    truncating an arbitrary file. Overwrite-in-place: one file, last pass wins."""
+    root = reservations_root()
+    path = root / ".reconcile.log"
+    tmp = root / f".reconcile.log.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+    payload = json.dumps({"ts": now_iso(), "rc": rc, "result": result}, sort_keys=True) + "\n"
+    # Exclusive-create stager + atomic os.rename (codex r3 P2 x2): rename never follows a
+    # final-component symlink, so a planted `.reconcile.log` symlink is REPLACED by the
+    # real file (its target untouched), and two concurrent passes each land a complete
+    # payload -- last rename wins, no interleaved truncation.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+        os.rename(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="reservations", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -771,6 +1055,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("gc")
     ml = sub.add_parser("mint-lane-id")
     ml.add_argument("--worktree", default=".")
+    rc = sub.add_parser("reconcile")
+    rc.add_argument("--arc-id", required=True)
+    rc.add_argument("--superseded-by")
+    ra = sub.add_parser("reconcile-all")
+    ra.add_argument("--log-to-store", action="store_true")
     args = p.parse_args(argv)
 
     def coerce(v: str):
@@ -822,13 +1111,42 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if selectable(args.arc_id) else 1
         elif args.cmd == "gc":
             out = [str(x) for x in gc()]
+        elif args.cmd == "reconcile":
+            marks: list[str] = []
+            state = reconcile(
+                args.arc_id,
+                gh_view=_gh_view,
+                superseded_by=args.superseded_by,
+                on_unconfirmed=marks.append,
+            )
+            # Same contract as reconcile-all (codex r7 P2): automation must be able to
+            # distinguish confirmed ground truth (exit 0) from a pass that never obtained
+            # it (UNCONFIRMED, exit 2).
+            out = f"UNCONFIRMED ({state}): {marks[0]}" if marks else state
+            print(json.dumps(out, sort_keys=True))
+            return 2 if marks else 0
+        elif args.cmd == "reconcile-all":
+            out = reconcile_all()
+            rc_all = 2 if any(v.startswith(("ERROR", "UNCONFIRMED")) for v in out.values()) else 0
+            if args.log_to_store:
+                try:
+                    _write_store_log(out, rc_all)
+                except OSError as exc:
+                    # a refused/failed store log is a LOST durable signal pre-U-HE-29:
+                    # loud + nonzero, never silent (codex r2 P1).
+                    print(f"ABORT: store log not written: {exc}", file=sys.stderr)
+                    rc_all = 2
+            print(json.dumps(out, sort_keys=True))
+            return rc_all
         else:
             print(mint_lane_id(Path(args.worktree).resolve()))
             return 0
         print(json.dumps(out, sort_keys=True))
         return 0
-    except ReservationError as exc:
-        print(f"ABORT: {exc}", file=sys.stderr)
+    except (ReservationError, OSError, ValueError, KeyError, TypeError) as exc:
+        # Same isolation classes as reconcile_all (codex r5 P3): a schema-malformed head
+        # reached through ANY subcommand is a fail-closed ABORT/exit-2, never a traceback.
+        print(f"ABORT: {exc!r}", file=sys.stderr)
         return 2
 
 
