@@ -389,9 +389,18 @@ def env_arc_and_lane() -> tuple[str, str]:
     lane_id = os.environ.get("HARNESS_LANE_ID") or (
         f"{socket.gethostname().split('.')[0]}-{Path.cwd().name}-nolane"
     )
+
     # '/' would make the fallback id unreservable (reservations arc_ids are single path
-    # components), silently skipping every C-HE-25 outcome persist (codex r19 P2)
-    return arc_id.replace(":", "_").replace("/", "-"), lane_id.replace(":", "_").replace("/", "-")
+    # components), silently skipping every C-HE-25 outcome persist (codex r19 P2). The
+    # slug alone is lossy (feat/x and feat-x collide), so an 6-hex digest of the RAW id
+    # keeps the fallback injective (codex r20 P2).
+    def _safe(raw: str) -> str:
+        safe = raw.replace(":", "_")  # pre-existing ':' mapping (row-format delimiter)
+        if "/" in safe:
+            safe = f"{safe.replace('/', '-')}-{hashlib.sha256(raw.encode()).hexdigest()[:6]}"
+        return safe
+
+    return _safe(arc_id), _safe(lane_id)
 
 
 def record_round_outcome_if_reserved(

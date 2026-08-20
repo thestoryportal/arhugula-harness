@@ -657,6 +657,18 @@ def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
     fr.validate(rows[0])
 
 
+def test_fallback_arc_id_is_reservable_and_injective(monkeypatch):
+    """codex r19/r20 P2: the branch-derived fallback arc id must be a single reservable
+    path component AND injective -- feat/x and feat-x must not collapse to one arc."""
+    monkeypatch.delenv("HARNESS_ARC_ID", raising=False)
+    monkeypatch.setattr(rw, "_git", lambda cwd, *a: "feat/he-lanes-s4b-u-he-17")
+    a1, _ = rw.env_arc_and_lane()
+    assert "/" not in a1 and ":" not in a1
+    monkeypatch.setattr(rw, "_git", lambda cwd, *a: "feat-he-lanes-s4b-u-he-17")
+    a2, _ = rw.env_arc_and_lane()
+    assert a1 != a2  # injective: the digest suffix separates slug collisions
+
+
 def test_gate_lens_rounds_stay_producer_scoped(tmp_path, monkeypatch):
     """codex r19: one merge-gate pass emits three lenses sequentially with round_n=None --
     each lens is its own producer, so all three must land at the SAME round number."""
