@@ -283,6 +283,11 @@ def test_ac2_a_same_instant(lanes, interleaving):
         (q / "pr-1.taken").write_text(json.dumps(d))
         # same-instant leg: both lanes judge the same dead .taken recoverable
         pa, pb = _spawn(a, q, "lane-a", barrier), _spawn(b, q, "lane-b", barrier)
+        # the named in-test reuse window (codex U-HE-20 r6 P3): neither racing lane may
+        # have been allocated the dead pid -- kernels allocate sequentially, so with
+        # this closed the residual external-reuse window is production's own (D2: the
+        # claim is seconds-scale liveness, re-adjudicated per pass).
+        assert reaped.pid not in (pa.pid, pb.pid), "dead pid reused by a racing lane"
         _release(barrier, "lane-a", "lane-b")
         _finish(pa), _finish(pb)
         res = _show(q)
