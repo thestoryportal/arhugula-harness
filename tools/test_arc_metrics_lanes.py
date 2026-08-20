@@ -210,9 +210,6 @@ def lanes(tmp_path, monkeypatch):
     return q, a, b, tmp_path
 
 
-# mutation-probe(tools/arc_metrics.py): comment out the re-publish fallback -> (iii) red
-# mutation-probe(tools/arc_metrics.py): comment out the transfer_holder call -> (ii) red
-# mutation-probe(tools/arc_metrics.py): comment out the open-held-by-other elif -> (v) red
 @pytest.mark.parametrize(
     "interleaving",
     [
@@ -224,6 +221,7 @@ def lanes(tmp_path, monkeypatch):
         "vi-killed-after-append",
     ],
 )
+# mutation-probe(tools/arc_metrics.py): republish/transfer/open-held-elif pins at (iii)/(ii)/(v)
 def test_ac2_a_same_instant(lanes, interleaving):
     q, a, b, root = lanes
     hold = root / "hold"
