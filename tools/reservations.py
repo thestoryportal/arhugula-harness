@@ -902,9 +902,15 @@ def reconcile_all(
     if not root.is_dir():
         return out
     for d in sorted(root.iterdir()):
-        if d.name.startswith(".") or not d.is_dir():
+        if d.name.startswith("."):
             continue
         try:
+            if d.is_symlink():
+                # In-band, never silently skipped (codex r3 P2): a dangling or
+                # non-directory symlink is the same planted-link class _dir refuses.
+                raise ReservationError(f"{d.name}: reservation path is a symlink -- refused")
+            if not d.is_dir():
+                continue
             # The head read is inside the guarded region too (codex U-HE-18 r1 P2): one
             # symlinked/corrupt reservation must not abort the pass before later arcs.
             cur = current(d.name)
@@ -924,11 +930,25 @@ def _write_store_log(result: dict[str, str], rc: int) -> None:
     write is store-owned and O_NOFOLLOW (codex r2 P1): reservations_root() refuses a
     symlinked store, and a planted symlink at the log path itself raises instead of
     truncating an arbitrary file. Overwrite-in-place: one file, last pass wins."""
-    path = reservations_root() / ".reconcile.log"
+    root = reservations_root()
+    path = root / ".reconcile.log"
+    tmp = root / f".reconcile.log.{os.getpid()}.tmp"
     payload = json.dumps({"ts": now_iso(), "rc": rc, "result": result}, sort_keys=True) + "\n"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(payload)
+    # Exclusive-create stager + atomic os.rename (codex r3 P2 x2): rename never follows a
+    # final-component symlink, so a planted `.reconcile.log` symlink is REPLACED by the
+    # real file (its target untouched), and two concurrent passes each land a complete
+    # payload -- last rename wins, no interleaved truncation.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(payload)
+        os.rename(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:

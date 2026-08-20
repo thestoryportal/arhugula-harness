@@ -818,8 +818,11 @@ def test_reconcile_all_isolates_corrupt_head_read(qdir, monkeypatch):
     outside = qdir / "outside-root"
     outside.mkdir()
     (qdir / "reservations" / "aa-bad").symlink_to(outside)  # sorts before pr-80
+    # r3: a DANGLING symlink must be in-band ERROR too, never silently skipped
+    (qdir / "reservations" / "ab-dangling").symlink_to(qdir / "no-such-target")
     out = rs.reconcile_all(gh_view=lambda pr: {"state": "MERGED"})
-    assert out["aa-bad"].startswith("ERROR") and out["pr-80"] == "merged"
+    assert out["aa-bad"].startswith("ERROR") and out["ab-dangling"].startswith("ERROR")
+    assert out["pr-80"] == "merged"
 
 
 def test_stale_open_branches_emit_hil_rows(qdir, monkeypatch):
@@ -866,11 +869,14 @@ def test_cli_reconcile_all_log_to_store_writes_and_refuses_symlink(qdir, monkeyp
     log = qdir / "reservations" / ".reconcile.log"
     entry = json.loads(log.read_text())
     assert entry["rc"] == 0 and entry["result"] == {"pr-97": "merged"}
-    # planted symlink at the log path: O_NOFOLLOW refuses; the target is never truncated
+    # planted symlink at the log path (r3): the atomic rename REPLACES the symlink inode;
+    # the target is never truncated and the fresh log is a regular file
     target = qdir / "victim.txt"
     target.write_text("precious")
     log.unlink()
     log.symlink_to(target)
     capsys.readouterr()
-    assert rs.main(["reconcile-all", "--log-to-store"]) == 2
+    assert rs.main(["reconcile-all", "--log-to-store"]) == 0
     assert target.read_text() == "precious"
+    assert not log.is_symlink() and json.loads(log.read_text())["rc"] == 0
+    assert not list((qdir / "reservations").glob(".reconcile.log.*.tmp"))  # stager cleaned
