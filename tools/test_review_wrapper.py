@@ -657,23 +657,23 @@ def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
     fr.validate(rows[0])
 
 
-def test_round_scope_mints_fresh_for_every_producer(tmp_path, monkeypatch):
-    """codex round-16 P1: the failover-chain round is minted INSIDE the log-lock critical
-    section, fresh for every producer in scope — a prior gemini round 3 forces the chained
-    codex primary to round 4, so neither leg can duplicate its own channel's history."""
+def test_round_mint_is_arc_global(tmp_path, monkeypatch):
+    """codex rounds 16/18: rounds are ARC-level events (C-HE-25) minted inside the log-lock
+    critical section over EVERY producer's rows — a prior gemini round 3 forces the next
+    codex mint to round 4, so a forced chain round can never be duplicated by an independent
+    invocation minting after the primary's row lands."""
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
     seeded = rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout")
     rw.emit_outcome(seeded, producer=cr.GEMINI_PRODUCER, arc_id="a1", lane_id="l", round_n=3)
     primary = rw.ReviewOutcome("REVIEWER_UNAVAILABLE", "codex", "transient", "r", [], EXPECTED)
-    written = rw.emit_outcome(
-        primary,
-        producer=cr.PRODUCER,
-        arc_id="a1",
-        lane_id="l",
-        round_n=None,
-        round_scope=(cr.PRODUCER, cr.GEMINI_PRODUCER),
-    )
+    written = rw.emit_outcome(primary, producer=cr.PRODUCER, arc_id="a1", lane_id="l", round_n=None)
     assert written[0]["round_n"] == 4
+    # an independent gemini mint after the chain's primary row lands can never reuse 4
+    indep = rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout")
+    later = rw.emit_outcome(
+        indep, producer=cr.GEMINI_PRODUCER, arc_id="a1", lane_id="l", round_n=None
+    )
+    assert later[0]["round_n"] == 5
 
 
 def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
@@ -1107,6 +1107,11 @@ def test_failover_child_env_set_and_parent_records_reservation_outcome(monkeypat
     assert out.terminal == "REVIEWER_UNAVAILABLE"
     outcomes = real_rs.current(arc_id)[1]["round_outcomes"]
     assert outcomes["3/gemini"]["terminal"] == "REVIEWER_UNAVAILABLE"
+    # codex r18 P2: the PARENT also emitted its own gate row for the rejected-envelope
+    # terminal the caller acts on -- the join to the gate log holds
+    rows = fr.read_rows(tmp_path / "g.jsonl")
+    parent_rows = [r for r in rows if r["producer"] == cr.GEMINI_PRODUCER and r["round_n"] == 3]
+    assert parent_rows and parent_rows[0]["record_kind"] == "reviewer_unavailable"
 
 
 def test_failover_without_envelope_is_recorded_here_once(monkeypatch, tmp_path):
@@ -1383,15 +1388,18 @@ def test_bound_block_already_on_stdout_when_our_cap_kills_still_blocks(tmp_path,
     assert out.terminal == "BLOCK" and len(out.findings) == 1
 
 
-def test_round_n_is_env_or_next_for_this_arc_and_producer(monkeypatch):
+def test_round_n_is_env_or_next_for_this_arc(monkeypatch):
+    """Rounds are ARC-GLOBAL (codex rounds 16/18, U-HE-17): the mint is max over EVERY
+    producer's rows for the arc, so a forced failover-chain round can never be duplicated
+    by an independent producer's own mint."""
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
     rows = [
         {"arc_id": "a", "producer": "p", "round_n": 2},
         {"arc_id": "a", "producer": "q", "round_n": 9},
         {"arc_id": "b", "producer": "p", "round_n": 7},
     ]
-    assert rw.round_n_for("a", "p", rows) == 3
-    assert rw.round_n_for("a", "zzz", rows) == 1
+    assert rw.round_n_for("a", "p", rows) == 10  # arc-global: q's round 9 counts
+    assert rw.round_n_for("a", "zzz", rows) == 10
     assert rw.round_n_for("new", "p", []) == 1
     monkeypatch.setenv("HARNESS_ROUND_N", "5")
     assert rw.round_n_for("a", "p", rows) == 5

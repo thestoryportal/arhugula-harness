@@ -357,18 +357,23 @@ def exit_code(outcome: ReviewOutcome) -> int:
 
 
 def round_n_for(arc_id: str, producer: str, rows: list[dict] | None = None) -> int:
-    """`HARNESS_ROUND_N` when the loop sets it; otherwise the next round for this (arc, producer)
-    derived from the gate log (codex round 6: without this every invocation was round 0 and
-    distinct review heads collapsed into one round)."""
+    """`HARNESS_ROUND_N` when the loop sets it; otherwise the next round for this ARC --
+    max over EVERY producer's rows (codex round 6 introduced per-(arc, producer) scoping so
+    distinct review heads stopped collapsing into one round; U-HE-17 merge-gate widened it
+    to arc-global: a round is an ARC-level event per C-HE-25, and per-producer sequences
+    let a D-C failover's two legs collide with unrelated same-number rounds -- with an
+    arc-global mint, the chain child forced to the primary's N can never be duplicated by
+    an independent invocation, whose own mint always sees the primary's row and lands at
+    N+1 or later). `producer` is retained for signature compatibility; it no longer scopes
+    the mint."""
     env = os.environ.get("HARNESS_ROUND_N")
     if env is not None:
         return int(env)
+    del producer  # arc-global (see docstring)
     prior = [
         r["round_n"]
         for r in (rows if rows is not None else fr.read_rows())
-        if r.get("arc_id") == arc_id
-        and r.get("producer") == producer
-        and r.get("round_n") is not None
+        if r.get("arc_id") == arc_id and r.get("round_n") is not None
     ]
     return max(prior, default=0) + 1
 
@@ -501,7 +506,6 @@ def emit_outcome(
     arc_id: str,
     lane_id: str,
     round_n: int | None,
-    round_scope: tuple[str, ...] | None = None,
     path: Path | None = None,
 ) -> list[dict]:
     """Append every observation of `outcome` to the gate log in ONE critical section: when
@@ -512,12 +516,10 @@ def emit_outcome(
     part of the contract (C-HE-18 §3), so a failed write must not be silent."""
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
-        # `round_scope` mints a round fresh for EVERY listed producer -- the failover-chain
-        # allocation -- INSIDE this critical section, so two concurrent invocations cannot
-        # select the same chain round (codex round-16 P1; a pre-lock max() held across a
-        # 1200 s review was racy).
-        scope = round_scope or (producer,)
-        n = round_n if round_n is not None else max(round_n_for(arc_id, s, rows) for s in scope)
+        # arc-global mint INSIDE this critical section (codex round-16 P1: a pre-lock max()
+        # held across a 1200 s review was racy; round-18 P2: arc-global numbering makes a
+        # forced chain round un-duplicable by independent invocations, see round_n_for)
+        n = round_n if round_n is not None else round_n_for(arc_id, producer, rows)
         pairs = []
         for obs in outcome_rows(
             outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=n

@@ -361,6 +361,12 @@ def test_fold_round_outcomes_projects_to_c_he_25_shape(qdir):
     # deciding leg first, unavailable leg second: same result (order-independent)
     reordered = {k: failover[k] for k in ("1/gemini", "1/codex", "2/gemini")}
     assert rs.fold_round_outcomes(reordered) == folded
+    # both legs unavailable: the failover (later-written) leg is the round's decider
+    both_unavail = {
+        "1/codex": {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0},
+        "1/gemini": {"channel": "gemini", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0},
+    }
+    assert rs.fold_round_outcomes(both_unavail)["1"]["channel"] == "gemini"
     with pytest.raises(rs.ReservationError, match="two decided legs"):
         rs.fold_round_outcomes(
             {

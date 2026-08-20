@@ -586,6 +586,11 @@ def fold_round_outcomes(outcomes: dict) -> dict:
         ):
             folded[n] = dict(row)
         elif row["terminal"] == "REVIEWER_UNAVAILABLE":
+            if prior["terminal"] == "REVIEWER_UNAVAILABLE":
+                # both legs unavailable: the FAILOVER leg (written later; dict order is
+                # insertion order through the JSON round-trip) is the round's deciding
+                # gate (C-HE-17), so its channel attribution stands (codex r18 P3)
+                folded[n] = dict(row)
             continue
         else:
             raise ReservationError(
