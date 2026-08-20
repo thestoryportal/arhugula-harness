@@ -2627,3 +2627,19 @@ def test_swept_leftover_claim_still_transfers_the_dead_holders_reservation(
     assert not (q / "pr-55.taken").exists(), "the dead leftover claim was swept"
     assert (q / "pr-55.json").exists(), "the restored entry untouched"
     assert rs.holder("pr-55") == "B", "the dead holder's reservation transferred"
+
+
+def test_reconciliation_stops_when_committed_history_is_unreadable(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r21 P2: unknown committed history must reconcile NOTHING -- an
+    unreadable MERGED_REF would misclassify committed baseline rows as droppable."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    ledger.write_text(json.dumps({"arc_id": "pr-88", "record_kind": "arc"}) + "\n")
+    rs.reserve("pr-88", lane_id="B", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-88", "B")  # would be dropped if reconciliation ran
+    monkeypatch.setattr(am, "_committed_ledger_lines", lambda: None)
+    am._reconcile_local_rows()
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-88"], (
+        "nothing reconciled while history is unknown"
+    )

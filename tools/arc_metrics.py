@@ -1525,8 +1525,20 @@ def _reconcile_local_rows() -> None:
         rows = read_ledger()
         if not rows:
             return
-        committed = committed_arc_ids()
         committed_lines = _committed_ledger_lines()
+        if committed_lines is None:
+            # Tri-state stop (codex r21 P2): committed_arc_ids()'s empty set cannot
+            # tell "no committed rows" from "git show failed", and an unreadable
+            # MERGED_REF would misclassify committed baseline rows as uncommitted --
+            # droppable. When committed history is UNKNOWN, reconcile NOTHING.
+            print("  local-row reconciliation skipped: committed history unreadable")
+            return
+        committed = set()
+        for cl in committed_lines:
+            try:
+                committed.add(json.loads(cl).get("arc_id"))
+            except json.JSONDecodeError:
+                continue
         keep, dropped = [], []
         replaced: set[str] = set()
         for r in rows:
