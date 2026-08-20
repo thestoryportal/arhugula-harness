@@ -1546,23 +1546,84 @@ def test_one_invalid_json_entry_does_not_abandon_the_rest(tmp_path, monkeypatch,
     assert "needs human repair" in err
 
 
+def _queue_args(arc_id):
+    return argparse.Namespace(
+        pr=1,
+        arc_id=arc_id,
+        arc_type="inventing",
+        decisions=1,
+        round_logs=None,
+        levers=None,
+        notes="",
+    )
+
+
 def test_arc_id_length_capped_for_recovery_suffix_budget(tmp_path, monkeypatch):
-    """An arc_id accepted at queue time must survive recovery's host+pid suffix."""
+    """An arc_id accepted at queue time must survive recovery's host+pid suffix --
+    measured in BYTES (multi-byte UTF-8 counts), not characters."""
     q = tmp_path / "queue"
     q.mkdir()
     monkeypatch.setattr(am, "QUEUE_DIR", q)
     with pytest.raises(am.AbortError, match="too long"):
-        am.queue_capture(
-            argparse.Namespace(
-                pr=1,
-                arc_id="x" * 121,
-                arc_type="inventing",
-                decisions=1,
-                round_logs=None,
-                levers=None,
-                notes="",
-            )
-        )
+        am.queue_capture(_queue_args("x" * 300))
+    with pytest.raises(am.AbortError, match="too long"):
+        am.queue_capture(_queue_args("\u00e9" * 130))  # 260 bytes in 130 chars
+
+
+def test_arc_id_rejects_the_reserved_taken_namespace(tmp_path, monkeypatch):
+    """'.taken' inside an arc_id would collide with / misparse claim + recovery names."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    with pytest.raises(am.AbortError, match="reserved"):
+        am.queue_capture(_queue_args("a.taken.recover.b"))
+
+
+def test_capture_at_risk_reported_when_restore_itself_fails(tmp_path, monkeypatch, capsys):
+    """If the .taken vanished AND the exclusive re-publish fails, drain must say
+    CAPTURE AT RISK with the payload -- never a false KEPT QUEUED (C-HE-04 SS7)."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+
+    def steal_then_abort(a):
+        (q / "pr-1.taken").unlink()
+        raise am.AbortError("no round logs")
+
+    monkeypatch.setattr(am, "extract", steal_then_abort)
+    real_publish = am.publish_exclusive
+
+    def emfile_on_republish(path, payload):
+        if path.suffix == ".json":  # the restore's re-publish; the claim still works
+            raise OSError(24, "EMFILE")
+        return real_publish(path, payload)
+
+    monkeypatch.setattr(am, "publish_exclusive", emfile_on_republish)
+    rc = am.drain(argparse.Namespace())
+    err = capsys.readouterr().err
+    assert rc == 1
+    assert "CAPTURE AT RISK" in err and '"arc_id": "pr-1"' in err
+    assert "KEPT QUEUED" not in err
+
+
+def test_a_directory_named_like_an_entry_is_isolated(tmp_path, monkeypatch, capsys):
+    """A directory matching *.json is a per-path fault: reported + kept, rest drained."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    (q / "pr-0-dir.json").mkdir()
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id=a.arc_id,
+            pr=a.pr,
+            merged_at="2026-08-19T00:00:00Z",
+            merge_sha="abc123def4567890abc123def4567890abc123de",
+        ),
+    )
+    rc = am.drain(argparse.Namespace())
+    err = capsys.readouterr().err
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]
+    assert rc == 1 and "unreadable" in err
 
 
 def test_rejudge_return_never_overwrites_a_newer_claim(tmp_path, monkeypatch):

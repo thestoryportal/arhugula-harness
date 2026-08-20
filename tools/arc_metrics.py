@@ -617,13 +617,20 @@ def queue_capture(args: argparse.Namespace) -> int:
             "(no '/', no '..', no leading '.') or the queued file lands where "
             "no drain will find it"
         )
+    # `.taken` (and everything built on it: `.taken.recover.<host>.<pid>`) is the
+    # claim/recovery namespace next to the entry -- an arc_id carrying it would
+    # collide with or misparse those coordination names (codex r6/r7 P3).
+    if ".taken" in arc_id:
+        raise AbortError(f"--arc-id {arc_id!r} contains '.taken', a reserved coordination suffix")
     # Recovery appends `.taken.recover.<hostname>.<pid>` to this name; an arc_id
-    # accepted here must stay under NAME_MAX with that suffix or the dead-claim
-    # recovery path fails ENAMETOOLONG and strands the capture (codex r6 P2).
-    if len(arc_id) > 120:
+    # accepted here must keep the WORST-CASE recovery filename under NAME_MAX in
+    # BYTES (multi-byte UTF-8 counts) or the dead-claim recovery path fails
+    # ENAMETOOLONG and strands the capture (codex r6 P2, r7 P2).
+    worst = f"{arc_id}.taken.recover.{socket.gethostname()}.{os.getpid()}".encode()
+    if len(worst) > 240:
         raise AbortError(
-            f"--arc-id too long ({len(arc_id)} chars, max 120): recovery filenames "
-            "append host+pid suffixes that must stay under the filesystem NAME_MAX"
+            f"--arc-id too long ({len(worst)} bytes with the recovery suffix, max 240): "
+            "recovery filenames must stay under the filesystem NAME_MAX"
         )
 
     # Resolve the globs HERE, at closure, and store concrete paths. A pattern
@@ -696,6 +703,12 @@ def read_queue(invalid: list[Path] | None = None) -> list[tuple[Path, dict]]:
             # read -- it is no longer pending. Skip, never propagate (C-HE-04
             # Invariants: no FileNotFoundError escapes drain()).
             continue
+        except OSError as exc:
+            if _is_systemic(exc):
+                raise
+            # EISDIR, ENAMETOOLONG, ... -- a per-path content fault, not a
+            # queue-wide one: report + keep, drain the rest (codex r7 P2).
+            msg = f"  {path.name}: unreadable ({exc}) -- kept, needs human repair"
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             msg = f"  {path.name}: not valid JSON ({exc}) -- kept, needs human repair"
         else:
@@ -1076,6 +1089,24 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
     return "added"
 
 
+def _report_kept(path: Path, arc_id: str, entry: dict, exc: BaseException) -> None:
+    """`KEPT QUEUED` only when the entry is verifiably back on disk (C-HE-04 SS7).
+
+    A restore can itself fail (the .taken vanished AND the exclusive re-publish
+    hit EMFILE / ENAMETOOLONG): claiming "kept" then would be false. When neither
+    name exists, say so LOUDLY and print the in-memory payload -- stderr is the
+    last carrier of the operator's declarations at that point."""
+    if path.exists() or path.with_suffix(".taken").exists():
+        print(f"  {arc_id}: KEPT QUEUED -- {exc!r}", file=sys.stderr)
+        return
+    payload = json.dumps({k: v for k, v in entry.items() if k != "_claim"}, sort_keys=True)
+    print(
+        f"  {arc_id}: CAPTURE AT RISK -- entry could not be restored ({exc!r}); "
+        f"re-queue it by hand from this payload: {payload}",
+        file=sys.stderr,
+    )
+
+
 def drain(_args: argparse.Namespace) -> int:
     """Fold every queued arc into the tracked ledger.
 
@@ -1138,7 +1169,7 @@ def drain(_args: argparse.Namespace) -> int:
             # extract(). This entry stays queued (already durably restored by
             # _drain_one where a claim was held); the rest still drain
             # (C-HE-04 SS3).
-            print(f"  {arc_id}: KEPT QUEUED -- {exc!r}", file=sys.stderr)
+            _report_kept(path, arc_id, entry, exc)
             kept += 1
             continue
         except OSError as exc:
@@ -1152,7 +1183,7 @@ def drain(_args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 return 2
-            print(f"  {arc_id}: KEPT QUEUED -- {exc}", file=sys.stderr)
+            _report_kept(path, arc_id, entry, exc)
             kept += 1
             continue
         if outcome == "added":
