@@ -53,4 +53,5 @@ dropped, so a marker can never leave the corpus unaccounted for.
 | Family | Head | Cleared | Artifact | Markers | Head marker |
 |---|---|---|---|---|---|
 | `class-1-fork-provider-construction-allowlist-semantic` | `§10-amendment (prefer-OAuth default; supersedes E-prod-3's False default forward)` | 2026-07-09 | `.harness/class_1_fork_provider_construction_allowlist_semantic.md` | 1 | `provider-construction-allowlist-prefer-oauth-cleared-2026-07-09.md` |
+| `implementation-plan-he-loop-lanes` | `v1.0 + rev 2026-08-19 (S4a execution correction, U-HE-15 Step 4b only)` | 2026-08-19 | `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` | 1 | `implementation-plan-he-loop-lanes-v1-s4a-step4b-rev-cleared-2026-08-19.md` |
 | `spec-he-loop-lanes` | `v1.3` | 2026-08-19 | `.harness/spec/Spec_HE_Loop_Lanes_v1.md` | 4 | `spec-he-loop-lanes-v1.3-cleared-2026-08-19.md` |
