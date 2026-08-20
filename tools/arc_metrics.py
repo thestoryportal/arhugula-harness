@@ -963,6 +963,17 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
                     dead_claim_entry = json.loads(aside.read_text())
                 except (OSError, ValueError):
                     dead_claim_entry = None
+                if dead_claim_entry is not None:
+                    # Adjudicated r15 vs merge-gate/codex r20 tension: transfer NOW,
+                    # from the stashed bytes, BEFORE the evidence is destroyed. If we
+                    # then lose the retry-publish to a concurrent claimant, the
+                    # reservation is held by THIS (live) lane and we drain the entry on
+                    # our own next pass -- not a wedge; if we die first it degrades to
+                    # the registered stuck-open §5 HITL posture. The alternative
+                    # (transfer only after winning) let a lost retry destroy the only
+                    # dead-holder evidence and strand the arc under a DEAD lane.
+                    _transfer_from_dead_claim(dead_claim_entry)
+                    dead_claim_entry = None
                 aside.unlink(missing_ok=True)
                 continue  # the owner is provably gone; retry once against the freed name
             return None
@@ -976,10 +987,6 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
             if _is_systemic(exc):
                 raise
             raise AbortError(f"cannot claim {path.name}: {exc}") from exc
-        if dead_claim_entry is not None:
-            # the replacement claim is WON: the C-HE-04 §4 transfer is now safe
-            _transfer_from_dead_claim(dead_claim_entry)
-            dead_claim_entry = None
         # Verify the entry on disk is still the bytes this drain LISTED before
         # consuming it: a producer can have published corrected declarations
         # (remove + re-queue) after our read_queue() -- unlinking blindly would
@@ -2028,6 +2035,11 @@ def cmd_extract(args: argparse.Namespace) -> int:
                 f"{row.arc_id}: lost the backfill reservation race ({exc}); the "
                 "reserving lane's drain will capture this arc"
             ) from exc
+        if row.pr is not None:
+            # stamp the PR at mint time (codex r20 P2): a crash between reserve and
+            # this line is the only window in which a retry's resume fence sees
+            # pr=null and cannot bind the PR -- keep it near-zero, not open-ended
+            rs.update_payload(row.arc_id, {"pr": row.pr})
         cur = rs.current(row.arc_id)
         print("note: historical backfill reserved by this lane")
     state, owner = cur[1]["state"], cur[1]["lane_id"]

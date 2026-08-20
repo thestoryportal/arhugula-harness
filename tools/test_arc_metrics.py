@@ -1911,6 +1911,7 @@ def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkey
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
     rs.record_phase("pr-1", "execute", "start", ts="2026-08-20T00:00:00Z")
     rs.record_round_outcome("pr-1", 1, channel="codex", terminal="APPROVE", finding_count=0)
+    rs.update_payload("pr-1", {"head_sha": "abc123f", "base_sha": "def456a"})
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     order = []
     real_append = am.append
@@ -1936,6 +1937,9 @@ def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkey
     assert row["round_outcomes"] == {
         "1": {"channel": "codex", "terminal": "APPROVE", "finding_count": 0}
     }
+    assert row["head_sha"] == "abc123f" and row["base_sha"] == "def456a", (
+        "sha provenance folds (codex r20 P3)"
+    )
     assert row["concurrent_lanes_at_open"] == 0
 
 
@@ -2476,7 +2480,7 @@ def test_backfill_discriminator_cannot_be_a_real_branch(tmp_path, monkeypatch, q
     assert not (tmp_path / "l.jsonl").exists()
 
 
-# mutation-probe: drop the transfer-after-win call in _claim_arc
+# mutation-probe: drop the stash-time transfer in _claim_arc's takeover
 def test_claim_arc_takeover_transfers_the_dead_holders_reservation(tmp_path, monkeypatch, qdir_res):
     """codex U-HE-19 r12 P2: the mid-drain takeover in _claim_arc is a THIRD dead-owner
     consumption site -- it too must run the C-HE-04 §4 transfer from the lane-stamped
