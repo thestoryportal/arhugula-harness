@@ -1069,9 +1069,19 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "gc":
             out = [str(x) for x in gc()]
         elif args.cmd == "reconcile":
-            out = reconcile(args.arc_id, gh_view=_gh_view, superseded_by=args.superseded_by)
+            marks: list[str] = []
+            state = reconcile(
+                args.arc_id,
+                gh_view=_gh_view,
+                superseded_by=args.superseded_by,
+                on_unconfirmed=marks.append,
+            )
+            # Same contract as reconcile-all (codex r7 P2): automation must be able to
+            # distinguish confirmed ground truth (exit 0) from a pass that never obtained
+            # it (UNCONFIRMED, exit 2).
+            out = f"UNCONFIRMED ({state}): {marks[0]}" if marks else state
             print(json.dumps(out, sort_keys=True))
-            return 0
+            return 2 if marks else 0
         elif args.cmd == "reconcile-all":
             out = reconcile_all()
             rc_all = 2 if any(v.startswith(("ERROR", "UNCONFIRMED")) for v in out.values()) else 0

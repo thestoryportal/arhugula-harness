@@ -62,21 +62,23 @@ _RESV=""
 # reservation pass could only fail closed into the log -- so the spawn stays dormant and
 # SELF-ACTIVATES the moment U-HE-29 lands. Synchronous callers (CLI, U-HE-22 merge lane)
 # are unaffected: their exit codes surface directly.
-if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ] && [ -f tools/reservations.py ] \
-  && command -v uv >/dev/null 2>&1 \
-  && grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh 2>/dev/null; then
-  # Surface the LAST detached pass's outcome first (codex r2 P2): the store-local log is
-  # the durable venue until U-HE-29 lands the loop-ledger emitter. Local grep -- no budget
-  # risk. The log write itself is store-owned + O_NOFOLLOW inside reservations.py (codex
-  # r2 P1: a shell redirect here would truncate through a planted symlink).
-  # jq on the authoritative rc field (codex r4 P3: a substring grep would false-positive
-  # on an arc id containing "ERROR"); jq is already a hard dependency of hook_emit.
+if [ -d "$_RROOT" ] && [ ! -L "$_RROOT" ]; then
+  # Surface the LAST pass's outcome (codex r2 P2) UNGATED by the U-HE-29 activation gate
+  # below (codex r7 P2): the store-local log can already exist from the CLI / merge-lane
+  # callers pre-U-HE-29, and an rc!=0 pass must surface regardless of which caller wrote
+  # it. The log write itself is store-owned + atomically renamed inside reservations.py
+  # (codex r2 P1/r3 P2). jq on the authoritative rc field (codex r4 P3: a substring grep
+  # would false-positive on an arc id containing "ERROR"); jq is already a hard
+  # dependency of hook_emit. A corrupt/unparseable log reads as non-zero -- fail closed.
   if [ -f "${_RROOT}/.reconcile.log" ] && [ ! -L "${_RROOT}/.reconcile.log" ] \
     && [ "$(jq -r '.rc // 0' "${_RROOT}/.reconcile.log" 2>/dev/null)" != "0" ]; then
     _RESV=" resv=ERR(last reconcile pass; see ${_RROOT}/.reconcile.log)"
   fi
-  nohup uv run python tools/reservations.py reconcile-all --log-to-store \
-    >/dev/null 2>&1 &
+  if [ -f tools/reservations.py ] && command -v uv >/dev/null 2>&1 \
+    && grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh 2>/dev/null; then
+    nohup uv run python tools/reservations.py reconcile-all --log-to-store \
+      >/dev/null 2>&1 &
+  fi
 fi
 
 # Single-line additionalContext for the SessionStart event (wraps the lib helper). The

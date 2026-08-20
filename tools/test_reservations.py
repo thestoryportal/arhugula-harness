@@ -940,3 +940,15 @@ def test_hook_activation_gate_names_the_emitters_function(qdir):
     assert "grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh" in hook
     src = (Path(__file__).parent / "reservations.py").read_text()
     assert 'loop_log_structured "$1" "$2" "$3" "$4"' in src
+
+
+def test_cli_single_arc_reconcile_unconfirmed_exits_2(qdir, monkeypatch, capsys):
+    """r7 P2: the single-arc CLI marks unreachable ground truth UNCONFIRMED and exits 2."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
+    monkeypatch.setattr(rs, "_gh_view", _gh_raises)
+    rs.reserve("pr-120", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-120", "A")
+    rs.update_payload("pr-120", {"pr": 120})
+    assert rs.main(["reconcile", "--arc-id", "pr-120"]) == 2
+    assert "UNCONFIRMED (open)" in capsys.readouterr().out
+    assert rs.current("pr-120")[1]["state"] == "open"
