@@ -617,6 +617,14 @@ def queue_capture(args: argparse.Namespace) -> int:
             "(no '/', no '..', no leading '.') or the queued file lands where "
             "no drain will find it"
         )
+    # Recovery appends `.taken.recover.<hostname>.<pid>` to this name; an arc_id
+    # accepted here must stay under NAME_MAX with that suffix or the dead-claim
+    # recovery path fails ENAMETOOLONG and strands the capture (codex r6 P2).
+    if len(arc_id) > 120:
+        raise AbortError(
+            f"--arc-id too long ({len(arc_id)} chars, max 120): recovery filenames "
+            "append host+pid suffixes that must stay under the filesystem NAME_MAX"
+        )
 
     # Resolve the globs HERE, at closure, and store concrete paths. A pattern
     # stored live would be re-expanded by the next arc's drain, so any file
@@ -950,7 +958,11 @@ def _recover_dead_claims() -> None:
                     gone.unlink(missing_ok=True)
                     print(f"  {claim.name}: dead leftover claim swept (entry already back)")
                 else:
-                    os.rename(gone, claim)
+                    try:
+                        os.link(gone, claim)  # exclusive: never overwrite a newer claim
+                    except FileExistsError:
+                        pass
+                    gone.unlink(missing_ok=True)
             continue
         if not _claim_owner_is_dead(claim):
             print(f"  {claim.name} is held by a live or unverifiable owner; leaving it")
@@ -972,7 +984,14 @@ def _recover_dead_claims() -> None:
             continue
         if not _claim_owner_is_dead(aside):
             # A live drain re-claimed under this name meanwhile -- not ours.
-            os.rename(aside, claim)
+            # Exclusive return: a NEWER claim can have been created from a
+            # republished entry while the aside was out; never overwrite it
+            # (the displaced owner's restore republishes from memory, E9).
+            try:
+                os.link(aside, claim)
+            except FileExistsError:
+                pass
+            aside.unlink(missing_ok=True)
             print(f"  {claim.name}: re-claimed by a live owner meanwhile; leaving it")
             continue
         # Exclusive restore: a concurrent queue_capture can have published an
@@ -1069,18 +1088,21 @@ def drain(_args: argparse.Namespace) -> int:
     try:
         _recover_dead_claims()
 
+        invalid: list[Path] = []
+        pending = read_queue(invalid)
+
         # Claims left behind by a live or unverifiable owner are outstanding
         # work. Reporting "nothing to drain" while they sit there would let
         # automation move on before a peer has finished, and would strand a
-        # foreign-host claim silently forever.
+        # foreign-host claim silently forever. Globbed AFTER read_queue: a peer
+        # that claimed an entry between the two scans (its .json vanished from
+        # pending) is then visible as a .taken here, so drain cannot exit 0
+        # while that fresh claim exists (codex r6 P1).
         outstanding = (
             sorted(QUEUE_DIR.glob("*.taken")) + sorted(QUEUE_DIR.glob("*.taken.recover.*"))
             if QUEUE_DIR.is_dir()
             else []
         )
-
-        invalid: list[Path] = []
-        pending = read_queue(invalid)
     except OSError as exc:
         if _is_systemic(exc):
             # Same single-message abort as an in-loop systemic fault (C-HE-04

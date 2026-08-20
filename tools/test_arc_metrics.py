@@ -1351,16 +1351,17 @@ def test_recover_dead_claims_fnf_guarded(tmp_path, monkeypatch):
     taken = q / "pr-7.taken"
     taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
     monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
-    real_replace = os.replace
+    real_rename = os.rename
 
     def peer_restored_first(src, dst):
-        # The real race (C-HE-04 SS1): a peer's _recover_dead_claims won the
-        # os.replace, so the destination .json EXISTS and src is gone by the
-        # time this call runs -- the losing racer's replace raises FNF.
-        real_replace(src, dst)
-        return real_replace(src, dst)  # raises FileNotFoundError
+        # The real race (C-HE-04 SS1): a peer's _recover_dead_claims restored the
+        # entry (json published, .taken gone) between our scan and the move-aside
+        # rename -- the losing racer's rename raises FNF and must log-and-yield.
+        (q / "pr-7.json").write_text(json.dumps({"pr": 7}))
+        Path(src).unlink()
+        return real_rename(src, dst)  # raises FileNotFoundError
 
-    monkeypatch.setattr(am.os, "replace", peer_restored_first)
+    monkeypatch.setattr(am.os, "rename", peer_restored_first)
     am._recover_dead_claims()  # must NOT raise
     assert (q / "pr-7.json").exists(), "the capture is held by the winning racer"
 
@@ -1543,6 +1544,55 @@ def test_one_invalid_json_entry_does_not_abandon_the_rest(tmp_path, monkeypatch,
     assert rc == 1
     assert (q / "pr-0-bad.json").exists() and (q / "pr-0-list.json").exists()
     assert "needs human repair" in err
+
+
+def test_arc_id_length_capped_for_recovery_suffix_budget(tmp_path, monkeypatch):
+    """An arc_id accepted at queue time must survive recovery's host+pid suffix."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    with pytest.raises(am.AbortError, match="too long"):
+        am.queue_capture(
+            argparse.Namespace(
+                pr=1,
+                arc_id="x" * 121,
+                arc_type="inventing",
+                decisions=1,
+                round_logs=None,
+                levers=None,
+                notes="",
+            )
+        )
+
+
+def test_rejudge_return_never_overwrites_a_newer_claim(tmp_path, monkeypatch):
+    """Returning a live aside must not clobber a NEWER claim created meanwhile."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    taken = q / "pr-7.taken"
+    taken.write_text(json.dumps({"pr": 7, "_claim": {"pid": 999999, "host": socket.gethostname()}}))
+    newer = json.dumps({"pr": 7, "_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
+    live = json.dumps({"pr": 7, "_claim": {"pid": os.getpid() + 1, "host": socket.gethostname()}})
+    real_dead = am._claim_owner_is_dead
+    calls = {"n": 0}
+
+    def dead_then_two_claims(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            verdict = real_dead(path)  # True on the on-disk dead stamp
+            taken.write_text(live)  # a live drain re-claims the name...
+            return verdict
+        # ...and while the aside is out, ANOTHER claim lands under the name.
+        if calls["n"] == 2:
+            taken.write_text(newer)
+        return real_dead(path)
+
+    monkeypatch.setattr(am, "_claim_owner_is_dead", dead_then_two_claims)
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: pid in (os.getpid(), os.getpid() + 1))
+    am._recover_dead_claims()
+    assert json.loads(taken.read_text()) == json.loads(newer), "the newer claim survives"
+    assert not list(q.glob("*.taken.recover.*")), "the displaced aside is dropped"
 
 
 def test_kill_after_claim_is_wired_into_drain(tmp_path):
