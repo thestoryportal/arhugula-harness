@@ -536,7 +536,54 @@ def release_ledger(ledger: Path) -> None:
     _ledger_claim_path(ledger).unlink(missing_ok=True)
 
 
-def append(row: ArcRow, *, require_holder: bool = True) -> None:
+def _require_reservation_holder(row: ArcRow) -> None:
+    """C-HE-04 §2(ii): only the lane holding the OPEN reservation may append -- a lane
+    killed after append cannot be silently superseded by a second appender. One
+    extension, codex U-HE-19 r3 P1 (registered contradiction, plan rev item vii): the
+    lane recorded on a MERGED head may make the arc's FIRST append -- open->merged
+    flips before the closure capture drains (the merge door post-U-HE-22, and this
+    module's own serialized fold+terminalization at drain), and C-HE-03 §6 forbids
+    *re*-appending a merged arc_id, not the merged holder's own capture. Unconditional
+    at every production append (codex r8 P2: no caller-optional bypass exists; tests
+    stub THIS seam). `reservations` imports this module at load; import it inside the
+    functions that need it (plan U-HE-19)."""
+    import reservations as rs
+
+    cur = rs.current(row.arc_id)
+    state = cur[1].get("state") if cur else None
+    owner = cur[1].get("lane_id") if cur else None
+    if not (owner == LANE_ID and state in ("open", "merged")):
+        raise AbortError(
+            f"{row.arc_id}: this lane ({LANE_ID}) is not the reservation holder "
+            f"(state={state!r}, lane={owner!r}) -- append refused (C-HE-04 §2)"
+        )
+    if state == "merged":
+        # The merged-holder admission covers exactly the not-yet-committed first
+        # capture. Once a row for this arc is in COMMITTED history, a same-lane
+        # append from another/reset worktree ledger would be the C-HE-03 §6
+        # re-append the per-worktree duplicate guard cannot see (codex r6 P1).
+        # TRI-STATE read (codex r7 P1): UNREADABLE merged history must HOLD, never
+        # fail open -- committed_arc_ids()'s empty set cannot tell "no row" from
+        # "git show failed", so the admission keys on _committed_ledger_lines(),
+        # whose None means unknown.
+        lines = _committed_ledger_lines()
+        if lines is None:
+            raise AbortError(
+                f"{row.arc_id}: merged reservation but committed history is "
+                "unreadable -- holding the append (fail closed, C-HE-03 §6)"
+            )
+        for line in lines:
+            try:
+                if json.loads(line).get("arc_id") == row.arc_id:
+                    raise AbortError(
+                        f"{row.arc_id}: reservation is merged and a row is already "
+                        "in committed history -- re-append refused (C-HE-03 §6)"
+                    )
+            except json.JSONDecodeError:
+                continue
+
+
+def append(row: ArcRow) -> None:
     # An arc is not an arc until it merged. Appending a pre-merge row would
     # persist null merge fields AND burn the arc_id, so the duplicate guard
     # below would then reject the correct post-merge capture -- turning a
@@ -548,49 +595,7 @@ def append(row: ArcRow, *, require_holder: bool = True) -> None:
             f"(merged_at={row.merged_at!r}, merge_sha={row.merge_sha!r}) -- "
             "capture after merge, or use --dry-run to inspect"
         )
-    if require_holder:
-        # C-HE-04 §2(ii): only the lane holding the OPEN reservation may append -- a lane
-        # killed after append cannot be silently superseded by a second appender. One
-        # extension, codex U-HE-19 r3 P1: the lane recorded on a MERGED head may make the
-        # arc's FIRST append -- the post-U-HE-22 normal flow flips open->merged at the
-        # merge door BEFORE the closure capture drains, and C-HE-03 §6 forbids
-        # *re*-appending a merged arc_id, not the merged holder's own capture (the ledger
-        # duplicate guard below still refuses a second row). `reservations` imports this
-        # module at load; import it inside the functions that need it (plan U-HE-19).
-        import reservations as rs
-
-        cur = rs.current(row.arc_id)
-        state = cur[1].get("state") if cur else None
-        owner = cur[1].get("lane_id") if cur else None
-        if not (owner == LANE_ID and state in ("open", "merged")):
-            raise AbortError(
-                f"{row.arc_id}: this lane ({LANE_ID}) is not the reservation holder "
-                f"(state={state!r}, lane={owner!r}) -- append refused (C-HE-04 §2)"
-            )
-        if state == "merged":
-            # The merged-holder admission covers exactly the not-yet-committed first
-            # capture. Once a row for this arc is in COMMITTED history, a same-lane
-            # append from another/reset worktree ledger would be the C-HE-03 §6
-            # re-append the per-worktree duplicate guard cannot see (codex r6 P1).
-            # TRI-STATE read (codex r7 P1): UNREADABLE merged history must HOLD, never
-            # fail open -- committed_arc_ids()'s empty set cannot tell "no row" from
-            # "git show failed", so the admission keys on _committed_ledger_lines(),
-            # whose None means unknown.
-            lines = _committed_ledger_lines()
-            if lines is None:
-                raise AbortError(
-                    f"{row.arc_id}: merged reservation but committed history is "
-                    "unreadable -- holding the append (fail closed, C-HE-03 §6)"
-                )
-            for line in lines:
-                try:
-                    if json.loads(line).get("arc_id") == row.arc_id:
-                        raise AbortError(
-                            f"{row.arc_id}: reservation is merged and a row is already "
-                            "in committed history -- re-append refused (C-HE-03 §6)"
-                        )
-                except json.JSONDecodeError:
-                    continue
+    _require_reservation_holder(row)
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     claim_ledger(LEDGER)
     try:
@@ -1343,67 +1348,73 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             notes=entry.get("notes", ""),
         )
         row = extract(args)
+
         # C-HE-27 §3 fold at drain, after the flip: the reservation's accreted facts land
         # on the ONE arc row. `fold_round_outcomes` is the committed projection of the
         # composite "<round>/<channel>" carrier into the C-HE-25 numeric arc-row shape
         # (plan rev 2026-08-20, clearance marker
         # implementation-plan-he-loop-lanes-v1-s4b-u-he-19-fold-rev-cleared-2026-08-20).
-        # Fold from a FRESH head (codex r4 P2): extract() spans external calls, and a
-        # record_phase/record_round_outcome CAS landing during that window would be
-        # permanently omitted from the one row a stale snapshot folds.
-        fresh = rs.current(arc_id)
-        res = fresh[1] if fresh else res
-        row.phases = res.get("phases", {})
-        row.round_outcomes = rs.fold_round_outcomes(res.get("round_outcomes", {}))
-        row.concurrent_lanes_at_open = res.get("concurrent_lanes_at_open")
-        if res.get("arc_type_declared_at") == "open":
-            # C-HE-26 §1: the reservation IS the open-time capture point -- the label
-            # joins via arc_id AND the row's provenance says so (codex r4 P2: extract()
-            # defaulted declared_at to "close" from the closure entry, stamping false
-            # close-time provenance on every reserved arc). The close-time queue label,
-            # when the entry carried one, stays visible beside it (C-HE-26 §2).
-            row.arc_type_open = res.get("arc_type")
-            row.arc_type_declared_at = "open"
-            # The canonical label follows the declared-at provenance (codex r6 P2): a
-            # row stamped declared_at="open" whose arc_type still held the closure-time
-            # value would contaminate every arc_type cohort read.
-            row.arc_type = res.get("arc_type")
-        row.lane_id = LANE_ID
-        row.head_sha = res.get("head_sha")
-        row.base_sha = res.get("base_sha")
+        # Fold + terminalize as ONE serialized step, BEFORE append (codex r4/r7/r8 P2
+        # lineage): a fold from any not-yet-terminal head can lose an accretion CAS
+        # landing after the read. The flip to `merged` closes the head against further
+        # accretion (_refuse_terminal_accretion), so a fold that generation-binds its
+        # terminalization -- retrying the read+fold whenever the expect fails -- is
+        # provably complete. Append then runs against the terminal head through the
+        # merged-holder gate. A crash between the flip and append self-heals: the
+        # retry's merged-ours fall-through re-extracts, re-folds the SAME terminal
+        # head, and appends.
+        def _fold(head: dict) -> None:
+            row.phases = head.get("phases", {})
+            row.round_outcomes = rs.fold_round_outcomes(head.get("round_outcomes", {}))
+            row.concurrent_lanes_at_open = head.get("concurrent_lanes_at_open")
+            if head.get("arc_type_declared_at") == "open":
+                # C-HE-26 §1: the reservation IS the open-time capture point -- the
+                # label joins via arc_id AND the row's provenance says so (codex r4
+                # P2). The canonical label follows the declared-at provenance (codex
+                # r6 P2); the close-time queue label stays visible beside it.
+                row.arc_type_open = head.get("arc_type")
+                row.arc_type_declared_at = "open"
+                row.arc_type = head.get("arc_type")
+            row.lane_id = LANE_ID
+            row.head_sha = head.get("head_sha")
+            row.base_sha = head.get("base_sha")
+
+        if res.get("state") == "open":
+            for _attempt in range(8):
+                fresh = rs.current(arc_id)
+                if (
+                    not fresh
+                    or fresh[1].get("state") != "open"
+                    or fresh[1].get("lane_id") != LANE_ID
+                ):
+                    raise AbortError(
+                        f"{arc_id}: reservation moved during the drain fold -- entry kept"
+                    )
+                _fold(fresh[1])
+                updates = (
+                    {"pr": entry["pr"]} if fresh[1].get("pr") is None and "pr" in entry else None
+                )
+                try:
+                    rs.transition(
+                        arc_id,
+                        "merged",
+                        lane_id=LANE_ID,
+                        updates=updates,
+                        expect={"generation": fresh[1].get("generation")},
+                    )
+                    break
+                except rs.IllegalTransition:
+                    continue  # an accretion CAS won the generation; re-read, re-fold
+            else:
+                raise AbortError(
+                    f"{arc_id}: fold+terminalization did not serialize in 8 attempts -- entry kept"
+                )
+        else:
+            # merged (ours): the terminal head is already closed against accretion
+            _fold(res)
         _kill_after("extract")
         append(row)
         _kill_after("append")
-        if res.get("state") == "open":
-            # Terminalize the open head this lane holds: the appended row PROVES the
-            # merge (merged_at/merge_sha are append's precondition -- C-HE-03 §4's
-            # "confirmed merge"). Without this a legacy bootstrap leaks a
-            # permanently-open pr=null reservation that reconcile can only
-            # HITL-escalate (codex U-HE-19 r5 P2). Post-U-HE-22 heads arrive merged
-            # and skip this. A failure here is per-arc: the row is appended and the
-            # entry restores; reconcile's ground-truth pass owns the leftover head.
-            updates = {"pr": entry["pr"]} if res.get("pr") is None and "pr" in entry else None
-            try:
-                # Bind the flip to the generation the fold READ (codex r7 P2): an
-                # accretion CAS landing between the fold and this terminalization
-                # would otherwise vanish silently from the appended row.
-                rs.transition(
-                    arc_id,
-                    "merged",
-                    lane_id=LANE_ID,
-                    updates=updates,
-                    expect={"generation": fresh[0]} if fresh else None,
-                )
-            except rs.IllegalTransition:
-                # The head moved after the fold. The row is appended and immutable, so
-                # refusing forever helps nobody: terminalize against the CURRENT head
-                # and say exactly what the row omits -- every generation is retained
-                # in the reservation history, and the gate log stays verdict-authority.
-                rs.transition(arc_id, "merged", lane_id=LANE_ID, updates=updates)
-                print(
-                    f"  {arc_id}: accretion landed after the fold; the arc row omits "
-                    "it -- full detail retained in the reservation history"
-                )
     except (
         AbortError,
         KeyError,
