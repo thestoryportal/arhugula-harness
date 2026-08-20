@@ -64,6 +64,21 @@ MANIFEST: list[Row] = [
     ),
     # C-HE-03 (U-HE-17)
     Row("C-HE-03", "pytest:tools/test_reservations.py", "phase0", "local + CI", True),
+    # C-HE-03/04 (U-HE-20): AC#2 subprocess lanes — real subprocesses, NO skip
+    Row(
+        "C-HE-03/04",
+        "pytest:tools/test_arc_metrics_lanes.py::test_ac2_a_same_instant",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-03/04",
+        "pytest:tools/test_arc_metrics_lanes.py::test_ac2_b_cross_latency",
+        "phase0",
+        "local + CI",
+        True,
+    ),
     # C-HE-04 (U-HE-15); the shell row carries the §6 teardown ahead-of-@{u} guard
     Row(
         "C-HE-04",
