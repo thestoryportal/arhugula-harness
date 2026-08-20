@@ -186,6 +186,17 @@ def test_symlinked_reservation_path_refused_at_read_and_write(qdir, tmp_path):
     (root / "pr-real" / "999.json").symlink_to(forged)
     with pytest.raises(rs.ReservationError, match=r"999\.json is a symlink"):
         rs.current("pr-real")
+    # root symlink: the whole store relocated is refused at the single source
+    # (codex round-11 P2)
+    import shutil as _sh
+
+    real_root_backup = tmp_path / "root-backup"
+    _sh.move(str(root), str(real_root_backup))
+    (qdir / "reservations").symlink_to(real_root_backup)
+    with pytest.raises(rs.ReservationError, match="reservations is a symlink"):
+        rs.current("pr-real")
+    (qdir / "reservations").unlink()
+    _sh.move(str(real_root_backup), str(root))
     # .seq allocator containment (codex round-10 P2)
     import shutil
 
@@ -251,6 +262,9 @@ def test_identifiers_reject_colon_and_empty(qdir):
         rs.reserve("pr-8", lane_id="bad:lane", branch="b", arc_type="inventing")
     with pytest.raises(rs.ReservationError, match="nonempty"):
         rs.reserve("pr-8", lane_id="", branch="b", arc_type="inventing")  # codex round-9 P3
+    with pytest.raises(rs.ReservationError, match="nonempty"):
+        # codex round-11 P2: a None holder would defeat the holder fence
+        rs.reserve("pr-8", lane_id=None, branch="b", arc_type="inventing")  # type: ignore[arg-type]
     assert ":" not in rs.mint_lane_id(Path("/tmp/wt-x"))
 
 
@@ -268,7 +282,7 @@ def test_update_and_transition_allowlists(qdir):
     ):
         with pytest.raises(rs.ReservationError, match="may not set"):
             rs.update_payload("pr-8b", bad)
-    rs.update_payload("pr-8b", {"pr": 8, "head_sha": "h" * 40, "pilot_run_id": "p1"})  # allowed
+    rs.update_payload("pr-8b", {"pr": 8, "head_sha": "a" * 40, "pilot_run_id": "p1"})  # allowed
     with pytest.raises(rs.ReservationError, match="may not set"):
         rs.transition("pr-8b", "open", lane_id="A", updates={"lane_id": "EVIL"})
     assert (
@@ -291,6 +305,10 @@ def test_payload_value_domains_enforced(qdir):
         {"attested_merge_tree": 7},
         {"concurrent_lanes_min": -1},
         {"concurrent_lanes_max": "3"},
+        {"head_sha": ""},  # codex round-11 P3: sha/oid fields are nonempty hex tokens
+        {"base_sha": "not-hex!"},
+        {"merge_sha": "ABC123"},  # uppercase is not the git object-name form
+        {"attested_merge_tree": "abc"},  # < 7 chars
     ):
         with pytest.raises(rs.ReservationError, match="must be"):
             rs.update_payload("pr-14", bad)

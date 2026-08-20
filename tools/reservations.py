@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -76,9 +77,12 @@ _INT_FIELDS = frozenset({"pr"})
 _COUNT_FIELDS = frozenset(
     {"concurrent_lanes_min", "concurrent_lanes_max", "concurrent_lanes_at_open"}
 )
-_STR_FIELDS = frozenset(
-    {"head_sha", "base_sha", "attested_merge_tree", "merge_sha", "pilot_run_id"}
-)
+_STR_FIELDS = frozenset({"pilot_run_id"})
+#: `<sha|null>` / `<oid|null>` fields (C-HE-03 §3): nonempty hex, 7-64 chars (abbreviated
+#: through sha256) -- an empty or malformed value in an immutable snapshot would poison the
+#: C-HE-06 step (ii) head/base confirmation and the merge-tree compare (codex round-11 P3).
+_SHA_FIELDS = frozenset({"head_sha", "base_sha", "attested_merge_tree", "merge_sha"})
+_SHA_RE = re.compile(r"^[0-9a-f]{7,64}$")
 
 
 class ReservationError(RuntimeError):
@@ -114,22 +118,30 @@ class LoopStatusWriteError(ReservationError):
 
 
 def reservations_root() -> Path:
-    return QUEUE_DIR / "reservations"
+    r = QUEUE_DIR / "reservations"
+    if r.is_symlink():
+        # the containment fences below all derive their boundary from THIS path; a planted
+        # QUEUE_DIR/reservations symlink would relocate the entire store outside QUEUE_DIR
+        # and make every relative check pass against the external target (codex round-11
+        # P2). Refusing here, at the single source, closes the whole location class.
+        raise ReservationError("QUEUE_DIR/reservations is a symlink -- refused")
+    return r
 
 
 def now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _check_id(name: str, value: str | None) -> None:
-    if value is not None and ":" in value:
+def _check_id(name: str, value: str) -> None:
+    # every caller passes an AUTHORITY-bearing id (lane_id at reserve/transition/transfer):
+    # None or empty is indistinguishable from "no holder" in every reader and would let two
+    # None-holders satisfy the holder fence (codex round-9 P3, round-11 P2).
+    if value is None or value == "":
+        raise ReservationError(f"{name} must be a nonempty identifier, got {value!r}")
+    if ":" in value:
         raise ReservationError(
             f"{name} must not contain ':' (finding_id/code delimiter): {value!r}"
         )
-    if value == "":
-        # an empty authority-bearing id is indistinguishable from "no holder" in every
-        # reader (codex round-9 P3)
-        raise ReservationError(f"{name} must be a nonempty identifier")
 
 
 def mint_lane_id(worktree: Path) -> str:
@@ -167,6 +179,11 @@ def _check_updates(fn: str, updates: dict, allowed: frozenset[str]) -> None:
             raise ReservationError(f"{fn}: {k} must be a nonnegative int|null, got {v!r}")
         if k in _STR_FIELDS and not isinstance(v, str):
             raise ReservationError(f"{fn}: {k} must be str|null (C-HE-03 §3), got {v!r}")
+        if k in _SHA_FIELDS and (not isinstance(v, str) or not _SHA_RE.match(v)):
+            raise ReservationError(
+                f"{fn}: {k} must be a 7-64 char lowercase-hex sha/oid or null "
+                f"(C-HE-03 §3), got {v!r}"
+            )
 
 
 def alloc_seq() -> int:
