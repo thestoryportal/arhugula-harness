@@ -256,11 +256,15 @@ def reserve(
     """(none) -> pending at arc OPEN. Refuses if a pending/open reservation exists
     (selection-time fence)."""
     _check_id("lane_id", lane_id)
-    if arc_type_declared_at != "open":
-        # reserve() IS the open-time capture point (C-HE-26 §1); a reservation minted with
-        # declared_at='close' would contaminate the cohort label downstream (codex round-6 P3).
+    if arc_type_declared_at not in ("open", "close"):
+        # reserve() IS the open-time capture point (C-HE-26 §1) -- arbitrary labels are
+        # refused (codex round-6 P3). "close" is legal ONLY for the documented one-time
+        # legacy-queue bootstrap at drain (plan §6 open item 3 / U-HE-19 / U-HE-44
+        # forward-register row; codex round-13 P2): entries queued before reservations
+        # existed are reserved at drain with the truthful close-time label.
         raise ReservationError(
-            f"arc_type_declared_at must be 'open' at reserve(), got {arc_type_declared_at!r}"
+            f"arc_type_declared_at must be 'open' or 'close' (C-HE-03 §3), "
+            f"got {arc_type_declared_at!r}"
         )
     if arc_type not in ARC_TYPES:
         raise ReservationError(
@@ -541,6 +545,38 @@ def record_round_outcome(
         return head
 
     return _cas_next(arc_id, build)
+
+
+def fold_round_outcomes(outcomes: dict) -> dict:
+    """Project the composite `"<round>/<channel>"` carrier into the C-HE-25 ARC-ROW shape
+    `{round_n: {channel, terminal, finding_count}}` -- the committed projection the U-HE-19
+    drain fold calls (codex round-10/13 P2). Per round NUMBER the DECIDING leg wins: a D-C
+    failover's REVIEWER_UNAVAILABLE leg is superseded by the failover verdict at the same
+    number (C-HE-17: the failover verdict blocks); it is kept only when no decided leg
+    exists. Nothing is lost: the N6 denominator exclusion travels via
+    `phases.verify_unavailable` (C-HE-27 §4), and the full two-leg detail stays durable in
+    the reservation history and the gate log. Two DECIDED legs at one number cannot arise
+    from the wrapper flow (the failover fires only on REVIEWER_UNAVAILABLE); if present,
+    the projection fails loudly rather than drop audit."""
+    folded: dict = {}
+    for key, row in outcomes.items():
+        n = key.split("/", 1)[0]
+        prior = folded.get(n)
+        if prior is None:
+            folded[n] = dict(row)
+        elif (
+            prior["terminal"] == "REVIEWER_UNAVAILABLE"
+            and row["terminal"] != "REVIEWER_UNAVAILABLE"
+        ):
+            folded[n] = dict(row)
+        elif row["terminal"] == "REVIEWER_UNAVAILABLE":
+            continue
+        else:
+            raise ReservationError(
+                f"round {n}: two decided legs ({prior['channel']}/{prior['terminal']} vs "
+                f"{row['channel']}/{row['terminal']}) cannot fold to one C-HE-25 entry"
+            )
+    return folded
 
 
 def holder(arc_id: str) -> str | None:

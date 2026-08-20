@@ -220,11 +220,46 @@ def test_finding_count_domain_enforced(qdir):
             )
 
 
-def test_reserve_requires_declared_at_open(qdir):
-    """codex round-6 P3: reserve() is the open-time capture point (C-HE-26 §1)."""
-    with pytest.raises(rs.ReservationError, match="must be 'open'"):
+def test_reserve_declared_at_domain(qdir):
+    """codex round-6 P3 + round-13 P2: arbitrary labels refused; 'close' is legal only as
+    the documented legacy-queue bootstrap value (plan §6 item 3 / U-HE-19 / U-HE-44)."""
+    with pytest.raises(rs.ReservationError, match="arc_type_declared_at"):
         rs.reserve(
-            "pr-23", lane_id="A", branch="b", arc_type="inventing", arc_type_declared_at="close"
+            "pr-23", lane_id="A", branch="b", arc_type="inventing", arc_type_declared_at="maybe"
+        )
+    p = rs.reserve(
+        "pr-23b", lane_id="A", branch="b", arc_type="inventing", arc_type_declared_at="close"
+    )
+    assert p["arc_type_declared_at"] == "close"  # legacy bootstrap path stays drainable
+
+
+# mutation-probe: drop the REVIEWER_UNAVAILABLE-superseded branch in fold_round_outcomes
+def test_fold_round_outcomes_projects_to_c_he_25_shape(qdir):
+    """codex round-10/13 P2: the committed projection for the U-HE-19 fold — numeric keys,
+    deciding leg wins a failover round, two decided legs fail loudly."""
+    single = {"1/codex": {"channel": "codex", "terminal": "APPROVE", "finding_count": 0}}
+    assert rs.fold_round_outcomes(single) == {
+        "1": {"channel": "codex", "terminal": "APPROVE", "finding_count": 0}
+    }
+    failover = {
+        "1/codex": {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0},
+        "1/gemini": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 2},
+        "2/gemini": {"channel": "gemini", "terminal": "APPROVE", "finding_count": 0},
+    }
+    folded = rs.fold_round_outcomes(failover)
+    assert folded == {
+        "1": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 2},
+        "2": {"channel": "gemini", "terminal": "APPROVE", "finding_count": 0},
+    }
+    # deciding leg first, unavailable leg second: same result (order-independent)
+    reordered = {k: failover[k] for k in ("1/gemini", "1/codex", "2/gemini")}
+    assert rs.fold_round_outcomes(reordered) == folded
+    with pytest.raises(rs.ReservationError, match="two decided legs"):
+        rs.fold_round_outcomes(
+            {
+                "1/codex": {"channel": "codex", "terminal": "APPROVE", "finding_count": 0},
+                "1/gemini": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 1},
+            }
         )
 
 
