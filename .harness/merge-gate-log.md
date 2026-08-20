@@ -474,3 +474,6 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-20T09:35:59Z | #1405 | aec1c9193258 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
 | 2026-08-20T09:36:00Z | #1405 | aec1c9193258 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
 | #1405 | 2026-08-20 | feat/he-lanes-s4b-u-he-17 | concurrency: APPROVE / spec-conformance: APPROVE / witness-adequacy: APPROVE | MERGE (gate r4 delta re-gate at artifact-heads regen head aec1c919; delta doc-only) | blast-radius: delta-only (generated table) |
+| 2026-08-20T12:26:35Z | #1407 | 6c593365f4a1 | merge-gate-concurrency | BLOCK | 3 finding(s) | r1 |
+| 2026-08-20T12:26:56Z | #1407 | 6c593365f4a1 | merge-gate-witness-adequacy | BLOCK | 4 finding(s) | r1 |
+| 2026-08-20T12:29:48Z | #1407 | 6c593365f4a1 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
