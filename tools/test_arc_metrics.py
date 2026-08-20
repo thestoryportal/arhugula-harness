@@ -1379,7 +1379,7 @@ def test_recover_dead_claims_systemic_fault_aborts_drain(tmp_path, monkeypatch, 
     def perm(src, dst):
         raise PermissionError(13, "queue dir read-only")
 
-    monkeypatch.setattr(am.os, "replace", perm)
+    monkeypatch.setattr(am.os, "link", perm)  # recovery's restore is an exclusive link
     rc = am.drain(argparse.Namespace())
     out = capsys.readouterr()
     assert rc == 2

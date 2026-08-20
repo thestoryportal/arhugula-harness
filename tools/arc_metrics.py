@@ -688,7 +688,7 @@ def read_queue(invalid: list[Path] | None = None) -> list[tuple[Path, dict]]:
             # read -- it is no longer pending. Skip, never propagate (C-HE-04
             # Invariants: no FileNotFoundError escapes drain()).
             continue
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             msg = f"  {path.name}: not valid JSON ({exc}) -- kept, needs human repair"
         else:
             if isinstance(entry, dict):
@@ -901,7 +901,11 @@ def _recover_dead_claims() -> None:
     # restore: the pid suffix names the recoverer, so deadness is exact. A live
     # recoverer's aside is in flight -- leave it.
     for orphan in sorted(QUEUE_DIR.glob("*.taken.recover.*")):
-        rest = orphan.name.split(".taken.recover.", 1)[1]
+        # rpartition parses from the RIGHT so an arc_id that itself contains
+        # ".taken.recover." cannot shift the host/pid fields (codex r5 P3).
+        base, _, rest = orphan.name.rpartition(".recover.")
+        if not base.endswith(".taken"):
+            continue  # a queue entry that merely matches the glob, not an aside
         host, _, pid_s = rest.rpartition(".")
         if host != socket.gethostname() or not pid_s.isdigit():
             # A foreign-host (or unparseable) recoverer cannot be judged from
@@ -910,15 +914,25 @@ def _recover_dead_claims() -> None:
             continue
         if _process_is_alive(int(pid_s)):
             continue
-        orphan_restored = orphan.with_name(orphan.name.split(".taken.recover.")[0] + ".json")
+        # The recoverer is dead, but the aside may hold a LIVE re-claim it had
+        # moved just before dying (codex r5 P2): re-judge the EMBEDDED owner and
+        # route accordingly -- live back to its .taken name, dead to .json. Both
+        # routes are exclusive links so a name published meanwhile is never
+        # clobbered; the aside copy is then superseded either way.
+        if _claim_owner_is_dead(orphan):
+            target = orphan.with_name(base[: -len(".taken")] + ".json")
+            what = "restored orphaned recovery file"
+        else:
+            target = orphan.with_name(base)
+            what = "returned live claim from a dead recoverer"
         try:
-            if orphan_restored.exists():
-                orphan.unlink()  # entry already back; the aside copy is redundant
-            else:
-                os.replace(orphan, orphan_restored)
-                print(f"  restored orphaned recovery file -> {orphan_restored.name}")
+            os.link(orphan, target)
+            print(f"  {what} -> {target.name}")
+        except FileExistsError:
+            pass  # the name is already durably held; the aside is redundant
         except FileNotFoundError:
             continue
+        orphan.unlink(missing_ok=True)
     for claim in sorted(QUEUE_DIR.glob("*.taken")):
         restored = claim.with_suffix(".json")
         if restored.exists():
@@ -961,12 +975,17 @@ def _recover_dead_claims() -> None:
             os.rename(aside, claim)
             print(f"  {claim.name}: re-claimed by a live owner meanwhile; leaving it")
             continue
+        # Exclusive restore: a concurrent queue_capture can have published an
+        # UPDATED .json after the exists() check above -- a clobbering replace
+        # would silently revert it to the stale dead-claim payload (codex r5
+        # P1). FileExistsError therefore means the queue name is durably held
+        # and this stale copy is dropped.
         try:
-            os.replace(aside, restored)
-        except FileNotFoundError:
-            print(f"  {claim.name}: a peer recovered it first; leaving it")
-            continue
-        print(f"  recovered claim from a dead owner -> {restored.name}")
+            os.link(aside, restored)
+            print(f"  recovered claim from a dead owner -> {restored.name}")
+        except FileExistsError:
+            print(f"  {claim.name}: a newer capture holds the queue name; dropping the stale copy")
+        aside.unlink(missing_ok=True)
 
 
 def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local: set[str]) -> str:
@@ -1019,8 +1038,12 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         _kill_after("extract")
         append(row)
         _kill_after("append")
-    except (AbortError, KeyError, TypeError, ValueError):
-        # Durable restore BEFORE the caller reports KEPT QUEUED (C-HE-04 SS7).
+    except (AbortError, KeyError, TypeError, ValueError, OSError):
+        # Durable restore BEFORE the caller reports KEPT QUEUED (C-HE-04 SS7) --
+        # OSError included (EMFILE from append, ...): drain() re-classifies it
+        # after the entry is durably back (codex r5 P2). If the fault is
+        # systemic the restore may itself raise; that escapes to the same
+        # systemic abort.
         _restore_or_republish(taken, path, entry)
         _kill_after("restore-abort")
         raise
@@ -1050,7 +1073,11 @@ def drain(_args: argparse.Namespace) -> int:
         # work. Reporting "nothing to drain" while they sit there would let
         # automation move on before a peer has finished, and would strand a
         # foreign-host claim silently forever.
-        outstanding = sorted(QUEUE_DIR.glob("*.taken")) if QUEUE_DIR.is_dir() else []
+        outstanding = (
+            sorted(QUEUE_DIR.glob("*.taken")) + sorted(QUEUE_DIR.glob("*.taken.recover.*"))
+            if QUEUE_DIR.is_dir()
+            else []
+        )
 
         invalid: list[Path] = []
         pending = read_queue(invalid)
