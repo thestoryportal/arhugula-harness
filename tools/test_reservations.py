@@ -219,7 +219,8 @@ def test_cli_update_accepts_digit_leading_sha_and_parses_ints(qdir, capsys):
     assert head["head_sha"] == "4be86eec1abc" and head["pr"] == 8
 
 
-# mutation-probe: drop the FileNotFoundError guard around the gc tmp-sweep stat/unlink
+# hand-witness (probe not deletion-expressible: commenting a bare try/except breaks syntax):
+# swap the tmp-sweep `except FileNotFoundError` to another type and this test reds.
 def test_gc_survives_tmp_vanishing_mid_sweep(qdir, monkeypatch):
     """codex round-1 P2: a tmp entry unlinked between glob and stat/unlink is benign — the
     sweep continues instead of aborting on FileNotFoundError."""
