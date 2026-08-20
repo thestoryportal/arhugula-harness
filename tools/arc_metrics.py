@@ -704,10 +704,11 @@ def read_queue(invalid: list[Path] | None = None) -> list[tuple[Path, dict]]:
             # Invariants: no FileNotFoundError escapes drain()).
             continue
         except OSError as exc:
-            if _is_systemic(exc):
-                raise
-            # EISDIR, ENAMETOOLONG, ... -- a per-path content fault, not a
-            # queue-wide one: report + keep, drain the rest (codex r7 P2).
+            if _is_systemic(exc) and not os.access(QUEUE_DIR, os.R_OK | os.X_OK):
+                raise  # the DIRECTORY is unreadable: queue-wide, abort once
+            # EISDIR, ENAMETOOLONG, a mode-000 FILE, ... -- a per-path content
+            # fault (the glob itself succeeded, so the directory reads): report
+            # + keep, drain the rest (codex r7 P2, r9 P2).
             msg = f"  {path.name}: unreadable ({exc}) -- kept, needs human repair"
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             msg = f"  {path.name}: not valid JSON ({exc}) -- kept, needs human repair"
@@ -837,9 +838,7 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
                 # published LIVE claim (codex r8 P1). Exactly one rename wins;
                 # the loser's rename raises FNF and its retry-publish then sees
                 # the winner's live claim.
-                aside = taken.with_name(
-                    f"{taken.name}.recover.{socket.gethostname()}.{os.getpid()}"
-                )
+                aside = taken.with_name(_aside_suffix(taken.name))
                 try:
                     os.rename(taken, aside)
                 except FileNotFoundError:
@@ -924,6 +923,15 @@ def _restore_or_republish(taken: Path, path: Path, entry: dict) -> None:
     taken.unlink(missing_ok=True)
 
 
+def _aside_suffix(name: str) -> str:
+    """A recovery-aside name that can NEVER collide with an existing aside:
+    `os.rename` overwrites its destination, so a deterministic host+pid name
+    could destroy a crashed recoverer's orphaned capture once the pid is
+    reused (codex r9 P2). The random token keeps the parse shape
+    `<base>.recover.<host>.<pid>[-token]` -- liveness reads the pid half."""
+    return f"{name}.recover.{socket.gethostname()}.{os.getpid()}-{os.urandom(4).hex()}"
+
+
 def _recover_dead_claims() -> None:
     """Return claims held by a DEAD drain, and only those.
 
@@ -949,7 +957,8 @@ def _recover_dead_claims() -> None:
         base, _, rest = orphan.name.rpartition(".recover.")
         if not base.endswith(".taken"):
             continue  # a queue entry that merely matches the glob, not an aside
-        host, _, pid_s = rest.rpartition(".")
+        host, _, pid_field = rest.rpartition(".")
+        pid_s = pid_field.split("-", 1)[0]  # `<pid>-<token>`; legacy bare pid also parses
         if host != socket.gethostname() or not pid_s.isdigit():
             # A foreign-host (or unparseable) recoverer cannot be judged from
             # here: unknown owner is LIVE, never dead (C-HE-02 SS6).
@@ -984,7 +993,7 @@ def _recover_dead_claims() -> None:
             # otherwise count as outstanding forever; sweep it through the same
             # move-aside re-judge so a live claim is never touched.
             if _claim_owner_is_dead(claim):
-                gone = claim.with_name(f"{claim.name}.recover.{socket.gethostname()}.{os.getpid()}")
+                gone = claim.with_name(_aside_suffix(claim.name))
                 try:
                     os.rename(claim, gone)
                 except FileNotFoundError:
@@ -1009,7 +1018,7 @@ def _recover_dead_claims() -> None:
         # would then yank the LIVE owner's claim back to .json. Once moved to
         # a pid-suffixed aside name no peer can restamp it, so judging the
         # aside bytes is race-free; a live verdict puts the claim straight back.
-        aside = claim.with_name(f"{claim.name}.recover.{socket.gethostname()}.{os.getpid()}")
+        aside = claim.with_name(_aside_suffix(claim.name))
         try:
             os.rename(claim, aside)
         except FileNotFoundError:
@@ -1111,7 +1120,7 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
     return "added"
 
 
-def _report_kept(path: Path, arc_id: str, entry: dict, exc: BaseException) -> None:
+def _report_kept(path: Path, arc_id: str, entry: dict, exc: BaseException) -> bool:
     """`KEPT QUEUED` only when the entry is verifiably back on disk (C-HE-04 SS7).
 
     A restore can itself fail (the .taken vanished AND the exclusive re-publish
@@ -1120,13 +1129,14 @@ def _report_kept(path: Path, arc_id: str, entry: dict, exc: BaseException) -> No
     last carrier of the operator's declarations at that point."""
     if path.exists() or path.with_suffix(".taken").exists():
         print(f"  {arc_id}: KEPT QUEUED -- {exc!r}", file=sys.stderr)
-        return
+        return True
     payload = json.dumps({k: v for k, v in entry.items() if k != "_claim"}, sort_keys=True)
     print(
         f"  {arc_id}: CAPTURE AT RISK -- entry could not be restored ({exc!r}); "
         f"re-queue it by hand from this payload: {payload}",
         file=sys.stderr,
     )
+    return False
 
 
 def drain(_args: argparse.Namespace) -> int:
@@ -1178,6 +1188,7 @@ def drain(_args: argparse.Namespace) -> int:
     local = {r.get("arc_id") for r in read_ledger()}
     kept = len(outstanding) + len(invalid)
     added = 0
+    lost = 0
     for i, (path, entry) in enumerate(pending):
         arc_id = path.stem  # safe fallback name; refined inside the try
         try:
@@ -1191,13 +1202,19 @@ def drain(_args: argparse.Namespace) -> int:
             # extract(). This entry stays queued (already durably restored by
             # _drain_one where a claim was held); the rest still drain
             # (C-HE-04 SS3).
-            _report_kept(path, arc_id, entry, exc)
-            kept += 1
+            if _report_kept(path, arc_id, entry, exc):
+                kept += 1
+            else:
+                lost += 1
             continue
         except OSError as exc:
             if _is_systemic(exc):
                 # One systemic queue-dir fault dooms every remaining entry the
-                # same way: abort once with one message (C-HE-04 SS3).
+                # same way: abort once with one message (C-HE-04 SS3) -- but
+                # report THIS entry's disposition first: a systemic fault after
+                # its .taken vanished would otherwise discard the only
+                # in-memory payload silently (codex r9 P1).
+                _report_kept(path, arc_id, entry, exc)
                 remaining = len(pending) - i
                 print(
                     f"ABORT: systemic queue fault on {QUEUE_DIR}: {exc}; "
@@ -1205,8 +1222,10 @@ def drain(_args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 return 2
-            _report_kept(path, arc_id, entry, exc)
-            kept += 1
+            if _report_kept(path, arc_id, entry, exc):
+                kept += 1
+            else:
+                lost += 1
             continue
         if outcome == "added":
             added += 1
@@ -1218,6 +1237,13 @@ def drain(_args: argparse.Namespace) -> int:
             # documented contract that exit 0 means nothing is left to fold.
             kept += 1
 
+    if lost:
+        print(
+            f"drained {added} arc(s); {kept} entr(y/ies) still queued; "
+            f"{lost} CAPTURE(S) AT RISK (payload printed above)",
+            file=sys.stderr,
+        )
+        return 2
     print(f"drained {added} arc(s); {kept} entr(y/ies) still queued")
     # Non-zero on a retained entry, so automation cannot read a pending retry
     # as a completed fold.

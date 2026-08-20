@@ -1410,6 +1410,7 @@ def test_read_queue_systemic_fault_aborts_drain_once(tmp_path, monkeypatch, caps
         raise PermissionError(13, "queue dir unreadable")
 
     monkeypatch.setattr(Path, "read_text", perm)
+    monkeypatch.setattr(am.os, "access", lambda *a, **k: False)  # the DIR itself unreadable
     rc = am.drain(argparse.Namespace())
     out = capsys.readouterr()
     assert rc == 2
@@ -1600,9 +1601,10 @@ def test_capture_at_risk_reported_when_restore_itself_fails(tmp_path, monkeypatc
     monkeypatch.setattr(am, "publish_exclusive", emfile_on_republish)
     rc = am.drain(argparse.Namespace())
     err = capsys.readouterr().err
-    assert rc == 1
+    assert rc == 2, "a lost capture is exit 2, never a routine 'still queued' 1"
     assert "CAPTURE AT RISK" in err and '"arc_id": "pr-1"' in err
     assert "KEPT QUEUED" not in err
+    assert "CAPTURE(S) AT RISK" in err, "the summary names the loss, not a false kept-count"
 
 
 def test_a_directory_named_like_an_entry_is_isolated(tmp_path, monkeypatch, capsys):
