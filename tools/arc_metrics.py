@@ -1126,8 +1126,15 @@ def _transfer_from_dead_claim(entry: dict) -> None:
         # unreadable/malformed reservation head (JSONDecodeError is a ValueError; a
         # non-object head raises AttributeError -- codex r6 P2) is a per-arc condition:
         # the entry is safely back; the holder gate at append keeps this lane honest
-        # either way. Loud, never silent, never a whole-drain abort.
-        print(f"  {arc_id}: holder transfer skipped ({exc})")
+        # either way. Loud, never silent, never a whole-drain abort. An ATTEMPTED
+        # transfer that failed (CAS exhaustion / malformed head -- codex r16 P2)
+        # degrades to the registered stall posture: the reservation stays stuck-open
+        # and C-HE-03 §5's ground-truth pass escalates it (DEFERRED-HIL), while a
+        # stale-precondition loss means another lane already resolved it.
+        print(
+            f"  {arc_id}: holder transfer skipped ({exc}); "
+            "stuck-open heads escalate via the C-HE-03 §5 reconcile pass"
+        )
 
 
 def _recover_dead_claims() -> None:
@@ -2043,6 +2050,13 @@ def cmd_extract(args: argparse.Namespace) -> int:
                 "invocation completes this backfill"
             ) from exc
         print("note: backfill reservation terminalized merged; appending the row")
+    if owner == LANE_ID:
+        # The backfill row folds its minted reservation exactly as drain folds a real
+        # one (codex r16 P2): lane_id / sensor / open-time label land on the row --
+        # a null-lane backfill row would contaminate the historical-null cohorts.
+        head = rs.current(row.arc_id)
+        if head:
+            _fold_head_onto(row, head[1])
     append(row)
     print(f"appended {row.arc_id} -> {LEDGER}")
     return 0
