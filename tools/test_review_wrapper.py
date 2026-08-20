@@ -657,16 +657,48 @@ def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
     fr.validate(rows[0])
 
 
+def test_fallback_arc_id_is_reservable_and_injective(monkeypatch):
+    """codex r19/r20 P2: the branch-derived fallback arc id must be a single reservable
+    path component AND injective -- feat/x and feat-x must not collapse to one arc."""
+    monkeypatch.delenv("HARNESS_ARC_ID", raising=False)
+    monkeypatch.setattr(rw, "_git", lambda cwd, *a: "feat/he-lanes-s4b-u-he-17")
+    a1, _ = rw.env_arc_and_lane()
+    assert "/" not in a1 and ":" not in a1
+    monkeypatch.setattr(rw, "_git", lambda cwd, *a: "feat-he-lanes-s4b-u-he-17")
+    a2, _ = rw.env_arc_and_lane()
+    assert a1 != a2  # injective: the digest suffix separates slug collisions
+
+
+def test_gate_lens_rounds_stay_producer_scoped(tmp_path, monkeypatch):
+    """codex r19: one merge-gate pass emits three lenses sequentially with round_n=None --
+    each lens is its own producer, so all three must land at the SAME round number."""
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    out = rw.ReviewOutcome("APPROVE", "merge-gate", None, "", [], EXPECTED, "stdout")
+    rounds = [
+        rw.emit_outcome(out, producer=lens, arc_id="a1", lane_id="l", round_n=None)[0]["round_n"]
+        for lens in (
+            "merge-gate-concurrency",
+            "merge-gate-spec-conformance",
+            "merge-gate-witness-adequacy",
+        )
+    ]
+    assert rounds == [1, 1, 1]
+
+
 def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
     calls = []
     stub = types.SimpleNamespace(
         current=lambda arc_id: (1, {"state": "open"}),
         record_round_outcome=lambda arc_id, n, **kw: calls.append((arc_id, n, kw)),
+        RoundOutcomeConflict=type("RoundOutcomeConflict", (RuntimeError,), {}),
     )
     monkeypatch.setitem(sys.modules, "reservations", stub)
     rw.record_round_outcome_if_reserved(
         "pr-1", 2, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
     )
+    # the caller's round_n is preserved when free, so the folded reservation joins to the
+    # gate-log round (codex round-7 P2)
     assert calls == [
         ("pr-1", 2, {"channel": "codex", "terminal": "REVIEWER_UNAVAILABLE", "finding_count": 0})
     ]
@@ -676,6 +708,40 @@ def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
         "pr-2", 1, channel="codex", terminal="APPROVE", finding_count=0
     )
     assert len(calls) == 1
+
+
+def test_wrapper_failover_collision_persists_both_channels(tmp_path, monkeypatch, capsys):
+    """codex round-5 P2 (real reservations module): the codex leg records round 1
+    REVIEWER_UNAVAILABLE; the gemini failover leg also carries round 1 (per-producer
+    gate-log rounds) -- the wrapper lands it at the next free arc-level key instead of
+    dropping it. Both channels persist; nothing is erased."""
+    import reservations as real_rs
+
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(real_rs, "QUEUE_DIR", q)
+    monkeypatch.setitem(sys.modules, "reservations", real_rs)
+    real_rs.reserve("pr-fo", lane_id="A", branch="b", arc_type="inventing")
+    rw.record_round_outcome_if_reserved(
+        "pr-fo", 1, channel="codex", terminal="REVIEWER_UNAVAILABLE", finding_count=0
+    )
+    rw.record_round_outcome_if_reserved(
+        "pr-fo", 1, channel="gemini", terminal="BLOCK", finding_count=3
+    )
+    assert capsys.readouterr().err == ""
+    outcomes = real_rs.current("pr-fo")[1]["round_outcomes"]
+    # composite (round/channel) keys: both legs of the failover persist under their own
+    # key, joins to the gate log stay exact (codex rounds 5-9 P2)
+    assert outcomes["1/codex"]["terminal"] == "REVIEWER_UNAVAILABLE"
+    assert outcomes["1/gemini"] == {"channel": "gemini", "terminal": "BLOCK", "finding_count": 3}
+    # SAME-key conflict (same round, same channel, different content) is an anomaly:
+    # reported to stderr, never overwritten (codex round-6/7 P2)
+    rw.record_round_outcome_if_reserved(
+        "pr-fo", 1, channel="codex", terminal="APPROVE", finding_count=0
+    )
+    assert "not persisted" in capsys.readouterr().err
+    after = real_rs.current("pr-fo")[1]["round_outcomes"]
+    assert after["1/codex"]["terminal"] == "REVIEWER_UNAVAILABLE"
 
 
 def test_wrapper_round_outcome_noop_without_reservation_substrate(monkeypatch, capsys):
@@ -799,8 +865,8 @@ def test_codex_review_failover_flag_runs_gemini_once_and_blocks(monkeypatch, tmp
     monkeypatch.setattr(
         cr,
         "_run_gemini_failover",
-        lambda repo, base: (
-            calls.append(1)
+        lambda repo, base, chain_round=None: (
+            calls.append(chain_round)
             or rw.ReviewOutcome(
                 "BLOCK",
                 "gemini",
@@ -846,7 +912,7 @@ def test_codex_review_failover_both_unavailable_exits_2_with_both_reasons(
     monkeypatch.setattr(
         cr,
         "_run_gemini_failover",
-        lambda repo, base: rw.ReviewOutcome(
+        lambda repo, base, chain_round=None: rw.ReviewOutcome(
             "REVIEWER_UNAVAILABLE", "gemini", "transient", "gemini-reason", [], EXPECTED
         ),
     )
@@ -876,7 +942,9 @@ def test_primary_outage_with_a_successful_failover_routes_by_failure_class(monke
     monkeypatch.setattr(
         cr,
         "_run_gemini_failover",
-        lambda repo, base: rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout"),
+        lambda repo, base, chain_round=None: rw.ReviewOutcome(
+            "APPROVE", "gemini", None, "", [], EXPECTED, "stdout"
+        ),
     )
     routed = []
     monkeypatch.setattr(
@@ -994,6 +1062,66 @@ def test_failover_reads_the_gemini_wrapper_envelope_not_raw_stdout(monkeypatch, 
     monkeypatch.setattr(cr, "run_bounded", _fake_just(body_f))
     out = cr._run_gemini_failover(Path("."), "main")
     assert out.terminal == "REVIEWER_UNAVAILABLE" and "different invocation" in out.reason
+
+
+def test_failover_child_env_set_and_parent_records_reservation_outcome(monkeypatch, tmp_path):
+    """codex r17 / merge-gate spec-conformance P2: the child skips reservation persistence
+    (HARNESS_FAILOVER_CHILD=1); the PARENT records the C-HE-25 outcome from the envelope it
+    ACCEPTED -- including the synthetic REVIEWER_UNAVAILABLE on a binding mismatch -- so the
+    reservation always matches what the caller acts on."""
+    import reservations as real_rs
+
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(real_rs, "QUEUE_DIR", q)
+    monkeypatch.setitem(sys.modules, "reservations", real_rs)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    monkeypatch.setenv("HARNESS_ARC_ID", "pr-chain")  # a reservable id (no '/')
+    arc_id, _ = rw.env_arc_and_lane()
+    real_rs.reserve(arc_id, lane_id="A", branch="b", arc_type="inventing")
+    gem = {**EXPECTED, "reviewer_identity": "gemini-review"}
+    monkeypatch.setattr(
+        rw, "compute_binding", lambda *a, **k: {**gem, "config_hash": k["config_hash"]}
+    )
+    monkeypatch.setattr(cr, "_gemini_config_hash", lambda: EXPECTED["config_hash"])
+    seen_env = {}
+    body = {
+        "terminal": "BLOCK",
+        "channel": "gemini",
+        "failure_class": None,
+        "reason": "",
+        "findings": [{"severity": "P1", "location": "l", "message": "m"}],
+        "binding": gem,
+        "source": "stdout",
+    }
+
+    def fake_run(cmd, *, cwd, timeout, env):
+        import subprocess as sp
+
+        seen_env.update(env)
+        Path(cmd[3]).write_text(json.dumps(body))
+        return sp.CompletedProcess(cmd, 1, "", "")
+
+    monkeypatch.setattr(cr, "run_bounded", fake_run)
+    out = cr._run_gemini_failover(Path("."), "main", chain_round=2)
+    assert out.terminal == "BLOCK"
+    assert seen_env.get("HARNESS_FAILOVER_CHILD") == "1"
+    assert seen_env.get("HARNESS_ROUND_N") == "2"
+    outcomes = real_rs.current(arc_id)[1]["round_outcomes"]
+    assert outcomes == {"2/gemini": {"channel": "gemini", "terminal": "BLOCK", "finding_count": 1}}
+    # rejected envelope (binding mismatch): the PARENT records the synthetic UNAVAILABLE the
+    # caller acts on -- same-key conflict with the accepted row above would raise, so use a
+    # fresh chain round as the production flow would
+    body["binding"] = {**gem, "head_sha": "d" * 40}
+    out = cr._run_gemini_failover(Path("."), "main", chain_round=3)
+    assert out.terminal == "REVIEWER_UNAVAILABLE"
+    outcomes = real_rs.current(arc_id)[1]["round_outcomes"]
+    assert outcomes["3/gemini"]["terminal"] == "REVIEWER_UNAVAILABLE"
+    # codex r18 P2: the PARENT also emitted its own gate row for the rejected-envelope
+    # terminal the caller acts on -- the join to the gate log holds
+    rows = fr.read_rows(tmp_path / "g.jsonl")
+    parent_rows = [r for r in rows if r["producer"] == cr.GEMINI_PRODUCER and r["round_n"] == 3]
+    assert parent_rows and parent_rows[0]["record_kind"] == "reviewer_unavailable"
 
 
 def test_failover_without_envelope_is_recorded_here_once(monkeypatch, tmp_path):
@@ -1271,6 +1399,9 @@ def test_bound_block_already_on_stdout_when_our_cap_kills_still_blocks(tmp_path,
 
 
 def test_round_n_is_env_or_next_for_this_arc_and_producer(monkeypatch):
+    """Per-(arc, producer) scoping is load-bearing for the merge-gate lenses (codex r19:
+    an arc-global mint renumbered one gate pass's three lens rows N/N+1/N+2 and was
+    reverted); the failover chain shares its round via HARNESS_ROUND_N instead."""
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
     rows = [
         {"arc_id": "a", "producer": "p", "round_n": 2},

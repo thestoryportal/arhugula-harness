@@ -353,20 +353,25 @@ def _head(repo: Path) -> str:
 
 
 def _emit_rows(
-    outcome: rw.ReviewOutcome, *, producer: str = PRODUCER, channel: str = CHANNEL
-) -> None:
+    outcome: rw.ReviewOutcome,
+    *,
+    producer: str = PRODUCER,
+    channel: str = CHANNEL,
+    round_n: int | None = None,
+) -> int:
     arc_id, lane_id = rw.env_arc_and_lane()
     written = rw.emit_outcome(
-        outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=None
-    )  # the round is minted under the log lock (codex round 7); every terminal yields >= 1 row
-    round_n = written[0]["round_n"]
+        outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=round_n
+    )  # round minted under the log lock when None (codex round 7); every terminal yields a row
+    n = written[0]["round_n"]
     rw.record_round_outcome_if_reserved(
         arc_id,
-        round_n,
+        n,
         channel=channel,
         terminal=outcome.terminal,
         finding_count=len(outcome.findings),
     )
+    return n
 
 
 def _gemini_config_hash() -> str:
@@ -417,7 +422,7 @@ def _read_envelope(path: Path, expected: dict[str, str]) -> rw.ReviewOutcome | N
     )
 
 
-def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
+def _run_gemini_failover(repo: Path, base: str, chain_round: int | None = None) -> rw.ReviewOutcome:
     """C-HE-17 §1: on primary REVIEWER_UNAVAILABLE run `just gemini-review` ONCE under the
     IDENTICAL bar. The gemini wrapper (U-HE-06) does its own schema parse and records its own
     rows; this reads back its terminal ENVELOPE (`--outcome-json`), never the raw vendor stdout
@@ -445,7 +450,7 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
             "permanent",
             f"binding: {' '.join(exc.cmd[:4])} failed: {err.strip()[:300]}",
         )
-        _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini")
+        _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini", round_n=chain_round)
         return outcome
     with tempfile.TemporaryDirectory(prefix="arhugula-gemini-failover-") as scratch:
         envelope = Path(scratch) / "outcome.json"
@@ -453,16 +458,48 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
         # timed-out `just` cannot leave the wrapper / agy descendants alive to append gate
         # state after this process recorded the failover unavailable (codex round 4). A missing
         # `just` surfaces as its rc-127 CompletedProcess (gemini round 3), never an exception.
+        env = dict(os.environ)  # the gemini wrapper strips its own provider env + hooks
+        env["HARNESS_FAILOVER_CHILD"] = "1"  # parent records the reservation outcome (below)
+        if chain_round is not None:
+            # Failover-chain round identity (codex round-14 P1): the two legs of ONE failover
+            # share the primary's round number, in BOTH the gate log (round_n_for honors
+            # HARNESS_ROUND_N) and the reservation's composite keys ("N/codex" + "N/gemini"),
+            # so fold_round_outcomes pairs the legs of the SAME chain -- never a stale
+            # same-number leg from an earlier review.
+            env["HARNESS_ROUND_N"] = str(chain_round)
         proc = run_bounded(
             ["just", "gemini-review", base, str(envelope)],
             cwd=repo,
             timeout=FAILOVER_SUBPROCESS_CAP_S,
-            env=dict(os.environ),  # the gemini wrapper strips its own provider env + hooks
+            env=env,
         )
         stdout, stderr = proc.stdout or "", proc.stderr or ""
         outcome = _read_envelope(envelope, binding)
     if outcome is not None:
-        return outcome  # the wrapper reached a terminal and recorded its own rows
+        if outcome.terminal == "REVIEWER_UNAVAILABLE" and "different invocation" in (
+            outcome.reason or ""
+        ):
+            # REJECTED envelope (binding mismatch -- HEAD moved mid-review): the child's
+            # persisted verdict is against a different tree; the parent emits its OWN gate
+            # row for the terminal the caller actually acts on, and _emit_rows also records
+            # the reservation outcome (codex r18 P2: without this row the gate log carried
+            # only the child's rejected verdict and the join broke).
+            _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini", round_n=chain_round)
+            return outcome
+        # ACCEPTED envelope: the child recorded its own GATE-LOG rows (write-first); the
+        # reservation's C-HE-25 outcome is recorded HERE, from the envelope the parent
+        # accepted (codex r17 / merge-gate spec-conformance P2; the child skips it under
+        # HARNESS_FAILOVER_CHILD=1).
+        arc_id, _lane = rw.env_arc_and_lane()
+        if chain_round is not None:
+            rw.record_round_outcome_if_reserved(
+                arc_id,
+                chain_round,
+                channel="gemini",
+                terminal=outcome.terminal,
+                finding_count=len(outcome.findings),
+            )
+        return outcome
     outcome = rw.ReviewOutcome(
         "REVIEWER_UNAVAILABLE",
         "gemini",
@@ -472,7 +509,7 @@ def _run_gemini_failover(repo: Path, base: str) -> rw.ReviewOutcome:
         [],
         binding,
     )
-    _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini")
+    _emit_rows(outcome, producer=GEMINI_PRODUCER, channel="gemini", round_n=chain_round)
     return outcome
 
 
@@ -542,15 +579,23 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     invoke = (lambda timeout: rw.Attempt("", "", 0, False)) if args.invoke_test_empty else None
 
+    chain: dict[str, int] = {}
+
     def primary() -> rw.ReviewOutcome:
         outcome = run_codex_review(Path.cwd(), args.base, invoke=invoke)
-        _emit_rows(outcome)  # the primary's row lands before the failover runs
+        # the primary's row lands before the failover runs; rounds are ARC-GLOBAL
+        # (round_n_for), so the chain round the failover child is forced to cannot be
+        # duplicated by any independent invocation minting after this row lands
+        # (codex rounds 15/16/18 P1-P2).
+        chain["round"] = _emit_rows(outcome)
         _report(outcome, label="codex-review")
         return outcome
 
     if not args.failover:
         return rw.exit_code(primary())
-    first, fo = rw.run_with_failover(primary, lambda: _run_gemini_failover(Path.cwd(), args.base))
+    first, fo = rw.run_with_failover(
+        primary, lambda: _run_gemini_failover(Path.cwd(), args.base, chain.get("round"))
+    )
     if fo is None:
         return rw.exit_code(first)
     # NO second emission for the failover: `just gemini-review` (agy_review, U-HE-06) already

@@ -357,9 +357,16 @@ def exit_code(outcome: ReviewOutcome) -> int:
 
 
 def round_n_for(arc_id: str, producer: str, rows: list[dict] | None = None) -> int:
-    """`HARNESS_ROUND_N` when the loop sets it; otherwise the next round for this (arc, producer)
-    derived from the gate log (codex round 6: without this every invocation was round 0 and
-    distinct review heads collapsed into one round)."""
+    """`HARNESS_ROUND_N` when the loop sets it; otherwise the next round for this
+    (arc, producer) derived from the gate log (codex round 6: without this every invocation
+    was round 0 and distinct review heads collapsed into one round). Per-producer scoping is
+    LOAD-BEARING for the merge-gate lenses: each lens is its own producer and one gate pass
+    must yield three rows sharing a round number (U-HE-17 codex r19 -- an arc-global mint
+    was tried and reverted: it renumbered the three sequential lens emissions N/N+1/N+2).
+    The D-C failover chain instead shares its round by FORCING the child to the primary's
+    number via HARNESS_ROUND_N; the residual same-(producer, round) collision with a
+    hypothetical concurrent independent gemini review of the same arc is registered to
+    U-HE-19/21 (flow-excluded by the arc-serial holder discipline)."""
     env = os.environ.get("HARNESS_ROUND_N")
     if env is not None:
         return int(env)
@@ -382,7 +389,18 @@ def env_arc_and_lane() -> tuple[str, str]:
     lane_id = os.environ.get("HARNESS_LANE_ID") or (
         f"{socket.gethostname().split('.')[0]}-{Path.cwd().name}-nolane"
     )
-    return arc_id.replace(":", "_"), lane_id.replace(":", "_")
+
+    # '/' would make the fallback id unreservable (reservations arc_ids are single path
+    # components), silently skipping every C-HE-25 outcome persist (codex r19 P2). The
+    # slug alone is lossy (feat/x and feat-x collide), so an 6-hex digest of the RAW id
+    # keeps the fallback injective (codex r20 P2).
+    def _safe(raw: str) -> str:
+        safe = raw.replace(":", "_")  # pre-existing ':' mapping (row-format delimiter)
+        if "/" in safe:
+            safe = f"{safe.replace('/', '-')}-{hashlib.sha256(raw.encode()).hexdigest()[:6]}"
+        return safe
+
+    return _safe(arc_id), _safe(lane_id)
 
 
 def record_round_outcome_if_reserved(
@@ -399,6 +417,12 @@ def record_round_outcome_if_reserved(
         return
     try:
         if rs.current(arc_id) is not None:
+            # The reservation map keys by the composite ("<round>/<channel>"), so the two
+            # legs of a D-C failover -- which legitimately share a producer-scoped round
+            # NUMBER (`round_n_for`) -- land under distinct keys with no renumbering and
+            # exact joins back to the gate log (codex rounds 5-9 P2). A same-key conflict
+            # (same round, same channel, different content) is a genuine anomaly: reported
+            # below, never overwritten.
             rs.record_round_outcome(
                 arc_id, round_n, channel=channel, terminal=terminal, finding_count=finding_count
             )
@@ -505,6 +529,8 @@ def emit_outcome(
     part of the contract (C-HE-18 §3), so a failed write must not be silent."""
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
+        # minted INSIDE this critical section (codex round-16 P1: a pre-lock allocation
+        # held across a 1200 s review was racy)
         n = round_n if round_n is not None else round_n_for(arc_id, producer, rows)
         pairs = []
         for obs in outcome_rows(

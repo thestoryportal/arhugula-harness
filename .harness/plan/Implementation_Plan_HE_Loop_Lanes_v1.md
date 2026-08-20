@@ -3608,7 +3608,7 @@ In `_drain_one`, before `extract`:
         return "released"
     res = cur[1]
 ```
-and after `row = extract(args)`, fold: `row.phases = res.get("phases", {}); row.round_outcomes = res.get("round_outcomes", {}); row.concurrent_lanes_at_open = res.get("concurrent_lanes_at_open"); row.arc_type_open = res.get("arc_type") if res.get("arc_type_declared_at") == "open" else row.arc_type_open; row.lane_id = LANE_ID; row.head_sha = res.get("head_sha"); row.base_sha = res.get("base_sha")`.
+and after `row = extract(args)`, fold (rev. at U-HE-17 landing, codex r19: the reservation carries composite `"<round>/<channel>"` keys; `rs.fold_round_outcomes` is the committed projection to the C-HE-25 numeric arc-row shape): `row.phases = res.get("phases", {}); row.round_outcomes = rs.fold_round_outcomes(res.get("round_outcomes", {})); row.concurrent_lanes_at_open = res.get("concurrent_lanes_at_open"); row.arc_type_open = res.get("arc_type") if res.get("arc_type_declared_at") == "open" else row.arc_type_open; row.lane_id = LANE_ID; row.head_sha = res.get("head_sha"); row.base_sha = res.get("base_sha")`.
 
 Add and call at the top of `drain()` (after `_recover_dead_claims()`):
 ```python
