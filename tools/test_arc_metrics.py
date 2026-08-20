@@ -22,6 +22,29 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import arc_metrics as am
+import reservations as rs
+
+
+@pytest.fixture(autouse=True)
+def _reservations_isolated(tmp_path_factory, monkeypatch):
+    """Isolate the reservation store per test and silence the fail-closed loop emitter.
+
+    U-HE-19 wires drain through reservations: a legacy (reservation-less) queue entry is
+    bootstrap-reserved at drain, which would otherwise (a) write into the REAL shared
+    QUEUE_DIR/reservations and (b) raise from the fail-closed emit_loop_row until U-HE-29
+    lands loop_log_structured. Tests exercising either behaviour re-patch explicitly."""
+    monkeypatch.setattr(rs, "QUEUE_DIR", tmp_path_factory.mktemp("resq"))
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a, **k: None)
+
+
+@pytest.fixture
+def qdir_res(tmp_path, monkeypatch):
+    """One tmp dir as BOTH the arc_metrics queue and the reservations store root."""
+    q = tmp_path / "queue"
+    q.mkdir()
+    monkeypatch.setattr(am, "QUEUE_DIR", q)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    return q
 
 
 # mutation-probe: delete the `if not logs: raise` guard in round_metrics()
@@ -72,7 +95,8 @@ def _queue_entry(qdir: Path, arc_id: str, pr: int) -> Path:
     """Write one queued-arc file, the shape `queue` emits."""
     qdir.mkdir(parents=True, exist_ok=True)
     path = qdir / f"{arc_id}.json"
-    path.write_text(json.dumps({"pr": pr, "arc_id": arc_id}))
+    # arc_type present so the U-HE-19 bootstrap reserve at drain succeeds
+    path.write_text(json.dumps({"pr": pr, "arc_id": arc_id, "arc_type": "inventing"}))
     return path
 
 
@@ -90,9 +114,9 @@ def _merged_row(arc_id: str = "pr-1338", pr: int = 1338) -> am.ArcRow:
 def test_duplicate_arc_id_refused(monkeypatch, tmp_path: Path):
     ledger = tmp_path / "arc-metrics.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)
-    am.append(_merged_row())
+    am.append(_merged_row(), require_holder=False)
     with pytest.raises(am.AbortError) as exc:
-        am.append(_merged_row())
+        am.append(_merged_row(), require_holder=False)
     assert "already in ledger" in str(exc.value)
     assert len(ledger.read_text().strip().splitlines()) == 1
 
@@ -107,7 +131,7 @@ def test_unmerged_arc_refused_and_does_not_burn_the_arc_id(monkeypatch, tmp_path
     assert "unmerged arc" in str(exc.value)
     assert not ledger.exists(), "a refused row must leave no trace"
     # the arc_id is still free, so the correct post-merge capture succeeds
-    am.append(_merged_row())
+    am.append(_merged_row(), require_holder=False)
     assert len(ledger.read_text().strip().splitlines()) == 1
 
 
@@ -166,7 +190,7 @@ def test_a_locally_appended_row_holds_its_queue_entry(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     monkeypatch.setattr(am, "LEDGER", ledger)
     monkeypatch.setattr(am, "committed_arc_ids", set)
-    am.append(_merged_row("pr-1338", 1338))
+    am.append(_merged_row("pr-1338", 1338), require_holder=False)
     _queue_entry(qdir, "pr-1338", 1338)
 
     assert am.drain(am.argparse.Namespace()) == 1, "held work is not success"
@@ -238,7 +262,7 @@ def test_entry_is_released_once_the_row_reaches_committed_history(monkeypatch, t
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
     monkeypatch.setattr(am, "LEDGER", ledger)
     monkeypatch.setattr(am, "committed_arc_ids", lambda: {"pr-1338"})
-    am.append(_merged_row("pr-1338", 1338))
+    am.append(_merged_row("pr-1338", 1338), require_holder=False)
     _queue_entry(qdir, "pr-1338", 1338)
 
     assert am.drain(am.argparse.Namespace()) == 0
@@ -1124,7 +1148,7 @@ def test_arc_type_at_open(monkeypatch, tmp_path: Path):
         arc_type_open="inventing",
         arc_type_declared_at="open",
     )
-    am.append(row)
+    am.append(row, require_holder=False)
     am.relabel_arc_type_close("pr-9", "applying")
     rows = am.read_ledger()
     assert len(rows) == 1
@@ -1142,7 +1166,10 @@ def test_relabel_leaves_every_other_row_byte_identical(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(am, "LEDGER", ledger)
     other = {"arc_id": "pr-1", "arc_type": "inventing", "notes": "historical row, no new keys"}
     ledger.write_text(json.dumps(other, sort_keys=True) + "\n")
-    am.append(am.ArcRow(arc_id="pr-2", merged_at="2026-08-18T00:00:00Z", merge_sha="y"))
+    am.append(
+        am.ArcRow(arc_id="pr-2", merged_at="2026-08-18T00:00:00Z", merge_sha="y"),
+        require_holder=False,
+    )
     am.relabel_arc_type_close("pr-2", "applying")
     lines = ledger.read_text().splitlines()
     assert lines[0] == json.dumps(other, sort_keys=True)
@@ -1181,7 +1208,10 @@ def test_relabel_aborts_when_the_ledger_changed_underneath(monkeypatch, tmp_path
     the relabel detects the changed bytes, writes nothing, and the appended row survives."""
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)
-    am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+    am.append(
+        am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"),
+        require_holder=False,
+    )
     real_read = am.read_ledger
 
     def read_then_concurrent_append():
@@ -1210,7 +1240,10 @@ def test_append_and_relabel_are_mutually_exclusive_by_claim(monkeypatch, tmp_pat
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)
     monkeypatch.setattr(am, "QUEUE_DIR", tmp_path / "queue")
-    am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+    am.append(
+        am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"),
+        require_holder=False,
+    )
     claim = am._ledger_claim_path(ledger)
     # C-HE-02 §2: the claim is QUEUE_DIR-adjacent, never beside the (REPO-resident) ledger
     assert claim.parent == tmp_path / "queue" and not claim.exists()
@@ -1220,7 +1253,10 @@ def test_append_and_relabel_are_mutually_exclusive_by_claim(monkeypatch, tmp_pat
         claim, json.dumps({"_claim": {"pid": os.getpid(), "host": socket.gethostname()}})
     )
     with pytest.raises(am.AbortError, match="claimed by another writer"):
-        am.append(am.ArcRow(arc_id="pr-2", merged_at="2026-08-18T00:00:00Z", merge_sha="b"))
+        am.append(
+            am.ArcRow(arc_id="pr-2", merged_at="2026-08-18T00:00:00Z", merge_sha="b"),
+            require_holder=False,
+        )
     with pytest.raises(am.AbortError, match="claimed by another writer"):
         am.relabel_arc_type_close("pr-1", "applying")
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]
@@ -1234,11 +1270,17 @@ def test_append_and_relabel_are_mutually_exclusive_by_claim(monkeypatch, tmp_pat
     # a foreign-host claim is never reclaimed (cannot tell) -> abort
     am.publish_exclusive(claim, json.dumps({"_claim": {"pid": 1, "host": "other-host"}}))
     with pytest.raises(am.AbortError, match="claimed by another writer"):
-        am.append(am.ArcRow(arc_id="pr-3", merged_at="2026-08-18T00:00:00Z", merge_sha="c"))
+        am.append(
+            am.ArcRow(arc_id="pr-3", merged_at="2026-08-18T00:00:00Z", merge_sha="c"),
+            require_holder=False,
+        )
     claim.unlink()
     # the claim is released even when the write aborts inside it
     with pytest.raises(am.AbortError, match="already in ledger"):
-        am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+        am.append(
+            am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"),
+            require_holder=False,
+        )
     assert not claim.exists()
 
 
@@ -1264,7 +1306,10 @@ def test_dead_claim_reclaim_never_steals_a_peers_fresh_live_claim(monkeypatch, t
 
     monkeypatch.setattr(am, "_claim_owner_is_dead", judged_dead_then_peer_reclaims_and_publishes)
     with pytest.raises(am.AbortError, match="claimed by another writer"):
-        am.append(am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"))
+        am.append(
+            am.ArcRow(arc_id="pr-1", merged_at="2026-08-18T00:00:00Z", merge_sha="a"),
+            require_holder=False,
+        )
     assert claim.read_text() == live  # A's claim survived, byte-identical
     assert not list((tmp_path / "queue").glob(".ledger-claim-*.dead.*"))
     assert not ledger.exists()
@@ -1273,7 +1318,10 @@ def test_dead_claim_reclaim_never_steals_a_peers_fresh_live_claim(monkeypatch, t
 def test_relabel_cli_is_wired(monkeypatch, tmp_path: Path, capsys):
     ledger = tmp_path / "l.jsonl"
     monkeypatch.setattr(am, "LEDGER", ledger)
-    am.append(am.ArcRow(arc_id="pr-3", merged_at="2026-08-18T00:00:00Z", merge_sha="z"))
+    am.append(
+        am.ArcRow(arc_id="pr-3", merged_at="2026-08-18T00:00:00Z", merge_sha="z"),
+        require_holder=False,
+    )
     assert am.main(["relabel", "--arc-id", "pr-3", "--arc-type-close", "inventing"]) == 0
     assert am.read_ledger()[0]["arc_type_close"] == "inventing"
     assert am.main(["relabel", "--arc-id", "pr-3", "--arc-type-close", "inventing"]) == 0
@@ -1848,3 +1896,113 @@ def test_kill_after_seam_exits_137():
     )
     assert r.returncode == 137
     assert "alive" not in r.stdout
+
+
+# ─── U-HE-19: drain ⇄ reservation integration (C-HE-04 §2/§4/§5, C-HE-03 §4/§6) ─────
+
+
+# mutation-probe: drop the holder check in append()
+def test_append_refuses_unless_holder(tmp_path, monkeypatch, qdir_res):
+    """C-HE-04 §2(ii): append() refuses unless THIS lane holds the open reservation."""
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-40", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-40", "A")
+    with pytest.raises(am.AbortError, match="holder"):
+        am.append(am.ArcRow(arc_id="pr-40", merged_at="t", merge_sha="s"))
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    am.append(am.ArcRow(arc_id="pr-40", merged_at="t", merge_sha="s"))
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-40"]
+
+
+def test_drain_flips_before_append_and_folds_reservation_fields(tmp_path, monkeypatch):
+    """C-HE-04 §2 order (flip BEFORE append) + the C-HE-27 §3 / C-HE-25 / C-HE-26 §1 fold."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve("pr-1", lane_id="A", branch="b", arc_type="applying")
+    rs.record_phase("pr-1", "execute", "start", ts="2026-08-20T00:00:00Z")
+    rs.record_round_outcome("pr-1", 1, channel="codex", terminal="APPROVE", finding_count=0)
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    order = []
+    real_append = am.append
+    monkeypatch.setattr(
+        am,
+        "append",
+        lambda row: (order.append(("append", rs.current("pr-1")[1]["state"])), real_append(row))[1],
+    )
+    monkeypatch.setattr(
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+    )
+    am.drain(argparse.Namespace())
+    assert order == [("append", "open")], "flip happened BEFORE append"
+    row = am.read_ledger()[0]
+    assert row["arc_type_open"] == "applying" and row["lane_id"] == "A"
+    assert row["phases"]["execute"]["start"] == "2026-08-20T00:00:00Z"
+    assert row["round_outcomes"] == {
+        "1": {"channel": "codex", "terminal": "APPROVE", "finding_count": 0}
+    }
+    assert row["concurrent_lanes_at_open"] == 0
+
+
+# mutation-probe: drop transfer_holder() from _recover_dead_claims
+def test_recover_transfers_holder_to_recoverer(tmp_path, monkeypatch, qdir_res):
+    """C-HE-04 §4 / C-HE-03 §6 (the named D2 exception): restoring a dead owner's claim
+    transfers the open reservation's holder to the recovering lane in the same step."""
+    q = qdir_res
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-50", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-50", "A")
+    (q / "pr-50.taken").write_text(
+        json.dumps(
+            {"pr": 50, "arc_id": "pr-50", "_claim": {"pid": 999999, "host": socket.gethostname()}}
+        )
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    am._recover_dead_claims()
+    assert (q / "pr-50.json").exists() and rs.holder("pr-50") == "B"
+
+
+def test_local_row_reconciliation_drops_superseded_rows(tmp_path, monkeypatch, qdir_res):
+    """C-HE-04 §5: uncommitted local rows whose reservation is held/merged by ANOTHER
+    lane are dropped at drain start; this lane's own rows survive."""
+    ledger = tmp_path / "l.jsonl"
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    ledger.write_text(
+        json.dumps({"arc_id": "pr-60", "record_kind": "arc"})
+        + "\n"
+        + json.dumps({"arc_id": "pr-61", "record_kind": "arc"})
+        + "\n"
+    )
+    rs.reserve("pr-60", lane_id="B", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-60", "B")  # held by another lane
+    rs.reserve("pr-61", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-61", "A")  # ours
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    am._reconcile_local_rows()
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-61"]
+
+
+def test_bootstrap_emit_failure_is_per_arc_and_next_drain_proceeds(tmp_path, monkeypatch, capsys):
+    """The fail-closed loop emitter (loop_log_structured lands at U-HE-29) raising at the
+    legacy bootstrap is a PER-ARC fault: entry kept + loud, no wedged claim -- and because
+    the reservation is created BEFORE the emit, the NEXT drain proceeds without it."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    monkeypatch.setattr(am, "extract", lambda a: _merged_row("pr-1", 1))
+
+    def boom(*a, **k):
+        raise rs.LoopStatusWriteError("loop row not written")
+
+    monkeypatch.setattr(rs, "emit_loop_row", boom)
+    rc = am.drain(argparse.Namespace())
+    err = capsys.readouterr().err
+    assert rc == 1 and "KEPT QUEUED" in err
+    assert (q / "pr-1.json").exists() and not list(q.glob("*.taken"))
+    assert rs.current("pr-1")[1]["state"] == "pending", "reservation created before the emit"
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a, **k: None)
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1, "added row held pending commit"
+    assert [r["arc_id"] for r in am.read_ledger()] == ["pr-1"]

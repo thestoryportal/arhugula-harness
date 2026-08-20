@@ -87,6 +87,13 @@ MERGED_REF = os.environ.get("ARC_METRICS_MERGED_REF", "origin/main")
 CI_TERMINAL = ("SUCCESS", "FAILURE", "CANCELLED")
 CI_GREEN = frozenset({"SUCCESS"})
 
+#: This process's lane identity (C-HE-03 §3). Lane-init (U-HE-31) exports HARNESS_LANE_ID;
+#: the fallback mints a stable per-process id so a lane never appears as ':'-bearing or
+#: empty (reservations._check_id refuses ':' and '').
+LANE_ID = os.environ.get(
+    "HARNESS_LANE_ID"
+) or f"{socket.gethostname().split('.')[0]}-{REPO.name}-{os.getpid():08x}"[:64].replace(":", "-")
+
 
 def ci_is_green(conclusion: str | None) -> bool:
     """Only an exact `success` counts. CANCELLED is named explicitly (C-HE-19 §2: not by
@@ -516,7 +523,7 @@ def release_ledger(ledger: Path) -> None:
     _ledger_claim_path(ledger).unlink(missing_ok=True)
 
 
-def append(row: ArcRow) -> None:
+def append(row: ArcRow, *, require_holder: bool = True) -> None:
     # An arc is not an arc until it merged. Appending a pre-merge row would
     # persist null merge fields AND burn the arc_id, so the duplicate guard
     # below would then reject the correct post-merge capture -- turning a
@@ -528,6 +535,19 @@ def append(row: ArcRow) -> None:
             f"(merged_at={row.merged_at!r}, merge_sha={row.merge_sha!r}) -- "
             "capture after merge, or use --dry-run to inspect"
         )
+    if require_holder:
+        # C-HE-04 §2(ii): only the lane holding the OPEN reservation may append -- a lane
+        # killed after append cannot be silently superseded by a second appender.
+        # `reservations` imports this module at load; import it inside the functions that
+        # need it (plan U-HE-19) so the cycle never forms at import time.
+        import reservations as rs
+
+        h = rs.holder(row.arc_id)
+        if h != LANE_ID:
+            raise AbortError(
+                f"{row.arc_id}: this lane ({LANE_ID}) is not the reservation holder "
+                f"({h!r}) -- append refused (C-HE-04 §2)"
+            )
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
     claim_ledger(LEDGER)
     try:
@@ -952,6 +972,34 @@ def _aside_suffix(name: str) -> str:
     return f"{name}.recover.{socket.gethostname()}.{os.getpid()}-{os.urandom(4).hex()}"
 
 
+def _transfer_reservation_to_recoverer(restored: Path) -> None:
+    """C-HE-04 §4 second half: restoring a DEAD owner's entry transfers its `open`
+    reservation to THIS lane in the same recovery step (C-HE-03 §6 -- the named D2
+    exception), so the recovering lane's holder-gated append() is authorized. The
+    deadness adjudication lives at the call site (the pid+host liveness check on the
+    claim bytes); this helper only records the already-adjudicated transfer."""
+    import reservations as rs
+
+    try:
+        entry = json.loads(restored.read_text())
+    except (OSError, ValueError):
+        return  # consumed or unreadable meanwhile -- the drain loop re-judges it
+    arc_id = entry.get("arc_id") or (f"pr-{entry['pr']}" if "pr" in entry else None)
+    if not arc_id:
+        return
+    try:
+        cur = rs.current(arc_id)
+        dead_lane = cur[1].get("lane_id") if cur else None
+        if dead_lane and rs.holder(arc_id) == dead_lane and dead_lane != LANE_ID:
+            rs.transfer_holder(arc_id, from_lane_id=dead_lane, to_lane_id=LANE_ID)
+            print(f"  {arc_id}: reservation holder transferred {dead_lane} -> {LANE_ID}")
+    except rs.ReservationError as exc:
+        # A stale precondition (a peer transferred first, or the state moved on) is a
+        # lost race, not a fault: the entry is safely back; the holder gate at append
+        # keeps this lane honest either way. Loud, never silent.
+        print(f"  {arc_id}: holder transfer skipped ({exc})")
+
+
 def _recover_dead_claims() -> None:
     """Return claims held by a DEAD drain, and only those.
 
@@ -1000,6 +1048,9 @@ def _recover_dead_claims() -> None:
         try:
             os.link(orphan, target)
             print(f"  {what} -> {target.name}")
+            if target.suffix == ".json":
+                # dead-owner route only: same-step holder transfer (C-HE-04 §4)
+                _transfer_reservation_to_recoverer(target)
         except FileExistsError:
             pass  # the name is already durably held; the aside is redundant
         except FileNotFoundError:
@@ -1066,6 +1117,7 @@ def _recover_dead_claims() -> None:
         try:
             os.link(aside, restored)
             print(f"  recovered claim from a dead owner -> {restored.name}")
+            _transfer_reservation_to_recoverer(restored)
         except FileExistsError:
             print(f"  {claim.name}: a newer capture holds the queue name; dropping the stale copy")
         aside.unlink(missing_ok=True)
@@ -1101,7 +1153,54 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
         print(f"  {arc_id}: claimed by a concurrent drain, still outstanding")
         return "outstanding"
 
+    # `reservations` imports this module at load; import it inside the functions that
+    # need it (plan U-HE-19) so the cycle never forms at import time. The U-HE-16
+    # module-set grep witness is unaffected.
+    import reservations as rs
+
     try:
+        # C-HE-04 §2 order: (i) flip pending->open with holder = this lane, (ii) append
+        # (holder-gated), (iii) restore/hold. The flip happens BEFORE append so a lane
+        # killed after append leaves an `open` reservation a peer can only take over
+        # through §4's adjudicated holder transfer -- never by silently re-appending.
+        cur = rs.current(arc_id)
+        if cur is None:
+            # Transitional bootstrap for entries queued before reservations existed
+            # (migration, plan §6 open item 3): reserve with the truthful close-time
+            # label. The reservation is created BEFORE the fail-closed NOTIFY
+            # (loop_log_structured lands at U-HE-29), so a raised emit costs one loud
+            # KEPT-QUEUED cycle, never the capture: the next drain finds the pending
+            # reservation and proceeds without re-emitting.
+            rs.reserve(
+                arc_id,
+                lane_id=LANE_ID,
+                branch=entry.get("branch", "unknown"),
+                arc_type=entry["arc_type"],
+                arc_type_declared_at="close",
+            )
+            rs.emit_loop_row(
+                "NOTIFY",
+                LANE_ID,
+                "reservation-bootstrap:transient-retry:legacy_queue_entry",
+                f"{arc_id} reservation created at drain (legacy entry)",
+            )
+            cur = rs.current(arc_id)
+        state = cur[1]["state"]
+        if state == "pending":
+            cur = (cur[0], rs.open_with_sensor(arc_id, LANE_ID))
+        elif state == "open" and cur[1]["lane_id"] != LANE_ID:
+            _restore_or_republish(taken, path, entry)
+            print(
+                f"  {arc_id}: open reservation held by {cur[1]['lane_id']}; "
+                "not appendable by this lane -- entry held"
+            )
+            return "held"
+        elif state == "merged":
+            path.unlink(missing_ok=True)
+            taken.unlink(missing_ok=True)
+            print(f"  {arc_id}: reservation merged; releasing queue entry")
+            return "released"
+        res = cur[1]
         # Namespace construction reads entry fields, so a malformed entry can
         # raise HERE, after the claim -- it must restore before propagating or
         # the claim wedges under a live pid (codex r4 P2).
@@ -1118,10 +1217,25 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             notes=entry.get("notes", ""),
         )
         row = extract(args)
+        # C-HE-27 §3 fold at drain, after the flip: the reservation's accreted facts land
+        # on the ONE arc row. `fold_round_outcomes` is the committed projection of the
+        # composite "<round>/<channel>" carrier into the C-HE-25 numeric arc-row shape
+        # (plan rev 2026-08-20, clearance marker
+        # implementation-plan-he-loop-lanes-v1-s4b-u-he-19-fold-rev-cleared-2026-08-20).
+        row.phases = res.get("phases", {})
+        row.round_outcomes = rs.fold_round_outcomes(res.get("round_outcomes", {}))
+        row.concurrent_lanes_at_open = res.get("concurrent_lanes_at_open")
+        if res.get("arc_type_declared_at") == "open":
+            # C-HE-26 §1: the open-time label joins via arc_id from the reservation;
+            # a close-declared (bootstrap) reservation leaves the entry-derived label.
+            row.arc_type_open = res.get("arc_type")
+        row.lane_id = LANE_ID
+        row.head_sha = res.get("head_sha")
+        row.base_sha = res.get("base_sha")
         _kill_after("extract")
         append(row)
         _kill_after("append")
-    except (AbortError, KeyError, TypeError, ValueError, OSError):
+    except (AbortError, KeyError, TypeError, ValueError, OSError, rs.ReservationError):
         # Durable restore BEFORE the caller reports KEPT QUEUED (C-HE-04 SS7) --
         # OSError included (EMFILE from append, ...): drain() re-classifies it
         # after the entry is durably back (codex r5 P2). If the fault is
@@ -1138,6 +1252,35 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
     _kill_after("restore")
     print(f"  {arc_id}: appended (entry held until the row is committed)")
     return "added"
+
+
+def _reconcile_local_rows() -> None:
+    """C-HE-04 §5: drop this worktree's uncommitted rows whose reservation is held or
+    merged by ANOTHER lane (we died after append; a peer superseded us via §4). Atomic
+    whole-file rewrite; committed rows untouched. Closes the "orphaned local row rides
+    along in the next PR" path (ADV-F6) before SPLIT_BRAIN_LEDGER would catch it at CI."""
+    import reservations as rs
+
+    rows = read_ledger()
+    if not rows:
+        return
+    committed = committed_arc_ids()
+    keep, dropped = [], []
+    for r in rows:
+        aid = r.get("arc_id")
+        cur = rs.current(aid) if aid and aid not in committed else None
+        if cur and cur[1]["state"] in ("open", "merged") and cur[1]["lane_id"] != LANE_ID:
+            dropped.append(aid)
+            continue
+        keep.append(r)
+    if dropped:
+        tmp = LEDGER.with_name(f".{LEDGER.name}.{os.getpid()}.tmp")
+        tmp.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in keep))
+        os.replace(tmp, LEDGER)
+        print(
+            f"  dropped {len(dropped)} orphaned local row(s) superseded by another lane: "
+            f"{', '.join(dropped)}"
+        )
 
 
 def _report_kept(path: Path, arc_id: str, entry: dict, exc: BaseException) -> bool:
@@ -1168,8 +1311,11 @@ def drain(_args: argparse.Namespace) -> int:
     different file and is picked up by this drain or the next one -- there is no
     window in which it can be erased, and no lock is needed to say so.
     """
+    import reservations as rs
+
     try:
         _recover_dead_claims()
+        _reconcile_local_rows()
 
         invalid: list[Path] = []
         pending = read_queue(invalid)
@@ -1216,12 +1362,13 @@ def drain(_args: argparse.Namespace) -> int:
             # fault when the entry is malformed -- it must not abort the loop.
             arc_id = entry.get("arc_id") or f"pr-{entry['pr']}"
             outcome = _drain_one(path, entry, arc_id, committed, local)
-        except (AbortError, KeyError, TypeError, ValueError) as exc:
-            # Per-arc fault -- AbortError from capture, or a malformed entry
+        except (AbortError, KeyError, TypeError, ValueError, rs.ReservationError) as exc:
+            # Per-arc fault -- AbortError from capture, a malformed entry
             # (missing/mistyped fields) raising in the arc_id expression or
-            # extract(). This entry stays queued (already durably restored by
-            # _drain_one where a claim was held); the rest still drain
-            # (C-HE-04 SS3).
+            # extract(), or a reservation-layer refusal (a lost reserve race, the
+            # fail-closed loop emitter before U-HE-29, a holder mismatch). This
+            # entry stays queued (already durably restored by _drain_one where a
+            # claim was held); the rest still drain (C-HE-04 SS3).
             if _report_kept(path, arc_id, entry, exc):
                 kept += 1
             else:
@@ -1448,7 +1595,10 @@ def cmd_extract(args: argparse.Namespace) -> int:
     if args.dry_run:
         print(json.dumps(asdict(row), indent=2, sort_keys=True))
         return 0
-    append(row)
+    # Manual/historical backfill: no reservation ever existed for a pre-lanes arc, so the
+    # C-HE-04 §2 holder gate stays on the DRAIN path only (plan U-HE-19).
+    append(row, require_holder=False)
+    print("note: historical backfill, reservation holder check bypassed")
     print(f"appended {row.arc_id} -> {LEDGER}")
     return 0
 

@@ -80,6 +80,14 @@ MANIFEST: list[Row] = [
         True,
     ),
     Row("C-HE-04", "shell:tools/hooks/test_lib.sh", "phase0", "local + CI", True),
+    # C-HE-04 §2/§4/§5 (U-HE-19): holder-gated append + drain ⇄ reservation integration
+    Row(
+        "C-HE-04",
+        "pytest:tools/test_arc_metrics.py::test_append_refuses_unless_holder",
+        "phase0",
+        "local + CI",
+        True,
+    ),
     # C-HE-05 (U-HE-10)
     Row(
         "C-HE-05",
