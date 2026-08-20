@@ -2435,7 +2435,7 @@ def test_backfill_resume_refuses_a_mismatched_reservation_payload(tmp_path, monk
     THIS invocation -- a mismatched recorded pr/arc_type is refused, not consumed."""
     monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
     monkeypatch.setattr(am, "LANE_ID", "B")
-    rs.reserve("pr-98", lane_id="B", branch="historical-backfill", arc_type="inventing")
+    rs.reserve("pr-98", lane_id="B", branch=am.BACKFILL_BRANCH, arc_type="inventing")
     rs.update_payload("pr-98", {"pr": 998})
     monkeypatch.setattr(
         am,
@@ -2447,3 +2447,47 @@ def test_backfill_resume_refuses_a_mismatched_reservation_payload(tmp_path, monk
     with pytest.raises(am.AbortError, match="not this command's reservation"):
         am.cmd_extract(argparse.Namespace(dry_run=False))
     assert not (tmp_path / "l.jsonl").exists() and rs.current("pr-98")[1]["state"] == "pending"
+
+
+def test_backfill_discriminator_cannot_be_a_real_branch(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r12 P2: the resume discriminator contains ':' -- illegal in a git
+    ref -- so a NORMAL arc whose branch merely resembles a backfill can never be
+    misclassified; and a same-lane normal reservation is still refused."""
+    assert ":" in am.BACKFILL_BRANCH
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "l.jsonl")
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    monkeypatch.setattr(
+        am,
+        "extract",
+        lambda a: am.ArcRow(
+            arc_id="pr-99", pr=99, merged_at="t", merge_sha="s", arc_type="applying"
+        ),
+    )
+    # a plausible-looking REAL branch name is still a normal reservation -> refused
+    rs.reserve("pr-99", lane_id="A", branch="historical-backfill", arc_type="applying")
+    with pytest.raises(am.AbortError, match="queue"):
+        am.cmd_extract(argparse.Namespace(dry_run=False))
+    assert not (tmp_path / "l.jsonl").exists()
+
+
+# mutation-probe: drop _transfer_reservation_to_recoverer() from _claim_arc's takeover
+def test_claim_arc_takeover_transfers_the_dead_holders_reservation(tmp_path, monkeypatch, qdir_res):
+    """codex U-HE-19 r12 P2: the mid-drain takeover in _claim_arc is a THIRD dead-owner
+    consumption site -- it too must run the C-HE-04 §4 transfer from the lane-stamped
+    claim bytes before discarding them."""
+    q = qdir_res
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-54", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-54", "A")
+    entry = {"pr": 54, "arc_id": "pr-54", "arc_type": "inventing"}
+    path = q / "pr-54.json"
+    path.write_text(json.dumps(entry))
+    (q / "pr-54.taken").write_text(
+        json.dumps(
+            {**entry, "_claim": {"pid": 999999, "host": socket.gethostname(), "lane_id": "A"}}
+        )
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    taken = am._claim_arc(path, entry)
+    assert taken is not None and taken.exists(), "the takeover claimed the entry"
+    assert rs.holder("pr-54") == "B", "the dead holder's reservation transferred"

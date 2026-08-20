@@ -88,6 +88,13 @@ CI_TERMINAL = ("SUCCESS", "FAILURE", "CANCELLED")
 CI_GREEN = frozenset({"SUCCESS"})
 
 
+#: The backfill reservation's pseudo-branch discriminator (codex U-HE-19 r12 P2):
+#: ":" is ILLEGAL in a git ref name, so no real arc's reservation can ever carry
+#: this value -- cmd_extract's resume path cannot be spoofed by a branch named
+#: like it.
+BACKFILL_BRANCH = "backfill:cmd-extract"
+
+
 def _fallback_lane_id(host: str, repo: Path) -> str:
     """STABLE per-(host, worktree) lane id -- never the pid (codex U-HE-19 r1 P2: a
     pid-bearing fallback makes every retrying CLI invocation look like another lane,
@@ -944,6 +951,12 @@ def _claim_arc(path: Path, entry: dict) -> Path | None:
                         pass
                     aside.unlink(missing_ok=True)
                     return None
+                # The dead claimant may have been the reservation holder (it claimed,
+                # flipped open, and died mid-drain after the startup recovery sweep):
+                # transfer from the aside bytes -- the LAST lane-stamped evidence --
+                # before they vanish (codex U-HE-19 r12 P2; same C-HE-04 §4 step as
+                # _recover_dead_claims' restore sites).
+                _transfer_reservation_to_recoverer(aside)
                 aside.unlink(missing_ok=True)
                 continue  # the owner is provably gone; retry once against the freed name
             return None
@@ -1949,7 +1962,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             rs.reserve(
                 row.arc_id,
                 lane_id=LANE_ID,
-                branch="historical-backfill",
+                branch=BACKFILL_BRANCH,
                 arc_type=row.arc_type,
                 arc_type_declared_at="close",
             )
@@ -1961,7 +1974,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
         cur = rs.current(row.arc_id)
         print("note: historical backfill reserved by this lane")
     state, owner = cur[1]["state"], cur[1]["lane_id"]
-    if owner == LANE_ID and cur[1].get("branch") != "historical-backfill":
+    if owner == LANE_ID and cur[1].get("branch") != BACKFILL_BRANCH:
         # A NORMAL same-lane reservation is not this command's to consume (codex r9
         # P2): appending here would skip the drain's reservation fold (phases, round
         # outcomes, open-time label) and then deadlock the queued drain's correct row
@@ -1971,7 +1984,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
             f"(state={state!r}) -- capture it through `queue` + `drain` (the drain "
             "folds the reservation); extract-backfill is for reservation-less history"
         )
-    if owner == LANE_ID and cur[1].get("branch") == "historical-backfill":
+    if owner == LANE_ID and cur[1].get("branch") == BACKFILL_BRANCH:
         # A lane+branch match alone does not make it THIS invocation's reservation
         # (codex r11 P2): a concurrent/retried backfill in the same worktree could
         # terminalize one reservation and append the other's payload. The recorded
