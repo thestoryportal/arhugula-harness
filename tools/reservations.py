@@ -150,11 +150,18 @@ def mint_lane_id(worktree: Path) -> str:
 
 
 def _dir(arc_id: str) -> Path:
-    # dot-prefixed ids are reserved for infrastructure (`.seq`, `.<gen>.<pid>.tmp` stagers)
-    # and are skipped by sibling_open_count/gc -- a reservation there would be invisible to
-    # coordination and retention (codex round-2 P3).
-    if "/" in arc_id or arc_id in ("", "..") or arc_id.startswith("."):
+    # Mirror the closure queue's arc_id rules (arc_metrics.queue_capture) so an id that
+    # reserves here can always drain there (codex round-12 P3): a single safe path
+    # component; dot-prefixed ids are infrastructure (`.seq`, stagers) and invisible to
+    # sibling_open_count/gc (codex round-2 P3); `.taken` is the claim/recovery namespace;
+    # the worst-case recovery filename must stay under NAME_MAX in bytes.
+    if arc_id != Path(arc_id).name or arc_id in ("", "..") or arc_id.startswith("."):
         raise ReservationError(f"bad arc_id {arc_id!r}")
+    if ".taken" in arc_id:
+        raise ReservationError(f"bad arc_id {arc_id!r}: '.taken' is a reserved suffix")
+    worst = f"{arc_id}.taken.recover.{socket.gethostname()}.{os.getpid()}".encode()
+    if len(worst) > 240:
+        raise ReservationError(f"bad arc_id: {len(worst)} bytes with recovery suffix (max 240)")
     d = reservations_root() / arc_id
     # A pre-planted symlink at reservations/<arc_id> would let every read follow forged
     # state and every write escape QUEUE_DIR (mkdir(exist_ok=True) accepts a link to a
@@ -477,6 +484,15 @@ def _outcome_row(channel: str, terminal: str, finding_count: int) -> dict:
 def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> dict:
     if phase not in PHASES or edge not in ("start", "end"):
         raise ReservationError(f"bad phase/edge {phase!r}/{edge!r}")
+    if ts is not None:
+        try:
+            datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError) as exc:
+            # a malformed timestamp in an immutable snapshot poisons every later duration
+            # read of the C-HE-27 phase record (codex round-12 P3)
+            raise ReservationError(
+                f"ts must be ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ): {ts!r}"
+            ) from exc
 
     def build(head: dict) -> dict:
         _refuse_terminal_accretion(arc_id, "record_phase", head)
@@ -504,7 +520,11 @@ def record_round_outcome(
     (U-HE-19), which projects these keys; the reservation-side carrier shape is plan-level
     (`round_outcomes` is not in the C-HE-03 §3 payload enumeration)."""
     row = _outcome_row(channel, terminal, finding_count)
-    key = f"{int(round_n)}/{channel}"
+    if isinstance(round_n, bool) or not isinstance(round_n, int) or round_n < 0:
+        # the gate record's round is a nonnegative integer; int() coercion would collapse
+        # floats and admit booleans/negatives into keys (codex round-12 P3)
+        raise ReservationError(f"round_n must be a nonnegative int, got {round_n!r}")
+    key = f"{round_n}/{channel}"
 
     def build(head: dict) -> dict:
         _refuse_terminal_accretion(arc_id, "record_round_outcome", head)

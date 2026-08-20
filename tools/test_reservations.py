@@ -320,11 +320,27 @@ def test_payload_value_domains_enforced(qdir):
 
 
 def test_dot_prefixed_arc_id_refused(qdir):
-    """codex round-2 P3: a dot-prefixed arc_id would collide with `.seq` and be invisible
-    to sibling_open_count/gc."""
-    for bad in (".seq", ".hidden", "."):
+    """codex round-2 P3 + round-12 P3: dot-prefixed ids collide with `.seq`; the queue's
+    `.taken` and recovery-budget rules apply at reserve time too, so an id that reserves
+    can always drain."""
+    for bad in (".seq", ".hidden", ".", "x.taken", "y.taken.recover.h.1", "z" * 240):
         with pytest.raises(rs.ReservationError, match="bad arc_id"):
             rs.reserve(bad, lane_id="A", branch="b", arc_type="inventing")
+
+
+def test_round_n_and_ts_domains(qdir):
+    """codex round-12 P3: round_n is a nonnegative int (no bools/floats/negatives); phase
+    ts is ISO-8601 UTC."""
+    rs.reserve("pr-30", lane_id="A", branch="b", arc_type="inventing")
+    for bad_round in (-1, True, 1.9):
+        with pytest.raises(rs.ReservationError, match="round_n"):
+            rs.record_round_outcome(
+                "pr-30", bad_round, channel="codex", terminal="APPROVE", finding_count=0
+            )
+    with pytest.raises(rs.ReservationError, match="ISO-8601"):
+        rs.record_phase("pr-30", "execute", "start", ts="t0")
+    with pytest.raises(rs.ReservationError, match="ISO-8601"):
+        rs.record_phase("pr-30", "execute", "start", ts="2026-08-19 00:00:00")
 
 
 def test_transfer_holder_only_from_named_lane(qdir):
