@@ -22,3 +22,4 @@ notes: >
   against the C-HE-04 Verification body's six (clearance fold G6) — informational, the
   Verification body governs; reconciliation of that count and of the (vi) immediate-drop
   sentence rides the U-HE-22 merge-lane landing with the U-HE-19 item-(vii)/(ix) residuals.
+---
