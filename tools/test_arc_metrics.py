@@ -2575,3 +2575,51 @@ def test_directory_shaped_generation_is_isolated_at_reconciliation(tmp_path, mon
     monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
     am._reconcile_local_rows()  # must NOT raise
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-87"], "row kept"
+
+
+def test_drain_never_hijacks_a_backfill_pending_reservation(tmp_path, monkeypatch):
+    """merge-gate r1 concurrency P2: a pending head minted by the cmd_extract backfill
+    is not drain's to flip -- the entry is held for that flow, both captures survive."""
+    q = _queue_entries(am, tmp_path, monkeypatch, 1)
+    monkeypatch.setattr(rs, "QUEUE_DIR", q)
+    monkeypatch.setattr(am, "LANE_ID", "A")
+    rs.reserve(
+        "pr-1",
+        lane_id="A",
+        branch=am.BACKFILL_BRANCH,
+        arc_type="applying",
+        arc_type_declared_at="close",
+    )
+    monkeypatch.setattr(am, "committed_arc_ids", lambda: set())
+    monkeypatch.setattr(
+        am, "extract", lambda a: am.ArcRow(arc_id="pr-1", merged_at="t", merge_sha="s")
+    )
+    rc = am.drain(argparse.Namespace())
+    assert rc == 1 and (q / "pr-1.json").exists(), "entry held, not consumed"
+    assert am.read_ledger() == [], "drain appended nothing"
+    assert rs.current("pr-1")[1]["state"] == "pending", "the backfill's head untouched"
+
+
+# mutation-probe: drop _transfer_reservation_to_recoverer() from the swept-leftover-claim branch
+def test_swept_leftover_claim_still_transfers_the_dead_holders_reservation(
+    tmp_path, monkeypatch, qdir_res
+):
+    """merge-gate r1 witness P2: the FOURTH dead-owner consumption site -- a dead
+    leftover .taken whose entry is already back -- must also run the C-HE-04 §4
+    transfer from the re-judged bytes before sweeping them."""
+    q = qdir_res
+    monkeypatch.setattr(am, "LANE_ID", "B")
+    rs.reserve("pr-55", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-55", "A")
+    entry = {"pr": 55, "arc_id": "pr-55", "arc_type": "inventing"}
+    (q / "pr-55.json").write_text(json.dumps(entry))  # the entry is already durably back
+    (q / "pr-55.taken").write_text(
+        json.dumps(
+            {**entry, "_claim": {"pid": 999999, "host": socket.gethostname(), "lane_id": "A"}}
+        )
+    )
+    monkeypatch.setattr(am, "_process_is_alive", lambda pid: False)
+    am._recover_dead_claims()
+    assert not (q / "pr-55.taken").exists(), "the dead leftover claim was swept"
+    assert (q / "pr-55.json").exists(), "the restored entry untouched"
+    assert rs.holder("pr-55") == "B", "the dead holder's reservation transferred"
