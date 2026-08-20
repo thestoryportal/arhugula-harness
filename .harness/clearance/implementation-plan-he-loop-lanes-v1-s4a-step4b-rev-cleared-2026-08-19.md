@@ -7,7 +7,7 @@ back_reference:
   - .harness/clearance/spec-he-loop-lanes-v1.3-cleared-2026-08-19.md (the spec head this plan executes; C-HE-04 §6 is UNCHANGED by this rev)
   - ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md (U-HE-15 Step 4b body + Status block Version row carry the dated rev note)"
   - "tools/hooks/lib.sh + tools/hooks/test_lib.sh (the executing teardown guard + its witnesses, same PR)"
-merge_commit: pending (pre-merge at filing time; same PR as the S4a cluster, #1403)
+merge_commit: "pending (pre-merge at filing time; same PR as the S4a cluster, #1403)"
 reviewer_chain:
   - "out-of-family codex rounds 1-2 on the S4a PR raised the plan's no-upstream fail-closed clause against the implemented spec-exact scope; the grounding shows the v1.0 clause unimplementable without flipping five existing safe-removal witnesses (test_lib.sh POST_SCAN rc 0 / HELD_CWD rc 7 / OPEN_UNKNOWN rc 9 / POST_IDENTITY rc 10 / signal-recovery) and without refusing every local-only scratch worktree in production"
   - "author grounding: hook_worktree_local_state gates hook_safe_worktree_remove at the pre-move AND quarantine-recheck sites, both BEFORE the paths those witnesses pin; spec C-HE-04 §6's MUST is scoped to `rev-list @{u}..HEAD` non-empty and is implemented exactly"
