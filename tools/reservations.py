@@ -500,7 +500,18 @@ def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> d
 
     def build(head: dict) -> dict:
         _refuse_terminal_accretion(arc_id, "record_phase", head)
-        head.setdefault("phases", {}).setdefault(phase, {})[edge] = ts or now_iso()
+        slot = head.setdefault("phases", {}).setdefault(phase, {})
+        val = ts or now_iso()
+        existing = slot.get(edge)
+        if existing is not None and existing != val:
+            # phase edges are append-only durable measurements (C-HE-27 §3): a resumed or
+            # duplicate emitter must never rewrite a recorded start/end -- N6 reads only the
+            # folded head (codex round-14 P2). Identical re-record is idempotent.
+            raise ReservationError(
+                f"{arc_id}: phase {phase}.{edge} already recorded ({existing}); "
+                f"refusing rewrite to {val}"
+            )
+        slot[edge] = val
         return head
 
     return _cas_next(arc_id, build)

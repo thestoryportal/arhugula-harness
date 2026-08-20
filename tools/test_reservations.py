@@ -449,6 +449,12 @@ def test_record_phase_accretes(qdir):
         "start": "2026-08-18T00:00:00Z",
         "end": "2026-08-18T00:10:00Z",
     }
+    # append-only edges (codex round-14 P2): identical re-record is idempotent, a rewrite
+    # of a durable measurement raises
+    rs.record_phase("pr-10", "execute", "end", ts="2026-08-18T00:10:00Z")
+    with pytest.raises(rs.ReservationError, match="already recorded"):
+        rs.record_phase("pr-10", "execute", "end", ts="2026-08-18T00:20:00Z")
+    assert rs.current("pr-10")[1]["phases"]["execute"]["end"] == "2026-08-18T00:10:00Z"
 
 
 def test_cli_update_accepts_digit_leading_sha_and_parses_ints(qdir, capsys):

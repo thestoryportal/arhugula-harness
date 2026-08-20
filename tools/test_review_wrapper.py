@@ -836,7 +836,7 @@ def test_codex_review_failover_flag_runs_gemini_once_and_blocks(monkeypatch, tmp
     monkeypatch.setattr(
         cr,
         "_run_gemini_failover",
-        lambda repo, base: (
+        lambda repo, base, chain_round=None: (
             calls.append(1)
             or rw.ReviewOutcome(
                 "BLOCK",
@@ -883,7 +883,7 @@ def test_codex_review_failover_both_unavailable_exits_2_with_both_reasons(
     monkeypatch.setattr(
         cr,
         "_run_gemini_failover",
-        lambda repo, base: rw.ReviewOutcome(
+        lambda repo, base, chain_round=None: rw.ReviewOutcome(
             "REVIEWER_UNAVAILABLE", "gemini", "transient", "gemini-reason", [], EXPECTED
         ),
     )
@@ -913,7 +913,9 @@ def test_primary_outage_with_a_successful_failover_routes_by_failure_class(monke
     monkeypatch.setattr(
         cr,
         "_run_gemini_failover",
-        lambda repo, base: rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout"),
+        lambda repo, base, chain_round=None: rw.ReviewOutcome(
+            "APPROVE", "gemini", None, "", [], EXPECTED, "stdout"
+        ),
     )
     routed = []
     monkeypatch.setattr(
