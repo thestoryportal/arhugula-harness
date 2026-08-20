@@ -470,3 +470,7 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-20T09:26:50Z | #1405 | 342e023a0238 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-08-20T09:27:05Z | #1405 | 342e023a0238 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | #1405 | 2026-08-20 | feat/he-lanes-s4b-u-he-17 | concurrency: APPROVE / spec-conformance: APPROVE / witness-adequacy: APPROVE | MERGE (gate r3 delta re-gate at marker head 342e023a: delta = clearance marker + gate rows only, claims verified) | blast-radius: delta-only (doc marker) |
+| 2026-08-20T09:35:46Z | #1405 | aec1c9193258 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-08-20T09:35:59Z | #1405 | aec1c9193258 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| 2026-08-20T09:36:00Z | #1405 | aec1c9193258 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| #1405 | 2026-08-20 | feat/he-lanes-s4b-u-he-17 | concurrency: APPROVE / spec-conformance: APPROVE / witness-adequacy: APPROVE | MERGE (gate r4 delta re-gate at artifact-heads regen head aec1c919; delta doc-only) | blast-radius: delta-only (generated table) |
