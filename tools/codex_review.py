@@ -358,10 +358,16 @@ def _emit_rows(
     producer: str = PRODUCER,
     channel: str = CHANNEL,
     round_n: int | None = None,
+    round_scope: tuple[str, ...] | None = None,
 ) -> int:
     arc_id, lane_id = rw.env_arc_and_lane()
     written = rw.emit_outcome(
-        outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=round_n
+        outcome,
+        producer=producer,
+        arc_id=arc_id,
+        lane_id=lane_id,
+        round_n=round_n,
+        round_scope=round_scope,
     )  # round minted under the log lock when None (codex round 7); every terminal yields a row
     n = written[0]["round_n"]
     rw.record_round_outcome_if_reserved(
@@ -556,21 +562,17 @@ def main(argv: list[str] | None = None) -> int:
     invoke = (lambda timeout: rw.Attempt("", "", 0, False)) if args.invoke_test_empty else None
 
     chain: dict[str, int] = {}
-    if args.failover:
-        # Joint chain allocation (codex round-15 P2): the failover pair shares ONE round
-        # number that is fresh for BOTH producers -- max of each producer's next round --
-        # so neither leg can duplicate an earlier round of its own channel in the gate log
-        # or collide with a stale same-number reservation entry.
-        arc_id, _ = rw.env_arc_and_lane()
-        chain["round"] = max(
-            rw.round_n_for(arc_id, PRODUCER), rw.round_n_for(arc_id, GEMINI_PRODUCER)
-        )
+    # Joint chain allocation (codex round-15 P2 / round-16 P1): under --failover the
+    # primary's round is minted fresh for BOTH producers -- INSIDE emit_outcome's log-lock
+    # critical section, never pre-computed across the (up to 1200 s) review -- so the two
+    # legs of one failover share a number no other invocation can also select, and neither
+    # leg can duplicate an earlier round of its own channel.
+    scope = (PRODUCER, GEMINI_PRODUCER) if args.failover else None
 
     def primary() -> rw.ReviewOutcome:
         outcome = run_codex_review(Path.cwd(), args.base, invoke=invoke)
-        # the primary's row lands before the failover runs, at the chain round when one
-        # was allocated
-        chain["round"] = _emit_rows(outcome, round_n=chain.get("round"))
+        # the primary's row lands before the failover runs, at the jointly-minted round
+        chain["round"] = _emit_rows(outcome, round_scope=scope)
         _report(outcome, label="codex-review")
         return outcome
 

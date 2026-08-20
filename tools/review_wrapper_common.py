@@ -501,6 +501,7 @@ def emit_outcome(
     arc_id: str,
     lane_id: str,
     round_n: int | None,
+    round_scope: tuple[str, ...] | None = None,
     path: Path | None = None,
 ) -> list[dict]:
     """Append every observation of `outcome` to the gate log in ONE critical section: when
@@ -511,7 +512,12 @@ def emit_outcome(
     part of the contract (C-HE-18 §3), so a failed write must not be silent."""
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
-        n = round_n if round_n is not None else round_n_for(arc_id, producer, rows)
+        # `round_scope` mints a round fresh for EVERY listed producer -- the failover-chain
+        # allocation -- INSIDE this critical section, so two concurrent invocations cannot
+        # select the same chain round (codex round-16 P1; a pre-lock max() held across a
+        # 1200 s review was racy).
+        scope = round_scope or (producer,)
+        n = round_n if round_n is not None else max(round_n_for(arc_id, s, rows) for s in scope)
         pairs = []
         for obs in outcome_rows(
             outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=n

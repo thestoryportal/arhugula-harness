@@ -657,6 +657,25 @@ def test_zero_byte_output_emits_finding_row(tmp_path, monkeypatch):
     fr.validate(rows[0])
 
 
+def test_round_scope_mints_fresh_for_every_producer(tmp_path, monkeypatch):
+    """codex round-16 P1: the failover-chain round is minted INSIDE the log-lock critical
+    section, fresh for every producer in scope — a prior gemini round 3 forces the chained
+    codex primary to round 4, so neither leg can duplicate its own channel's history."""
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    seeded = rw.ReviewOutcome("APPROVE", "gemini", None, "", [], EXPECTED, "stdout")
+    rw.emit_outcome(seeded, producer=cr.GEMINI_PRODUCER, arc_id="a1", lane_id="l", round_n=3)
+    primary = rw.ReviewOutcome("REVIEWER_UNAVAILABLE", "codex", "transient", "r", [], EXPECTED)
+    written = rw.emit_outcome(
+        primary,
+        producer=cr.PRODUCER,
+        arc_id="a1",
+        lane_id="l",
+        round_n=None,
+        round_scope=(cr.PRODUCER, cr.GEMINI_PRODUCER),
+    )
+    assert written[0]["round_n"] == 4
+
+
 def test_wrapper_persists_round_outcome_on_reservation(monkeypatch):
     calls = []
     stub = types.SimpleNamespace(
