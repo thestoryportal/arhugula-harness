@@ -458,3 +458,7 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-20T02:38:39Z | #1403 | 493dbf250cd1 | merge-gate-concurrency | BLOCK | 1 finding(s) | r1 |
 | 2026-08-20T02:39:44Z | #1403 | 493dbf250cd1 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
 | 2026-08-20T02:40:13Z | #1403 | 493dbf250cd1 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-20T02:52:37Z | #1403 | bbc84ab2222f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-08-20T02:53:44Z | #1403 | bbc84ab2222f | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-20T02:58:35Z | #1403 | bbc84ab2222f | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-19 | #1403 | he-lanes-s4a | r1: concurrency BLOCK (fail-open @{u} resolve, lib.sh) / spec APPROVE / witness APPROVE → L1 fixed (config-gated upstream presence + pruned-upstream witness + re-pin) | r2 @ bbc84ab2: 3× APPROVE | outcome: MERGE | blast-radius: 8 production consumers (drain/queue CLI via ship-pr + loop_lib + justfile; hook_worktree_local_state via safe-worktree-remove chain; lanes_verify manifest; drain exit codes) + graft floor-note (CLI-by-string dominates) |
