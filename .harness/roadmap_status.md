@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `950a6404dbb4` |
+| `workspace_state_hash` | `ceb19be84a07` |
 | `last_refreshed` | 2026-08-21T00:00:00Z |
-| `git_head` | `8d89cd28` —  |
+| `git_head` | `6bbb61e8` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1414).** The next implementable unit is `U-HE-24` — ci.yml concurrency group keyed by SHA, ending the refresh-cancels-merge-run dance both prior arcs ate; then U-HE-25 (guard: safe-merge wrapper + the registered U-HE-21/22/23 allowlist additions).
+**Current next action (post-#1415).** The next implementable unit is `U-HE-25` — tools/hooks/safe-merge.sh + guard deny-raw / allow-wrapper + test inversion (C-HE-07), including the registered U-HE-21 exact-shape allowlist additions (reservations.py carrier verbs, HARNESS_ARC_ID=/HARNESS_LANE_ID= bareword env-prefix strip, git merge-tree); then U-HE-26 (push-to-main client-side emit_deny predicates, C-HE-08 §1).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1415 | 2026-08-21 | S4c U-HE-24 ci.yml main-push concurrency keyed by SHA (squash 6bbb61e8b): group ci-workflow-(ref==main && sha || ref) per C-HE-06 §4 verbatim, PR-event semantics unchanged, tradeoff comment inline; NEW tools/test_ci_yml_concurrency.py wired into codex-parity-check.sh; codex APPROVE r1 zero findings; LEAN gate-skip (config/tooling, no harness-*/src|tests); N>=2 landing precondition now satisfied |
 | 1414 | 2026-08-21 | S4c U-HE-23 merge-door landing driver (squash 8d89cd281): land() steps (ii)-(ix), §5 reconcile, §8 backoff + rate-limit deadline, §9 gate rows, AC#2(c) subprocess crash-resume incl. refresh half; 10-round codex chain to cap + 3-lens gate all-approve r2; B-187 filed |
 | PR #1413 | 2026-08-21 | S4c U-HE-22 on main (#1413, squash 35f3d07b): tools/merge_door.py lease primitive — fail-fast acquire (P2 holder invariant + reservation-tuple cross-check + post-publication re-validation), one-shot transition markers (closed action set), token-named sidecars (sidecars-before-LEASE crash order), reclaim/unblock with persisted-lease adjudication + terminal retraction + refresh-continuation carry, dead-marker completion with exclusive claim + adjudicate-after-rename break + ground-truth gate, symlink-hardened writers/GC, marker-before-tombstone GC ordering; spec v1.4 X4a-X4d discharge (flip-timing, merged-gate carve-out, keep-loudly, six interleavings) + ship-pr production pending→open flip; 10 codex rounds to register-and-hold terminal + merge-gate r1 2 BLOCKs fixed (pre-rename re-stamp, cross-host witnesses) r2 3x APPROVE; 36 probes PINNED coverage 0; u-he-22 reservation ran the FULL C-HE-03 lifecycle in production (pending→open at final gate→merged by ground-truth reconcile) |
 | PR #1412 | 2026-08-20 | S4b U-HE-21 on main (#1412, squash d92b9bdd): reservation carriers — roadmap-continue arc-open (selectable check + pending reserve with open-time arc_type per C-HE-26 §1, HARNESS_ARC_ID export, lane-id persisted at .harness/.lane-id, state-first resume, TOCTOU race-loss path, explicit headless ask→deny degradation), ship-pr back-fills (pr/head/base at PR creation, merge tuple + attested_merge_tree at final gate, unreserved-skip), session-start reconcile-all pinned; NEW 33-assertion witness runs permission-guard on all 7 shapes (never-denied floor + force-push positive control + bare-review ALLOW floor); go-live: first real open-time reservation (u-he-21, applying, gen 1) dogfooded with 7 wrapper round_outcomes + full merge-tuple back-fill; 7 codex rounds to register-and-hold terminal + merge-gate r1 3x APPROVE + r2 delta re-gate 3x APPROVE (2 probe re-pins); guard allowlist registered exact-shape at U-HE-25, lane-id atomic mint at U-HE-31, flip-timing carrier line in U-HE-22 Scope |
 | PR #1411 | 2026-08-20 | S4b U-HE-20 on main (#1411, squash 80c94811): AC#2 subprocess harness tools/test_arc_metrics_lanes.py — six interleavings + cross-latency over real lanes, RED-first at pre-U-HE-19 8638f2e7; inert hold/abort seams incl. restore-link mid-restore; 2 no-skip §8.1 rows; 20 probes PINNED coverage 0; 7 codex rounds to register-and-hold terminal (held (vi) immediate-drop class routed to U-HE-22) + merge-gate 3x APPROVE r1; C-HE-30 audit row + as-built rev note + clearance marker |
-| 1409 | 2026-08-20 | S4b U-HE-19 on main (#1409, squash 2797189c): drain ⇄ reservation integration — holder-gated append (merged-holder first-capture reading REGISTERED to U-HE-22, rev items vii/ix), flip-before-append + fresh-head fold via fold_round_outcomes, dead-claim holder transfer at all four consumption sites (lane-stamped claims), local-row reconciliation (tri-state committed-history stops, canonical convergence), cmd_extract backfill reservation-fence (BACKFILL_BRANCH sentinel, every-state drain hold); 22 codex rounds to register-and-hold terminal + 3 merge-gate rounds (r1 2 BLOCKs fixed, r2 2 BLOCKs fixed, r3 3x APPROVE); 19 mutation probes PINNED, coverage 0; plan rev items i–xii + 2 clearance markers |
 
 ---
 
