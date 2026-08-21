@@ -109,16 +109,23 @@ git rev-parse HEAD
 git rev-parse origin/main
 git merge-tree --write-tree origin/main HEAD
 uv run python tools/reservations.py update --arc-id <arc-id> --set head_sha=<head-sha> base_sha=<base-sha> attested_merge_tree=<tree-oid>
+uv run python tools/reservations.py transition --arc-id <arc-id> --to open --lane-id <lane-id>
 ```
 
+**The `pending→open` flip happens HERE, pre-acquire (spec v1.4 X4a; U-HE-22).** The
+merge-door `acquire()` admits only an `open` reservation held by this lane, so the final
+gate opens it the moment the merge tuple is attested (the drain-start flip remains the
+closure-capture/bootstrap opener; the CLI transition skips the best-effort
+`concurrent_lanes_at_open` sensor, which is `derived`-optional per C-HE-03 §7). Skip when
+the arc is unreserved (headless degradation) — and skip when the reservation is already
+`open` (a resumed gate pass).
+
 A stale tuple cannot merge: C-HE-06 step (ii) re-confirms head/base against `gh` and
-byte-compares the tree at the door (the merge-door consumer lands with U-HE-22; recording
-starts now so every arc from this one forward carries the attestation). The reservation is
-still `pending` here — `update` is payload-only and valid on a pending head; WHERE the
-C-HE-03 §4 `pending→open` flip happens relative to the door's open-holder acquisition
-invariant is part of the registered flip-timing contradiction class routed to the U-HE-22
-merge-lane landing (plan U-HE-19 rev item (vii) + U-HE-21 rev item (vii)) — the door
-carrier defines it there; this unit only records.
+byte-compares the tree at the door (the door primitive landed at U-HE-22; the landing
+driver that consumes the attestation lands with U-HE-23). The `update` back-fill is
+payload-only and valid on the still-`pending` head; the flip block above then resolves the
+formerly-registered flip-timing class (U-HE-19 rev item (vii) → spec v1.4 X4a): the merge
+lane opens pre-acquire, drain-start remains the closure-capture opener.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 

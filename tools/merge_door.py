@@ -137,6 +137,14 @@ def _check_lane_id(lane_id: str) -> None:
         raise LeaseError(f"bad lane_id {lane_id!r}: must be a single safe path component")
 
 
+def _check_door() -> None:
+    """Writer-side containment (codex r6 P2): a planted QUEUE_DIR/merge-door symlink would
+    receive every LEASE/sidecar/marker/attempt write outside QUEUE_DIR. Mirrors gc()'s
+    root guard on every write path."""
+    if DOOR.is_symlink():
+        raise LeaseError("merge-door is a symlink -- refused")
+
+
 def _rate_check(lane_id: str, now: float) -> None:
     """K acquire attempts per lane per 60 s. Record-then-count: the caller's own attempt is
     published FIRST (exclusive create), then the window is counted including it, so a burst
@@ -145,6 +153,7 @@ def _rate_check(lane_id: str, now: float) -> None:
     LEASE exclusive create is the fence); refusals never touch the caller's §8 budget, and a
     refused attempt IS recorded (it was an attempt)."""
     _check_lane_id(lane_id)
+    _check_door()
     att = DOOR / "attempts"
     if att.is_symlink():
         # Writer-side mirror of gc()'s parent guard (codex r4 P2): a planted attempts
@@ -267,6 +276,7 @@ def win_marker(token: str, target_action: str, *, extra: dict | None = None) -> 
         # Closed action set (codex r4 P2): the marker is one-shot per token — a typo'd
         # action would consume the transition and be mis-completed as a reclaim.
         raise LeaseError(f"unknown transition action {target_action!r}")
+    _check_door()
     m = DOOR / f"transition.{token}"
     try:
         publish_exclusive(
@@ -290,6 +300,7 @@ def win_marker(token: str, target_action: str, *, extra: dict | None = None) -> 
 def mark_attempted(lease: dict, *, suffix: str = "") -> None:
     """Payload CAS: temp + os.link onto a token-named sidecar BEFORE the merge request leaves
     the process."""
+    _check_door()
     name = ("refresh." if suffix == "refresh" else "") + "attempted"
     try:
         publish_exclusive(
@@ -300,6 +311,7 @@ def mark_attempted(lease: dict, *, suffix: str = "") -> None:
 
 
 def mark_blocked(lease: dict, *, sha: str, reason: str) -> None:
+    _check_door()
     try:
         publish_exclusive(
             _sidecar(lease["lease_token"], "blocked"),
@@ -551,12 +563,23 @@ def complete_dead_marker(marker: Path) -> bool:
     # refused completion stays retryable; the claim-to-act window is two idempotent
     # statements, and the door reconcile (U-HE-23 §5) is the ground-truth recovery for a
     # completer that dies inside it.
+    claim = DOOR / f"completed.{token}"
     try:
         publish_exclusive(
-            DOOR / f"completed.{token}",
+            claim,
             json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "at": _now_iso()}),
         )
     except FileExistsError:
+        # A completer that died between claiming and acting must not strand the
+        # completion forever (codex r6 P1): break a claim whose claimant is provably
+        # dead on this host — same poison-pill logic as the marker itself — and yield
+        # this pass (the next completer wins a fresh create).
+        try:
+            c = json.loads(claim.read_text())
+            if c["host"] == socket.gethostname() and not _process_is_alive(int(c["pid"])):
+                claim.unlink(missing_ok=True)
+        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            pass
         return False
     done = False
     if LEASE.exists() and json.loads(LEASE.read_text()).get("lease_token") == token:

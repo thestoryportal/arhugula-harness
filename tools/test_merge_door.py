@@ -544,6 +544,43 @@ def test_history_sidecars_restamped_on_transition(door):
     assert abs(_time.time() - side.stat().st_mtime) < 120
 
 
+# ── codex U-HE-22 r6 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop _check_door()'s symlink refusal (writes land outside QUEUE_DIR)
+def test_writers_refuse_symlinked_door(door, tmp_path):
+    """Every write path refuses a planted QUEUE_DIR/merge-door symlink — acquire's rate
+    store, markers and sidecars must never land in the link's target (r6 P2)."""
+    outside = tmp_path / "outside-door-writer"
+    outside.mkdir()
+    link = tmp_path / "queue" / "merge-door"
+    link.symlink_to(outside)
+    with pytest.raises(md.LeaseError, match="merge-door is a symlink"):
+        _acq(lane="A")
+    with pytest.raises(md.LeaseError, match="merge-door is a symlink"):
+        md.win_marker("t" * 32, "release")
+    assert list(outside.iterdir()) == []
+
+
+# mutation-probe: drop complete_dead_marker()'s dead-claimant claim break (stranded forever)
+def test_dead_claimant_claim_is_broken(door):
+    """A completer that died between claiming and acting must not strand completion — a
+    later completer breaks a provably-dead claimant's claim and the pass after that
+    completes (r6 P1)."""
+    lease = _acq(lane="A")
+    m = _crashed_reclaim_marker(lease)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(
+        md.DOOR / f"completed.{lease['lease_token']}",
+        json.dumps({"pid": 999999, "host": md.socket.gethostname(), "at": "t"}),
+    )
+    assert md.complete_dead_marker(m) is False  # this pass breaks the dead claim
+    assert not (md.DOOR / f"completed.{lease['lease_token']}").exists()
+    assert md.complete_dead_marker(m) is True  # the next pass completes
+    assert md.read_lease()["lease_token"] == "f" * 32
+
+
 # ── codex U-HE-22 r5 corrections ─────────────────────────────────────────────
 
 
