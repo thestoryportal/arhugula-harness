@@ -1474,6 +1474,7 @@ def test_refresh_intent_recovery_verbs(door, monkeypatch):
     from arc_metrics import publish_exclusive
 
     publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    _kill_holder()  # r6: the verbs refuse a LIVE unblocked holder (mid-creation window)
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "B"]) == 4  # wrong lane
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
     g.add_refresh_pr()
@@ -1496,6 +1497,7 @@ def test_refresh_intent_recovery_verbs(door, monkeypatch):
     }
     lease5 = md.acquire(lane_id="A", arc_id="pr-5", pr=5, head_sha="a" * 40, base_sha="b" * 40)
     publish_exclusive(md._sidecar(lease5["lease_token"], "refresh.intent"), "{}")
+    _kill_holder()
     assert md.main(["clear-refresh-intent", "--lane-id", "A"]) == 0
     assert not md._sidecar(lease5["lease_token"], "refresh.intent").exists()
 
@@ -1607,3 +1609,48 @@ def test_intent_unresolved_emits_gate_and_hil(door, monkeypatch):
 
     causes = [r.get("cause_attribution") for r in frr.read_rows()]
     assert "refresh_intent_unresolved" in causes
+
+
+# ── codex U-HE-23 r6 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop the recovery verbs' live-holder refusal (fence removed mid-creation)
+def test_recovery_verbs_refuse_a_live_unblocked_holder(door):
+    g = FakeGround()
+    del g
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    assert md.main(["clear-refresh-intent", "--lane-id", "A"]) == 4  # holder alive
+    assert md._sidecar(lease["lease_token"], "refresh.intent").exists()  # fence intact
+
+
+# mutation-probe: drop the reconciled-cycle counter reset (nonconsecutive cleans silence)
+def test_tier_counter_resets_on_a_reconciled_cycle(door):
+    """§10: three CONSECUTIVE clean cycles — a reconciled cycle resets the count (r6 P2)."""
+    g = FakeGround()
+    assert _land(door, g) == "released"  # clean cycle 1
+    assert len(list((md.DOOR / "tier-clean-cycles").iterdir())) == 1
+    _open_backfilled("pr-9", "A", 9)
+    rs.update_payload("pr-9", {"attested_merge_tree": "d" * 40})
+    g.states[9] = {
+        "state": "OPEN",
+        "headRefOid": "a" * 40,
+        "baseRefOid": "b" * 40,
+        "mergedAt": None,
+        "mergeCommit": None,
+    }
+
+    def merge_hang(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        g.t += timeout + 1
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    g.gh_merge = merge_hang
+    assert md.land(9, lane_id="A", arc_id="pr-9", ground=g, refresh=None) == "released"
+    # the reconciled cycle RESET the counter — nonconsecutive cleans never accumulate
+    assert list((md.DOOR / "tier-clean-cycles").iterdir()) == []
+    assert md._tiering_active() is True

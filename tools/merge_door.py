@@ -1287,6 +1287,13 @@ def land(
             if not tcc.is_symlink():  # same containment as every door subdir (r1 P2)
                 tcc.mkdir(exist_ok=True)
                 (tcc / lease["lease_token"]).touch()
+        else:
+            # §10 requires three CONSECUTIVE clean cycles (codex r6 P2): a reconciled or
+            # HITL cycle resets the counter, else nonconsecutive cleans silence the tier
+            tcc = DOOR / "tier-clean-cycles"
+            if tcc.is_dir() and not tcc.is_symlink():
+                for f in tcc.iterdir():
+                    f.unlink(missing_ok=True)
         if tier:
             _notify(
                 "NOTIFY",
@@ -1474,6 +1481,18 @@ def main(argv: list[str] | None = None) -> int:
             live = read_lease()
             if live is None or live.get("lane_id") != args.lane_id:
                 raise LeaseError("no live lease held by this lane")
+            holder_active = (
+                live.get("host") == socket.gethostname()
+                and _process_is_alive(int(live["pid"]))
+                and live.get("state") != "blocked"
+            )
+            if holder_active:
+                # a LIVE holder may be mid-refresh-creation right now (codex r6 P2):
+                # removing the crash fence under it reopens the duplicate-PR window
+                raise LeaseError(
+                    "the lease holder is alive and unblocked -- recovery verbs operate "
+                    "on a blocked door or a dead holder only"
+                )
             intent = _sidecar(live["lease_token"], "refresh.intent")
             if args.cmd == "record-refresh":
                 publish_exclusive(
