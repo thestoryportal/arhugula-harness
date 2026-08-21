@@ -444,27 +444,30 @@ def _publish_fresh(fresh: dict) -> None:
         except FileExistsError:
             pass
     if ref:
-        try:
-            publish_exclusive(
-                _sidecar(fresh["lease_token"], "refresh"),
-                json.dumps(
-                    {k: v for k, v in ref.items() if k != "merge_attempted_at"}, sort_keys=True
-                ),
-            )
-        except FileExistsError:
-            pass
-        if ref.get("merge_attempted_at"):
-            try:
-                publish_exclusive(
-                    _sidecar(fresh["lease_token"], "refresh.attempted"),
-                    json.dumps({"merge_attempted_at": ref["merge_attempted_at"]}),
-                )
-            except FileExistsError:
-                pass
+        _publish_refresh_sidecars(fresh["lease_token"], ref)
     try:
         publish_exclusive(LEASE, json.dumps(payload, sort_keys=True))
     except FileExistsError:
         pass
+
+
+def _publish_refresh_sidecars(token: str, ref: dict) -> None:
+    """The refresh continuation's token-named sidecars (base + its own attempted)."""
+    try:
+        publish_exclusive(
+            _sidecar(token, "refresh"),
+            json.dumps({k: v for k, v in ref.items() if k != "merge_attempted_at"}, sort_keys=True),
+        )
+    except FileExistsError:
+        pass
+    if ref.get("merge_attempted_at"):
+        try:
+            publish_exclusive(
+                _sidecar(token, "refresh.attempted"),
+                json.dumps({"merge_attempted_at": ref["merge_attempted_at"]}),
+            )
+        except FileExistsError:
+            pass
 
 
 def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
