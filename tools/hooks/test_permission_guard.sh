@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:464-466 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:494-496 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -602,7 +602,10 @@ done
 ( cd "$REPO" && git config push.default matching )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push under push.default=matching → deny" || bad "matching bare push not denied: $OUT"
 ( cd "$REPO" && git config push.default current && git config remote.origin.url /tmp/nowhere && git config branch.topic.remote origin && git config branch.topic.merge refs/heads/main )
-OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push with upstream merge=main → deny" || bad "upstream-main bare push not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "upstream merge=main under push.default=current → allow (r3 P2: real push goes topic->topic)" || bad "current-mode upstream-main falsely denied: $OUT"
+( cd "$REPO" && git config push.default upstream )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "upstream merge=main under push.default=upstream → deny" || bad "upstream-main bare push not denied: $OUT"
+( cd "$REPO" && git config push.default current )
 ( cd "$REPO" && git config --unset branch.topic.merge && git config remote.origin.push 'refs/heads/topic:refs/heads/main' )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push with remote.origin.push dest=main → deny" || bad "remote-push-refspec bare push not denied: $OUT"
 ( cd "$REPO" && git config --unset remote.origin.push )
@@ -623,6 +626,27 @@ OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "br
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "remote.pushDefault resolution → deny" || bad "pushDefault not resolved: $OUT"
 ( cd "$REPO" && git config --unset remote.pushDefault && git config --unset remote.staging.push )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after r2 config cleanup → allow" || bad "r2 cleaned-up bare push blocked: $OUT"
+
+# codex r3 hardening: separate-value --recurse-submodules, colonless HEAD refspec,
+# --repo remote selection, remote.<r>.mirror, configured matching refspec.
+( cd "$REPO" && git checkout -q main )
+OUT=$(run_on "$(pl Bash 'git push --recurse-submodules no origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "--recurse-submodules value-form bare push on main → deny" || bad "recurse-submodules bare push on main not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push origin HEAD' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "colonless HEAD refspec on main checkout → deny" || bad "HEAD refspec on main not denied: $OUT"
+( cd "$REPO" && git checkout -q topic )
+OUT=$(run_on "$(pl Bash 'git push --recurse-submodules no origin' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "--recurse-submodules value-form bare push on topic → allow" || bad "recurse-submodules topic push blocked: $OUT"
+OUT=$(run_on "$(pl Bash 'git push origin HEAD' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "colonless HEAD refspec on topic → allow" || bad "HEAD refspec on topic blocked: $OUT"
+OUT=$(run_on "$(pl Bash 'git push origin topic:HEAD' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "explicit :HEAD destination (remote default branch) → deny" || bad ":HEAD dest not denied: $OUT"
+( cd "$REPO" && git config remote.origin.push 'refs/heads/topic:refs/heads/main' && git config branch.topic.pushRemote staging )
+OUT=$(run_on "$(pl Bash 'git push --repo origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "--repo value selects the remote (origin's refspec dest=main) → deny" || bad "--repo remote selection missed: $OUT"
+( cd "$REPO" && git config --unset branch.topic.pushRemote && git config --unset remote.origin.push )
+( cd "$REPO" && git config remote.origin.mirror true )
+OUT=$(run_on "$(pl Bash 'git push origin topic' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "remote.origin.mirror=true refspec push → deny" || bad "mirror-config refspec push not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "remote.origin.mirror=true bare push → deny" || bad "mirror-config bare push not denied: $OUT"
+( cd "$REPO" && git config --unset remote.origin.mirror )
+( cd "$REPO" && git config remote.origin.push '+:' )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "configured matching refspec (+:) → deny" || bad "configured +: not denied: $OUT"
+( cd "$REPO" && git config --unset remote.origin.push )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after r3 config cleanup → allow" || bad "r3 cleaned-up bare push blocked: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
