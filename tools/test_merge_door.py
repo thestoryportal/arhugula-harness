@@ -19,6 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import finding_record as fr
 import merge_door as md
 import reservations as rs
 
@@ -27,6 +28,10 @@ import reservations as rs
 def door(tmp_path, monkeypatch):
     q = tmp_path / "queue"
     q.mkdir()
+    # Hermeticity: the landing driver's §9 gate rows must land in a scratch log, never
+    # the tracked .harness/merge-gate-log.jsonl (a plain suite run was appending fake-sha
+    # rows to the repo — caught by the stop-gate's ROOT_CHECKOUT_EDIT).
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "gate-log.jsonl")
     monkeypatch.setattr(md, "QUEUE_DIR", q)
     monkeypatch.setattr(md, "DOOR", q / "merge-door")
     monkeypatch.setattr(md, "LEASE", q / "merge-door" / "LEASE")
@@ -1225,6 +1230,7 @@ def test_ac2_c_crash_resume(door, tmp_path, monkeypatch, kill, expect_merge_call
         **os.environ,
         "PATH": f"{bindir}:{os.environ['PATH']}",
         "ARC_METRICS_QUEUE_DIR": str(q),
+        "HARNESS_GATE_LOG": str(tmp_path / "gate-log.jsonl"),
         "PYTHONPATH": str(TOOLS),
         "HARNESS_LANE_ID": "A",
     }
