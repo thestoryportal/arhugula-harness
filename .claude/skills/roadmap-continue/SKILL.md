@@ -25,24 +25,34 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
 
    **Arc open (C-HE-03 §4) — the instant the unit is chosen, BEFORE any work.** Selection
    IS arc open: mint the `pending` reservation now, with the `arc_type` declared now
-   (C-HE-26 §1 — the open-time capture point, never inferred at close):
+   (C-HE-26 §1 — the open-time capture point, never inferred at close). Every value below
+   is a LITERAL you type — no `$( )`, no chaining (the permission guard auto-allows only
+   single clean invocations), and shell exports do NOT survive across Bash tool calls, so
+   the two `HARNESS_*` ids must be restated inline on every later command that reads them:
    ```bash
-   ARC_ID=<unit-id-or-pr-slug>            # e.g. u-he-21 (single path component, no ':')
-   export HARNESS_LANE_ID="${HARNESS_LANE_ID:-$(uv run python tools/reservations.py mint-lane-id)}"
-   uv run python tools/reservations.py selectable --arc-id "$ARC_ID" || {
-     # Reserved already. Same-lane resume (crash/compaction re-entry): `show` reveals our
-     # own lane_id on a pending/open head → continue WITHOUT re-reserving. Any other
-     # lane's reservation → this unit is taken: re-derive and pick the next unit.
-     uv run python tools/reservations.py show --arc-id "$ARC_ID"
-   }
-   uv run python tools/reservations.py reserve --arc-id "$ARC_ID" \
-     --lane-id "$HARNESS_LANE_ID" --branch "$(git branch --show-current)" \
-     --arc-type <inventing|applying>      # declare the type NOW (C-HE-26 §1)
-   export HARNESS_ARC_ID="$ARC_ID"        # review-wrapper rows join the real reservation
+   uv run python tools/reservations.py mint-lane-id     # once per lane; reuse the printed id below
+   uv run python tools/reservations.py selectable --arc-id <arc-id>
    ```
+   - `selectable` exit 0 (free) → reserve it, then export for this shell:
+     ```bash
+     uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>
+     export HARNESS_ARC_ID=<arc-id>   # same-shell only — restate inline later
+     ```
+   - `selectable` exit 1 (a head exists) → `uv run python tools/reservations.py show --arc-id <arc-id>` and branch on its `lane_id`:
+     - the head's `lane_id` is YOUR lane id (crash/compaction re-entry) → resume
+       WITHOUT re-reserving (a second `reserve` refuses any existing head);
+     - anyone else's (or a terminal head) → the unit is taken: do NOT reserve —
+       re-derive and pick the next unit.
+
    A second lane's selection of the same unit fails here (duplicate *scheduling* is
    prevented at open; duplicate *append* by C-HE-03 §6). `ship-pr` back-fills
-   `pr`/`head_sha`/`base_sha`/`attested_merge_tree` on this same record.
+   `pr`/`head_sha`/`base_sha`/`attested_merge_tree` on this same record. When a later
+   command needs the ids in its environment (the review wrapper's C-HE-24/25 rows join
+   the reservation through `HARNESS_ARC_ID`/`HARNESS_LANE_ID`), prefix them inline:
+   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`.
+   *Known friction (registered to U-HE-23's permission-guard unit): the guard does not
+   yet auto-allow `uv run python tools/reservations.py` or the `HARNESS_*`-prefixed
+   forms, so in loop mode these commands currently surface one approval prompt each.*
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a

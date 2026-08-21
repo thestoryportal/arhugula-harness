@@ -47,6 +47,22 @@ grep -q -- '--arc-type' "$RC" \
 grep -q 'export HARNESS_ARC_ID' "$RC" \
   && ok "HARNESS_ARC_ID exported" || bad "no HARNESS_ARC_ID export"
 
+# --- roadmap-continue: round-1 codex corrections (env propagation + resume flow) ---
+grep -q 'do NOT survive across Bash tool calls' "$RC" \
+  && ok "env non-inheritance stated (ids restated inline)" || bad "no fresh-shell env warning"
+grep -q 'show --arc-id' "$RC" \
+  && ok "resume path reads the head via show" || bad "no show-based resume path"
+grep -q 'WITHOUT re-reserving' "$RC" \
+  && ok "same-lane resume forbids re-reserve" || bad "no same-lane resume clause"
+grep -q 'do NOT reserve' "$RC" \
+  && ok "other-lane path re-derives instead of reserving" || bad "no other-lane branch"
+# Mandatory commands must be substitution-free single invocations (guard-compatible):
+if grep -E 'reservations\.py (reserve|update|selectable|show)' "$RC" "$SP" | grep -q '\$('; then
+  bad "a mandatory reservation command still uses \$( ) command substitution"
+else
+  ok "reservation commands are substitution-free (literal values)"
+fi
+
 # --- ship-pr: back-fill (C-HE-03 §3) + attested tree (C-HE-06 §4(ii)) ---
 grep -q 'reservations.py update --arc-id .* --set pr=' "$SP" \
   && ok "ship-pr back-fills pr/head_sha/base_sha at PR creation" || bad "no pr back-fill in ship-pr"

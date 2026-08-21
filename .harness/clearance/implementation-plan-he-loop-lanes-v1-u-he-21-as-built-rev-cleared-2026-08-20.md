@@ -12,7 +12,7 @@ merge_commit: "pending (pre-merge at filing time; same PR as the U-HE-21 unit)"
 reviewer_chain:
   - "author grounding: the plan sketch's session-start edit is a no-op at HEAD (U-HE-18 already landed the C-HE-03 section 5 pass at the roadmap-audit hook, detached + activation-gated); the as-built witness pins the real path instead of editing a nonexistent file"
   - "lane-id mint fallback + same-lane re-entry clause + single-line back-fill are carrier-prose corrections against landed CLI semantics (selectable() is false for ANY head; HARNESS_LANE_ID's minting unit U-HE-31 has not landed) -- no contract surface changes"
-  - "out-of-family review chain on the U-HE-21 PR covers the bundled rev note per the register-and-hold discipline"
+  - "out-of-family codex round 1 (BLOCK, 1 P1 + 4 P2): env non-inheritance across Bash tool calls, resume-flow control bug, guard-autonomy friction (registered to U-HE-23), grep-witness weakness, artifact-heads filename tie-break -- all absorbed (rev item vi) except the guard edit, which routes to U-HE-23's reviewed guard-modification scope"
   - "council NOT convened (proportionality: path/prose corrections of one unit's execution steps; every C-HE-* contract cited is unchanged)"
 supersedes: null
 superseded_by: null

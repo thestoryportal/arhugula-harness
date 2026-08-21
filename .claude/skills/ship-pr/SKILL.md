@@ -62,10 +62,14 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   R-NNN it advances. End the body with the standard generated-with trailer.
 - Commit/PR trailers per the workspace convention (Co-Authored-By; 🤖 Generated-with).
 - **Reservation back-fill at PR creation (C-HE-03 §3, U-HE-21).** The arc's reservation was
-  minted at selection by `roadmap-continue` (`HARNESS_ARC_ID` is exported). Immediately
-  after `gh pr create`:
+  minted at selection by `roadmap-continue`; its `<arc-id>` is the id you reserved there
+  (recover it with `show` if the session compacted — shell exports do not survive across
+  Bash tool calls, so pass the id as a LITERAL, never `"$HARNESS_ARC_ID"` in a fresh
+  shell). Immediately after `gh pr create`, with `<head-sha>`/`<base-sha>` taken from
+  prior `git rev-parse HEAD` / `git rev-parse origin/main` output (no `$( )` — the guard
+  auto-allows only single clean invocations):
   ```bash
-  uv run python tools/reservations.py update --arc-id "$HARNESS_ARC_ID" --set pr=<N> head_sha=$(git rev-parse HEAD) base_sha=$(git rev-parse origin/main)
+  uv run python tools/reservations.py update --arc-id <arc-id> --set pr=<N> head_sha=<head-sha> base_sha=<base-sha>
   ```
 
 ## Pre-merge gate — CI green + decorrelated 3-lens review (before `gh pr merge`)
@@ -86,13 +90,16 @@ audit-log append.
 
 **Final-gate reservation back-fill (C-HE-03 §3 + C-HE-06 §4(ii), U-HE-21).** After the
 gate all-approves and BEFORE the merge door: refresh the merge tuple and record the
-attested merge tree the door will byte-compare (`git merge-tree --write-tree` needs
-git ≥ 2.38; prints the tree OID):
+attested merge tree the door will byte-compare. Obtain the three values first, each as
+its own command (`git merge-tree --write-tree` needs git ≥ 2.38; prints the tree OID),
+then pass them as LITERALS (no `$( )`; same fresh-shell rule as the PR-creation
+back-fill — the arc id is a literal, not an inherited variable):
 
 ```bash
-uv run python tools/reservations.py update --arc-id "$HARNESS_ARC_ID" \
-  --set head_sha=$(git rev-parse HEAD) base_sha=$(git rev-parse origin/main) \
-        attested_merge_tree=$(git merge-tree --write-tree origin/main HEAD)
+git rev-parse HEAD
+git rev-parse origin/main
+git merge-tree --write-tree origin/main HEAD
+uv run python tools/reservations.py update --arc-id <arc-id> --set head_sha=<head-sha> base_sha=<base-sha> attested_merge_tree=<tree-oid>
 ```
 
 A stale tuple cannot merge: C-HE-06 step (ii) re-confirms head/base against `gh` and
