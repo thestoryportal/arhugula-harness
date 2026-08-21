@@ -241,8 +241,13 @@ _push_targets_main() {
   for tok in "$@"; do
     if [ -n "$want_value" ]; then
       # codex r3 P1: --repo's value IS the selected remote -- discarding it made the
-      # config checks below inspect the wrong remote's push refspecs.
-      [ "$want_value" = "repo" ] && repo_opt="$tok"
+      # config checks below inspect the wrong remote's push refspecs. Dequoted before
+      # storing (codex r5 P1: the shell passes 'origin' to git AS origin; querying config
+      # for the literal quoted string missed the remote's main-targeting refspec).
+      if [ "$want_value" = "repo" ]; then
+        tok=${tok//\"/}; tok=${tok//\'/}; tok=${tok//\\/}
+        repo_opt="$tok"
+      fi
       want_value=""; continue
     fi
     # Shell dequoting: quotes AND backslashes -- 'HEAD:main' IS HEAD:main (Codex round-4 P1)
@@ -281,7 +286,9 @@ _push_targets_main() {
       # codex r2 P1: `+:` (and bare `:`) is the matching-refspec push -- it updates every
       # matching branch, main included, and parses to an EMPTY destination.
       case "$tok" in *:) return 0 ;; esac
-      dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/heads/}"
+      # Two-step strip: refs/heads/main -> main AND the DWIM partial form heads/main ->
+      # main (codex r5 P1: git resolves `topic:heads/main` to refs/heads/main).
+      dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/}"; dest="${dest#heads/}"
       # codex r3 P1: a colonless HEAD/@ refspec resolves to the CURRENT branch (deny on a
       # main checkout); an explicit `:HEAD`/`:@` destination resolves to the REMOTE's
       # default branch, which is plausibly main -- deny outright (over-deny is safe).
@@ -332,7 +339,7 @@ _push_targets_main() {
       # updates every matching branch, main included -- same class as the command-line
       # token check above; a HEAD/@ destination resolves to the remote default branch.
       case "$tok" in *:) return 0 ;; esac
-      dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/heads/}"
+      dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/}"; dest="${dest#heads/}"
       case "$dest" in main|*'*'*|HEAD|@) return 0 ;; esac
     done < <(git -C "$PROJECT_DIR" config --get-all "remote.${remote}.push" 2>/dev/null)
   fi

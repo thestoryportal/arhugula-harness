@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:505-507 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:512-514 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -658,6 +658,14 @@ OUT=$(run_on "$(pl Bash 'git push --al origin' '')"); [ "$(dec "$OUT")" = "deny"
 OUT=$(run_on "$(pl Bash 'git push origin topic' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "remote.origin.mirror=yes (git boolean) → deny" || bad "mirror=yes not denied: $OUT"
 ( cd "$REPO" && git config --unset remote.origin.mirror )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after r4 config cleanup → allow" || bad "r4 cleaned-up bare push blocked: $OUT"
+
+# codex r5 hardening: quoted --repo value dequoted before config lookup; DWIM partial
+# ref (heads/main) destination.
+OUT=$(run_on "$(pl Bash 'git push origin topic:heads/main' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "DWIM partial ref dest (heads/main) → deny" || bad "heads/main dest not denied: $OUT"
+( cd "$REPO" && git config remote.origin.push 'refs/heads/topic:refs/heads/main' )
+OUT=$(run_on "$(pl Bash "git push --repo 'origin'" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "quoted --repo value dequoted before config lookup → deny" || bad "quoted --repo value missed: $OUT"
+( cd "$REPO" && git config --unset remote.origin.push )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after r5 config cleanup → allow" || bad "r5 cleaned-up bare push blocked: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
