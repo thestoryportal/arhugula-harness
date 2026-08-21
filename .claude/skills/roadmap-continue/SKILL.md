@@ -74,15 +74,14 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    transitions and `gc` still surface to the operator), the leading
    `HARNESS_ARC_ID=`/`HARNESS_LANE_ID=` bareword prefix forms, and `git merge-tree` —
    so headless arcs CAN reserve at open. The degradation clause below survives as the
-   generic fallback for any OTHER refusal (a non-loop venue, a future guard change): if
-   ANY arc-open command above (`mint-lane-id`, `selectable`, `reserve`) is refused by
-   the permission layer, proceed with the arc UNRESERVED and say so in the PR body;
+   generic fallback for any OTHER refusal (a non-loop venue, a future guard change):
+   if ANY arc-open command above (`mint-lane-id`, `selectable`, `reserve`) is refused
+   by the permission layer, proceed with the arc UNRESERVED and say so in the PR body;
    append safety still holds (the U-HE-19 drain bootstrap mints the reservation at
    closure and the C-HE-03 §6 holder gate fences the ledger). The same rule downstream:
-   a refused PREFIXED review invocation degrades to the bare
-   `just review-with-failover` (allowlisted; writes the pre-U-HE-21 fallback ids —
-   witnessed as guard-ALLOW), and the ship-pr back-fills are skipped per its
-   unreserved-arc clause.*
+   a refused PREFIXED review invocation degrades to the bare `just review-with-failover`
+   (allowlisted; writes the pre-U-HE-21 fallback ids — witnessed as guard-ALLOW), and
+   the ship-pr back-fills are skipped per its unreserved-arc clause.*
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
