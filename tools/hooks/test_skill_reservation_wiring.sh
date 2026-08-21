@@ -109,11 +109,16 @@ grep -q 'attested_merge_tree=' "$SP" \
 grep -q 'reservations.py reconcile-all' "$SS" \
   && ok "session-start runs reconcile-all" || bad "no reconcile-all in session-start hook"
 
-# --- guard adjudication floor (codex r3): the documented command shapes must NEVER be
-# DENIED by permission-guard in loop mode. Today they fall through to ask (the registered
-# U-HE-25 friction — one approval prompt each); after U-HE-25's allowlist additions they
-# become allow. A DENY would structurally block the loop — that regression is what this
-# leg pins. The guard is exercised for real, not grepped.
+# --- guard adjudication floor (codex r3; degradation contract made explicit r7): the
+# documented command shapes must NEVER be DENIED by permission-guard in loop mode. Today
+# they fall through to ask (the registered U-HE-25 friction — one approval prompt each
+# attended; ask→deny in the HEADLESS runner, where the carriers' explicit degradation
+# contract applies: any refused arc-open command → proceed UNRESERVED + PR-body note;
+# refused prefixed review → bare allowlisted review-with-failover; unreserved back-fills
+# skipped — each clause grep-witnessed above, and the bare-review ALLOW floor witnessed
+# below). After U-HE-25's exact-shape allowlist additions these become allow and the
+# degradation goes dormant. A DENY would structurally block the loop — that regression is
+# what this leg pins. The guard is exercised for real, not grepped.
 GUARD="$SCRIPT_DIR/permission-guard.sh"
 GREPO="$(mktemp -d)" && mkdir -p "$GREPO/.harness"
 guard_dec() { # $1=command → prints permissionDecision, or "ask" (guard exit 0, no output).
@@ -145,6 +150,7 @@ while IFS= read -r shape; do
     *) bad "guard adjudication failed for mandatory carrier command ($DEC): $shape" ;;
   esac
 done <<'SHAPES'
+uv run python tools/reservations.py mint-lane-id
 uv run python tools/reservations.py selectable --arc-id u-he-21
 uv run python tools/reservations.py reserve --arc-id u-he-21 --lane-id lane-a --branch feat/x --arc-type applying
 uv run python tools/reservations.py show --arc-id u-he-21
