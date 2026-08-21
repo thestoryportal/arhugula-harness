@@ -52,8 +52,13 @@ def test_to_put_payload_normalizes_get_shape():
         "required_linear_history": {"enabled": False},
     }
     put = mp._to_put_payload(got)
+    # App bindings survive the normalization (codex r3 P2): the GET carried `checks` with an
+    # app_id, so the PUT body keeps the pair rather than flattening to any-app contexts.
     assert put == {
-        "required_status_checks": {"strict": True, "contexts": ["a — blocking"]},
+        "required_status_checks": {
+            "strict": True,
+            "checks": [{"context": "a — blocking", "app_id": 1}],
+        },
         "enforce_admins": True,
         "required_pull_request_reviews": None,
         "restrictions": None,
@@ -62,6 +67,18 @@ def test_to_put_payload_normalizes_get_shape():
         "required_linear_history": False,
     }
     assert mp.verify(got, put) == []
+    # A null app_id means "any app" and is expressed by omitting the key on the PUT.
+    got_anyapp = dict(got)
+    got_anyapp["required_status_checks"] = {
+        "strict": True,
+        "checks": [{"context": "a — blocking", "app_id": None}],
+    }
+    put_anyapp = mp._to_put_payload(got_anyapp)
+    assert put_anyapp["required_status_checks"] == {
+        "strict": True,
+        "checks": [{"context": "a — blocking"}],
+    }
+    assert mp.verify(got_anyapp, put_anyapp) == []
     got["restrictions"] = {
         "users": [{"login": "alice"}],
         "teams": [{"slug": "core"}],
@@ -117,16 +134,19 @@ def test_prr_put_payload_preserves_strengthening_fields():
     assert prr["bypass_pull_request_allowances"] == {"users": [], "teams": [], "apps": ["bot"]}
 
 
-def test_merge_refusal_classifier_separates_protection_from_transport():
-    """A `gh pr merge` refusal is enforcement evidence only when attributable to branch
-    protection / strict base-freshness; auth, rate-limit, and network failures are an
-    indeterminate probe, never a PASS (codex r1 P2)."""
-    assert mp._merge_refusal_is_protection("GraphQL: Pull request is not mergeable")
-    assert mp._merge_refusal_is_protection("Required status check 'x' is expected.")
-    assert mp._merge_refusal_is_protection("Head branch is behind the base branch")
-    assert not mp._merge_refusal_is_protection("HTTP 401: Bad credentials")
-    assert not mp._merge_refusal_is_protection("API rate limit exceeded for user")
-    assert not mp._merge_refusal_is_protection("could not resolve host: github.com")
+def test_merge_refusal_classifier_three_tiers():
+    """'strict' names the protection mechanism itself; 'generic' mergeability errors also
+    cover conflicts/unrelated restrictions and count only alongside an independent BEHIND
+    reading; transport failures are an indeterminate probe, never a PASS (codex r1/r3 P2)."""
+    assert mp._classify_merge_refusal("Required status check 'x' is expected.") == "strict"
+    assert mp._classify_merge_refusal("Head branch is behind the base branch") == "strict"
+    assert mp._classify_merge_refusal("GraphQL: Pull request is not mergeable") == "generic"
+    assert mp._classify_merge_refusal("pull request is in an unstable merge state") == "generic"
+    assert mp._classify_merge_refusal("HTTP 401: Bad credentials") == "transport"
+    assert mp._classify_merge_refusal("API rate limit exceeded for user") == "transport"
+    assert mp._classify_merge_refusal("could not resolve host: github.com") == "transport"
+    # head-race is deliberately NOT protection evidence (r2 P2)
+    assert mp._classify_merge_refusal("expected head to be abc123 but was def456") == "transport"
 
 
 _PRIOR_GET = {

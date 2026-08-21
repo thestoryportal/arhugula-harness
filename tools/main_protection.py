@@ -105,13 +105,24 @@ def verify(current: dict | None, desired: dict) -> list[str]:
             out.append(
                 f"required_status_checks.strict: {rsc.get('strict')!r} != {want_rsc['strict']!r}"
             )
-        have = sorted(rsc.get("contexts") or [c["context"] for c in rsc.get("checks", [])])
-        want = sorted(want_rsc["contexts"])
-        if have != want:
-            out.append(
-                f"contexts differ: missing={sorted(set(want) - set(have))} "
-                f"extra={sorted(set(have) - set(want))}"
-            )
+        if "checks" in want_rsc:
+            # App-bound target (a restored prior policy): compare (context, app_id) pairs so
+            # an any-app policy is never certified as an app-bound one (codex r3 P2).
+            have_pairs = sorted((c["context"], c.get("app_id")) for c in rsc.get("checks") or [])
+            want_pairs = sorted((c["context"], c.get("app_id")) for c in want_rsc["checks"])
+            if have_pairs != want_pairs:
+                out.append(
+                    f"checks differ: missing={sorted(set(want_pairs) - set(have_pairs))} "
+                    f"extra={sorted(set(have_pairs) - set(want_pairs))}"
+                )
+        else:
+            have = sorted(rsc.get("contexts") or [c["context"] for c in rsc.get("checks", [])])
+            want = sorted(want_rsc["contexts"])
+            if have != want:
+                out.append(
+                    f"contexts differ: missing={sorted(set(want) - set(have))} "
+                    f"extra={sorted(set(have) - set(want))}"
+                )
     want_prr = desired.get("required_pull_request_reviews")
     cur_prr = current.get("required_pull_request_reviews")
     if want_prr is None:
@@ -124,11 +135,12 @@ def verify(current: dict | None, desired: dict) -> list[str]:
     for k in ("enforce_admins", "allow_force_pushes", "allow_deletions", "required_linear_history"):
         if _flag(current, k) != desired[k]:
             out.append(f"{k}: {_flag(current, k)!r} != {desired[k]!r}")
-    # Optional strengthening controls: compared only when the target policy pins them
-    # (present in a normalized pre-change payload; absent from the §2 payload).
+    # Optional strengthening controls are ALWAYS compared: a target that omits them pins
+    # them to their default (False) — otherwise a live lock_branch would verify PASS while
+    # blocking every PR landing (codex r3 P2). An absent key on the live side reads False.
     for k in _OPTIONAL_CONTROLS:
-        if k in desired and _flag(current, k) != desired[k]:
-            out.append(f"{k}: {_flag(current, k)!r} != {desired[k]!r}")
+        if bool(_flag(current, k)) != bool(desired.get(k, False)):
+            out.append(f"{k}: {bool(_flag(current, k))!r} != {bool(desired.get(k, False))!r}")
     # §2 exact-compare includes restrictions: the target payload pins them (null for §2), so
     # a live user/team/app push restriction is a mismatch, not an ignorable extra (codex r1 P2).
     want_r = desired.get("restrictions")
@@ -175,17 +187,29 @@ def _to_put_payload(got: dict) -> dict:
     normalize to the fields the PUT accepts so a rollback actually restores (Codex round-4 P1)."""
     rsc = got.get("required_status_checks") or {}
     prr = got.get("required_pull_request_reviews")
-    return {
-        "required_status_checks": (
-            {
-                "strict": bool(rsc.get("strict")),
-                "contexts": sorted(
-                    rsc.get("contexts") or [c["context"] for c in rsc.get("checks", [])]
+    if not rsc:
+        put_rsc = None
+    elif rsc.get("checks"):
+        # Preserve per-check app bindings — flattening checks to bare contexts would restore
+        # an app-bound prior policy as an any-app policy (codex r3 P2). A null app_id means
+        # "any app" and is expressed by omitting the key on the PUT.
+        put_rsc = {
+            "strict": bool(rsc.get("strict")),
+            "checks": sorted(
+                (
+                    {
+                        "context": c["context"],
+                        **({"app_id": c["app_id"]} if c.get("app_id") is not None else {}),
+                    }
+                    for c in rsc["checks"]
                 ),
-            }
-            if rsc
-            else None
-        ),
+                key=lambda c: (c["context"], c.get("app_id") or 0),
+            ),
+        }
+    else:
+        put_rsc = {"strict": bool(rsc.get("strict")), "contexts": sorted(rsc.get("contexts") or [])}
+    return {
+        "required_status_checks": put_rsc,
         "enforce_admins": bool(_flag(got, "enforce_admins")),
         "required_pull_request_reviews": (None if not prr else _prr_put_payload(prr)),
         # Preserve user/team/app restrictions on rollback (round-5 P1).
@@ -350,24 +374,31 @@ def main(argv: list[str] | None = None) -> int:
     return tiebreaker()
 
 
-#: stderr signatures that attribute a `gh pr merge` refusal to branch protection / strict
-#: base-freshness enforcement, as opposed to auth/network/rate-limit/head-race failures. A
-#: refusal that matches none of these is an INDETERMINATE probe, not a PASS (codex r1 P2).
-_PROTECTION_REFUSAL_SIGS = (
-    "not mergeable",
+#: Three-way refusal attribution (codex r1 P2 + r3 P2). "strict" signatures name the
+#: protection/base-freshness mechanism itself; "generic" signatures ("not mergeable",
+#: "merge state") also cover conflicts and unrelated restrictions, so they count as
+#: enforcement evidence only when the PR's own mergeStateStatus independently read BEHIND
+#: (the strict staleness reading); anything else (auth/rate-limit/network/head-race) is an
+#: indeterminate probe, never a PASS.
+_STRICT_REFUSAL_SIGS = (
     "required status check",
     "branch protection",
     "protected branch",
     "behind",
     "base branch",
     "review is required",
-    "merge state",
 )
+_GENERIC_MERGEABILITY_SIGS = ("not mergeable", "merge state")
 
 
-def _merge_refusal_is_protection(stderr: str) -> bool:
+def _classify_merge_refusal(stderr: str) -> str:
+    """'strict' | 'generic' | 'transport' — see the signature-tier comment above."""
     low = stderr.lower()
-    return any(s in low for s in _PROTECTION_REFUSAL_SIGS)
+    if any(s in low for s in _STRICT_REFUSAL_SIGS):
+        return "strict"
+    if any(s in low for s in _GENERIC_MERGEABILITY_SIGS):
+        return "generic"
+    return "transport"
 
 
 def tiebreaker() -> int:
@@ -378,10 +409,13 @@ def tiebreaker() -> int:
     Runs in an ISOLATED temporary worktree (never switches the operator's checkout; never
     picks up staged changes — Codex round-3 P1) and compares the stale landing against the
     main SHA captured BEFORE that merge."""
-    ts = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+    # PID suffix: one-second timestamp uniqueness is not enough — concurrent tiebreakers
+    # must never collide on (or GC) each other's scratch branches (codex r3 P2).
+    ts = f"{time.strftime('%Y%m%d%H%M%S', time.gmtime())}-{os.getpid()}"
     br = f"mp-tiebreaker-{ts}"
     br2 = f"mp-tiebreaker-stale-{ts}"
     wt = Path(tempfile.mkdtemp(prefix="mp-tiebreaker-"))
+    created: list[str] = []  # only branches THIS invocation pushed are GC'd (codex r3 P2)
 
     def sh(*c: str, cwd: Path | None = None) -> str:
         q = subprocess.run(list(c), capture_output=True, text=True, timeout=180, cwd=cwd or wt)
@@ -396,6 +430,7 @@ def tiebreaker() -> int:
         sh("git", "checkout", "-q", "-b", br)
         sh("git", "commit", "-q", "--allow-empty", "-m", f"chore: main-protection tiebreaker {ts}")
         sh("git", "push", "-q", "-u", "origin", br)
+        created.append(br)
         url = sh(
             "gh",
             "pr",
@@ -425,6 +460,7 @@ def tiebreaker() -> int:
         sh("git", "checkout", "-q", "-b", br2, base)
         sh("git", "commit", "-q", "--allow-empty", "-m", "ops: stale refresh-shaped commit")
         sh("git", "push", "-q", "-u", "origin", br2)
+        created.append(br2)
         url2 = sh(
             "gh",
             "pr",
@@ -472,19 +508,23 @@ def tiebreaker() -> int:
             )
             if m2.returncode != 0:
                 err = m2.stderr.strip()
-                if _merge_refusal_is_protection(err):
+                kind = _classify_merge_refusal(err)
+                if kind == "strict" or (kind == "generic" and state == "BEHIND"):
+                    # A generic refusal ("not mergeable") counts only when the independent
+                    # mergeStateStatus read said BEHIND — the strict staleness signal (r3 P2).
                     verdict, why = (
                         "PASS",
                         f"stale merge REFUSED under strict:true "
                         f"(mergeStateStatus={state}; {err[:120]})",
                     )
                 else:
-                    # Auth / rate-limit / network / head-race failures are NOT enforcement
-                    # evidence — an unattributable refusal is an indeterminate probe (r1 P2).
+                    # Auth / rate-limit / network / head-race failures — and generic
+                    # mergeability errors without the BEHIND reading — are NOT enforcement
+                    # evidence; an unattributable refusal is an indeterminate probe (r1 P2).
                     verdict, why = (
                         "FAIL",
-                        f"indeterminate: stale merge errored for a non-protection reason "
-                        f"({err[:160]})",
+                        f"indeterminate: stale merge refusal not attributable to strict "
+                        f"base-freshness (kind={kind}, mergeStateStatus={state}; {err[:160]})",
                     )
             else:
                 sh("git", "fetch", "-q", "origin")
@@ -512,7 +552,7 @@ def tiebreaker() -> int:
         # Best-effort external-state GC on EVERY exit path — a failed probe must not leave
         # scratch PRs open or remote branches behind (codex r1 P3): deleting a remote branch
         # auto-closes its open PR, and an already-deleted/merged branch makes this a no-op.
-        for scratch in (br, br2):
+        for scratch in created:
             subprocess.run(
                 ["git", "push", "-q", "origin", "--delete", scratch],
                 capture_output=True,
