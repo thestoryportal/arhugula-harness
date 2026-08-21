@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:535-537 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:538-540 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -595,7 +595,7 @@ OUT=$(run_on "$(pl Bash 'git push -u origin' '')"); [ "$(dec "$OUT")" = "deny" ]
 # codex r1 hardening (all on the topic checkout, so a parser miss would fall through to
 # auto-allow): shell dequoting of backslashes, option-supplied remote (--repo=), --all,
 # wildcard destination refspec.
-for c in 'git push origin HEAD:ma\in' 'git push --repo=origin main' 'git push --all origin' "git push origin 'refs/heads/*:refs/heads/*'"; do
+for c in 'git push origin HEAD:ma\in' 'git push --all origin' "git push origin 'refs/heads/*:refs/heads/*'"; do
   OUT=$(run_on "$(pl Bash "$c" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny (hardened)" || bad "hardened case not denied: $c → $OUT"
 done
 # codex r1 P2: bare push on a topic checkout can still update main through config.
@@ -691,6 +691,17 @@ OUT=$(run_on "$(pl Bash 'git push --recurse-submodules on-demand origin' '')"); 
 OUT=$(run_on "$(pl Bash 'git push --recurse-submodules=no origin topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "--recurse-submodules=no topic push → allow" || bad "=no topic push blocked: $OUT"
 OUT=$(run_on "$(pl Bash 'git push -- origin topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "-- end-of-options + topic refspec → allow (r8 P2)" || bad "-- topic push blocked: $OUT"
 OUT=$(run_on "$(pl Bash 'git push -- origin main' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "-- end-of-options + main refspec → still deny" || bad "-- main refspec not denied: $OUT"
+
+# codex r9: glob chars gate the whole command (pathname expansion applies to every word);
+# a single positional is git's REPOSITORY (measured r7) -- `git push main` / `--repo=origin
+# main` are bare pushes to a remote named main: denied on a main checkout, allowed on topic.
+OUT=$(run_on "$(pl Bash 'git push [am]* topic' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "glob remote token → deny (whole-command glob gate)" || bad "glob remote not denied: $OUT"
+( cd "$REPO" && git checkout -q main )
+OUT=$(run_on "$(pl Bash 'git push main' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push to remote 'main' on main checkout → deny" || bad "bare push to remote main on main not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push --repo=origin main' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "--repo=origin main on main checkout → deny (bare push of main)" || bad "--repo bare push on main not denied: $OUT"
+( cd "$REPO" && git checkout -q topic )
+OUT=$(run_on "$(pl Bash 'git push main' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare topic push to remote named 'main' → allow (r9 P2: positional[0] is the repository)" || bad "remote-named-main bare topic push blocked: $OUT"
+OUT=$(run_on "$(pl Bash 'git push --repo=origin main' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "--repo=origin main on topic → allow (bare push to repository 'main', measured r7)" || bad "--repo bare topic push blocked: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"

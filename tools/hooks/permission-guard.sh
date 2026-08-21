@@ -234,7 +234,10 @@ _push_targets_main() {
   # arguments -- `git push # comment` IS a bare push to the checked-out branch, while the
   # parser would count two phantom positionals and skip the bare-push branch. `#` is
   # illegal in refnames, so nothing legitimate is lost.)
-  case "$cmd" in *'{'*|*'}'*|*'$'*|*'#'*) return 0 ;; esac
+  # (`*`/`?`/`[` join at codex r9 P1: pathname expansion applies to EVERY word -- a glob
+  # remote token like `[am]*` can expand to `a main …`, synthesizing a main refspec the
+  # per-destination checks below never see. No legitimate loop push carries glob chars.)
+  case "$cmd" in *'{'*|*'}'*|*'$'*|*'#'*|*'*'*|*'?'*|*'['*) return 0 ;; esac
   # codex r4 P1: word-splitting cannot preserve quoted argument boundaries -- a quoted
   # value containing whitespace (--repo 'remote bare repo') smears into phantom
   # positionals and skips the bare-push branch. Any quoted span with internal whitespace
@@ -297,13 +300,13 @@ _push_targets_main() {
     positional+=("$tok")
   done
   branch=$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)
-  # Refspec scan skips the remote slot ONLY at >=2 positionals (codex r6 P2: a remote
-  # named `main` would hard-deny a legitimate topic push); since r4 every unrecognized
-  # option fails closed, a >=2-positional [0] is reliably the remote. At exactly one
-  # positional the token is git's repository argument (measured r7: a positional takes
-  # precedence over --repo), but a refspec-LOOKING single positional (`--repo=origin
-  # main`) is scanned as a refspec anyway -- pure over-approximation toward deny.
-  if [ "${#positional[@]}" -ge 2 ]; then scan_from=1; else scan_from=0; fi
+  # Refspec scan always skips the remote slot: positional[0] is git's REPOSITORY argument
+  # at every arity (measured r7: a positional repository beats --repo; codex r6/r9 P2: a
+  # remote named `main` must not hard-deny a topic push). Since r4 every unrecognized
+  # option fails closed, positional[0] is reliably the repository -- a single-positional
+  # push is a BARE push to that repository and is handled by the bare-push branch below
+  # (branch check + config checks against exactly that remote).
+  scan_from=1
   if [ "${#positional[@]}" -gt "$scan_from" ]; then
     for tok in "${positional[@]:$scan_from}"; do
       # codex r2 P1: `+:` (and bare `:`) is the matching-refspec push -- it updates every

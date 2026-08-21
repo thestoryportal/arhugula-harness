@@ -2229,3 +2229,13 @@ same spec leg.
 - **Why it was not repaired in the arc.** Narrowing to an argv-position parse (after the permitted env prefix) would make the deny WEAKER than the spec-verbatim predicate — a Spec_HE_Loop_Lanes change-note decision (§4.3), not an in-unit guard edit. It is also the same free-text class as the sibling denies in the same block (force-push, secret-relocation scans), which are longstanding and carry the same workaround.
 - **Bounding.** Loop-mode only (the guard is inert otherwise); the memory-documented workaround holds — `git commit -F <file>` / `--body-file` keep the phrase out of the scanned command string; a deny is loud (audited `loop_log DENY`), never silent.
 - **Close-out.** (1) Spec-level decision: prescribe argv-position matching or ratify the conservative free-text scan (change-note either way); (2) if narrowed, land the parse in a reviewed guard unit with allow+hardening witnesses (quoted-mention commit → allow; real merge argv → deny); (3) record the workaround at the U-HE-29 activation-gate go-live witness where loop-mode friction first materializes.
+
+### B-189 · shell mutation-probe annotations collapse per (script, target-file) — two same-file range annotations reduce to one coverage requirement *(surfaced by out-of-family Codex r9 against the U-HE-26 guard unit, 2026-08-21; not exploitable at HEAD — one annotation per target; register-and-held)*
+
+**What it is.** `required_probes()` reduces a shell suite's `# mutation-probe:` annotations to `(script, target path)` pairs and the pin-log key (`_pinned_nodeids`) likewise drops the line range, so a shell suite carrying two annotations for DIFFERENT ranges of one source file would stay coverage-green after re-pinning only one of them.
+
+**Current state.** Not exploitable at HEAD: every shell suite carries at most one annotation per target file (the U-HE-26 suite carries exactly one). The `lines` field is already present in every probe-log entry, so the migration is key-widening, not data backfill.
+
+**Close-out steps.** (1) Decide whether the pin key becomes `(test, file, lines)` across `required_probes` / `_pinned_nodeids` / `mutation_probe.log_result` — a lockstep three-carrier schema change; (2) if taken, add the two-ranges-one-file witness codex r9 named; (3) until then the one-annotation-per-target convention holds by inspection at review time.
+
+**Council.** NO — single-tool coverage-gate schema refinement; no cross-axis consumer; the only decision is the three-carrier key migration.

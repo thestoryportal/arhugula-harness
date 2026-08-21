@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 188
+  total: 189
   open: 1
   design_substrate_gated: 3
-  registered_finding: 39
+  registered_finding: 40
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: 262d096fc76ba6bc
+  identity_digest: 8843fd51fc3b9efe
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9955,3 +9955,25 @@ items:
   council: 'NO — single-surface guard-predicate refinement with a cleared-spec carrier; the
     only decision is a spec change-note, routed per §4.3 if taken.'
   heading: '### B-188 · C-HE-07 raw-merge deny is a FREE-TEXT scan — loop-mode commands whose quoted data mentions `gh pr merge` (commit messages, PR comment bodies, echoes) are hard-denied *(surfaced by out-of-family Codex r2/r4 against the U-HE-25 guard unit, 2026-08-21; spec-verbatim predicate held; adjudicated to the 3-lens merge gate)*'
+- id: B-189
+  title: >-
+    Shell mutation-probe annotations collapse per (script, target-file) — two annotations
+    probing DIFFERENT LINE RANGES of the same source file reduce to one coverage requirement
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (r9 P3) against the U-HE-26 guard unit and
+    register-and-held. required_probes() reduces shell annotations to `(script, target path)`
+    pairs and the pin log key (`_pinned_nodeids`) likewise drops the line range, so a shell
+    suite carrying two annotations for different ranges of ONE source file would stay
+    coverage-green after re-pinning only one of them. Not exploitable at HEAD: every shell
+    suite carries at most one annotation per target file (the U-HE-26 suite carries exactly
+    one). Closing it means extending the pin key with the annotated range at BOTH ends
+    (required_probes + _pinned_nodeids + the probe log writer) — a coverage-gate schema
+    change, not an in-unit edit.'
+  close_out: '(1) Decide whether the pin key becomes (test, file, lines) across
+    required_probes/_pinned_nodeids/mutation_probe.log_result — a lockstep three-carrier
+    schema change; (2) if taken, migrate existing log entries (lines field already present in
+    every entry) and add the two-ranges-one-file witness codex r9 named; (3) until then the
+    one-annotation-per-target convention holds by inspection at review time.'
+  council: 'NO — single-tool coverage-gate schema refinement; no cross-axis consumer; the only
+    decision is the three-carrier key migration.'
+  heading: '### B-189 · shell mutation-probe annotations collapse per (script, target-file) — two same-file range annotations reduce to one coverage requirement *(surfaced by out-of-family Codex r9 against the U-HE-26 guard unit, 2026-08-21; not exploitable at HEAD — one annotation per target; register-and-held)*'
