@@ -674,6 +674,66 @@ def test_completion_refuses_symlinked_or_foreign_marker(door, tmp_path):
     assert md.read_lease()["lease_token"] == lease["lease_token"]
 
 
+# ── merge-gate r1 corrections (PR #1413) ─────────────────────────────────────
+
+
+def _forge_holder(host="another-host", pid=999999):
+    """Rewrite the persisted LEASE with a FOREIGN host (and dead-looking pid): a pid
+    number is meaningless across hosts, so the mismatch must read as unverifiable."""
+    body = json.loads(md.LEASE.read_text())
+    body["host"] = host
+    body["pid"] = pid
+    md.LEASE.write_text(json.dumps(body, sort_keys=True))
+
+
+def test_cross_host_lease_is_unverifiable_not_reclaimable(door):
+    """merge-gate r1 witness P2: a lease whose holder lives on ANOTHER host must refuse
+    reclaim even with a dead-looking pid — deadness is only adjudicable on the holder's
+    own host; anything else is split-brain of the single-writer fence."""
+    lease = _acq(lane="A")
+    _forge_holder()
+    with pytest.raises(md.LeaseError, match="unverifiable"):
+        md.reclaim(lease, lane_id="B", ground_state="OPEN")
+    assert md.read_lease()["lease_token"] == lease["lease_token"]  # holder undisturbed
+
+
+def test_cross_host_marker_and_claim_are_unverifiable(door):
+    """Same property at the completion surfaces: a foreign-host marker never completes,
+    and a foreign-host completion claim is never broken."""
+    lease = _acq(lane="A")
+    m = _crashed_reclaim_marker(lease)
+    body = json.loads(m.read_text())
+    body["host"] = "another-host"
+    m.write_text(json.dumps(body))
+    assert md.complete_dead_marker(m) is False  # foreign creator: unverifiable
+    body["host"] = md.socket.gethostname()
+    m.write_text(json.dumps(body))
+    from arc_metrics import publish_exclusive
+
+    claim = md.DOOR / f"completed.{lease['lease_token']}"
+    publish_exclusive(claim, json.dumps({"pid": 999999, "host": "another-host", "at": "t"}))
+    assert md.complete_dead_marker(m) is False  # foreign claim: never broken
+    assert claim.exists()
+
+
+# mutation-probe: drop _move_lease()'s pre-rename re-stamp block (stale-mtime record GC'd)
+def test_aged_lease_history_is_born_fresh(door):
+    """merge-gate r1 concurrency P2: the transition record must be BORN with the fresh
+    transition-time mtime (stamped pre-rename) — a >30d-stale mtime surviving into the
+    history name would let a concurrent gc() unlink it before the re-stamp lands."""
+    lease = _acq(lane="A")
+    md.mark_attempted(lease)
+    os.utime(md.LEASE, (0, 0))  # the lease sat blocked/held for ages
+    side = md._sidecar(lease["lease_token"], "attempted")
+    os.utime(side, (0, 0))
+    md.release(lease)
+    import time as _time
+
+    hist = md.DOOR / f"released.{lease['lease_token']}"
+    assert abs(_time.time() - hist.stat().st_mtime) < 120
+    assert abs(_time.time() - side.stat().st_mtime) < 120
+
+
 # ── codex U-HE-22 r5 corrections ─────────────────────────────────────────────
 
 

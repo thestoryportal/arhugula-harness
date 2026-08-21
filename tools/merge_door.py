@@ -326,20 +326,24 @@ def mark_blocked(lease: dict, *, sha: str, reason: str) -> None:
 
 def _move_lease(token: str, dest_prefix: str) -> None:
     dest = DOOR / f"{dest_prefix}.{token}"
+    # Re-stamp BEFORE the rename (merge-gate r1 concurrency P2 on the r3/r4 re-stamp
+    # fix): rename preserves the source mtime, so stamping the SOURCE first means dest is
+    # BORN with the fresh transition-time mtime — no window in which a concurrent gc()
+    # can stat a >30d-stale dest and unlink the record early. The history clock starts at
+    # the transition, not the acquire (codex r3 P3); the token's sidecars carry the same
+    # history and get the same clock, stamped while the live-lease guard still protects
+    # them (codex r4 P3).
+    try:
+        os.utime(LEASE, None)
+    except FileNotFoundError:
+        pass
+    for side in DOOR.glob(f"LEASE.{token}.*"):
+        try:
+            os.utime(side, None)
+        except FileNotFoundError:
+            continue
     try:
         os.rename(LEASE, dest)
-        # Re-stamp: rename preserves the ACQUISITION mtime, and gc() expires history from
-        # mtime — a lease blocked >30 d would otherwise be eligible for deletion the moment
-        # its transition completes, instead of holding its record for the contracted 30 d
-        # (codex U-HE-22 r3 P3). The history clock starts at the transition, not the acquire.
-        # The token's SIDECARS carry the same history (attempted/blocked/refresh) and get
-        # the same clock (codex r4 P3), else GC erases the transition evidence early.
-        os.utime(dest, None)
-        for side in DOOR.glob(f"LEASE.{token}.*"):
-            try:
-                os.utime(side, None)
-            except FileNotFoundError:
-                continue
     except FileNotFoundError:
         pass  # already moved: fail-closed idempotency (a rename on a moved source = "done")
 
