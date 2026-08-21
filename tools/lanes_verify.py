@@ -197,14 +197,14 @@ MANIFEST: list[Row] = [
         "pytest:tools/test_merge_door.py::test_inflight_first_attempt_then_reissue",
         "phase0",
         "local + CI",
-        False,
+        True,
     ),
     Row(
         "C-HE-06",
         "pytest:tools/test_merge_door.py::test_ac2_c_crash_resume",
         "phase0",
         "local + CI",
-        False,
+        True,
     ),
     # C-HE-09/10 (U-HE-09)
     Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True),

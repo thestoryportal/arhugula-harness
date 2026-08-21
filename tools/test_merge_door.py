@@ -32,6 +32,7 @@ def door(tmp_path, monkeypatch):
     # the tracked .harness/merge-gate-log.jsonl (a plain suite run was appending fake-sha
     # rows to the repo — caught by the stop-gate's ROOT_CHECKOUT_EDIT).
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "gate-log.jsonl")
+    monkeypatch.setenv("MERGE_DOOR_ALLOW_NO_REFRESH", "1")  # r9: env-gated test bypass
     monkeypatch.setattr(md, "QUEUE_DIR", q)
     monkeypatch.setattr(md, "DOOR", q / "merge-door")
     monkeypatch.setattr(md, "LEASE", q / "merge-door" / "LEASE")
@@ -1159,14 +1160,27 @@ def test_wait_for_door_backoff_numbers_and_budget(door):
     assert len(sleeps) == 11 + 3
 
 
-def _fake_gh(bindir: Path, state: Path, log: Path, tree: str) -> None:
+def _fake_gh(bindir: Path, state: Path, log: Path, tree: str, state2: Path | None = None) -> None:
     """A `gh` + `git` shim on PATH: pr view answers from state.json; pr merge appends to
     merge-calls.log and flips state.json to MERGED; run list reports success; git
-    merge-tree returns the attested tree; other git calls pass through."""
+    merge-tree returns the attested tree; other git calls pass through. With state2,
+    PR #2 (the terminating refresh) answers/flips its own file (codex r9 P3)."""
+    pr2_cases = ""
+    if state2 is not None:
+        pr2_cases = f"""  *"pr view 2"*) cat "{state2}" ;;
+  *"pr merge 2"*) echo "$*" >> "{log}"; python3 - <<'PY2B'
+import json
+p = "{state2}"
+s = json.load(open(p))
+s.update(state="MERGED", mergedAt="now", mergeCommit={{"oid": "9" * 40}})
+json.dump(s, open(p, "w"))
+PY2B
+  ;;
+"""
     (bindir / "gh").write_text(
         f"""#!/usr/bin/env bash
 case "$*" in
-  *"pr view"*) cat "{state}" ;;
+{pr2_cases}  *"pr view"*) cat "{state}" ;;
   *"pr merge"*) echo "$*" >> "{log}"; python3 - <<'PY2'
 import json
 p = "{state}"
@@ -1531,7 +1545,7 @@ def test_unblock_refuses_foreign_lane_while_reservation_open(door):
     holder transfer is reclaim's dead-holder job (r4 P2)."""
     lease = _acq(lane="A")
     md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
-    with pytest.raises(md.LeaseError, match="held\\b.*not"):
+    with pytest.raises(md.LeaseError, match=r"held\b.*not"):
         md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="B")
     assert md.read_lease()["state"] == "blocked"  # untouched
 
@@ -1641,7 +1655,8 @@ def test_recovery_verbs_refuse_a_live_unblocked_holder(door):
 def test_tier_counter_resets_on_a_reconciled_cycle(door):
     """§10: three CONSECUTIVE clean cycles — a reconciled cycle resets the count (r6 P2)."""
     g = FakeGround()
-    assert _land(door, g) == "released"  # clean cycle 1
+    # a clean cycle requires a CONFIRMED refresh (r9 P2) — drive the full lifecycle
+    assert _land(door, g, refresh=g.add_refresh_pr) == "released"  # clean cycle 1
     assert len(list((md.DOOR / "tier-clean-cycles").iterdir())) == 1
     _open_backfilled("pr-9", "A", 9)
     rs.update_payload("pr-9", {"attested_merge_tree": "d" * 40})
@@ -1781,3 +1796,198 @@ def test_base_toctou_blocked_survives_raising_gate_writer(door, monkeypatch):
     lease = md.read_lease()
     assert lease["state"] == "blocked"
     assert lease["blocked_reason"] == "base_toctou_first_parent_mismatch"
+
+
+# ── codex U-HE-23 r9 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop the persisted-view adoption after the resumed-lease validation
+def test_resumed_land_ignores_forged_caller_fields(door):
+    """The persisted view is authoritative for the drive (r9 P1): a caller retaining
+    valid identifiers cannot forge unblocked_from to bypass BASE_TOCTOU."""
+    g = FakeGround()
+    g.git_first_parent = lambda sha: "e" * 40  # merge lands on a different base
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    forged = {**lease, "unblocked_from": "c" * 40}  # equals the fake merge SHA
+    with pytest.raises(md.DoorBlocked, match="base_toctou"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=forged)
+    assert md.read_lease()["state"] == "blocked"  # detected, never bypassed
+
+
+# mutation-probe: drop the fresh-refresh identity gate (any real OPEN PR merges)
+def test_fresh_refresh_identity_mismatch_never_persists_or_merges(door):
+    """A refresh command mistakenly returning an unrelated OPEN PR's real pair must
+    neither persist the pair nor merge that PR under the lease (r9 P1)."""
+    g = FakeGround()
+
+    def wrong_refresh():
+        g.states[3] = {
+            "state": "OPEN",
+            "headRefOid": "f" * 40,
+            "baseRefOid": "b" * 40,
+            "mergedAt": None,
+            "mergeCommit": None,
+            "title": "feat: unrelated work",
+            "files": [{"path": "src/x.py"}],
+        }
+        return 3, "f" * 40
+
+    with pytest.raises(md.DoorBlocked):
+        _land(door, g, refresh=wrong_refresh)
+    live = md.read_lease()
+    assert live["state"] == "blocked"
+    assert "refresh identity mismatch" in live["blocked_reason"]
+    assert [c[0] for c in g.merge_calls] == [1]  # the unrelated PR was NEVER merged
+    assert live.get("refresh") is None  # the pair was never persisted
+
+
+# mutation-probe: drop the cross-host refusal in the recovery verbs
+def test_recovery_verbs_refuse_cross_host_holder(door, monkeypatch):
+    """A same-lane process on ANOTHER host cannot prove the holder dead; the recovery
+    verbs must refuse rather than clear refresh.intent mid-creation (r9 P2)."""
+    g = FakeGround()
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    _forge_holder()  # foreign host, dead-looking pid — liveness unverifiable
+    g.add_refresh_pr()
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 4
+    assert md.main(["clear-refresh-intent", "--lane-id", "A"]) == 4
+    assert md._sidecar(lease["lease_token"], "refresh.intent").exists()  # untouched
+
+
+# mutation-probe: drop the MERGE_DOOR_ALLOW_NO_REFRESH env gate (production bypass)
+def test_no_refresh_refused_without_env_optin(door, monkeypatch):
+    """--no-refresh is NOT a production path: without the explicit env opt-in the CLI
+    refuses before driving anything (r9 P2)."""
+    g = FakeGround()
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    monkeypatch.delenv("MERGE_DOOR_ALLOW_NO_REFRESH")
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    assert md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"]) == 4
+    assert g.merge_calls == []  # nothing drove the door
+    assert md.read_lease() is None  # no lease was even taken
+
+
+# mutation-probe: drop the recorded-MERGED pre-check (never-reissue violated)
+def test_recorded_merged_refresh_never_reissued(door, monkeypatch):
+    """record-refresh accepts a ground-truth MERGED PR; the resumed land must NEVER
+    re-issue gh pr merge for it (r9 P2)."""
+    g = FakeGround()
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    _kill_holder()
+    g.add_refresh_pr()
+    g.states[2].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "9" * 40})
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
+    out = md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=md.read_lease())
+    assert out == "released"
+    assert [c[0] for c in g.merge_calls] == [1]  # the MERGED refresh was never re-driven
+
+
+# mutation-probe: re-allow a refresh-skipped cycle to count toward §10 tier-clean
+def test_refresh_skipped_cycle_neither_counts_nor_resets_tier(door):
+    """A --no-refresh / refresh-skipped cycle is NOT a clean §10 cycle: it must not add
+    a token — and must not reset the streak either (r9 P2)."""
+    g = FakeGround()
+    assert _land(door, g, refresh=g.add_refresh_pr) == "released"  # a REAL clean cycle
+    tcc = md.DOOR / "tier-clean-cycles"
+    assert len(list(tcc.iterdir())) == 1
+    _open_backfilled("pr-9", "A", 9)
+    rs.update_payload("pr-9", {"attested_merge_tree": "d" * 40})
+    g.states[9] = {
+        "state": "OPEN",
+        "headRefOid": "a" * 40,
+        "baseRefOid": "b" * 40,
+        "mergedAt": None,
+        "mergeCommit": None,
+    }
+    # a NORMAL merge with the refresh skipped: not reconciled, not refresh-confirmed
+    assert md.land(9, lane_id="A", arc_id="pr-9", ground=g, refresh=None) == "released"
+    assert len(list(tcc.iterdir())) == 1  # unchanged: neither counted nor reset
+
+
+# mutation-probe: drop crash recovery across the terminating-refresh continuation
+def test_ac2_c_refresh_crash_resume(door, tmp_path, monkeypatch):
+    """AC#2(c) refresh half (r9 P3): a REAL subprocess killed at refresh-attempted,
+    then resumed with the SAME --refresh-cmd; each PR is merged exactly once and the
+    recorded refresh identity survives the crash (no second refresh PR is minted)."""
+    q = door
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    state = tmp_path / "state.json"
+    state2 = tmp_path / "state2.json"
+    log = tmp_path / "merge-calls.log"
+    state.write_text(
+        json.dumps(
+            {
+                "state": "OPEN",
+                "headRefOid": "a" * 40,
+                "baseRefOid": "b" * 40,
+                "mergedAt": None,
+                "mergeCommit": None,
+            }
+        )
+    )
+    state2.write_text(
+        json.dumps(
+            {
+                "state": "OPEN",
+                "headRefOid": "r" * 40,
+                "baseRefOid": "c" * 40,
+                "mergedAt": None,
+                "mergeCommit": None,
+                "title": "ops: roadmap status refresh post-#1",
+                "files": [{"path": ".harness/roadmap_status.md"}],
+            }
+        )
+    )
+    _fake_gh(bindir, state, log, "d" * 40, state2=state2)
+    refresh_json = tmp_path / "refresh.json"
+    refresh_json.write_text(json.dumps({"pr": 2, "head_sha": "r" * 40}))
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "ARC_METRICS_QUEUE_DIR": str(q),
+        "HARNESS_GATE_LOG": str(tmp_path / "gate-log.jsonl"),
+        "PYTHONPATH": str(TOOLS),
+        "HARNESS_LANE_ID": "A",
+    }
+    cmd = [
+        sys.executable,
+        str(TOOLS / "merge_door.py"),
+        "land",
+        "1",
+        "--lane-id",
+        "A",
+        "--arc-id",
+        "pr-1",
+        "--refresh-cmd",
+        f"cat {refresh_json}",
+    ]
+    p1 = subprocess.run(
+        cmd,
+        env={**env, "MERGE_DOOR_TEST_KILL_AFTER": "refresh-attempted"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert p1.returncode == 137, p1.stderr
+    live = md.read_lease()
+    assert live is not None and live.get("refresh", {}).get("pr") == 2  # identity durable
+    p2 = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=120)
+    assert p2.returncode == 0, p2.stderr
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert len(calls) == 2, calls  # each PR merged exactly once across crash + resume
+    assert sum("pr merge 1 " in c for c in calls) == 1
+    assert sum("pr merge 2 " in c for c in calls) == 1
+    assert md.read_lease() is None
+    assert any(md.DOOR.glob("released.*"))

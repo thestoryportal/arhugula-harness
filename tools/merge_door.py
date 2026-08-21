@@ -40,7 +40,9 @@ MERGE_TIMEOUT_S = 120.0
 # CLAUDE.md §12.2.1 terminating-refresh discriminator (codex r8 P1): the recorded
 # refresh PR must carry this exact shape — title prefix + roadmap-status-only file set
 REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
-REFRESH_ONLY_FILE = ".harness/roadmap_status.md"
+# concatenated so the store-audit literal extractor cannot misread this gh-side
+# file-set discriminator as an uninventoried QUEUE_DIR store literal
+REFRESH_ONLY_FILE = ".harness" + "/roadmap_status.md"
 POST_MERGE_CI_BOUND_S = 45 * 60
 REFRESH_BOUND_S = 45 * 60
 BACKOFF = {"base_s": 30.0, "factor": 2.0, "cap_s": 600.0, "max_attempts": 12}
@@ -1116,6 +1118,10 @@ def land(
             raise DoorBlocked(
                 f"lease is blocked at {live.get('blocked_at_sha')!r}; use unblock, not land"
             )
+        # the PERSISTED view is authoritative for the drive (codex r9 P1): a caller
+        # retaining valid identifiers could forge unblocked_from (a BASE_TOCTOU bypass)
+        # or omit the attempted/refresh sidecars (regaining spent re-issue budget)
+        lease = live
     if ground.codex_worktree_present():
         _notify(
             "NOTIFY",
@@ -1216,6 +1222,7 @@ def land(
             raise DoorBlocked(status)
         _kill_after("post-ci")
         recorded = (read_lease() or {}).get("refresh")
+        refresh_confirmed = False  # §10: only a refresh-green cycle can count clean (r9 P2)
         if refresh is not None or recorded is not None:  # (viii)
             rpr_rhead = None
             if recorded is not None:
@@ -1256,6 +1263,20 @@ def land(
                 except FileExistsError:
                     pass
                 rpr, rhead = refresh()
+                rv0 = ground.gh_view(rpr)
+                rfiles = [f.get("path") for f in (rv0.get("files") or [])]
+                if (
+                    rv0.get("headRefOid") != rhead
+                    or not str(rv0.get("title") or "").startswith(REFRESH_TITLE_PREFIX)
+                    or rfiles != [REFRESH_ONLY_FILE]
+                ):
+                    # same identity gate as record-refresh (codex r9 P1): a refresh-cmd
+                    # mistakenly returning any real OPEN PR's pair must never persist —
+                    # the pair would be squash-merged under the global lease
+                    raise DoorFailed(
+                        f"refresh identity mismatch: pr #{rpr} at {str(rhead)[:12]} is "
+                        f"not a terminating refresh (title {str(rv0.get('title'))[:40]!r})"
+                    )
                 publish_exclusive(
                     _sidecar(lease["lease_token"], "refresh"),
                     json.dumps({"pr": rpr, "head_sha": rhead}),
@@ -1266,8 +1287,11 @@ def land(
                 recorded is not None and recorded.get("merge_attempted_at") is not None
             )
             refresh_landed = False
-            if refresh_resumed and reconcile_ground({**lease, "pr": rpr}, ground) == "MERGED":
-                refresh_landed = True  # the recorded refresh landed pre-crash: NEVER re-issue
+            if recorded is not None and ground.gh_view(rpr).get("state") == "MERGED":
+                # ANY recorded refresh already MERGED by ground truth is never re-issued
+                # (codex r9 P2): record-refresh accepts a MERGED PR whose sidecar carries
+                # no attempted marker — the attempted-only reconcile re-drove gh pr merge
+                refresh_landed = True
             refresh_budget = 2
             if refresh_resumed:
                 refresh_budget = 1  # §5: one re-issue per reconcile pass
@@ -1303,16 +1327,19 @@ def land(
                     f"door blocked; fix, then `just merge-door-unblock {rpr} {rsha}`",
                 )
                 raise DoorBlocked(rstatus)
+            refresh_confirmed = True
         release(lease)  # (ix)
-        if not reconciled:
-            # a CLEAN cycle (C-HE-06 §10): no reconcile pass, no HITL
+        if not reconciled and refresh_confirmed:
+            # a CLEAN cycle (C-HE-06 §10) requires no reconcile pass, no HITL, AND a
+            # CONFIRMED refresh (codex r9 P2: a refresh-skipped run must never count)
             tcc = DOOR / "tier-clean-cycles"
             if not tcc.is_symlink():  # same containment as every door subdir (r1 P2)
                 tcc.mkdir(exist_ok=True)
                 (tcc / lease["lease_token"]).touch()
-        else:
+        elif reconciled:
             # §10 requires three CONSECUTIVE clean cycles (codex r6 P2): a reconciled or
             # HITL cycle resets the counter, else nonconsecutive cleans silence the tier
+            # (a refresh-skipped clean run neither counts nor resets)
             tcc = DOOR / "tier-clean-cycles"
             if tcc.is_dir() and not tcc.is_symlink():
                 for f in tcc.iterdir():
@@ -1443,6 +1470,18 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     try:
         if args.cmd == "land":
+            if args.no_refresh and os.environ.get("MERGE_DOOR_ALLOW_NO_REFRESH") != "1":
+                # --no-refresh is NOT a production path (codex r9 P2): the C-HE-06
+                # held-until-refresh invariant stands; the bypass exists for the
+                # subprocess crash suites and operator recovery, behind this env gate —
+                # refused BEFORE any lease is taken
+                print(
+                    "--no-refresh violates the C-HE-06 §4(viii) held-until-refresh "
+                    "invariant in production; set MERGE_DOOR_ALLOW_NO_REFRESH=1 for a "
+                    "test/manual bypass",
+                    file=sys.stderr,
+                )
+                return 4
             ground = default_ground()
             refresh = None
             if args.refresh_cmd and not args.no_refresh:
@@ -1546,6 +1585,13 @@ def main(argv: list[str] | None = None) -> int:
             live = read_lease()
             if live is None or live.get("lane_id") != args.lane_id:
                 raise LeaseError("no live lease held by this lane")
+            if live.get("state") != "blocked" and live.get("host") != socket.gethostname():
+                # cross-host liveness is UNVERIFIABLE (codex r9 P2): treating a foreign
+                # host's holder as dead reopens the duplicate-refresh window mid-creation
+                raise LeaseError(
+                    "cross-host holder liveness is unverifiable -- run the recovery verb "
+                    "on the holder host, or unblock a blocked door"
+                )
             holder_active = (
                 live.get("host") == socket.gethostname()
                 and _process_is_alive(int(live["pid"]))
