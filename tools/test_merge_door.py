@@ -86,6 +86,11 @@ def test_lease_holder_invariant(door):
     with pytest.raises(md.HolderInvariant):
         # open but held by A
         md.acquire(lane_id="B", arc_id="pr-1", pr=1, head_sha="h" * 40, base_sha="b" * 40)
+    # Discriminates the PRE-check from the r3 post-publication re-validation (which also
+    # raises HolderInvariant but only AFTER transiently publishing + self-releasing): the
+    # pre-check path must never publish at all — no lease, no self-heal history artifact.
+    assert md.read_lease() is None
+    assert not list(md.DOOR.glob("released.*"))
 
 
 def test_rate_counter_ignores_tmp_remnants(door):
