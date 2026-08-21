@@ -457,13 +457,16 @@ def required_probes(row: Row) -> list[tuple[str, str]]:
         # (test_permission_guard.sh probes permission-guard.sh, a hyphenated name the
         # `test_`-strip cannot reach). First annotation wins; sibling default otherwise.
         # (Flat loop, no guarding `if`: the scan must stay deletion-expressible for the
-        # mutation probe -- commenting it out falls through to the sibling default.)
+        # mutation probe -- commenting it out falls through to the sibling default.
+        # EVERY annotation is collected, per this function's every-annotation contract --
+        # returning on the first one let a second annotated target go unprobed, codex r8.)
+        found: list[tuple[str, str]] = []
         for line in path.read_text().splitlines() if path.exists() else []:
             if line.startswith("# mutation-probe: "):
                 d = _DESC_TARGET.match(line.removeprefix("# mutation-probe: ").strip())
-                if d:
-                    return [(script, d.group("path"))]
-        return [(script, default_probe_target(script))]
+                if d and (script, d.group("path")) not in found:
+                    found.append((script, d.group("path")))
+        return found or [(script, default_probe_target(script))]
     if kind != "pytest":
         return [(target, target)]
     file_part, _, node = target.partition("::")

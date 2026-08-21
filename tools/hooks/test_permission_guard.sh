@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:522-524 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:535-537 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -683,6 +683,14 @@ OUT=$(run_on "$(pl Bash 'git push main main' '')"); [ "$(dec "$OUT")" = "deny" ]
 OUT=$(run_on "$(pl Bash 'git push origin\ repo' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "backslash-escaped whitespace remote (bare push in disguise) → deny" || bad "backslash-space push not denied: $OUT"
 ( cd "$REPO" && git checkout -q topic )
 OUT=$(run_on "$(pl Bash 'git push --repo=origin main topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "--repo + positional repo named main + topic refspec → allow (r7 refutation witness)" || bad "--repo positional-precedence case blocked: $OUT"
+
+# codex r8: recursive submodule modes spawn nested pushes outside the hook (deny);
+# `--` end-of-options is not an unknown option (legit topic pushes stay allowed).
+OUT=$(run_on "$(pl Bash 'git push --recurse-submodules=on-demand origin topic' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "--recurse-submodules=on-demand → deny (nested pushes unhookable)" || bad "on-demand recurse not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push --recurse-submodules on-demand origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "--recurse-submodules on-demand (value form) → deny" || bad "on-demand value form not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push --recurse-submodules=no origin topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "--recurse-submodules=no topic push → allow" || bad "=no topic push blocked: $OUT"
+OUT=$(run_on "$(pl Bash 'git push -- origin topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "-- end-of-options + topic refspec → allow (r8 P2)" || bad "-- topic push blocked: $OUT"
+OUT=$(run_on "$(pl Bash 'git push -- origin main' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "-- end-of-options + main refspec → still deny" || bad "-- main refspec not denied: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"

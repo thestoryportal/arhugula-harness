@@ -136,6 +136,19 @@ def test_shell_row_explicit_annotation_names_hyphenated_probe_target(repo: Path)
     ]
     unannot = _row(art="shell:tools/hooks/test_c.sh", mp=True)
     assert lv.required_probes(unannot) == [("tools/hooks/test_c.sh", "tools/hooks/c.sh")]
+    # codex r8 P3: EVERY annotation is required, not just the first -- a suite probing two
+    # source files owes two pins.
+    (repo / "tools" / "hooks" / "other-module.sh").write_text("y=1\n")
+    (repo / "tools" / "hooks" / "test_permission_guard.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "# mutation-probe: tools/hooks/permission-guard.sh:410-412 deny predicate\n"
+        "# mutation-probe: tools/hooks/other-module.sh:1 second annotated target\n"
+        "true\n"
+    )
+    assert lv.required_probes(row) == [
+        ("tools/hooks/test_permission_guard.sh", "tools/hooks/permission-guard.sh"),
+        ("tools/hooks/test_permission_guard.sh", "tools/hooks/other-module.sh"),
+    ]
 
 
 def _nodes(gaps) -> list[str]:

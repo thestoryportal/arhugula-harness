@@ -224,7 +224,7 @@ _safe_merge_wrapper() {
 # 0 iff the push command targets main: any refspec destination == main, or no refspec while
 # main is checked out (a bare push sends the current branch). U-HE-26 (C-HE-08 §1).
 _push_targets_main() {
-  local cmd="$1" tok positional=() dest branch remote="" repo_opt="" want_value="" pd scan_from=0
+  local cmd="$1" tok positional=() dest branch remote="" repo_opt="" want_value="" pd scan_from=0 opts_done=0
   # codex r2 P1: the parser sees the UNEXPANDED command. Brace expansion
   # (`HEAD:ma{in,ster}` executes as HEAD:main) and variable expansion (`HEAD:$b` --
   # _bash_args_safe rejects only $UPPERCASE) can synthesize a main refspec after approval,
@@ -254,6 +254,11 @@ _push_targets_main() {
       if [ "$want_value" = "repo" ]; then
         tok=${tok//\"/}; tok=${tok//\'/}; tok=${tok//\\/}
         repo_opt="$tok"
+      elif [ "$want_value" = "rsub" ]; then
+        # codex r8 P1: recursive submodule modes trigger NESTED pushes that never pass
+        # through this hook (a submodule checked out on main could be pushed). Only the
+        # non-recursive modes are inert.
+        case "$tok" in no|check) ;; *) return 0 ;; esac
       fi
       want_value=""; continue
     fi
@@ -261,19 +266,27 @@ _push_targets_main() {
     # and HEAD:ma\in IS HEAD:main (codex r1 P1). Removing every backslash can only widen
     # the deny (a literal backslash-bearing ref can never be main).
     tok=${tok//\"/}; tok=${tok//\'/}; tok=${tok//\\/}
+    if [ "$opts_done" = 1 ]; then positional+=("$tok"); continue; fi
     case "$tok" in
+      --) opts_done=1; continue ;;          # codex r8 P2: end-of-options -- everything after
+                                            # is positional; hard-denying `--` broke legit
+                                            # topic pushes
       --all|--branches) return 0 ;;         # pushes every branch, main included (codex r1 P1;
                                             # --mirror is denied by the sibling predicate above)
       --repo) want_value=repo; continue ;;
       --repo=*) repo_opt="${tok#--repo=}"; continue ;;
-      -o|--push-option|--receive-pack|--exec|--recurse-submodules)
+      --recurse-submodules) want_value=rsub; continue ;;
+      --recurse-submodules=no|--recurse-submodules=check) continue ;;
+      --recurse-submodules=*) return 0 ;;   # codex r8 P1: on-demand/only spawn nested
+                                            # submodule pushes outside this hook's sight
+      -o|--push-option|--receive-pack|--exec)
                                             # codex r2/r3 P1: the separate-value options of
                                             # `git push` -- their value is NOT a positional;
                                             # miscounting one skipped the bare-push branch
                                             # entirely (`--recurse-submodules no origin` was
                                             # empirically confirmed to consume `no` as value).
         want_value=other; continue ;;
-      -u|--set-upstream|-q|--quiet|-v|--verbose|-n|--dry-run|--porcelain|--progress|--no-progress|--thin|--no-thin|--atomic|--no-atomic|--follow-tags|--no-follow-tags|--tags|--verify|--no-verify|-4|--ipv4|-6|--ipv6|--signed|--no-signed|--signed=*|--force-with-lease|--force-with-lease=*|--no-force-with-lease|--push-option=*|--receive-pack=*|--exec=*|--recurse-submodules=*|--no-recurse-submodules)
+      -u|--set-upstream|-q|--quiet|-v|--verbose|-n|--dry-run|--porcelain|--progress|--no-progress|--thin|--no-thin|--atomic|--no-atomic|--follow-tags|--no-follow-tags|--tags|--verify|--no-verify|-4|--ipv4|-6|--ipv6|--signed|--no-signed|--signed=*|--force-with-lease|--force-with-lease=*|--no-force-with-lease|--push-option=*|--receive-pack=*|--exec=*|--no-recurse-submodules)
         continue ;;                         # recognized flag-only / =-form options: none can
                                             # redirect an otherwise-safe push onto main
       -*) return 0 ;;                       # codex r4 P1: git accepts unambiguous
