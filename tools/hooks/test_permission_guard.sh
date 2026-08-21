@@ -5,6 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
+# mutation-probe: tools/hooks/permission-guard.sh:410-412 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 

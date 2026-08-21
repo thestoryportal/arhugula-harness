@@ -119,6 +119,25 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     return tmp_path
 
 
+# mutation-probe: drop the shell-annotation scan (explicit-target branch) in required_probes()
+def test_shell_row_explicit_annotation_names_hyphenated_probe_target(repo: Path):
+    """A shell suite whose sibling default is underivable (hyphenated source name, U-HE-26)
+    names its probed file with a file-level red-first-form annotation; an unannotated suite
+    keeps the sibling default."""
+    (repo / "tools" / "hooks" / "permission-guard.sh").write_text("x=1\n")
+    (repo / "tools" / "hooks" / "test_permission_guard.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "# mutation-probe: tools/hooks/permission-guard.sh:410-412 deny predicate\n"
+        "true\n"
+    )
+    row = _row(art="shell:tools/hooks/test_permission_guard.sh", mp=True)
+    assert lv.required_probes(row) == [
+        ("tools/hooks/test_permission_guard.sh", "tools/hooks/permission-guard.sh")
+    ]
+    unannot = _row(art="shell:tools/hooks/test_c.sh", mp=True)
+    assert lv.required_probes(unannot) == [("tools/hooks/test_c.sh", "tools/hooks/c.sh")]
+
+
 def _nodes(gaps) -> list[str]:
     return [n.split(" [probe of ")[0] for _, n in gaps]
 
