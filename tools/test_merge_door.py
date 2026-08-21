@@ -1065,7 +1065,7 @@ def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
     ) in rows
 
 
-# mutation-probe: force a second acquire() call before the refresh PR merge
+# mutation-probe: drop land()'s (viii) continuation block (refresh never lands under the lease)
 def test_continuation_no_reacquire(door, monkeypatch):
     g = FakeGround()
     acquires = []

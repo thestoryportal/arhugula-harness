@@ -1130,15 +1130,18 @@ def land(
         _kill_after("post-ci")
         recorded = (read_lease() or {}).get("refresh")
         if refresh is not None or recorded is not None:  # (viii)
+            rpr_rhead = None
             if recorded is not None:
                 # self-resume: NEVER create a second refresh PR
-                rpr, rhead = int(recorded["pr"]), recorded["head_sha"]
-            else:
+                rpr_rhead = (int(recorded["pr"]), recorded["head_sha"])
+            if rpr_rhead is None:
                 rpr, rhead = refresh()
                 publish_exclusive(
                     _sidecar(lease["lease_token"], "refresh"),
                     json.dumps({"pr": rpr, "head_sha": rhead}),
                 )
+            else:
+                rpr, rhead = rpr_rhead
             reconciled = _merge_once(lease, rpr, rhead, ground, suffix="refresh") or reconciled
             rv = ground.gh_view(rpr)
             if rv.get("state") != "MERGED":
