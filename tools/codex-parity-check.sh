@@ -19,6 +19,7 @@ uv run pytest -q \
   tools/test_mutation_probe.py \
   tools/test_arc_metrics.py \
   tools/test_arc_metrics_lanes.py \
+  tools/test_ci_yml_concurrency.py \
   tools/test_finding_record.py \
   tools/test_lanes_verify.py \
   tools/test_merge_door.py \
