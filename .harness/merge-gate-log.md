@@ -523,3 +523,5 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-21T17:32:31Z | #1416 | c2b309c869a0 | merge-gate-concurrency | BLOCK | 1 finding(s) | r1 |
 | 2026-08-21T17:33:57Z | #1416 | c2b309c869a0 | merge-gate-spec-conformance | BLOCK | 3 finding(s) | r1 |
 | 2026-08-21T17:34:54Z | #1416 | c2b309c869a0 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-08-21T17:51:31Z | #1416 | 74da527735fe | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-21T17:52:49Z | #1416 | 74da527735fe | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
