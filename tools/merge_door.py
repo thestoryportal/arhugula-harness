@@ -125,6 +125,10 @@ def read_lease() -> dict | None:
             lease["refresh"]["merge_attempted_at"] = json.loads(ratt.read_text())[
                 "merge_attempted_at"
             ]
+    if _sidecar(tok, "refresh.intent").exists():
+        # declared refresh intent survives into the view so self-resume carries it
+        # across a token change (codex U-HE-23 r2 P2)
+        lease["refresh_intent"] = True
     return lease
 
 
@@ -461,7 +465,10 @@ def _publish_fresh(fresh: dict) -> None:
     stripped from the base LEASE payload and republished as sidecars under the new token
     (attempted; the refresh continuation + its own attempted — codex U-HE-22 r1 P1)."""
     ref = fresh.get("refresh")
-    payload = {k: v for k, v in fresh.items() if k not in ("refresh", "blocked_at")}
+    intent = fresh.get("refresh_intent")
+    payload = {
+        k: v for k, v in fresh.items() if k not in ("refresh", "blocked_at", "refresh_intent")
+    }
     # SIDECARS FIRST, LEASE LAST (codex r4 P1): a crash between a published LEASE and its
     # not-yet-republished sidecars would present an apparently-refresh-free lease — a later
     # self-resume would then lose the recorded refresh/attempt state and could re-issue.
@@ -477,6 +484,15 @@ def _publish_fresh(fresh: dict) -> None:
             pass
     if ref:
         _publish_refresh_sidecars(fresh["lease_token"], ref)
+    if intent:
+        # the declared-intent fence survives the token change (codex r2 P2): losing it
+        # across a reclaim would let a resumed pass mint a second refresh PR
+        try:
+            publish_exclusive(
+                _sidecar(fresh["lease_token"], "refresh.intent"), json.dumps({"at": _now_iso()})
+            )
+        except FileExistsError:
+            pass
     try:
         publish_exclusive(LEASE, json.dumps(payload, sort_keys=True))
     except FileExistsError:
@@ -1272,6 +1288,8 @@ def _tiering_active() -> bool:
     """C-HE-06 §10: NOTIFY per acquire/release during the pilot + first multi-lane merges;
     silent after 3 clean cycles (one file per clean cycle under tier-clean-cycles/)."""
     d = DOOR / "tier-clean-cycles"
+    if d.is_symlink():
+        return True  # a planted link must not SUPPRESS notifications (codex r2 P3)
     return not d.is_dir() or len(list(d.iterdir())) < 3
 
 
@@ -1352,14 +1370,15 @@ def main(argv: list[str] | None = None) -> int:
                         lane_id=args.lane_id,
                         ground_state=reconcile_ground(live, ground),
                     )  # self-resume via the marker discipline
-            else:
+            if lease is None:
                 cur = rs.current(args.arc_id)
-                if cur is not None and cur[1]["state"] == "merged":
+                if live is None and cur is not None and cur[1]["state"] == "merged":
                     print("nothing to land: no lease and the reservation is already merged")
                     return 0
                 if cur is not None:
-                    # §8 caller policy IS the production path (codex r1 P2): contention
-                    # backs off with jitter for up to ~1 h, then exits 5 (HITL).
+                    # §8 caller policy IS the production path (codex r1/r2 P2): normal
+                    # contention (a live foreign lease) and a free door both route
+                    # through the jittered 12-attempt backoff, then exit 5 (HITL).
                     lease = wait_for_door(
                         lambda: acquire(
                             lane_id=args.lane_id,
@@ -1393,6 +1412,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 3
     except BudgetExhausted as exc:
+        # the wedged door is human-actionable state (codex r2 P2): §9 gate row + HIL row,
+        # never only a stderr line
+        _emit_gate(
+            None,
+            gate="merge-door-lease-acquire",
+            fail_class="HITL-recoverable",
+            cause="lease_acquire_budget_exhausted",
+            evidence=str(exc),
+            arc_id=args.arc_id,
+            lane_id=args.lane_id,
+        )
+        _notify(
+            "DEFERRED-HIL",
+            args.lane_id,
+            "merge-door-lease-acquire:HITL-recoverable:lease_acquire_budget_exhausted",
+            f"{args.arc_id} — pr #{args.pr}: {exc}; inspect the holder "
+            f"(merge_door status) and reconcile by ground truth",
+        )
         print(f"BUDGET: {exc}", file=sys.stderr)
         return 5
     except LeaseError as exc:

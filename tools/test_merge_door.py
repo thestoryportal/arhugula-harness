@@ -1351,3 +1351,71 @@ def test_tier_clean_cycles_symlink_not_followed(door, tmp_path):
     g = FakeGround()
     assert _land(door, g) == "released"
     assert list(outside.iterdir()) == []  # nothing written through the link
+
+
+# ── codex U-HE-23 r2 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop _publish_fresh()'s intent republish (fence lost across reclaim)
+def test_refresh_intent_survives_reclaim(door):
+    """The declared-intent fence is token-keyed — self-resume reclaims into a NEW token
+    and must carry it, else the resumed pass can mint a second refresh PR (r2 P2)."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    _kill_holder()
+    fresh = md.reclaim(md.read_lease(), lane_id="A", ground_state="OPEN")
+    assert md._sidecar(fresh["lease_token"], "refresh.intent").exists()  # carried
+    calls = []
+
+    def refresh():
+        calls.append(1)
+        return g.add_refresh_pr()
+
+    with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=fresh)
+    assert calls == []
+
+
+def test_tiering_never_suppressed_by_symlink(door, tmp_path):
+    """A planted tier-clean-cycles symlink (to a dir with >=3 entries) must not SUPPRESS
+    the §10 notifications (r2 P3)."""
+    outside = tmp_path / "outside-tiers"
+    outside.mkdir()
+    for i in range(3):
+        (outside / f"tok{i}").write_text("")
+    md.DOOR.mkdir(parents=True, exist_ok=True)
+    (md.DOOR / "tier-clean-cycles").symlink_to(outside)
+    assert md._tiering_active() is True
+
+
+# mutation-probe: drop the CLI's wait_for_door contention route (fail-fast exit 4)
+def test_cli_contention_routes_through_backoff_and_emits(door, monkeypatch):
+    """Normal contention (a live FOREIGN lease) routes through the §8 backoff and, on
+    budget exhaustion, exits 5 with a §9 gate row + DEFERRED-HIL signal (r2 P2)."""
+    g = FakeGround()
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    _open_backfilled("pr-9", "C", 9)
+    md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="a" * 40, base_sha="b" * 40)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    # make the 12-attempt backoff instantaneous for the test; disable the per-lane rate
+    # limiter (real-clock RateLimited refusals never count against the budget, so at the
+    # default K=5/60s the loop would retry rate-limited forever)
+    monkeypatch.setitem(md.BACKOFF, "base_s", 0.0)
+    monkeypatch.setitem(md.BACKOFF, "cap_s", 0.0)
+    monkeypatch.setattr(md, "RATE_K", 10_000)
+    rc = md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"])
+    assert rc == 5  # BudgetExhausted, not the fail-fast LeaseError exit 4
+    assert (
+        "DEFERRED-HIL",
+        "merge-door-lease-acquire:HITL-recoverable:lease_acquire_budget_exhausted",
+    ) in rows
+    import finding_record as frr
+
+    gate_rows = [r for r in frr.read_rows() if r.get("producer") == "merge-door-lease-acquire"]
+    assert gate_rows and gate_rows[-1]["cause_attribution"] == "lease_acquire_budget_exhausted"
