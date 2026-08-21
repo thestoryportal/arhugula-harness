@@ -329,6 +329,8 @@ def test_completion_requires_live_reservation(door):
     rs.transition("pr-1", "abandoned", lane_id="A", superseded_by="pr-99")
     assert md.complete_dead_marker(m) is False
     assert md.read_lease() is None  # nothing resurrected
+    # r9 P2: a claim that completed NOTHING is relinquished, keeping completion retryable
+    assert not (md.DOOR / f"completed.{lease['lease_token']}").exists()
 
 
 def test_completion_allowed_during_merged_continuation(door):

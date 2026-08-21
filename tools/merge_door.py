@@ -675,6 +675,13 @@ def complete_dead_marker(marker: Path) -> bool:
         if published and _retract_if_terminal(m["fresh_lease"]):
             published = False  # terminalized mid-completion (codex r8 P1); self-released
         done = done or published
+    if not done:
+        # We claimed but completed NOTHING (codex r9 P2): e.g. the old lease was already
+        # moved and a foreign holder occupies the door, so the fresh publish lost. A
+        # retained claim from a LIVE completer would refuse every later pass until this
+        # process dies — relinquish our own claim so completion stays retryable once the
+        # door frees.
+        claim.unlink(missing_ok=True)
     return done
 
 
