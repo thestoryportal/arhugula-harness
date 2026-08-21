@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:512-514 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:518-520 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -666,6 +666,14 @@ OUT=$(run_on "$(pl Bash 'git push origin topic:heads/main' '')"); [ "$(dec "$OUT
 OUT=$(run_on "$(pl Bash "git push --repo 'origin'" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "quoted --repo value dequoted before config lookup → deny" || bad "quoted --repo value missed: $OUT"
 ( cd "$REPO" && git config --unset remote.origin.push )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after r5 config cleanup → allow" || bad "r5 cleaned-up bare push blocked: $OUT"
+
+# codex r6: comment tokens defeat word-splitting (deny); remote slot no longer scanned as
+# a refspec at >=2 positionals (a remote named `main` must not hard-deny a topic push).
+( cd "$REPO" && git checkout -q main )
+OUT=$(run_on "$(pl Bash 'git push # comment' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "comment-bearing push (bare push in disguise) → deny" || bad "comment push not denied: $OUT"
+( cd "$REPO" && git checkout -q topic )
+OUT=$(run_on "$(pl Bash 'git push main topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "remote named main + topic refspec → allow (r6 P2: remote slot not a refspec)" || bad "remote-named-main topic push blocked: $OUT"
+OUT=$(run_on "$(pl Bash 'git push main main' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "remote named main + main refspec → still deny" || bad "main refspec via main remote not denied: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"

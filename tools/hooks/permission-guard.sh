@@ -224,13 +224,17 @@ _safe_merge_wrapper() {
 # 0 iff the push command targets main: any refspec destination == main, or no refspec while
 # main is checked out (a bare push sends the current branch). U-HE-26 (C-HE-08 §1).
 _push_targets_main() {
-  local cmd="$1" tok positional=() dest branch remote="" repo_opt="" want_value="" pd
+  local cmd="$1" tok positional=() dest branch remote="" repo_opt="" want_value="" pd scan_from=0
   # codex r2 P1: the parser sees the UNEXPANDED command. Brace expansion
   # (`HEAD:ma{in,ster}` executes as HEAD:main) and variable expansion (`HEAD:$b` --
   # _bash_args_safe rejects only $UPPERCASE) can synthesize a main refspec after approval,
   # and neither is rejected by the generic control-operator gate. Any expansion-capable
   # character in a push command denies outright.
-  case "$cmd" in *'{'*|*'}'*|*'$'*) return 0 ;; esac
+  # (`#` joins the gate at codex r6 P1: word-splitting treats a shell comment's tokens as
+  # arguments -- `git push # comment` IS a bare push to the checked-out branch, while the
+  # parser would count two phantom positionals and skip the bare-push branch. `#` is
+  # illegal in refnames, so nothing legitimate is lost.)
+  case "$cmd" in *'{'*|*'}'*|*'$'*|*'#'*) return 0 ;; esac
   # codex r4 P1: word-splitting cannot preserve quoted argument boundaries -- a quoted
   # value containing whitespace (--repo 'remote bare repo') smears into phantom
   # positionals and skips the bare-push branch. Any quoted span with internal whitespace
@@ -277,12 +281,14 @@ _push_targets_main() {
     positional+=("$tok")
   done
   branch=$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)
-  if [ "${#positional[@]}" -gt 0 ]; then
-    for tok in "${positional[@]}"; do       # EVERY positional, remote slot included: with
-                                            # --repo=<r> the remote arrives as an option and
-                                            # positional[0] is already a refspec (codex r1 P1).
-                                            # A remote token scanned here can only
-                                            # false-positive toward deny, never toward allow.
+  # Refspec scan skips the remote slot ONLY at >=2 positionals (codex r6 P2: a remote
+  # named `main` would hard-deny a legitimate topic push). At exactly one positional the
+  # token may be a refspec rather than a remote (--repo=<r> supplies the remote as an
+  # option, codex r1 P1), so it IS scanned -- and since r4 every unrecognized option fails
+  # closed, a >=2-positional [0] is reliably the remote (no unconsumed-value misparse).
+  if [ "${#positional[@]}" -ge 2 ]; then scan_from=1; else scan_from=0; fi
+  if [ "${#positional[@]}" -gt "$scan_from" ]; then
+    for tok in "${positional[@]:$scan_from}"; do
       # codex r2 P1: `+:` (and bare `:`) is the matching-refspec push -- it updates every
       # matching branch, main included, and parses to an EMPTY destination.
       case "$tok" in *:) return 0 ;; esac
