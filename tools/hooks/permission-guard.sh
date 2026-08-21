@@ -231,6 +231,11 @@ _push_targets_main() {
   # and neither is rejected by the generic control-operator gate. Any expansion-capable
   # character in a push command denies outright.
   case "$cmd" in *'{'*|*'}'*|*'$'*) return 0 ;; esac
+  # codex r4 P1: word-splitting cannot preserve quoted argument boundaries -- a quoted
+  # value containing whitespace (--repo 'remote bare repo') smears into phantom
+  # positionals and skips the bare-push branch. Any quoted span with internal whitespace
+  # denies outright (single-token quoting like 'HEAD:main' is unaffected).
+  printf '%s' "$cmd" | grep -Eq "['\"][^'\"]*[[:space:]][^'\"]*['\"]" && return 0
   set -f; set -- $cmd; set +f
   shift 2                                   # git push
   for tok in "$@"; do
@@ -256,8 +261,13 @@ _push_targets_main() {
                                             # entirely (`--recurse-submodules no origin` was
                                             # empirically confirmed to consume `no` as value).
         want_value=other; continue ;;
-      -*) continue ;;                       # flag-only / =-form options anywhere (-u,
-                                            # --set-upstream, --force-with-lease=..., ...)
+      -u|--set-upstream|-q|--quiet|-v|--verbose|-n|--dry-run|--porcelain|--progress|--no-progress|--thin|--no-thin|--atomic|--no-atomic|--follow-tags|--no-follow-tags|--tags|--verify|--no-verify|-4|--ipv4|-6|--ipv6|--signed|--no-signed|--signed=*|--force-with-lease|--force-with-lease=*|--no-force-with-lease|--push-option=*|--receive-pack=*|--exec=*|--recurse-submodules=*|--no-recurse-submodules)
+        continue ;;                         # recognized flag-only / =-form options: none can
+                                            # redirect an otherwise-safe push onto main
+      -*) return 0 ;;                       # codex r4 P1: git accepts unambiguous
+                                            # long-option ABBREVIATIONS (--al == --all), so
+                                            # any option not an EXACT member of the
+                                            # recognized set fails closed.
     esac
     positional+=("$tok")
   done
@@ -300,7 +310,8 @@ _push_targets_main() {
   remote="${remote:-origin}"
   # codex r3 P1: remote.<r>.mirror=true behaves as if --mirror were supplied -- every ref,
   # main included, regardless of the command's own refspecs.
-  [ "$(git -C "$PROJECT_DIR" config --get "remote.${remote}.mirror" 2>/dev/null)" = "true" ] && return 0
+  # --bool normalizes yes/on/1 (codex r4 P1: git booleans are not the literal string true).
+  [ "$(git -C "$PROJECT_DIR" config --bool --get "remote.${remote}.mirror" 2>/dev/null)" = "true" ] && return 0
   if [ "${#positional[@]}" -le 1 ]; then    # bare push (optional remote only)
     [ "$branch" = "main" ] && return 0
     # codex r1 P2 + r3 P2: a bare push can update main regardless of the checked-out
