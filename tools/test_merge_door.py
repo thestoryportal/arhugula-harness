@@ -544,6 +544,68 @@ def test_history_sidecars_restamped_on_transition(door):
     assert abs(_time.time() - side.stat().st_mtime) < 120
 
 
+# ── codex U-HE-22 r5 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop complete_dead_marker()'s exclusive completion claim
+def test_completion_takes_exclusive_claim(door):
+    """Concurrent completers serialize on an exclusive-create claim — without it, two
+    callers can both validate the old token and the loser's rename strips a foreign
+    holder's live fence (r5 P1). The claim artifact is the witness of the mechanism."""
+    lease = _acq(lane="A")
+    m = _crashed_reclaim_marker(lease)
+    assert md.complete_dead_marker(m) is True
+    assert (md.DOOR / f"completed.{lease['lease_token']}").exists()
+    # a second completer yields on the claim; a foreign holder is never touched
+    md.release(md.read_lease())
+    _open_backfilled("pr-9", "C", 9)
+    other = md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="a" * 40, base_sha="b" * 40)
+    assert md.complete_dead_marker(m) is False
+    assert md.read_lease()["lease_token"] == other["lease_token"]
+
+
+# mutation-probe: drop unblock()'s reservation-state gate (terminated arc regains authority)
+def test_unblock_refuses_terminated_reservation(door):
+    """A blocked arc abandoned/superseded meanwhile must not regain merge authority
+    through unblock — same terminal refusal as reclaim (r5 P2)."""
+    lease = _acq(lane="A")
+    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    rs.reserve("pr-99", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-1", "abandoned", lane_id="A", superseded_by="pr-99")
+    with pytest.raises(md.LeaseError, match="terminated"):
+        md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+
+
+# mutation-probe: drop gc()'s symlinked-DOOR refusal (history deleted through the link)
+def test_gc_refuses_symlinked_door(door, tmp_path, monkeypatch):
+    """A planted QUEUE_DIR/merge-door symlink must not have its target's history files
+    unlinked through the gc walk (r5 P1)."""
+    outside = tmp_path / "outside-door"
+    outside.mkdir()
+    victim = outside / ("released." + "x" * 32)
+    victim.write_text("history")
+    os.utime(victim, (0, 0))  # far older than GC_KEEP_DAYS
+    link = tmp_path / "door-link"
+    link.symlink_to(outside)
+    monkeypatch.setattr(md, "DOOR", link)
+    monkeypatch.setattr(md, "LEASE", link / "LEASE")
+    assert md.gc() == []
+    assert victim.exists()
+
+
+# mutation-probe: drop _rate_check()'s per-lane symlink refusal
+def test_rate_store_refuses_symlinked_lane(door, tmp_path):
+    """attempts/<lane> may itself be the planted symlink — mkdir(exist_ok=True) follows a
+    symlink-to-dir silently; the writer must refuse (r5 P2)."""
+    outside = tmp_path / "outside-lane"
+    outside.mkdir()
+    (md.DOOR / "attempts").mkdir(parents=True, exist_ok=True)
+    (md.DOOR / "attempts" / "A").symlink_to(outside)
+    with pytest.raises(md.LeaseError, match="is a symlink"):
+        _acq(lane="A")
+    assert list(outside.iterdir()) == []
+
+
 # mutation-probe: drop gc()'s parent-level attempts symlink guard (escape via attempts itself)
 def test_gc_attempts_dir_itself_symlink(door, tmp_path):
     """The attempts DIRECTORY itself may be the planted symlink — its ordinary child dirs

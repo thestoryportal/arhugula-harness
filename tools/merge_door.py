@@ -152,6 +152,10 @@ def _rate_check(lane_id: str, now: float) -> None:
         # contents — fail closed, never follow.
         raise LeaseError("merge-door/attempts is a symlink -- refused")
     d = att / lane_id
+    if d.is_symlink():
+        # Same containment for the per-lane path (codex r5 P2): mkdir(exist_ok=True)
+        # follows a symlink-to-dir silently; never write attempts through one.
+        raise LeaseError(f"merge-door/attempts/{lane_id} is a symlink -- refused")
     d.mkdir(parents=True, exist_ok=True)
 
     def _ts(p: Path) -> float | None:
@@ -492,6 +496,14 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
             f"unblock key mismatch: lease is pr={sorted(known_prs)} "
             f"blocked_at_sha={lease.get('blocked_at_sha')}"
         )
+    res = rs.current(lease["reservation_id"])
+    if res is None or res[1]["state"] not in ("open", "merged"):
+        # Same terminal-arc refusal as reclaim (codex r5 P2): a blocked arc abandoned or
+        # superseded meanwhile must not regain merge-driving authority through unblock.
+        raise LeaseError(
+            f"unblock refused: reservation {lease['reservation_id']!r} reads "
+            f"{res and res[1]['state']!r} — the arc has been terminated"
+        )
     fresh = {
         **lease,
         "lease_token": secrets.token_hex(16),
@@ -532,6 +544,20 @@ def complete_dead_marker(marker: Path) -> bool:
         # Fail closed on a malformed persisted marker (codex r4 P2): treating an unknown
         # action as reclaim-ish would archive a live lease on a forged/corrupt file.
         return False
+    # Serialize completers (codex r5 P1): two callers can both validate the old token,
+    # the first moves it, a foreign lane acquires, and the second's rename would then
+    # strip the NEW holder's live fence. Exactly one completer wins this exclusive
+    # create; losers yield. The claim is taken only after the cheap refusals above, so a
+    # refused completion stays retryable; the claim-to-act window is two idempotent
+    # statements, and the door reconcile (U-HE-23 §5) is the ground-truth recovery for a
+    # completer that dies inside it.
+    try:
+        publish_exclusive(
+            DOOR / f"completed.{token}",
+            json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "at": _now_iso()}),
+        )
+    except FileExistsError:
+        return False
     done = False
     if LEASE.exists() and json.loads(LEASE.read_text()).get("lease_token") == token:
         _move_lease(token, "released" if action == "release" else "reclaimed")
@@ -567,13 +593,17 @@ def complete_dead_marker(marker: Path) -> bool:
 def gc(*, now: datetime | None = None) -> list[Path]:
     now = now or datetime.now(UTC)
     removed = []
-    if not DOOR.is_dir():
+    if DOOR.is_symlink() or not DOOR.is_dir():
+        # A planted QUEUE_DIR/merge-door symlink must not have its TARGET's history
+        # unlinked through this walk (codex r5 P1) — is_dir() follows links.
         return removed
     cutoff = now - timedelta(days=GC_KEEP_DAYS)
     for p in DOOR.iterdir():
         try:
             expired = (
-                p.name.startswith(("transition.", "released.", "reclaimed.", "LEASE."))
+                p.name.startswith(
+                    ("transition.", "released.", "reclaimed.", "completed.", "LEASE.")
+                )
                 and not p.is_symlink()
                 and datetime.fromtimestamp(p.stat().st_mtime, UTC) < cutoff
             )
