@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 189
+  total: 190
   open: 1
   design_substrate_gated: 3
-  registered_finding: 40
+  registered_finding: 41
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: 8843fd51fc3b9efe
+  identity_digest: 8e0144d6e0882a91
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9977,3 +9977,29 @@ items:
   council: 'NO — single-tool coverage-gate schema refinement; no cross-axis consumer; the only
     decision is the three-carrier key migration.'
   heading: '### B-189 · shell mutation-probe annotations collapse per (script, target-file) — two same-file range annotations reduce to one coverage requirement *(surfaced by out-of-family Codex r9 against the U-HE-26 guard unit, 2026-08-21; not exploitable at HEAD — one annotation per target; register-and-held)*'
+- id: B-190
+  title: >-
+    C-HE-08 §1 client-side push parser — residual classes premised on ADVERSARIAL LOCAL GIT
+    CONFIG (metachar-bearing remote names vs config-key lookups; config TOCTOU between hook
+    sample and push execution)
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (r10 P1/P2) against the U-HE-26 guard unit at the
+    10-round cap and register-and-held. Both findings presume an actor who already holds
+    arbitrary git-config write in the workspace: (P1) a remote NAMED with an embedded quote
+    (`o''igin`) defeats dequote-then-lookup so `remote.o''igin.push`/`mirror` targeting main
+    is missed; (P2) the bare-push config checks sample mutable shared state with no
+    lock/CAS binding it to the subsequent approved execution, so a concurrent writer can
+    retarget `remote.origin.push` at main inside the window. Config-write is code-write in
+    this workspace (the same actor could edit the hook itself), so the classes sit OUTSIDE
+    the client predicate''s threat model (accidental/haywire-agent commands); the spec''s own
+    answer is the SERVER-side fence — C-HE-08 §2 branch protection (U-HE-27) with invariant
+    R-20: protection is independent of any bug in the client guard.'
+  close_out: '(1) Land U-HE-27 (`tools/main_protection.py` + recipes) and run the §4
+    tiebreaker + §5 verify — the server fence closes both classes for main regardless of
+    client parsing; (2) at U-HE-27''s landing, record in its evidence log that B-190''s
+    residual classes are bounded by the fence; (3) no client-side narrowing is owed — further
+    parser hardening against adversarial config is non-convergent by measurement (rounds
+    r1-r10).'
+  council: 'NO — the terminal is prescribed by the cleared spec itself (C-HE-08 §2 + R-20);
+    the only open work is the already-scheduled next unit.'
+  heading: '### B-190 · C-HE-08 §1 client-side push parser residual classes premised on adversarial local git config *(surfaced by out-of-family Codex r10 against the U-HE-26 guard unit at the 10-round cap, 2026-08-21; register-and-held; bounded by the C-HE-08 §2 server fence at U-HE-27 per R-20)*'

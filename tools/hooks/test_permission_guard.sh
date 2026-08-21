@@ -703,6 +703,11 @@ OUT=$(run_on "$(pl Bash 'git push --repo=origin main' '')"); [ "$(dec "$OUT")" =
 OUT=$(run_on "$(pl Bash 'git push main' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare topic push to remote named 'main' → allow (r9 P2: positional[0] is the repository)" || bad "remote-named-main bare topic push blocked: $OUT"
 OUT=$(run_on "$(pl Bash 'git push --repo=origin main' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "--repo=origin main on topic → allow (bare push to repository 'main', measured r7)" || bad "--repo bare topic push blocked: $OUT"
 
+# codex r10 terminal (register-and-hold at the round cap): the metachar gates OVER-DENY
+# exotic-but-legit forms BY DESIGN -- quote-aware parsing is exactly what r10 P1 measured
+# as unreliable, so a literal '#' inside a quoted push-option stays denied (fail-closed).
+OUT=$(run_on "$(pl Bash "git push -o 'note=#123' origin topic" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "quoted '#' push-option → deny (retained fail-closed over-deny, r10 terminal)" || bad "quoted-# over-deny witness failed: $OUT"
+
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -5,17 +5,17 @@ cleared_at: 2026-08-21T13:15:00-06:00
 clearance_type: execution-correction-H_E-tooling
 back_reference:
   - ".harness/clearance/spec-he-loop-lanes-v1.4-cleared-2026-08-20.md (the spec head this unit executes; C-HE-08 §1 contract unchanged — explicit emit_deny entries in the audited deny block, parser-based, topic pushes stay auto-allowed)"
-  - ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md (U-HE-26 as-built rev note items i-xii, dated inline: i stripped-read predicate + discriminating witness; ii combined C-HE-07/08 manifest row; iii shell-row explicit probe-target annotation; iv-xii codex r1-r9 parser hardening absorptions incl. the r3 P2 over-deny correction and the r4 fail-closed closure moves)"
+  - ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md (U-HE-26 as-built rev note items i-xiii, dated inline: i stripped-read predicate + discriminating witness; ii combined C-HE-07/08 manifest row; iii shell-row explicit probe-target annotation; iv-xiii codex r1-r10 parser hardening absorptions (r10 register-and-hold terminal at the round cap) incl. the r3 P2 over-deny correction and the r4 fail-closed closure moves)"
   - "tools/hooks/permission-guard.sh + tools/hooks/test_permission_guard.sh + tools/lanes_verify.py + tools/test_lanes_verify.py (same PR)"
 reviewer_chain:
-  - "out-of-family codex rounds r1-r9 (r1-r6, r8 absorbed same-round; r7 one absorbed + one refuted by measurement; r9 two absorbed + one registered as B-189): r1 (backslash dequote, --repo=/--all, wildcard dest, bare-push config truth), r2 (expansion-char deny, separate-value options, matching-push refspec, push-remote precedence), r3 (recurse-submodules value, --repo capture, HEAD refspecs, mirror config, configured matching refspec; P2 over-deny corrected), r4 (fail-closed closure: quoted-whitespace gate, exact option allowlist with unknown-option deny, --bool mirror), r5 (--repo value dequote, DWIM heads/main, marker + rev-note consistency), r6 (comment-token gate; remote-slot over-deny corrected), r7 (backslash-whitespace gate; --repo precedence claim refuted empirically -- positional beats --repo), r8 (recurse-submodules mode discrimination, -- end-of-options, every-annotation shell probe collection), r9 (whole-command glob gate; positional[0]-is-repository resolution of the r6 P2; B-189 registration)"
+  - "out-of-family codex rounds r1-r10 (r1-r6, r8 absorbed same-round; r7 one absorbed + one refuted by measurement; r9 two absorbed + one registered as B-189; r10 register-and-hold terminal -- B-190 filed for the adversarial-local-config classes, bounded by the C-HE-08 §2 server fence at U-HE-27 per R-20, over-deny pinned by witness, B-189 re-find disposition stands): r1 (backslash dequote, --repo=/--all, wildcard dest, bare-push config truth), r2 (expansion-char deny, separate-value options, matching-push refspec, push-remote precedence), r3 (recurse-submodules value, --repo capture, HEAD refspecs, mirror config, configured matching refspec; P2 over-deny corrected), r4 (fail-closed closure: quoted-whitespace gate, exact option allowlist with unknown-option deny, --bool mirror), r5 (--repo value dequote, DWIM heads/main, marker + rev-note consistency), r6 (comment-token gate; remote-slot over-deny corrected), r7 (backslash-whitespace gate; --repo precedence claim refuted empirically -- positional beats --repo), r8 (recurse-submodules mode discrimination, -- end-of-options, every-annotation shell probe collection), r9 (whole-command glob gate; positional[0]-is-repository resolution of the r6 P2; B-189 registration), r10 (terminal: B-190 registration, retained-over-deny witness)"
 supersedes: null
 superseded_by: null
 ---
 
 # Clearance — `Implementation_Plan_HE_Loop_Lanes` v1.0 rev 2026-08-21 (U-HE-26 as-built)
 
-The U-HE-26 landing revises only the unit's own execution record: rev note items (i)–(xii).
+The U-HE-26 landing revises only the unit's own execution record: rev note items (i)–(xiii).
 Item (i) discharges the U-HE-25 rev (v) witness residual: the deny predicate reads the
 `HARNESS_ARC_ID=`/`HARNESS_LANE_ID=` prefix-STRIPPED command — the allowlist strips that
 exact prefix class into `TRIM` before its `git push` alternation, so the plan-sketch raw
@@ -26,7 +26,7 @@ strengthens the prior C-HE-07 `False`). Item (iii) records the shell-row explici
 probe-target annotation in `tools/lanes_verify.py` — the sketch's probe registration was
 unsatisfiable because the sibling default derives an underscore filename
 (`permission_guard.sh`) that does not exist — plus the deletion-expressible restructure,
-its pytest witness, and the digest re-pins its edits owed. Items (iv)–(xii) record the nine
+its pytest witness, and the digest re-pins its edits owed. Items (iv)–(xiii) record the ten
 out-of-family codex hardening rounds absorbed into the parser same-round (each BLOCK's
 classes closed with witnesses; the r3 and r6 P2 over-denies corrected; r4's findings closed by
 fail-closed CLOSURE moves — quoted-whitespace gate, exact option allowlist — rather than
