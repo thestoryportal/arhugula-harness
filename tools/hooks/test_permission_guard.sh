@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:439-441 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:464-466 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -607,6 +607,22 @@ OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "ba
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push with remote.origin.push dest=main → deny" || bad "remote-push-refspec bare push not denied: $OUT"
 ( cd "$REPO" && git config --unset remote.origin.push )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after config cleanup → allow (checks are config-driven, not sticky)" || bad "cleaned-up bare push blocked: $OUT"
+
+# codex r2 hardening: matching-refspec push, expansion-capable tokens, separate-value
+# options, and the full push-remote resolution chain.
+OUT=$(run_on "$(pl Bash 'git push origin +:' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "matching-refspec push (+:) → deny" || bad "+: not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push origin HEAD:ma{in,ster}' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "brace-expansion refspec → deny" || bad "brace refspec not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push origin HEAD:ma?n' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "glob-capable dest (?) → deny" || bad "glob dest not denied: $OUT"
+( cd "$REPO" && git checkout -q main )
+OUT=$(run_on "$(pl Bash 'git push -o ci.skip origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "-o value not a positional: bare push on main → deny" || bad "-o bare push on main not denied: $OUT"
+( cd "$REPO" && git checkout -q topic )
+OUT=$(run_on "$(pl Bash 'git push -o ci.skip origin' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "-o value skipped: bare push on topic → allow" || bad "-o topic push blocked: $OUT"
+( cd "$REPO" && git config branch.topic.pushRemote staging && git config remote.staging.push 'refs/heads/topic:refs/heads/main' )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "branch.<b>.pushRemote resolution → deny" || bad "pushRemote not resolved: $OUT"
+( cd "$REPO" && git config --unset branch.topic.pushRemote && git config remote.pushDefault staging )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "remote.pushDefault resolution → deny" || bad "pushDefault not resolved: $OUT"
+( cd "$REPO" && git config --unset remote.pushDefault && git config --unset remote.staging.push )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after r2 config cleanup → allow" || bad "r2 cleaned-up bare push blocked: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"

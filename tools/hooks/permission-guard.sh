@@ -224,10 +224,17 @@ _safe_merge_wrapper() {
 # 0 iff the push command targets main: any refspec destination == main, or no refspec while
 # main is checked out (a bare push sends the current branch). U-HE-26 (C-HE-08 §1).
 _push_targets_main() {
-  local cmd="$1" tok positional=() dest branch remote
+  local cmd="$1" tok positional=() dest branch remote skip_next=0
+  # codex r2 P1: the parser sees the UNEXPANDED command. Brace expansion
+  # (`HEAD:ma{in,ster}` executes as HEAD:main) and variable expansion (`HEAD:$b` --
+  # _bash_args_safe rejects only $UPPERCASE) can synthesize a main refspec after approval,
+  # and neither is rejected by the generic control-operator gate. Any expansion-capable
+  # character in a push command denies outright.
+  case "$cmd" in *'{'*|*'}'*|*'$'*) return 0 ;; esac
   set -f; set -- $cmd; set +f
   shift 2                                   # git push
   for tok in "$@"; do
+    if [ "$skip_next" = 1 ]; then skip_next=0; continue; fi
     # Shell dequoting: quotes AND backslashes -- 'HEAD:main' IS HEAD:main (Codex round-4 P1)
     # and HEAD:ma\in IS HEAD:main (codex r1 P1). Removing every backslash can only widen
     # the deny (a literal backslash-bearing ref can never be main).
@@ -235,8 +242,15 @@ _push_targets_main() {
     case "$tok" in
       --all|--branches) return 0 ;;         # pushes every branch, main included (codex r1 P1;
                                             # --mirror is denied by the sibling predicate above)
-      -*) continue ;;                       # other options anywhere (-u, --set-upstream,
-                                            # --force-with-lease=..., --repo=..., ...)
+      -o|--push-option|--repo|--receive-pack|--exec)
+                                            # codex r2 P1: the separate-value options of
+                                            # `git push` (complete per git 2.x -h) -- their
+                                            # value is NOT a positional; miscounting it
+                                            # skipped the bare-push branch entirely.
+        skip_next=1; continue ;;
+      -*) continue ;;                       # flag-only / =-form options anywhere (-u,
+                                            # --set-upstream, --force-with-lease=...,
+                                            # --repo=..., ...)
     esac
     positional+=("$tok")
   done
@@ -246,9 +260,14 @@ _push_targets_main() {
                                             # positional[0] is already a refspec (codex r1 P1).
                                             # A remote token scanned here can only
                                             # false-positive toward deny, never toward allow.
+      # codex r2 P1: `+:` (and bare `:`) is the matching-refspec push -- it updates every
+      # matching branch, main included, and parses to an EMPTY destination.
+      case "$tok" in *:) return 0 ;; esac
       dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/heads/}"
-      # Exact main, or a wildcard refspec that can reach it (codex r1 P1).
-      case "$dest" in main|*'*'*) return 0 ;; esac
+      # Exact main, a wildcard refspec that can reach it (codex r1 P1), or a glob-capable
+      # token (`?`/`[` -- a matching file in the cwd would expand it; same class as the
+      # brace/variable gate above).
+      case "$dest" in main|*'*'*|*'?'*|*'['*) return 0 ;; esac
     done
   fi
   if [ "${#positional[@]}" -le 1 ]; then    # bare push (optional remote only)
@@ -263,7 +282,13 @@ _push_targets_main() {
     case "$(git -C "$PROJECT_DIR" config --get "branch.${branch:-HEAD}.merge" 2>/dev/null)" in
       refs/heads/main|main) return 0 ;;
     esac
-    remote="${positional[0]:-$(git -C "$PROJECT_DIR" config --get "branch.${branch:-HEAD}.remote" 2>/dev/null)}"
+    # codex r2 P1: git's push-remote precedence is branch.<b>.pushRemote >
+    # remote.pushDefault > branch.<b>.remote > origin; resolving only branch.<b>.remote
+    # read the wrong remote's push refspecs.
+    remote="${positional[0]:-}"
+    [ -z "$remote" ] && remote=$(git -C "$PROJECT_DIR" config --get "branch.${branch:-HEAD}.pushRemote" 2>/dev/null)
+    [ -z "$remote" ] && remote=$(git -C "$PROJECT_DIR" config --get remote.pushDefault 2>/dev/null)
+    [ -z "$remote" ] && remote=$(git -C "$PROJECT_DIR" config --get "branch.${branch:-HEAD}.remote" 2>/dev/null)
     while IFS= read -r tok; do
       dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/heads/}"
       case "$dest" in main|*'*'*) return 0 ;; esac
