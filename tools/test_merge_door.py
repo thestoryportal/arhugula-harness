@@ -118,10 +118,16 @@ def test_marker_race_exactly_one_wins(door):
 
 
 def test_release_then_history_file(door):
+    import time as _time
+
     lease = _acq()
     md.release(lease)
     assert md.read_lease() is None
-    assert (md.DOOR / f"released.{lease['lease_token']}").exists()
+    hist = md.DOOR / f"released.{lease['lease_token']}"
+    assert hist.exists()
+    # r3 P3: the history clock starts at the TRANSITION (rename re-stamps mtime), so gc's
+    # 30-day retention runs from release, not from a possibly-ancient acquisition.
+    assert abs(_time.time() - hist.stat().st_mtime) < 120
 
 
 def _kill_holder():
@@ -222,7 +228,13 @@ def test_blocked_and_unblock_through_marker(door):
     assert md.read_lease()["state"] == "blocked"
     with pytest.raises(md.LeaseError):
         md.unblock(pr=1, blocked_at_sha="x" * 40, lane_id="A")  # keyed to blocked_at_sha
-    md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+    fresh = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+    # r3 P1: unblock mints a REPLACEMENT lease (the door typically blocks mid-continuation,
+    # when the reservation reads `merged` and acquire() would refuse a re-acquire).
+    view = md.read_lease()
+    assert view["lease_token"] == fresh["lease_token"]
+    assert view["state"] == "held" and view["pr"] == 1
+    md.release(fresh)  # a lane that wants the door free releases the successor normally
     assert md.read_lease() is None
 
 
@@ -255,8 +267,8 @@ def test_reclaim_refuses_blocked_lease(door):
     _kill_holder()
     with pytest.raises(md.DoorBlocked):
         md.reclaim(lease, lane_id="A", ground_state="OPEN")
-    md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")  # the sanctioned path still works
-    assert md.read_lease() is None
+    successor = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")  # the sanctioned path
+    assert md.read_lease()["lease_token"] == successor["lease_token"]
 
 
 # mutation-probe: drop _publish_fresh()'s refresh-sidecar republish (continuation lost)
@@ -326,7 +338,8 @@ def test_release_refuses_blocked_and_stale(door):
     md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
     with pytest.raises(md.DoorBlocked):
         md.release(lease)  # caller's dict still says held; persisted view says blocked
-    md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")  # door free again
+    successor = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+    md.release(successor)  # door free again
     # Door cycles to another lane; the old dict must not release the new holder's lease.
     rs.reserve("pr-9", lane_id="C", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-9", "C")
@@ -346,6 +359,79 @@ def test_reclaim_refuses_terminated_reservation(door):
     rs.transition("pr-1", "abandoned", lane_id="A", superseded_by="pr-99")
     with pytest.raises(md.LeaseError, match="terminated"):
         md.reclaim(lease, lane_id="B", ground_state="OPEN")
+
+
+# mutation-probe: drop unblock()'s fresh-lease publish + post-check (continuation stranded)
+def test_unblock_resumes_continuation(door):
+    """The door typically blocks DURING the merged continuation — unblock must hand the
+    named lane a replacement lease (with the continuation sidecars carried over), not an
+    empty door that acquire() can no longer pass (r3 P1)."""
+    lease = _acq(lane="A")
+    md.mark_attempted(lease)
+    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    rs.transition("pr-1", "merged", lane_id="A")  # the §4(vi) flip already happened
+    fresh = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+    view = md.read_lease()
+    assert view["lease_token"] == fresh["lease_token"]
+    assert view["state"] == "held"
+    assert view["merge_attempted_at"] is not None  # continuation state carried over
+    with pytest.raises(md.HolderInvariant):
+        # and the door was NEVER free in a state a re-acquire could have passed:
+        md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="h" * 40, base_sha="b" * 40)
+
+
+def test_reclaim_gate_uses_persisted_reservation_id(door):
+    """The reservation gate reads the PERSISTED reservation_id — a caller keeping the valid
+    token but substituting another active arc's id must not bypass the terminated-arc
+    refusal (r3 P1)."""
+    lease = _acq(lane="A")
+    _kill_holder()
+    rs.reserve("pr-99", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-1", "abandoned", lane_id="A", superseded_by="pr-99")
+    rs.reserve("pr-9", lane_id="B", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-9", "B")
+    forged = {**lease, "reservation_id": "pr-9"}  # an open arc, not the lease's own
+    with pytest.raises(md.LeaseError, match="terminated"):
+        md.reclaim(forged, lane_id="B", ground_state="OPEN")
+
+
+# mutation-probe: drop acquire()'s post-publication re-validation (terminal-arc lease kept)
+def test_acquire_revalidates_after_publish(door, monkeypatch):
+    """The pre-check and the exclusive create are separate operations: a reconciliation
+    terminalizing the reservation in between must not leave a live lease on a terminal
+    arc — acquire self-releases through the marker and refuses (r3 P2)."""
+    real_current = rs.current
+    calls = {"n": 0}
+
+    def flipping_current(arc_id):
+        calls["n"] += 1
+        cur = real_current(arc_id)
+        if calls["n"] >= 2 and cur is not None:
+            # the concurrent reconciliation flipped it terminal between check and publish
+            return (cur[0], {**cur[1], "state": "merged"})
+        return cur
+
+    monkeypatch.setattr(rs, "current", flipping_current)
+    with pytest.raises(md.HolderInvariant, match="changed during acquisition"):
+        _acq(lane="A")
+    monkeypatch.setattr(rs, "current", real_current)
+    assert md.read_lease() is None  # self-released, never left held
+    assert list(md.DOOR.glob("released.*"))  # through the marker discipline, not an unlink
+
+
+# mutation-probe: drop gc()'s parent-level attempts symlink guard (escape via attempts itself)
+def test_gc_attempts_dir_itself_symlink(door, tmp_path):
+    """The attempts DIRECTORY itself may be the planted symlink — its ordinary child dirs
+    would pass the per-lane check while living outside QUEUE_DIR (r3 P1)."""
+    outside = tmp_path / "outside-parent"
+    (outside / "lane-x").mkdir(parents=True)
+    victim = outside / "lane-x" / "1000.000000"
+    victim.write_text("precious")
+    os.utime(victim, (0, 0))
+    md.DOOR.mkdir(parents=True, exist_ok=True)
+    (md.DOOR / "attempts").symlink_to(outside)
+    md.gc()
+    assert victim.exists()
 
 
 # mutation-probe: drop gc()'s attempts symlink/containment skip (escape deleted)

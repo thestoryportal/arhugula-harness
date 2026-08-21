@@ -215,6 +215,20 @@ def acquire(
     except FileExistsError as exc:
         msg = "merge door held (cause_attribution: lease_contended)"
         raise LeaseHeld(msg) from exc
+    # Post-publication re-validation (codex U-HE-22 r3 P2): the pre-check and the exclusive
+    # create are separate operations — a concurrent reconciliation can terminalize the
+    # reservation in between, leaving a fresh lease on a terminal arc. Re-read after the
+    # publish; on divergence, self-heal through the marker discipline (never a path-only
+    # unlink) and refuse.
+    cur2 = rs.current(arc_id)
+    if cur2 is None or cur2[1]["state"] != "open" or cur2[1]["lane_id"] != lane_id:
+        if win_marker(payload["lease_token"], "release") is not None:
+            _move_lease(payload["lease_token"], "released")
+        raise HolderInvariant(
+            f"{arc_id}: reservation changed during acquisition "
+            f"(now {cur2 and cur2[1]['state']!r} held by {cur2 and cur2[1]['lane_id']!r}); "
+            "lease self-released"
+        )
     _kill_after("acquire")
     return payload
 
@@ -266,8 +280,14 @@ def mark_blocked(lease: dict, *, sha: str, reason: str) -> None:
 
 
 def _move_lease(token: str, dest_prefix: str) -> None:
+    dest = DOOR / f"{dest_prefix}.{token}"
     try:
-        os.rename(LEASE, DOOR / f"{dest_prefix}.{token}")
+        os.rename(LEASE, dest)
+        # Re-stamp: rename preserves the ACQUISITION mtime, and gc() expires history from
+        # mtime — a lease blocked >30 d would otherwise be eligible for deletion the moment
+        # its transition completes, instead of holding its record for the contracted 30 d
+        # (codex U-HE-22 r3 P3). The history clock starts at the transition, not the acquire.
+        os.utime(dest, None)
     except FileNotFoundError:
         pass  # already moved: fail-closed idempotency (a rename on a moved source = "done")
 
@@ -333,10 +353,10 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
     # abandoned/superseded while its PR stayed OPEN must not regain merge-driving authority
     # through a dead lease. `open` and `merged` are the legitimate lease-holding states
     # (merged = the §4(vi)–(ix) continuation window).
-    res = rs.current(lease["reservation_id"])
+    res = rs.current(persisted["reservation_id"])
     if res is None or res[1]["state"] not in ("open", "merged"):
         raise LeaseError(
-            f"reclaim refused: reservation {lease['reservation_id']!r} reads "
+            f"reclaim refused: reservation {persisted['reservation_id']!r} reads "
             f"{res and res[1]['state']!r} — the arc has been terminated or never opened"
         )
     fresh = {
@@ -409,9 +429,14 @@ def _publish_fresh(fresh: dict) -> None:
                 pass
 
 
-def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> None:
+def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
     """Operator-confirmed reclaim through the marker CAS, keyed to blocked_at_sha. Never a
-    path-only unlink."""
+    path-only unlink. Mints a REPLACEMENT lease held by `lane_id` (codex U-HE-22 r3 P1): a
+    door typically blocks DURING the §4(vii)–(viii) continuation, when the reservation
+    already reads `merged` and `acquire()` would refuse — clearing without a successor
+    would strand the continuation behind an unacquirable door. The unblocking lane resumes
+    it (sidecar continuation state carried over); a lane that genuinely wants the door free
+    releases the returned lease with the normal verb."""
     lease = read_lease()
     if lease is None or lease.get("state") != "blocked":
         raise LeaseError("no blocked lease to unblock")
@@ -420,9 +445,29 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> None:
             f"unblock key mismatch: lease is pr={lease['pr']} "
             f"blocked_at_sha={lease.get('blocked_at_sha')}"
         )
-    if win_marker(lease["lease_token"], "unblock") is None:
+    fresh = {
+        **lease,
+        "lease_token": secrets.token_hex(16),
+        "lane_id": lane_id,
+        "acquired_at": _now_iso(),
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "state": "held",
+        "blocked_at_sha": None,
+        "blocked_reason": None,
+    }
+    fresh.pop("blocked_at", None)
+    if win_marker(lease["lease_token"], "unblock", extra={"fresh_lease": fresh}) is None:
         raise MarkerLost("unblock marker already taken")
     _move_lease(lease["lease_token"], "reclaimed")
+    _publish_fresh(fresh)
+    live = read_lease()
+    if not live or live["lease_token"] != fresh["lease_token"]:
+        raise LeaseError(
+            f"unblock lost the door to another acquirer "
+            f"(holder {live and live['lane_id']}); not resumed"
+        )
+    return live
 
 
 def complete_dead_marker(marker: Path) -> bool:
@@ -440,7 +485,7 @@ def complete_dead_marker(marker: Path) -> bool:
     if LEASE.exists() and json.loads(LEASE.read_text()).get("lease_token") == token:
         _move_lease(token, "released" if action == "release" else "reclaimed")
         done = True
-    if action == "reclaim" and "fresh_lease" in m:
+    if action in ("reclaim", "unblock") and "fresh_lease" in m:
         # The reclaimer may have died AFTER moving the old lease and BEFORE publishing the
         # fresh one: finish it. `_publish_fresh` is idempotent (FileExistsError = the fresh
         # token, or a later acquirer, already holds the door). Ground-truth gate (codex
@@ -491,7 +536,9 @@ def gc(*, now: datetime | None = None) -> list[Path]:
             # a concurrent collector won this artifact: log-and-yield idiom (codex r2 P3)
             continue
     att = DOOR / "attempts"
-    if att.is_dir():
+    # The attempts dir ITSELF must not be a planted symlink either — its ordinary-looking
+    # children would pass the per-lane check while living outside QUEUE_DIR (codex r3 P1).
+    if att.is_dir() and not att.is_symlink():
         for lane in att.iterdir():
             # NEVER follow a planted symlink out of the attempts store: a pre-existing
             # attempts/<lane> symlink would make this walk unlink regular files outside
