@@ -1112,9 +1112,12 @@ def land(
         reconciled = reconciled or already
         if not already:
             v0 = verify_head_base(lease, ground)  # (ii)
+            externally_merged = False
             if v0.get("state") == "MERGED":
                 # verified ground truth already says MERGED (an externally-landed PR):
                 # never follow a verified MERGED with another gh pr merge (codex r4 P2)
+                externally_merged = True
+            if externally_merged:
                 reconciled = True
             else:
                 local_base_cas_check(head_sha, attested, ground)
@@ -1288,14 +1291,13 @@ def land(
         # cause attribution names the ACTUAL failure class (codex r4 P3): a blanket
         # merge_reissue_exhausted misroutes operators and corrupts the §9 reducers
         msg = str(exc)
+        cause = "door_failed_after_attempt"
         if "merge_reissue_exhausted" in msg:
             cause = "merge_reissue_exhausted"
-        elif "not reconcilable" in msg:
+        if "not reconcilable" in msg:
             cause = "unreconcilable_pr_state"
-        elif "refresh" in msg:
+        if "refresh" in msg and cause == "door_failed_after_attempt":
             cause = "refresh_failed"
-        else:
-            cause = "door_failed_after_attempt"
         _emit_gate(
             live,
             gate="merge-door-reconcile",
