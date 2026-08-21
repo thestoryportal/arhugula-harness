@@ -617,6 +617,52 @@ def test_live_claim_survives_a_breaker_pass(door):
     assert claim.exists()  # the live claim was restored, never lost
 
 
+# ── codex U-HE-22 r8 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop reclaim()'s post-publish terminal retraction (authority restored)
+def test_reclaim_retracts_on_midflight_terminalization(door, monkeypatch):
+    """The reservation gate is check-then-act: terminalized between rs.current() and the
+    successor publish, the successor must self-release, never stand (r8 P1)."""
+    lease = _acq(lane="A")
+    _kill_holder()
+    real_current = rs.current
+    calls = {"n": 0}
+
+    def flipping(arc_id):
+        calls["n"] += 1
+        cur = real_current(arc_id)
+        if calls["n"] >= 2 and cur is not None:
+            # terminalized after the gate read and before the retract re-check
+            return (cur[0], {**cur[1], "state": "abandoned"})
+        return cur
+
+    monkeypatch.setattr(rs, "current", flipping)
+    with pytest.raises(md.LeaseError, match="retracted"):
+        md.reclaim(lease, lane_id="B", ground_state="OPEN")
+    monkeypatch.setattr(rs, "current", real_current)
+    assert md.read_lease() is None  # the successor did not stand
+
+
+# mutation-probe: drop complete_dead_marker()'s containment preamble (forged marker moves LEASE)
+def test_completion_refuses_symlinked_or_foreign_marker(door, tmp_path):
+    """A planted symlink named like a marker, or a file outside DOOR, must never move the
+    current LEASE (r8 P2)."""
+    lease = _acq(lane="A")
+    outside = tmp_path / "forged.json"
+    outside.write_text(
+        json.dumps({"pid": 999999, "host": md.socket.gethostname(), "target_action": "release"})
+    )
+    link = md.DOOR / f"transition.{lease['lease_token']}"
+    link.symlink_to(outside)
+    assert md.complete_dead_marker(link) is False
+    assert md.read_lease()["lease_token"] == lease["lease_token"]  # lease untouched
+    foreign = tmp_path / f"transition.{lease['lease_token']}"
+    foreign.write_text(outside.read_text())
+    assert md.complete_dead_marker(foreign) is False
+    assert md.read_lease()["lease_token"] == lease["lease_token"]
+
+
 # ── codex U-HE-22 r5 corrections ─────────────────────────────────────────────
 
 

@@ -439,6 +439,11 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
             f"reclaim lost the door to another acquirer "
             f"(holder {live and live['lane_id']}); not resumed"
         )
+    if _retract_if_terminal(fresh):
+        raise LeaseError(
+            f"reclaim retracted: reservation {fresh['reservation_id']!r} terminalized "
+            "during the reclaim (codex r8 P1); successor self-released"
+        )
     return live
 
 
@@ -541,12 +546,43 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
             f"unblock lost the door to another acquirer "
             f"(holder {live and live['lane_id']}); not resumed"
         )
+    if _retract_if_terminal(fresh):
+        raise LeaseError(
+            f"unblock retracted: reservation {fresh['reservation_id']!r} terminalized "
+            "during the unblock (codex r8 P1); successor self-released"
+        )
     return live
+
+
+def _retract_if_terminal(fresh: dict) -> bool:
+    """Post-publish terminal re-check (codex r8 P1): the reservation gate is check-then-act
+    — an arc can be terminalized between rs.current() and the successor publish. Mirror of
+    acquire()'s post-publication re-validation: if the reservation no longer reads
+    open/merged, self-release the just-published successor through the marker discipline
+    and report the retraction. Returns True when the successor was retracted."""
+    res = rs.current(fresh["reservation_id"])
+    if res is not None and res[1]["state"] in ("open", "merged"):
+        return False
+    live = read_lease()
+    if live and live["lease_token"] == fresh["lease_token"]:
+        if win_marker(fresh["lease_token"], "release") is not None:
+            _move_lease(fresh["lease_token"], "released")
+    return True
 
 
 def complete_dead_marker(marker: Path) -> bool:
     """Poison-pill guard: a third party MAY complete a dead creator's declared target_action
     idempotently."""
+    _check_door()
+    if marker.is_symlink() or not marker.name.startswith("transition."):
+        # Containment (codex r8 P2): a planted symlink named like a marker must not move
+        # the current LEASE, and the marker must be the DOOR's own transition file.
+        return False
+    try:
+        if marker.parent.resolve() != DOOR.resolve():
+            return False
+    except OSError:
+        return False
     try:
         m = json.loads(marker.read_text())
     except (OSError, json.JSONDecodeError):
@@ -580,6 +616,16 @@ def complete_dead_marker(marker: Path) -> bool:
         # bytes adjudicated are the moved file itself. Dead claimant -> discard + yield
         # (the next completer wins a fresh create); live claimant (we displaced a fresh
         # claim) -> restore via os.link, which yields to any even-newer claim.
+        # Pre-read gate (codex r8 P1): never rename a claim we believe LIVE — removing
+        # the pathname before proving deadness would let a third completer claim and run
+        # concurrently with the original live completer. Only a read-dead claim enters
+        # the rename CAS; the moved bytes are then re-adjudicated (r7).
+        try:
+            pre = json.loads(claim.read_text())
+            if pre["host"] != socket.gethostname() or _process_is_alive(int(pre["pid"])):
+                return False
+        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            return False
         broken = DOOR / f".completed.{token}.broken.{os.getpid()}.{secrets.token_hex(4)}"
         try:
             os.rename(claim, broken)
@@ -621,11 +667,14 @@ def complete_dead_marker(marker: Path) -> bool:
         before = read_lease()
         _publish_fresh(m["fresh_lease"])
         after = read_lease()
-        done = done or (
+        published = (
             before is None
             and after is not None
             and after["lease_token"] == m["fresh_lease"]["lease_token"]
         )
+        if published and _retract_if_terminal(m["fresh_lease"]):
+            published = False  # terminalized mid-completion (codex r8 P1); self-released
+        done = done or published
     return done
 
 
