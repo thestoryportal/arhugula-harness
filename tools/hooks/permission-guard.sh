@@ -240,6 +240,9 @@ _push_targets_main() {
   # positionals and skips the bare-push branch. Any quoted span with internal whitespace
   # denies outright (single-token quoting like 'HEAD:main' is unaffected).
   printf '%s' "$cmd" | grep -Eq "['\"][^'\"]*[[:space:]][^'\"]*['\"]" && return 0
+  # codex r7 P1 (same class): a backslash-escaped whitespace (`origin\ repo` is ONE
+  # argument to git) also breaks word-split boundaries -- deny outright.
+  printf '%s' "$cmd" | grep -Eq '\\[[:space:]]' && return 0
   set -f; set -- $cmd; set +f
   shift 2                                   # git push
   for tok in "$@"; do
@@ -282,10 +285,11 @@ _push_targets_main() {
   done
   branch=$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)
   # Refspec scan skips the remote slot ONLY at >=2 positionals (codex r6 P2: a remote
-  # named `main` would hard-deny a legitimate topic push). At exactly one positional the
-  # token may be a refspec rather than a remote (--repo=<r> supplies the remote as an
-  # option, codex r1 P1), so it IS scanned -- and since r4 every unrecognized option fails
-  # closed, a >=2-positional [0] is reliably the remote (no unconsumed-value misparse).
+  # named `main` would hard-deny a legitimate topic push); since r4 every unrecognized
+  # option fails closed, a >=2-positional [0] is reliably the remote. At exactly one
+  # positional the token is git's repository argument (measured r7: a positional takes
+  # precedence over --repo), but a refspec-LOOKING single positional (`--repo=origin
+  # main`) is scanned as a refspec anyway -- pure over-approximation toward deny.
   if [ "${#positional[@]}" -ge 2 ]; then scan_from=1; else scan_from=0; fi
   if [ "${#positional[@]}" -gt "$scan_from" ]; then
     for tok in "${positional[@]:$scan_from}"; do

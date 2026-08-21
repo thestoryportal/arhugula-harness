@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:518-520 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:522-524 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -674,6 +674,15 @@ OUT=$(run_on "$(pl Bash 'git push # comment' '')"); [ "$(dec "$OUT")" = "deny" ]
 ( cd "$REPO" && git checkout -q topic )
 OUT=$(run_on "$(pl Bash 'git push main topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "remote named main + topic refspec → allow (r6 P2: remote slot not a refspec)" || bad "remote-named-main topic push blocked: $OUT"
 OUT=$(run_on "$(pl Bash 'git push main main' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "remote named main + main refspec → still deny" || bad "main refspec via main remote not denied: $OUT"
+
+# codex r7: backslash-escaped whitespace is ONE git argument but two word-split tokens
+# (deny); the --repo positional-precedence claim was REFUTED by measurement (a positional
+# repository beats --repo), so `git push --repo=origin main topic` stays modeled as
+# remote=main + refspec=topic.
+( cd "$REPO" && git checkout -q main )
+OUT=$(run_on "$(pl Bash 'git push origin\ repo' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "backslash-escaped whitespace remote (bare push in disguise) → deny" || bad "backslash-space push not denied: $OUT"
+( cd "$REPO" && git checkout -q topic )
+OUT=$(run_on "$(pl Bash 'git push --repo=origin main topic' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "--repo + positional repo named main + topic refspec → allow (r7 refutation witness)" || bad "--repo positional-precedence case blocked: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
