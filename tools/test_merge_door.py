@@ -1475,9 +1475,10 @@ def test_refresh_intent_recovery_verbs(door, monkeypatch):
 
     publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
     _kill_holder()  # r6: the verbs refuse a LIVE unblocked holder (mid-creation window)
+    g.add_refresh_pr()  # r7: the verb validates the pair against gh ground truth
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "B"]) == 4  # wrong lane
+    assert md.main(["record-refresh", "2", "e" * 40, "--lane-id", "A"]) == 4  # head mismatch
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
-    g.add_refresh_pr()
     out = md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=md.read_lease())
     assert out == "released"  # the recorded refresh unwedged the resume
     assert [c[0] for c in g.merge_calls] == [1, 2]
@@ -1540,9 +1541,9 @@ def test_intent_block_end_to_end_recovery(door, monkeypatch):
         md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
     blocked = md.read_lease()
     assert blocked["state"] == "blocked"
+    g.add_refresh_pr()  # the discovered PR exists in ground truth
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
     successor = md.unblock(pr=1, blocked_at_sha=blocked["blocked_at_sha"], lane_id="A")
-    g.add_refresh_pr()
     out = md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=successor)
     assert out == "released"
     assert [c[0] for c in g.merge_calls] == [1, 2]
@@ -1654,3 +1655,65 @@ def test_tier_counter_resets_on_a_reconciled_cycle(door):
     # the reconciled cycle RESET the counter — nonconsecutive cleans never accumulate
     assert list((md.DOOR / "tier-clean-cycles").iterdir()) == []
     assert md._tiering_active() is True
+
+
+# ── codex U-HE-23 r7 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop record-refresh's unresolved-intent + ground-truth gate
+def test_record_refresh_refuses_without_unresolved_intent(door, monkeypatch):
+    """record-refresh must resolve an EXISTING unresolved intent against gh ground
+    truth — a bare lane-owned lease must not accept an arbitrary pr/head pair, and a
+    second record must not overwrite a resolved one (r7 P1)."""
+    g = FakeGround()
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    _kill_holder()
+    g.add_refresh_pr()
+    # no intent published → refused even though lane matches and the pair is real
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 4
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
+    # already resolved → a second (possibly different) record is refused
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 4
+
+
+# mutation-probe: drop the CLI resume's DoorFailed→mark_blocked routing (permanent wedge)
+def test_cli_resume_unreconcilable_blocks_instead_of_wedging(door, monkeypatch):
+    """A dead holder whose PR is now CLOSED must not wedge the door: reconcile's
+    fail-closed raise at CLI resume routes to blocked (unblock available), never to a
+    bare exit that retains an unblocked dead lease (r7 P1)."""
+    g = FakeGround()
+    g.states[1].update(state="CLOSED")
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    _kill_holder()
+    rc = md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"])
+    assert rc == 3
+    live = md.read_lease()
+    assert live["state"] == "blocked"
+    assert live["blocked_reason"].startswith("unreconcilable_at_resume:")
+    # the recovery path is now REACHABLE: unblock mints a successor for the holder lane
+    successor = md.unblock(pr=1, blocked_at_sha=live["blocked_at_sha"], lane_id="A")
+    assert successor["unblocked_from"]
+    assert g.merge_calls == []  # nothing was driven while unreconcilable
+
+
+# mutation-probe: drop the --no-refresh NOTIFY (silent skip of the §4(viii) continuation)
+def test_no_refresh_is_loud(door, monkeypatch):
+    """--no-refresh satisfies the required group but skips the mandatory continuation —
+    that posture must emit a NOTIFY row naming the skip (r7 P2)."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    g = FakeGround()
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    assert md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"]) == 0
+    assert (
+        "NOTIFY",
+        "merge-door-refresh:transient-retry:refresh_skipped_by_operator",
+    ) in rows

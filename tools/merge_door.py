@@ -1440,10 +1440,23 @@ def main(argv: list[str] | None = None) -> int:
                     int(live["pid"])
                 )
                 if same_lane and holder_dead and live.get("state") != "blocked":
+                    try:
+                        gs = reconcile_ground(live, ground)
+                    except DoorFailed as exc:
+                        # an unreconcilable PR at resume must not wedge an unblockable
+                        # door (codex r7 P1): block it so the operator's unblock +
+                        # recovery verbs become available
+                        mark_blocked(
+                            live,
+                            sha=live.get("head_sha") or "0" * 40,
+                            reason=f"unreconcilable_at_resume:{exc}",
+                        )
+                        print(f"BLOCKED: {exc}", file=sys.stderr)
+                        return 3
                     lease = reclaim(
                         live,
                         lane_id=args.lane_id,
-                        ground_state=reconcile_ground(live, ground),
+                        ground_state=gs,
                     )  # self-resume via the marker discipline
             if lease is None:
                 cur = rs.current(args.arc_id)
@@ -1463,6 +1476,16 @@ def main(argv: list[str] | None = None) -> int:
                             base_sha=cur[1]["base_sha"],
                         )
                     )
+            if args.no_refresh:
+                # skipping the mandatory §4(viii) continuation is an EXPLICIT, LOUD
+                # operator choice (codex r7 P2), never a silent default
+                _notify(
+                    "NOTIFY",
+                    args.lane_id,
+                    "merge-door-refresh:transient-retry:refresh_skipped_by_operator",
+                    f"{args.arc_id} — landing pr #{args.pr} with --no-refresh: the "
+                    "terminating refresh is owed out-of-band",
+                )
             out = land(
                 args.pr,
                 lane_id=args.lane_id,
@@ -1495,6 +1518,20 @@ def main(argv: list[str] | None = None) -> int:
                 )
             intent = _sidecar(live["lease_token"], "refresh.intent")
             if args.cmd == "record-refresh":
+                if not intent.exists() or _sidecar(live["lease_token"], "refresh").exists():
+                    # only an UNRESOLVED intent may be resolved this way (codex r7 P1)
+                    raise LeaseError("no unresolved refresh intent to resolve")
+                v = default_ground().gh_view(int(args.pr))
+                if v.get("headRefOid") != args.head_sha or v.get("state") not in (
+                    "OPEN",
+                    "MERGED",
+                ):
+                    # the recorded pair must BE a real PR at that head (codex r7 P1):
+                    # a mistaken pair would merge an unrelated PR under the global lease
+                    raise LeaseError(
+                        f"record-refresh: pr #{args.pr} ground truth does not match "
+                        f"(state {v.get('state')!r}, head {str(v.get('headRefOid'))[:12]})"
+                    )
                 publish_exclusive(
                     _sidecar(live["lease_token"], "refresh"),
                     json.dumps({"pr": int(args.pr), "head_sha": args.head_sha}),
