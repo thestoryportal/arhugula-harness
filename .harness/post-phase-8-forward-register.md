@@ -2232,20 +2232,20 @@ same spec leg.
 
 ### B-189 · shell mutation-probe annotations collapse per (script, target-file) — two same-file range annotations reduce to one coverage requirement *(surfaced by out-of-family Codex r9 against the U-HE-26 guard unit, 2026-08-21; not exploitable at HEAD — one annotation per target; register-and-held)*
 
-**What it is.** `required_probes()` reduces a shell suite's `# mutation-probe:` annotations to `(script, target path)` pairs and the pin-log key (`_pinned_nodeids`) likewise drops the line range, so a shell suite carrying two annotations for DIFFERENT ranges of one source file would stay coverage-green after re-pinning only one of them.
+- **What it is.** `required_probes()` reduces a shell suite's `# mutation-probe:` annotations to `(script, target path)` pairs and the pin-log key (`_pinned_nodeids`) likewise drops the line range, so a shell suite carrying two annotations for DIFFERENT ranges of one source file would stay coverage-green after re-pinning only one of them.
 
-**Current state.** Not exploitable at HEAD: every shell suite carries at most one annotation per target file (the U-HE-26 suite carries exactly one). The `lines` field is already present in every probe-log entry, so the migration is key-widening, not data backfill.
+- **Current state.** Not exploitable at HEAD: every shell suite carries at most one annotation per target file (the U-HE-26 suite carries exactly one). The `lines` field is already present in every probe-log entry, so the migration is key-widening, not data backfill.
 
-**Close-out steps.** (1) Decide whether the pin key becomes `(test, file, lines)` across `required_probes` / `_pinned_nodeids` / `mutation_probe.log_result` — a lockstep three-carrier schema change; (2) if taken, add the two-ranges-one-file witness codex r9 named; (3) until then the one-annotation-per-target convention holds by inspection at review time.
+- **Close-out steps.** (1) Decide whether the pin key becomes `(test, file, lines)` across `required_probes` / `_pinned_nodeids` / `mutation_probe.log_result` — a lockstep three-carrier schema change; (2) if taken, add the two-ranges-one-file witness codex r9 named; (3) until then the one-annotation-per-target convention holds by inspection at review time.
 
-**Council.** NO — single-tool coverage-gate schema refinement; no cross-axis consumer; the only decision is the three-carrier key migration.
+- **Council.** NO — single-tool coverage-gate schema refinement; no cross-axis consumer; the only decision is the three-carrier key migration.
 
 ### B-190 · C-HE-08 §1 client-side push parser residual classes premised on adversarial local git config *(surfaced by out-of-family Codex r10 against the U-HE-26 guard unit at the 10-round cap, 2026-08-21; register-and-held; bounded by the C-HE-08 §2 server fence at U-HE-27 per R-20)*
 
-**What it is.** Two r10 classes share one premise — an actor already holding arbitrary git-config write: (P1) a remote NAMED with an embedded quote (`o'igin`) defeats dequote-then-lookup so a main-targeting `remote.o'igin.push`/`mirror` is missed; (P2) the bare-push config checks sample mutable shared state with no lock/CAS binding it to the approved execution, so a concurrent writer can retarget `remote.origin.push` at main inside the window.
+- **What it is.** Two r10 classes share one premise — an actor already holding arbitrary git-config write: (P1) a remote NAMED with an embedded quote (`o'igin`) defeats dequote-then-lookup so a main-targeting `remote.o'igin.push`/`mirror` is missed; (P2) the bare-push config checks sample mutable shared state with no lock/CAS binding it to the approved execution, so a concurrent writer can retarget `remote.origin.push` at main inside the window.
 
-**Current state.** Config-write is code-write in this workspace (the same actor could edit the hook itself), so both classes sit outside the client predicate's threat model (accidental/haywire-agent commands). Rounds r1–r10 measured the class as non-convergent client-side.
+- **Current state.** Config-write is code-write in this workspace (the same actor could edit the hook itself), so both classes sit outside the client predicate's threat model (accidental/haywire-agent commands). Rounds r1–r10 measured the class as non-convergent client-side.
 
-**Close-out steps.** (1) Land U-HE-27 (server-side branch protection, C-HE-08 §2) — the fence closes both classes for `main` regardless of client parsing (invariant R-20); (2) record in U-HE-27's evidence log that B-190's residuals are bounded by the fence; (3) no client-side narrowing owed.
+- **Close-out steps.** (1) Land U-HE-27 (server-side branch protection, C-HE-08 §2) — the fence closes both classes for `main` regardless of client parsing (invariant R-20); (2) record in U-HE-27's evidence log that B-190's residuals are bounded by the fence; (3) no client-side narrowing owed.
 
-**Council.** NO — the terminal is prescribed by the cleared spec itself (C-HE-08 §2 + R-20); the only open work is the already-scheduled next unit.
+- **Council.** NO — the terminal is prescribed by the cleared spec itself (C-HE-08 §2 + R-20); the only open work is the already-scheduled next unit.
