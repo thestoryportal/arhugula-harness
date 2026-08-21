@@ -1419,3 +1419,70 @@ def test_cli_contention_routes_through_backoff_and_emits(door, monkeypatch):
 
     gate_rows = [r for r in frr.read_rows() if r.get("producer") == "merge-door-lease-acquire"]
     assert gate_rows and gate_rows[-1]["cause_attribution"] == "lease_acquire_budget_exhausted"
+
+
+# ── codex U-HE-23 r3 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop the toctou_attested skip (unblocked BASE_TOCTOU re-blocks forever)
+def test_base_toctou_unblock_is_attested_and_resumable(door):
+    """The operator-keyed unblock IS the re-validation attestation: a resumed land()
+    must not re-fire the same first-parent mismatch and wedge the door (r3 P1)."""
+    g = FakeGround()
+    g.git_first_parent = lambda sha: "e" * 40
+    with pytest.raises(md.DoorBlocked, match="base_toctou"):
+        _land(door, g)
+    blocked = md.read_lease()
+    successor = md.unblock(pr=1, blocked_at_sha=blocked["blocked_at_sha"], lane_id="A")
+    assert successor.get("unblocked_from") == blocked["blocked_at_sha"]
+    out = md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=successor)
+    assert out == "released"  # attested: the mismatch does not re-block
+    assert md.read_lease() is None
+
+
+# mutation-probe: drop land()'s resumed-lease validation (a foreign dict drives the door)
+def test_land_refuses_a_stale_or_foreign_lease_dict(door):
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    forged = {**lease, "lease_token": "f" * 32}
+    with pytest.raises(md.DoorFailed, match="not the door's current lease"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=forged)
+    assert g.merge_calls == []  # nothing drove the door
+    assert md.read_lease()["lease_token"] == lease["lease_token"]
+
+
+def test_refresh_intent_recovery_verbs(door, monkeypatch):
+    """record-refresh attaches the discovered PR; clear-refresh-intent clears a false
+    intent — both require the live lease's own lane; either unwedges the resume (r3 P1)."""
+    g = FakeGround()
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "B"]) == 4  # wrong lane
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
+    g.add_refresh_pr()
+    out = md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=md.read_lease())
+    assert out == "released"  # the recorded refresh unwedged the resume
+    assert [c[0] for c in g.merge_calls] == [1, 2]
+    # and clear-refresh-intent removes a false intent (fresh scenario)
+    rs.reserve("pr-5", lane_id="A", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-5", "A")
+    rs.update_payload(
+        "pr-5",
+        {"pr": 5, "head_sha": "a" * 40, "base_sha": "b" * 40, "attested_merge_tree": "d" * 40},
+    )
+    g.states[5] = {
+        "state": "OPEN",
+        "headRefOid": "a" * 40,
+        "baseRefOid": "b" * 40,
+        "mergedAt": None,
+        "mergeCommit": None,
+    }
+    lease5 = md.acquire(lane_id="A", arc_id="pr-5", pr=5, head_sha="a" * 40, base_sha="b" * 40)
+    publish_exclusive(md._sidecar(lease5["lease_token"], "refresh.intent"), "{}")
+    assert md.main(["clear-refresh-intent", "--lane-id", "A"]) == 0
+    assert not md._sidecar(lease5["lease_token"], "refresh.intent").exists()

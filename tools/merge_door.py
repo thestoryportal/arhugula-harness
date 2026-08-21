@@ -558,6 +558,10 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
         "state": "held",
         "blocked_at_sha": None,
         "blocked_reason": None,
+        # the operator-keyed unblock IS the re-validation attestation for the sha it was
+        # keyed to (codex r3 P1): without this, a BASE_TOCTOU block re-fires on every
+        # resume and the door is permanently wedged
+        "unblocked_from": blocked_at_sha,
     }
     fresh.pop("blocked_at", None)
     if win_marker(lease["lease_token"], "unblock", extra={"fresh_lease": fresh}) is None:
@@ -932,44 +936,29 @@ def _emit_gate(
     """§9 gate rows as C-HE-24 findings (`code` = <gate>:<fail_class>:<cause>)."""
     import finding_record as fr
 
-    core = fr.FindingCore(
-        # the id's location-hash hashes the row's OWN location field (C-HE-24 §4 — the
-        # plan sketch hashed the gate name and failed validation; as-built fix), and `n`
-        # is the count of this producer's prior rows for this head (the sketch's fixed 0
-        # collided on a second same-head emission and tripped the same-core invariant)
-        fr.make_finding_id(
-            gate,
-            (lease or {}).get("head_sha") or "nohead",
-            "merge-door",
-            sum(
-                1
-                for r in fr.read_rows()
-                if r.get("producer") == gate and r.get("head_sha") == (lease or {}).get("head_sha")
-            ),
+    # allocate + append under finding_record's own lock (codex U-HE-23 r3 P2: an
+    # unlocked count-then-append let two concurrent emitters mint one id)
+    fr.append_observation(
+        {
+            "location": "merge-door",
+            "observed_evidence": evidence,
+            "expected_contract": "C-HE-06 §9",
+            "severity": severity,
+            "finding_type": fail_class,
+            "lineage_claim": "door",
+            "producer": gate,
+        },
+        fr.Envelope(
+            "finding",
+            fr.now_iso(),
+            arc_id,
+            lane_id,
+            (lease or {}).get("head_sha"),
+            (lease or {}).get("base_sha"),
+            None,
+            None,
+            cause_attribution=cause,
         ),
-        "merge-door",
-        evidence,
-        "C-HE-06 §9",
-        severity,
-        fail_class,
-        "door",
-        gate,
-    )
-    fr.append_row(
-        fr.make_row(
-            core,
-            fr.Envelope(
-                "finding",
-                fr.now_iso(),
-                arc_id,
-                lane_id,
-                (lease or {}).get("head_sha"),
-                (lease or {}).get("base_sha"),
-                None,
-                None,
-                cause_attribution=cause,
-            ),
-        )
     )
 
 
@@ -1075,6 +1064,22 @@ def land(
     )
     if lease is None:
         lease = acquire(lane_id=lane_id, arc_id=arc_id, pr=pr, head_sha=head_sha, base_sha=base_sha)
+    else:
+        # a caller-supplied (resumed) lease must BE the door's current lease for THIS
+        # arc/lane/pr (codex r3 P2): a stale or foreign dict would drive gh pr merge
+        # while another lease is current, defeating the single-writer fence
+        live = read_lease()
+        if (
+            live is None
+            or live["lease_token"] != lease["lease_token"]
+            or live.get("reservation_id") != arc_id
+            or live.get("lane_id") != lane_id
+            or int(live.get("pr", -1)) != int(pr)
+        ):
+            raise DoorFailed(
+                f"resumed lease is not the door's current lease for {arc_id!r} "
+                f"(door: {live and live.get('lease_token')!r})"
+            )
     if ground.codex_worktree_present():
         _notify(
             "NOTIFY",
@@ -1116,7 +1121,8 @@ def land(
                 rs.update_payload(arc_id, {"merge_sha": merge_sha})
             rs.transition(arc_id, "merged", lane_id=lane_id)  # (vi)
         _kill_after("reservation-merged")
-        if merge_sha and ground.git_first_parent(merge_sha) != base_sha:
+        toctou_attested = lease.get("unblocked_from") == merge_sha
+        if merge_sha and not toctou_attested and ground.git_first_parent(merge_sha) != base_sha:
             # BASE_TOCTOU detection (C-HE-12 §2): positive proof the race window was hit —
             # NEVER silent acceptance. The merge landed server-side (the reservation
             # reflects that fact); the DOOR blocks and routes to re-validation.
@@ -1333,6 +1339,15 @@ def main(argv: list[str] | None = None) -> int:
     ub.add_argument("pr", type=int)
     ub.add_argument("blocked_at_sha")
     ub.add_argument("--lane-id", required=True)
+    # refresh_intent_unresolved recovery (codex r3 P1): the two ground-truth resolutions —
+    # the refresh PR EXISTS (record it) or it does NOT (clear the intent) — each require
+    # the caller to be the live lease's own lane.
+    rr = sub.add_parser("record-refresh")
+    rr.add_argument("pr", type=int)
+    rr.add_argument("head_sha")
+    rr.add_argument("--lane-id", required=True)
+    ci = sub.add_parser("clear-refresh-intent")
+    ci.add_argument("--lane-id", required=True)
     sub.add_parser("status")
     sub.add_parser("gc")
     args = p.parse_args(argv)
@@ -1401,6 +1416,21 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "unblock":
             unblock(pr=args.pr, blocked_at_sha=args.blocked_at_sha, lane_id=args.lane_id)
             print("unblocked; successor lease held by this lane")
+            return 0
+        elif args.cmd in ("record-refresh", "clear-refresh-intent"):
+            live = read_lease()
+            if live is None or live.get("lane_id") != args.lane_id:
+                raise LeaseError("no live lease held by this lane")
+            intent = _sidecar(live["lease_token"], "refresh.intent")
+            if args.cmd == "record-refresh":
+                publish_exclusive(
+                    _sidecar(live["lease_token"], "refresh"),
+                    json.dumps({"pr": int(args.pr), "head_sha": args.head_sha}),
+                )
+                print(f"refresh #{args.pr} recorded; resume with `land`")
+            else:
+                intent.unlink(missing_ok=True)
+                print("refresh intent cleared; resume with `land` (a fresh refresh may mint)")
             return 0
         elif args.cmd == "status":
             print(json.dumps(read_lease(), sort_keys=True))
