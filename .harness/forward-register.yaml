@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 187
+  total: 188
   open: 1
   design_substrate_gated: 3
-  registered_finding: 38
+  registered_finding: 39
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: a4baaed0cba8ee03
+  identity_digest: 262d096fc76ba6bc
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9931,3 +9931,27 @@ items:
   council: 'NO — single-axis contract-surface extension with an obvious cheapest carrier; a real
     fork only if the carrier choice grows cross-axis consumers (revisit at close-out step 1).'
   heading: '### B-187 · merge-door refresh continuation lacks LINEAGE-BINDING — the §12.2.1 shape gate (title prefix + roadmap-status-only file set) accepts an OLD terminating-refresh PR from a prior landing *(surfaced by out-of-family Codex r9/r10 against the U-HE-23 landing driver #1414, 2026-08-21; register-and-held at the 10-round cap; adjudicated to the 3-lens merge gate)*'
+- id: B-188
+  title: >-
+    C-HE-07 raw-merge deny is a FREE-TEXT scan — quoted mentions of `gh pr merge` in commit
+    messages / PR comments / echoes are hard-denied in loop mode
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (r2/r4) against the U-HE-25 guard unit and
+    register-and-held. The C-HE-07 §2 deny predicate is folded VERBATIM from the cleared spec
+    (`(^|[[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)` over the whole command
+    string), so loop-mode commands whose quoted DATA mentions the phrase — `git commit -m
+    "route gh pr merge through the wrapper"`, `gh pr comment N --body "…gh pr merge…"`,
+    `echo gh pr merge` — are hard-denied, not asked. Same free-text class as the sibling
+    denies in the same block (force-push, secret-relocation scans) with the same
+    memory-documented workaround (`git commit -F <file>`; body-from-file). Narrowing to an
+    argv-position parse would make the deny weaker than the spec-verbatim predicate — a spec
+    change-note decision, not an in-unit edit.'
+  close_out: '(1) Decide at spec level whether C-HE-07 §2 should prescribe argv-position
+    matching after the permitted env prefix (change-note on Spec_HE_Loop_Lanes v1.x) or keep
+    the conservative free-text scan; (2) if narrowed, land the parse in a reviewed guard unit
+    with allow+hardening witnesses (quoted-mention commit → allow; real merge argv → deny);
+    (3) either way, record the `git commit -F` / `--body-file` workaround at the U-HE-29
+    activation-gate go-live witness where loop-mode friction first materializes.'
+  council: 'NO — single-surface guard-predicate refinement with a cleared-spec carrier; the
+    only decision is a spec change-note, routed per §4.3 if taken.'
+  heading: '### B-188 · C-HE-07 raw-merge deny is a FREE-TEXT scan — loop-mode commands whose quoted data mentions `gh pr merge` (commit messages, PR comment bodies, echoes) are hard-denied *(surfaced by out-of-family Codex r2/r4 against the U-HE-25 guard unit, 2026-08-21; spec-verbatim predicate held; adjudicated to the 3-lens merge gate)*'
