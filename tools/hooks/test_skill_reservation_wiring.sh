@@ -67,6 +67,16 @@ grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-fail
 grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover' "$SP" \
   && ok "ship-pr preflight review carries the inline HARNESS_* prefix (standalone runs)" \
   || bad "ship-pr preflight review lacks the inline HARNESS_* prefix"
+# Round-4 codex corrections (races + headless degradation):
+grep -q 'lost race' "$RC" || grep -q 'lost the race' "$RC" \
+  && ok "reserve race-loss handled like the occupied path" || bad "no reserve race-loss clause"
+grep -q 'NEVER overwrite' "$RC" \
+  && ok "lane-id file content is authoritative (never overwrite)" || bad "no lane-id overwrite rule"
+grep -q 'RE-READ the file' "$RC" \
+  && ok "lane-id mint adopts the file content after write" || bad "no post-write re-read rule"
+grep -q 'proceed with the arc UNRESERVED' "$RC" \
+  && ok "headless denial degrades to unreserved-with-note (U-HE-19 drain bootstrap)" \
+  || bad "no headless degradation clause"
 # Mandatory commands must be substitution-free single invocations (guard-compatible):
 if grep -E 'reservations\.py (reserve|update|selectable|show)' "$RC" "$SP" | grep -q '\$('; then
   bad "a mandatory reservation command still uses \$( ) command substitution"
@@ -91,19 +101,28 @@ grep -q 'reservations.py reconcile-all' "$SS" \
 # leg pins. The guard is exercised for real, not grepped.
 GUARD="$SCRIPT_DIR/permission-guard.sh"
 GREPO="$(mktemp -d)" && mkdir -p "$GREPO/.harness"
-guard_dec() { # $1=command → prints permissionDecision or empty (ask)
-  jq -nc --arg c "$1" \
-    '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":$c,"file_path":""}}' \
-    | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$GREPO" bash "$GUARD" \
-    | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null
+guard_dec() { # $1=command → prints permissionDecision, or "ask" (guard exit 0, no output).
+  # Distinguishes a genuine fall-through ask from a crashed guard / broken jq stage
+  # (codex r4 P2: an inert pipeline must not read as "never denied").
+  local payload raw rc
+  payload=$(jq -nc --arg c "$1" \
+    '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":$c,"file_path":""}}') || { echo PIPELINE_FAILURE; return; }
+  raw=$(printf '%s' "$payload" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$GREPO" bash "$GUARD"); rc=$?
+  [ "$rc" -ne 0 ] && { echo PIPELINE_FAILURE; return; }
+  if [ -z "$raw" ]; then echo ask; return; fi
+  printf '%s' "$raw" | jq -r '.hookSpecificOutput.permissionDecision // "ask"' || echo PIPELINE_FAILURE
 }
+# Positive control FIRST: a crashed/inert guard must fail loudly, not pass silently
+# (a gate that cannot tell "empty" from "unlooked" is no gate).
+DEC="$(guard_dec 'git push --force origin main')"
+[ "$DEC" = "deny" ] && ok "positive control: guard denies force-push" \
+  || bad "positive control failed — guard did not deny force-push (got: $DEC)"
 while IFS= read -r shape; do
   DEC="$(guard_dec "$shape")"
-  if [ "$DEC" = "deny" ]; then
-    bad "guard DENIES a mandatory carrier command: $shape"
-  else
-    ok "guard never denies (${DEC:-ask}): $shape"
-  fi
+  case "$DEC" in
+    allow|ask) ok "guard never denies ($DEC): $shape" ;;
+    *) bad "guard adjudication failed for mandatory carrier command ($DEC): $shape" ;;
+  esac
 done <<'SHAPES'
 uv run python tools/reservations.py selectable --arc-id u-he-21
 uv run python tools/reservations.py reserve --arc-id u-he-21 --lane-id lane-a --branch feat/x --arc-type applying

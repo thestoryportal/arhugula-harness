@@ -35,14 +35,23 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    ```
    **Lane id is minted ONCE per worktree and persisted** (pre-U-HE-31 lane-init): if
    `.harness/.lane-id` exists (gitignored, worktree-local), its content IS this lane's id —
-   read it and reuse it; only when absent, run `mint-lane-id` and Write the printed id to
-   `.harness/.lane-id`. A fresh mint per session would generate a new random suffix and
-   make the same-lane resume below misclassify this lane's own reservation as another's.
+   NEVER overwrite it; re-read it (rather than trusting memory) before every `reserve`.
+   Only when absent, run `mint-lane-id`, Write the printed id there, then RE-READ the file
+   and adopt whatever it now contains — if a concurrent session in the same worktree won
+   the write race, its value is the lane id (one worktree IS one lane per the two-lane
+   discipline, so this is a crash-overlap edge, not a normal state; atomic exclusive-create
+   minting is U-HE-31 lane-init's). A fresh mint per session would generate a new random
+   suffix and make the same-lane resume below misclassify this lane's own reservation as
+   another's.
    - `selectable` exit 0 (free) → reserve it, then export for this shell:
      ```bash
      uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>
      export HARNESS_ARC_ID=<arc-id>   # same-shell only — restate inline later
      ```
+     If `reserve` itself FAILS because another lane won the selectable→reserve window
+     (the store's exclusive-create CAS refuses a second head — a lost race, not an
+     error), treat it exactly like the exit-1 path below: `show` and branch on the
+     head's `lane_id`.
    - `selectable` exit 1 (a head exists) → `uv run python tools/reservations.py show --arc-id <arc-id>` and branch on its `lane_id`:
      - the head's `lane_id` equals the persisted `.harness/.lane-id` content
        (crash/compaction re-entry) → resume WITHOUT re-reserving (a second `reserve`
@@ -56,11 +65,17 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    command needs the ids in its environment (the review wrapper's C-HE-24/25 rows join
    the reservation through `HARNESS_ARC_ID`/`HARNESS_LANE_ID`), prefix them inline:
    `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`.
-   *Known friction (registered into U-HE-25's guard-edit scope — the reviewed
+   *Known gap (registered verbatim into U-HE-25's guard-edit scope — the reviewed
    permission-guard unit): the guard does not yet auto-allow
    `uv run python tools/reservations.py`, the leading `HARNESS_*=` prefix forms, or
-   `git merge-tree`, so in loop mode these commands currently surface one approval
-   prompt each; they are never DENIED (the U-HE-21 witness pins that floor).*
+   `git merge-tree`. Attended sessions see one approval prompt each (the shapes are
+   never guard-DENIED — witnessed). The HEADLESS runner (`tools/04-loop/run.sh`) maps
+   ask→deny, so until U-HE-25 lands a headless arc CANNOT reserve at open — the
+   explicit degradation is: if the reserve command is refused by the permission layer,
+   proceed with the arc UNRESERVED and say so in the PR body; append safety still holds
+   (the U-HE-19 drain bootstrap mints the reservation at closure and the C-HE-03 §6
+   holder gate fences the ledger), only the §4 selection-time scheduling dedup is
+   deferred — that property arrives for headless lanes with U-HE-25.*
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
