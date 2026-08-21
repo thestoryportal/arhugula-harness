@@ -21,6 +21,7 @@ uv run pytest -q \
   tools/test_arc_metrics_lanes.py \
   tools/test_finding_record.py \
   tools/test_lanes_verify.py \
+  tools/test_merge_door.py \
   tools/test_merge_gate_log.py \
   tools/test_review_wrapper.py \
   tools/test_reservations.py \
