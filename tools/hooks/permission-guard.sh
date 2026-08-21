@@ -205,6 +205,22 @@ _safe_worktree_remove_wrapper() {
   esac
 }
 
+# C-HE-07 §1: the ONLY merge verb auto-allowed in loop mode is the safe-merge wrapper,
+# exact arity `bash tools/hooks/safe-merge.sh <pr-number>` (all-digits PR, no other token) —
+# mirroring _safe_worktree_remove_wrapper's hardening. Reference matcher folded verbatim
+# from Spec_HE_Loop_Lanes_v1.md C-HE-07 §1.
+_safe_merge_wrapper() {
+  local cmd="$1"
+  printf '%s' "$cmd" | grep -q '[;&|<>`\\()]' && return 1
+  [[ "$cmd" == *$'\n'* ]] && return 1
+  printf '%s' "$cmd" | grep -Eq '(~|\.\.|\$\{?[A-Za-z_])' && return 1
+  set -f; set -- $cmd; set +f
+  if [ "${1:-}" = "bash" ]; then shift; fi
+  [ "$#" -eq 2 ] && [ "$1" = "tools/hooks/safe-merge.sh" ] || return 1
+  case "$2" in ''|*[!0-9]*) return 1 ;; esac
+  return 0
+}
+
 # A merge-gate lens may spawn a fresh Codex process only in lifecycle-isolated,
 # ephemeral read-only mode.
 # Require `--` before the prompt so option validation never scans prompt or reviewed text.
@@ -288,6 +304,10 @@ fi
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && _safe_worktree_remove_wrapper "$CMD"; then
   emit_allow
 fi
+# C-HE-07 §2: wrapper allow exits BEFORE the deny block below (which denies the raw verb).
+if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && _safe_merge_wrapper "$CMD"; then
+  emit_allow
+fi
 
 # ─── 2) DENY-LIST (hard-stop, enforced even in loop mode) ──────────────────────
 
@@ -326,6 +346,9 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     && emit_deny "git history rewrite"
   printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+(-D|--delete[[:space:]]+--force)|git[[:space:]]+push.*(--delete|[[:space:]]+:)|git[[:space:]]+worktree[[:space:]]+(add|remove).*--force' \
     && emit_deny "branch deletion / remote ref delete"
+  # C-HE-07: the merge verb goes through the lease-holding wrapper ONLY (structural fence, P1).
+  printf '%s' "$CMD" | grep -Eq '(^|[[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' \
+    && emit_deny "raw gh pr merge — must go through tools/hooks/safe-merge.sh"
   # Secret / credential relocation.
   printf '%s' "$CMD" | grep -Eq '(mv|cp|scp|rsync|install)[[:space:]].*(\.env|credentials|\.pem|id_rsa|id_ed25519|keyring|secret)' \
     && emit_deny "secret/credential relocation"
@@ -401,6 +424,13 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     :  # chained / nested / redirected / destructive submode (incl. git commit --amend) → ask
   else
     TRIM=$(printf '%s' "$CMD" | sed 's/^[[:space:]]*//')
+    # U-HE-25 (registered from U-HE-21 codex r6, EXACT-SHAPE): strip a leading
+    # HARNESS_ARC_ID= / HARNESS_LANE_ID= bareword assignment (no $ / quotes / spaces in the
+    # value) so the prefixed review-wrapper invocation matches the alternation below.
+    # NEVER the generic HARNESS_[A-Z0-9_]+ class — HARNESS_FAILOVER_CHILD=1 must NOT strip
+    # (it would let `just gemini-review` silently skip reservation-outcome persistence).
+    # The deny scan above and _bash_args_safe below still see the FULL command.
+    TRIM=$(printf '%s' "$TRIM" | sed -E 's/^((HARNESS_ARC_ID|HARNESS_LANE_ID)=[A-Za-z0-9._-]+[[:space:]]+)+//')
     # (Loop-control wrappers defer.sh/halt.sh are auto-allowed earlier — at the top of the
     # deny block — so a deferral reason naming an operator action isn't tripped by the
     # free-text deny scan. See the short-circuit in §2.)
@@ -424,7 +454,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # Git scopes these operations to this repository; this path helper limits destinations.
       # Removal uses the separately allowlisted mutex-backed wrapper.
       emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment|merge)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi
