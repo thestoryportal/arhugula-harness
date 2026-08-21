@@ -1084,10 +1084,12 @@ def land(
             verify_head_base(lease, ground)  # (ii)
             local_base_cas_check(head_sha, attested, ground)
             _kill_after("verify")
+            main_budget = 2
+            if resumed_attempt:
+                main_budget = 1  # §5: a resume pass re-issues at most ONCE
             reconciled = (
-                _merge_once(lease, pr, head_sha, ground, budget=1 if resumed_attempt else 2)
-                or reconciled
-            )  # (iii)+(iv); a resume pass re-issues at most ONCE (§5)
+                _merge_once(lease, pr, head_sha, ground, budget=main_budget) or reconciled
+            )  # (iii)+(iv)
         v = ground.gh_view(pr)  # (v)
         if v.get("state") != "MERGED":
             raise DoorFailed("post-merge confirm: not MERGED")
@@ -1178,18 +1180,17 @@ def land(
             refresh_resumed = (
                 recorded is not None and recorded.get("merge_attempted_at") is not None
             )
+            refresh_landed = False
             if refresh_resumed and reconcile_ground({**lease, "pr": rpr}, ground) == "MERGED":
-                reconciled = True  # the recorded refresh landed pre-crash: NEVER re-issue
+                refresh_landed = True  # the recorded refresh landed pre-crash: NEVER re-issue
+            refresh_budget = 2
+            if refresh_resumed:
+                refresh_budget = 1  # §5: one re-issue per reconcile pass
+            if refresh_landed:
+                reconciled = True
             else:
                 reconciled = (
-                    _merge_once(
-                        lease,
-                        rpr,
-                        rhead,
-                        ground,
-                        suffix="refresh",
-                        budget=1 if refresh_resumed else 2,
-                    )
+                    _merge_once(lease, rpr, rhead, ground, suffix="refresh", budget=refresh_budget)
                     or reconciled
                 )
             rv = ground.gh_view(rpr)
