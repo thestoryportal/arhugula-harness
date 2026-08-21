@@ -15,17 +15,21 @@ which consumes the §4/§8 constants declared below.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import secrets
 import socket
+import subprocess
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import reservations as rs
-from arc_metrics import QUEUE_DIR, _process_is_alive, publish_exclusive
+from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish_exclusive
 
 DOOR = QUEUE_DIR / "merge-door"
 LEASE = DOOR / "LEASE"
@@ -764,3 +768,564 @@ def gc(*, now: datetime | None = None) -> list[Path]:
                 except FileNotFoundError:
                     continue  # concurrent collector won it (codex r2 P3)
     return removed
+
+
+# ── U-HE-23: landing driver — C-HE-06 §4 steps (ii)–(ix), §5 reconcile, §8 policy ──────
+
+
+class BudgetExhausted(LeaseError):  # noqa: N818 — U-HE-23 plan signature verbatim
+    ...
+
+
+@dataclass
+class Ground:
+    """Injected gh/git seams; production defaults shell out with bounded timeouts."""
+
+    gh_view: Callable[[int], dict]
+    gh_merge: Callable[[int, str, float], subprocess.CompletedProcess]
+    gh_runs_for_sha: Callable[[str], list[dict]]
+    gh_main_runs_in_progress: Callable[[], int]
+    git_merge_tree: Callable[[str, str], str]
+    git_first_parent: Callable[[str], str]
+    codex_worktree_present: Callable[[], bool]
+    clock: Callable[[], float] = field(default=time.monotonic)
+    sleep: Callable[[float], None] = field(default=time.sleep)
+
+
+def _gh(*args: str, timeout: float) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["gh", *args], cwd=REPO, capture_output=True, text=True, timeout=timeout, check=False
+    )
+
+
+def default_ground() -> Ground:
+    def gh_view(pr):
+        p = _gh(
+            "pr",
+            "view",
+            str(pr),
+            "--json",
+            "state,mergedAt,headRefOid,baseRefOid,mergeCommit",
+            timeout=30,
+        )
+        if p.returncode != 0 or not p.stdout.strip():
+            raise RuntimeError(f"gh pr view failed: {p.stderr.strip()}")
+        return json.loads(p.stdout)
+
+    def gh_merge(pr, head, timeout):
+        # the ONE fixed merge invocation string (C-HE-07 §1)
+        return _gh("pr", "merge", str(pr), "--squash", "--match-head-commit", head, timeout=timeout)
+
+    def gh_runs_for_sha(sha):
+        p = _gh(
+            "run",
+            "list",
+            "--commit",
+            sha,
+            "--workflow",
+            "CI",
+            "--json",
+            "status,conclusion,event",
+            "--limit",
+            "20",
+            timeout=30,
+        )
+        return json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else []
+
+    def gh_main_runs_in_progress():
+        p = _gh(
+            "run",
+            "list",
+            "--branch",
+            "main",
+            "--event",
+            "push",
+            "--status",
+            "in_progress",
+            "--json",
+            "databaseId",
+            timeout=30,
+        )
+        return len(json.loads(p.stdout)) if p.returncode == 0 and p.stdout.strip() else 0
+
+    def git_merge_tree(base, head):
+        return subprocess.run(
+            ["git", "-C", str(REPO), "merge-tree", "--write-tree", base, head],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()[0]
+
+    def git_first_parent(sha):
+        return subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", f"{sha}^1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def codex_worktree_present():
+        out = subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return "/.codex-worktrees/" in out
+
+    return Ground(
+        gh_view,
+        gh_merge,
+        gh_runs_for_sha,
+        gh_main_runs_in_progress,
+        git_merge_tree,
+        git_first_parent,
+        codex_worktree_present,
+    )
+
+
+def _notify(kind: str, lane_id: str, cause: str, detail: str) -> None:
+    """Loop-ledger row, TOLERANT of the not-yet-landed writer (as-built: the plan's §3
+    order ships `loop_log_structured` at U-HE-29 while the roadmap executes U-HE-23 first
+    — the registered §0-vs-§1 ordering contradiction). A missing ledger writer must never
+    mask a DoorBlocked or crash the driver mid-landing: pre-U-HE-29 the signal degrades to
+    a LOUD stderr line (in-band, never silent); the durable row arrives with U-HE-29."""
+    try:
+        rs.emit_loop_row(kind, lane_id, cause, detail)
+    except rs.LoopStatusWriteError as exc:
+        print(
+            f"merge-door {kind} (ledger writer pending U-HE-29): {cause} — {detail} [{exc}]",
+            file=sys.stderr,
+        )
+
+
+def _emit_gate(
+    lease: dict | None,
+    *,
+    gate: str,
+    fail_class: str,
+    cause: str,
+    evidence: str,
+    arc_id: str,
+    lane_id: str,
+    severity: str = "warn",
+) -> None:
+    """§9 gate rows as C-HE-24 findings (`code` = <gate>:<fail_class>:<cause>)."""
+    import finding_record as fr
+
+    core = fr.FindingCore(
+        # the id's location-hash hashes the row's OWN location field (C-HE-24 §4 — the
+        # plan sketch hashed the gate name and failed validation; as-built fix), and `n`
+        # is the count of this producer's prior rows for this head (the sketch's fixed 0
+        # collided on a second same-head emission and tripped the same-core invariant)
+        fr.make_finding_id(
+            gate,
+            (lease or {}).get("head_sha") or "nohead",
+            "merge-door",
+            sum(
+                1
+                for r in fr.read_rows()
+                if r.get("producer") == gate and r.get("head_sha") == (lease or {}).get("head_sha")
+            ),
+        ),
+        "merge-door",
+        evidence,
+        "C-HE-06 §9",
+        severity,
+        fail_class,
+        "door",
+        gate,
+    )
+    fr.append_row(
+        fr.make_row(
+            core,
+            fr.Envelope(
+                "finding",
+                fr.now_iso(),
+                arc_id,
+                lane_id,
+                (lease or {}).get("head_sha"),
+                (lease or {}).get("base_sha"),
+                None,
+                None,
+                cause_attribution=cause,
+            ),
+        )
+    )
+
+
+def local_base_cas_check(head_sha: str, attested_tree: str | None, ground: Ground) -> None:
+    tree = ground.git_merge_tree("origin/main", head_sha)
+    if not attested_tree or tree != attested_tree:
+        raise DoorFailed(
+            f"local-base-cas-check: merge-tree {tree[:12]} != attested "
+            f"{str(attested_tree)[:12]} -- base moved; re-gate (R-23)"
+        )
+
+
+def verify_head_base(lease: dict, ground: Ground) -> dict:
+    v = ground.gh_view(int(lease["pr"]))
+    if v.get("headRefOid") != lease["head_sha"] or v.get("baseRefOid") != lease["base_sha"]:
+        raise DoorFailed(f"pr #{lease['pr']} head/base moved since the lease was recorded; re-gate")
+    return v
+
+
+def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
+    """Poll the merge SHA's OWN main run until completed. success → 'success'; anything
+    else → 'blocked:<why>' (CANCELLED blocks the door — C-HE-19 §2's ci_is_green)."""
+    deadline = ground.clock() + bound_s
+    notified = False
+    while ground.clock() < deadline:
+        runs = [r for r in ground.gh_runs_for_sha(sha) if r.get("event") in (None, "push")]
+        done = [r for r in runs if r.get("status") == "completed"]
+        if done:
+            concl = done[0].get("conclusion")
+            return "success" if ci_is_green(concl) else f"blocked:post_merge_ci_not_green:{concl}"
+        if not notified and ground.gh_main_runs_in_progress() > 2:
+            _notify(
+                "NOTIFY",
+                lane_id,
+                "merge-door-post-merge-ci:transient-retry:main_ci_queue_depth",
+                f"> 2 main-push CI runs in progress while waiting on {sha[:12]}",
+            )
+            notified = True
+        ground.sleep(30)
+    return "blocked:post_merge_ci_not_green:timeout"
+
+
+def reconcile_ground(lease: dict, ground: Ground) -> str:
+    """§5 timeout/crash reconciliation by ground truth. MERGED ⇒ never re-issue.
+    OPEN ⇒ the caller may re-issue at most ONCE per pass."""
+    v = ground.gh_view(int(lease["pr"]))
+    if v.get("state") == "MERGED":
+        return "MERGED"
+    return "OPEN"
+
+
+def _merge_once(lease: dict, pr: int, head_sha: str, ground: Ground, *, suffix: str = "") -> bool:
+    """(iii) attempted-marker BEFORE (iv) the bounded merge; on timeout reconcile,
+    re-issue at most once. Returns True iff a reconcile pass was needed (the cycle is
+    then not "clean" for §10 tiering)."""
+    mark_attempted(lease, suffix=suffix)
+    _kill_after("refresh-attempted" if suffix else "attempted")
+    for attempt in (1, 2):
+        try:
+            proc = ground.gh_merge(pr, head_sha, MERGE_TIMEOUT_S)
+            _kill_after("merge")
+            if proc.returncode == 0:
+                return attempt > 1
+        except subprocess.TimeoutExpired:
+            pass
+        if reconcile_ground({**lease, "pr": pr}, ground) == "MERGED":
+            return True  # invariant: NEVER re-invoke after MERGED
+        if attempt == 2:
+            raise DoorFailed("merge_reissue_exhausted (cause_attribution: merge_reissue_exhausted)")
+    return True
+
+
+def land(
+    pr: int,
+    *,
+    lane_id: str,
+    arc_id: str,
+    ground: Ground,
+    refresh: Callable[[], tuple[int, str]] | None,
+    lease: dict | None = None,
+) -> str:
+    """Steps (i)–(ix). `lease` is passed on self-resume (reclaimed); otherwise acquired
+    here (one attempt, fail-fast)."""
+    res = rs.current(arc_id)
+    if res is None:
+        raise DoorFailed(f"{arc_id}: no reservation")
+    head_sha, base_sha, attested = (
+        res[1]["head_sha"],
+        res[1]["base_sha"],
+        res[1]["attested_merge_tree"],
+    )
+    if lease is None:
+        lease = acquire(lane_id=lane_id, arc_id=arc_id, pr=pr, head_sha=head_sha, base_sha=base_sha)
+    if ground.codex_worktree_present():
+        _notify(
+            "NOTIFY",
+            lane_id,
+            "merge-door-lease-acquire:transient-retry:cross_carrier_codex_lane",
+            "a .codex-worktrees/ lane is present: C-HE-01 §1 residual — a Codex-exec lane "
+            "may reach gh pr merge unfenced",
+        )
+    tier = _tiering_active()
+    if tier:
+        _notify(
+            "NOTIFY",
+            lane_id,
+            "merge-door-lease-acquire:transient-retry:attestation_tier",
+            f"lease acquired for pr #{pr} by {lane_id}",
+        )
+    reconciled = False
+    try:
+        already = lease.get("merge_attempted_at") is not None and (
+            reconcile_ground(lease, ground) == "MERGED"
+        )
+        reconciled = reconciled or already
+        if not already:
+            verify_head_base(lease, ground)  # (ii)
+            local_base_cas_check(head_sha, attested, ground)
+            _kill_after("verify")
+            reconciled = _merge_once(lease, pr, head_sha, ground) or reconciled  # (iii)+(iv)
+        v = ground.gh_view(pr)  # (v)
+        if v.get("state") != "MERGED":
+            raise DoorFailed("post-merge confirm: not MERGED")
+        _kill_after("confirm")
+        merge_sha = (v.get("mergeCommit") or {}).get("oid") or ""
+        if rs.current(arc_id)[1]["state"] != "merged":
+            if merge_sha:
+                rs.update_payload(arc_id, {"merge_sha": merge_sha})
+            rs.transition(arc_id, "merged", lane_id=lane_id)  # (vi)
+        _kill_after("reservation-merged")
+        if merge_sha and ground.git_first_parent(merge_sha) != base_sha:
+            # BASE_TOCTOU detection (C-HE-12 §2): positive proof the race window was hit —
+            # NEVER silent acceptance. The merge landed server-side (the reservation
+            # reflects that fact); the DOOR blocks and routes to re-validation.
+            _emit_gate(
+                lease,
+                gate="BASE_TOCTOU",
+                fail_class="HITL-recoverable",
+                cause="first_parent_mismatch",
+                evidence=f"merge {merge_sha[:12]} first parent != verified base {base_sha[:12]}",
+                arc_id=arc_id,
+                lane_id=lane_id,
+                severity="hard",
+            )
+            mark_blocked(lease, sha=merge_sha, reason="base_toctou_first_parent_mismatch")
+            _notify(
+                "DEFERRED-HIL",
+                lane_id,
+                "merge-door-post-merge:HITL-recoverable:base_toctou",
+                f"{arc_id} — merge {merge_sha[:12]} landed on a base other than the verified "
+                f"{base_sha[:12]}; re-validate main, then "
+                f"`just merge-door-unblock {pr} {merge_sha}`",
+            )
+            raise DoorBlocked("base_toctou_first_parent_mismatch")
+        status = wait_post_merge_ci(
+            merge_sha, ground, bound_s=POST_MERGE_CI_BOUND_S, lane_id=lane_id
+        )  # (vii)
+        if status != "success":
+            mark_blocked(lease, sha=merge_sha, reason="post_merge_ci_not_green")
+            _emit_gate(
+                lease,
+                gate="merge-door-post-merge-ci",
+                fail_class="HITL-recoverable",
+                cause="post_merge_ci_not_green",
+                evidence=status,
+                arc_id=arc_id,
+                lane_id=lane_id,
+            )
+            _notify(
+                "DEFERRED-HIL",
+                lane_id,
+                "merge-door-post-merge-ci:HITL-recoverable:post_merge_ci_not_green",
+                f"{arc_id} — post-merge main run for {merge_sha[:12]} {status}; door blocked; "
+                f"run `just merge-door-unblock {pr} {merge_sha}` after fixing",
+            )
+            raise DoorBlocked(status)
+        _kill_after("post-ci")
+        recorded = (read_lease() or {}).get("refresh")
+        if refresh is not None or recorded is not None:  # (viii)
+            if recorded is not None:
+                # self-resume: NEVER create a second refresh PR
+                rpr, rhead = int(recorded["pr"]), recorded["head_sha"]
+            else:
+                rpr, rhead = refresh()
+                publish_exclusive(
+                    _sidecar(lease["lease_token"], "refresh"),
+                    json.dumps({"pr": rpr, "head_sha": rhead}),
+                )
+            reconciled = _merge_once(lease, rpr, rhead, ground, suffix="refresh") or reconciled
+            rv = ground.gh_view(rpr)
+            if rv.get("state") != "MERGED":
+                raise DoorFailed("refresh PR did not merge")
+            _kill_after("refresh-merged")
+            rsha = (rv.get("mergeCommit") or {}).get("oid") or ""
+            rstatus = wait_post_merge_ci(rsha, ground, bound_s=REFRESH_BOUND_S, lane_id=lane_id)
+            if rstatus != "success":
+                mark_blocked(lease, sha=rsha, reason="refresh_ci_not_green")
+                _emit_gate(
+                    lease,
+                    gate="merge-door-post-merge-ci",
+                    fail_class="HITL-recoverable",
+                    cause="refresh_ci_not_green",
+                    evidence=rstatus,
+                    arc_id=arc_id,
+                    lane_id=lane_id,
+                )
+                _notify(
+                    "DEFERRED-HIL",
+                    lane_id,
+                    "merge-door-post-merge-ci:HITL-recoverable:refresh_ci_not_green",
+                    f"{arc_id} — terminating refresh #{rpr} run for {rsha[:12]} {rstatus}; "
+                    f"door blocked; fix, then `just merge-door-unblock {rpr} {rsha}`",
+                )
+                raise DoorBlocked(rstatus)
+        release(lease)  # (ix)
+        if not reconciled:
+            # a CLEAN cycle (C-HE-06 §10): no reconcile pass, no HITL
+            (DOOR / "tier-clean-cycles").mkdir(exist_ok=True)
+            (DOOR / "tier-clean-cycles" / lease["lease_token"]).touch()
+        if tier:
+            _notify(
+                "NOTIFY",
+                lane_id,
+                "merge-door-lease-release:transient-retry:attestation_tier",
+                f"lease released after pr #{pr}",
+            )
+        return "released"
+    except DoorFailed as exc:
+        live = read_lease() or lease  # the sidecar view is the authority, not the dict
+        if live.get("merge_attempted_at") is None:
+            release(live)  # pre-attempt failure: release + re-gate
+            raise
+        # A failure AFTER the attempt is an ambiguous merge state: NEVER blind-release
+        # (C-HE-06 §5). Block the door and route to HITL reconciliation.
+        mark_blocked(
+            live,
+            sha=live.get("head_sha") or head_sha,
+            reason=f"door_failed_after_attempt:{exc}",
+        )
+        _emit_gate(
+            live,
+            gate="merge-door-reconcile",
+            fail_class="HITL-recoverable",
+            cause="merge_reissue_exhausted",
+            evidence=str(exc),
+            arc_id=arc_id,
+            lane_id=lane_id,
+        )
+        _notify(
+            "DEFERRED-HIL",
+            lane_id,
+            "merge-door-reconcile:HITL-recoverable:merge_reissue_exhausted",
+            f"{arc_id} — pr #{pr}: {exc}; reconcile by ground truth then "
+            f"`just merge-door-unblock {pr} <sha>`",
+        )
+        raise DoorBlocked(str(exc)) from exc
+
+
+def _tiering_active() -> bool:
+    """C-HE-06 §10: NOTIFY per acquire/release during the pilot + first multi-lane merges;
+    silent after 3 clean cycles (one file per clean cycle under tier-clean-cycles/)."""
+    d = DOOR / "tier-clean-cycles"
+    return not d.is_dir() or len(list(d.iterdir())) < 3
+
+
+def wait_for_door(
+    try_acquire: Callable[[], dict], *, clock=time.monotonic, sleep=time.sleep, rng=None
+) -> dict:
+    """§8 caller policy: bounded exponential backoff + full jitter (base 30 s, ×2, cap
+    10 min, 12 attempts ≈ 1 h), then HITL-recoverable. Rate-limit refusals wait but never
+    count against the 12."""
+    import random
+
+    rng = rng or random.random
+    attempts = 0
+    delay = BACKOFF["base_s"]
+    while True:
+        try:
+            return try_acquire()
+        except RateLimited:
+            sleep(BACKOFF["base_s"] * rng())
+            continue
+        except LeaseHeld:
+            attempts += 1
+            if attempts >= BACKOFF["max_attempts"]:
+                raise BudgetExhausted("HITL-recoverable: lease_acquire_budget_exhausted") from None
+            sleep(min(BACKOFF["cap_s"], delay) * rng())
+            delay = min(BACKOFF["cap_s"], delay * BACKOFF["factor"])
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI. Exit codes: 0 released / nothing to land; 3 blocked (HITL); 4 door failed
+    (re-gate); 5 budget exhausted."""
+    p = argparse.ArgumentParser(prog="merge_door", description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    landp = sub.add_parser("land")
+    landp.add_argument("pr", type=int)
+    landp.add_argument("--lane-id", required=True)
+    landp.add_argument("--arc-id", required=True)
+    landp.add_argument("--no-refresh", action="store_true")
+    landp.add_argument("--refresh-cmd", help="command printing JSON {pr, head_sha}")
+    ub = sub.add_parser("unblock")
+    ub.add_argument("pr", type=int)
+    ub.add_argument("blocked_at_sha")
+    ub.add_argument("--lane-id", required=True)
+    sub.add_parser("status")
+    sub.add_parser("gc")
+    args = p.parse_args(argv)
+    try:
+        if args.cmd == "land":
+            ground = default_ground()
+            refresh = None
+            if args.refresh_cmd and not args.no_refresh:
+
+                def refresh():
+                    out = subprocess.run(
+                        ["bash", "-c", args.refresh_cmd],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        timeout=3600,
+                    ).stdout
+                    d = json.loads(out)
+                    return int(d["pr"]), d["head_sha"]
+
+            lease = None
+            live = read_lease()
+            if live is not None:
+                same_lane = (
+                    live.get("lane_id") == args.lane_id and int(live.get("pr", -1)) == args.pr
+                )
+                holder_dead = live.get("host") == socket.gethostname() and not _process_is_alive(
+                    int(live["pid"])
+                )
+                if same_lane and holder_dead and live.get("state") != "blocked":
+                    lease = reclaim(
+                        live,
+                        lane_id=args.lane_id,
+                        ground_state=reconcile_ground(live, ground),
+                    )  # self-resume via the marker discipline
+            else:
+                cur = rs.current(args.arc_id)
+                if cur is not None and cur[1]["state"] == "merged":
+                    print("nothing to land: no lease and the reservation is already merged")
+                    return 0
+            out = land(
+                args.pr,
+                lane_id=args.lane_id,
+                arc_id=args.arc_id,
+                ground=ground,
+                refresh=refresh,
+                lease=lease,
+            )
+            print(out)
+            return 0
+        elif args.cmd == "unblock":
+            unblock(pr=args.pr, blocked_at_sha=args.blocked_at_sha, lane_id=args.lane_id)
+            print("unblocked; successor lease held by this lane")
+            return 0
+        elif args.cmd == "status":
+            print(json.dumps(read_lease(), sort_keys=True))
+            return 0
+        else:
+            print(json.dumps([str(x) for x in gc()]))
+            return 0
+    except DoorBlocked as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return 3
+    except BudgetExhausted as exc:
+        print(f"BUDGET: {exc}", file=sys.stderr)
+        return 5
+    except LeaseError as exc:
+        print(f"DOOR: {exc}", file=sys.stderr)
+        return 4
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

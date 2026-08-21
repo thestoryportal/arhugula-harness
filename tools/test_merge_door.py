@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -236,11 +237,11 @@ def test_mark_attempted_is_crash_safe_sidecar(door):
 
 def test_blocked_and_unblock_through_marker(door):
     lease = _acq()
-    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
     assert md.read_lease()["state"] == "blocked"
     with pytest.raises(md.LeaseError):
         md.unblock(pr=1, blocked_at_sha="x" * 40, lane_id="A")  # keyed to blocked_at_sha
-    fresh = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+    fresh = md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="A")
     # r3 P1: unblock mints a REPLACEMENT lease (the door typically blocks mid-continuation,
     # when the reservation reads `merged` and acquire() would refuse a re-acquire).
     view = md.read_lease()
@@ -275,11 +276,11 @@ def test_reclaim_requires_the_door_current_lease(door):
 def test_reclaim_refuses_blocked_lease(door):
     """A blocked door resumes ONLY through the operator-keyed unblock (r1 P1)."""
     lease = _acq(lane="A")
-    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
     _kill_holder()
     with pytest.raises(md.DoorBlocked):
         md.reclaim(lease, lane_id="A", ground_state="OPEN")
-    successor = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")  # the sanctioned path
+    successor = md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="A")  # the sanctioned path
     assert md.read_lease()["lease_token"] == successor["lease_token"]
 
 
@@ -353,10 +354,10 @@ def test_release_refuses_blocked_and_stale(door):
     """release() adjudicates from the persisted lease (r2 P1): a blocked door releases
     only through unblock, and a stale dict must never move ANOTHER lane's lease aside."""
     lease = _acq(lane="A")
-    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
     with pytest.raises(md.DoorBlocked):
         md.release(lease)  # caller's dict still says held; persisted view says blocked
-    successor = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+    successor = md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="A")
     md.release(successor)  # door free again
     # Door cycles to another lane; the old dict must not release the new holder's lease.
     _open_backfilled("pr-9", "C", 9)
@@ -385,9 +386,9 @@ def test_unblock_resumes_continuation(door):
     empty door that acquire() can no longer pass (r3 P1)."""
     lease = _acq(lane="A")
     md.mark_attempted(lease)
-    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
     rs.transition("pr-1", "merged", lane_id="A")  # the §4(vi) flip already happened
-    fresh = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+    fresh = md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="A")
     view = md.read_lease()
     assert view["lease_token"] == fresh["lease_token"]
     assert view["state"] == "held"
@@ -501,8 +502,8 @@ def test_unblock_accepts_refresh_pr(door):
     from arc_metrics import publish_exclusive
 
     publish_exclusive(md._sidecar(lease["lease_token"], "refresh"), json.dumps({"pr": 999}))
-    md.mark_blocked(lease, sha="m" * 40, reason="refresh_ci_not_green")
-    successor = md.unblock(pr=999, blocked_at_sha="m" * 40, lane_id="A")
+    md.mark_blocked(lease, sha="c" * 40, reason="refresh_ci_not_green")
+    successor = md.unblock(pr=999, blocked_at_sha="c" * 40, lane_id="A")
     assert md.read_lease()["lease_token"] == successor["lease_token"]
     assert successor["refresh"]["pr"] == 999  # continuation carried to the successor
 
@@ -759,11 +760,11 @@ def test_unblock_refuses_terminated_reservation(door):
     """A blocked arc abandoned/superseded meanwhile must not regain merge authority
     through unblock — same terminal refusal as reclaim (r5 P2)."""
     lease = _acq(lane="A")
-    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
     rs.reserve("pr-99", lane_id="A", branch="b", arc_type="inventing")
     rs.transition("pr-1", "abandoned", lane_id="A", superseded_by="pr-99")
     with pytest.raises(md.LeaseError, match="terminated"):
-        md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
+        md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="A")
 
 
 # mutation-probe: drop gc()'s symlinked-DOOR refusal (history deleted through the link)
@@ -852,3 +853,398 @@ def test_refused_attempt_is_recorded(door):
         _acq(lane="A", now=10.0)
     files = [p for p in (md.DOOR / "attempts" / "A").iterdir() if not p.name.startswith(".")]
     assert len(files) == 6  # the refusal recorded its attempt too
+
+
+# ══ U-HE-23: landing driver — second half ═══════════════════════════════════════════════
+
+TOOLS = Path(__file__).resolve().parent
+
+
+class FakeGround:
+    """In-memory gh/git with a call log; `merge_calls` is THE mutation-probe surface for
+    'never re-issue after MERGED'. As-built vs the plan sketch: state is PER-PR (the
+    sketch's single shared dict made gh_view(1) report the refresh PR's state after the
+    continuation began, breaking every resume assertion)."""
+
+    def __init__(self, *, head="a" * 40, base="b" * 40, tree="d" * 40, ci="success"):
+        self.states = {
+            1: {
+                "state": "OPEN",
+                "headRefOid": head,
+                "baseRefOid": base,
+                "mergedAt": None,
+                "mergeCommit": None,
+            }
+        }
+        self.tree, self.ci, self.merge_calls, self.t = tree, ci, [], 0.0
+
+    def gh_view(self, pr):
+        return dict(self.states[pr])
+
+    def gh_merge(self, pr, head, timeout):
+        self.merge_calls.append((pr, head))
+        self.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    def gh_runs_for_sha(self, sha):
+        return [{"status": "completed", "conclusion": self.ci, "event": "push"}]
+
+    def gh_main_runs_in_progress(self):
+        return 1
+
+    def git_merge_tree(self, base, head):
+        return self.tree
+
+    def git_first_parent(self, sha):
+        return self.states[1]["baseRefOid"]
+
+    def clock(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+    def codex_worktree_present(self):
+        return False
+
+    def add_refresh_pr(self):
+        self.states[2] = {
+            "state": "OPEN",
+            "headRefOid": "r" * 40,
+            "baseRefOid": "c" * 40,
+            "mergedAt": None,
+            "mergeCommit": None,
+        }
+        return 2, "r" * 40
+
+
+def _land(door, g, **kw):
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    return md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=kw.pop("refresh", None), **kw)
+
+
+def test_happy_path_lands_holds_through_ci_and_releases(door):
+    g = FakeGround()
+    assert _land(door, g) == "released"
+    assert g.merge_calls == [(1, "a" * 40)]
+    assert rs.current("pr-1")[1]["state"] == "merged"
+    assert md.read_lease() is None
+
+
+def test_local_base_cas_check_fails_door_on_tree_mismatch(door):
+    g = FakeGround(tree="x" * 40)
+    with pytest.raises(md.DoorFailed, match="attested"):
+        _land(door, g)
+    assert g.merge_calls == []
+    assert md.read_lease() is None  # released via §6, re-gate
+
+
+def test_head_base_mismatch_releases_and_regates(door):
+    g = FakeGround(head="e" * 40)
+    with pytest.raises(md.DoorFailed, match="head/base"):
+        _land(door, g)
+    assert md.read_lease() is None
+
+
+# mutation-probe: drop reconcile_ground()'s MERGED return (blind re-issue after MERGED)
+def test_timeout_reconcile_merged_calls_once(door):
+    """gh pr merge hangs past 120 s but the server landed it: ground truth MERGED ->
+    call log stays 1 (the C-HE-06 Invariant)."""
+    g = FakeGround()
+
+    def merge_hang(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        g.t += timeout + 1
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    g.gh_merge = merge_hang
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 1  # never re-issued after MERGED
+
+
+def test_timeout_reconcile_open_reissues_exactly_once(door):
+    g = FakeGround()
+    n = {"k": 0}
+
+    def merge_first_hangs(pr, head, timeout):
+        n["k"] += 1
+        g.merge_calls.append((pr, head))
+        if n["k"] == 1:
+            g.t += timeout + 1
+            raise subprocess.TimeoutExpired("gh", timeout)
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    g.gh_merge = merge_first_hangs
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 2
+
+
+# mutation-probe: decide the post-attempt handler from the caller dict instead of read_lease()
+def test_failure_after_attempt_blocks_never_releases(door):
+    """Both merge attempts time out and ground truth stays OPEN → reissue exhausted AFTER
+    the attempted marker: the door must BLOCK (HITL), not release (Codex round-2 P1)."""
+    g = FakeGround()
+
+    def always_hang(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.t += timeout + 1
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    g.gh_merge = always_hang
+    with pytest.raises(md.DoorBlocked, match="merge_reissue_exhausted"):
+        _land(door, g)
+    lease = md.read_lease()
+    assert lease is not None and lease["state"] == "blocked"
+    assert len(g.merge_calls) == 2
+
+
+def test_inflight_first_attempt_then_reissue(door):
+    """T6: a delayed first landing -- exactly one MERGED outcome; nothing proceeds past
+    (v) on an error path."""
+    g = FakeGround()
+
+    def delayed(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.t += timeout + 1
+        # the server lands it a moment AFTER our timeout fires:
+        g.states[pr].update(state="MERGED", mergedAt="later", mergeCommit={"oid": "c" * 40})
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    g.gh_merge = delayed
+    assert _land(door, g) == "released"
+    assert len(g.merge_calls) == 1
+
+
+# mutation-probe: make wait_post_merge_ci treat any completed conclusion as green
+def test_post_merge_ci_blocked_and_unblock(door):
+    """CANCELLED blocks the door (C-HE-19 §2 ci_is_green)."""
+    g = FakeGround(ci="cancelled")
+    with pytest.raises(md.DoorBlocked):
+        _land(door, g)
+    lease = md.read_lease()
+    assert lease["state"] == "blocked"
+    assert lease["blocked_reason"] == "post_merge_ci_not_green"
+    md.unblock(pr=1, blocked_at_sha=lease["blocked_at_sha"], lane_id="A")
+    assert md.read_lease() is not None  # unblock mints the continuation successor (r3 P1)
+
+
+# mutation-probe: drop the mark_blocked/raise after the first-parent mismatch (emit-only)
+def test_base_toctou_blocks_door(door):
+    g = FakeGround()
+    g.git_first_parent = lambda sha: "e" * 40  # landed on a base other than the verified one
+    with pytest.raises(md.DoorBlocked, match="base_toctou"):
+        _land(door, g)
+    lease = md.read_lease()
+    assert lease["state"] == "blocked"
+    assert lease["blocked_reason"] == "base_toctou_first_parent_mismatch"
+    assert rs.current("pr-1")[1]["state"] == "merged"  # the fact recorded; the DOOR blocks
+
+
+def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    calls = {"n": 0}
+
+    def runs(sha):
+        calls["n"] += 1
+        # main run green, refresh run red
+        concl = "success" if calls["n"] == 1 else "failure"
+        return [{"status": "completed", "conclusion": concl, "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert md.read_lease()["blocked_reason"] == "refresh_ci_not_green"
+    assert (
+        "DEFERRED-HIL",
+        "merge-door-post-merge-ci:HITL-recoverable:refresh_ci_not_green",
+    ) in rows
+
+
+# mutation-probe: force a second acquire() call before the refresh PR merge
+def test_continuation_no_reacquire(door, monkeypatch):
+    g = FakeGround()
+    acquires = []
+    real = md.acquire
+    monkeypatch.setattr(md, "acquire", lambda **kw: (acquires.append(1), real(**kw))[1])
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr) == "released"
+    assert acquires == [1]
+    assert [c[0] for c in g.merge_calls] == [1, 2]
+
+
+# mutation-probe: drop the `recorded is not None` branch (always call refresh())
+def test_resume_uses_recorded_refresh_never_a_second_pr(door, monkeypatch):
+    g = FakeGround()
+    calls = []
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+
+    def refresh():
+        calls.append(1)
+        return g.add_refresh_pr()
+
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(
+        md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code))
+    )  # in-process stand-in for the kill
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    lease = md.read_lease()
+    assert lease["refresh"] == {
+        "pr": 2,
+        "head_sha": "r" * 40,
+        "merge_attempted_at": lease["refresh"]["merge_attempted_at"],
+    }
+    assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=lease) == (
+        "released"
+    )
+    assert calls == [1]  # refresh() called ONCE across crash + resume
+
+
+def test_wait_for_door_backoff_numbers_and_budget(door):
+    t = {"now": 0.0}
+    sleeps = []
+
+    def try_acquire():
+        raise md.LeaseHeld("held")
+
+    with pytest.raises(md.BudgetExhausted, match="lease_acquire_budget_exhausted"):
+        md.wait_for_door(
+            try_acquire,
+            clock=lambda: t["now"],
+            sleep=lambda s: (sleeps.append(s), t.__setitem__("now", t["now"] + s)),
+            rng=lambda: 1.0,
+        )
+    assert len(sleeps) == 11
+    assert sleeps[0] == 30.0 and sleeps[1] == 60.0 and max(sleeps) == 600.0
+    # rate-limit refusals wait but never count against the 12
+    k = {"n": 0}
+
+    def rl():
+        k["n"] += 1
+        if k["n"] <= 3:
+            raise md.RateLimited("rate")
+        raise md.LeaseHeld("held")
+
+    sleeps.clear()
+    with pytest.raises(md.BudgetExhausted):
+        md.wait_for_door(
+            rl, clock=lambda: t["now"], sleep=lambda s: sleeps.append(s), rng=lambda: 1.0
+        )
+    assert len(sleeps) == 11 + 3
+
+
+def _fake_gh(bindir: Path, state: Path, log: Path, tree: str) -> None:
+    """A `gh` + `git` shim on PATH: pr view answers from state.json; pr merge appends to
+    merge-calls.log and flips state.json to MERGED; run list reports success; git
+    merge-tree returns the attested tree; other git calls pass through."""
+    (bindir / "gh").write_text(
+        f"""#!/usr/bin/env bash
+case "$*" in
+  *"pr view"*) cat "{state}" ;;
+  *"pr merge"*) echo "$*" >> "{log}"; python3 - <<'PY2'
+import json
+p = "{state}"
+s = json.load(open(p))
+s.update(state="MERGED", mergedAt="now", mergeCommit={{"oid": "c" * 40}})
+json.dump(s, open(p, "w"))
+PY2
+  ;;
+  *"run list"*"--commit"*)
+    echo '[{{"status":"completed","conclusion":"success","event":"push"}}]' ;;
+  *"run list"*) echo '[]' ;;
+  *) echo "fake gh: unhandled $*" >&2; exit 1 ;;
+esac
+"""
+    )
+    (bindir / "git").write_text(
+        f"""#!/usr/bin/env bash
+if [ "$1" = "-C" ]; then shift 2; fi
+case "$1 $2" in
+  "merge-tree --write-tree") echo "{tree}" ;;
+  "rev-parse "*) echo "{"b" * 40}" ;;
+  "worktree list") echo "worktree /x" ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+"""
+    )
+    for f in ("gh", "git"):
+        (bindir / f).chmod(0o755)
+
+
+def _land_cmd() -> list[str]:
+    return [
+        sys.executable,
+        str(TOOLS / "merge_door.py"),
+        "land",
+        "1",
+        "--lane-id",
+        "A",
+        "--arc-id",
+        "pr-1",
+        "--no-refresh",
+    ]
+
+
+@pytest.mark.parametrize(
+    "kill,expect_merge_calls,resume_state",
+    [
+        ("attempted", 1, "released"),
+        ("confirm", 1, "released"),
+        ("reservation-merged", 1, "released"),
+        ("release", 1, "no-lease"),
+    ],
+)
+def test_ac2_c_crash_resume(door, tmp_path, monkeypatch, kill, expect_merge_calls, resume_state):
+    """AC#2(c): a REAL subprocess killed at the named step (os._exit 137), then resumed;
+    the merge is issued at most once across crash + resume."""
+    q = door
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    state = tmp_path / "state.json"
+    log = tmp_path / "merge-calls.log"
+    state.write_text(
+        json.dumps(
+            {
+                "state": "OPEN",
+                "headRefOid": "a" * 40,
+                "baseRefOid": "b" * 40,
+                "mergedAt": None,
+                "mergeCommit": None,
+            }
+        )
+    )
+    _fake_gh(bindir, state, log, "d" * 40)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "ARC_METRICS_QUEUE_DIR": str(q),
+        "PYTHONPATH": str(TOOLS),
+        "HARNESS_LANE_ID": "A",
+    }
+    p1 = subprocess.run(
+        _land_cmd(),
+        env={**env, "MERGE_DOOR_TEST_KILL_AFTER": kill},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert p1.returncode == 137, p1.stderr
+    if kill == "reservation-merged":
+        assert md.read_lease() is not None
+        assert rs.current("pr-1")[1]["state"] == "merged"
+    p2 = subprocess.run(_land_cmd(), env=env, capture_output=True, text=True, timeout=120)
+    assert p2.returncode == 0, p2.stderr
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert len(calls) == expect_merge_calls, calls
+    if resume_state == "released":
+        assert md.read_lease() is None
+        assert any(md.DOOR.glob("released.*"))
+    else:
+        assert "nothing to land" in (p2.stdout + p2.stderr)
