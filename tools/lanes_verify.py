@@ -141,6 +141,35 @@ MANIFEST: list[Row] = [
         "local + CI",
         False,
     ),
+    # C-HE-06 (U-HE-22): merge-door lease primitive — acquire/holder/rate/marker
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_lease_holder_invariant",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_contention_fail_fast",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_marker_race_exactly_one_wins",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_rate_limit_sixth_refused",
+        "phase0",
+        "local + CI",
+        True,
+    ),
     # C-HE-09/10 (U-HE-09)
     Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True),
     # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)
