@@ -191,6 +191,46 @@ done
 # DENY-row audit of the raw-merge denial flows through emit_deny → loop_log DENY; its
 # observable venue (loop_status.md row) lands with U-HE-29 — no assertion here until then
 # (codex r2 P3: a `grep || true` pseudo-assertion would be unconditionally green).
+
+# C-HE-07 hermetic EXECUTION witness for safe-merge.sh (codex r3 P2): the wrapper itself is
+# run — arity/digit validation, env preconditions abort BEFORE delegation, and the exact
+# merge_door.py land delegation (arg-boundary-exact via a stubbed `uv` on PATH; the
+# --refresh-cmd value must arrive as ONE argument). No real merge/door/gh is reachable.
+SMWRAP="$SCRIPT_DIR/safe-merge.sh"
+SMDIR="$REPO/sm"; mkdir -p "$SMDIR/bin"; ( cd "$SMDIR" && git init -q . )
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" > "$SM_ARGS_OUT"' > "$SMDIR/bin/uv"
+chmod +x "$SMDIR/bin/uv"
+( cd "$SMDIR" && bash "$SMWRAP" ) >/dev/null 2>&1
+[ $? -eq 64 ] && ok "safe-merge: no arg → exit 64" || bad "safe-merge no-arg rc wrong"
+( cd "$SMDIR" && bash "$SMWRAP" abc ) >/dev/null 2>&1
+[ $? -eq 64 ] && ok "safe-merge: non-digit pr → exit 64" || bad "safe-merge non-digit rc wrong"
+( cd "$SMDIR" && bash "$SMWRAP" 268 --squash ) >/dev/null 2>&1
+[ $? -eq 64 ] && ok "safe-merge: extra flag → exit 64" || bad "safe-merge extra-flag rc wrong"
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" PATH="$SMDIR/bin:$PATH" \
+  env -u HARNESS_LANE_ID HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+if [ $? -ne 0 ] && [ ! -f "$SMDIR/args" ]; then
+  ok "safe-merge: missing HARNESS_LANE_ID aborts pre-delegation"
+else
+  bad "safe-merge ran without lane id (args file: $(cat "$SMDIR/args" 2>/dev/null))"
+fi
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" PATH="$SMDIR/bin:$PATH" \
+  HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+SM_EXPECT='run
+python
+tools/merge_door.py
+land
+268
+--lane-id
+lane-1
+--arc-id
+u-he-25
+--refresh-cmd
+uv run python tools/roadmap_status_refresh.py --emit-refresh-pr-json'
+if [ "$(cat "$SMDIR/args" 2>/dev/null)" = "$SM_EXPECT" ]; then
+  ok "safe-merge: delegates the exact merge_door land invocation"
+else
+  bad "safe-merge delegation drifted: $(cat "$SMDIR/args" 2>/dev/null | tr '\n' ' ')"
+fi
 OUT=$(run_on "$(pl Bash 'gh run view 5' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh run view → allow" || bad "gh run view not allowed: $OUT"
 for c in "gh pr close 123 --delete-branch" "gh run cancel 5" "gh api repos/o/r --raw-field x=y" "gh pr edit 1 --title z"; do
