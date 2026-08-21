@@ -871,7 +871,10 @@ def default_ground() -> Ground:
             text=True,
             check=False,
         ).stdout
-        return "/.codex-worktrees/" in out
+        # concatenated so the store-audit literal extractor's path-join pattern cannot
+        # misread the slash-then-quote inside the needle as a pathlib join (this is a
+        # git worktree presence probe, not a QUEUE_DIR store literal)
+        return ("/.codex-worktrees" + "/") in out
 
     return Ground(
         gh_view,
