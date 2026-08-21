@@ -104,6 +104,9 @@ grep -q 'reservations.py update --arc-id .* --set pr=' "$SP" \
   && ok "ship-pr back-fills pr/head_sha/base_sha at PR creation" || bad "no pr back-fill in ship-pr"
 grep -q 'attested_merge_tree=' "$SP" \
   && ok "ship-pr records attested_merge_tree at final gate" || bad "no attested_merge_tree in ship-pr"
+grep -q 'reservations.py transition --arc-id <arc-id> --to open' "$SP" \
+  && ok "ship-pr performs the pending→open flip pre-acquire (v1.4 X4a, U-HE-22)" \
+  || bad "no pending→open flip in ship-pr final gate"
 
 # --- session-start: C-HE-03 §5 ground-truth reconcile pass (landed U-HE-18; pinned here) ---
 grep -q 'reservations.py reconcile-all' "$SS" \

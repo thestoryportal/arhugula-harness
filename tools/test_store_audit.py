@@ -31,12 +31,12 @@ LANDED = [
     "tools/arc_metrics.py",
     "tools/hooks/loop_lib.sh",
     "tools/lanes_verify.py",  # C-HE-31 §4d evaluator site; reads the probe log today
+    "tools/merge_door.py",  # U-HE-22
     "tools/reservations.py",  # U-HE-17
 ]
 #: Planned store creators -- skipped until they land; the landing unit (U-HE-17 / U-HE-22 /
 #: U-HE-31 lane-init) MUST move its module into LANDED in the same change.
 PENDING = [
-    "tools/merge_door.py",
     "tools/hooks/lane-init.sh",
     "tools/mechanized_checks/__init__.py",  # STATE_PATH home (U-HE-40)
     "tools/mechanized_checks/runner.py",
