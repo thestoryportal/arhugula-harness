@@ -503,3 +503,11 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-21T01:43:28Z | #1412 | 90101dd35314 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | 2026-08-21T01:45:28Z | #1412 | 90101dd35314 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | #1412 | 2026-08-20 | feat/he-lanes-s4b-u-he-21 | concurrency: APPROVE / spec-conformance: APPROVE / witness-adequacy: APPROVE | MERGE (gate r2 delta re-gate at 90101dd3: delta = gate rows + 2 probe re-pins only, claims verified, coverage 0) | blast-radius: delta-only (log rows + probe evidence) |
+| 2026-08-21T05:55:56Z | #1413 | 4b9f8008ef9e | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+| 2026-08-21T05:55:56Z | #1413 | 4b9f8008ef9e | merge-gate-concurrency | BLOCK | 2 finding(s) | r1 |
+| 2026-08-21T05:56:05Z | #1413 | 4b9f8008ef9e | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r2 |
+| 2026-08-21T05:57:20Z | #1413 | 4b9f8008ef9e | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-21T06:01:57Z | #1413 | 679f3594118d | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-08-21T06:03:26Z | #1413 | 679f3594118d | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-21T06:08:49Z | #1413 | 679f3594118d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| #1413 | 2026-08-21 | feat/he-lanes-s4c-u-he-22 | concurrency: APPROVE / spec-conformance: APPROVE / witness-adequacy: APPROVE | MERGE (gate r1 at 4b9f8008: concurrency BLOCK P2 rename→utime stale-mtime GC window + P3 blocked-CAS registered to U-HE-23, witness BLOCK P2 cross-host branch unwitnessed, spec APPROVE → both fixed; r2 at 679f3594: 3x APPROVE, witness lens empirically mutation-checked all four host sites, concurrency lens walked the original interleaving structurally-closed; 10 codex rounds to register-and-hold terminal pre-gate) | blast-radius: no production callers yet (land() is U-HE-23); test suite + parity list + lanes_verify manifest + store-audit LANDED + ship-pr carrier prose |
