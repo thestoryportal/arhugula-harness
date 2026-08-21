@@ -124,8 +124,27 @@ def read_lease() -> dict | None:
     return lease
 
 
+def _check_lane_id(lane_id: str) -> None:
+    """Containment: lane_id becomes a path component of the attempts store. An absolute or
+    traversing value would make pathlib discard DOOR entirely (codex U-HE-22 r1 P2)."""
+    if (
+        not lane_id
+        or lane_id != Path(lane_id).name
+        or lane_id in (".", "..")
+        or lane_id.startswith(".")
+        or ":" in lane_id
+    ):
+        raise LeaseError(f"bad lane_id {lane_id!r}: must be a single safe path component")
+
+
 def _rate_check(lane_id: str, now: float) -> None:
-    """K acquire attempts per lane per 60 s. Refusals never touch the caller's §8 budget."""
+    """K acquire attempts per lane per 60 s. Record-then-count: the caller's own attempt is
+    published FIRST (exclusive create), then the window is counted including it, so a burst
+    of concurrent callers cannot all under-count a not-yet-recorded peer (codex U-HE-22 r1
+    P2). The limiter bounds sustained rates — single-writer safety never depends on it (the
+    LEASE exclusive create is the fence); refusals never touch the caller's §8 budget, and a
+    refused attempt IS recorded (it was an attempt)."""
+    _check_lane_id(lane_id)
     d = DOOR / "attempts" / lane_id
     d.mkdir(parents=True, exist_ok=True)
 
@@ -136,21 +155,21 @@ def _rate_check(lane_id: str, now: float) -> None:
             # `.<ts>.<pid>.tmp` remnants of a crashed publish_exclusive: not attempts
             return None
 
-    recent = [p for p in d.iterdir() if (_ts(p) is not None and now - _ts(p) <= RATE_WINDOW_S)]
-    for junk in d.glob(".*.tmp"):
-        if now - junk.stat().st_mtime > 3600:
-            junk.unlink(missing_ok=True)
-    if len(recent) >= RATE_K:
-        raise RateLimited(
-            f"{lane_id}: > {RATE_K} lease acquire attempts in {RATE_WINDOW_S}s "
-            "(cause_attribution: lease_acquire_rate_exceeded)"
-        )
     for _ in range(8):
         try:
             publish_exclusive(d / f"{now:.6f}", "")
             break
         except FileExistsError:
             now += 1e-6
+    recent = [p for p in d.iterdir() if (_ts(p) is not None and now - _ts(p) <= RATE_WINDOW_S)]
+    for junk in d.glob(".*.tmp"):
+        if now - junk.stat().st_mtime > 3600:
+            junk.unlink(missing_ok=True)
+    if len(recent) > RATE_K:
+        raise RateLimited(
+            f"{lane_id}: > {RATE_K} lease acquire attempts in {RATE_WINDOW_S}s "
+            "(cause_attribution: lease_acquire_rate_exceeded)"
+        )
 
 
 def acquire(
@@ -270,7 +289,24 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
     token's marker -- whose payload carries the FRESH lease so a crashed reclaimer can be
     completed idempotently by a third party -- moves LEASE aside, publishes the fresh LEASE
     (new token). Transfers merge-driving authority for `pr` -- never reservation ownership."""
-    if lease["host"] != socket.gethostname() or _process_is_alive(int(lease["pid"])):
+    # Deadness and state are adjudicated from the PERSISTED lease, never the caller's dict —
+    # a copied dict with a substituted pid must not displace a live holder (codex U-HE-22
+    # r1 P1). The caller's dict only NAMES the lease it claims; the door's current LEASE is
+    # the evidence.
+    persisted = read_lease()
+    if persisted is None or persisted["lease_token"] != lease["lease_token"]:
+        raise LeaseError(
+            "stale reclaim: the door does not currently hold that lease "
+            f"(door: {persisted and persisted['lease_token']!r})"
+        )
+    if persisted.get("state") == "blocked":
+        # A blocked door resumes ONLY through the operator-confirmed, blocked_at_sha-keyed
+        # unblock (C-HE-06 §6) — generic self-resume must not bypass it (codex U-HE-22 r1 P1).
+        raise DoorBlocked(
+            f"lease is blocked at {persisted.get('blocked_at_sha')!r} "
+            f"({persisted.get('blocked_reason')!r}); use unblock, not reclaim"
+        )
+    if persisted["host"] != socket.gethostname() or _process_is_alive(int(persisted["pid"])):
         raise LeaseError(
             "holder is live or unverifiable; not reclaimable "
             "(self-resume requires the old pid to be dead)"
@@ -278,7 +314,7 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
     if ground_state not in ("MERGED", "OPEN"):
         raise LeaseError(f"reclaim requires ground truth MERGED|OPEN, got {ground_state!r}")
     fresh = {
-        **lease,
+        **persisted,
         "lease_token": secrets.token_hex(16),
         "lane_id": lane_id,
         "acquired_at": _now_iso(),
@@ -288,7 +324,10 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
         "blocked_at_sha": None,
         "blocked_reason": None,
     }
-    fresh.pop("refresh", None)
+    # The refresh continuation SURVIVES self-resume (codex U-HE-22 r1 P1: dropping it lets
+    # the landing driver re-create the refresh instead of reconciling the recorded attempt);
+    # `_publish_fresh` republishes it as sidecars under the new token. Transient view keys
+    # that read_lease() merged in are stripped from the base payload there.
     if win_marker(lease["lease_token"], "reclaim", extra={"fresh_lease": fresh}) is None:
         raise MarkerLost("reclaim marker already taken")
     _move_lease(lease["lease_token"], "reclaimed")
@@ -307,9 +346,13 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
 
 def _publish_fresh(fresh: dict) -> None:
     """Idempotent: a twin (or a third party completing our marker) may already have published
-    this exact token."""
+    this exact token. `fresh` may be a merged read_lease() view: transient view keys are
+    stripped from the base LEASE payload and republished as sidecars under the new token
+    (attempted; the refresh continuation + its own attempted — codex U-HE-22 r1 P1)."""
+    ref = fresh.get("refresh")
+    payload = {k: v for k, v in fresh.items() if k not in ("refresh", "blocked_at")}
     try:
-        publish_exclusive(LEASE, json.dumps(fresh, sort_keys=True))
+        publish_exclusive(LEASE, json.dumps(payload, sort_keys=True))
     except FileExistsError:
         pass
     if fresh.get("merge_attempted_at"):
@@ -320,6 +363,24 @@ def _publish_fresh(fresh: dict) -> None:
             )
         except FileExistsError:
             pass
+    if ref:
+        try:
+            publish_exclusive(
+                _sidecar(fresh["lease_token"], "refresh"),
+                json.dumps(
+                    {k: v for k, v in ref.items() if k != "merge_attempted_at"}, sort_keys=True
+                ),
+            )
+        except FileExistsError:
+            pass
+        if ref.get("merge_attempted_at"):
+            try:
+                publish_exclusive(
+                    _sidecar(fresh["lease_token"], "refresh.attempted"),
+                    json.dumps({"merge_attempted_at": ref["merge_attempted_at"]}),
+                )
+            except FileExistsError:
+                pass
 
 
 def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> None:
@@ -356,7 +417,16 @@ def complete_dead_marker(marker: Path) -> bool:
     if action == "reclaim" and "fresh_lease" in m:
         # The reclaimer may have died AFTER moving the old lease and BEFORE publishing the
         # fresh one: finish it. `_publish_fresh` is idempotent (FileExistsError = the fresh
-        # token, or a later acquirer, already holds the door).
+        # token, or a later acquirer, already holds the door). Ground-truth gate (codex
+        # U-HE-22 r1 P1): a stale marker surviving a full foreign acquire→release cycle must
+        # not resurrect authority for an arc that has moved on — publish only while the
+        # fresh lease's reservation still reads `open` (the C-HE-03 authority; a landed or
+        # abandoned arc refuses). The narrower stale-head window that remains (reservation
+        # still open, door cycled) is bounded by the land driver's own step-(ii) head/base
+        # re-verification (U-HE-23), which releases a stale resurrected lease.
+        res = rs.current(m["fresh_lease"]["reservation_id"])
+        if res is None or res[1]["state"] != "open":
+            return done
         before = read_lease()
         _publish_fresh(m["fresh_lease"])
         after = read_lease()

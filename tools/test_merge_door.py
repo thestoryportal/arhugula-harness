@@ -124,13 +124,22 @@ def test_release_then_history_file(door):
     assert (md.DOOR / f"released.{lease['lease_token']}").exists()
 
 
+def _kill_holder():
+    """Test-side crash simulation: rewrite the persisted LEASE with a provably-dead pid.
+    (Production never mutates LEASE in place; reclaim adjudicates from this persisted
+    record, so simulating a dead holder means changing the record, not the caller dict.)"""
+    body = json.loads(md.LEASE.read_text())
+    body["pid"] = 999999
+    md.LEASE.write_text(json.dumps(body, sort_keys=True))
+
+
 def test_reclaim_two_step_and_transfers_merge_authority_only(door):
     lease = _acq(lane="A")
     with pytest.raises(md.LeaseError, match="live"):
         # same lane, holder pid ALIVE → refused (round-2 P1)
         md.reclaim(lease, lane_id="A", ground_state="OPEN")
-    dead = {**lease, "pid": 999999}
-    new = md.reclaim(dead, lane_id="B", ground_state="OPEN")
+    _kill_holder()
+    new = md.reclaim(lease, lane_id="B", ground_state="OPEN")
     assert new["lease_token"] != lease["lease_token"]
     assert new["lane_id"] == "B"
     assert new["pr"] == 1
@@ -141,7 +150,7 @@ def test_reclaim_two_step_and_transfers_merge_authority_only(door):
 # mutation-probe: drop reclaim()'s post-publish token re-check (a foreign lease is adopted)
 def test_reclaim_never_adopts_a_foreign_lease(door, monkeypatch):
     lease = _acq(lane="A")
-    dead = {**lease, "pid": 999999}
+    _kill_holder()
     real_publish = md._publish_fresh
 
     def sneak_in(fresh):
@@ -153,7 +162,7 @@ def test_reclaim_never_adopts_a_foreign_lease(door, monkeypatch):
 
     monkeypatch.setattr(md, "_publish_fresh", sneak_in)
     with pytest.raises(md.LeaseError, match="lost the door"):
-        md.reclaim(dead, lane_id="B", ground_state="OPEN")
+        md.reclaim(lease, lane_id="B", ground_state="OPEN")
     assert md.read_lease()["lane_id"] == "C"  # the foreign lease is untouched; nothing drove pr 1
 
 
@@ -215,3 +224,98 @@ def test_blocked_and_unblock_through_marker(door):
         md.unblock(pr=1, blocked_at_sha="x" * 40, lane_id="A")  # keyed to blocked_at_sha
     md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
     assert md.read_lease() is None
+
+
+# ── codex U-HE-22 r1 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop reclaim()'s persisted-lease deadness check (a forged dict displaces)
+def test_forged_caller_dict_cannot_displace_live_holder(door):
+    """Deadness comes from the PERSISTED lease: a caller copying the lease dict and
+    substituting a dead pid must NOT reclaim while the real holder is driving (r1 P1)."""
+    lease = _acq(lane="A")
+    forged = {**lease, "pid": 999999}
+    with pytest.raises(md.LeaseError, match="live"):
+        md.reclaim(forged, lane_id="B", ground_state="OPEN")
+    assert md.read_lease()["lease_token"] == lease["lease_token"]  # holder undisturbed
+
+
+def test_reclaim_requires_the_door_current_lease(door):
+    lease = _acq(lane="A")
+    md.release(lease)
+    with pytest.raises(md.LeaseError, match="stale reclaim"):
+        md.reclaim(lease, lane_id="B", ground_state="OPEN")  # door no longer holds it
+
+
+# mutation-probe: drop reclaim()'s DoorBlocked refusal (self-resume bypasses unblock)
+def test_reclaim_refuses_blocked_lease(door):
+    """A blocked door resumes ONLY through the operator-keyed unblock (r1 P1)."""
+    lease = _acq(lane="A")
+    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    _kill_holder()
+    with pytest.raises(md.DoorBlocked):
+        md.reclaim(lease, lane_id="A", ground_state="OPEN")
+    md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")  # the sanctioned path still works
+    assert md.read_lease() is None
+
+
+# mutation-probe: drop _publish_fresh()'s refresh-sidecar republish (continuation lost)
+def test_reclaim_preserves_refresh_continuation(door):
+    """The refresh continuation survives self-resume as sidecars under the NEW token; the
+    base LEASE payload never absorbs it (r1 P1)."""
+    lease = _acq(lane="A")
+    md.mark_attempted(lease)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(
+        md._sidecar(lease["lease_token"], "refresh"),
+        json.dumps({"refresh_head": "r" * 40}),
+    )
+    md.mark_attempted(lease, suffix="refresh")
+    _kill_holder()
+    new = md.reclaim(lease, lane_id="B", ground_state="OPEN")
+    view = md.read_lease()
+    assert view["lease_token"] == new["lease_token"]
+    assert view["refresh"]["refresh_head"] == "r" * 40
+    assert view["refresh"]["merge_attempted_at"] is not None
+    assert view["merge_attempted_at"] is not None
+    assert "refresh" not in json.loads(md.LEASE.read_text())  # sidecar-carried, not payload
+
+
+# mutation-probe: drop complete_dead_marker()'s reservation-open gate (stale resurrection)
+def test_completion_requires_open_reservation(door):
+    """A stale reclaim marker must not resurrect authority for an arc that has moved on:
+    completion publishes only while the reservation still reads `open` (r1 P1)."""
+    lease = _acq(lane="A")
+    dead = {**lease, "pid": 999999}
+    fresh = {**dead, "lease_token": "f" * 32, "lane_id": "B", "pid": 999998, "state": "held"}
+    m = md.win_marker(lease["lease_token"], "reclaim", extra={"fresh_lease": fresh})
+    body = json.loads(m.read_text())
+    body["pid"] = 999999
+    m.write_text(json.dumps(body))
+    md._move_lease(lease["lease_token"], "reclaimed")
+    rs.transition("pr-1", "merged", lane_id="A")  # the arc landed meanwhile
+    assert md.complete_dead_marker(m) is False
+    assert md.read_lease() is None  # nothing resurrected
+
+
+# mutation-probe: drop _rate_check()'s _check_lane_id containment call
+def test_lane_id_containment(door):
+    """lane_id becomes a path component of the attempts store — absolute or traversing
+    values must be refused before any filesystem write (r1 P2)."""
+    for bad in ("/tmp/evil", "../evil", "a/b", ".hidden", "a:b", ""):
+        with pytest.raises(md.LeaseError):
+            _acq(lane=bad)
+
+
+def test_refused_attempt_is_recorded(door):
+    """Record-then-count (r1 P2): the refusing 6th attempt is itself recorded, so a burst
+    cannot under-count a not-yet-recorded peer; the LEASE CAS remains the safety fence."""
+    _acq(now=0.0)
+    for i in range(4):
+        with pytest.raises(md.LeaseHeld):
+            _acq(lane="A", now=1.0 + i)
+    with pytest.raises(md.RateLimited):
+        _acq(lane="A", now=10.0)
+    files = [p for p in (md.DOOR / "attempts" / "A").iterdir() if not p.name.startswith(".")]
+    assert len(files) == 6  # the refusal recorded its attempt too

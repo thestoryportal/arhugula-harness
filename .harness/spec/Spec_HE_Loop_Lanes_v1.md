@@ -4,7 +4,7 @@
 
 Clearance-folded draft (operator draft review ✓ → Codex gate 7/10 ✓ → harness council + adversarial + Codex cold review ✓ → consolidated reconcile + fold ✓ → E4 residual sweep → operator ratification → clearance marker).
 
-Path: `.harness/spec/Spec_HE_Loop_Lanes_v1.md` · Date: 2026-08-18 · **v1.3** (execution-correction change-notes X1 2026-08-18 + X2 2026-08-19 + X3 2026-08-19; marker `spec-he-loop-lanes-v1.3-cleared-2026-08-19.md`) · Repo at `17011f89c` (all `file:line` cites are pinned to this commit) · Namespace `C-HE-*` (H_E dev tooling; see §0.2)
+Path: `.harness/spec/Spec_HE_Loop_Lanes_v1.md` · Date: 2026-08-18 · **v1.4** (execution-correction change-notes X1 2026-08-18 + X2 2026-08-19 + X3 2026-08-19 + X4a–X4d 2026-08-20; marker `spec-he-loop-lanes-v1.4-cleared-2026-08-20.md`) · Repo at `17011f89c` (all `file:line` cites are pinned to this commit) · Namespace `C-HE-*` (H_E dev tooling; see §0.2)
 
 Authority chain (earlier links govern where later links are silent — HE-1 §0):
 `BUILD-PLAN-operator-ratified-2026-08-17.md` (operator-ratified: D-A…D-D, Arcs 1–7) →
