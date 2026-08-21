@@ -56,9 +56,11 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    command needs the ids in its environment (the review wrapper's C-HE-24/25 rows join
    the reservation through `HARNESS_ARC_ID`/`HARNESS_LANE_ID`), prefix them inline:
    `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`.
-   *Known friction (registered to U-HE-23's permission-guard unit): the guard does not
-   yet auto-allow `uv run python tools/reservations.py` or the `HARNESS_*`-prefixed
-   forms, so in loop mode these commands currently surface one approval prompt each.*
+   *Known friction (registered into U-HE-25's guard-edit scope — the reviewed
+   permission-guard unit): the guard does not yet auto-allow
+   `uv run python tools/reservations.py`, the leading `HARNESS_*=` prefix forms, or
+   `git merge-tree`, so in loop mode these commands currently surface one approval
+   prompt each; they are never DENIED (the U-HE-21 witness pins that floor).*
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a

@@ -84,6 +84,36 @@ grep -q 'attested_merge_tree=' "$SP" \
 grep -q 'reservations.py reconcile-all' "$SS" \
   && ok "session-start runs reconcile-all" || bad "no reconcile-all in session-start hook"
 
+# --- guard adjudication floor (codex r3): the documented command shapes must NEVER be
+# DENIED by permission-guard in loop mode. Today they fall through to ask (the registered
+# U-HE-25 friction — one approval prompt each); after U-HE-25's allowlist additions they
+# become allow. A DENY would structurally block the loop — that regression is what this
+# leg pins. The guard is exercised for real, not grepped.
+GUARD="$SCRIPT_DIR/permission-guard.sh"
+GREPO="$(mktemp -d)" && mkdir -p "$GREPO/.harness"
+guard_dec() { # $1=command → prints permissionDecision or empty (ask)
+  jq -nc --arg c "$1" \
+    '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":$c,"file_path":""}}' \
+    | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$GREPO" bash "$GUARD" \
+    | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null
+}
+while IFS= read -r shape; do
+  DEC="$(guard_dec "$shape")"
+  if [ "$DEC" = "deny" ]; then
+    bad "guard DENIES a mandatory carrier command: $shape"
+  else
+    ok "guard never denies (${DEC:-ask}): $shape"
+  fi
+done <<'SHAPES'
+uv run python tools/reservations.py selectable --arc-id u-he-21
+uv run python tools/reservations.py reserve --arc-id u-he-21 --lane-id lane-a --branch feat/x --arc-type applying
+uv run python tools/reservations.py show --arc-id u-he-21
+uv run python tools/reservations.py update --arc-id u-he-21 --set pr=1 head_sha=abc base_sha=def
+HARNESS_ARC_ID=u-he-21 HARNESS_LANE_ID=lane-a just review-with-failover
+git merge-tree --write-tree origin/main HEAD
+SHAPES
+rm -rf "$GREPO"
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "FAILED: $FAIL failure(s), $PASS passed"
