@@ -22,6 +22,67 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    for a specific prior round if one is genuinely needed, never read it wholesale). If the
    auto-`ACTIVE` queue is empty, apply the **no-parking directive (§12.4.1)**: pick the
    highest-value forward item, do NOT stop citing "operator-owned."
+
+   **Arc open (C-HE-03 §4) — the instant the unit is chosen, BEFORE any work.** Selection
+   IS arc open: mint the `pending` reservation now, with the `arc_type` declared now
+   (C-HE-26 §1 — the open-time capture point, never inferred at close). Every value below
+   is a LITERAL you type — no `$( )`, no chaining (the permission guard auto-allows only
+   single clean invocations), and shell exports do NOT survive across Bash tool calls, so
+   the two `HARNESS_*` ids must be restated inline on every later command that reads them:
+   ```bash
+   uv run python tools/reservations.py mint-lane-id     # ONLY if .harness/.lane-id is absent (below)
+   uv run python tools/reservations.py selectable --arc-id <arc-id>
+   ```
+   **Lane id is minted ONCE per worktree and persisted** (pre-U-HE-31 lane-init): if
+   `.harness/.lane-id` exists (gitignored, worktree-local), its content IS this lane's id —
+   NEVER overwrite it; re-read it (rather than trusting memory) before every `reserve`.
+   Only when absent, run `mint-lane-id`, Write the printed id there, then RE-READ the file
+   and adopt whatever it now contains — if a concurrent session in the same worktree won
+   the write race, its value is the lane id (one worktree IS one lane per the two-lane
+   discipline, so this is a crash-overlap edge, not a normal state; atomic exclusive-create
+   minting is U-HE-31 lane-init's). A fresh mint per session would generate a new random
+   suffix and make the same-lane resume below misclassify this lane's own reservation as
+   another's.
+   - `selectable` exit 0 (free) → reserve it, then export for this shell:
+     ```bash
+     uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>
+     export HARNESS_ARC_ID=<arc-id>   # same-shell only — restate inline later
+     ```
+     If `reserve` itself FAILS because another lane won the selectable→reserve window
+     (the store's exclusive-create CAS refuses a second head — a lost race, not an
+     error), treat it exactly like the exit-1 path below: `show` and branch on the
+     head's `lane_id`.
+   - `selectable` exit 1 (a head exists) → `uv run python tools/reservations.py show --arc-id <arc-id>` and branch on its `state` FIRST, then `lane_id`:
+     - `state` is terminal (`merged`/`abandoned`) → the arc already ran, whoever's
+       lane it was — NEVER resume a terminal head: re-derive and pick the next unit;
+     - `state` is `pending`/`open` AND the head's `lane_id` equals the persisted
+       `.harness/.lane-id` content (crash/compaction re-entry) → resume
+       WITHOUT re-reserving (a second `reserve` refuses any existing head);
+     - `state` is `pending`/`open` held by anyone else → the unit is taken:
+       do NOT reserve — re-derive and pick the next unit.
+
+   A second lane's selection of the same unit fails here (duplicate *scheduling* is
+   prevented at open; duplicate *append* by C-HE-03 §6). `ship-pr` back-fills
+   `pr`/`head_sha`/`base_sha`/`attested_merge_tree` on this same record. When a later
+   command needs the ids in its environment (the review wrapper's C-HE-24/25 rows join
+   the reservation through `HARNESS_ARC_ID`/`HARNESS_LANE_ID`), prefix them inline:
+   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`.
+   *Known gap (registered verbatim into U-HE-25's guard-edit scope — the reviewed
+   permission-guard unit): the guard does not yet auto-allow
+   `uv run python tools/reservations.py`, the leading `HARNESS_*=` prefix forms, or
+   `git merge-tree`. Attended sessions see one approval prompt each (the shapes are
+   never guard-DENIED — witnessed). The HEADLESS runner (`tools/04-loop/run.sh`) maps
+   ask→deny, so until U-HE-25 lands a headless arc CANNOT reserve at open — the
+   explicit degradation is: if ANY arc-open command above (`mint-lane-id`,
+   `selectable`, `reserve`) is refused by the permission layer,
+   proceed with the arc UNRESERVED and say so in the PR body; append safety still holds
+   (the U-HE-19 drain bootstrap mints the reservation at closure and the C-HE-03 §6
+   holder gate fences the ledger), only the §4 selection-time scheduling dedup is
+   deferred — that property arrives for headless lanes with U-HE-25. The same rule
+   downstream: a refused PREFIXED review invocation degrades to
+   the bare `just review-with-failover` (allowlisted; writes the pre-U-HE-21 fallback ids —
+   witnessed as guard-ALLOW), and the ship-pr back-fills are skipped per its
+   unreserved-arc clause.*
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
@@ -35,7 +96,10 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    branch diff — an uncommitted tree makes HEAD-bound checks stale); **grounding pass** (re-read every
    file:line cite at the now-current HEAD, recompute every count, verify every #NNN,
    confirm `just codex-check` ran at the *current* HEAD, state the pass in the PR body — per
-   ship-pr U-WT-01) then out-of-family `just review-with-failover` to convergence (§13.1) —
+   ship-pr U-WT-01) then out-of-family
+   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover` to
+   convergence (§13.1; the inline prefix is the step-2 arc-open ids — a bare invocation
+   writes `branch-*`/`-nolane` fallback ids into the C-HE-24/25 rows) —
    the fail-closed `codex-review` wrapper (C-HE-18) with the `gemini-review` D-C failover
    (C-HE-17); a verdict counts only on its schema parse (C-HE-15), never on exit code or
    silence. *Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored

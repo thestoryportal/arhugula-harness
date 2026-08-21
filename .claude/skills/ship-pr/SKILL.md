@@ -37,9 +37,13 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **The non-mechanical residue is a habit, not a script:** *when you write a sentence about
   what the code does, open the file in the same action.* Both P1s on the `B-71` leg were
   sentences written from a narrative instead of from a call site.
-- **Out-of-family review.** `just review-with-failover` (branch-vs-`main`; the C-HE-18
-  fail-closed `codex-review` wrapper with the C-HE-17 `gemini-review` failover) to
-  convergence — fix real findings, hermetically regression-test each (§13.1). Exit 0
+- **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`
+  (branch-vs-`main`; the C-HE-18 fail-closed `codex-review` wrapper with the C-HE-17
+  `gemini-review` failover) to convergence — the inline `HARNESS_*` prefix is REQUIRED
+  even when ship-pr is invoked standalone: shell exports do not survive across Bash tool
+  calls, and a bare invocation writes the wrapper's `branch-*`/`-nolane` fallback ids
+  into the C-HE-24/25 rows instead of joining the arc's real reservation (`<arc-id>` from
+  the arc-open step; `<lane-id>` from `.harness/.lane-id`) — fix real findings, hermetically regression-test each (§13.1). Exit 0
   APPROVE / 1 BLOCK / 2 `REVIEWER_UNAVAILABLE`; the terminal line on stderr is the verdict,
   never the exit code or the absence of output. *Invariant #3 (restated, C-HE-17 §3):
   out-of-family review covers Codex-authored work as before, AND serves as the D-C failover
@@ -61,6 +65,21 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   title; body lists what changed + verification (tests/assertions, codex rounds) + the
   R-NNN it advances. End the body with the standard generated-with trailer.
 - Commit/PR trailers per the workspace convention (Co-Authored-By; 🤖 Generated-with).
+- **Reservation back-fill at PR creation (C-HE-03 §3, U-HE-21).** The arc's reservation was
+  minted at selection by `roadmap-continue`; its `<arc-id>` is the id you reserved there
+  (recover it with `show` if the session compacted — shell exports do not survive across
+  Bash tool calls, so pass the id as a LITERAL, never `"$HARNESS_ARC_ID"` in a fresh
+  shell). Immediately after `gh pr create`, with `<head-sha>`/`<base-sha>` taken from
+  prior `git rev-parse HEAD` / `git rev-parse origin/main` output (no `$( )` — the guard
+  auto-allows only single clean invocations):
+  ```bash
+  uv run python tools/reservations.py update --arc-id <arc-id> --set pr=<N> head_sha=<head-sha> base_sha=<base-sha>
+  ```
+  If `show --arc-id <arc-id>` reports NO reservation (the headless-degradation case in
+  roadmap-continue — the arc opened unreserved because the permission layer refused the
+  reserve), SKIP both this back-fill and the final-gate one, and say so in the PR body:
+  `update` on a nonexistent reservation aborts, and the arc's reservation will instead be
+  minted at closure by the U-HE-19 drain bootstrap.
 
 ## Pre-merge gate — CI green + decorrelated 3-lens review (before `gh pr merge`)
 
@@ -77,6 +96,29 @@ verdict → do not merge; automatic fix-and-re-gate is capped at ten rounds. An 
 substantive disagreement is the decision point surfaced to the operator via one
 `AskUserQuestion` — see the skill for the full procedure, parse-failure handling, and the
 audit-log append.
+
+**Final-gate reservation back-fill (C-HE-03 §3 + C-HE-06 §4(ii), U-HE-21).** After the
+gate all-approves and BEFORE the merge door: refresh the merge tuple and record the
+attested merge tree the door will byte-compare. Obtain the three values first, each as
+its own command (`git merge-tree --write-tree` needs git ≥ 2.38; prints the tree OID),
+then pass them as LITERALS (no `$( )`; same fresh-shell rule as the PR-creation
+back-fill — the arc id is a literal, not an inherited variable):
+
+```bash
+git rev-parse HEAD
+git rev-parse origin/main
+git merge-tree --write-tree origin/main HEAD
+uv run python tools/reservations.py update --arc-id <arc-id> --set head_sha=<head-sha> base_sha=<base-sha> attested_merge_tree=<tree-oid>
+```
+
+A stale tuple cannot merge: C-HE-06 step (ii) re-confirms head/base against `gh` and
+byte-compares the tree at the door (the merge-door consumer lands with U-HE-22; recording
+starts now so every arc from this one forward carries the attestation). The reservation is
+still `pending` here — `update` is payload-only and valid on a pending head; WHERE the
+C-HE-03 §4 `pending→open` flip happens relative to the door's open-holder acquisition
+invariant is part of the registered flip-timing contradiction class routed to the U-HE-22
+merge-lane landing (plan U-HE-19 rev item (vii) + U-HE-21 rev item (vii)) — the door
+carrier defines it there; this unit only records.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 

@@ -64,6 +64,14 @@ MANIFEST: list[Row] = [
     ),
     # C-HE-03 (U-HE-17)
     Row("C-HE-03", "pytest:tools/test_reservations.py", "phase0", "local + CI", True),
+    # C-HE-03 §3/§4 + C-HE-26 §1 (U-HE-21): skill/hook carrier wiring — grep witness
+    Row(
+        "C-HE-03",
+        "shell:tools/hooks/test_skill_reservation_wiring.sh",
+        "phase0",
+        "local + CI",
+        False,
+    ),
     # C-HE-03/04 (U-HE-20): AC#2 subprocess lanes — real subprocesses, NO skip
     Row(
         "C-HE-03/04",
