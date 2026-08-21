@@ -73,11 +73,16 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    `git merge-tree`. Attended sessions see one approval prompt each (the shapes are
    never guard-DENIED — witnessed). The HEADLESS runner (`tools/04-loop/run.sh`) maps
    ask→deny, so until U-HE-25 lands a headless arc CANNOT reserve at open — the
-   explicit degradation is: if the reserve command is refused by the permission layer,
+   explicit degradation is: if ANY arc-open command above (`mint-lane-id`,
+   `selectable`, `reserve`) is refused by the permission layer,
    proceed with the arc UNRESERVED and say so in the PR body; append safety still holds
    (the U-HE-19 drain bootstrap mints the reservation at closure and the C-HE-03 §6
    holder gate fences the ledger), only the §4 selection-time scheduling dedup is
-   deferred — that property arrives for headless lanes with U-HE-25.*
+   deferred — that property arrives for headless lanes with U-HE-25. The same rule
+   downstream: a refused PREFIXED review invocation degrades to
+   the bare `just review-with-failover` (allowlisted; writes the pre-U-HE-21 fallback ids —
+   witnessed as guard-ALLOW), and the ship-pr back-fills are skipped per its
+   unreserved-arc clause.*
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a

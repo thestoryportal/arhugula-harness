@@ -78,11 +78,14 @@ grep -q 'proceed with the arc UNRESERVED' "$RC" \
   && ok "headless denial degrades to unreserved-with-note (U-HE-19 drain bootstrap)" \
   || bad "no headless degradation clause"
 # Round-5 codex corrections:
-if grep -n 'just review-with-failover' "$RC" "$SP" | grep -v 'HARNESS_ARC_ID=' | grep -q .; then
+if grep -n 'just review-with-failover' "$RC" "$SP" | grep -v 'HARNESS_ARC_ID=' | grep -v 'bare' | grep -q .; then
   bad "a review-with-failover invocation lacks the inline HARNESS_* prefix (bare form writes fallback ids)"
 else
-  ok "EVERY review-with-failover mention carries the inline HARNESS_* prefix"
+  ok "EVERY review-with-failover mention is prefixed (or the marked bare headless fallback)"
 fi
+grep -q 'if ANY arc-open command' "$RC" \
+  && ok "headless degradation triggers on ANY refused arc-open command" \
+  || bad "degradation trigger covers only reserve"
 grep -q 'NEVER resume a terminal head' "$RC" \
   && ok "terminal heads are never resumed (state checked before lane_id)" \
   || bad "no terminal-head refusal in the resume branches"
@@ -129,6 +132,12 @@ guard_dec() { # $1=command → prints permissionDecision, or "ask" (guard exit 0
 DEC="$(guard_dec 'git push --force origin main')"
 [ "$DEC" = "deny" ] && ok "positive control: guard denies force-push" \
   || bad "positive control failed — guard did not deny force-push (got: $DEC)"
+# The headless review FALLBACK must be allow (not merely non-deny): a bare
+# `just review-with-failover` is the documented degradation when the prefixed form is
+# refused, so losing its allowlist entry would strand headless review entirely.
+DEC="$(guard_dec 'just review-with-failover')"
+[ "$DEC" = "allow" ] && ok "bare review-with-failover adjudicates ALLOW (headless fallback floor)" \
+  || bad "bare review-with-failover no longer allowlisted (got: $DEC) — headless fallback broken"
 while IFS= read -r shape; do
   DEC="$(guard_dec "$shape")"
   case "$DEC" in
