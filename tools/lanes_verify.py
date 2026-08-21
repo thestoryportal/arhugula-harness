@@ -170,6 +170,42 @@ MANIFEST: list[Row] = [
         "local + CI",
         True,
     ),
+    # C-HE-06 §4/§5/§8 (U-HE-23): landing driver — reconcile, continuation, crash-resume
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_timeout_reconcile_merged_calls_once",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_continuation_no_reacquire",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_post_merge_ci_blocked_and_unblock",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_inflight_first_attempt_then_reissue",
+        "phase0",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-06",
+        "pytest:tools/test_merge_door.py::test_ac2_c_crash_resume",
+        "phase0",
+        "local + CI",
+        True,
+    ),
     # C-HE-09/10 (U-HE-09)
     Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True),
     # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)

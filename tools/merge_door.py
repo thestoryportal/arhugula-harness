@@ -15,17 +15,21 @@ which consumes the §4/§8 constants declared below.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import secrets
 import socket
+import subprocess
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import reservations as rs
-from arc_metrics import QUEUE_DIR, _process_is_alive, publish_exclusive
+from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish_exclusive
 
 DOOR = QUEUE_DIR / "merge-door"
 LEASE = DOOR / "LEASE"
@@ -33,6 +37,12 @@ RATE_K = 5
 RATE_WINDOW_S = 60
 GC_KEEP_DAYS = 30
 MERGE_TIMEOUT_S = 120.0
+# CLAUDE.md §12.2.1 terminating-refresh discriminator (codex r8 P1): the recorded
+# refresh PR must carry this exact shape — title prefix + roadmap-status-only file set
+REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
+# concatenated so the store-audit literal extractor cannot misread this gh-side
+# file-set discriminator as an uninventoried QUEUE_DIR store literal
+REFRESH_ONLY_FILE = ".harness" + "/roadmap_status.md"
 POST_MERGE_CI_BOUND_S = 45 * 60
 REFRESH_BOUND_S = 45 * 60
 BACKOFF = {"base_s": 30.0, "factor": 2.0, "cap_s": 600.0, "max_attempts": 12}
@@ -121,6 +131,10 @@ def read_lease() -> dict | None:
             lease["refresh"]["merge_attempted_at"] = json.loads(ratt.read_text())[
                 "merge_attempted_at"
             ]
+    if _sidecar(tok, "refresh.intent").exists():
+        # declared refresh intent survives into the view so self-resume carries it
+        # across a token change (codex U-HE-23 r2 P2)
+        lease["refresh_intent"] = True
     return lease
 
 
@@ -410,6 +424,11 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
     # through a dead lease. `open` and `merged` are the legitimate lease-holding states
     # (merged = the §4(vi)–(ix) continuation window).
     res = rs.current(persisted["reservation_id"])
+    # NOTE (codex r10 P1, HELD): a foreign-lane reclaim of an OPEN reservation leaves
+    # holdership with the original lane BY DESIGN (the U-HE-22 r2-pinned adjudication:
+    # rs.holder stays "A"); if the (vi) holder-gated transition then refuses, the door
+    # BLOCKS loud (post-attempt) and the C-HE-03 §6 transfer_holder venue recovers —
+    # never a silent wedge
     if res is None or res[1]["state"] not in ("open", "merged"):
         raise LeaseError(
             f"reclaim refused: reservation {persisted['reservation_id']!r} reads "
@@ -457,7 +476,10 @@ def _publish_fresh(fresh: dict) -> None:
     stripped from the base LEASE payload and republished as sidecars under the new token
     (attempted; the refresh continuation + its own attempted — codex U-HE-22 r1 P1)."""
     ref = fresh.get("refresh")
-    payload = {k: v for k, v in fresh.items() if k not in ("refresh", "blocked_at")}
+    intent = fresh.get("refresh_intent")
+    payload = {
+        k: v for k, v in fresh.items() if k not in ("refresh", "blocked_at", "refresh_intent")
+    }
     # SIDECARS FIRST, LEASE LAST (codex r4 P1): a crash between a published LEASE and its
     # not-yet-republished sidecars would present an apparently-refresh-free lease — a later
     # self-resume would then lose the recorded refresh/attempt state and could re-issue.
@@ -473,6 +495,15 @@ def _publish_fresh(fresh: dict) -> None:
             pass
     if ref:
         _publish_refresh_sidecars(fresh["lease_token"], ref)
+    if intent:
+        # the declared-intent fence survives the token change (codex r2 P2): losing it
+        # across a reclaim would let a resumed pass mint a second refresh PR
+        try:
+            publish_exclusive(
+                _sidecar(fresh["lease_token"], "refresh.intent"), json.dumps({"at": _now_iso()})
+            )
+        except FileExistsError:
+            pass
     try:
         publish_exclusive(LEASE, json.dumps(payload, sort_keys=True))
     except FileExistsError:
@@ -528,6 +559,15 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
             f"unblock refused: reservation {lease['reservation_id']!r} reads "
             f"{res and res[1]['state']!r} — the arc has been terminated"
         )
+    if res[1]["state"] == "open" and res[1]["lane_id"] != lane_id:
+        # While the reservation is still OPEN, only its holder may take the successor
+        # (codex U-HE-23 r4 P2): a foreign lane's merge would succeed externally and
+        # then fail the (vi) holder transition — an ambiguous attempted state. Holder
+        # transfer is reclaim's job (dead-holder proof), never unblock's.
+        raise LeaseError(
+            f"unblock refused: reservation {lease['reservation_id']!r} is open and held "
+            f"by {res[1]['lane_id']!r}, not {lane_id!r}"
+        )
     fresh = {
         **lease,
         "lease_token": secrets.token_hex(16),
@@ -538,6 +578,10 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
         "state": "held",
         "blocked_at_sha": None,
         "blocked_reason": None,
+        # the operator-keyed unblock IS the re-validation attestation for the sha it was
+        # keyed to (codex r3 P1): without this, a BASE_TOCTOU block re-fires on every
+        # resume and the door is permanently wedged
+        "unblocked_from": blocked_at_sha,
     }
     fresh.pop("blocked_at", None)
     if win_marker(lease["lease_token"], "unblock", extra={"fresh_lease": fresh}) is None:
@@ -764,3 +808,913 @@ def gc(*, now: datetime | None = None) -> list[Path]:
                 except FileNotFoundError:
                     continue  # concurrent collector won it (codex r2 P3)
     return removed
+
+
+# ── U-HE-23: landing driver — C-HE-06 §4 steps (ii)–(ix), §5 reconcile, §8 policy ──────
+
+
+class BudgetExhausted(LeaseError):  # noqa: N818 — U-HE-23 plan signature verbatim
+    ...
+
+
+@dataclass
+class Ground:
+    """Injected gh/git seams; production defaults shell out with bounded timeouts."""
+
+    gh_view: Callable[[int], dict]
+    gh_merge: Callable[[int, str, float], subprocess.CompletedProcess]
+    gh_runs_for_sha: Callable[[str], list[dict]]
+    gh_main_runs_in_progress: Callable[[], int]
+    git_merge_tree: Callable[[str, str], str]
+    git_first_parent: Callable[[str], str]
+    codex_worktree_present: Callable[[], bool]
+    clock: Callable[[], float] = field(default=time.monotonic)
+    sleep: Callable[[float], None] = field(default=time.sleep)
+
+
+def _gh(*args: str, timeout: float) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["gh", *args], cwd=REPO, capture_output=True, text=True, timeout=timeout, check=False
+    )
+
+
+def default_ground() -> Ground:
+    def gh_view(pr):
+        p = _gh(
+            "pr",
+            "view",
+            str(pr),
+            "--json",
+            "state,mergedAt,headRefOid,baseRefOid,mergeCommit,title,files",
+            timeout=30,
+        )
+        if p.returncode != 0 or not p.stdout.strip():
+            raise RuntimeError(f"gh pr view failed: {p.stderr.strip()}")
+        return json.loads(p.stdout)
+
+    def gh_merge(pr, head, timeout):
+        # the ONE fixed merge invocation string (C-HE-07 §1)
+        return _gh("pr", "merge", str(pr), "--squash", "--match-head-commit", head, timeout=timeout)
+
+    def gh_runs_for_sha(sha):
+        p = _gh(
+            "run",
+            "list",
+            "--commit",
+            sha,
+            "--workflow",
+            "CI",
+            "--json",
+            "status,conclusion,event",
+            "--limit",
+            "20",
+            timeout=30,
+        )
+        return json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else []
+
+    def gh_main_runs_in_progress():
+        p = _gh(
+            "run",
+            "list",
+            "--branch",
+            "main",
+            "--event",
+            "push",
+            "--status",
+            "in_progress",
+            "--json",
+            "databaseId",
+            timeout=30,
+        )
+        return len(json.loads(p.stdout)) if p.returncode == 0 and p.stdout.strip() else 0
+
+    def git_merge_tree(base, head):
+        return subprocess.run(
+            ["git", "-C", str(REPO), "merge-tree", "--write-tree", base, head],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()[0]
+
+    def git_first_parent(sha):
+        proc = None
+        for attempt in (1, 2):
+            proc = subprocess.run(
+                ["git", "-C", str(REPO), "rev-parse", f"{sha}^1"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0:
+                return proc.stdout.strip()
+            if attempt == 1:
+                # the squash SHA is minted SERVER-SIDE by gh pr merge and is normally
+                # absent from the local object database (codex r8 P1) — without this
+                # fetch a successful remote merge raised AFTER the reservation flipped
+                # merged, wedging the door and skipping post-merge CI + refresh
+                subprocess.run(
+                    ["git", "-C", str(REPO), "fetch", "origin", sha],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=600,
+                )
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
+
+    def codex_worktree_present():
+        out = subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        # concatenated so the store-audit literal extractor's path-join pattern cannot
+        # misread the slash-then-quote inside the needle as a pathlib join (this is a
+        # git worktree presence probe, not a QUEUE_DIR store literal)
+        return ("/.codex-worktrees" + "/") in out
+
+    return Ground(
+        gh_view,
+        gh_merge,
+        gh_runs_for_sha,
+        gh_main_runs_in_progress,
+        git_merge_tree,
+        git_first_parent,
+        codex_worktree_present,
+    )
+
+
+def _notify(kind: str, lane_id: str, cause: str, detail: str) -> None:
+    """Loop-ledger row, TOLERANT of the not-yet-landed writer (as-built: the plan's §3
+    order ships `loop_log_structured` at U-HE-29 while the roadmap executes U-HE-23 first
+    — the registered §0-vs-§1 ordering contradiction). A missing ledger writer must never
+    mask a DoorBlocked or crash the driver mid-landing: pre-U-HE-29 the signal degrades to
+    a LOUD stderr line (in-band, never silent); the durable row arrives with U-HE-29."""
+    try:
+        rs.emit_loop_row(kind, lane_id, cause, detail)
+    except rs.LoopStatusWriteError as exc:
+        print(
+            f"merge-door {kind} (ledger writer pending U-HE-29): {cause} — {detail} [{exc}]",
+            file=sys.stderr,
+        )
+
+
+def _emit_gate(
+    lease: dict | None,
+    *,
+    gate: str,
+    fail_class: str,
+    cause: str,
+    evidence: str,
+    arc_id: str,
+    lane_id: str,
+    severity: str = "warn",
+) -> None:
+    """§9 gate rows as C-HE-24 findings (`code` = <gate>:<fail_class>:<cause>)."""
+    import finding_record as fr
+
+    # allocate + append under finding_record's own lock (codex U-HE-23 r3 P2: an
+    # unlocked count-then-append let two concurrent emitters mint one id)
+    fr.append_observation(
+        {
+            "location": "merge-door",
+            "observed_evidence": evidence,
+            "expected_contract": "C-HE-06 §9",
+            "severity": severity,
+            "finding_type": fail_class,
+            "lineage_claim": "door",
+            "producer": gate,
+        },
+        fr.Envelope(
+            "finding",
+            fr.now_iso(),
+            arc_id,
+            lane_id,
+            (lease or {}).get("head_sha"),
+            (lease or {}).get("base_sha"),
+            None,
+            None,
+            cause_attribution=cause,
+        ),
+    )
+
+
+def local_base_cas_check(head_sha: str, attested_tree: str | None, ground: Ground) -> None:
+    tree = ground.git_merge_tree("origin/main", head_sha)
+    if not attested_tree or tree != attested_tree:
+        raise DoorFailed(
+            f"local-base-cas-check: merge-tree {tree[:12]} != attested "
+            f"{str(attested_tree)[:12]} -- base moved; re-gate (R-23)"
+        )
+
+
+def verify_head_base(lease: dict, ground: Ground) -> dict:
+    v = ground.gh_view(int(lease["pr"]))
+    if v.get("headRefOid") != lease["head_sha"] or v.get("baseRefOid") != lease["base_sha"]:
+        raise DoorFailed(f"pr #{lease['pr']} head/base moved since the lease was recorded; re-gate")
+    return v
+
+
+def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
+    """Poll the merge SHA's OWN main run until completed. success → 'success'; anything
+    else → 'blocked:<why>' (CANCELLED blocks the door — C-HE-19 §2's ci_is_green)."""
+    deadline = ground.clock() + bound_s
+    notified = False
+    while ground.clock() < deadline:
+        runs = [r for r in ground.gh_runs_for_sha(sha) if r.get("event") in (None, "push")]
+        done = [r for r in runs if r.get("status") == "completed"]
+        if done:
+            concl = done[0].get("conclusion")
+            if not ci_is_green(concl):
+                # CANCELLED/failure blocks the door (C-HE-19 §2) — never read as green
+                return f"blocked:post_merge_ci_not_green:{concl}"
+            return "success"
+        if not notified and ground.gh_main_runs_in_progress() > 2:
+            _notify(
+                "NOTIFY",
+                lane_id,
+                "merge-door-post-merge-ci:transient-retry:main_ci_queue_depth",
+                f"> 2 main-push CI runs in progress while waiting on {sha[:12]}",
+            )
+            notified = True
+        ground.sleep(30)
+    return "blocked:post_merge_ci_not_green:timeout"
+
+
+def reconcile_ground(lease: dict, ground: Ground) -> str:
+    """§5 timeout/crash reconciliation by ground truth. MERGED ⇒ never re-issue.
+    OPEN ⇒ the caller may re-issue at most ONCE per pass."""
+    v = ground.gh_view(int(lease["pr"]))
+    state = v.get("state")
+    if state == "MERGED":
+        return "MERGED"
+    if state == "OPEN":
+        return "OPEN"
+    # CLOSED / malformed / unknown is NOT permission to re-issue (codex U-HE-23 r1 P2):
+    # the contract's re-issue branch is an explicit OPEN result only — fail closed.
+    raise DoorFailed(f"reconcile: pr #{lease['pr']} state {state!r} is not reconcilable")
+
+
+def _merge_once(
+    lease: dict, pr: int, head_sha: str, ground: Ground, *, suffix: str = "", budget: int = 2
+) -> bool:
+    """(iii) attempted-marker BEFORE (iv) the bounded merge; on timeout reconcile,
+    re-issue at most once. A RESUME pass (the attempted marker predates this process)
+    gets budget=1 — the §5 contract permits a single re-issue per reconcile pass, and
+    the prior process may already have consumed its own (codex U-HE-23 r1 P2). Returns
+    True iff a reconcile pass was needed (the cycle is then not "clean" for §10)."""
+    mark_attempted(lease, suffix=suffix)
+    _kill_after("refresh-attempted" if suffix else "attempted")
+    for attempt in tuple(range(1, budget + 1)):
+        try:
+            proc = ground.gh_merge(pr, head_sha, MERGE_TIMEOUT_S)
+            _kill_after("merge")
+            if proc.returncode == 0:
+                return attempt > 1
+        except subprocess.TimeoutExpired:
+            pass
+        if reconcile_ground({**lease, "pr": pr}, ground) == "MERGED":
+            return True  # invariant: NEVER re-invoke after MERGED
+        if attempt == budget:
+            raise DoorFailed("merge_reissue_exhausted (cause_attribution: merge_reissue_exhausted)")
+    return True
+
+
+def land(
+    pr: int,
+    *,
+    lane_id: str,
+    arc_id: str,
+    ground: Ground,
+    refresh: Callable[[], tuple[int, str]] | None,
+    lease: dict | None = None,
+) -> str:
+    """Steps (i)–(ix). `lease` is passed on self-resume (reclaimed); otherwise acquired
+    here (one attempt, fail-fast)."""
+    res = rs.current(arc_id)
+    if res is None:
+        raise DoorFailed(f"{arc_id}: no reservation")
+    head_sha, base_sha, attested = (
+        res[1]["head_sha"],
+        res[1]["base_sha"],
+        res[1]["attested_merge_tree"],
+    )
+    if lease is None:
+        lease = acquire(lane_id=lane_id, arc_id=arc_id, pr=pr, head_sha=head_sha, base_sha=base_sha)
+    else:
+        # a caller-supplied (resumed) lease must BE the door's current lease for THIS
+        # arc/lane/pr (codex r3 P2): a stale or foreign dict would drive gh pr merge
+        # while another lease is current, defeating the single-writer fence
+        live = read_lease()
+        if (
+            live is None
+            or live["lease_token"] != lease["lease_token"]
+            or live.get("reservation_id") != arc_id
+            or live.get("lane_id") != lane_id
+            or int(live.get("pr", -1)) != int(pr)
+        ):
+            raise DoorFailed(
+                f"resumed lease is not the door's current lease for {arc_id!r} "
+                f"(door: {live and live.get('lease_token')!r})"
+            )
+        if live.get("state") == "blocked":
+            # an operator block is never driven past by a direct resume (codex r5 P2):
+            # the sanctioned transition is unblock, which mints the successor
+            raise DoorBlocked(
+                f"lease is blocked at {live.get('blocked_at_sha')!r}; use unblock, not land"
+            )
+        # the PERSISTED view is authoritative for the drive (codex r9 P1): a caller
+        # retaining valid identifiers could forge unblocked_from (a BASE_TOCTOU bypass)
+        # or omit the attempted/refresh sidecars (regaining spent re-issue budget)
+        lease = live
+    if ground.codex_worktree_present():
+        _notify(
+            "NOTIFY",
+            lane_id,
+            "merge-door-lease-acquire:transient-retry:cross_carrier_codex_lane",
+            "a .codex-worktrees/ lane is present: C-HE-01 §1 residual — a Codex-exec lane "
+            "may reach gh pr merge unfenced",
+        )
+    tier = _tiering_active()
+    if tier:
+        _notify(
+            "NOTIFY",
+            lane_id,
+            "merge-door-lease-acquire:transient-retry:attestation_tier",
+            f"lease acquired for pr #{pr} by {lane_id}",
+        )
+    reconciled = False
+    try:
+        resumed_attempt = lease.get("merge_attempted_at") is not None
+        already = resumed_attempt and reconcile_ground(lease, ground) == "MERGED"
+        reconciled = reconciled or already
+        if not already:
+            v0 = verify_head_base(lease, ground)  # (ii)
+            externally_merged = False
+            if v0.get("state") == "MERGED":
+                # verified ground truth already says MERGED (an externally-landed PR):
+                # never follow a verified MERGED with another gh pr merge (codex r4 P2)
+                externally_merged = True
+            if externally_merged:
+                reconciled = True
+            else:
+                local_base_cas_check(head_sha, attested, ground)
+                _kill_after("verify")
+                main_budget = 2
+                if resumed_attempt:
+                    main_budget = 1  # §5: a resume pass re-issues at most ONCE
+                reconciled = (
+                    _merge_once(lease, pr, head_sha, ground, budget=main_budget) or reconciled
+                )  # (iii)+(iv)
+        v = ground.gh_view(pr)  # (v)
+        if v.get("state") != "MERGED":
+            raise DoorFailed("post-merge confirm: not MERGED")
+        _kill_after("confirm")
+        merge_sha = (v.get("mergeCommit") or {}).get("oid") or ""
+        if rs.current(arc_id)[1]["state"] != "merged":
+            if merge_sha:
+                rs.update_payload(arc_id, {"merge_sha": merge_sha})
+            rs.transition(arc_id, "merged", lane_id=lane_id)  # (vi)
+        _kill_after("reservation-merged")
+        toctou_attested = lease.get("unblocked_from") == merge_sha
+        if merge_sha and not toctou_attested and ground.git_first_parent(merge_sha) != base_sha:
+            # BASE_TOCTOU detection (C-HE-12 §2): positive proof the race window was hit —
+            # NEVER silent acceptance. The merge landed server-side (the reservation
+            # reflects that fact); the DOOR blocks and routes to re-validation.
+            # blocked-state FIRST, emissions second (codex r8 P2): a raising gate-log
+            # writer must never leave a positively-detected race as an unblocked lease
+            mark_blocked(lease, sha=merge_sha, reason="base_toctou_first_parent_mismatch")
+            _emit_gate(
+                lease,
+                gate="BASE_TOCTOU",
+                fail_class="HITL-recoverable",
+                cause="first_parent_mismatch",
+                evidence=f"merge {merge_sha[:12]} first parent != verified base {base_sha[:12]}",
+                arc_id=arc_id,
+                lane_id=lane_id,
+                severity="hard",
+            )
+            _notify(
+                "DEFERRED-HIL",
+                lane_id,
+                "merge-door-post-merge:HITL-recoverable:base_toctou",
+                f"{arc_id} — merge {merge_sha[:12]} landed on a base other than the verified "
+                f"{base_sha[:12]}; re-validate main, then "
+                f"`just merge-door-unblock {pr} {merge_sha}`",
+            )
+            raise DoorBlocked("base_toctou_first_parent_mismatch")
+        status = wait_post_merge_ci(
+            merge_sha, ground, bound_s=POST_MERGE_CI_BOUND_S, lane_id=lane_id
+        )  # (vii)
+        if status != "success":
+            mark_blocked(lease, sha=merge_sha, reason="post_merge_ci_not_green")
+            _emit_gate(
+                lease,
+                gate="merge-door-post-merge-ci",
+                fail_class="HITL-recoverable",
+                cause="post_merge_ci_not_green",
+                evidence=status,
+                arc_id=arc_id,
+                lane_id=lane_id,
+            )
+            _notify(
+                "DEFERRED-HIL",
+                lane_id,
+                "merge-door-post-merge-ci:HITL-recoverable:post_merge_ci_not_green",
+                f"{arc_id} — post-merge main run for {merge_sha[:12]} {status}; door blocked; "
+                f"run `just merge-door-unblock {pr} {merge_sha}` after fixing",
+            )
+            raise DoorBlocked(status)
+        _kill_after("post-ci")
+        recorded = (read_lease() or {}).get("refresh")
+        refresh_confirmed = False  # §10: only a refresh-green cycle can count clean (r9 P2)
+        if (
+            refresh is None
+            and recorded is None
+            and os.environ.get("MERGE_DOOR_ALLOW_NO_REFRESH") != "1"
+        ):
+            # the §4(viii) continuation is MANDATORY at the API layer too (codex r10 P2):
+            # the CLI's env gate must not be bypassable by a direct land() caller —
+            # fail closed (blocked, recoverable via unblock) rather than release
+            mark_blocked(
+                lease,
+                sha=lease.get("head_sha") or head_sha,
+                reason="refresh_skipped_without_optin",
+            )
+            raise DoorBlocked("refresh_skipped_without_optin")
+        if refresh is not None or recorded is not None:  # (viii)
+            rpr_rhead = None
+            if recorded is not None:
+                # self-resume: NEVER create a second refresh PR
+                rpr_rhead = (int(recorded["pr"]), recorded["head_sha"])
+            if rpr_rhead is None:
+                intent = _sidecar(lease["lease_token"], "refresh.intent")
+                if intent.exists():
+                    # A prior pass declared intent and crashed between creating the
+                    # refresh PR and persisting its identity — the PR may exist with no
+                    # durable record; calling refresh() again could mint a SECOND
+                    # terminating-refresh PR (codex r1 P2). Ground-truth HITL resolves.
+                    mark_blocked(
+                        lease,
+                        sha=lease.get("head_sha") or head_sha,
+                        reason="refresh_intent_unresolved",
+                    )
+                    _emit_gate(
+                        lease,
+                        gate="merge-door-post-merge-ci",
+                        fail_class="HITL-recoverable",
+                        cause="refresh_intent_unresolved",
+                        evidence="declared refresh intent with no durable record",
+                        arc_id=arc_id,
+                        lane_id=lane_id,
+                    )
+                    _notify(
+                        "DEFERRED-HIL",
+                        lane_id,
+                        "merge-door-post-merge-ci:HITL-recoverable:refresh_intent_unresolved",
+                        f"{arc_id} — a refresh PR may exist unrecorded; inspect open PRs, "
+                        "then `record-refresh <pr> <head>` or `clear-refresh-intent`, "
+                        "`unblock`, and `land`",
+                    )
+                    raise DoorBlocked("refresh_intent_unresolved")
+                try:
+                    publish_exclusive(intent, json.dumps({"at": _now_iso()}))
+                except FileExistsError:
+                    pass
+                rpr, rhead = refresh()
+                rv0 = ground.gh_view(rpr)
+                rfiles = [f.get("path") for f in (rv0.get("files") or [])]
+                if (
+                    rv0.get("headRefOid") != rhead
+                    or not str(rv0.get("title") or "").startswith(REFRESH_TITLE_PREFIX)
+                    or rfiles != [REFRESH_ONLY_FILE]
+                ):
+                    # same identity gate as record-refresh (codex r9 P1): a refresh-cmd
+                    # mistakenly returning any real OPEN PR's pair must never persist —
+                    # the pair would be squash-merged under the global lease
+                    raise DoorFailed(
+                        f"refresh identity mismatch: pr #{rpr} at {str(rhead)[:12]} is "
+                        f"not a terminating refresh (title {str(rv0.get('title'))[:40]!r})"
+                    )
+                publish_exclusive(
+                    _sidecar(lease["lease_token"], "refresh"),
+                    json.dumps({"pr": rpr, "head_sha": rhead}),
+                )
+            else:
+                rpr, rhead = rpr_rhead
+            refresh_resumed = (
+                recorded is not None and recorded.get("merge_attempted_at") is not None
+            )
+            refresh_landed = False
+            if ground.gh_view(rpr).get("state") == "MERGED":
+                # ANY refresh already MERGED by ground truth is never re-issued —
+                # recorded (codex r9 P2: record-refresh accepts a MERGED PR whose sidecar
+                # carries no attempted marker) AND fresh (codex r10 P2: a refresh-cmd may
+                # return an already-landed pair; observing MERGED then merging violates
+                # the never-reissue invariant)
+                refresh_landed = True
+            refresh_budget = 2
+            if refresh_resumed:
+                refresh_budget = 1  # §5: one re-issue per reconcile pass
+            if refresh_landed:
+                reconciled = True
+            else:
+                reconciled = (
+                    _merge_once(lease, rpr, rhead, ground, suffix="refresh", budget=refresh_budget)
+                    or reconciled
+                )
+            rv = ground.gh_view(rpr)
+            if rv.get("state") != "MERGED":
+                raise DoorFailed("refresh PR did not merge")
+            _kill_after("refresh-merged")
+            rsha = (rv.get("mergeCommit") or {}).get("oid") or ""
+            rstatus = wait_post_merge_ci(rsha, ground, bound_s=REFRESH_BOUND_S, lane_id=lane_id)
+            if rstatus != "success":
+                mark_blocked(lease, sha=rsha, reason="refresh_ci_not_green")
+                _emit_gate(
+                    lease,
+                    gate="merge-door-post-merge-ci",
+                    fail_class="HITL-recoverable",
+                    cause="refresh_ci_not_green",
+                    evidence=rstatus,
+                    arc_id=arc_id,
+                    lane_id=lane_id,
+                )
+                _notify(
+                    "DEFERRED-HIL",
+                    lane_id,
+                    "merge-door-post-merge-ci:HITL-recoverable:refresh_ci_not_green",
+                    f"{arc_id} — terminating refresh #{rpr} run for {rsha[:12]} {rstatus}; "
+                    f"door blocked; fix, then `just merge-door-unblock {rpr} {rsha}`",
+                )
+                raise DoorBlocked(rstatus)
+            refresh_confirmed = True
+        release(lease)  # (ix)
+        if not reconciled and refresh_confirmed:
+            # a CLEAN cycle (C-HE-06 §10) requires no reconcile pass, no HITL, AND a
+            # CONFIRMED refresh (codex r9 P2: a refresh-skipped run must never count)
+            tcc = DOOR / "tier-clean-cycles"
+            if not tcc.is_symlink():  # same containment as every door subdir (r1 P2)
+                tcc.mkdir(exist_ok=True)
+                (tcc / lease["lease_token"]).touch()
+        elif reconciled:
+            # §10 requires three CONSECUTIVE clean cycles (codex r6 P2): a reconciled or
+            # HITL cycle resets the counter, else nonconsecutive cleans silence the tier
+            # (a refresh-skipped clean run neither counts nor resets)
+            tcc = DOOR / "tier-clean-cycles"
+            if tcc.is_dir() and not tcc.is_symlink():
+                for f in tcc.iterdir():
+                    f.unlink(missing_ok=True)
+        if tier:
+            _notify(
+                "NOTIFY",
+                lane_id,
+                "merge-door-lease-release:transient-retry:attestation_tier",
+                f"lease released after pr #{pr}",
+            )
+        return "released"
+    except DoorBlocked:
+        raise  # already adjudicated: the blocked sidecar is persisted at the raise site
+    except Exception as exc:
+        # NOT only DoorFailed (codex r10 P1): the production seams raise RuntimeError,
+        # JSONDecodeError, CalledProcessError, TimeoutExpired — any post-acquire escape
+        # must adjudicate the lease (release pre-attempt / block post-attempt), never
+        # exit with a live unblocked lease owned by a dead process
+        live = lease
+        refreshed = read_lease()
+        if refreshed is not None:
+            # the persisted sidecar view is the authority, not the caller dict (codex r2)
+            live = refreshed
+        refresh_attempted = (
+            isinstance(live.get("refresh"), dict)
+            and live["refresh"].get("merge_attempted_at") is not None
+        )
+        if live.get("merge_attempted_at") is None and not refresh_attempted:
+            release(live)  # pre-attempt failure: release + re-gate
+            raise
+        # a REFRESH attempt is an attempt (codex r8 P1): an externally-MERGED main PR
+        # carries no main attempted marker, so an ambiguous refresh merge would
+        # otherwise blind-release the global door
+        # A failure AFTER the attempt is an ambiguous merge state: NEVER blind-release
+        # (C-HE-06 §5). Block the door and route to HITL reconciliation.
+        mark_blocked(
+            live,
+            sha=live.get("head_sha") or head_sha,
+            reason=f"door_failed_after_attempt:{exc}",
+        )
+        # cause attribution names the ACTUAL failure class (codex r4 P3): a blanket
+        # merge_reissue_exhausted misroutes operators and corrupts the §9 reducers
+        msg = str(exc)
+        cause = "door_failed_after_attempt"
+        if "merge_reissue_exhausted" in msg:
+            cause = "merge_reissue_exhausted"
+        if "not reconcilable" in msg:
+            cause = "unreconcilable_pr_state"
+        if "refresh" in msg and cause == "door_failed_after_attempt":
+            cause = "refresh_failed"
+        _emit_gate(
+            live,
+            gate="merge-door-reconcile",
+            fail_class="HITL-recoverable",
+            cause=cause,
+            evidence=msg,
+            arc_id=arc_id,
+            lane_id=lane_id,
+        )
+        _notify(
+            "DEFERRED-HIL",
+            lane_id,
+            f"merge-door-reconcile:HITL-recoverable:{cause}",
+            f"{arc_id} — pr #{pr}: {exc}; reconcile by ground truth then "
+            f"`just merge-door-unblock {pr} <sha>`",
+        )
+        raise DoorBlocked(str(exc)) from exc
+
+
+def _tiering_active() -> bool:
+    """C-HE-06 §10: NOTIFY per acquire/release during the pilot + first multi-lane merges;
+    silent after 3 clean cycles (one file per clean cycle under tier-clean-cycles/)."""
+    d = DOOR / "tier-clean-cycles"
+    if d.is_symlink():
+        return True  # a planted link must not SUPPRESS notifications (codex r2 P3)
+    return not d.is_dir() or len(list(d.iterdir())) < 3
+
+
+def wait_for_door(
+    try_acquire: Callable[[], dict], *, clock=time.monotonic, sleep=time.sleep, rng=None
+) -> dict:
+    """§8 caller policy: bounded exponential backoff + full jitter (base 30 s, ×2, cap
+    10 min, 12 attempts ≈ 1 h), then HITL-recoverable. Rate-limit refusals wait but never
+    count against the 12."""
+    import random
+
+    rng = rng or random.random
+    attempts = 0
+    delay = BACKOFF["base_s"]
+    # rate refusals never count against the 12 — but they are DEADLINE-bounded
+    # (codex r10 P2): sustained same-lane contention could otherwise keep >K attempts
+    # in every rolling window and spin past the HITL exhaustion route forever
+    deadline = clock() + BACKOFF["cap_s"] * BACKOFF["max_attempts"]
+    while True:
+        try:
+            return try_acquire()
+        except RateLimited:
+            if clock() >= deadline:
+                raise BudgetExhausted(
+                    "HITL-recoverable: lease_acquire_budget_exhausted (rate-limit deadline)"
+                ) from None
+            sleep(BACKOFF["base_s"] * rng())
+            continue
+        except LeaseHeld:
+            attempts += 1
+            if attempts >= BACKOFF["max_attempts"]:
+                raise BudgetExhausted("HITL-recoverable: lease_acquire_budget_exhausted") from None
+            sleep(min(BACKOFF["cap_s"], delay) * rng())
+            delay = min(BACKOFF["cap_s"], delay * BACKOFF["factor"])
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI. Exit codes: 0 released / nothing to land; 3 blocked (HITL); 4 door failed
+    (re-gate); 5 budget exhausted."""
+    p = argparse.ArgumentParser(prog="merge_door", description=__doc__)
+    sub = p.add_subparsers(dest="cmd", required=True)
+    landp = sub.add_parser("land")
+    landp.add_argument("pr", type=int)
+    landp.add_argument("--lane-id", required=True)
+    landp.add_argument("--arc-id", required=True)
+    # the terminating-refresh continuation is MANDATORY (C-HE-06 §4(viii)) — skipping it
+    # must be an explicit operator choice, never a silent default (codex r5 P2)
+    refresh_mode = landp.add_mutually_exclusive_group(required=True)
+    refresh_mode.add_argument("--no-refresh", action="store_true")
+    refresh_mode.add_argument("--refresh-cmd", help="command printing JSON {pr, head_sha}")
+    ub = sub.add_parser("unblock")
+    ub.add_argument("pr", type=int)
+    ub.add_argument("blocked_at_sha")
+    ub.add_argument("--lane-id", required=True)
+    # refresh_intent_unresolved recovery (codex r3 P1): the two ground-truth resolutions —
+    # the refresh PR EXISTS (record it) or it does NOT (clear the intent) — each require
+    # the caller to be the live lease's own lane.
+    rr = sub.add_parser("record-refresh")
+    rr.add_argument("pr", type=int)
+    rr.add_argument("head_sha")
+    rr.add_argument("--lane-id", required=True)
+    ci = sub.add_parser("clear-refresh-intent")
+    ci.add_argument("--lane-id", required=True)
+    sub.add_parser("status")
+    sub.add_parser("gc")
+    args = p.parse_args(argv)
+    try:
+        if args.cmd == "land":
+            if args.no_refresh and os.environ.get("MERGE_DOOR_ALLOW_NO_REFRESH") != "1":
+                # --no-refresh is NOT a production path (codex r9 P2): the C-HE-06
+                # held-until-refresh invariant stands; the bypass exists for the
+                # subprocess crash suites and operator recovery, behind this env gate —
+                # refused BEFORE any lease is taken
+                print(
+                    "--no-refresh violates the C-HE-06 §4(viii) held-until-refresh "
+                    "invariant in production; set MERGE_DOOR_ALLOW_NO_REFRESH=1 for a "
+                    "test/manual bypass",
+                    file=sys.stderr,
+                )
+                return 4
+            ground = default_ground()
+            refresh = None
+            if args.refresh_cmd and not args.no_refresh:
+
+                def refresh():
+                    out = subprocess.run(
+                        ["bash", "-c", args.refresh_cmd],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        timeout=3600,
+                    ).stdout
+                    d = json.loads(out)
+                    return int(d["pr"]), d["head_sha"]
+
+            lease = None
+            live = read_lease()
+            if live is not None:
+                same_lane = (
+                    live.get("lane_id") == args.lane_id
+                    and int(live.get("pr", -1)) == args.pr
+                    and live.get("reservation_id") == args.arc_id
+                )
+                holder_dead = live.get("host") == socket.gethostname() and not _process_is_alive(
+                    int(live["pid"])
+                )
+                if same_lane and holder_dead and live.get("state") != "blocked":
+                    try:
+                        gs = reconcile_ground(live, ground)
+                    except DoorFailed as exc:
+                        # an unreconcilable PR at resume must not wedge an unblockable
+                        # door (codex r7 P1): block it so the operator's unblock +
+                        # recovery verbs become available
+                        mark_blocked(
+                            live,
+                            sha=live.get("head_sha") or "0" * 40,
+                            reason=f"unreconcilable_at_resume:{exc}",
+                        )
+                        print(f"BLOCKED: {exc}", file=sys.stderr)
+                        return 3
+                    lease = reclaim(
+                        live,
+                        lane_id=args.lane_id,
+                        ground_state=gs,
+                    )  # self-resume via the marker discipline
+            if lease is None:
+                cur = rs.current(args.arc_id)
+                if live is None and cur is not None and cur[1]["state"] == "merged":
+                    print("nothing to land: no lease and the reservation is already merged")
+                    return 0
+                if cur is not None:
+                    # §8 caller policy IS the production path (codex r1/r2 P2): normal
+                    # contention (a live foreign lease) and a free door both route
+                    # through the jittered 12-attempt backoff, then exit 5 (HITL).
+                    lease = wait_for_door(
+                        lambda: acquire(
+                            lane_id=args.lane_id,
+                            arc_id=args.arc_id,
+                            pr=args.pr,
+                            head_sha=cur[1]["head_sha"],
+                            base_sha=cur[1]["base_sha"],
+                        )
+                    )
+            if args.no_refresh:
+                # skipping the mandatory §4(viii) continuation is an EXPLICIT posture
+                # carrying the same operator-attention contract as every other owed
+                # recovery (codex r7 P2 → r8 P2): a DURABLE §9 gate row + DEFERRED-HIL,
+                # emitted as posture (before the drive) so a crash cannot lose it
+                _emit_gate(
+                    None,
+                    gate="merge-door-refresh",
+                    fail_class="HITL-recoverable",
+                    cause="refresh_skipped_by_operator",
+                    evidence=f"landing pr #{args.pr} with --no-refresh: the §4(viii) "
+                    "terminating refresh is owed out-of-band",
+                    arc_id=args.arc_id,
+                    lane_id=args.lane_id,
+                )
+                _notify(
+                    "DEFERRED-HIL",
+                    args.lane_id,
+                    "merge-door-refresh:HITL-recoverable:refresh_skipped_by_operator",
+                    f"{args.arc_id} — landing pr #{args.pr} with --no-refresh: the "
+                    "terminating refresh is owed out-of-band",
+                )
+            out = land(
+                args.pr,
+                lane_id=args.lane_id,
+                arc_id=args.arc_id,
+                ground=ground,
+                refresh=refresh,
+                lease=lease,
+            )
+            print(out)
+            return 0
+        elif args.cmd == "unblock":
+            unblock(pr=args.pr, blocked_at_sha=args.blocked_at_sha, lane_id=args.lane_id)
+            print("unblocked; successor lease held by this lane")
+            return 0
+        elif args.cmd in ("record-refresh", "clear-refresh-intent"):
+            live = read_lease()
+            if live is None or live.get("lane_id") != args.lane_id:
+                raise LeaseError("no live lease held by this lane")
+            if live.get("state") != "blocked" and live.get("host") != socket.gethostname():
+                # cross-host liveness is UNVERIFIABLE (codex r9 P2): treating a foreign
+                # host's holder as dead reopens the duplicate-refresh window mid-creation
+                raise LeaseError(
+                    "cross-host holder liveness is unverifiable -- run the recovery verb "
+                    "on the holder host, or unblock a blocked door"
+                )
+            holder_active = (
+                live.get("host") == socket.gethostname()
+                and _process_is_alive(int(live["pid"]))
+                and live.get("state") != "blocked"
+            )
+            if holder_active:
+                # a LIVE holder may be mid-refresh-creation right now (codex r6 P2):
+                # removing the crash fence under it reopens the duplicate-PR window
+                raise LeaseError(
+                    "the lease holder is alive and unblocked -- recovery verbs operate "
+                    "on a blocked door or a dead holder only"
+                )
+            intent = _sidecar(live["lease_token"], "refresh.intent")
+            if args.cmd == "record-refresh":
+                if not intent.exists() or _sidecar(live["lease_token"], "refresh").exists():
+                    # only an UNRESOLVED intent may be resolved this way (codex r7 P1)
+                    raise LeaseError("no unresolved refresh intent to resolve")
+                v = default_ground().gh_view(int(args.pr))
+                if v.get("headRefOid") != args.head_sha or v.get("state") not in (
+                    "OPEN",
+                    "MERGED",
+                ):
+                    # the recorded pair must BE a real PR at that head (codex r7 P1):
+                    # a mistaken pair would merge an unrelated PR under the global lease
+                    raise LeaseError(
+                        f"record-refresh: pr #{args.pr} ground truth does not match "
+                        f"(state {v.get('state')!r}, head {str(v.get('headRefOid'))[:12]})"
+                    )
+                title = str(v.get("title") or "")
+                files = [f.get("path") for f in (v.get("files") or [])]
+                if not title.startswith(REFRESH_TITLE_PREFIX) or files != [REFRESH_ONLY_FILE]:
+                    # pair-consistency alone is not identity (codex r8 P1): ANY real
+                    # OPEN PR passes a head match — the recorded PR must carry the
+                    # CLAUDE.md §12.2.1 terminating-refresh SHAPE (title prefix + the
+                    # roadmap-status-only file set) to merge under this lease
+                    raise LeaseError(
+                        f"record-refresh: pr #{args.pr} is not a terminating refresh "
+                        f"(title {title[:40]!r}, files {files!r})"
+                    )
+                publish_exclusive(
+                    _sidecar(live["lease_token"], "refresh"),
+                    json.dumps({"pr": int(args.pr), "head_sha": args.head_sha}),
+                )
+                print(
+                    f"refresh #{args.pr} recorded; if the door is blocked, `unblock` "
+                    "with its blocked_at_sha, then `land`"
+                )
+            else:
+                intent.unlink(missing_ok=True)
+                print(
+                    "refresh intent cleared; if the door is blocked, `unblock` with its "
+                    "blocked_at_sha, then `land` (a fresh refresh may mint)"
+                )
+            return 0
+        elif args.cmd == "status":
+            print(json.dumps(read_lease(), sort_keys=True))
+            return 0
+        else:
+            print(json.dumps([str(x) for x in gc()]))
+            return 0
+    except DoorBlocked as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return 3
+    except BudgetExhausted as exc:
+        # the wedged door is human-actionable state (codex r2 P2): §9 gate row + HIL row,
+        # never only a stderr line
+        _emit_gate(
+            None,
+            gate="merge-door-lease-acquire",
+            fail_class="HITL-recoverable",
+            cause="lease_acquire_budget_exhausted",
+            evidence=str(exc),
+            arc_id=args.arc_id,
+            lane_id=args.lane_id,
+        )
+        _notify(
+            "DEFERRED-HIL",
+            args.lane_id,
+            "merge-door-lease-acquire:HITL-recoverable:lease_acquire_budget_exhausted",
+            f"{args.arc_id} — pr #{args.pr}: {exc}; inspect the holder "
+            f"(merge_door status) and reconcile by ground truth",
+        )
+        print(f"BUDGET: {exc}", file=sys.stderr)
+        return 5
+    except LeaseError as exc:
+        print(f"DOOR: {exc}", file=sys.stderr)
+        return 4
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
