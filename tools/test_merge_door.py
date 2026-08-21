@@ -581,6 +581,42 @@ def test_dead_claimant_claim_is_broken(door):
     assert md.read_lease()["lease_token"] == "f" * 32
 
 
+# mutation-probe: drop gc()'s completed-tombstone ordering skip (marker executable again)
+def test_gc_retires_transition_before_its_completion_tombstone(door):
+    """The completion tombstone must OUTLIVE its transition marker: a pass that removed
+    completed.<T> while transition.<T> survived would make the dead marker executable
+    again (r7 P2). Pass 1 removes the marker and keeps the tombstone; pass 2 removes it."""
+    from datetime import UTC, datetime, timedelta
+
+    lease = _acq(lane="A")
+    m = _crashed_reclaim_marker(lease)
+    assert md.complete_dead_marker(m) is True
+    tok = lease["lease_token"]
+    future = datetime.now(UTC) + timedelta(days=md.GC_KEEP_DAYS + 1)
+    removed1 = {p.name for p in md.gc(now=future)}
+    assert f"transition.{tok}" in removed1
+    assert f"completed.{tok}" not in removed1
+    assert (md.DOOR / f"completed.{tok}").exists()  # tombstone outlives the marker
+    removed2 = {p.name for p in md.gc(now=future)}
+    assert f"completed.{tok}" in removed2
+
+
+def test_live_claim_survives_a_breaker_pass(door):
+    """The adjudicate-after-rename break restores a LIVE claimant's claim rather than
+    unlinking it by pathname (r7 P1)."""
+    lease = _acq(lane="A")
+    m = _crashed_reclaim_marker(lease)
+    from arc_metrics import publish_exclusive
+
+    claim = md.DOOR / f"completed.{lease['lease_token']}"
+    publish_exclusive(
+        claim,
+        json.dumps({"pid": os.getpid(), "host": md.socket.gethostname(), "at": "t"}),
+    )
+    assert md.complete_dead_marker(m) is False  # live claimant: yielded, not broken
+    assert claim.exists()  # the live claim was restored, never lost
+
+
 # ── codex U-HE-22 r5 corrections ─────────────────────────────────────────────
 
 

@@ -182,8 +182,11 @@ def _rate_check(lane_id: str, now: float) -> None:
             now += 1e-6
     recent = [p for p in d.iterdir() if (_ts(p) is not None and now - _ts(p) <= RATE_WINDOW_S)]
     for junk in d.glob(".*.tmp"):
-        if now - junk.stat().st_mtime > 3600:
-            junk.unlink(missing_ok=True)
+        try:
+            if now - junk.stat().st_mtime > 3600:
+                junk.unlink(missing_ok=True)
+        except FileNotFoundError:
+            continue  # a concurrent cleaner won (codex r7 P3)
     if len(recent) > RATE_K:
         raise RateLimited(
             f"{lane_id}: > {RATE_K} lease acquire attempts in {RATE_WINDOW_S}s "
@@ -571,15 +574,28 @@ def complete_dead_marker(marker: Path) -> bool:
         )
     except FileExistsError:
         # A completer that died between claiming and acting must not strand the
-        # completion forever (codex r6 P1): break a claim whose claimant is provably
-        # dead on this host — same poison-pill logic as the marker itself — and yield
-        # this pass (the next completer wins a fresh create).
+        # completion forever (codex r6 P1). Break the claim by ADJUDICATE-AFTER-RENAME
+        # (codex r7 P1): a read-dead-then-unlink-by-path lets a second breaker unlink a
+        # freshly recreated LIVE claim. The rename is the atomic single-winner CAS; the
+        # bytes adjudicated are the moved file itself. Dead claimant -> discard + yield
+        # (the next completer wins a fresh create); live claimant (we displaced a fresh
+        # claim) -> restore via os.link, which yields to any even-newer claim.
+        broken = DOOR / f".completed.{token}.broken.{os.getpid()}.{secrets.token_hex(4)}"
         try:
-            c = json.loads(claim.read_text())
-            if c["host"] == socket.gethostname() and not _process_is_alive(int(c["pid"])):
-                claim.unlink(missing_ok=True)
+            os.rename(claim, broken)
+        except FileNotFoundError:
+            return False  # another breaker won the rename
+        try:
+            c = json.loads(broken.read_text())
+            dead = c["host"] == socket.gethostname() and not _process_is_alive(int(c["pid"]))
         except (OSError, json.JSONDecodeError, KeyError, ValueError):
-            pass
+            dead = False
+        if not dead:
+            try:
+                os.link(broken, claim)  # restore; loses politely to a newer claim
+            except FileExistsError:
+                pass
+        broken.unlink(missing_ok=True)
         return False
     done = False
     if LEASE.exists() and json.loads(LEASE.read_text()).get("lease_token") == token:
@@ -621,6 +637,11 @@ def gc(*, now: datetime | None = None) -> list[Path]:
         # unlinked through this walk (codex r5 P1) — is_dir() follows links.
         return removed
     cutoff = now - timedelta(days=GC_KEEP_DAYS)
+    # Pass-start snapshot of live transition markers: a completed.<T> tombstone is only
+    # collectable on a pass its marker did NOT begin (codex r7 P2) — same-pass removal
+    # order via iterdir would otherwise retire both together, and a crash between the
+    # two unlinks could leave the marker executable with its tombstone gone.
+    markers_at_start = {q.name for q in DOOR.iterdir() if q.name.startswith("transition.")}
     for p in DOOR.iterdir():
         try:
             expired = (
@@ -634,6 +655,15 @@ def gc(*, now: datetime | None = None) -> list[Path]:
                 live = read_lease()
                 if live and live["lease_token"] in p.name:
                     continue
+                if p.name.startswith("completed."):
+                    # The completion tombstone must OUTLIVE its transition marker (codex
+                    # r7 P2): removing completed.<T> while transition.<T> survives (a gc
+                    # crash mid-pass, or a completion racing the marker's removal) makes
+                    # the dead marker executable again — stale authority resurrection.
+                    # Skip the tombstone while its marker exists; it goes next pass.
+                    tok = p.name.removeprefix("completed.")
+                    if f"transition.{tok}" in markers_at_start:
+                        continue
                 p.unlink()
                 removed.append(p)
         except FileNotFoundError:
