@@ -37,6 +37,10 @@ RATE_K = 5
 RATE_WINDOW_S = 60
 GC_KEEP_DAYS = 30
 MERGE_TIMEOUT_S = 120.0
+# CLAUDE.md §12.2.1 terminating-refresh discriminator (codex r8 P1): the recorded
+# refresh PR must carry this exact shape — title prefix + roadmap-status-only file set
+REFRESH_TITLE_PREFIX = "ops: roadmap status refresh "
+REFRESH_ONLY_FILE = ".harness/roadmap_status.md"
 POST_MERGE_CI_BOUND_S = 45 * 60
 REFRESH_BOUND_S = 45 * 60
 BACKOFF = {"base_s": 30.0, "factor": 2.0, "cap_s": 600.0, "max_attempts": 12}
@@ -834,7 +838,7 @@ def default_ground() -> Ground:
             "view",
             str(pr),
             "--json",
-            "state,mergedAt,headRefOid,baseRefOid,mergeCommit",
+            "state,mergedAt,headRefOid,baseRefOid,mergeCommit,title,files",
             timeout=30,
         )
         if p.returncode != 0 or not p.stdout.strip():
@@ -886,12 +890,29 @@ def default_ground() -> Ground:
         ).stdout.split()[0]
 
     def git_first_parent(sha):
-        return subprocess.run(
-            ["git", "-C", str(REPO), "rev-parse", f"{sha}^1"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+        proc = None
+        for attempt in (1, 2):
+            proc = subprocess.run(
+                ["git", "-C", str(REPO), "rev-parse", f"{sha}^1"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0:
+                return proc.stdout.strip()
+            if attempt == 1:
+                # the squash SHA is minted SERVER-SIDE by gh pr merge and is normally
+                # absent from the local object database (codex r8 P1) — without this
+                # fetch a successful remote merge raised AFTER the reservation flipped
+                # merged, wedging the door and skipping post-merge CI + refresh
+                subprocess.run(
+                    ["git", "-C", str(REPO), "fetch", "origin", sha],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=600,
+                )
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, proc.stdout, proc.stderr)
 
     def codex_worktree_present():
         out = subprocess.run(
@@ -1149,6 +1170,9 @@ def land(
             # BASE_TOCTOU detection (C-HE-12 §2): positive proof the race window was hit —
             # NEVER silent acceptance. The merge landed server-side (the reservation
             # reflects that fact); the DOOR blocks and routes to re-validation.
+            # blocked-state FIRST, emissions second (codex r8 P2): a raising gate-log
+            # writer must never leave a positively-detected race as an unblocked lease
+            mark_blocked(lease, sha=merge_sha, reason="base_toctou_first_parent_mismatch")
             _emit_gate(
                 lease,
                 gate="BASE_TOCTOU",
@@ -1159,7 +1183,6 @@ def land(
                 lane_id=lane_id,
                 severity="hard",
             )
-            mark_blocked(lease, sha=merge_sha, reason="base_toctou_first_parent_mismatch")
             _notify(
                 "DEFERRED-HIL",
                 lane_id,
@@ -1308,9 +1331,16 @@ def land(
         if refreshed is not None:
             # the persisted sidecar view is the authority, not the caller dict (codex r2)
             live = refreshed
-        if live.get("merge_attempted_at") is None:
+        refresh_attempted = (
+            isinstance(live.get("refresh"), dict)
+            and live["refresh"].get("merge_attempted_at") is not None
+        )
+        if live.get("merge_attempted_at") is None and not refresh_attempted:
             release(live)  # pre-attempt failure: release + re-gate
             raise
+        # a REFRESH attempt is an attempt (codex r8 P1): an externally-MERGED main PR
+        # carries no main attempted marker, so an ambiguous refresh merge would
+        # otherwise blind-release the global door
         # A failure AFTER the attempt is an ambiguous merge state: NEVER blind-release
         # (C-HE-06 §5). Block the door and route to HITL reconciliation.
         mark_blocked(
@@ -1477,12 +1507,24 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     )
             if args.no_refresh:
-                # skipping the mandatory §4(viii) continuation is an EXPLICIT, LOUD
-                # operator choice (codex r7 P2), never a silent default
+                # skipping the mandatory §4(viii) continuation is an EXPLICIT posture
+                # carrying the same operator-attention contract as every other owed
+                # recovery (codex r7 P2 → r8 P2): a DURABLE §9 gate row + DEFERRED-HIL,
+                # emitted as posture (before the drive) so a crash cannot lose it
+                _emit_gate(
+                    None,
+                    gate="merge-door-refresh",
+                    fail_class="HITL-recoverable",
+                    cause="refresh_skipped_by_operator",
+                    evidence=f"landing pr #{args.pr} with --no-refresh: the §4(viii) "
+                    "terminating refresh is owed out-of-band",
+                    arc_id=args.arc_id,
+                    lane_id=args.lane_id,
+                )
                 _notify(
-                    "NOTIFY",
+                    "DEFERRED-HIL",
                     args.lane_id,
-                    "merge-door-refresh:transient-retry:refresh_skipped_by_operator",
+                    "merge-door-refresh:HITL-recoverable:refresh_skipped_by_operator",
                     f"{args.arc_id} — landing pr #{args.pr} with --no-refresh: the "
                     "terminating refresh is owed out-of-band",
                 )
@@ -1531,6 +1573,17 @@ def main(argv: list[str] | None = None) -> int:
                     raise LeaseError(
                         f"record-refresh: pr #{args.pr} ground truth does not match "
                         f"(state {v.get('state')!r}, head {str(v.get('headRefOid'))[:12]})"
+                    )
+                title = str(v.get("title") or "")
+                files = [f.get("path") for f in (v.get("files") or [])]
+                if not title.startswith(REFRESH_TITLE_PREFIX) or files != [REFRESH_ONLY_FILE]:
+                    # pair-consistency alone is not identity (codex r8 P1): ANY real
+                    # OPEN PR passes a head match — the recorded PR must carry the
+                    # CLAUDE.md §12.2.1 terminating-refresh SHAPE (title prefix + the
+                    # roadmap-status-only file set) to merge under this lease
+                    raise LeaseError(
+                        f"record-refresh: pr #{args.pr} is not a terminating refresh "
+                        f"(title {title[:40]!r}, files {files!r})"
                     )
                 publish_exclusive(
                     _sidecar(live["lease_token"], "refresh"),

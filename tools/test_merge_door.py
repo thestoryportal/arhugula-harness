@@ -919,6 +919,9 @@ class FakeGround:
             "baseRefOid": "c" * 40,
             "mergedAt": None,
             "mergeCommit": None,
+            # the §12.2.1 terminating-refresh shape record-refresh validates (r8 P1)
+            "title": "ops: roadmap status refresh post-#1",
+            "files": [{"path": ".harness/roadmap_status.md"}],
         }
         return 2, "r" * 40
 
@@ -1179,11 +1182,17 @@ PY2
 esac
 """
     )
+    fetched = bindir / "fetched.marker"
     (bindir / "git").write_text(
         f"""#!/usr/bin/env bash
 if [ "$1" = "-C" ]; then shift 2; fi
 case "$1 $2" in
   "merge-tree --write-tree") echo "{tree}" ;;
+  "fetch origin") touch "{fetched}" ;;
+  "rev-parse {"c" * 40}^1")
+    # the squash SHA is minted server-side: absent from the local odb until a
+    # fetch lands it (codex r8 P1 — the earlier answer-everything shim masked this)
+    if [ -f "{fetched}" ]; then echo "{"b" * 40}"; else echo "unknown revision" >&2; exit 128; fi ;;
   "rev-parse "*) echo "{"b" * 40}" ;;
   "worktree list") echo "worktree /x" ;;
   *) exec /usr/bin/git "$@" ;;
@@ -1675,6 +1684,11 @@ def test_record_refresh_refuses_without_unresolved_intent(door, monkeypatch):
     from arc_metrics import publish_exclusive
 
     publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    # a REAL pair that is not a terminating refresh is refused on SHAPE (r8 P1):
+    # pair-consistency alone would merge any unrelated OPEN PR under the lease
+    g.states[2]["title"] = "feat: unrelated work"
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 4
+    g.states[2]["title"] = "ops: roadmap status refresh post-#1"
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
     # already resolved → a second (possibly different) record is refused
     assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 4
@@ -1714,6 +1728,56 @@ def test_no_refresh_is_loud(door, monkeypatch):
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
     assert md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"]) == 0
     assert (
-        "NOTIFY",
-        "merge-door-refresh:transient-retry:refresh_skipped_by_operator",
+        "DEFERRED-HIL",
+        "merge-door-refresh:HITL-recoverable:refresh_skipped_by_operator",
     ) in rows
+    import finding_record as frr
+
+    gate_rows = [r for r in frr.read_rows() if r.get("producer") == "merge-door-refresh"]
+    assert gate_rows and gate_rows[-1]["cause_attribution"] == "refresh_skipped_by_operator"
+
+
+# ── codex U-HE-23 r8 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop the refresh-attempt arm of the post-attempt ambiguity check
+def test_ambiguous_refresh_attempt_blocks_even_without_main_attempt(door, monkeypatch):
+    """An externally-MERGED main PR carries no main attempted marker; an ambiguous
+    REFRESH merge after it must still block the door, never blind-release (r8 P1)."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: None)
+    g = FakeGround()
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+
+    def refresh():
+        pr, head = FakeGround.add_refresh_pr(g)
+        g.states[pr].update(state="CLOSED")  # attempt lands in an unreconcilable state
+        return pr, head
+
+    def merge_fail(pr, head, timeout):
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=timeout)
+
+    g.gh_merge = merge_fail
+    with pytest.raises(md.DoorBlocked):
+        _land(door, g, refresh=refresh)
+    live = md.read_lease()
+    assert live["state"] == "blocked"  # ambiguous refresh attempt: NEVER blind-release
+    assert live["blocked_reason"].startswith("door_failed_after_attempt:")
+
+
+# mutation-probe: swap BASE_TOCTOU back to gate-append-before-mark_blocked
+def test_base_toctou_blocked_survives_raising_gate_writer(door, monkeypatch):
+    """The blocked sidecar persists BEFORE the gate/notify emissions: a raising
+    gate-log writer must not leave a positively-detected race unblocked (r8 P2)."""
+    import finding_record as frr
+
+    def boom(*a, **k):
+        raise RuntimeError("gate log unwritable")
+
+    monkeypatch.setattr(frr, "append_observation", boom)
+    g = FakeGround()
+    g.git_first_parent = lambda sha: "e" * 40
+    with pytest.raises(RuntimeError, match="gate log unwritable"):
+        _land(door, g)
+    lease = md.read_lease()
+    assert lease["state"] == "blocked"
+    assert lease["blocked_reason"] == "base_toctou_first_parent_mismatch"
