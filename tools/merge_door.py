@@ -980,7 +980,10 @@ def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str
         done = [r for r in runs if r.get("status") == "completed"]
         if done:
             concl = done[0].get("conclusion")
-            return "success" if ci_is_green(concl) else f"blocked:post_merge_ci_not_green:{concl}"
+            if not ci_is_green(concl):
+                # CANCELLED/failure blocks the door (C-HE-19 §2) — never read as green
+                return f"blocked:post_merge_ci_not_green:{concl}"
+            return "success"
         if not notified and ground.gh_main_runs_in_progress() > 2:
             _notify(
                 "NOTIFY",
@@ -1182,7 +1185,11 @@ def land(
             )
         return "released"
     except DoorFailed as exc:
-        live = read_lease() or lease  # the sidecar view is the authority, not the dict
+        live = lease
+        refreshed = read_lease()
+        if refreshed is not None:
+            # the persisted sidecar view is the authority, not the caller dict (codex r2)
+            live = refreshed
         if live.get("merge_attempted_at") is None:
             release(live)  # pre-attempt failure: release + re-gate
             raise
