@@ -145,7 +145,13 @@ def _rate_check(lane_id: str, now: float) -> None:
     LEASE exclusive create is the fence); refusals never touch the caller's §8 budget, and a
     refused attempt IS recorded (it was an attempt)."""
     _check_lane_id(lane_id)
-    d = DOOR / "attempts" / lane_id
+    att = DOOR / "attempts"
+    if att.is_symlink():
+        # Writer-side mirror of gc()'s parent guard (codex r4 P2): a planted attempts
+        # symlink must not receive attempt files or derive rate authority from external
+        # contents — fail closed, never follow.
+        raise LeaseError("merge-door/attempts is a symlink -- refused")
+    d = att / lane_id
     d.mkdir(parents=True, exist_ok=True)
 
     def _ts(p: Path) -> float | None:
@@ -194,6 +200,22 @@ def acquire(
         )
     if not (pr and head_sha and base_sha):
         raise LeaseError("pr, head_sha, base_sha are REQUIRED on the lease (C-HE-06 §3)")
+    # The reservation-to-lease authority link (codex r4 P2): ship-pr back-fills the merge
+    # tuple on the reservation BEFORE the door (C-HE-03 §3) — the lease must carry THOSE
+    # values, not unrelated caller inputs. A not-yet-back-filled reservation is a flow
+    # violation, not a default.
+    snap = cur[1]
+    if snap.get("pr") is None or snap.get("head_sha") is None or snap.get("base_sha") is None:
+        raise LeaseError(
+            f"{arc_id}: reservation merge tuple not back-filled "
+            "(ship-pr writes pr/head_sha/base_sha before the door -- C-HE-03 §3)"
+        )
+    if int(snap["pr"]) != int(pr) or snap["head_sha"] != head_sha or snap["base_sha"] != base_sha:
+        raise LeaseError(
+            f"{arc_id}: lease inputs diverge from the reservation snapshot "
+            f"(reservation pr={snap['pr']} head={snap['head_sha'][:12]} "
+            f"base={snap['base_sha'][:12]})"
+        )
     payload = {
         "lease_token": secrets.token_hex(16),
         "lane_id": lane_id,
@@ -237,6 +259,10 @@ def win_marker(token: str, target_action: str, *, extra: dict | None = None) -> 
     """One marker per token, ever. The winner alone may move LEASE. `extra` (e.g. the reclaim's
     fresh lease) rides in the marker so a dead creator's declared action can be COMPLETED, not
     just archived (C-HE-06 §6 poison-pill)."""
+    if target_action not in ("release", "reclaim", "unblock"):
+        # Closed action set (codex r4 P2): the marker is one-shot per token — a typo'd
+        # action would consume the transition and be mis-completed as a reclaim.
+        raise LeaseError(f"unknown transition action {target_action!r}")
     m = DOOR / f"transition.{token}"
     try:
         publish_exclusive(
@@ -287,7 +313,14 @@ def _move_lease(token: str, dest_prefix: str) -> None:
         # mtime — a lease blocked >30 d would otherwise be eligible for deletion the moment
         # its transition completes, instead of holding its record for the contracted 30 d
         # (codex U-HE-22 r3 P3). The history clock starts at the transition, not the acquire.
+        # The token's SIDECARS carry the same history (attempted/blocked/refresh) and get
+        # the same clock (codex r4 P3), else GC erases the transition evidence early.
         os.utime(dest, None)
+        for side in DOOR.glob(f"LEASE.{token}.*"):
+            try:
+                os.utime(side, None)
+            except FileNotFoundError:
+                continue
     except FileNotFoundError:
         pass  # already moved: fail-closed idempotency (a rename on a moved source = "done")
 
@@ -397,10 +430,11 @@ def _publish_fresh(fresh: dict) -> None:
     (attempted; the refresh continuation + its own attempted — codex U-HE-22 r1 P1)."""
     ref = fresh.get("refresh")
     payload = {k: v for k, v in fresh.items() if k not in ("refresh", "blocked_at")}
-    try:
-        publish_exclusive(LEASE, json.dumps(payload, sort_keys=True))
-    except FileExistsError:
-        pass
+    # SIDECARS FIRST, LEASE LAST (codex r4 P1): a crash between a published LEASE and its
+    # not-yet-republished sidecars would present an apparently-refresh-free lease — a later
+    # self-resume would then lose the recorded refresh/attempt state and could re-issue.
+    # Token-named sidecars published before their LEASE are invisible orphans (read_lease
+    # keys off the published token), so this order is crash-safe in both directions.
     if fresh.get("merge_attempted_at"):
         try:
             publish_exclusive(
@@ -427,6 +461,10 @@ def _publish_fresh(fresh: dict) -> None:
                 )
             except FileExistsError:
                 pass
+    try:
+        publish_exclusive(LEASE, json.dumps(payload, sort_keys=True))
+    except FileExistsError:
+        pass
 
 
 def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
@@ -440,9 +478,15 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
     lease = read_lease()
     if lease is None or lease.get("state") != "blocked":
         raise LeaseError("no blocked lease to unblock")
-    if int(lease["pr"]) != int(pr) or lease.get("blocked_at_sha") != blocked_at_sha:
+    # A refresh-CI block is keyed by the REFRESH PR (codex r4 P2): the §4(viii)
+    # continuation records its own PR in the refresh sidecar, and the documented recovery
+    # command passes that number — accept either the lease's own PR or the continuation's.
+    known_prs = {int(lease["pr"])}
+    if isinstance(lease.get("refresh"), dict) and lease["refresh"].get("pr") is not None:
+        known_prs.add(int(lease["refresh"]["pr"]))
+    if int(pr) not in known_prs or lease.get("blocked_at_sha") != blocked_at_sha:
         raise LeaseError(
-            f"unblock key mismatch: lease is pr={lease['pr']} "
+            f"unblock key mismatch: lease is pr={sorted(known_prs)} "
             f"blocked_at_sha={lease.get('blocked_at_sha')}"
         )
     fresh = {
@@ -481,6 +525,10 @@ def complete_dead_marker(marker: Path) -> bool:
         return False
     token = marker.name.removeprefix("transition.")
     action = m["target_action"]
+    if action not in ("release", "reclaim", "unblock"):
+        # Fail closed on a malformed persisted marker (codex r4 P2): treating an unknown
+        # action as reclaim-ish would archive a live lease on a forged/corrupt file.
+        return False
     done = False
     if LEASE.exists() and json.loads(LEASE.read_text()).get("lease_token") == token:
         _move_lease(token, "released" if action == "release" else "reclaimed")

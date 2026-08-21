@@ -34,12 +34,21 @@ def door(tmp_path, monkeypatch):
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: pid == os.getpid())
     rs.reserve("pr-1", lane_id="A", branch="b", arc_type="inventing")
     rs.open_with_sensor("pr-1", "A")
+    # ship-pr back-fills the merge tuple BEFORE the door (C-HE-03 §3); acquire()
+    # cross-checks its inputs against this snapshot (codex r4 P2).
+    rs.update_payload("pr-1", {"pr": 1, "head_sha": "a" * 40, "base_sha": "b" * 40})
     return q
+
+
+def _open_backfilled(arc: str, lane: str, pr: int) -> None:
+    rs.reserve(arc, lane_id=lane, branch="b", arc_type="inventing")
+    rs.open_with_sensor(arc, lane)
+    rs.update_payload(arc, {"pr": pr, "head_sha": "a" * 40, "base_sha": "b" * 40})
 
 
 def _acq(lane="A", arc="pr-1", pr=1, now=1000.0):
     return md.acquire(
-        lane_id=lane, arc_id=arc, pr=pr, head_sha="h" * 40, base_sha="b" * 40, now=now
+        lane_id=lane, arc_id=arc, pr=pr, head_sha="a" * 40, base_sha="b" * 40, now=now
     )
 
 
@@ -72,8 +81,7 @@ def test_contention_fail_fast(door):
     # B must pass the P2 holder check to REACH the door (the plan sketch's
     # `_acq(lane="B", arc="pr-1")` trips HolderInvariant on A's arc first and never
     # exercises contention): B contends holding its OWN open reservation.
-    rs.reserve("pr-2", lane_id="B", branch="b", arc_type="inventing")
-    rs.open_with_sensor("pr-2", "B")
+    _open_backfilled("pr-2", "B", 2)
     with pytest.raises(md.LeaseHeld):
         _acq(lane="B", arc="pr-2", pr=2)
 
@@ -82,10 +90,10 @@ def test_contention_fail_fast(door):
 def test_lease_holder_invariant(door):
     rs.reserve("pr-2", lane_id="B", branch="b", arc_type="inventing")  # pending, not open
     with pytest.raises(md.HolderInvariant):
-        md.acquire(lane_id="B", arc_id="pr-2", pr=2, head_sha="h" * 40, base_sha="b" * 40)
+        md.acquire(lane_id="B", arc_id="pr-2", pr=2, head_sha="a" * 40, base_sha="b" * 40)
     with pytest.raises(md.HolderInvariant):
         # open but held by A
-        md.acquire(lane_id="B", arc_id="pr-1", pr=1, head_sha="h" * 40, base_sha="b" * 40)
+        md.acquire(lane_id="B", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
     # Discriminates the PRE-check from the r3 post-publication re-validation (which also
     # raises HolderInvariant but only AFTER transiently publishing + self-releasing): the
     # pre-check path must never publish at all — no lease, no self-heal history artifact.
@@ -166,9 +174,8 @@ def test_reclaim_never_adopts_a_foreign_lease(door, monkeypatch):
 
     def sneak_in(fresh):
         # another lane grabs the free door in the move->publish window
-        rs.reserve("pr-9", lane_id="C", branch="b", arc_type="inventing")
-        rs.open_with_sensor("pr-9", "C")
-        md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="h" * 40, base_sha="b" * 40)
+        _open_backfilled("pr-9", "C", 9)
+        md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="a" * 40, base_sha="b" * 40)
         real_publish(fresh)  # FileExistsError swallowed inside
 
     monkeypatch.setattr(md, "_publish_fresh", sneak_in)
@@ -346,9 +353,8 @@ def test_release_refuses_blocked_and_stale(door):
     successor = md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")
     md.release(successor)  # door free again
     # Door cycles to another lane; the old dict must not release the new holder's lease.
-    rs.reserve("pr-9", lane_id="C", branch="b", arc_type="inventing")
-    rs.open_with_sensor("pr-9", "C")
-    other = md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="h" * 40, base_sha="b" * 40)
+    _open_backfilled("pr-9", "C", 9)
+    other = md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="a" * 40, base_sha="b" * 40)
     with pytest.raises(md.LeaseError, match="stale release"):
         md.release(lease)
     assert md.read_lease()["lease_token"] == other["lease_token"]  # C undisturbed
@@ -382,7 +388,7 @@ def test_unblock_resumes_continuation(door):
     assert view["merge_attempted_at"] is not None  # continuation state carried over
     with pytest.raises(md.HolderInvariant):
         # and the door was NEVER free in a state a re-acquire could have passed:
-        md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="h" * 40, base_sha="b" * 40)
+        md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
 
 
 def test_reclaim_gate_uses_persisted_reservation_id(door):
@@ -422,6 +428,120 @@ def test_acquire_revalidates_after_publish(door, monkeypatch):
     monkeypatch.setattr(rs, "current", real_current)
     assert md.read_lease() is None  # self-released, never left held
     assert list(md.DOOR.glob("released.*"))  # through the marker discipline, not an unlink
+
+
+# ── codex U-HE-22 r4 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop acquire()'s reservation-tuple cross-check (authority link broken)
+def test_acquire_requires_backfilled_matching_tuple(door):
+    """The lease must carry the reservation's OWN back-filled merge tuple (C-HE-03 §3) —
+    unrelated caller inputs or a not-yet-back-filled reservation refuse (r4 P2)."""
+    rs.reserve("pr-3", lane_id="B", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-3", "B")  # opened but NOT back-filled
+    with pytest.raises(md.LeaseError, match="not back-filled"):
+        md.acquire(lane_id="B", arc_id="pr-3", pr=3, head_sha="a" * 40, base_sha="b" * 40)
+    with pytest.raises(md.LeaseError, match="diverge"):
+        md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="c" * 40, base_sha="b" * 40)
+    assert md.read_lease() is None
+
+
+# mutation-probe: drop _publish_fresh()'s final LEASE publish (continuation never re-presented)
+def test_publish_fresh_sidecars_before_lease(door, monkeypatch):
+    """Crash ordering (r4 P1): sidecars publish FIRST, the LEASE LAST — a crash between a
+    published LEASE and its sidecars would present an apparently-refresh-free lease and a
+    later self-resume would lose (then re-issue) the recorded refresh/attempt state."""
+    real_publish = md.publish_exclusive
+
+    def die_on_lease(path, payload):
+        if path == md.LEASE:
+            raise RuntimeError("crashed before the LEASE publish")
+        real_publish(path, payload)
+
+    fresh = {
+        "lease_token": "f" * 32,
+        "lane_id": "B",
+        "reservation_id": "pr-1",
+        "pr": 1,
+        "head_sha": "a" * 40,
+        "base_sha": "b" * 40,
+        "acquired_at": "2026-08-20T00:00:00Z",
+        "pid": 1,
+        "host": "x",
+        "merge_attempted_at": "2026-08-20T00:00:00Z",
+        "state": "held",
+        "blocked_at_sha": None,
+        "blocked_reason": None,
+        "refresh": {"pr": 999, "merge_attempted_at": "2026-08-20T00:00:01Z"},
+    }
+    md.DOOR.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(md, "publish_exclusive", die_on_lease)
+    with pytest.raises(RuntimeError):
+        md._publish_fresh(fresh)
+    assert md.read_lease() is None  # no half-published lease
+    assert md._sidecar("f" * 32, "refresh").exists()  # continuation already durable
+    monkeypatch.setattr(md, "publish_exclusive", real_publish)
+    md._publish_fresh(fresh)  # idempotent completion
+    view = md.read_lease()
+    assert view["refresh"]["pr"] == 999
+    assert view["refresh"]["merge_attempted_at"] is not None
+
+
+# mutation-probe: drop unblock()'s refresh-pr key acceptance (documented recovery fails)
+def test_unblock_accepts_refresh_pr(door):
+    """A refresh-CI block is keyed by the REFRESH PR the continuation recorded — the
+    documented `merge-door-unblock <refresh-pr>` recovery must not key-mismatch (r4 P2)."""
+    lease = _acq(lane="A")
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh"), json.dumps({"pr": 999}))
+    md.mark_blocked(lease, sha="m" * 40, reason="refresh_ci_not_green")
+    successor = md.unblock(pr=999, blocked_at_sha="m" * 40, lane_id="A")
+    assert md.read_lease()["lease_token"] == successor["lease_token"]
+    assert successor["refresh"]["pr"] == 999  # continuation carried to the successor
+
+
+# mutation-probe: drop _rate_check()'s writer-side attempts symlink refusal
+def test_rate_store_refuses_symlinked_attempts(door, tmp_path):
+    """The WRITER must not follow a planted attempts symlink either — no attempt files
+    outside QUEUE_DIR, no rate authority derived from external contents (r4 P2)."""
+    outside = tmp_path / "outside-rate"
+    outside.mkdir()
+    md.DOOR.mkdir(parents=True, exist_ok=True)
+    (md.DOOR / "attempts").symlink_to(outside)
+    with pytest.raises(md.LeaseError, match="attempts is a symlink"):
+        _acq(lane="A")
+    assert list(outside.iterdir()) == []  # nothing written through the link
+
+
+# mutation-probe: drop complete_dead_marker()'s closed-action check (typo archives a lease)
+def test_unknown_marker_action_fails_closed(door):
+    """win_marker refuses an unknown action; a malformed PERSISTED marker never archives
+    the live lease as a pseudo-reclaim (r4 P2)."""
+    lease = _acq(lane="A")
+    with pytest.raises(md.LeaseError, match="unknown transition action"):
+        md.win_marker(lease["lease_token"], "typo-action")
+    m = md.DOOR / f"transition.{lease['lease_token']}"
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(
+        m,
+        json.dumps({"pid": 999999, "host": md.socket.gethostname(), "target_action": "typo"}),
+    )
+    assert md.complete_dead_marker(m) is False
+    assert md.read_lease()["lease_token"] == lease["lease_token"]  # lease intact
+
+
+def test_history_sidecars_restamped_on_transition(door):
+    """gc's 30-day retention runs from the TRANSITION for the sidecars too (r4 P3)."""
+    import time as _time
+
+    lease = _acq(lane="A")
+    md.mark_attempted(lease)
+    side = md._sidecar(lease["lease_token"], "attempted")
+    os.utime(side, (0, 0))  # pretend the block/attempt happened ages ago
+    md.release(lease)
+    assert abs(_time.time() - side.stat().st_mtime) < 120
 
 
 # mutation-probe: drop gc()'s parent-level attempts symlink guard (escape via attempts itself)
