@@ -1486,3 +1486,69 @@ def test_refresh_intent_recovery_verbs(door, monkeypatch):
     publish_exclusive(md._sidecar(lease5["lease_token"], "refresh.intent"), "{}")
     assert md.main(["clear-refresh-intent", "--lane-id", "A"]) == 0
     assert not md._sidecar(lease5["lease_token"], "refresh.intent").exists()
+
+
+# ── codex U-HE-23 r4 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop land()'s verified-MERGED short-circuit (re-merges an external merge)
+def test_fresh_land_of_an_already_merged_pr_never_reissues(door):
+    """A PR merged externally (reservation still open) must never receive another
+    gh pr merge after verify already returned MERGED (r4 P2)."""
+    g = FakeGround()
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+    assert _land(door, g) == "released"
+    assert g.merge_calls == []  # verified ground truth; nothing re-issued
+
+
+# mutation-probe: drop unblock()'s open-holder refusal (a foreign lane takes the successor)
+def test_unblock_refuses_foreign_lane_while_reservation_open(door):
+    """While the reservation is OPEN, only its holder may take the unblock successor —
+    holder transfer is reclaim's dead-holder job (r4 P2)."""
+    lease = _acq(lane="A")
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
+    with pytest.raises(md.LeaseError, match="held\\b.*not"):
+        md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="B")
+    assert md.read_lease()["state"] == "blocked"  # untouched
+
+
+def test_intent_block_end_to_end_recovery(door, monkeypatch):
+    """The FULL wedge recovery (r4 P2): intent-block → record-refresh → unblock →
+    resumed land releases."""
+    g = FakeGround()
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    blocked = md.read_lease()
+    assert blocked["state"] == "blocked"
+    assert md.main(["record-refresh", "2", "r" * 40, "--lane-id", "A"]) == 0
+    successor = md.unblock(pr=1, blocked_at_sha=blocked["blocked_at_sha"], lane_id="A")
+    g.add_refresh_pr()
+    out = md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=successor)
+    assert out == "released"
+    assert [c[0] for c in g.merge_calls] == [1, 2]
+
+
+# mutation-probe: drop the post-attempt cause-attribution mapping (blanket reissue cause)
+def test_post_attempt_cause_names_the_failure_class(door, monkeypatch):
+    """An unreconcilable-PR failure is attributed as such, not as reissue exhaustion
+    (r4 P3)."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    g = FakeGround()
+
+    def hang_then_closed(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr]["state"] = "CLOSED"
+        g.t += timeout + 1
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    g.gh_merge = hang_then_closed
+    with pytest.raises(md.DoorBlocked):
+        _land(door, g)
+    assert any(c.endswith(":unreconcilable_pr_state") for _, c in rows), rows

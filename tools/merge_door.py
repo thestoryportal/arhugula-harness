@@ -548,6 +548,15 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
             f"unblock refused: reservation {lease['reservation_id']!r} reads "
             f"{res and res[1]['state']!r} — the arc has been terminated"
         )
+    if res[1]["state"] == "open" and res[1]["lane_id"] != lane_id:
+        # While the reservation is still OPEN, only its holder may take the successor
+        # (codex U-HE-23 r4 P2): a foreign lane's merge would succeed externally and
+        # then fail the (vi) holder transition — an ambiguous attempted state. Holder
+        # transfer is reclaim's job (dead-holder proof), never unblock's.
+        raise LeaseError(
+            f"unblock refused: reservation {lease['reservation_id']!r} is open and held "
+            f"by {res[1]['lane_id']!r}, not {lane_id!r}"
+        )
     fresh = {
         **lease,
         "lease_token": secrets.token_hex(16),
@@ -1102,15 +1111,20 @@ def land(
         already = resumed_attempt and reconcile_ground(lease, ground) == "MERGED"
         reconciled = reconciled or already
         if not already:
-            verify_head_base(lease, ground)  # (ii)
-            local_base_cas_check(head_sha, attested, ground)
-            _kill_after("verify")
-            main_budget = 2
-            if resumed_attempt:
-                main_budget = 1  # §5: a resume pass re-issues at most ONCE
-            reconciled = (
-                _merge_once(lease, pr, head_sha, ground, budget=main_budget) or reconciled
-            )  # (iii)+(iv)
+            v0 = verify_head_base(lease, ground)  # (ii)
+            if v0.get("state") == "MERGED":
+                # verified ground truth already says MERGED (an externally-landed PR):
+                # never follow a verified MERGED with another gh pr merge (codex r4 P2)
+                reconciled = True
+            else:
+                local_base_cas_check(head_sha, attested, ground)
+                _kill_after("verify")
+                main_budget = 2
+                if resumed_attempt:
+                    main_budget = 1  # §5: a resume pass re-issues at most ONCE
+                reconciled = (
+                    _merge_once(lease, pr, head_sha, ground, budget=main_budget) or reconciled
+                )  # (iii)+(iv)
         v = ground.gh_view(pr)  # (v)
         if v.get("state") != "MERGED":
             raise DoorFailed("post-merge confirm: not MERGED")
@@ -1271,19 +1285,30 @@ def land(
             sha=live.get("head_sha") or head_sha,
             reason=f"door_failed_after_attempt:{exc}",
         )
+        # cause attribution names the ACTUAL failure class (codex r4 P3): a blanket
+        # merge_reissue_exhausted misroutes operators and corrupts the §9 reducers
+        msg = str(exc)
+        if "merge_reissue_exhausted" in msg:
+            cause = "merge_reissue_exhausted"
+        elif "not reconcilable" in msg:
+            cause = "unreconcilable_pr_state"
+        elif "refresh" in msg:
+            cause = "refresh_failed"
+        else:
+            cause = "door_failed_after_attempt"
         _emit_gate(
             live,
             gate="merge-door-reconcile",
             fail_class="HITL-recoverable",
-            cause="merge_reissue_exhausted",
-            evidence=str(exc),
+            cause=cause,
+            evidence=msg,
             arc_id=arc_id,
             lane_id=lane_id,
         )
         _notify(
             "DEFERRED-HIL",
             lane_id,
-            "merge-door-reconcile:HITL-recoverable:merge_reissue_exhausted",
+            f"merge-door-reconcile:HITL-recoverable:{cause}",
             f"{arc_id} — pr #{pr}: {exc}; reconcile by ground truth then "
             f"`just merge-door-unblock {pr} <sha>`",
         )
@@ -1427,10 +1452,16 @@ def main(argv: list[str] | None = None) -> int:
                     _sidecar(live["lease_token"], "refresh"),
                     json.dumps({"pr": int(args.pr), "head_sha": args.head_sha}),
                 )
-                print(f"refresh #{args.pr} recorded; resume with `land`")
+                print(
+                    f"refresh #{args.pr} recorded; if the door is blocked, `unblock` "
+                    "with its blocked_at_sha, then `land`"
+                )
             else:
                 intent.unlink(missing_ok=True)
-                print("refresh intent cleared; resume with `land` (a fresh refresh may mint)")
+                print(
+                    "refresh intent cleared; if the door is blocked, `unblock` with its "
+                    "blocked_at_sha, then `land` (a fresh refresh may mint)"
+                )
             return 0
         elif args.cmd == "status":
             print(json.dumps(read_lease(), sort_keys=True))
