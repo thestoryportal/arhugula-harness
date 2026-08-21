@@ -39,9 +39,14 @@ on:
   push:
     branches: [main]
 
-# Cancel superseded runs on the same ref so a fast push series doesn't queue.
+# Cancel superseded runs on the same ref so a fast push series doesn't queue -- EXCEPT on
+# `main`, where the group is keyed by SHA: the merge door (C-HE-06 §4(vii)) holds its lease
+# until the merge commit's OWN post-merge run is `success`, and lane B's landing must not
+# cancel lane A's run. Tradeoff (stated): cancel-in-progress is effectively off for main
+# pushes; under N-lane cadence full runs can queue -- the door emits a NOTIFY when > 2 are
+# in progress.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
