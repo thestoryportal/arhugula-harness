@@ -213,6 +213,18 @@ MANIFEST: list[Row] = [
     # row: the manifest keys rows by artifact (test_manifest_rows_well_formed), mirroring
     # C-HE-09/10 / C-HE-15/16/18.
     Row("C-HE-07/08", "shell:tools/hooks/test_permission_guard.sh", "phase0", "local + CI", True),
+    # C-HE-08 §2–§5 (U-HE-27): server-side X9 fence. `verify` exact-compares the live
+    # protection against the ci.yml-derived payload (404/mismatch → RED; auth-absent is the
+    # legal skip, which phase0 counts as NOT passed per C-HE-13 §1). The apply + tiebreaker
+    # halves are operator-gated live steps recorded in the plan evidence log.
+    Row("C-HE-08", "just:main-protection-verify", "phase0", "local", False, ("gh-auth-absent",)),
+    Row(
+        "C-HE-08",
+        "live:main-protection-tiebreaker + apply (operator-gated; evidence log)",
+        "operator-gated",
+        "loop, live",
+        False,
+    ),
     # C-HE-09/10 (U-HE-09)
     Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True),
     # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)

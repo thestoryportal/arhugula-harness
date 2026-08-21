@@ -9997,9 +9997,10 @@ items:
   close_out: '(1) Land U-HE-27 (`tools/main_protection.py` + recipes) and run the §4
     tiebreaker + §5 verify — the server fence closes both classes for main regardless of
     client parsing; (2) at U-HE-27''s landing, record in its evidence log that B-190''s
-    residual classes are bounded by the fence; (3) no client-side narrowing is owed — further
-    parser hardening against adversarial config is non-convergent by measurement (rounds
-    r1-r10).'
+    residual classes (P1/P2 and the folded merge-gate witness lens P3 from PR #1417 — the
+    bare-push predicate''s untested `branch.<b>.remote` resolution tier) are bounded by the
+    fence; (3) no client-side narrowing is owed — further parser hardening against
+    adversarial config is non-convergent by measurement (rounds r1-r10).'
   council: 'NO — the terminal is prescribed by the cleared spec itself (C-HE-08 §2 + R-20);
     the only open work is the already-scheduled next unit.'
   heading: '### B-190 · C-HE-08 §1 client-side push parser residual classes premised on adversarial local git config *(surfaced by out-of-family Codex r10 against the U-HE-26 guard unit at the 10-round cap, 2026-08-21; register-and-held; bounded by the C-HE-08 §2 server fence at U-HE-27 per R-20)*'

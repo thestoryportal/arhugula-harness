@@ -2242,10 +2242,10 @@ same spec leg.
 
 ### B-190 · C-HE-08 §1 client-side push parser residual classes premised on adversarial local git config *(surfaced by out-of-family Codex r10 against the U-HE-26 guard unit at the 10-round cap, 2026-08-21; register-and-held; bounded by the C-HE-08 §2 server fence at U-HE-27 per R-20)*
 
-- **What it is.** Two r10 classes share one premise — an actor already holding arbitrary git-config write: (P1) a remote NAMED with an embedded quote (`o'igin`) defeats dequote-then-lookup so a main-targeting `remote.o'igin.push`/`mirror` is missed; (P2) the bare-push config checks sample mutable shared state with no lock/CAS binding it to the approved execution, so a concurrent writer can retarget `remote.origin.push` at main inside the window.
+- **What it is.** Two r10 classes share one premise — an actor already holding arbitrary git-config write: (P1) a remote NAMED with an embedded quote (`o'igin`) defeats dequote-then-lookup so a main-targeting `remote.o'igin.push`/`mirror` is missed; (P2) the bare-push config checks sample mutable shared state with no lock/CAS binding it to the approved execution, so a concurrent writer can retarget `remote.origin.push` at main inside the window. Folded in at U-HE-27 (merge-gate witness lens P3 on PR #1417, same client-predicate residual family): the bare-push predicate's `branch.<b>.remote` resolution tier has no dedicated guard-suite witness — untested-tier misresolution is bounded by the same server fence.
 
 - **Current state.** Config-write is code-write in this workspace (the same actor could edit the hook itself), so both classes sit outside the client predicate's threat model (accidental/haywire-agent commands). Rounds r1–r10 measured the class as non-convergent client-side.
 
-- **Close-out steps.** (1) Land U-HE-27 (server-side branch protection, C-HE-08 §2) — the fence closes both classes for `main` regardless of client parsing (invariant R-20); (2) record in U-HE-27's evidence log that B-190's residuals are bounded by the fence; (3) no client-side narrowing owed.
+- **Close-out steps.** (1) Land U-HE-27 (server-side branch protection, C-HE-08 §2) — the fence closes both classes for `main` regardless of client parsing (invariant R-20); (2) record in U-HE-27's evidence log that B-190's residuals (P1/P2 and the folded lens-P3 untested `branch.<b>.remote` tier) are bounded by the fence; (3) no client-side narrowing owed.
 
 - **Council.** NO — the terminal is prescribed by the cleared spec itself (C-HE-08 §2 + R-20); the only open work is the already-scheduled next unit.
