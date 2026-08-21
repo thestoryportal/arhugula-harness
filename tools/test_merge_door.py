@@ -331,6 +331,10 @@ def test_completion_requires_live_reservation(door):
     assert md.read_lease() is None  # nothing resurrected
     # r9 P2: a claim that completed NOTHING is relinquished, keeping completion retryable
     assert not (md.DOOR / f"completed.{lease['lease_token']}").exists()
+    # Discriminates the PRE-gate from the r8 post-publish retraction (which also ends with
+    # an empty door, but only after transiently publishing + self-releasing): the pre-gate
+    # path never publishes, so no released.* self-heal artifact may exist.
+    assert not list(md.DOOR.glob("released.*"))
 
 
 def test_completion_allowed_during_merged_continuation(door):
