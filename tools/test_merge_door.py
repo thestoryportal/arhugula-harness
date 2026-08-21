@@ -1991,3 +1991,88 @@ def test_ac2_c_refresh_crash_resume(door, tmp_path, monkeypatch):
     assert sum("pr merge 2 " in c for c in calls) == 1
     assert md.read_lease() is None
     assert any(md.DOOR.glob("released.*"))
+
+
+# ── codex U-HE-23 r10 corrections (terminal round) ───────────────────────────
+
+
+# mutation-probe: restrict the drive's exception adjudication back to DoorFailed only
+def test_raw_exception_after_attempt_blocks_lease(door):
+    """Production seams raise RuntimeError/JSON/CalledProcessError — any post-acquire
+    escape must adjudicate the lease, never exit leaving a live unblocked lease (r10 P1)."""
+    g = FakeGround()
+    calls = {"n": 0}
+    real_view = g.gh_view
+
+    def view_then_boom(pr):
+        calls["n"] += 1
+        if calls["n"] >= 2:  # the (v) post-merge confirm raises RAW
+            raise RuntimeError("gh transport exploded")
+        return real_view(pr)
+
+    g.gh_view = view_then_boom
+    with pytest.raises(RuntimeError, match="gh transport exploded"):
+        _land(door, g)
+    live = md.read_lease()
+    assert live["state"] == "blocked"  # post-attempt: adjudicated, not abandoned
+    assert live["blocked_reason"].startswith("door_failed_after_attempt:")
+
+
+def test_raw_exception_before_attempt_releases_lease(door):
+    """The same adjudication pre-attempt: release + re-gate, no lease left behind."""
+    g = FakeGround()
+
+    def boom(pr):
+        raise RuntimeError("gh view down")
+
+    g.gh_view = boom  # the (ii) pre-attempt verification raises RAW
+    with pytest.raises(RuntimeError, match="gh view down"):
+        _land(door, g)
+    assert md.read_lease() is None  # released, door free
+
+
+# mutation-probe: drop land()'s own refresh-skip env gate (API bypass of the CLI gate)
+def test_direct_land_without_refresh_blocks_without_optin(door, monkeypatch):
+    """The §4(viii) continuation is mandatory at the API layer too: a direct land()
+    caller without the env opt-in fails closed after the merge (r10 P2)."""
+    monkeypatch.delenv("MERGE_DOOR_ALLOW_NO_REFRESH")
+    g = FakeGround()
+    with pytest.raises(md.DoorBlocked, match="refresh_skipped_without_optin"):
+        _land(door, g)
+    live = md.read_lease()
+    assert live["state"] == "blocked"
+    assert live["blocked_reason"] == "refresh_skipped_without_optin"
+
+
+# mutation-probe: restrict the never-reissue pre-check to the recorded path only
+def test_fresh_refresh_already_merged_never_reissued(door):
+    """A refresh-cmd may return an already-landed pair: observing MERGED then merging
+    violates never-reissue on the FRESH path too (r10 P2)."""
+    g = FakeGround()
+
+    def merged_refresh():
+        pr, head = FakeGround.add_refresh_pr(g)
+        g.states[pr].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "9" * 40})
+        return pr, head
+
+    assert _land(door, g, refresh=merged_refresh) == "released"
+    assert [c[0] for c in g.merge_calls] == [1]  # the MERGED pair was never re-driven
+
+
+# mutation-probe: drop wait_for_door's rate-limit deadline (indefinite starvation spin)
+def test_rate_limited_wait_is_deadline_bounded():
+    """Sustained rate refusals must reach the HITL exhaustion route, never spin past
+    the §8 envelope forever (r10 P2)."""
+    t = {"now": 0.0}
+
+    def clock():
+        return t["now"]
+
+    def sleep(s):
+        t["now"] += 700.0  # each rate wait burns real envelope time
+
+    def always_limited():
+        raise md.RateLimited("limited")
+
+    with pytest.raises(md.BudgetExhausted, match="rate-limit deadline"):
+        md.wait_for_door(always_limited, clock=clock, sleep=sleep, rng=lambda: 1.0)

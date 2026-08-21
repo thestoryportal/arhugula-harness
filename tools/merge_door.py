@@ -424,6 +424,11 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
     # through a dead lease. `open` and `merged` are the legitimate lease-holding states
     # (merged = the §4(vi)–(ix) continuation window).
     res = rs.current(persisted["reservation_id"])
+    # NOTE (codex r10 P1, HELD): a foreign-lane reclaim of an OPEN reservation leaves
+    # holdership with the original lane BY DESIGN (the U-HE-22 r2-pinned adjudication:
+    # rs.holder stays "A"); if the (vi) holder-gated transition then refuses, the door
+    # BLOCKS loud (post-attempt) and the C-HE-03 §6 transfer_holder venue recovers —
+    # never a silent wedge
     if res is None or res[1]["state"] not in ("open", "merged"):
         raise LeaseError(
             f"reclaim refused: reservation {persisted['reservation_id']!r} reads "
@@ -1223,6 +1228,20 @@ def land(
         _kill_after("post-ci")
         recorded = (read_lease() or {}).get("refresh")
         refresh_confirmed = False  # §10: only a refresh-green cycle can count clean (r9 P2)
+        if (
+            refresh is None
+            and recorded is None
+            and os.environ.get("MERGE_DOOR_ALLOW_NO_REFRESH") != "1"
+        ):
+            # the §4(viii) continuation is MANDATORY at the API layer too (codex r10 P2):
+            # the CLI's env gate must not be bypassable by a direct land() caller —
+            # fail closed (blocked, recoverable via unblock) rather than release
+            mark_blocked(
+                lease,
+                sha=lease.get("head_sha") or head_sha,
+                reason="refresh_skipped_without_optin",
+            )
+            raise DoorBlocked("refresh_skipped_without_optin")
         if refresh is not None or recorded is not None:  # (viii)
             rpr_rhead = None
             if recorded is not None:
@@ -1287,10 +1306,12 @@ def land(
                 recorded is not None and recorded.get("merge_attempted_at") is not None
             )
             refresh_landed = False
-            if recorded is not None and ground.gh_view(rpr).get("state") == "MERGED":
-                # ANY recorded refresh already MERGED by ground truth is never re-issued
-                # (codex r9 P2): record-refresh accepts a MERGED PR whose sidecar carries
-                # no attempted marker — the attempted-only reconcile re-drove gh pr merge
+            if ground.gh_view(rpr).get("state") == "MERGED":
+                # ANY refresh already MERGED by ground truth is never re-issued —
+                # recorded (codex r9 P2: record-refresh accepts a MERGED PR whose sidecar
+                # carries no attempted marker) AND fresh (codex r10 P2: a refresh-cmd may
+                # return an already-landed pair; observing MERGED then merging violates
+                # the never-reissue invariant)
                 refresh_landed = True
             refresh_budget = 2
             if refresh_resumed:
@@ -1352,7 +1373,13 @@ def land(
                 f"lease released after pr #{pr}",
             )
         return "released"
-    except DoorFailed as exc:
+    except DoorBlocked:
+        raise  # already adjudicated: the blocked sidecar is persisted at the raise site
+    except Exception as exc:
+        # NOT only DoorFailed (codex r10 P1): the production seams raise RuntimeError,
+        # JSONDecodeError, CalledProcessError, TimeoutExpired — any post-acquire escape
+        # must adjudicate the lease (release pre-attempt / block post-attempt), never
+        # exit with a live unblocked lease owned by a dead process
         live = lease
         refreshed = read_lease()
         if refreshed is not None:
@@ -1424,10 +1451,18 @@ def wait_for_door(
     rng = rng or random.random
     attempts = 0
     delay = BACKOFF["base_s"]
+    # rate refusals never count against the 12 — but they are DEADLINE-bounded
+    # (codex r10 P2): sustained same-lane contention could otherwise keep >K attempts
+    # in every rolling window and spin past the HITL exhaustion route forever
+    deadline = clock() + BACKOFF["cap_s"] * BACKOFF["max_attempts"]
     while True:
         try:
             return try_acquire()
         except RateLimited:
+            if clock() >= deadline:
+                raise BudgetExhausted(
+                    "HITL-recoverable: lease_acquire_budget_exhausted (rate-limit deadline)"
+                ) from None
             sleep(BACKOFF["base_s"] * rng())
             continue
         except LeaseHeld:
