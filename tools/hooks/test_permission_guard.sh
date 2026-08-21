@@ -587,7 +587,11 @@ OUT=$(run_on "$(pl Bash 'git push origin feature' '')"); [ "$(dec "$OUT")" = "al
 OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-26 git push origin HEAD:main' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "prefixed push-to-main → deny (stripped-read witness)" || bad "prefixed push-to-main not denied: $OUT"
 # bare `git push` while main is checked out
-( cd "$REPO" && git init -q . && git checkout -q -b main 2>/dev/null; git commit -q --allow-empty -m i )
+# Hermetic identity: without -c user.* the commit FAILS on CI (no global git identity),
+# HEAD stays unborn, `checkout -b topic` RENAMES the unborn branch, and every later
+# `git checkout main` errors `pathspec 'main'` -- the main-checkout deny rows then test
+# a topic checkout (CI-only red, 2026-08-21).
+( cd "$REPO" && git init -q . && git checkout -q -b main 2>/dev/null; git -c user.email=hermetic@test -c user.name=hermetic commit -q --allow-empty -m i )
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push on main checkout → deny" || bad "bare push on main not denied: $OUT"
 OUT=$(run_on "$(pl Bash 'git push -u origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "option-bearing bare push on main → deny" || bad "-u origin on main not denied: $OUT"
 ( cd "$REPO" && git checkout -q -b topic ); OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic → allow" || bad "bare push on topic blocked: $OUT"
