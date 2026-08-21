@@ -532,6 +532,13 @@ def test_unknown_marker_action_fails_closed(door):
     )
     assert md.complete_dead_marker(m) is False
     assert md.read_lease()["lease_token"] == lease["lease_token"]  # lease intact
+    # r10 P2: a parseable-but-malformed marker (missing pid) refuses, never raises
+    m.unlink()
+    publish_exclusive(
+        m, json.dumps({"host": md.socket.gethostname(), "target_action": "release"})
+    )
+    assert md.complete_dead_marker(m) is False
+    assert md.read_lease()["lease_token"] == lease["lease_token"]
 
 
 def test_history_sidecars_restamped_on_transition(door):

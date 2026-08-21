@@ -587,7 +587,12 @@ def complete_dead_marker(marker: Path) -> bool:
         m = json.loads(marker.read_text())
     except (OSError, json.JSONDecodeError):
         return False
-    if m["host"] != socket.gethostname() or _process_is_alive(int(m["pid"])):
+    try:
+        if m["host"] != socket.gethostname() or _process_is_alive(int(m["pid"])):
+            return False
+    except (KeyError, TypeError, ValueError):
+        # Malformed-but-parseable marker (codex r10 P2): missing keys / non-integer pid
+        # must refuse, never abort reconciliation with a raise.
         return False
     token = marker.name.removeprefix("transition.")
     action = m["target_action"]
@@ -662,19 +667,18 @@ def complete_dead_marker(marker: Path) -> bool:
         # bounded by the land driver's own step-(ii) head/base re-verification (U-HE-23),
         # which releases a stale resurrected lease.
         res = rs.current(m["fresh_lease"]["reservation_id"])
-        if res is None or res[1]["state"] not in ("open", "merged"):
-            return done
-        before = read_lease()
-        _publish_fresh(m["fresh_lease"])
-        after = read_lease()
-        published = (
-            before is None
-            and after is not None
-            and after["lease_token"] == m["fresh_lease"]["lease_token"]
-        )
-        if published and _retract_if_terminal(m["fresh_lease"]):
-            published = False  # terminalized mid-completion (codex r8 P1); self-released
-        done = done or published
+        if res is not None and res[1]["state"] in ("open", "merged"):
+            before = read_lease()
+            _publish_fresh(m["fresh_lease"])
+            after = read_lease()
+            published = (
+                before is None
+                and after is not None
+                and after["lease_token"] == m["fresh_lease"]["lease_token"]
+            )
+            if published and _retract_if_terminal(m["fresh_lease"]):
+                published = False  # terminalized mid-completion (r8 P1); self-released
+            done = done or published
     if not done:
         # We claimed but completed NOTHING (codex r9 P2): e.g. the old lease was already
         # moved and a foreign holder occupies the door, so the fresh publish lost. A
