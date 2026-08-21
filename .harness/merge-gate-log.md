@@ -520,3 +520,12 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-21T10:45:03Z | #1414 | 826d556ed718 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | 2026-08-21T10:45:04Z | #1414 | 826d556ed718 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 - PR #1414 · 2026-08-21 · `feat/he-lanes-s4c-u-he-23` · round 2 @ `826d556ed` — concurrency: APPROVE; spec-conformance: APPROVE (both r1 P2 fixes verified: marker scope i-xvii; B-187 filed, register OK); witness-adequacy: APPROVE (doc-only delta; 101 tests green; coverage 0). Outcome: ALL-APPROVE → merge without HIL (CI green precondition met). blast-radius: 5 consumers (unchanged from r1).
+| 2026-08-21T17:32:31Z | #1416 | c2b309c869a0 | merge-gate-concurrency | BLOCK | 1 finding(s) | r1 |
+| 2026-08-21T17:33:57Z | #1416 | c2b309c869a0 | merge-gate-spec-conformance | BLOCK | 3 finding(s) | r1 |
+| 2026-08-21T17:34:54Z | #1416 | c2b309c869a0 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-08-21T17:51:31Z | #1416 | 74da527735fe | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-21T17:52:49Z | #1416 | 74da527735fe | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-21T18:16:18Z | #1416 | 18246b43bc7f | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-08-21T18:18:20Z | #1416 | 18246b43bc7f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-08-21T18:19:30Z | #1416 | 18246b43bc7f | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| PR #1416 | 2026-08-21 | feat/he-lanes-u-he-25-guard-safe-merge | r1: 3x BLOCK (refresh-flag door-wedge, all lenses; spec: doc-trail + carrier docs) -> fix (pre-lease guard, rev note, docs); r2: concurrency APPROVE + witness APPROVE at 74da5277, spec BLOCK (missing clearance marker; wiring-witness rewrap break) -> fix; r3 delta re-gate at 18246b43: 3x APPROVE | MERGE | blast-radius: 10 consumers (grep-derived; graft graph python-only) |

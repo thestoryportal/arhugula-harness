@@ -165,8 +165,105 @@ OUT=$(run_on "$(jq -nc '{"hook_event_name":"PreToolUse","tool_name":"Grep","tool
 [ -z "$OUT" ] && ok "Grep outside-worktree → ask" || bad "outside Grep auto-decided: $OUT"
 
 # 5h) gh: only enumerated read/safe subcommands auto-allow; mutating ones fall to ask (codex P1).
+# C-HE-07: raw merge verb DENIED in loop mode; only the safe-merge wrapper is auto-allowed.
 OUT=$(run_on "$(pl Bash 'gh pr merge 268 --squash --delete-branch' '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "gh pr merge → allow (intended arc)" || bad "gh pr merge not allowed: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "raw gh pr merge → deny (loop mode)" || bad "raw merge not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'bash tools/hooks/safe-merge.sh 268' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "safe-merge wrapper → allow" || bad "wrapper not allowed: $OUT"
+for c in 'bash tools/hooks/safe-merge.sh 268 --squash' 'bash tools/hooks/safe-merge.sh $PR' 'bash tools/hooks/safe-merge.sh 268; rm x' 'bash tools/hooks/safe-merge.sh abc' 'tools/hooks/safe-merge.sh'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "wrapper hardening: '$c' → not allow" || bad "wrapper over-matched: $c"
+done
+# direct-exec form: the C-HE-07 §1 verbatim matcher makes the `bash` token optional
+# (mirrors _safe_worktree_remove_wrapper) — pinned so the shape is deliberate, not drift.
+OUT=$(run_on "$(pl Bash 'tools/hooks/safe-merge.sh 268' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "direct-exec wrapper form → allow (verbatim matcher)" || bad "direct-exec wrapper not allowed: $OUT"
+# wrapper with the exact-shape HARNESS_* bareword prefix (codex r1 P1: safe-merge.sh
+# requires both ids; exports do not survive across Bash tool calls)
+OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-25 HARNESS_LANE_ID=lane-1 bash tools/hooks/safe-merge.sh 268' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "HARNESS_* prefixed wrapper → allow" || bad "prefixed wrapper not allowed: $OUT"
+for c in 'HARNESS_FAILOVER_CHILD=1 bash tools/hooks/safe-merge.sh 268' \
+         'HARNESS_ARC_ID=$ARC bash tools/hooks/safe-merge.sh 268' \
+         'HARNESS_ARC_ID="u he" bash tools/hooks/safe-merge.sh 268'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "prefixed-wrapper hardening: '$c' → not allow" || bad "prefixed wrapper over-matched: $c"
+done
+# DENY-row audit of the raw-merge denial flows through emit_deny → loop_log DENY; its
+# observable venue (loop_status.md row) lands with U-HE-29 — no assertion here until then
+# (codex r2 P3: a `grep || true` pseudo-assertion would be unconditionally green).
+
+# C-HE-07 hermetic EXECUTION witness for safe-merge.sh (codex r3 P2): the wrapper itself is
+# run — arity/digit validation, env preconditions abort BEFORE delegation, and the exact
+# merge_door.py land delegation (arg-boundary-exact via a stubbed `uv` on PATH; the
+# --refresh-cmd value must arrive as ONE argument). No real merge/door/gh is reachable.
+SMWRAP="$SCRIPT_DIR/safe-merge.sh"
+SMDIR="$REPO/sm"; mkdir -p "$SMDIR/bin"; ( cd "$SMDIR" && git init -q . )
+# Stub uv: answers the wrapper's pre-lease `--help` availability probe (default: flag
+# present; override via SM_HELP_OUT), records any other invocation's argv one-per-line.
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'case "$*" in'
+  printf '%s\n' '  *--help*) printf "%s\n" "${SM_HELP_OUT:---emit-refresh-pr-json}" ;;'
+  printf '%s\n' '  *) printf "%s\n" "$@" > "$SM_ARGS_OUT" ;;'
+  printf '%s\n' 'esac'
+} > "$SMDIR/bin/uv"
+chmod +x "$SMDIR/bin/uv"
+( cd "$SMDIR" && bash "$SMWRAP" ) >/dev/null 2>&1
+[ $? -eq 64 ] && ok "safe-merge: no arg → exit 64" || bad "safe-merge no-arg rc wrong"
+( cd "$SMDIR" && bash "$SMWRAP" abc ) >/dev/null 2>&1
+[ $? -eq 64 ] && ok "safe-merge: non-digit pr → exit 64" || bad "safe-merge non-digit rc wrong"
+( cd "$SMDIR" && bash "$SMWRAP" 268 --squash ) >/dev/null 2>&1
+[ $? -eq 64 ] && ok "safe-merge: extra flag → exit 64" || bad "safe-merge extra-flag rc wrong"
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" PATH="$SMDIR/bin:$PATH" \
+  env -u HARNESS_LANE_ID HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+if [ $? -ne 0 ] && [ ! -f "$SMDIR/args" ]; then
+  ok "safe-merge: missing HARNESS_LANE_ID aborts pre-delegation"
+else
+  bad "safe-merge ran without lane id (args file: $(cat "$SMDIR/args" 2>/dev/null))"
+fi
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" PATH="$SMDIR/bin:$PATH" \
+  HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+SM_EXPECT='run
+python
+tools/merge_door.py
+land
+268
+--lane-id
+lane-1
+--arc-id
+u-he-25
+--refresh-cmd
+uv run python tools/roadmap_status_refresh.py --emit-refresh-pr-json'
+if [ "$(cat "$SMDIR/args" 2>/dev/null)" = "$SM_EXPECT" ]; then
+  ok "safe-merge: delegates the exact merge_door land invocation"
+else
+  bad "safe-merge delegation drifted: $(cat "$SMDIR/args" 2>/dev/null | tr '\n' ' ')"
+fi
+# Pre-lease availability guard (merge-gate r1): flag ABSENT from the probed CLI → the
+# wrapper aborts exit 69 BEFORE any delegation (no lease, no merge — the deterministic
+# post-merge door-wedge the three lenses traced cannot start).
+rm -f "$SMDIR/args"
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_HELP_OUT='no such flag here' PATH="$SMDIR/bin:$PATH" \
+  HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+if [ $? -eq 69 ] && [ ! -f "$SMDIR/args" ]; then
+  ok "safe-merge: unsupported refresh flag aborts pre-lease (exit 69, no delegation)"
+else
+  bad "safe-merge ran despite unsupported refresh flag (args: $(cat "$SMDIR/args" 2>/dev/null))"
+fi
+# REAL-CLI posture pin: at this HEAD the real roadmap_status_refresh.py does not yet
+# support --emit-refresh-pr-json (it lands at U-HE-28), so the wrapper against the REAL
+# repo + REAL uv must fail closed pre-lease. U-HE-28's own scope flips this expectation
+# to a successful probe — update this pin there.
+REALROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+( cd "$REALROOT" && HARNESS_LANE_ID=lane-witness HARNESS_ARC_ID=arc-witness bash "$SMWRAP" 999999 ) >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 69 ]; then
+  ok "safe-merge: REAL CLI probe fails closed pre-lease at this HEAD (exit 69)"
+elif [ "$RC" -eq 64 ]; then
+  bad "safe-merge real-CLI pin hit arity path unexpectedly"
+else
+  bad "safe-merge real-CLI pin: expected pre-lease abort 69, got rc=$RC (has U-HE-28 landed the flag? update this pin per its scope)"
+fi
 OUT=$(run_on "$(pl Bash 'gh run view 5' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh run view → allow" || bad "gh run view not allowed: $OUT"
 for c in "gh pr close 123 --delete-branch" "gh run cancel 5" "gh api repos/o/r --raw-field x=y" "gh pr edit 1 --title z"; do
@@ -338,7 +435,64 @@ done
 OUT=$(run_on "$(pl Bash 'git diff .github/workflows/ci.yml' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "git diff .github/... → allow (not .git)" || bad ".github path rejected as .git: $OUT"
 OUT=$(run_on "$(pl Bash 'gh pr merge 1 --squash' '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "gh pr merge --squash → still allow" || bad "normal merge not allowed: $OUT"
+[ "$(dec "$OUT")" = "deny" ] && ok "raw gh pr merge --squash → deny" || bad "raw merge --squash not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'gh pr merge 5 --admin' '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "--admin merge stays denied" || bad "--admin merge not denied: $OUT"
+
+# U-HE-25 registered allowlist additions (from U-HE-21 codex r1-r6; EXACT-SHAPE only).
+# (a) reservations.py carrier verbs — selectable|show|reserve|update|mint-lane-id ONLY.
+for c in 'uv run python tools/reservations.py selectable --arc-id u-he-25' \
+         'uv run python tools/reservations.py show --arc-id u-he-25' \
+         'uv run python tools/reservations.py reserve --arc-id u-he-25 --lane-id lane-1 --branch feat/x --arc-type applying' \
+         'uv run python tools/reservations.py update --arc-id u-he-25 --pr 1' \
+         'uv run python tools/reservations.py mint-lane-id'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "reservations carrier verb → allow: '$c'" || bad "reservations carrier not allowed: $c → $OUT"
+done
+# hardening: state-mutating / gh-backed / non-carrier verbs and the bare module prefix stay un-allowed
+for c in 'uv run python tools/reservations.py transition --arc-id x --to merged' \
+         'uv run python tools/reservations.py gc' \
+         'uv run python tools/reservations.py reconcile-all' \
+         'uv run python tools/reservations.py' \
+         'uv run python tools/other.py selectable'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "reservations hardening: '$c' → not allow" || bad "reservations over-matched: $c"
+done
+# (a') ship-pr's pending→open flip: transition is allowed for --to open ONLY (codex r1 P1);
+# terminal targets reject the whole command wherever they appear (argparse last-wins).
+OUT=$(run_on "$(pl Bash 'uv run python tools/reservations.py transition --arc-id u-he-25 --to open --lane-id lane-1' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "transition --to open → allow" || bad "transition --to open not allowed: $OUT"
+for c in 'uv run python tools/reservations.py transition --arc-id x --to merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to abandoned --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to open --to merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to open --to=merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to=open --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --t merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to open --t abandoned --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --lane-id l'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "transition hardening: '$c' → not allow" || bad "transition over-matched: $c"
+done
+# (b) leading env-prefix strip: EXACTLY HARNESS_ARC_ID= / HARNESS_LANE_ID= with bareword values.
+OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-25 HARNESS_LANE_ID=lane-1 just review-with-failover' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "HARNESS_* prefixed review-with-failover → allow" || bad "prefixed review not allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'HARNESS_LANE_ID=lane-1 git status' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "single HARNESS_LANE_ID prefix → allow" || bad "single-prefix git status not allowed: $OUT"
+# hardening: other HARNESS_* names, $-expansion / quoted values, and prefix-only stay un-allowed
+for c in 'HARNESS_FAILOVER_CHILD=1 just gemini-review' \
+         'HARNESS_ARC_ID=$ARC just review-with-failover' \
+         'HARNESS_ARC_ID="u he" just review-with-failover' \
+         'HARNESS_ARC_ID=u-he-25' \
+         'HARNESS_ARC_ID=u-he-25 gh pr close 1'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "env-prefix hardening: '$c' → not allow" || bad "env-prefix over-matched: $c"
+done
+# prefixed dangerous command still hits the deny-list (strip must not bypass deny scan)
+OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-25 git push --force origin main' '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "prefixed force-push → still deny" || bad "prefixed force-push not denied: $OUT"
+# (c) git merge-tree joins the read-arc git verb group
+OUT=$(run_on "$(pl Bash 'git merge-tree --write-tree origin/main HEAD' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "git merge-tree → allow" || bad "git merge-tree not allowed: $OUT"
 # in-worktree symlink to an outside file → Read must ask (OS would follow the link out)
 ln -sf /etc/passwd "$REPO/secretlink" 2>/dev/null
 OUT=$(run_on "$(pl Read '' "$REPO/secretlink")")
