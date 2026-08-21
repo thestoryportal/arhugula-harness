@@ -174,6 +174,20 @@ for c in 'bash tools/hooks/safe-merge.sh 268 --squash' 'bash tools/hooks/safe-me
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "wrapper hardening: '$c' → not allow" || bad "wrapper over-matched: $c"
 done
+# direct-exec form: the C-HE-07 §1 verbatim matcher makes the `bash` token optional
+# (mirrors _safe_worktree_remove_wrapper) — pinned so the shape is deliberate, not drift.
+OUT=$(run_on "$(pl Bash 'tools/hooks/safe-merge.sh 268' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "direct-exec wrapper form → allow (verbatim matcher)" || bad "direct-exec wrapper not allowed: $OUT"
+# wrapper with the exact-shape HARNESS_* bareword prefix (codex r1 P1: safe-merge.sh
+# requires both ids; exports do not survive across Bash tool calls)
+OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-25 HARNESS_LANE_ID=lane-1 bash tools/hooks/safe-merge.sh 268' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "HARNESS_* prefixed wrapper → allow" || bad "prefixed wrapper not allowed: $OUT"
+for c in 'HARNESS_FAILOVER_CHILD=1 bash tools/hooks/safe-merge.sh 268' \
+         'HARNESS_ARC_ID=$ARC bash tools/hooks/safe-merge.sh 268' \
+         'HARNESS_ARC_ID="u he" bash tools/hooks/safe-merge.sh 268'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "prefixed-wrapper hardening: '$c' → not allow" || bad "prefixed wrapper over-matched: $c"
+done
 grep -q 'raw gh pr merge' "$REPO/.harness/loop_status.md" 2>/dev/null || true   # DENY row audited via emit_deny (venue per U-HE-29)
 OUT=$(run_on "$(pl Bash 'gh run view 5' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh run view → allow" || bad "gh run view not allowed: $OUT"
@@ -368,6 +382,17 @@ for c in 'uv run python tools/reservations.py transition --arc-id x --to merged'
          'uv run python tools/other.py selectable'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "reservations hardening: '$c' → not allow" || bad "reservations over-matched: $c"
+done
+# (a') ship-pr's pending→open flip: transition is allowed for --to open ONLY (codex r1 P1);
+# terminal targets reject the whole command wherever they appear (argparse last-wins).
+OUT=$(run_on "$(pl Bash 'uv run python tools/reservations.py transition --arc-id u-he-25 --to open --lane-id lane-1' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "transition --to open → allow" || bad "transition --to open not allowed: $OUT"
+for c in 'uv run python tools/reservations.py transition --arc-id x --to merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to abandoned --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to open --to merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --lane-id l'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "transition hardening: '$c' → not allow" || bad "transition over-matched: $c"
 done
 # (b) leading env-prefix strip: EXACTLY HARNESS_ARC_ID= / HARNESS_LANE_ID= with bareword values.
 OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-25 HARNESS_LANE_ID=lane-1 just review-with-failover' '')")

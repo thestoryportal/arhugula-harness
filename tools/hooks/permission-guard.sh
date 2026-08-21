@@ -305,8 +305,15 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && _safe_worktree_remove_wrapper "$CMD"
   emit_allow
 fi
 # C-HE-07 §2: wrapper allow exits BEFORE the deny block below (which denies the raw verb).
-if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && _safe_merge_wrapper "$CMD"; then
-  emit_allow
+# The exact-shape HARNESS_ARC_ID=/HARNESS_LANE_ID= bareword prefix (U-HE-25 (b)) is stripped
+# first: safe-merge.sh requires both ids and shell exports do not survive across Bash tool
+# calls, so a Claude-session invocation must carry them inline (codex r1 P1). A non-bareword
+# value (any $ / quote / space) never strips, and the verbatim matcher then rejects it.
+if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
+  _MERGE_CMD=$(printf '%s' "$CMD" | sed -E 's/^[[:space:]]*((HARNESS_ARC_ID|HARNESS_LANE_ID)=[A-Za-z0-9._-]+[[:space:]]+)+//')
+  if _safe_merge_wrapper "$_MERGE_CMD"; then
+    emit_allow
+  fi
 fi
 
 # ─── 2) DENY-LIST (hard-stop, enforced even in loop mode) ──────────────────────
@@ -453,6 +460,17 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # paths intentionally fail _bash_args_safe's current-worktree containment test.
       # Git scopes these operations to this repository; this path helper limits destinations.
       # Removal uses the separately allowlisted mutex-backed wrapper.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+transition([[:space:]]|$)' \
+       && printf '%s' "$TRIM" | grep -Eq -- '--to[[:space:]]+open([[:space:]]|$)' \
+       && ! printf '%s' "$TRIM" | grep -Eq -- '--to[[:space:]]+(merged|abandoned|pending)' \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-25 (codex r1 P1): ship-pr's production pending→open flip at the final gate
+      # (ship-pr/SKILL.md — `transition --arc-id <arc> --to open --lane-id <lane>`) must not
+      # strand headless at ask→deny. ONLY `--to open` is allowed; any occurrence of a
+      # terminal target (`--to merged|abandoned`) rejects the whole command regardless of
+      # position (argparse last-wins would otherwise smuggle a terminal transition), keeping
+      # the U-HE-21 r6 rationale: terminal state changes + gc stay operator-visible.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
