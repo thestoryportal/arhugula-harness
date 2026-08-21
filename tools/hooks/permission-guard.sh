@@ -304,6 +304,24 @@ fi
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ] && _safe_worktree_remove_wrapper "$CMD"; then
   emit_allow
 fi
+# U-HE-25 (codex r2 P1): token-parse the transition target instead of pattern-matching it.
+# argparse accepts --to=<v> and prefix abbreviations (--t <v>), and last-occurrence wins —
+# a regex pair ("has --to open" + "lacks --to merged") is bypassable via `--to open
+# --to=merged`. 0 iff the command carries EXACTLY ONE --to option, in the two-token
+# literal form, with target exactly `open`; any =-form or --t… abbreviation rejects.
+_transition_to_open_only() {
+  local cmd="$1" tok prev="" target="" count=0
+  set -f; set -- $cmd; set +f
+  for tok in "$@"; do
+    case "$tok" in
+      --to) prev="TO"; count=$((count + 1)); continue ;;
+      --to=*|--t|--t=*|--to?*) return 1 ;;   # =-form / abbreviation / mangled option
+      *) if [ "$prev" = "TO" ]; then target="$tok"; fi; prev="" ;;
+    esac
+  done
+  [ "$count" -eq 1 ] && [ "$target" = "open" ]
+}
+
 # C-HE-07 §2: wrapper allow exits BEFORE the deny block below (which denies the raw verb).
 # The exact-shape HARNESS_ARC_ID=/HARNESS_LANE_ID= bareword prefix (U-HE-25 (b)) is stripped
 # first: safe-merge.sh requires both ids and shell exports do not survive across Bash tool
@@ -462,15 +480,14 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # Removal uses the separately allowlisted mutex-backed wrapper.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+transition([[:space:]]|$)' \
-       && printf '%s' "$TRIM" | grep -Eq -- '--to[[:space:]]+open([[:space:]]|$)' \
-       && ! printf '%s' "$TRIM" | grep -Eq -- '--to[[:space:]]+(merged|abandoned|pending)' \
+       && _transition_to_open_only "$TRIM" \
        && _bash_args_safe "$CMD"; then
       # U-HE-25 (codex r1 P1): ship-pr's production pending→open flip at the final gate
       # (ship-pr/SKILL.md — `transition --arc-id <arc> --to open --lane-id <lane>`) must not
-      # strand headless at ask→deny. ONLY `--to open` is allowed; any occurrence of a
-      # terminal target (`--to merged|abandoned`) rejects the whole command regardless of
-      # position (argparse last-wins would otherwise smuggle a terminal transition), keeping
-      # the U-HE-21 r6 rationale: terminal state changes + gc stay operator-visible.
+      # strand headless at ask→deny. ONLY the exact two-token `--to open` is allowed —
+      # _transition_to_open_only token-parses the target (codex r2 P1: =-forms, argparse
+      # prefix abbreviations, and last-occurrence-wins smuggling all reject), keeping the
+      # U-HE-21 r6 rationale: terminal state changes + gc stay operator-visible.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then

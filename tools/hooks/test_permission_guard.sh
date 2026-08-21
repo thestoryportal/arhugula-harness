@@ -188,7 +188,9 @@ for c in 'HARNESS_FAILOVER_CHILD=1 bash tools/hooks/safe-merge.sh 268' \
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "prefixed-wrapper hardening: '$c' → not allow" || bad "prefixed wrapper over-matched: $c"
 done
-grep -q 'raw gh pr merge' "$REPO/.harness/loop_status.md" 2>/dev/null || true   # DENY row audited via emit_deny (venue per U-HE-29)
+# DENY-row audit of the raw-merge denial flows through emit_deny → loop_log DENY; its
+# observable venue (loop_status.md row) lands with U-HE-29 — no assertion here until then
+# (codex r2 P3: a `grep || true` pseudo-assertion would be unconditionally green).
 OUT=$(run_on "$(pl Bash 'gh run view 5' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh run view → allow" || bad "gh run view not allowed: $OUT"
 for c in "gh pr close 123 --delete-branch" "gh run cancel 5" "gh api repos/o/r --raw-field x=y" "gh pr edit 1 --title z"; do
@@ -390,6 +392,10 @@ OUT=$(run_on "$(pl Bash 'uv run python tools/reservations.py transition --arc-id
 for c in 'uv run python tools/reservations.py transition --arc-id x --to merged --lane-id l' \
          'uv run python tools/reservations.py transition --arc-id x --to abandoned --lane-id l' \
          'uv run python tools/reservations.py transition --arc-id x --to open --to merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to open --to=merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to=open --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --t merged --lane-id l' \
+         'uv run python tools/reservations.py transition --arc-id x --to open --t abandoned --lane-id l' \
          'uv run python tools/reservations.py transition --arc-id x --lane-id l'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "transition hardening: '$c' → not allow" || bad "transition over-matched: $c"
