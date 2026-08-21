@@ -529,3 +529,8 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-21T18:18:20Z | #1416 | 18246b43bc7f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | 2026-08-21T18:19:30Z | #1416 | 18246b43bc7f | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
 | PR #1416 | 2026-08-21 | feat/he-lanes-u-he-25-guard-safe-merge | r1: 3x BLOCK (refresh-flag door-wedge, all lenses; spec: doc-trail + carrier docs) -> fix (pre-lease guard, rev note, docs); r2: concurrency APPROVE + witness APPROVE at 74da5277, spec BLOCK (missing clearance marker; wiring-witness rewrap break) -> fix; r3 delta re-gate at 18246b43: 3x APPROVE | MERGE | blast-radius: 10 consumers (grep-derived; graft graph python-only) |
+| 2026-08-21T22:28:55Z | #1417 | 5ab834010457 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-21T22:31:54Z | #1417 | 5ab834010457 | merge-gate-witness-adequacy | REVIEWER_UNAVAILABLE | 0 finding(s) | r1 |
+| 2026-08-21T22:32:40Z | #1417 | 5ab834010457 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-21T22:33:19Z | #1417 | 5ab834010457 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| PR #1417 | 2026-08-21 | feat/he-lanes-u-he-26-push-main-deny | concurrency: APPROVE · spec-conformance: APPROVE · witness-adequacy: APPROVE | ALL-APPROVE → merge | blast-radius: 6 consumers (coverage_gaps→main, justfile lanes recipes ×3, codex-parity-check.sh, hook registration + safe-merge/TRIM composition); notes: concurrency's torn-config-read + witness's P3 untested branch.<b>.remote tier both self-classified into registered B-190 (fold P3 into B-190 close-out at U-HE-27); witness r1 emit exit-2 (P3 on APPROVE violates schema) → conformant re-emit recorded r2 |

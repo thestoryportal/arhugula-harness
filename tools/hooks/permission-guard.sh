@@ -221,6 +221,157 @@ _safe_merge_wrapper() {
   return 0
 }
 
+# 0 iff the push command targets main: any refspec destination == main, or no refspec while
+# main is checked out (a bare push sends the current branch). U-HE-26 (C-HE-08 §1).
+_push_targets_main() {
+  local cmd="$1" tok positional=() dest branch remote="" repo_opt="" want_value="" pd scan_from=0 opts_done=0
+  # codex r2 P1: the parser sees the UNEXPANDED command. Brace expansion
+  # (`HEAD:ma{in,ster}` executes as HEAD:main) and variable expansion (`HEAD:$b` --
+  # _bash_args_safe rejects only $UPPERCASE) can synthesize a main refspec after approval,
+  # and neither is rejected by the generic control-operator gate. Any expansion-capable
+  # character in a push command denies outright.
+  # (`#` joins the gate at codex r6 P1: word-splitting treats a shell comment's tokens as
+  # arguments -- `git push # comment` IS a bare push to the checked-out branch, while the
+  # parser would count two phantom positionals and skip the bare-push branch. `#` is
+  # illegal in refnames, so nothing legitimate is lost.)
+  # (`*`/`?`/`[` join at codex r9 P1: pathname expansion applies to EVERY word -- a glob
+  # remote token like `[am]*` can expand to `a main …`, synthesizing a main refspec the
+  # per-destination checks below never see. No legitimate loop push carries glob chars.)
+  case "$cmd" in *'{'*|*'}'*|*'$'*|*'#'*|*'*'*|*'?'*|*'['*) return 0 ;; esac
+  # codex r4 P1: word-splitting cannot preserve quoted argument boundaries -- a quoted
+  # value containing whitespace (--repo 'remote bare repo') smears into phantom
+  # positionals and skips the bare-push branch. Any quoted span with internal whitespace
+  # denies outright (single-token quoting like 'HEAD:main' is unaffected).
+  printf '%s' "$cmd" | grep -Eq "['\"][^'\"]*[[:space:]][^'\"]*['\"]" && return 0
+  # codex r7 P1 (same class): a backslash-escaped whitespace (`origin\ repo` is ONE
+  # argument to git) also breaks word-split boundaries -- deny outright.
+  printf '%s' "$cmd" | grep -Eq '\\[[:space:]]' && return 0
+  set -f; set -- $cmd; set +f
+  shift 2                                   # git push
+  for tok in "$@"; do
+    if [ -n "$want_value" ]; then
+      # codex r3 P1: --repo's value IS the selected remote -- discarding it made the
+      # config checks below inspect the wrong remote's push refspecs. Dequoted before
+      # storing (codex r5 P1: the shell passes 'origin' to git AS origin; querying config
+      # for the literal quoted string missed the remote's main-targeting refspec).
+      if [ "$want_value" = "repo" ]; then
+        tok=${tok//\"/}; tok=${tok//\'/}; tok=${tok//\\/}
+        repo_opt="$tok"
+      elif [ "$want_value" = "rsub" ]; then
+        # codex r8 P1: recursive submodule modes trigger NESTED pushes that never pass
+        # through this hook (a submodule checked out on main could be pushed). Only the
+        # non-recursive modes are inert.
+        case "$tok" in no|check) ;; *) return 0 ;; esac
+      fi
+      want_value=""; continue
+    fi
+    # Shell dequoting: quotes AND backslashes -- 'HEAD:main' IS HEAD:main (Codex round-4 P1)
+    # and HEAD:ma\in IS HEAD:main (codex r1 P1). Removing every backslash can only widen
+    # the deny (a literal backslash-bearing ref can never be main).
+    tok=${tok//\"/}; tok=${tok//\'/}; tok=${tok//\\/}
+    if [ "$opts_done" = 1 ]; then positional+=("$tok"); continue; fi
+    case "$tok" in
+      --) opts_done=1; continue ;;          # codex r8 P2: end-of-options -- everything after
+                                            # is positional; hard-denying `--` broke legit
+                                            # topic pushes
+      --all|--branches) return 0 ;;         # pushes every branch, main included (codex r1 P1;
+                                            # --mirror is denied by the sibling predicate above)
+      --repo) want_value=repo; continue ;;
+      --repo=*) repo_opt="${tok#--repo=}"; continue ;;
+      --recurse-submodules) want_value=rsub; continue ;;
+      --recurse-submodules=no|--recurse-submodules=check) continue ;;
+      --recurse-submodules=*) return 0 ;;   # codex r8 P1: on-demand/only spawn nested
+                                            # submodule pushes outside this hook's sight
+      -o|--push-option|--receive-pack|--exec)
+                                            # codex r2/r3 P1: the separate-value options of
+                                            # `git push` -- their value is NOT a positional;
+                                            # miscounting one skipped the bare-push branch
+                                            # entirely (`--recurse-submodules no origin` was
+                                            # empirically confirmed to consume `no` as value).
+        want_value=other; continue ;;
+      -u|--set-upstream|-q|--quiet|-v|--verbose|-n|--dry-run|--porcelain|--progress|--no-progress|--thin|--no-thin|--atomic|--no-atomic|--follow-tags|--no-follow-tags|--tags|--verify|--no-verify|-4|--ipv4|-6|--ipv6|--signed|--no-signed|--signed=*|--force-with-lease|--force-with-lease=*|--no-force-with-lease|--push-option=*|--receive-pack=*|--exec=*|--no-recurse-submodules)
+        continue ;;                         # recognized flag-only / =-form options: none can
+                                            # redirect an otherwise-safe push onto main
+      -*) return 0 ;;                       # codex r4 P1: git accepts unambiguous
+                                            # long-option ABBREVIATIONS (--al == --all), so
+                                            # any option not an EXACT member of the
+                                            # recognized set fails closed.
+    esac
+    positional+=("$tok")
+  done
+  branch=$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)
+  # Refspec scan always skips the remote slot: positional[0] is git's REPOSITORY argument
+  # at every arity (measured r7: a positional repository beats --repo; codex r6/r9 P2: a
+  # remote named `main` must not hard-deny a topic push). Since r4 every unrecognized
+  # option fails closed, positional[0] is reliably the repository -- a single-positional
+  # push is a BARE push to that repository and is handled by the bare-push branch below
+  # (branch check + config checks against exactly that remote).
+  scan_from=1
+  if [ "${#positional[@]}" -gt "$scan_from" ]; then
+    for tok in "${positional[@]:$scan_from}"; do
+      # codex r2 P1: `+:` (and bare `:`) is the matching-refspec push -- it updates every
+      # matching branch, main included, and parses to an EMPTY destination.
+      case "$tok" in *:) return 0 ;; esac
+      # Two-step strip: refs/heads/main -> main AND the DWIM partial form heads/main ->
+      # main (codex r5 P1: git resolves `topic:heads/main` to refs/heads/main).
+      dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/}"; dest="${dest#heads/}"
+      # codex r3 P1: a colonless HEAD/@ refspec resolves to the CURRENT branch (deny on a
+      # main checkout); an explicit `:HEAD`/`:@` destination resolves to the REMOTE's
+      # default branch, which is plausibly main -- deny outright (over-deny is safe).
+      case "$tok" in
+        HEAD|@|+HEAD|+@) [ "$branch" = "main" ] && return 0 ;;
+        *:*) case "$dest" in HEAD|@) return 0 ;; esac ;;
+      esac
+      # Exact main, a wildcard refspec that can reach it (codex r1 P1), or a glob-capable
+      # token (`?`/`[` -- a matching file in the cwd would expand it; same class as the
+      # brace/variable gate above).
+      case "$dest" in main|*'*'*|*'?'*|*'['*) return 0 ;; esac
+    done
+  fi
+  # The remote git will actually push to: positional[0] when refspecs are present, else the
+  # bare-push precedence chain --repo > branch.<b>.pushRemote > remote.pushDefault >
+  # branch.<b>.remote > origin (codex r2/r3 P1: resolving only branch.<b>.remote read the
+  # wrong remote's config).
+  if [ "${#positional[@]}" -ge 2 ]; then
+    remote="${positional[0]}"
+  else
+    remote="${positional[0]:-$repo_opt}"
+    [ -z "$remote" ] && remote=$(git -C "$PROJECT_DIR" config --get "branch.${branch:-HEAD}.pushRemote" 2>/dev/null)
+    [ -z "$remote" ] && remote=$(git -C "$PROJECT_DIR" config --get remote.pushDefault 2>/dev/null)
+    [ -z "$remote" ] && remote=$(git -C "$PROJECT_DIR" config --get "branch.${branch:-HEAD}.remote" 2>/dev/null)
+  fi
+  remote="${remote:-origin}"
+  # codex r3 P1: remote.<r>.mirror=true behaves as if --mirror were supplied -- every ref,
+  # main included, regardless of the command's own refspecs.
+  # --bool normalizes yes/on/1 (codex r4 P1: git booleans are not the literal string true).
+  [ "$(git -C "$PROJECT_DIR" config --bool --get "remote.${remote}.mirror" 2>/dev/null)" = "true" ] && return 0
+  if [ "${#positional[@]}" -le 1 ]; then    # bare push (optional remote only)
+    [ "$branch" = "main" ] && return 0
+    # codex r1 P2 + r3 P2: a bare push can update main regardless of the checked-out
+    # branch -- deterministic config reads (no remote-tracking refs required, unlike
+    # @{push}). push.default=matching pushes every matching branch. branch.<b>.merge=main
+    # pushes main ONLY under push.default=upstream (or its deprecated alias tracking):
+    # under simple the push merely refuses, and under current it goes topic->topic --
+    # both stay allowed (r3 P2 corrected the unconditional over-deny here).
+    pd=$(git -C "$PROJECT_DIR" config --get push.default 2>/dev/null)
+    [ "$pd" = "matching" ] && return 0
+    if [ "$pd" = "upstream" ] || [ "$pd" = "tracking" ]; then
+      case "$(git -C "$PROJECT_DIR" config --get "branch.${branch:-HEAD}.merge" 2>/dev/null)" in
+        refs/heads/main|main) return 0 ;;
+      esac
+    fi
+    while IFS= read -r tok; do
+      # codex r3 P1: a configured matching refspec (`:` / `+:`, empty parsed destination)
+      # updates every matching branch, main included -- same class as the command-line
+      # token check above; a HEAD/@ destination resolves to the remote default branch.
+      case "$tok" in *:) return 0 ;; esac
+      dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/}"; dest="${dest#heads/}"
+      case "$dest" in main|*'*'*|HEAD|@) return 0 ;; esac
+    done < <(git -C "$PROJECT_DIR" config --get-all "remote.${remote}.push" 2>/dev/null)
+  fi
+  return 1
+}
+
 # A merge-gate lens may spawn a fresh Codex process only in lifecycle-isolated,
 # ephemeral read-only mode.
 # Require `--` before the prompt so option validation never scans prompt or reviewed text.
@@ -371,6 +522,22 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     && emit_deny "git history rewrite"
   printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+(-D|--delete[[:space:]]+--force)|git[[:space:]]+push.*(--delete|[[:space:]]+:)|git[[:space:]]+worktree[[:space:]]+(add|remove).*--force' \
     && emit_deny "branch deletion / remote ref delete"
+  # C-HE-08 §1 (D5): no auto-approved push lands content on main. Explicit denies (audited
+  # via loop_log DENY), NOT a removal from the allow regex (that would be the silent,
+  # unaudited "ask" path). The spec's reference regexes (C10) consumed at most one token
+  # between `push` and the refspec and therefore ALLOWED `git push -u origin feature:main`
+  # (Codex round-2 P1); this parses the argument list instead: option tokens (`-*`) anywhere
+  # are skipped, positionals are [remote] [refspec...], and any refspec whose destination is
+  # main -- `main`, `HEAD:main`, `X:main`, `refs/heads/main` -- or a push with NO refspec
+  # while main is checked out, is denied. The predicate reads the same HARNESS_ARC_ID=/
+  # HARNESS_LANE_ID= prefix-stripped form the allowlist matches (U-HE-25 (b) TRIM strip
+  # below): an anchored scan of the RAW command would let `HARNESS_ARC_ID=x git push origin
+  # main` past this deny and into the alternation's auto-allow (U-HE-25 rev (v)
+  # discriminating witness).
+  _PUSH_CMD=$(printf '%s' "$CMD" | sed -E 's/^[[:space:]]*((HARNESS_ARC_ID|HARNESS_LANE_ID)=[A-Za-z0-9._-]+[[:space:]]+)+//')
+  if printf '%s' "$_PUSH_CMD" | grep -Eq '^[[:space:]]*git[[:space:]]+push([[:space:]]|$)' && _push_targets_main "$_PUSH_CMD"; then
+    emit_deny "push targeting main — land through a PR + tools/hooks/safe-merge.sh"
+  fi
   # C-HE-07: the merge verb goes through the lease-holding wrapper ONLY (structural fence, P1).
   printf '%s' "$CMD" | grep -Eq '(^|[[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' \
     && emit_deny "raw gh pr merge — must go through tools/hooks/safe-merge.sh"
