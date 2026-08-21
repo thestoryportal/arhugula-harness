@@ -13,6 +13,7 @@ protection back to the pre-change state.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -70,36 +71,73 @@ def current_protection() -> dict | None:
     return json.loads(p.stdout)
 
 
+#: Mutable top-level protection controls beyond the fixed REQUIRED set. A rollback payload
+#: must carry these when the captured pre-change policy did — dropping them would restore a
+#: WEAKER policy than was live (codex r2 P1). Absent from the §2 desired payload on purpose.
+_OPTIONAL_CONTROLS = (
+    "required_conversation_resolution",
+    "block_creations",
+    "lock_branch",
+    "allow_fork_syncing",
+)
+
+
 def _flag(cur: dict | None, key: str) -> object:
     v = (cur or {}).get(key)
     return v.get("enabled") if isinstance(v, dict) and "enabled" in v else v
 
 
 def verify(current: dict | None, desired: dict) -> list[str]:
+    """Mismatches of a live GET `current` against a PUT-shaped `desired` — DESIRED-RELATIVE
+    throughout (codex r2 P2): the same comparator serves the §2 target policy AND the
+    rollback restore-check, where `desired` is the normalized pre-change policy (which may
+    legitimately carry reviews or restrictions)."""
     if current is None:
         return ["unprotected (404)"]
     out: list[str] = []
+    want_rsc = desired.get("required_status_checks")
     rsc = current.get("required_status_checks") or {}
-    if rsc.get("strict") is not True:
-        out.append(f"required_status_checks.strict: {rsc.get('strict')!r} != True")
-    have = sorted(rsc.get("contexts") or [c["context"] for c in rsc.get("checks", [])])
-    want = sorted(desired["required_status_checks"]["contexts"])
-    if have != want:
-        out.append(
-            f"contexts differ: missing={sorted(set(want) - set(have))} "
-            f"extra={sorted(set(have) - set(want))}"
-        )
-    if current.get("required_pull_request_reviews") not in (None, {}):
-        out.append(
-            "required_pull_request_reviews must be null (review authority is the gate chain)"
-        )
+    if want_rsc is None:
+        if rsc:
+            out.append("required_status_checks must be absent")
+    else:
+        if rsc.get("strict") is not want_rsc["strict"]:
+            out.append(
+                f"required_status_checks.strict: {rsc.get('strict')!r} != {want_rsc['strict']!r}"
+            )
+        have = sorted(rsc.get("contexts") or [c["context"] for c in rsc.get("checks", [])])
+        want = sorted(want_rsc["contexts"])
+        if have != want:
+            out.append(
+                f"contexts differ: missing={sorted(set(want) - set(have))} "
+                f"extra={sorted(set(have) - set(want))}"
+            )
+    want_prr = desired.get("required_pull_request_reviews")
+    cur_prr = current.get("required_pull_request_reviews")
+    if want_prr is None:
+        if cur_prr not in (None, {}):
+            out.append(
+                "required_pull_request_reviews must be null (review authority is the gate chain)"
+            )
+    elif _prr_put_payload(cur_prr or {}) != want_prr:
+        out.append("required_pull_request_reviews differ from the target policy")
     for k in ("enforce_admins", "allow_force_pushes", "allow_deletions", "required_linear_history"):
         if _flag(current, k) != desired[k]:
             out.append(f"{k}: {_flag(current, k)!r} != {desired[k]!r}")
-    # §2 exact-compare includes restrictions: the desired payload pins them to null, so a live
-    # user/team/app push restriction is a mismatch, not an ignorable extra (codex r1 P2).
-    if current.get("restrictions"):
-        out.append("restrictions must be null (no user/team/app push restrictions)")
+    # Optional strengthening controls: compared only when the target policy pins them
+    # (present in a normalized pre-change payload; absent from the §2 payload).
+    for k in _OPTIONAL_CONTROLS:
+        if k in desired and _flag(current, k) != desired[k]:
+            out.append(f"{k}: {_flag(current, k)!r} != {desired[k]!r}")
+    # §2 exact-compare includes restrictions: the target payload pins them (null for §2), so
+    # a live user/team/app push restriction is a mismatch, not an ignorable extra (codex r1 P2).
+    want_r = desired.get("restrictions")
+    cur_r = _restrictions_payload(current.get("restrictions"))
+    if want_r is None:
+        if cur_r:
+            out.append("restrictions must be null (no user/team/app push restrictions)")
+    elif cur_r != want_r:
+        out.append("restrictions differ from the target policy")
     return out
 
 
@@ -155,7 +193,15 @@ def _to_put_payload(got: dict) -> dict:
         "allow_force_pushes": bool(_flag(got, "allow_force_pushes")),
         "allow_deletions": bool(_flag(got, "allow_deletions")),
         "required_linear_history": bool(_flag(got, "required_linear_history")),
+        # Optional strengthening controls survive the normalization when captured (r2 P1).
+        **{k: bool(_flag(got, k)) for k in _OPTIONAL_CONTROLS if k in got},
     }
+
+
+def _approval_digest(current: dict | None, desired: dict) -> str:
+    """Binds an operator approval to the exact (BEFORE, AFTER) pair shown at the dry run."""
+    blob = json.dumps([current, desired], sort_keys=True).encode()
+    return hashlib.sha256(blob).hexdigest()[:16]
 
 
 def diff_report(current: dict | None, desired: dict) -> str:
@@ -175,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("cmd", choices=["show", "apply", "rollback", "verify", "tiebreaker"])
     p.add_argument("--confirm", action="store_true")
+    p.add_argument("--approved-digest", default=None)
     a = p.parse_args(argv)
     desired = desired_payload(blocking_contexts())
     if a.cmd == "verify":
@@ -206,13 +253,24 @@ def main(argv: list[str] | None = None) -> int:
                 "apply refuses to run in loop mode (operator-gated; CLAUDE.md §12.4.1)"
             )
         cur = current_protection()
+        digest = _approval_digest(cur, desired)
         print(diff_report(cur, desired))
         if not a.confirm:
             print(
-                "\nDRY RUN — nothing changed. After the operator approves THIS diff, "
-                "run `just main-protection-apply-confirm`."
+                f"\nDRY RUN — nothing changed. approval digest: {digest}\n"
+                "After the operator approves THIS diff, run "
+                f"`just main-protection-apply-confirm {digest}`."
             )
             return 3
+        # The confirmation is bound to the exact BEFORE/AFTER pair the operator approved:
+        # if the live protection or the ci.yml-derived payload changed between the dry run
+        # and this confirm, the digest differs and NOTHING is mutated (codex r2 P1).
+        if a.approved_digest != digest:
+            raise SystemExit(
+                "approval digest mismatch: the live protection or the ci.yml-derived payload "
+                f"changed since the approved diff (approved={a.approved_digest or '<none>'}, "
+                f"current={digest}) — re-run `just main-protection-apply` and re-approve"
+            )
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         with EVIDENCE_LOG.open("a") as f:
             f.write(f"\n## main-protection apply {stamp}\n```\n{diff_report(cur, desired)}\n```\n")
@@ -237,39 +295,48 @@ def main(argv: list[str] | None = None) -> int:
             rc = 1
             print(f"tiebreaker raised instead of returning: {e!r}")
         if rc != 0:
-            rb = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
-            if cur is None and (rb.returncode != 0 or current_protection() is not None):
-                raise SystemExit(
-                    "tiebreaker FAILED and the rollback DELETE did not restore the unprotected "
-                    "pre-change state — the new protection REMAINS LIVE on main; run "
-                    f"`just main-protection-rollback` and re-verify ({rb.stderr.strip()[:200]})"
+            if cur is None:
+                # Pre-change state was unprotected: DELETE, and VALIDATE that the deletion
+                # actually landed — a failed DELETE must not be reported as a rollback (r1 P2).
+                rb = _gh(
+                    "api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60
                 )
-            if cur is not None:
-                # There was a prior protection: restore it from a NORMALIZED (PUT-shaped) payload.
-                restore = subprocess.run(
-                    [
-                        "gh",
-                        "api",
-                        "-X",
-                        "PUT",
-                        f"repos/{_repo()}/branches/main/protection",
-                        "--input",
-                        "-",
-                    ],
-                    input=json.dumps(_to_put_payload(cur)),
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                )
-                if restore.returncode != 0 or verify(current_protection(), _to_put_payload(cur)):
+                if rb.returncode != 0 or current_protection() is not None:
                     raise SystemExit(
-                        "tiebreaker FAILED and prior protection could NOT be restored — main is "
-                        "UNPROTECTED; re-run apply-confirm or restore by hand "
-                        f"({restore.stderr.strip()[:200]})"
+                        "tiebreaker FAILED and the rollback DELETE did not restore the "
+                        "unprotected pre-change state — the new protection REMAINS LIVE on "
+                        "main; run `just main-protection-rollback` and re-verify "
+                        f"({rb.stderr.strip()[:200]})"
                     )
+                raise SystemExit(
+                    "tiebreaker FAILED → protection rolled back (DELETE); settings NOT persisted"
+                )
+            # Prior policy exists: restore it with a single PUT — PUT replaces in place, so
+            # there is no reason to open an unprotected DELETE window first (codex r2 P1).
+            restore = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    "-X",
+                    "PUT",
+                    f"repos/{_repo()}/branches/main/protection",
+                    "--input",
+                    "-",
+                ],
+                input=json.dumps(_to_put_payload(cur)),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if restore.returncode != 0 or verify(current_protection(), _to_put_payload(cur)):
+                raise SystemExit(
+                    "tiebreaker FAILED and the prior protection could NOT be verified as "
+                    "restored — inspect `just main-protection-show` against the evidence-log "
+                    "BEFORE block and restore by hand "
+                    f"({restore.stderr.strip()[:200]})"
+                )
             raise SystemExit(
-                f"tiebreaker FAILED → protection rolled back (rc={rb.returncode}); "
-                "settings NOT persisted"
+                "tiebreaker FAILED → prior protection restored (PUT); new settings NOT persisted"
             )
         print("tiebreaker PASS; protection persists. Run `just main-protection-verify`.")
         return 0
@@ -293,7 +360,6 @@ _PROTECTION_REFUSAL_SIGS = (
     "protected branch",
     "behind",
     "base branch",
-    "expected head",
     "review is required",
     "merge state",
 )
@@ -382,21 +448,18 @@ def tiebreaker() -> int:
         state = sh(
             "gh", "pr", "view", pr2, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"
         )
-        if state in ("BEHIND", "DIRTY"):
-            verdict, why = "PASS", f"stale PR caught pre-merge (mergeStateStatus={state})"
-        elif state == "BLOCKED":
-            if chk.returncode != 0:
-                verdict, why = (
-                    "FAIL",
-                    "indeterminate: stale PR BLOCKED with non-green checks "
-                    f"(gh pr checks rc={chk.returncode}) — strict:true was not exercised",
-                )
-            else:
-                verdict, why = (
-                    "PASS",
-                    "stale PR caught pre-merge (BLOCKED with green checks → protection holds it)",
-                )
+        if chk.returncode != 0:
+            # Non-green checks contaminate the probe: any merge refusal would be attributable
+            # to failing checks rather than base-staleness, so strict:true is not isolable.
+            verdict, why = (
+                "FAIL",
+                f"indeterminate: stale PR checks did not go green (gh pr checks "
+                f"rc={chk.returncode}, mergeStateStatus={state}) — strict:true not exercised",
+            )
         else:
+            # EXERCISE the merge rather than inferring from mergeStateStatus — BEHIND/BLOCKED
+            # are advisory readings, and only an actual protection-attributed refusal (or a
+            # clean fast-forward landing) proves the load-bearing parameter (codex r2 P1).
             sh("git", "fetch", "-q", "origin")
             pre = sh("git", "rev-parse", "origin/main")  # main BEFORE the stale merge
             head2 = sh("git", "rev-parse", "HEAD")
@@ -410,7 +473,11 @@ def tiebreaker() -> int:
             if m2.returncode != 0:
                 err = m2.stderr.strip()
                 if _merge_refusal_is_protection(err):
-                    verdict, why = "PASS", f"stale merge REFUSED under strict:true ({err[:120]})"
+                    verdict, why = (
+                        "PASS",
+                        f"stale merge REFUSED under strict:true "
+                        f"(mergeStateStatus={state}; {err[:120]})",
+                    )
                 else:
                     # Auth / rate-limit / network / head-race failures are NOT enforcement
                     # evidence — an unattributable refusal is an indeterminate probe (r1 P2).

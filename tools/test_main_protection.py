@@ -7,8 +7,11 @@ Provider-free unit tests: payload derivation from ci.yml, GET→PUT normalizatio
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -124,6 +127,115 @@ def test_merge_refusal_classifier_separates_protection_from_transport():
     assert not mp._merge_refusal_is_protection("HTTP 401: Bad credentials")
     assert not mp._merge_refusal_is_protection("API rate limit exceeded for user")
     assert not mp._merge_refusal_is_protection("could not resolve host: github.com")
+
+
+_PRIOR_GET = {
+    "required_status_checks": {"strict": True, "contexts": ["a — blocking"]},
+    "enforce_admins": {"enabled": True},
+    "required_pull_request_reviews": None,
+    "allow_force_pushes": {"enabled": False},
+    "allow_deletions": {"enabled": False},
+    "required_linear_history": {"enabled": False},
+}
+
+
+def _wire_apply(monkeypatch, tmp_path, *, cur, tiebreaker):
+    """Hermetic apply harness: records every gh/api subprocess, never leaves the process."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def fake_gh(*args, timeout=30):
+        calls.append(["gh", *args])
+        return subprocess.CompletedProcess(["gh", *args], 0, "", "")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    monkeypatch.setattr(mp, "_gh", fake_gh)
+    monkeypatch.setattr(mp, "_repo", lambda: "o/r")
+    monkeypatch.setattr(mp, "_loop_mode", lambda: False)
+    monkeypatch.setattr(mp, "current_protection", lambda: cur)
+    monkeypatch.setattr(mp, "tiebreaker", tiebreaker)
+    monkeypatch.setattr(mp, "EVIDENCE_LOG", tmp_path / "evidence.md")
+    return calls
+
+
+def _puts(calls):
+    return [c for c in calls if "PUT" in c]
+
+
+def _deletes(calls):
+    return [c for c in calls if "DELETE" in c]
+
+
+def test_apply_confirm_refuses_stale_approval_digest(monkeypatch, tmp_path):
+    """The confirm is bound to the exact approved BEFORE/AFTER pair: a digest mismatch must
+    abort BEFORE any mutation (codex r2 P1)."""
+    calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 0)
+    with pytest.raises(SystemExit) as e:
+        mp.main(["apply", "--confirm", "--approved-digest", "0000000000000000"])
+    assert "digest mismatch" in str(e.value)
+    assert _puts(calls) == [] and _deletes(calls) == []
+
+
+def test_apply_rollback_deletes_only_when_previously_unprotected(monkeypatch, tmp_path):
+    """cur=None + tiebreaker FAIL → exactly one PUT (the provisional apply), a validated
+    DELETE, and NO restore PUT (codex r2 P1 sequencing)."""
+    calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 1)
+    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    with pytest.raises(SystemExit) as e:
+        mp.main(["apply", "--confirm", "--approved-digest", digest])
+    assert "rolled back" in str(e.value)
+    assert len(_puts(calls)) == 1 and len(_deletes(calls)) == 1
+
+
+def test_apply_rollback_restores_prior_policy_via_put_without_delete(monkeypatch, tmp_path):
+    """cur=prior + tiebreaker FAIL → the prior policy is restored with a single PUT and NO
+    DELETE — PUT replaces in place, so an unprotected window must never be opened (r2 P1)."""
+    calls = _wire_apply(monkeypatch, tmp_path, cur=_PRIOR_GET, tiebreaker=lambda: 1)
+    digest = mp._approval_digest(_PRIOR_GET, mp.desired_payload(mp.blocking_contexts()))
+    with pytest.raises(SystemExit) as e:
+        mp.main(["apply", "--confirm", "--approved-digest", digest])
+    assert "prior protection restored" in str(e.value)
+    assert len(_puts(calls)) == 2 and _deletes(calls) == []
+
+
+def test_apply_rolls_back_when_tiebreaker_raises(monkeypatch, tmp_path):
+    """A tiebreaker that ESCAPES (SystemExit from sh(), TimeoutExpired) must still reach the
+    rollback — never exit with the new protection silently live (codex r1 P1)."""
+
+    def raising_tiebreaker():
+        raise SystemExit("gh pr checks: boom")
+
+    calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=raising_tiebreaker)
+    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    with pytest.raises(SystemExit) as e:
+        mp.main(["apply", "--confirm", "--approved-digest", digest])
+    assert "rolled back" in str(e.value)
+    assert len(_deletes(calls)) == 1
+
+
+def test_verify_restore_check_accepts_prior_policy_with_reviews():
+    """The restore-check compares against the NORMALIZED PRIOR policy, not the §2 target: a
+    restored policy carrying reviews/restrictions must verify clean (codex r2 P2)."""
+    got = {
+        "required_status_checks": {"strict": True, "contexts": ["a — blocking"]},
+        "enforce_admins": {"enabled": True},
+        "required_pull_request_reviews": {
+            "dismiss_stale_reviews": True,
+            "require_code_owner_reviews": False,
+            "required_approving_review_count": 1,
+        },
+        "restrictions": {"users": [{"login": "alice"}], "teams": [], "apps": []},
+        "allow_force_pushes": {"enabled": False},
+        "allow_deletions": {"enabled": False},
+        "required_linear_history": {"enabled": True},
+        "required_conversation_resolution": {"enabled": True},
+    }
+    put = mp._to_put_payload(got)
+    assert put["required_conversation_resolution"] is True
+    assert mp.verify(got, put) == []
 
 
 def test_verify_flags_404_and_mismatch():

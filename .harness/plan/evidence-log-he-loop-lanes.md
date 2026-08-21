@@ -22,7 +22,13 @@ invariant R-20** (protection is independent of any bug in the client guard):
 
 All three presume adversarial local git-config write (config-write = code-write in this
 workspace) and sit outside the client predicate's threat model. The fence closes each for
-`main` regardless of client parsing. **The bound becomes live at the operator-approved
-`apply --confirm` + §4 tiebreaker PASS recorded below; `just main-protection-verify` GREEN
-is the standing observable (a §8.1 phase0 row as of this unit).** No client-side narrowing
-is owed (non-convergent by measurement, U-HE-26 codex rounds r1–r10).
+`main` regardless of client parsing. No client-side narrowing is owed (non-convergent by
+measurement, U-HE-26 codex rounds r1–r10).
+
+**Status: PENDING-APPLY.** This entry records the LANDING half only (code + recipes +
+§8.1 phase0 row); as of this landing `main` is still unprotected (`show` → `null`,
+`verify` → RED `unprotected (404)`) and the fence is NOT yet live, so B-190's bound is
+**not yet in force**. It comes into force only when the operator-approved
+`apply --confirm` (digest-bound diff) and its §4 tiebreaker PASS are appended below;
+`just main-protection-verify` GREEN is the standing observable from that point (codex r2
+P2: this file must not read as claiming the bound before the live evidence exists).

@@ -283,8 +283,8 @@ main-protection-show:
     uv run python tools/main_protection.py show
 main-protection-apply:
     uv run python tools/main_protection.py apply
-main-protection-apply-confirm:
-    uv run python tools/main_protection.py apply --confirm
+main-protection-apply-confirm digest:
+    uv run python tools/main_protection.py apply --confirm --approved-digest {{digest}}
 main-protection-rollback:
     uv run python tools/main_protection.py rollback
 main-protection-verify:
