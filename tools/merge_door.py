@@ -1089,6 +1089,12 @@ def land(
                 f"resumed lease is not the door's current lease for {arc_id!r} "
                 f"(door: {live and live.get('lease_token')!r})"
             )
+        if live.get("state") == "blocked":
+            # an operator block is never driven past by a direct resume (codex r5 P2):
+            # the sanctioned transition is unblock, which mints the successor
+            raise DoorBlocked(
+                f"lease is blocked at {live.get('blocked_at_sha')!r}; use unblock, not land"
+            )
     if ground.codex_worktree_present():
         _notify(
             "NOTIFY",
@@ -1203,6 +1209,23 @@ def land(
                         lease,
                         sha=lease.get("head_sha") or head_sha,
                         reason="refresh_intent_unresolved",
+                    )
+                    _emit_gate(
+                        lease,
+                        gate="merge-door-post-merge-ci",
+                        fail_class="HITL-recoverable",
+                        cause="refresh_intent_unresolved",
+                        evidence="declared refresh intent with no durable record",
+                        arc_id=arc_id,
+                        lane_id=lane_id,
+                    )
+                    _notify(
+                        "DEFERRED-HIL",
+                        lane_id,
+                        "merge-door-post-merge-ci:HITL-recoverable:refresh_intent_unresolved",
+                        f"{arc_id} — a refresh PR may exist unrecorded; inspect open PRs, "
+                        "then `record-refresh <pr> <head>` or `clear-refresh-intent`, "
+                        "`unblock`, and `land`",
                     )
                     raise DoorBlocked("refresh_intent_unresolved")
                 try:
@@ -1360,8 +1383,11 @@ def main(argv: list[str] | None = None) -> int:
     landp.add_argument("pr", type=int)
     landp.add_argument("--lane-id", required=True)
     landp.add_argument("--arc-id", required=True)
-    landp.add_argument("--no-refresh", action="store_true")
-    landp.add_argument("--refresh-cmd", help="command printing JSON {pr, head_sha}")
+    # the terminating-refresh continuation is MANDATORY (C-HE-06 §4(viii)) — skipping it
+    # must be an explicit operator choice, never a silent default (codex r5 P2)
+    refresh_mode = landp.add_mutually_exclusive_group(required=True)
+    refresh_mode.add_argument("--no-refresh", action="store_true")
+    refresh_mode.add_argument("--refresh-cmd", help="command printing JSON {pr, head_sha}")
     ub = sub.add_parser("unblock")
     ub.add_argument("pr", type=int)
     ub.add_argument("blocked_at_sha")

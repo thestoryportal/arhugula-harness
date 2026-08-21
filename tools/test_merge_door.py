@@ -1006,20 +1006,32 @@ def test_failure_after_attempt_blocks_never_releases(door):
 
 
 def test_inflight_first_attempt_then_reissue(door):
-    """T6: a delayed first landing -- exactly one MERGED outcome; nothing proceeds past
-    (v) on an error path."""
+    """T6: the first request stays IN FLIGHT — ground truth still reads OPEN at the first
+    reconcile, the permitted single re-issue fires, then the delayed FIRST landing
+    surfaces; exactly one MERGED outcome (r5 P3: a synchronous flip before the timeout
+    duplicated the ordinary timeout/MERGED case and could not catch this window)."""
     g = FakeGround()
+    views = {"n": 0}
+    real_view = g.gh_view
 
-    def delayed(pr, head, timeout):
+    def delayed_view(pr):
+        views["n"] += 1
+        v = real_view(pr)
+        if views["n"] <= 2:
+            return {**v, "state": "OPEN", "mergedAt": None, "mergeCommit": None}
+        return {**v, "state": "MERGED", "mergedAt": "later", "mergeCommit": {"oid": "c" * 40}}
+
+    g.gh_view = delayed_view
+
+    def hang(pr, head, timeout):
         g.merge_calls.append((pr, head))
-        g.t += timeout + 1
-        # the server lands it a moment AFTER our timeout fires:
         g.states[pr].update(state="MERGED", mergedAt="later", mergeCommit={"oid": "c" * 40})
+        g.t += timeout + 1
         raise subprocess.TimeoutExpired("gh", timeout)
 
-    g.gh_merge = delayed
+    g.gh_merge = hang
     assert _land(door, g) == "released"
-    assert len(g.merge_calls) == 1
+    assert len(g.merge_calls) == 2  # the §5 single re-issue, then the delayed first lands
 
 
 # mutation-probe: make wait_post_merge_ci treat any completed conclusion as green
@@ -1552,3 +1564,46 @@ def test_post_attempt_cause_names_the_failure_class(door, monkeypatch):
     with pytest.raises(md.DoorBlocked):
         _land(door, g)
     assert any(c.endswith(":unreconcilable_pr_state") for _, c in rows), rows
+
+
+# ── codex U-HE-23 r5 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop land()'s blocked-resume refusal (an operator block is driven past)
+def test_land_refuses_a_blocked_resumed_lease(door):
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
+    with pytest.raises(md.DoorBlocked, match="use unblock"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=md.read_lease())
+    assert g.merge_calls == []  # never drove past the operator block
+
+
+def test_cli_requires_an_explicit_refresh_posture(door):
+    """Skipping the mandatory §4(viii) continuation must be an explicit choice (r5 P2)."""
+    with pytest.raises(SystemExit) as exc:
+        md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1"])
+    assert exc.value.code == 2  # argparse refusal, not a silent refresh=None
+
+
+# mutation-probe: drop the intent-unresolved gate/HIL emission (silent wedge)
+def test_intent_unresolved_emits_gate_and_hil(door, monkeypatch):
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (
+        "DEFERRED-HIL",
+        "merge-door-post-merge-ci:HITL-recoverable:refresh_intent_unresolved",
+    ) in rows
+    import finding_record as frr
+
+    causes = [r.get("cause_attribution") for r in frr.read_rows()]
+    assert "refresh_intent_unresolved" in causes
