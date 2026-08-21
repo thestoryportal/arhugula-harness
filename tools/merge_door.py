@@ -535,10 +535,12 @@ def gc(*, now: datetime | None = None) -> list[Path]:
         except FileNotFoundError:
             # a concurrent collector won this artifact: log-and-yield idiom (codex r2 P3)
             continue
-    att = DOOR / "attempts"
+    att: Path | None = DOOR / "attempts"
     # The attempts dir ITSELF must not be a planted symlink either — its ordinary-looking
     # children would pass the per-lane check while living outside QUEUE_DIR (codex r3 P1).
-    if att.is_dir() and not att.is_symlink():
+    if att is not None and att.is_symlink():
+        att = None
+    if att is not None and att.is_dir():
         for lane in att.iterdir():
             # NEVER follow a planted symlink out of the attempts store: a pre-existing
             # attempts/<lane> symlink would make this walk unlink regular files outside
