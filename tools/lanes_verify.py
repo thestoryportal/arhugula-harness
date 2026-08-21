@@ -451,17 +451,18 @@ def required_probes(row: Row) -> list[tuple[str, str]]:
     if kind == "shell":
         script = target.split()[0]
         path = REPO / script
-        if path.exists():
-            # A shell suite has no `def test_` for _ANNOT to bind, so a file-level
-            # red-first-form line (`# mutation-probe: <path>:<lines> ...`) names the probed
-            # file explicitly -- required when the sibling default is underivable
-            # (test_permission_guard.sh probes permission-guard.sh, a hyphenated name the
-            # `test_`-strip cannot reach). First annotation wins; sibling default otherwise.
-            for line in path.read_text().splitlines():
-                if line.startswith("# mutation-probe: "):
-                    d = _DESC_TARGET.match(line.removeprefix("# mutation-probe: ").strip())
-                    if d:
-                        return [(script, d.group("path"))]
+        # A shell suite has no `def test_` for _ANNOT to bind, so a file-level
+        # red-first-form line (`# mutation-probe: <path>:<lines> ...`) names the probed
+        # file explicitly -- required when the sibling default is underivable
+        # (test_permission_guard.sh probes permission-guard.sh, a hyphenated name the
+        # `test_`-strip cannot reach). First annotation wins; sibling default otherwise.
+        # (Flat loop, no guarding `if`: the scan must stay deletion-expressible for the
+        # mutation probe -- commenting it out falls through to the sibling default.)
+        for line in path.read_text().splitlines() if path.exists() else []:
+            if line.startswith("# mutation-probe: "):
+                d = _DESC_TARGET.match(line.removeprefix("# mutation-probe: ").strip())
+                if d:
+                    return [(script, d.group("path"))]
         return [(script, default_probe_target(script))]
     if kind != "pytest":
         return [(target, target)]
