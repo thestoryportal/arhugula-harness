@@ -89,12 +89,12 @@ B first because it looks smaller, do not hand-resolve a merge commit.
 
 Two guard facts shape how that is actually executed:
 
-- `git rebase` is hard-denied by the permission guard (`tools/hooks/permission-guard.sh:325-326`,
+- `git rebase` is hard-denied by the permission guard (`tools/hooks/permission-guard.sh:370-371`,
   "git history rewrite"). The rebase is therefore realized as: branch fresh from the refreshed
   `origin/main` and re-apply lane B's work there (`git cherry-pick <sha>...` on the *clean* new
   branch, or simply redo the edits — the arc is small by construction).
 - Deleting the abandoned branch is a privileged operation: `git branch -d` refuses an unmerged
-  branch and forced `-D` is hard-denied (`tools/hooks/permission-guard.sh:327-328`). Abandoning
+  branch and forced `-D` is hard-denied (`tools/hooks/permission-guard.sh:372-373`). Abandoning
   means *not merging it*; leave the branch in place and hand the operator the deletion command
   if it needs to go.
 - **The durable prune reminder is a TRACKED row, shipped in the replacement PR:** append the

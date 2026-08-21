@@ -198,7 +198,15 @@ done
 # --refresh-cmd value must arrive as ONE argument). No real merge/door/gh is reachable.
 SMWRAP="$SCRIPT_DIR/safe-merge.sh"
 SMDIR="$REPO/sm"; mkdir -p "$SMDIR/bin"; ( cd "$SMDIR" && git init -q . )
-printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$@" > "$SM_ARGS_OUT"' > "$SMDIR/bin/uv"
+# Stub uv: answers the wrapper's pre-lease `--help` availability probe (default: flag
+# present; override via SM_HELP_OUT), records any other invocation's argv one-per-line.
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'case "$*" in'
+  printf '%s\n' '  *--help*) printf "%s\n" "${SM_HELP_OUT:---emit-refresh-pr-json}" ;;'
+  printf '%s\n' '  *) printf "%s\n" "$@" > "$SM_ARGS_OUT" ;;'
+  printf '%s\n' 'esac'
+} > "$SMDIR/bin/uv"
 chmod +x "$SMDIR/bin/uv"
 ( cd "$SMDIR" && bash "$SMWRAP" ) >/dev/null 2>&1
 [ $? -eq 64 ] && ok "safe-merge: no arg → exit 64" || bad "safe-merge no-arg rc wrong"
@@ -230,6 +238,31 @@ if [ "$(cat "$SMDIR/args" 2>/dev/null)" = "$SM_EXPECT" ]; then
   ok "safe-merge: delegates the exact merge_door land invocation"
 else
   bad "safe-merge delegation drifted: $(cat "$SMDIR/args" 2>/dev/null | tr '\n' ' ')"
+fi
+# Pre-lease availability guard (merge-gate r1): flag ABSENT from the probed CLI → the
+# wrapper aborts exit 69 BEFORE any delegation (no lease, no merge — the deterministic
+# post-merge door-wedge the three lenses traced cannot start).
+rm -f "$SMDIR/args"
+( cd "$SMDIR" && SM_ARGS_OUT="$SMDIR/args" SM_HELP_OUT='no such flag here' PATH="$SMDIR/bin:$PATH" \
+  HARNESS_LANE_ID=lane-1 HARNESS_ARC_ID=u-he-25 bash "$SMWRAP" 268 ) >/dev/null 2>&1
+if [ $? -eq 69 ] && [ ! -f "$SMDIR/args" ]; then
+  ok "safe-merge: unsupported refresh flag aborts pre-lease (exit 69, no delegation)"
+else
+  bad "safe-merge ran despite unsupported refresh flag (args: $(cat "$SMDIR/args" 2>/dev/null))"
+fi
+# REAL-CLI posture pin: at this HEAD the real roadmap_status_refresh.py does not yet
+# support --emit-refresh-pr-json (it lands at U-HE-28), so the wrapper against the REAL
+# repo + REAL uv must fail closed pre-lease. U-HE-28's own scope flips this expectation
+# to a successful probe — update this pin there.
+REALROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+( cd "$REALROOT" && HARNESS_LANE_ID=lane-witness HARNESS_ARC_ID=arc-witness bash "$SMWRAP" 999999 ) >/dev/null 2>&1
+RC=$?
+if [ "$RC" -eq 69 ]; then
+  ok "safe-merge: REAL CLI probe fails closed pre-lease at this HEAD (exit 69)"
+elif [ "$RC" -eq 64 ]; then
+  bad "safe-merge real-CLI pin hit arity path unexpectedly"
+else
+  bad "safe-merge real-CLI pin: expected pre-lease abort 69, got rc=$RC (has U-HE-28 landed the flag? update this pin per its scope)"
 fi
 OUT=$(run_on "$(pl Bash 'gh run view 5' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh run view → allow" || bad "gh run view not allowed: $OUT"
