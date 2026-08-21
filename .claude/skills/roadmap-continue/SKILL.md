@@ -52,12 +52,14 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
      (the store's exclusive-create CAS refuses a second head — a lost race, not an
      error), treat it exactly like the exit-1 path below: `show` and branch on the
      head's `lane_id`.
-   - `selectable` exit 1 (a head exists) → `uv run python tools/reservations.py show --arc-id <arc-id>` and branch on its `lane_id`:
-     - the head's `lane_id` equals the persisted `.harness/.lane-id` content
-       (crash/compaction re-entry) → resume WITHOUT re-reserving (a second `reserve`
-       refuses any existing head);
-     - anyone else's (or a terminal head) → the unit is taken: do NOT reserve —
-       re-derive and pick the next unit.
+   - `selectable` exit 1 (a head exists) → `uv run python tools/reservations.py show --arc-id <arc-id>` and branch on its `state` FIRST, then `lane_id`:
+     - `state` is terminal (`merged`/`abandoned`) → the arc already ran, whoever's
+       lane it was — NEVER resume a terminal head: re-derive and pick the next unit;
+     - `state` is `pending`/`open` AND the head's `lane_id` equals the persisted
+       `.harness/.lane-id` content (crash/compaction re-entry) → resume
+       WITHOUT re-reserving (a second `reserve` refuses any existing head);
+     - `state` is `pending`/`open` held by anyone else → the unit is taken:
+       do NOT reserve — re-derive and pick the next unit.
 
    A second lane's selection of the same unit fails here (duplicate *scheduling* is
    prevented at open; duplicate *append* by C-HE-03 §6). `ship-pr` back-fills
@@ -89,7 +91,10 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    branch diff — an uncommitted tree makes HEAD-bound checks stale); **grounding pass** (re-read every
    file:line cite at the now-current HEAD, recompute every count, verify every #NNN,
    confirm `just codex-check` ran at the *current* HEAD, state the pass in the PR body — per
-   ship-pr U-WT-01) then out-of-family `just review-with-failover` to convergence (§13.1) —
+   ship-pr U-WT-01) then out-of-family
+   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover` to
+   convergence (§13.1; the inline prefix is the step-2 arc-open ids — a bare invocation
+   writes `branch-*`/`-nolane` fallback ids into the C-HE-24/25 rows) —
    the fail-closed `codex-review` wrapper (C-HE-18) with the `gemini-review` D-C failover
    (C-HE-17); a verdict counts only on its schema parse (C-HE-15), never on exit code or
    silence. *Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored

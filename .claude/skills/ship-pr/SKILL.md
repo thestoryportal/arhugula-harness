@@ -75,6 +75,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   ```bash
   uv run python tools/reservations.py update --arc-id <arc-id> --set pr=<N> head_sha=<head-sha> base_sha=<base-sha>
   ```
+  If `show --arc-id <arc-id>` reports NO reservation (the headless-degradation case in
+  roadmap-continue — the arc opened unreserved because the permission layer refused the
+  reserve), SKIP both this back-fill and the final-gate one, and say so in the PR body:
+  `update` on a nonexistent reservation aborts, and the arc's reservation will instead be
+  minted at closure by the U-HE-19 drain bootstrap.
 
 ## Pre-merge gate — CI green + decorrelated 3-lens review (before `gh pr merge`)
 

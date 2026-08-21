@@ -77,6 +77,18 @@ grep -q 'RE-READ the file' "$RC" \
 grep -q 'proceed with the arc UNRESERVED' "$RC" \
   && ok "headless denial degrades to unreserved-with-note (U-HE-19 drain bootstrap)" \
   || bad "no headless degradation clause"
+# Round-5 codex corrections:
+if grep -n 'just review-with-failover' "$RC" "$SP" | grep -v 'HARNESS_ARC_ID=' | grep -q .; then
+  bad "a review-with-failover invocation lacks the inline HARNESS_* prefix (bare form writes fallback ids)"
+else
+  ok "EVERY review-with-failover mention carries the inline HARNESS_* prefix"
+fi
+grep -q 'NEVER resume a terminal head' "$RC" \
+  && ok "terminal heads are never resumed (state checked before lane_id)" \
+  || bad "no terminal-head refusal in the resume branches"
+grep -q 'SKIP both this back-fill' "$SP" \
+  && ok "ship-pr skips back-fills for an unreserved (headless-degraded) arc" \
+  || bad "no unreserved-skip clause in ship-pr back-fill"
 # Mandatory commands must be substitution-free single invocations (guard-compatible):
 if grep -E 'reservations\.py (reserve|update|selectable|show)' "$RC" "$SP" | grep -q '\$('; then
   bad "a mandatory reservation command still uses \$( ) command substitution"
