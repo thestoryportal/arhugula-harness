@@ -300,12 +300,17 @@ def test_completion_requires_open_reservation(door):
 
 
 # mutation-probe: drop _rate_check()'s _check_lane_id containment call
-def test_lane_id_containment(door):
+def test_lane_id_containment(door, tmp_path):
     """lane_id becomes a path component of the attempts store — absolute or traversing
-    values must be refused before any filesystem write (r1 P2)."""
-    for bad in ("/tmp/evil", "../evil", "a/b", ".hidden", "a:b", ""):
-        with pytest.raises(md.LeaseError):
+    values must be refused BEFORE any filesystem write (r1 P2). The raises-match is
+    deliberately the containment refusal itself: without the guard a bad lane still
+    raises a DOWNSTREAM LeaseError (HolderInvariant) — after creating the escaped
+    directory — so a bare LeaseError assertion would not kill the mutation."""
+    escape = tmp_path / "outside-door-escape"
+    for bad in (str(escape), "../evil", "a/b", ".hidden", "a:b", ""):
+        with pytest.raises(md.LeaseError, match="bad lane_id"):
             _acq(lane=bad)
+    assert not escape.exists()  # nothing was written outside the attempts store
 
 
 def test_refused_attempt_is_recorded(door):
