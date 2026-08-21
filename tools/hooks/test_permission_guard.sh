@@ -572,6 +572,25 @@ WTN="$REPO/wt-none"; mkdir -p "$WTN"
 OUT=$(runh "$(pl Bash "git worktree remove $WTN" '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "no-transcript direct removal → denied for race safety" || bad "no-transcript direct removal not denied: $OUT"
 
+# 8) C-HE-08 §1 (U-HE-26): push-to-main denied in the audited deny block; topic pushes
+#    stay auto-allowed. The parser reads the argument list (options skipped anywhere), so
+#    multi-option forms the spec's reference regexes missed are covered.
+for c in 'git push origin HEAD:main' 'git push origin main' 'git push origin refs/heads/main' 'git push -u origin feature:main' 'git push --set-upstream origin main' 'git push origin feature main' 'git push --force-with-lease=x origin +feature:refs/heads/main' "git push origin 'HEAD:main'" 'git push origin "main"'; do
+  OUT=$(run_on "$(pl Bash "$c" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny" || bad "push-to-main not denied: $c → $OUT"
+done
+OUT=$(run_on "$(pl Bash 'git push origin feature' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "topic push → allow" || bad "topic push blocked: $OUT"
+# Discriminating witness (U-HE-25 rev (v)): the deny must read the prefix-STRIPPED command.
+# The allowlist strips HARNESS_ARC_ID=/HARNESS_LANE_ID= into TRIM before its `git push`
+# alternation, so a raw-command-anchored deny would let a prefixed push-to-main through to
+# auto-ALLOW — this row fails under the raw reading and passes under the stripped one.
+OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-26 git push origin HEAD:main' '')")
+[ "$(dec "$OUT")" = "deny" ] && ok "prefixed push-to-main → deny (stripped-read witness)" || bad "prefixed push-to-main not denied: $OUT"
+# bare `git push` while main is checked out
+( cd "$REPO" && git init -q . && git checkout -q -b main 2>/dev/null; git commit -q --allow-empty -m i )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push on main checkout → deny" || bad "bare push on main not denied: $OUT"
+OUT=$(run_on "$(pl Bash 'git push -u origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "option-bearing bare push on main → deny" || bad "-u origin on main not denied: $OUT"
+( cd "$REPO" && git checkout -q -b topic ); OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic → allow" || bad "bare push on topic blocked: $OUT"
+
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

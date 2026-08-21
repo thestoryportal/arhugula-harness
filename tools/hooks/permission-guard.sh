@@ -221,6 +221,29 @@ _safe_merge_wrapper() {
   return 0
 }
 
+# 0 iff the push command targets main: any refspec destination == main, or no refspec while
+# main is checked out (a bare push sends the current branch). U-HE-26 (C-HE-08 §1).
+_push_targets_main() {
+  local cmd="$1" tok positional=() dest branch
+  set -f; set -- $cmd; set +f
+  shift 2                                   # git push
+  for tok in "$@"; do
+    tok=${tok//\"/}; tok=${tok//\'/}         # the real shell strips quotes: 'HEAD:main' IS HEAD:main (Codex round-4 P1)
+    case "$tok" in -*) continue ;; esac     # options anywhere (-u, --set-upstream, --force-with-lease=..., ...)
+    positional+=("$tok")
+  done
+  if [ "${#positional[@]}" -le 1 ]; then    # bare push (optional remote only) -> pushes the current branch
+    branch=$(git -C "$PROJECT_DIR" symbolic-ref --short -q HEAD 2>/dev/null)
+    [ "$branch" = "main" ] && return 0
+    return 1
+  fi
+  for tok in "${positional[@]:1}"; do       # every refspec after the remote
+    dest="${tok##*:}"; dest="${dest#+}"; dest="${dest#refs/heads/}"
+    [ "$dest" = "main" ] && return 0
+  done
+  return 1
+}
+
 # A merge-gate lens may spawn a fresh Codex process only in lifecycle-isolated,
 # ephemeral read-only mode.
 # Require `--` before the prompt so option validation never scans prompt or reviewed text.
@@ -371,6 +394,22 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     && emit_deny "git history rewrite"
   printf '%s' "$CMD" | grep -Eq 'git[[:space:]]+branch[[:space:]]+(-D|--delete[[:space:]]+--force)|git[[:space:]]+push.*(--delete|[[:space:]]+:)|git[[:space:]]+worktree[[:space:]]+(add|remove).*--force' \
     && emit_deny "branch deletion / remote ref delete"
+  # C-HE-08 §1 (D5): no auto-approved push lands content on main. Explicit denies (audited
+  # via loop_log DENY), NOT a removal from the allow regex (that would be the silent,
+  # unaudited "ask" path). The spec's reference regexes (C10) consumed at most one token
+  # between `push` and the refspec and therefore ALLOWED `git push -u origin feature:main`
+  # (Codex round-2 P1); this parses the argument list instead: option tokens (`-*`) anywhere
+  # are skipped, positionals are [remote] [refspec...], and any refspec whose destination is
+  # main -- `main`, `HEAD:main`, `X:main`, `refs/heads/main` -- or a push with NO refspec
+  # while main is checked out, is denied. The predicate reads the same HARNESS_ARC_ID=/
+  # HARNESS_LANE_ID= prefix-stripped form the allowlist matches (U-HE-25 (b) TRIM strip
+  # below): an anchored scan of the RAW command would let `HARNESS_ARC_ID=x git push origin
+  # main` past this deny and into the alternation's auto-allow (U-HE-25 rev (v)
+  # discriminating witness).
+  _PUSH_CMD=$(printf '%s' "$CMD" | sed -E 's/^[[:space:]]*((HARNESS_ARC_ID|HARNESS_LANE_ID)=[A-Za-z0-9._-]+[[:space:]]+)+//')
+  if printf '%s' "$_PUSH_CMD" | grep -Eq '^[[:space:]]*git[[:space:]]+push([[:space:]]|$)' && _push_targets_main "$_PUSH_CMD"; then
+    emit_deny "push targeting main — land through a PR + tools/hooks/safe-merge.sh"
+  fi
   # C-HE-07: the merge verb goes through the lease-holding wrapper ONLY (structural fence, P1).
   printf '%s' "$CMD" | grep -Eq '(^|[[:space:]])gh[[:space:]]+pr[[:space:]]+merge([[:space:]]|$)' \
     && emit_deny "raw gh pr merge — must go through tools/hooks/safe-merge.sh"

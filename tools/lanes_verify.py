@@ -209,6 +209,9 @@ MANIFEST: list[Row] = [
     # C-HE-07 (U-HE-25): raw gh pr merge denied / safe-merge wrapper allowed (+ the
     # U-HE-21-registered exact-shape allowlist additions)
     Row("C-HE-07", "shell:tools/hooks/test_permission_guard.sh", "phase0", "local + CI", False),
+    # C-HE-08 §1 (U-HE-26): push-to-main denied in the audited deny block (argument-list
+    # parser on the prefix-stripped command); topic pushes stay auto-allowed
+    Row("C-HE-08", "shell:tools/hooks/test_permission_guard.sh", "phase0", "local + CI", True),
     # C-HE-09/10 (U-HE-09)
     Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True),
     # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)
