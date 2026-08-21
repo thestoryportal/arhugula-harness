@@ -1003,18 +1003,27 @@ def reconcile_ground(lease: dict, ground: Ground) -> str:
     """§5 timeout/crash reconciliation by ground truth. MERGED ⇒ never re-issue.
     OPEN ⇒ the caller may re-issue at most ONCE per pass."""
     v = ground.gh_view(int(lease["pr"]))
-    if v.get("state") == "MERGED":
+    state = v.get("state")
+    if state == "MERGED":
         return "MERGED"
-    return "OPEN"
+    if state == "OPEN":
+        return "OPEN"
+    # CLOSED / malformed / unknown is NOT permission to re-issue (codex U-HE-23 r1 P2):
+    # the contract's re-issue branch is an explicit OPEN result only — fail closed.
+    raise DoorFailed(f"reconcile: pr #{lease['pr']} state {state!r} is not reconcilable")
 
 
-def _merge_once(lease: dict, pr: int, head_sha: str, ground: Ground, *, suffix: str = "") -> bool:
+def _merge_once(
+    lease: dict, pr: int, head_sha: str, ground: Ground, *, suffix: str = "", budget: int = 2
+) -> bool:
     """(iii) attempted-marker BEFORE (iv) the bounded merge; on timeout reconcile,
-    re-issue at most once. Returns True iff a reconcile pass was needed (the cycle is
-    then not "clean" for §10 tiering)."""
+    re-issue at most once. A RESUME pass (the attempted marker predates this process)
+    gets budget=1 — the §5 contract permits a single re-issue per reconcile pass, and
+    the prior process may already have consumed its own (codex U-HE-23 r1 P2). Returns
+    True iff a reconcile pass was needed (the cycle is then not "clean" for §10)."""
     mark_attempted(lease, suffix=suffix)
     _kill_after("refresh-attempted" if suffix else "attempted")
-    for attempt in (1, 2):
+    for attempt in tuple(range(1, budget + 1)):
         try:
             proc = ground.gh_merge(pr, head_sha, MERGE_TIMEOUT_S)
             _kill_after("merge")
@@ -1024,7 +1033,7 @@ def _merge_once(lease: dict, pr: int, head_sha: str, ground: Ground, *, suffix: 
             pass
         if reconcile_ground({**lease, "pr": pr}, ground) == "MERGED":
             return True  # invariant: NEVER re-invoke after MERGED
-        if attempt == 2:
+        if attempt == budget:
             raise DoorFailed("merge_reissue_exhausted (cause_attribution: merge_reissue_exhausted)")
     return True
 
@@ -1068,15 +1077,17 @@ def land(
         )
     reconciled = False
     try:
-        already = lease.get("merge_attempted_at") is not None and (
-            reconcile_ground(lease, ground) == "MERGED"
-        )
+        resumed_attempt = lease.get("merge_attempted_at") is not None
+        already = resumed_attempt and reconcile_ground(lease, ground) == "MERGED"
         reconciled = reconciled or already
         if not already:
             verify_head_base(lease, ground)  # (ii)
             local_base_cas_check(head_sha, attested, ground)
             _kill_after("verify")
-            reconciled = _merge_once(lease, pr, head_sha, ground) or reconciled  # (iii)+(iv)
+            reconciled = (
+                _merge_once(lease, pr, head_sha, ground, budget=1 if resumed_attempt else 2)
+                or reconciled
+            )  # (iii)+(iv); a resume pass re-issues at most ONCE (§5)
         v = ground.gh_view(pr)  # (v)
         if v.get("state") != "MERGED":
             raise DoorFailed("post-merge confirm: not MERGED")
@@ -1141,6 +1152,22 @@ def land(
                 # self-resume: NEVER create a second refresh PR
                 rpr_rhead = (int(recorded["pr"]), recorded["head_sha"])
             if rpr_rhead is None:
+                intent = _sidecar(lease["lease_token"], "refresh.intent")
+                if intent.exists():
+                    # A prior pass declared intent and crashed between creating the
+                    # refresh PR and persisting its identity — the PR may exist with no
+                    # durable record; calling refresh() again could mint a SECOND
+                    # terminating-refresh PR (codex r1 P2). Ground-truth HITL resolves.
+                    mark_blocked(
+                        lease,
+                        sha=lease.get("head_sha") or head_sha,
+                        reason="refresh_intent_unresolved",
+                    )
+                    raise DoorBlocked("refresh_intent_unresolved")
+                try:
+                    publish_exclusive(intent, json.dumps({"at": _now_iso()}))
+                except FileExistsError:
+                    pass
                 rpr, rhead = refresh()
                 publish_exclusive(
                     _sidecar(lease["lease_token"], "refresh"),
@@ -1148,7 +1175,23 @@ def land(
                 )
             else:
                 rpr, rhead = rpr_rhead
-            reconciled = _merge_once(lease, rpr, rhead, ground, suffix="refresh") or reconciled
+            refresh_resumed = (
+                recorded is not None and recorded.get("merge_attempted_at") is not None
+            )
+            if refresh_resumed and reconcile_ground({**lease, "pr": rpr}, ground) == "MERGED":
+                reconciled = True  # the recorded refresh landed pre-crash: NEVER re-issue
+            else:
+                reconciled = (
+                    _merge_once(
+                        lease,
+                        rpr,
+                        rhead,
+                        ground,
+                        suffix="refresh",
+                        budget=1 if refresh_resumed else 2,
+                    )
+                    or reconciled
+                )
             rv = ground.gh_view(rpr)
             if rv.get("state") != "MERGED":
                 raise DoorFailed("refresh PR did not merge")
@@ -1177,8 +1220,10 @@ def land(
         release(lease)  # (ix)
         if not reconciled:
             # a CLEAN cycle (C-HE-06 §10): no reconcile pass, no HITL
-            (DOOR / "tier-clean-cycles").mkdir(exist_ok=True)
-            (DOOR / "tier-clean-cycles" / lease["lease_token"]).touch()
+            tcc = DOOR / "tier-clean-cycles"
+            if not tcc.is_symlink():  # same containment as every door subdir (r1 P2)
+                tcc.mkdir(exist_ok=True)
+                (tcc / lease["lease_token"]).touch()
         if tier:
             _notify(
                 "NOTIFY",
@@ -1293,7 +1338,9 @@ def main(argv: list[str] | None = None) -> int:
             live = read_lease()
             if live is not None:
                 same_lane = (
-                    live.get("lane_id") == args.lane_id and int(live.get("pr", -1)) == args.pr
+                    live.get("lane_id") == args.lane_id
+                    and int(live.get("pr", -1)) == args.pr
+                    and live.get("reservation_id") == args.arc_id
                 )
                 holder_dead = live.get("host") == socket.gethostname() and not _process_is_alive(
                     int(live["pid"])
@@ -1309,6 +1356,18 @@ def main(argv: list[str] | None = None) -> int:
                 if cur is not None and cur[1]["state"] == "merged":
                     print("nothing to land: no lease and the reservation is already merged")
                     return 0
+                if cur is not None:
+                    # §8 caller policy IS the production path (codex r1 P2): contention
+                    # backs off with jitter for up to ~1 h, then exits 5 (HITL).
+                    lease = wait_for_door(
+                        lambda: acquire(
+                            lane_id=args.lane_id,
+                            arc_id=args.arc_id,
+                            pr=args.pr,
+                            head_sha=cur[1]["head_sha"],
+                            base_sha=cur[1]["base_sha"],
+                        )
+                    )
             out = land(
                 args.pr,
                 lane_id=args.lane_id,

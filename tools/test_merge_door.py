@@ -1254,3 +1254,100 @@ def test_ac2_c_crash_resume(door, tmp_path, monkeypatch, kill, expect_merge_call
         assert any(md.DOOR.glob("released.*"))
     else:
         assert "nothing to land" in (p2.stdout + p2.stderr)
+
+
+# ── codex U-HE-23 r1 corrections ─────────────────────────────────────────────
+
+
+# mutation-probe: drop reconcile_ground()'s fail-closed arm (CLOSED read as re-issuable)
+def test_reconcile_fails_closed_on_closed_pr(door):
+    """A CLOSED (or malformed) PR state is NOT permission to re-issue (r1 P2)."""
+    g = FakeGround()
+
+    def hang_then_closed(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.states[pr]["state"] = "CLOSED"
+        g.t += timeout + 1
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    g.gh_merge = hang_then_closed
+    with pytest.raises(md.DoorBlocked, match="not reconcilable"):
+        _land(door, g)
+    assert len(g.merge_calls) == 1  # never re-issued into an unreconcilable state
+
+
+# mutation-probe: drop _merge_once()'s budget parameter wiring (resume re-issues twice)
+def test_resume_pass_reissues_at_most_once(door):
+    """A resume pass (attempted marker predates this process) gets ONE re-issue (r1 P2)."""
+    g = FakeGround()
+
+    def always_hang(pr, head, timeout):
+        g.merge_calls.append((pr, head))
+        g.t += timeout + 1
+        raise subprocess.TimeoutExpired("gh", timeout)
+
+    g.gh_merge = always_hang
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    md.mark_attempted(lease)  # the PRIOR process attempted
+    resumed = md.read_lease()
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed)
+    assert len(g.merge_calls) == 1  # the single §5 re-issue, not the fresh-pass two
+
+
+# mutation-probe: drop land()'s refresh.intent gate (a second refresh PR can be minted)
+def test_refresh_intent_without_record_blocks(door):
+    """Intent declared + no durable record = the refresh PR may exist unrecorded;
+    calling refresh() again could mint a second terminating-refresh PR (r1 P2)."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
+    calls = []
+
+    def refresh():
+        calls.append(1)
+        return g.add_refresh_pr()
+
+    with pytest.raises(md.DoorBlocked, match="refresh_intent_unresolved"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=refresh, lease=lease)
+    assert calls == []  # refresh() was never invoked past an unresolved intent
+
+
+# mutation-probe: drop the refresh_resumed reconcile-before-merge guard (re-issues a landed refresh)
+def test_resumed_refresh_already_merged_never_reissued(door):
+    """A recorded refresh whose merge landed pre-crash is NEVER re-issued (r1 P2)."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    lease = md.acquire(lane_id="A", arc_id="pr-1", pr=1, head_sha="a" * 40, base_sha="b" * 40)
+    g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+    md.mark_attempted(lease)
+    g.add_refresh_pr()
+    g.states[2].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(
+        md._sidecar(lease["lease_token"], "refresh"),
+        json.dumps({"pr": 2, "head_sha": "r" * 40}),
+    )
+    md.mark_attempted(lease, suffix="refresh")
+    rs.transition("pr-1", "merged", lane_id="A")
+    resumed = md.read_lease()
+    assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed) == (
+        "released"
+    )
+    assert g.merge_calls == []  # NOTHING re-issued: both merges were ground-truth MERGED
+
+
+def test_tier_clean_cycles_symlink_not_followed(door, tmp_path):
+    """The §10 tiering counter never writes through a planted symlink (r1 P2)."""
+    outside = tmp_path / "outside-tier"
+    outside.mkdir()
+    md.DOOR.mkdir(parents=True, exist_ok=True)
+    (md.DOOR / "tier-clean-cycles").symlink_to(outside)
+    g = FakeGround()
+    assert _land(door, g) == "released"
+    assert list(outside.iterdir()) == []  # nothing written through the link
