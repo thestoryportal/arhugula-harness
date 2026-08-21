@@ -5,7 +5,7 @@
 # Edit), design-substrate Edit → ask, unknown → ask, and the PermissionRequest schema.
 
 set -uo pipefail
-# mutation-probe: tools/hooks/permission-guard.sh:410-412 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
+# mutation-probe: tools/hooks/permission-guard.sh:439-441 push-to-main deny predicate stays load-bearing (C-HE-08 §1)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/permission-guard.sh"
 
@@ -591,6 +591,22 @@ OUT=$(run_on "$(pl Bash 'HARNESS_ARC_ID=u-he-26 git push origin HEAD:main' '')")
 OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push on main checkout → deny" || bad "bare push on main not denied: $OUT"
 OUT=$(run_on "$(pl Bash 'git push -u origin' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "option-bearing bare push on main → deny" || bad "-u origin on main not denied: $OUT"
 ( cd "$REPO" && git checkout -q -b topic ); OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic → allow" || bad "bare push on topic blocked: $OUT"
+
+# codex r1 hardening (all on the topic checkout, so a parser miss would fall through to
+# auto-allow): shell dequoting of backslashes, option-supplied remote (--repo=), --all,
+# wildcard destination refspec.
+for c in 'git push origin HEAD:ma\in' 'git push --repo=origin main' 'git push --all origin' "git push origin 'refs/heads/*:refs/heads/*'"; do
+  OUT=$(run_on "$(pl Bash "$c" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "'$c' → deny (hardened)" || bad "hardened case not denied: $c → $OUT"
+done
+# codex r1 P2: bare push on a topic checkout can still update main through config.
+( cd "$REPO" && git config push.default matching )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push under push.default=matching → deny" || bad "matching bare push not denied: $OUT"
+( cd "$REPO" && git config push.default current && git config remote.origin.url /tmp/nowhere && git config branch.topic.remote origin && git config branch.topic.merge refs/heads/main )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push with upstream merge=main → deny" || bad "upstream-main bare push not denied: $OUT"
+( cd "$REPO" && git config --unset branch.topic.merge && git config remote.origin.push 'refs/heads/topic:refs/heads/main' )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "deny" ] && ok "bare push with remote.origin.push dest=main → deny" || bad "remote-push-refspec bare push not denied: $OUT"
+( cd "$REPO" && git config --unset remote.origin.push )
+OUT=$(run_on "$(pl Bash 'git push' '')"); [ "$(dec "$OUT")" = "allow" ] && ok "bare push on topic after config cleanup → allow (checks are config-driven, not sticky)" || bad "cleaned-up bare push blocked: $OUT"
 
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
