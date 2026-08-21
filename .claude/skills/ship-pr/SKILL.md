@@ -37,9 +37,13 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **The non-mechanical residue is a habit, not a script:** *when you write a sentence about
   what the code does, open the file in the same action.* Both P1s on the `B-71` leg were
   sentences written from a narrative instead of from a call site.
-- **Out-of-family review.** `just review-with-failover` (branch-vs-`main`; the C-HE-18
-  fail-closed `codex-review` wrapper with the C-HE-17 `gemini-review` failover) to
-  convergence — fix real findings, hermetically regression-test each (§13.1). Exit 0
+- **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`
+  (branch-vs-`main`; the C-HE-18 fail-closed `codex-review` wrapper with the C-HE-17
+  `gemini-review` failover) to convergence — the inline `HARNESS_*` prefix is REQUIRED
+  even when ship-pr is invoked standalone: shell exports do not survive across Bash tool
+  calls, and a bare invocation writes the wrapper's `branch-*`/`-nolane` fallback ids
+  into the C-HE-24/25 rows instead of joining the arc's real reservation (`<arc-id>` from
+  the arc-open step; `<lane-id>` from `.harness/.lane-id`) — fix real findings, hermetically regression-test each (§13.1). Exit 0
   APPROVE / 1 BLOCK / 2 `REVIEWER_UNAVAILABLE`; the terminal line on stderr is the verdict,
   never the exit code or the absence of output. *Invariant #3 (restated, C-HE-17 §3):
   out-of-family review covers Codex-authored work as before, AND serves as the D-C failover
@@ -104,7 +108,12 @@ uv run python tools/reservations.py update --arc-id <arc-id> --set head_sha=<hea
 
 A stale tuple cannot merge: C-HE-06 step (ii) re-confirms head/base against `gh` and
 byte-compares the tree at the door (the merge-door consumer lands with U-HE-22; recording
-starts now so every arc from this one forward carries the attestation).
+starts now so every arc from this one forward carries the attestation). The reservation is
+still `pending` here — `update` is payload-only and valid on a pending head; WHERE the
+C-HE-03 §4 `pending→open` flip happens relative to the door's open-holder acquisition
+invariant is part of the registered flip-timing contradiction class routed to the U-HE-22
+merge-lane landing (plan U-HE-19 rev item (vii) + U-HE-21 rev item (vii)) — the door
+carrier defines it there; this unit only records.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 

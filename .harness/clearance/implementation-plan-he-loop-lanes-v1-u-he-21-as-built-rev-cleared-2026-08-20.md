@@ -13,6 +13,7 @@ reviewer_chain:
   - "author grounding: the plan sketch's session-start edit is a no-op at HEAD (U-HE-18 already landed the C-HE-03 section 5 pass at the roadmap-audit hook, detached + activation-gated); the as-built witness pins the real path instead of editing a nonexistent file"
   - "lane-id mint fallback + same-lane re-entry clause + single-line back-fill are carrier-prose corrections against landed CLI semantics (selectable() is false for ANY head; HARNESS_LANE_ID's minting unit U-HE-31 has not landed) -- no contract surface changes"
   - "out-of-family codex round 1 (BLOCK, 1 P1 + 4 P2): env non-inheritance across Bash tool calls, resume-flow control bug, guard-autonomy friction (registered to U-HE-23), grep-witness weakness, artifact-heads filename tie-break -- all absorbed (rev item vi) except the guard edit, which routes to U-HE-23's reviewed guard-modification scope"
+  - "out-of-family codex round 2 (BLOCK, 1 P1 + 4 P2): lane-id persistence (.harness/.lane-id, absorbed), ship-pr standalone review prefix (absorbed), witness needles (absorbed); the pending-vs-open door-timing P1 REGISTERED into the U-HE-19 item-(vii) flip-timing contradiction class routed to U-HE-22; the guard-friction re-raise HELD (rev item vii) -- register-and-hold, adjudication at the 3-lens merge gate"
   - "council NOT convened (proportionality: path/prose corrections of one unit's execution steps; every C-HE-* contract cited is unchanged)"
 supersedes: null
 superseded_by: null

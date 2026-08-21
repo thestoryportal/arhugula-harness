@@ -30,17 +30,23 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    single clean invocations), and shell exports do NOT survive across Bash tool calls, so
    the two `HARNESS_*` ids must be restated inline on every later command that reads them:
    ```bash
-   uv run python tools/reservations.py mint-lane-id     # once per lane; reuse the printed id below
+   uv run python tools/reservations.py mint-lane-id     # ONLY if .harness/.lane-id is absent (below)
    uv run python tools/reservations.py selectable --arc-id <arc-id>
    ```
+   **Lane id is minted ONCE per worktree and persisted** (pre-U-HE-31 lane-init): if
+   `.harness/.lane-id` exists (gitignored, worktree-local), its content IS this lane's id —
+   read it and reuse it; only when absent, run `mint-lane-id` and Write the printed id to
+   `.harness/.lane-id`. A fresh mint per session would generate a new random suffix and
+   make the same-lane resume below misclassify this lane's own reservation as another's.
    - `selectable` exit 0 (free) → reserve it, then export for this shell:
      ```bash
      uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>
      export HARNESS_ARC_ID=<arc-id>   # same-shell only — restate inline later
      ```
    - `selectable` exit 1 (a head exists) → `uv run python tools/reservations.py show --arc-id <arc-id>` and branch on its `lane_id`:
-     - the head's `lane_id` is YOUR lane id (crash/compaction re-entry) → resume
-       WITHOUT re-reserving (a second `reserve` refuses any existing head);
+     - the head's `lane_id` equals the persisted `.harness/.lane-id` content
+       (crash/compaction re-entry) → resume WITHOUT re-reserving (a second `reserve`
+       refuses any existing head);
      - anyone else's (or a terminal head) → the unit is taken: do NOT reserve —
        re-derive and pick the next unit.
 

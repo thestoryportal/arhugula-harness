@@ -56,6 +56,17 @@ grep -q 'WITHOUT re-reserving' "$RC" \
   && ok "same-lane resume forbids re-reserve" || bad "no same-lane resume clause"
 grep -q 'do NOT reserve' "$RC" \
   && ok "other-lane path re-derives instead of reserving" || bad "no other-lane branch"
+# Round-2 codex corrections:
+grep -q 'mint-lane-id' "$RC" \
+  && ok "lane id minted via mint-lane-id" || bad "no mint-lane-id step"
+grep -q '\.harness/\.lane-id' "$RC" \
+  && ok "lane id persisted per worktree (.harness/.lane-id)" || bad "no lane-id persistence"
+grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover' "$RC" \
+  && ok "roadmap-continue names the inline-prefixed review invocation" \
+  || bad "no inline-prefixed review invocation in roadmap-continue"
+grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover' "$SP" \
+  && ok "ship-pr preflight review carries the inline HARNESS_* prefix (standalone runs)" \
+  || bad "ship-pr preflight review lacks the inline HARNESS_* prefix"
 # Mandatory commands must be substitution-free single invocations (guard-compatible):
 if grep -E 'reservations\.py (reserve|update|selectable|show)' "$RC" "$SP" | grep -q '\$('; then
   bad "a mandatory reservation command still uses \$( ) command substitution"
