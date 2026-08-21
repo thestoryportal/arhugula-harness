@@ -96,6 +96,10 @@ def verify(current: dict | None, desired: dict) -> list[str]:
     for k in ("enforce_admins", "allow_force_pushes", "allow_deletions", "required_linear_history"):
         if _flag(current, k) != desired[k]:
             out.append(f"{k}: {_flag(current, k)!r} != {desired[k]!r}")
+    # §2 exact-compare includes restrictions: the desired payload pins them to null, so a live
+    # user/team/app push restriction is a mismatch, not an ignorable extra (codex r1 P2).
+    if current.get("restrictions"):
+        out.append("restrictions must be null (no user/team/app push restrictions)")
     return out
 
 
@@ -107,6 +111,25 @@ def _restrictions_payload(r: dict | None) -> dict | None:
         "teams": [t["slug"] for t in r.get("teams", [])],
         "apps": [a["slug"] for a in r.get("apps", [])],
     }
+
+
+def _prr_put_payload(prr: dict) -> dict:
+    """PUT-shaped required_pull_request_reviews, preserving the optional strengthening fields
+    (dismissal_restrictions / bypass_pull_request_allowances / require_last_push_approval) so a
+    rollback never restores a WEAKER review policy than was captured (codex r1 P2)."""
+    out: dict = {
+        "dismiss_stale_reviews": bool(prr.get("dismiss_stale_reviews")),
+        "require_code_owner_reviews": bool(prr.get("require_code_owner_reviews")),
+        "required_approving_review_count": int(prr.get("required_approving_review_count", 0)),
+        "require_last_push_approval": bool(prr.get("require_last_push_approval")),
+    }
+    if prr.get("dismissal_restrictions"):
+        out["dismissal_restrictions"] = _restrictions_payload(prr["dismissal_restrictions"]) or {}
+    if prr.get("bypass_pull_request_allowances"):
+        out["bypass_pull_request_allowances"] = (
+            _restrictions_payload(prr["bypass_pull_request_allowances"]) or {}
+        )
+    return out
 
 
 def _to_put_payload(got: dict) -> dict:
@@ -126,17 +149,7 @@ def _to_put_payload(got: dict) -> dict:
             else None
         ),
         "enforce_admins": bool(_flag(got, "enforce_admins")),
-        "required_pull_request_reviews": (
-            None
-            if not prr
-            else {
-                "dismiss_stale_reviews": bool(prr.get("dismiss_stale_reviews")),
-                "require_code_owner_reviews": bool(prr.get("require_code_owner_reviews")),
-                "required_approving_review_count": int(
-                    prr.get("required_approving_review_count", 0)
-                ),
-            }
-        ),
+        "required_pull_request_reviews": (None if not prr else _prr_put_payload(prr)),
         # Preserve user/team/app restrictions on rollback (round-5 P1).
         "restrictions": _restrictions_payload(got.get("restrictions")),
         "allow_force_pushes": bool(_flag(got, "allow_force_pushes")),
@@ -169,7 +182,17 @@ def main(argv: list[str] | None = None) -> int:
             # A legal §8.1 skip; lanes-phase0-check counts it RED (C-HE-13 §1).
             print("SKIPPED [1] main_protection.py:1: gh-auth-absent")
             return 0
-        problems = verify(current_protection(), desired)
+        try:
+            cur = current_protection()
+        except SystemExit as e:
+            # Logged in but the token lacks the scope to READ protection (403): that is the
+            # same auth-insufficient class as no login — the contractual skip, not a hard
+            # failure (codex r1 P3).
+            if "403" in str(e) or "Resource not accessible" in str(e):
+                print("SKIPPED [1] main_protection.py:1: gh-auth-absent")
+                return 0
+            raise
+        problems = verify(cur, desired)
         for m in problems:
             print(f"MISMATCH {m}")
         print("main-protection-verify:", "PASS" if not problems else "FAIL")
@@ -206,9 +229,21 @@ def main(argv: list[str] | None = None) -> int:
         # tiebreaker needs strict:true live to be meaningful, so apply is provisional: a FAIL
         # rolls back to the pre-change state (Codex round-3 P1).
         print("applied provisionally; running the tiebreaker (FAIL → automatic rollback)")
-        rc = tiebreaker()
+        try:
+            rc = tiebreaker()
+        except BaseException as e:  # sh() raises SystemExit; subprocess raises
+            # TimeoutExpired. ANY escape after the PUT must still reach the rollback below —
+            # exiting here would leave the new protection silently live (codex r1 P1).
+            rc = 1
+            print(f"tiebreaker raised instead of returning: {e!r}")
         if rc != 0:
             rb = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
+            if cur is None and (rb.returncode != 0 or current_protection() is not None):
+                raise SystemExit(
+                    "tiebreaker FAILED and the rollback DELETE did not restore the unprotected "
+                    "pre-change state — the new protection REMAINS LIVE on main; run "
+                    f"`just main-protection-rollback` and re-verify ({rb.stderr.strip()[:200]})"
+                )
             if cur is not None:
                 # There was a prior protection: restore it from a NORMALIZED (PUT-shaped) payload.
                 restore = subprocess.run(
@@ -246,6 +281,27 @@ def main(argv: list[str] | None = None) -> int:
     if _loop_mode():
         raise SystemExit("tiebreaker is a live probe; run outside loop mode")
     return tiebreaker()
+
+
+#: stderr signatures that attribute a `gh pr merge` refusal to branch protection / strict
+#: base-freshness enforcement, as opposed to auth/network/rate-limit/head-race failures. A
+#: refusal that matches none of these is an INDETERMINATE probe, not a PASS (codex r1 P2).
+_PROTECTION_REFUSAL_SIGS = (
+    "not mergeable",
+    "required status check",
+    "branch protection",
+    "protected branch",
+    "behind",
+    "base branch",
+    "expected head",
+    "review is required",
+    "merge state",
+)
+
+
+def _merge_refusal_is_protection(stderr: str) -> bool:
+    low = stderr.lower()
+    return any(s in low for s in _PROTECTION_REFUSAL_SIGS)
 
 
 def tiebreaker() -> int:
@@ -313,11 +369,33 @@ def tiebreaker() -> int:
             "C-HE-08 §4 stale-branch check",
         )
         pr2 = url2.rsplit("/", 1)[-1]
+        # BLOCKED is ambiguous straight after creation — pending or failing required checks
+        # also report BLOCKED, so an immediate read could "PASS" without strict:true ever
+        # being exercised (codex r1 P1). Let the stale PR's checks settle first, then read.
+        chk = subprocess.run(
+            ["gh", "pr", "checks", pr2, "--watch"],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            cwd=wt,
+        )
         state = sh(
             "gh", "pr", "view", pr2, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"
         )
-        if state in ("BEHIND", "BLOCKED", "DIRTY"):
+        if state in ("BEHIND", "DIRTY"):
             verdict, why = "PASS", f"stale PR caught pre-merge (mergeStateStatus={state})"
+        elif state == "BLOCKED":
+            if chk.returncode != 0:
+                verdict, why = (
+                    "FAIL",
+                    "indeterminate: stale PR BLOCKED with non-green checks "
+                    f"(gh pr checks rc={chk.returncode}) — strict:true was not exercised",
+                )
+            else:
+                verdict, why = (
+                    "PASS",
+                    "stale PR caught pre-merge (BLOCKED with green checks → protection holds it)",
+                )
         else:
             sh("git", "fetch", "-q", "origin")
             pre = sh("git", "rev-parse", "origin/main")  # main BEFORE the stale merge
@@ -330,10 +408,17 @@ def tiebreaker() -> int:
                 cwd=wt,
             )
             if m2.returncode != 0:
-                verdict, why = (
-                    "PASS",
-                    f"stale merge REFUSED under strict:true ({m2.stderr.strip()[:120]})",
-                )
+                err = m2.stderr.strip()
+                if _merge_refusal_is_protection(err):
+                    verdict, why = "PASS", f"stale merge REFUSED under strict:true ({err[:120]})"
+                else:
+                    # Auth / rate-limit / network / head-race failures are NOT enforcement
+                    # evidence — an unattributable refusal is an indeterminate probe (r1 P2).
+                    verdict, why = (
+                        "FAIL",
+                        f"indeterminate: stale merge errored for a non-protection reason "
+                        f"({err[:160]})",
+                    )
             else:
                 sh("git", "fetch", "-q", "origin")
                 new_main = sh("git", "rev-parse", "origin/main")
@@ -357,6 +442,17 @@ def tiebreaker() -> int:
         )
         return 0 if verdict == "PASS" else 1
     finally:
+        # Best-effort external-state GC on EVERY exit path — a failed probe must not leave
+        # scratch PRs open or remote branches behind (codex r1 P3): deleting a remote branch
+        # auto-closes its open PR, and an already-deleted/merged branch makes this a no-op.
+        for scratch in (br, br2):
+            subprocess.run(
+                ["git", "push", "-q", "origin", "--delete", scratch],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=REPO,
+            )
         subprocess.run(
             ["bash", str(REPO / "tools" / "hooks" / "safe-worktree-remove.sh"), str(wt)],
             capture_output=True,
