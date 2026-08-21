@@ -282,11 +282,8 @@ def test_reclaim_preserves_refresh_continuation(door):
     assert "refresh" not in json.loads(md.LEASE.read_text())  # sidecar-carried, not payload
 
 
-# mutation-probe: drop complete_dead_marker()'s reservation-open gate (stale resurrection)
-def test_completion_requires_open_reservation(door):
-    """A stale reclaim marker must not resurrect authority for an arc that has moved on:
-    completion publishes only while the reservation still reads `open` (r1 P1)."""
-    lease = _acq(lane="A")
+def _crashed_reclaim_marker(lease):
+    """Marker whose creator died after moving the old lease aside, before publishing."""
     dead = {**lease, "pid": 999999}
     fresh = {**dead, "lease_token": "f" * 32, "lane_id": "B", "pid": 999998, "state": "held"}
     m = md.win_marker(lease["lease_token"], "reclaim", extra={"fresh_lease": fresh})
@@ -294,9 +291,77 @@ def test_completion_requires_open_reservation(door):
     body["pid"] = 999999
     m.write_text(json.dumps(body))
     md._move_lease(lease["lease_token"], "reclaimed")
-    rs.transition("pr-1", "merged", lane_id="A")  # the arc landed meanwhile
+    return m
+
+
+# mutation-probe: drop complete_dead_marker()'s reservation-state gate (stale resurrection)
+def test_completion_requires_live_reservation(door):
+    """A stale reclaim marker must not resurrect authority for a TERMINATED arc:
+    completion publishes only while the reservation reads `open` or `merged` (r1 P1,
+    narrowed r2 P1 — `merged` is the legitimate §4(vi)–(ix) continuation state)."""
+    lease = _acq(lane="A")
+    m = _crashed_reclaim_marker(lease)
+    rs.reserve("pr-99", lane_id="A", branch="b", arc_type="inventing")  # the superseder
+    rs.transition("pr-1", "abandoned", lane_id="A", superseded_by="pr-99")
     assert md.complete_dead_marker(m) is False
     assert md.read_lease() is None  # nothing resurrected
+
+
+def test_completion_allowed_during_merged_continuation(door):
+    """A post-merge reclaimer crash between move and publish MUST still be completable —
+    the reservation legitimately reads `merged` through post-merge CI + refresh; refusing
+    would let another lane acquire mid-continuation (r2 P1)."""
+    lease = _acq(lane="A")
+    m = _crashed_reclaim_marker(lease)
+    rs.transition("pr-1", "merged", lane_id="A")  # the §4(vi) flip happened
+    assert md.complete_dead_marker(m) is True
+    assert md.read_lease()["lease_token"] == "f" * 32  # continuation restored
+
+
+# mutation-probe: drop release()'s persisted-state re-read (blocked/stale release passes)
+def test_release_refuses_blocked_and_stale(door):
+    """release() adjudicates from the persisted lease (r2 P1): a blocked door releases
+    only through unblock, and a stale dict must never move ANOTHER lane's lease aside."""
+    lease = _acq(lane="A")
+    md.mark_blocked(lease, sha="m" * 40, reason="post_merge_ci_not_green")
+    with pytest.raises(md.DoorBlocked):
+        md.release(lease)  # caller's dict still says held; persisted view says blocked
+    md.unblock(pr=1, blocked_at_sha="m" * 40, lane_id="A")  # door free again
+    # Door cycles to another lane; the old dict must not release the new holder's lease.
+    rs.reserve("pr-9", lane_id="C", branch="b", arc_type="inventing")
+    rs.open_with_sensor("pr-9", "C")
+    other = md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="h" * 40, base_sha="b" * 40)
+    with pytest.raises(md.LeaseError, match="stale release"):
+        md.release(lease)
+    assert md.read_lease()["lease_token"] == other["lease_token"]  # C undisturbed
+
+
+# mutation-probe: drop reclaim()'s reservation-state re-check (terminated arc reclaimed)
+def test_reclaim_refuses_terminated_reservation(door):
+    """A dead lease whose arc was abandoned/superseded (PR may still be OPEN on GitHub)
+    must not regain merge-driving authority (r2 P2)."""
+    lease = _acq(lane="A")
+    _kill_holder()
+    rs.reserve("pr-99", lane_id="A", branch="b", arc_type="inventing")
+    rs.transition("pr-1", "abandoned", lane_id="A", superseded_by="pr-99")
+    with pytest.raises(md.LeaseError, match="terminated"):
+        md.reclaim(lease, lane_id="B", ground_state="OPEN")
+
+
+# mutation-probe: drop gc()'s attempts symlink/containment skip (escape deleted)
+def test_gc_never_follows_attempts_symlink(door, tmp_path):
+    """A planted attempts/<lane> symlink must not let GC unlink files outside QUEUE_DIR
+    (r2 P1); concurrent-collector FileNotFoundError yields rather than aborting (r2 P3)."""
+    outside = tmp_path / "outside-store"
+    outside.mkdir()
+    victim = outside / "1000.000000"
+    victim.write_text("precious")
+    os.utime(victim, (0, 0))  # ancient
+    (md.DOOR / "attempts").mkdir(parents=True, exist_ok=True)
+    (md.DOOR / "attempts" / "evil").symlink_to(outside)
+    removed = md.gc()
+    assert victim.exists()  # the escape was never followed
+    assert not any("outside-store" in str(p) for p in removed)
 
 
 # mutation-probe: drop _rate_check()'s _check_lane_id containment call

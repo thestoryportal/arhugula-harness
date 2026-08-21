@@ -273,6 +273,22 @@ def _move_lease(token: str, dest_prefix: str) -> None:
 
 
 def release(lease: dict) -> None:
+    # Re-read the persisted state (codex U-HE-22 r2 P1): the caller's dict may predate a
+    # mark_blocked (a blocked door stays closed until the operator-keyed unblock), and a
+    # stale dict must never move ANOTHER lease aside (_move_lease renames the CURRENT
+    # LEASE; the marker namespace is per-token, so a stale caller could win its own old
+    # token's marker while the door holds a different lease).
+    persisted = read_lease()
+    if persisted is None or persisted["lease_token"] != lease["lease_token"]:
+        raise LeaseError(
+            "stale release: the door does not currently hold that lease "
+            f"(door: {persisted and persisted['lease_token']!r})"
+        )
+    if persisted.get("state") == "blocked":
+        raise DoorBlocked(
+            f"lease is blocked at {persisted.get('blocked_at_sha')!r} "
+            f"({persisted.get('blocked_reason')!r}); use unblock, not release"
+        )
     if win_marker(lease["lease_token"], "release") is None:
         raise MarkerLost(
             f"lease {lease['lease_token']}: transition marker already taken -- "
@@ -313,6 +329,16 @@ def reclaim(lease: dict, *, lane_id: str, ground_state: str) -> dict:
         )
     if ground_state not in ("MERGED", "OPEN"):
         raise LeaseError(f"reclaim requires ground truth MERGED|OPEN, got {ground_state!r}")
+    # The linked reservation is re-checked too (codex U-HE-22 r2 P2): an arc the operator
+    # abandoned/superseded while its PR stayed OPEN must not regain merge-driving authority
+    # through a dead lease. `open` and `merged` are the legitimate lease-holding states
+    # (merged = the §4(vi)–(ix) continuation window).
+    res = rs.current(lease["reservation_id"])
+    if res is None or res[1]["state"] not in ("open", "merged"):
+        raise LeaseError(
+            f"reclaim refused: reservation {lease['reservation_id']!r} reads "
+            f"{res and res[1]['state']!r} — the arc has been terminated or never opened"
+        )
     fresh = {
         **persisted,
         "lease_token": secrets.token_hex(16),
@@ -420,12 +446,16 @@ def complete_dead_marker(marker: Path) -> bool:
         # token, or a later acquirer, already holds the door). Ground-truth gate (codex
         # U-HE-22 r1 P1): a stale marker surviving a full foreign acquire→release cycle must
         # not resurrect authority for an arc that has moved on — publish only while the
-        # fresh lease's reservation still reads `open` (the C-HE-03 authority; a landed or
-        # abandoned arc refuses). The narrower stale-head window that remains (reservation
-        # still open, door cycled) is bounded by the land driver's own step-(ii) head/base
-        # re-verification (U-HE-23), which releases a stale resurrected lease.
+        # fresh lease's reservation still reads `open` OR `merged` (the C-HE-03 authority):
+        # `merged` is the legitimate §4(vi)–(ix) continuation state — a post-merge reclaimer
+        # crashing between move and publish must still be completable, else the door reads
+        # free and another lane acquires mid-continuation (codex U-HE-22 r2 P1 on the r1
+        # open-only gate). An abandoned/superseded or never-opened arc refuses. The narrower
+        # stale-head window that remains (reservation not yet terminal, door cycled) is
+        # bounded by the land driver's own step-(ii) head/base re-verification (U-HE-23),
+        # which releases a stale resurrected lease.
         res = rs.current(m["fresh_lease"]["reservation_id"])
-        if res is None or res[1]["state"] != "open":
+        if res is None or res[1]["state"] not in ("open", "merged"):
             return done
         before = read_lease()
         _publish_fresh(m["fresh_lease"])
@@ -445,25 +475,42 @@ def gc(*, now: datetime | None = None) -> list[Path]:
         return removed
     cutoff = now - timedelta(days=GC_KEEP_DAYS)
     for p in DOOR.iterdir():
-        if (
-            p.name.startswith(("transition.", "released.", "reclaimed.", "LEASE."))
-            and datetime.fromtimestamp(p.stat().st_mtime, UTC) < cutoff
-        ):
-            live = read_lease()
-            if live and live["lease_token"] in p.name:
-                continue
-            p.unlink()
-            removed.append(p)
+        try:
+            expired = (
+                p.name.startswith(("transition.", "released.", "reclaimed.", "LEASE."))
+                and not p.is_symlink()
+                and datetime.fromtimestamp(p.stat().st_mtime, UTC) < cutoff
+            )
+            if expired:
+                live = read_lease()
+                if live and live["lease_token"] in p.name:
+                    continue
+                p.unlink()
+                removed.append(p)
+        except FileNotFoundError:
+            # a concurrent collector won this artifact: log-and-yield idiom (codex r2 P3)
+            continue
     att = DOOR / "attempts"
     if att.is_dir():
         for lane in att.iterdir():
+            # NEVER follow a planted symlink out of the attempts store: a pre-existing
+            # attempts/<lane> symlink would make this walk unlink regular files outside
+            # QUEUE_DIR (codex U-HE-22 r2 P1). Lane dirs are only ever created by
+            # _rate_check under _check_lane_id containment — anything else is skipped.
+            if lane.is_symlink() or not lane.is_dir():
+                continue
             for f in lane.iterdir():
                 try:
-                    age = now.timestamp() - float(f.name)
-                except ValueError:
-                    # `.tmp` remnant of a crashed publish_exclusive (round-5 P2)
-                    age = now.timestamp() - f.stat().st_mtime
-                if age > 3600:
-                    f.unlink()
-                    removed.append(f)
+                    if f.is_symlink():
+                        continue
+                    try:
+                        age = now.timestamp() - float(f.name)
+                    except ValueError:
+                        # `.tmp` remnant of a crashed publish_exclusive (round-5 P2)
+                        age = now.timestamp() - f.stat().st_mtime
+                    if age > 3600:
+                        f.unlink()
+                        removed.append(f)
+                except FileNotFoundError:
+                    continue  # concurrent collector won it (codex r2 P3)
     return removed
