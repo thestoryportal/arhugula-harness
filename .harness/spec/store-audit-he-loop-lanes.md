@@ -53,6 +53,7 @@ Locks and stagers that carry no durable fact — never read for state, never an 
 | Lens scratch (binding input) | `.harness/tmp/` (`LENS_SCRATCH`; a lens's fenced JSON must RESOLVE under it) | one gate round |
 | Atomic-write stagers | `.<name>.<pid>.tmp` next to the target (`LEDGER`, queue entries; `arc_metrics.py` only — `loop_status.md` is appended in place under the mutex below) | one `os.replace` |
 | Recovery aside (queue claim) | `QUEUE_DIR/<arc>.taken.recover.<pid>` (`*.taken.recover.*`; move-aside re-judge in `_recover_dead_claims`, U-HE-15 r3 — orphans from a dead recoverer are swept and restored on the next recovery pass) | one recovery step |
+| Claim-break aside (completion claim) | `QUEUE_DIR/merge-door/.completed.<token>.broken.<pid>.<hex>` (adjudicate-after-rename CAS in `complete_dead_marker`, U-HE-22 r7 — the moved bytes are the adjudicated evidence; a live claimant's claim is restored via `os.link`, then the aside is unlinked) | one claim-break step |
 | Status-ledger mutex | `.harness/.loop-status.lock` (fd 8; lib.sh worktree-mutex pattern) | one append |
 | Test hold-seam rendezvous (U-HE-20) | `<ARC_METRICS_TEST_HOLD_DIR>/<step>.reached` touched at the named step, `<step>.go` polled ≤30 s (`_hold_after`, sibling of `_kill_after`; inert unless `ARC_METRICS_TEST_HOLD_AFTER` is set — test-only, never in production env) | one interleaving hold |
 
