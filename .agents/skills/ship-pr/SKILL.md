@@ -135,7 +135,7 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.
 7. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
    DEFER removing the arc worktree and pruning the topic branch until AFTER the arc exit
-   report below — the report reads the arc worktree's `.harness/loop_status.md` for this
+   report below — the report reads the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`) for this
    arc's pending-HIL rows, and disposition deletes that ledger.
 6. Record loop gates through `worktree_disposition` (the disposition itself now happens
    after the exit report) and require `just codex-loop-check`.
@@ -180,7 +180,7 @@ unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path th
 Validate the call before using its output: require exit 0 and the named report path. The
 recipe writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed, so a
 re-run overwrites rather than orphaning a sibling) and appends one `EXIT-REPORT` row to
-`.harness/loop_status.md`. Paste the emitted `yaml` block into the final response as the
+the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`). Paste the emitted `yaml` block into the final response as the
 arc's machine-readable closure record. Every field is collected or explicitly null — a null
 `refresh_commit`, a `main_ci.conclusion` other than `success`, or `checkpoint.confirmed:
 false` each mean a closeout obligation above is still open.

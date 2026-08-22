@@ -967,10 +967,13 @@ def test_primary_outage_with_a_successful_failover_routes_by_failure_class(monke
 def test_route_to_hitl_notify_kind_for_the_non_blocking_case(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     (tmp_path / ".harness").mkdir()
+    # C-HE-09 §2: the ledger is a SHARED venue, no longer selected by CLAUDE_PROJECT_DIR.
+    monkeypatch.setenv("HARNESS_LOOP_STATUS_PATH", str(tmp_path / "shared-loop_status.md"))
     _REAL_ROUTE_TO_HITL("B-778", "codex: x; gemini: APPROVE", kind="primary-transient")
-    ledger = (tmp_path / ".harness" / "loop_status.md").read_text()
+    ledger = (tmp_path / "shared-loop_status.md").read_text()
     assert (
-        "| NOTIFY | review-with-failover: primary REVIEWER_UNAVAILABLE, failover carried the "
+        "| NOTIFY | lane=-;cause=- | review-with-failover: primary REVIEWER_UNAVAILABLE, "
+        "failover carried the "
         "review — B-778: codex: x; gemini: APPROVE [ref "
     ) in ledger
     assert "| DEFERRED-HIL |" not in ledger  # the header prose mentions the kind; rows do not
@@ -979,10 +982,12 @@ def test_route_to_hitl_notify_kind_for_the_non_blocking_case(tmp_path, monkeypat
 def test_route_to_hitl_writes_a_deferred_hil_row_via_loop_defer(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))  # lib.sh's project-dir override
     (tmp_path / ".harness").mkdir()
+    monkeypatch.setenv("HARNESS_LOOP_STATUS_PATH", str(tmp_path / "shared-loop_status.md"))
     _REAL_ROUTE_TO_HITL("B-777", "codex: x; gemini: y")
-    ledger = (tmp_path / ".harness" / "loop_status.md").read_text()
+    ledger = (tmp_path / "shared-loop_status.md").read_text()
     assert (
-        "| DEFERRED-HIL | B-777 — review-with-failover: REVIEWER_UNAVAILABLE on both channels — "
+        "| DEFERRED-HIL | lane=-;cause=- | B-777 — review-with-failover: REVIEWER_UNAVAILABLE "
+        "on both channels — "
         "codex: x; gemini: y [ref "
     ) in ledger
     assert ledger.count("| DEFERRED-HIL |") == 1
@@ -1524,8 +1529,9 @@ def test_route_to_hitl_reports_a_swallowed_append(tmp_path, monkeypatch, capsys)
     """loop_log turns a failed append into success (`|| true`); the router verifies the row."""
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     (tmp_path / ".harness").mkdir()
-    (tmp_path / ".harness" / "loop_status.md").write_text("# ledger\n")
-    (tmp_path / ".harness" / "loop_status.md").chmod(0o444)
+    monkeypatch.setenv("HARNESS_LOOP_STATUS_PATH", str(tmp_path / "shared-loop_status.md"))
+    (tmp_path / "shared-loop_status.md").write_text("# ledger\n")
+    (tmp_path / "shared-loop_status.md").chmod(0o444)
     _REAL_ROUTE_TO_HITL("B-779", "codex: x; gemini: y")
     assert "HITL row NOT written" in capsys.readouterr().err
 
@@ -1613,11 +1619,12 @@ def test_bound_block_on_stderr_when_our_cap_kills_still_blocks(tmp_path, monkeyp
 def test_route_to_hitl_permanent_primary_defers_the_channel_not_the_arc(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
     (tmp_path / ".harness").mkdir()
+    monkeypatch.setenv("HARNESS_LOOP_STATUS_PATH", str(tmp_path / "shared-loop_status.md"))
     _REAL_ROUTE_TO_HITL("B-780", "codex: not logged in; gemini: BLOCK", kind="primary-permanent")
-    ledger = (tmp_path / ".harness" / "loop_status.md").read_text()
+    ledger = (tmp_path / "shared-loop_status.md").read_text()
     assert (
-        "| DEFERRED-HIL | codex-review-channel — primary channel permanently unavailable; "
-        "the failover carried B-780"
+        "| DEFERRED-HIL | lane=-;cause=- | codex-review-channel — primary channel "
+        "permanently unavailable; the failover carried B-780"
     ) in ledger
     assert "| DEFERRED-HIL | B-780" not in ledger  # the arc itself is NOT marked pending
     assert "on both channels" not in ledger

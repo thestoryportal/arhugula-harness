@@ -152,6 +152,33 @@ def mk_repo(root: Path) -> Path:
     return root
 
 
+@pytest.fixture(autouse=True)
+def shared_ledger(tmp_path):
+    """Pin the SHARED loop ledger (C-HE-09 §2) into tmp_path for every test.
+
+    Since U-HE-29 the ledger is worktree-independent -- `loop_status_path` resolves it
+    from `HARNESS_LOOP_STATUS_PATH` / `ARC_METRICS_QUEUE_DIR`, NOT from the repo root a
+    test builds. Without this pin the real `loop_lib.sh` copied into each fake repo would
+    resolve the OPERATOR's live ledger and these tests would read (and grow) it.
+
+    Deliberately NOT `monkeypatch.setenv`: several tests below call `monkeypatch.undo()`
+    mid-test to drop their `run` stub, and `monkeypatch` is one function-scoped instance
+    shared with this fixture — an undo() would silently unpin the venue mid-test and point
+    the very next real subprocess at the operator's ledger.
+    """
+    p = tmp_path / "shared" / "loop_status.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    prev = os.environ.get("HARNESS_LOOP_STATUS_PATH")
+    os.environ["HARNESS_LOOP_STATUS_PATH"] = str(p)
+    try:
+        yield p
+    finally:
+        if prev is None:
+            os.environ.pop("HARNESS_LOOP_STATUS_PATH", None)
+        else:
+            os.environ["HARNESS_LOOP_STATUS_PATH"] = prev
+
+
 @pytest.fixture
 def repo(tmp_path):
     return mk_repo(tmp_path / "repo")
@@ -554,7 +581,9 @@ def test_ac4_populated_todos_carry_full_rows(repo, gstack, monkeypatch):
     ]
 
 
-def test_ac4_todo_collection_failure_is_unknown_null_never_empty(repo, gstack, monkeypatch):
+def test_ac4_todo_collection_failure_is_unknown_null_never_empty(
+    repo, gstack, monkeypatch, shared_ledger
+):
     """codex round-2: an UNREADABLE ledger must render `todo_for_human: null` + an UNKNOWN
     note — never an authoritative [] ('nothing is waiting' and 'could not look' are
     different claims). The ledger index row mirrors it as todos=unknown."""
@@ -568,7 +597,7 @@ def test_ac4_todo_collection_failure_is_unknown_null_never_empty(repo, gstack, m
     assert "No pending DEFERRED-HIL items — nothing is waiting on a human." not in rendered
     monkeypatch.undo()
     assert aer.append_ledger_row(repo, data, "p.md") is True
-    assert "todos=unknown" in (repo / aer.LEDGER_REL).read_text(encoding="utf-8")
+    assert "todos=unknown" in shared_ledger.read_text(encoding="utf-8")
 
 
 def test_ac4_missing_helper_libs_are_unknown_not_empty(tmp_path):
@@ -585,7 +614,7 @@ def test_ac4_missing_helper_libs_are_unknown_not_empty(tmp_path):
     assert any("UNKNOWN" in n and "loop_lib.sh not found" in n for n in notes)
 
 
-def test_ac4_missing_helper_libs_render_as_null_and_todos_unknown(repo, tmp_path):
+def test_ac4_missing_helper_libs_render_as_null_and_todos_unknown(repo, tmp_path, shared_ledger):
     """…and it propagates: the yaml carries null, the prose warns, the index row says
     unknown — the same end-to-end shape as the nonzero-exit arm above."""
     bare = tmp_path / "no-hooks"
@@ -606,7 +635,7 @@ def test_ac4_missing_helper_libs_render_as_null_and_todos_unknown(repo, tmp_path
     assert "UNKNOWN" in rendered
     assert "No pending DEFERRED-HIL items — nothing is waiting on a human." not in rendered
     assert aer.append_ledger_row(repo, data, "p.md") is True
-    assert "todos=unknown" in (repo / aer.LEDGER_REL).read_text(encoding="utf-8")
+    assert "todos=unknown" in shared_ledger.read_text(encoding="utf-8")
 
 
 # --- AC5: idempotent per-PR re-run ------------------------------------------------------
@@ -638,7 +667,8 @@ def test_gate_l1_vanished_ledger_is_unknown_not_empty(repo, monkeypatch, tmp_pat
     notes: list[str] = []
     gone = tmp_path / "goneroot"
     (gone / ".harness").mkdir(parents=True)
-    # ledger_was_present=True but no loop_status.md on disk at read time
+    # ledger_was_present=True but the SHARED venue (the autouse fixture's path, which no
+    # test wrote to) holds no file at read time.
     got = aer._todos(gone, repo, notes, ledger_was_present=True)
     assert got is None
     assert any("vanished" in n for n in notes)
@@ -896,7 +926,10 @@ def test_exit_2_on_nonpositive_pr(repo, monkeypatch):
 
 # --- ledger index row (real loop_log, real byte-format) ---------------------------------
 
-ROW = re.compile(r"^\| (?P<ts>[^|]+) \| (?P<kind>[^|]+) \| (?P<detail>.*) \|$")
+# C-HE-09 §3 row shape: | ts | kind | lane=<id>;cause=<sig> | detail |
+ROW = re.compile(
+    r"^\| (?P<ts>[^|]+) \| (?P<kind>[^|]+) \| (?P<col>lane=[^|]*) \| (?P<detail>.*) \|$"
+)
 
 
 def unescape(detail: str) -> str:
@@ -904,13 +937,13 @@ def unescape(detail: str) -> str:
     return detail.replace("\\|", "|")
 
 
-def test_ledger_row_byte_format_via_the_real_loop_log(repo, gstack, monkeypatch):
+def test_ledger_row_byte_format_via_the_real_loop_log(repo, gstack, monkeypatch, shared_ledger):
     data = collect_with(scenario(todos="R-410 — needs runtime"), repo, gstack, monkeypatch)
     monkeypatch.undo()  # the ledger append must use the REAL subprocess runner
     rel = f"{aer.REPORT_DIR}/arc-exit-report-pr1202.md"
     assert aer.append_ledger_row(repo, data, rel) is True
 
-    lines = (repo / aer.LEDGER_REL).read_text(encoding="utf-8").splitlines()
+    lines = shared_ledger.read_text(encoding="utf-8").splitlines()
     rows = [ROW.match(ln) for ln in lines if ln.startswith("| ") and " | EXIT-REPORT | " in ln]
     assert len(rows) == 1, f"expected exactly one EXIT-REPORT row, got {len(rows)}"
     m = rows[0]
@@ -920,11 +953,11 @@ def test_ledger_row_byte_format_via_the_real_loop_log(repo, gstack, monkeypatch)
     assert detail == (f"pr=#1202 ci={MERGE[:8]}:success refresh={REFRESH[:8]} todos=1 path={rel}")
 
 
-def test_ledger_row_marks_a_missing_refresh_as_none(repo, gstack, monkeypatch):
+def test_ledger_row_marks_a_missing_refresh_as_none(repo, gstack, monkeypatch, shared_ledger):
     data = collect_with(scenario(log=[], files={}, todos=""), repo, gstack, monkeypatch)
     monkeypatch.undo()
     assert aer.append_ledger_row(repo, data, "p.md") is True
-    text = (repo / aer.LEDGER_REL).read_text(encoding="utf-8")
+    text = shared_ledger.read_text(encoding="utf-8")
     assert "refresh=none todos=0" in text
     assert REFRESH[:8] not in text
 
@@ -951,14 +984,14 @@ def test_ledger_rerun_with_silent_append_failure_is_not_a_false_pass(repo, gstac
     assert aer.append_ledger_row(repo, data, rel) is False
 
 
-def test_ledger_row_pipes_are_escaped_so_one_row_stays_one_row(repo, gstack, monkeypatch):
+def test_ledger_row_pipes_are_escaped_so_one_row_stays_one_row(
+    repo, gstack, monkeypatch, shared_ledger
+):
     data = collect_with(scenario(), repo, gstack, monkeypatch)
     monkeypatch.undo()
     assert aer.append_ledger_row(repo, data, "a|b.md") is True
     line = next(
-        ln
-        for ln in (repo / aer.LEDGER_REL).read_text(encoding="utf-8").splitlines()
-        if "EXIT-REPORT" in ln
+        ln for ln in shared_ledger.read_text(encoding="utf-8").splitlines() if "EXIT-REPORT" in ln
     )
     assert r"path=a\|b.md" in line
     assert unescape(ROW.match(line).group("detail")).endswith("path=a|b.md")
@@ -990,7 +1023,9 @@ def worktree_pair(tmp_path):
     return main, wt
 
 
-def test_r6f1_linked_worktree_writes_to_the_main_checkout(worktree_pair, gstack, monkeypatch):
+def test_r6f1_linked_worktree_writes_to_the_main_checkout(
+    worktree_pair, gstack, monkeypatch, shared_ledger
+):
     main, wt = worktree_pair
     sc = scenario(common_dir=(0, str(main / ".git")))
     monkeypatch.chdir(wt)  # invoked FROM the arc worktree, as the Codex flow does
@@ -1001,8 +1036,11 @@ def test_r6f1_linked_worktree_writes_to_the_main_checkout(worktree_pair, gstack,
 
     assert aer.report_path(main, 1202).is_file(), "report must land in the MAIN checkout"
     assert not aer.report_path(wt, 1202).exists(), "nothing may be left in the disposable worktree"
-    assert (main / aer.LEDGER_REL).is_file(), "ledger index must land in the MAIN checkout"
-    assert not (wt / aer.LEDGER_REL).exists()
+    # The REPORT is redirected to the main checkout; the ledger row is not "redirected"
+    # anywhere -- it lands in the one shared venue (C-HE-09 §2), which is neither checkout.
+    assert shared_ledger.is_file(), "ledger index must land in the SHARED venue"
+    assert not (main / ".harness" / "loop_status.md").exists()
+    assert not (wt / ".harness" / "loop_status.md").exists()
     assert "MAIN checkout" in aer.report_path(main, 1202).read_text(encoding="utf-8")
 
 
@@ -1022,32 +1060,50 @@ def test_r6f1_rerun_from_the_worktree_overwrites_the_same_main_file(
     assert [p.name for p in written] == ["arc-exit-report-pr1202.md"]
 
 
-# --- ROUND-7 FINDING: the WRITE redirect must not drag the pending-HIL READ with it -----
-# `loop_defer` writes through `hook_project_dir` → CLAUDE_PROJECT_DIR → the INVOKING
-# worktree, so this arc's DEFERRED-HIL rows live in the worktree's own ignored ledger.
-# Reading them from the redirected main root reports this arc's outstanding obligations as
-# `todo_for_human: []`, or surfaces a different session's items.
+# --- ROUND-7 FINDING, as re-cut by U-HE-29 ---------------------------------------------
+# The original finding was that the report's WRITE redirect (worktree → main checkout)
+# must not drag the pending-HIL READ with it, because each worktree kept its OWN
+# `.harness/loop_status.md` and reading the wrong one either lost this arc's obligations
+# or surfaced a parallel session's. C-HE-09 §2 dissolves the premise: there is now exactly
+# ONE ledger for every lane. What must still hold is that the read reaches THAT venue
+# (never a per-checkout path) and that rows keep their lane attribution, which is what the
+# tests below pin. The write redirect itself is unchanged and still covered above.
 
 
-def write_ledger(root: Path, *details: str) -> Path:
-    """A minimal loop ledger carrying one DEFERRED-HIL row per `details` entry."""
-    p = root / aer.LEDGER_REL
-    p.parent.mkdir(parents=True, exist_ok=True)
-    rows = "".join(f"| 2026-08-04T00:01:00Z | DEFERRED-HIL | {d} |\n" for d in details)
-    p.write_text(
-        "| timestamp | kind | detail |\n|---|---|---|\n"
-        "| 2026-08-04T00:00:00Z | ACTIVATE | run |\n" + rows,
-        encoding="utf-8",
+def write_ledger(path: Path, *details: str, lane: str = "-") -> Path:
+    """A minimal SHARED loop ledger carrying one DEFERRED-HIL row per `details` entry.
+
+    Rows are written in the C-HE-09 §3 structured shape (`lane=…;cause=…` BEFORE detail);
+    `lane` sets the emitting lane so cross-lane attribution can be asserted.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = "".join(
+        f"| 2026-08-04T00:01:00Z | DEFERRED-HIL | lane={lane};cause=- | {d} |\n" for d in details
     )
-    return p
+    with path.open("a", encoding="utf-8") as fh:
+        if fh.tell() == 0:
+            fh.write(
+                "| timestamp | kind | lane;cause | detail |\n|---|---|---|---|\n"
+                "| 2026-08-04T00:00:00Z | ACTIVATE | lane=-;cause=- | run |\n"
+            )
+        fh.write(rows)
+    return path
 
 
-def test_r7_worktree_rows_win_over_the_main_checkouts(worktree_pair, gstack, monkeypatch):
-    """(a) THE discriminator: both ledgers exist and DIFFER. The report must carry THIS
-    arc's rows (the worktree's), never the main checkout's unrelated ones."""
+def test_u_he_29_worktree_read_reaches_the_shared_venue_with_lane_attribution(
+    worktree_pair, gstack, monkeypatch, shared_ledger
+):
+    """(a) THE discriminator, re-cut: a worktree closeout reads the SHARED venue, and every
+    row arrives tagged with the lane that deferred it.
+
+    Pre-U-HE-29 this test asserted the opposite shape — the worktree's private ledger won
+    and a parallel lane's rows were excluded. That exclusion was a workaround for the venue
+    split, not a goal: two lanes gated on the same operator are both real obligations, and
+    the lane tag is what makes a shared list actionable rather than confusing."""
     main, wt = worktree_pair
-    write_ledger(wt, "R-501 — needs a vendor pick", "B-77 — needs paid-call authorization")
-    write_ledger(main, "R-999 — another session's item")
+    write_ledger(shared_ledger, "R-501 — needs a vendor pick", lane="L1")
+    write_ledger(shared_ledger, "B-77 — needs paid-call authorization", lane="L1")
+    write_ledger(shared_ledger, "R-999 — a sibling lane's item", lane="L2")
     sc = scenario(common_dir=(0, str(main / ".git")))
     monkeypatch.chdir(wt)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
@@ -1057,21 +1113,18 @@ def test_r7_worktree_rows_win_over_the_main_checkouts(worktree_pair, gstack, mon
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")  # still written to MAIN
     loaded = yaml.safe_load(yaml_block(body))
     assert loaded["todo_for_human"] == [
-        "B-77 — needs paid-call authorization",
-        "R-501 — needs a vendor pick",
-    ], "this arc's own deferrals must be reported"
-    assert "R-999" not in body, "another session's ledger must not leak in"
-    assert "NOT merged into this report" in body, "the split must be stated honestly"
+        "[L1] B-77 — needs paid-call authorization",
+        "[L1] R-501 — needs a vendor pick",
+        "[L2] R-999 — a sibling lane's item",
+    ], "every open deferral, each carrying its lane (C-HE-09 §3)"
+    assert "SHARED loop ledger" in body, "the venue must be stated honestly"
 
 
-def test_r7_worktree_without_a_ledger_is_an_honest_empty_never_borrowed(
-    worktree_pair, gstack, monkeypatch
-):
-    """(b, re-cut at codex round-10) a ledger-less worktree is the NORMAL no-deferral
-    case; borrowing main's ledger would serialize a PARALLEL session's rows as this
-    arc's obligations. The honest answer is []: this arc deferred nothing."""
+def test_u_he_29_no_shared_ledger_is_an_honest_empty(worktree_pair, gstack, monkeypatch):
+    """(b) With no ledger at the shared venue at all, nothing was ever deferred: the honest
+    answer is [], never a fabricated row and never UNKNOWN (the ledger did not VANISH — it
+    was never there, which `ledger_was_present=False` distinguishes)."""
     main, wt = worktree_pair
-    write_ledger(main, "R-999 — needs the operator")
     sc = scenario(common_dir=(0, str(main / ".git")))
     monkeypatch.chdir(wt)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
@@ -1080,8 +1133,6 @@ def test_r7_worktree_without_a_ledger_is_an_honest_empty_never_borrowed(
 
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")
     assert yaml.safe_load(yaml_block(body))["todo_for_human"] == []
-    assert "R-999" not in body, "a parallel session's row must never be borrowed"
-    assert "NOT borrowed" in body
 
 
 def test_r7_neither_ledger_present_is_an_honest_empty(worktree_pair, gstack, monkeypatch):
@@ -1095,25 +1146,29 @@ def test_r7_neither_ledger_present_is_an_honest_empty(worktree_pair, gstack, mon
     assert yaml.safe_load(yaml_block(body))["todo_for_human"] == []
 
 
-def test_r7_main_checkout_invocation_reads_and_writes_one_root(repo, gstack, monkeypatch):
-    """(c) unchanged for a main-checkout run: both roots are the same, no split note."""
-    write_ledger(repo, "R-410 — needs container runtime")
+def test_r7_main_checkout_invocation_reads_and_writes_one_root(
+    repo, gstack, monkeypatch, shared_ledger
+):
+    """(c) unchanged for a main-checkout run: both roots are the same, no worktree note."""
+    write_ledger(shared_ledger, "R-410 — needs container runtime")
     sc = scenario(common_dir=(0, str(repo / ".git")))
     monkeypatch.chdir(repo)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
     monkeypatch.setattr(aer, "run", make_run(sc, repo, real_bash=True))
     assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
     body = aer.report_path(repo, 1202).read_text(encoding="utf-8")
-    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-410 — needs container runtime"]
-    assert "NOT merged into this report" not in body
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == [
+        "[-] R-410 — needs container runtime"
+    ]
+    assert "SHARED loop ledger" not in body, "no worktree redirect happened, so no note"
     assert "linked worktree" not in body
 
 
-def test_r7_explicit_repo_root_sets_both_roots(worktree_pair, gstack, monkeypatch):
-    """An explicit --repo-root wins entirely — it is the read root as well as the write one."""
+def test_r7_explicit_repo_root_sets_both_roots(worktree_pair, gstack, monkeypatch, shared_ledger):
+    """An explicit --repo-root wins entirely — it is the read root as well as the write one.
+    The ledger it reads is the shared venue either way (C-HE-09 §2)."""
     main, wt = worktree_pair
-    write_ledger(wt, "R-501 — the worktree's row")
-    write_ledger(main, "R-999 — the main checkout's row")
+    write_ledger(shared_ledger, "R-999 — the one shared row")
     sc = scenario(common_dir=(0, str(main / ".git")))
     monkeypatch.chdir(wt)
     monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
@@ -1122,17 +1177,19 @@ def test_r7_explicit_repo_root_sets_both_roots(worktree_pair, gstack, monkeypatc
     monkeypatch.setattr(aer, "run", make_run(sc, main, real_bash=True))
     assert aer.main(["--pr", "1202", "--merge-sha", MERGE, "--repo-root", str(main)]) == 0
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")
-    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-999 — the main checkout's row"]
-    assert "R-501" not in body
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["[-] R-999 — the one shared row"]
 
 
-def test_r7_stale_worktree_loop_lib_does_not_break_the_read(worktree_pair, gstack, monkeypatch):
+def test_r7_stale_worktree_loop_lib_does_not_break_the_read(
+    worktree_pair, gstack, monkeypatch, shared_ledger
+):
     """Witnessed LIVE against a real worktree checked out at an older revision: sourcing the
     WORKTREE's `loop_lib.sh` exited 127 because that copy predates `loop_pending_hil_list`,
-    degrading the whole field to UNKNOWN. The ledger LOCATION comes from the worktree; the
-    parser CODE must come from the main checkout, whose helper set is current."""
+    degrading the whole field to UNKNOWN. The parser CODE must come from the main checkout,
+    whose helper set is current — now doubly so, since a pre-U-HE-29 worktree copy would
+    also resolve the ledger to the OLD per-worktree venue."""
     main, wt = worktree_pair
-    write_ledger(wt, "R-501 — this arc's obligation")
+    write_ledger(shared_ledger, "R-501 — this arc's obligation")
     # Simulate the stale worktree: its loop_lib.sh has no loop_pending_hil_list.
     stale = (wt / "tools" / "hooks" / "loop_lib.sh").read_text(encoding="utf-8")
     (wt / "tools" / "hooks" / "loop_lib.sh").write_text(
@@ -1146,20 +1203,20 @@ def test_r7_stale_worktree_loop_lib_does_not_break_the_read(worktree_pair, gstac
     assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
 
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")
-    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == ["R-501 — this arc's obligation"]
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == [
+        "[-] R-501 — this arc's obligation"
+    ]
     assert "UNKNOWN" not in body, "a stale worktree helper set must not blank the field"
 
 
 def test_r7_resolve_repo_root_returns_both_roots(worktree_pair, monkeypatch):
     """Structural: the resolver's contract is a (write, read) pair, not one path."""
     main, wt = worktree_pair
-    write_ledger(wt, "R-501 — x")
-    write_ledger(main, "R-999 — y")
     monkeypatch.setattr(aer, "run", make_run(scenario(common_dir=(0, str(main / ".git"))), wt))
     roots, notes = aer.resolve_repo_root(wt)
     assert roots is not None
     assert roots.write == main and roots.read == wt
-    assert any("NOT merged" in n for n in notes)
+    assert any("SHARED loop ledger" in n for n in notes)
 
 
 def test_r6f1_main_checkout_invocation_is_unchanged(repo, gstack, monkeypatch):
@@ -1245,7 +1302,9 @@ def test_r6f2_metacharacter_repo_path_does_not_execute_in_the_hil_read(evil_repo
     assert notes == []
 
 
-def test_r6f2_metacharacter_repo_path_does_not_execute_in_the_ledger_append(evil_repo):
+def test_r6f2_metacharacter_repo_path_does_not_execute_in_the_ledger_append(
+    evil_repo, shared_ledger
+):
     root, sentinel = evil_repo
     data = {
         "pr": 1202,
@@ -1255,7 +1314,7 @@ def test_r6f2_metacharacter_repo_path_does_not_execute_in_the_ledger_append(evil
     }
     assert aer.append_ledger_row(root, data, "p.md") is True
     assert not sentinel.exists(), f"INJECTION EXECUTED: {sentinel} was created"
-    assert "EXIT-REPORT" in (root / aer.LEDGER_REL).read_text(encoding="utf-8")
+    assert "EXIT-REPORT" in shared_ledger.read_text(encoding="utf-8")
 
 
 def test_r6f2_shim_sources_are_constant_strings(evil_repo, monkeypatch):
@@ -1266,6 +1325,11 @@ def test_r6f2_shim_sources_are_constant_strings(evil_repo, monkeypatch):
 
     def spy(cmd, cwd, timeout=20):
         seen.append(list(cmd))
+        # Answer the ledger-path resolution with a real path so the callers proceed to
+        # their own shims — a None answer would short-circuit the append entirely and
+        # leave the very call this test exists to inspect unexercised.
+        if len(cmd) > 2 and "loop_status_path" in cmd[2]:
+            return 0, str(root / "shared-ledger.md")
         return 0, ""
 
     monkeypatch.setattr(aer, "run", spy)
@@ -1274,12 +1338,16 @@ def test_r6f2_shim_sources_are_constant_strings(evil_repo, monkeypatch):
         root, {"pr": 1, "main_ci": {}, "refresh_commit": None, "todo_for_human": []}, "p.md"
     )
     bash_calls = [c for c in seen if c[0] == "bash"]
-    assert len(bash_calls) == 2
+    # 4 = ledger_path (from _todos) + _todos' own list read + ledger_path (from the
+    # append) + the append's loop_log.
+    assert len(bash_calls) == 4
     for cmd in bash_calls:
         source = cmd[2]
         assert str(root) not in source, "the repo path leaked into the bash SOURCE"
-        assert '"$1"' in source and '"$2"' in source and '"$3"' in source
-        assert str(root) in cmd[3:], "the repo path must travel as an argv value"
+        assert '"$1"' in source and '"$2"' in source
+        # `ledger_path` passes the two lib paths (which contain root) rather than root
+        # itself, so membership is by containment, not identity.
+        assert any(str(root) in a for a in cmd[3:]), "the repo path must travel as an argv value"
 
 
 # --- render purity ----------------------------------------------------------------------

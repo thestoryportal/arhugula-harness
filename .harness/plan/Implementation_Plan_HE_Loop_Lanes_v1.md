@@ -5480,6 +5480,87 @@ loop_notify_summary() {
 - [ ] **Step 4: GREEN** (`bash tools/hooks/test_loop_lib.sh` + `test_permission_guard.sh` + `test_stop_gate.sh` etc. — every hook test that reads the ledger must set `HARNESS_LOOP_STATUS_PATH`; sweep with `rg 'loop_status_path|loop_status.md' tools/hooks/test_*.sh`). Probes: ACTIVATE reset (`--lines` cannot re-add a line — witness is the §4 test; record) and row shape (`--lines` = the `if ($4 ~ /^[ \t]*lane=/)` branch → structured rows mis-parse → RED) → PINNED. Register `Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True)`.
 - [ ] **Step 5: Commit** — `git add tools/hooks/loop_lib.sh tools/hooks/test_loop_lib.sh tools/hooks/session-start.sh .claude/skills/loop-start/SKILL.md .claude/skills/loop-stop/SKILL.md .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md tools/lanes_verify.py && git commit -m "feat(he-lanes): U-HE-29 shared loop_status venue, structured column, NOTIFY kind, ACTIVATE scoping, pointer sweep (C-HE-09)"`.
 
+**As-built rev note (2026-08-22, U-HE-29 landing).** Every C-HE-09 / C-HE-20 contract this unit
+cites is unchanged; the corrections below are execution-time findings against the unit's own
+sketch, recorded per the as-built discipline.
+
+(i) **`tools/roadmap-audit/session-start.sh`, not `tools/hooks/session-start.sh`.** The unit's Files
+list named a hook path that does not exist at HEAD. The SessionStart carrier is
+`tools/roadmap-audit/session-start.sh` (it already sources `loop_lib.sh` at `:22-24` and renders
+`loop_pending_hil_summary` at `:37-43`); `loop_notify_summary` is rendered there, as its own
+segment appended after the HIL segment, so an empty HIL summary still surfaces notices and a
+populated one is never diluted (C-HE-09 §5 "beside, never merged into").
+
+(ii) **`tools/arc_exit_report.py` is a SECOND live carrier of the venue — absorbed, mandatory.**
+Not in the unit's Files list. It held its own `LEDGER_REL = ".harness/loop_status.md"`
+derivation and used it at 8 sites, including `append_ledger_row`'s pre/post growth check. Moving
+the venue without it is a LANDING-ORDER DEFECT, not a cosmetic miss: `loop_log` would append to
+the shared venue while the growth check watched the old per-worktree path, so the check would
+see no growth, `append_ledger_row` would return False, and `main()` would fail closed with
+exit 3 on EVERY arc closed through ship-pr. Absorbed by replacing the constant with a
+`ledger_path(code_root)` resolver that ASKS `loop_status_path` (one authority, honouring
+`HARNESS_LOOP_STATUS_PATH` / `ARC_METRICS_QUEUE_DIR` identically to every hook) and returns
+None -- never a guessed fallback -- when it cannot resolve.
+
+(iii) **The R-7 worktree-vs-main ledger discrimination is DELETED, not ported.** `_resolve_roots`
+carried a wt_ledger/main_ledger branch whose two notes claimed rows came from the invoking
+worktree's private ledger and that the main checkout's "SEPARATE ledger" was not borrowed. Under
+one shared venue both claims are FALSE, so re-stating either would be a fabricated provenance
+note. Replaced with a single honest note naming the shared venue. Its tests were re-cut the same
+way: `test_r7_worktree_rows_win_over_the_main_checkouts` /
+`..._without_a_ledger_is_an_honest_empty_never_borrowed` became
+`test_u_he_29_worktree_read_reaches_the_shared_venue_with_lane_attribution` /
+`..._no_shared_ledger_is_an_honest_empty`. The old exclusion was a workaround for the venue
+split, not a goal — two lanes gated on the same operator are both real obligations, and the
+`[lane_id]` render (§3) is what makes the shared list actionable.
+
+(iv) **`_loop_epoch` does not exist; the epoch helper became a shared AWK prelude.** The sketch's
+`loop_notify_summary` called a `_loop_epoch` shell helper that is nowhere at HEAD — the epoch
+logic lived inline in `_loop_hil_ttl_resurface_unlocked`'s awk. Rather than add a shell helper
+that forks per row, the Hinnant days-from-civil pair was lifted into `_LOOP_AWK_EPOCH` beside
+`_LOOP_AWK_ROW` and both reducers now share it. Same rule as the row parser: one parse, one
+authority.
+
+(v) **`_loop_structured_col` + `_loop_escape_detail` extracted.** `loop_resolve` verifies its own
+write by grepping for the exact row it just appended, so it must reproduce the structured
+column and the pipe-escaping byte-for-byte. Building that string twice (once in the writer, once
+in the checker) is a drift surface that would silently break the resolve verification the
+moment either spelling changed; both now call the same two helpers.
+
+(vi) **The ACTIVATE-reset strike reaches `_loop_hil_ttl_resurface_unlocked` too.** §4 strikes the
+reset "for HIL rows"; the TTL re-surfacer reduces HIL rows, so its own
+`k == "ACTIVATE" { delete state; delete at }` was struck as well. Left in place, a sibling lane's
+ACTIVATE would silence another lane's aged deferral — precisely the notification the C-HE-20 TTL
+exists to deliver.
+
+(vii) **Six shell suites + two pytest suites pin `HARNESS_LOOP_STATUS_PATH`.** Beyond
+`test_loop_lib.sh`, the venue move stranded `test_stop_loop.sh`, `test_resolve_lib.sh`,
+`test_permission_guard.sh`, `tools/04-loop/test_run.sh`, `tools/04-loop/test_loop_wrappers.sh`,
+`tools/roadmap-audit/test_session_start.sh`, `tools/test_review_wrapper.py` and
+`tools/test_arc_exit_report.py`. In `test_arc_exit_report.py` the pin is an autouse fixture that
+sets the env var DIRECTLY rather than through `monkeypatch.setenv`: several tests there call
+`monkeypatch.undo()` mid-test to drop their `run` stub, and `monkeypatch` is one function-scoped
+instance shared with the fixture — an `undo()` would have silently unpinned the venue mid-test
+and pointed the next real subprocess at the OPERATOR's live ledger.
+
+(viii) **Two more skip-set scoping assertions inverted.** Besides `test_loop_lib.sh` tests 10 and
+17d, `test_stop_loop.sh` test 7 asserted that a DEFERRED-HIL row preceding an ACTIVATE is
+excluded from the injected skip-set. Inverted per §4 and strengthened: the still-open pre-ACTIVATE
+row must now be INCLUDED, and a companion RESOLVED-HIL row proves resolution remains the only exit.
+
+(ix) **`Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", ...)` already existed** (landed at
+U-HE-09); the manifest keys rows by artifact, so it was not duplicated. A second row registers the
+newly-load-bearing carrier from (ii): `Row("C-HE-09", "pytest:tools/test_arc_exit_report.py",
+"phase0", "local + CI", False)`.
+
+(x) **The U-HE-18 SessionStart activation gate self-activated.** `session-start.sh:100-101` gates
+its detached `reconcile-all` spawn on `grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh`.
+That writer now exists, so the pass runs and its C-HE-20 escalation rows reach the shared ledger
+instead of only the store-local `.reconcile.log` (the pre-U-HE-29 registered residual). The gate
+is RETAINED rather than removed — it is a live precondition, not a countdown: a checkout whose
+`loop_lib.sh` predates U-HE-29 (a bisect, an old worktree) would otherwise run an unattended pass
+that can only fail closed into the log.
+
 ---
 
 ### U-HE-30: Gate coalescing by `cause_signature`, 10 min window, pull-based delivery

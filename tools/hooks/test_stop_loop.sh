@@ -14,6 +14,10 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL mktemp"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 mkdir -p "$REPO/.harness"
+# C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
+# no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
+
 # Minimal dashboard with a Next action section carrying an R-id.
 cat > "$REPO/.harness/roadmap_status.md" <<'EOF'
 ## Next action
@@ -50,7 +54,7 @@ OUT=$(printf '{}' | HARNESS_LOOP=1 HARNESS_LOOP_MAX=2 CLAUDE_PROJECT_DIR="$REPO"
 [ -z "$OUT" ] && ok "iteration cap → allows stop" || bad "blocked past cap: $OUT"
 [ ! -f "$REPO/.harness/.loop-iter" ] && ok "counter reset at cap" || bad "counter not reset"
 [ -f "$REPO/.harness/.loop-halt" ] && ok "cap raises halt marker (real boundary)" || bad "cap did not raise halt marker"
-grep -q '| STOP | iteration cap' "$REPO/.harness/loop_status.md" && ok "cap logged to ledger" || bad "cap not logged"
+grep -q '| STOP | lane=[^|]* | iteration cap' "$HARNESS_LOOP_STATUS_PATH" && ok "cap logged to ledger" || bad "cap not logged"
 rm -f "$REPO/.harness/.loop-halt"
 
 # 5) Halt marker → stand down (allow stop) + marker PRESERVED for the runner (codex P1:
@@ -59,7 +63,7 @@ rm -f "$REPO/.harness/.loop-halt"
 OUT=$(run_on)
 [ -z "$OUT" ] && ok "halt marker → allows stop" || bad "blocked despite halt: $OUT"
 [ -f "$REPO/.harness/.loop-halt" ] && ok "halt marker preserved for runner" || bad "halt marker was consumed"
-grep -q '| STOP | halt marker' "$REPO/.harness/loop_status.md" && ok "halt logged to ledger" || bad "halt not logged"
+grep -q '| STOP | lane=[^|]* | halt marker' "$HARNESS_LOOP_STATUS_PATH" && ok "halt logged to ledger" || bad "halt not logged"
 rm -f "$REPO/.harness/.loop-halt"
 
 # 6) Non-numeric HARNESS_LOOP_MAX must not break the cap (codex P2): falls back to 25,
@@ -69,17 +73,22 @@ OUT=$(printf '{}' | HARNESS_LOOP=1 HARNESS_LOOP_MAX=abc CLAUDE_PROJECT_DIR="$REP
 [ -z "$OUT" ] && ok "non-numeric MAX → defaults to 25, counter 30 stops" || bad "invalid MAX kept blocking: $OUT"
 
 # 7) Skip-set injection (the defer-and-ADVANCE mechanism — the load-bearing fix). With a
-#    ledger carrying DEFERRED-HIL rows SINCE the last ACTIVATE, the continue-reason must
-#    carry those item-IDs (so a fresh headless `claude -p` child skips them off the static
-#    pointer) and must instruct defer-and-advance, NOT halt-at-gate. A DEFERRED-HIL row
-#    BEFORE the ACTIVATE is a prior run's — it must NOT leak into this run's skip-set.
+#    ledger carrying open DEFERRED-HIL rows, the continue-reason must carry those item-IDs
+#    (so a fresh headless `claude -p` child skips them off the static pointer) and must
+#    instruct defer-and-advance, NOT halt-at-gate. Since U-HE-29 a row that PRECEDES an
+#    ACTIVATE is included too (C-HE-09 §4, option b): the ledger is shared across lanes, so
+#    an ACTIVATE-scoped window would let one lane's activation un-skip another lane's
+#    still-open gate and the loop would re-attempt it. Only a RESOLVED-HIL row clears an
+#    item — over-skipping is safe, under-skipping re-loops.
 rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
-cat > "$REPO/.harness/loop_status.md" <<'EOF'
+cat > "$HARNESS_LOOP_STATUS_PATH" <<'EOF'
 # ledger
 | ts | kind | detail |
 |---|---|---|
-| t0 | DEFERRED-HIL | R-999 — prior run, must be excluded |
+| t0 | DEFERRED-HIL | R-999 — still open, never resolved |
 | t1 | ACTIVATE | this run |
+| t2 | DEFERRED-HIL | R-888 — deferred then answered |
+| t3 | RESOLVED-HIL | R-888 — the operator answered it |
 | t2 | DEFERRED-HIL | R-410 — needs container runtime |
 | t3 | DEFERRED-HIL | R-300 — needs OpenAI creds |
 EOF
@@ -87,7 +96,8 @@ OUT=$(run_on)
 echo "$OUT" | jq -e '.reason | test("ALREADY DEFERRED")'         >/dev/null 2>&1 && ok "reason carries the skip-set header" || bad "no skip-set header: $OUT"
 echo "$OUT" | jq -e '.reason | test("R-410")'                    >/dev/null 2>&1 && ok "skip-set includes R-410 (this run)" || bad "R-410 missing from skip-set"
 echo "$OUT" | jq -e '.reason | test("R-300")'                    >/dev/null 2>&1 && ok "skip-set includes R-300 (this run)" || bad "R-300 missing from skip-set"
-echo "$OUT" | jq -e '.reason | test("R-999") | not'              >/dev/null 2>&1 && ok "skip-set EXCLUDES R-999 (pre-ACTIVATE)" || bad "R-999 leaked into skip-set: $OUT"
+echo "$OUT" | jq -e '.reason | test("R-999")'                    >/dev/null 2>&1 && ok "skip-set INCLUDES a still-open pre-ACTIVATE row (C-HE-09 §4)" || bad "ACTIVATE dropped an open deferral: $OUT"
+echo "$OUT" | jq -e '.reason | test("R-888") | not'              >/dev/null 2>&1 && ok "skip-set EXCLUDES a RESOLVED item (the only exit)" || bad "resolved item leaked into skip-set: $OUT"
 echo "$OUT" | jq -e '.reason | test("do NOT raise .loop-halt")'  >/dev/null 2>&1 && ok "instructs defer-NOT-halt at a gate" || bad "missing defer-not-halt guidance"
 echo "$OUT" | jq -e '.reason | test("tools/04-loop/defer.sh")'      >/dev/null 2>&1 && ok "instructs the allowlisted defer.sh wrapper (not a denied raw source)" || bad "missing defer.sh wrapper guidance"
 echo "$OUT" | jq -e '.reason | test("tools/04-loop/halt.sh")'       >/dev/null 2>&1 && ok "instructs the allowlisted halt.sh wrapper for stand-down" || bad "missing halt.sh wrapper guidance"

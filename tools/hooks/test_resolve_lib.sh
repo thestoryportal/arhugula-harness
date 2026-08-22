@@ -13,6 +13,10 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL mktemp"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 mkdir -p "$REPO/.harness" "$REPO/bin"
+# C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
+# no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
+
 
 export CLAUDE_PROJECT_DIR="$REPO"
 # shellcheck source=lib.sh
@@ -42,13 +46,13 @@ grep -q 'exec' "$REPO/.harness/codex_args.log" && ok "uses codex exec" || bad "n
 
 # 3) resolve_record appends a RESOLVE row.
 resolve_record "option A" "both agreed A is reversible"
-grep -q '| RESOLVE | DECIDE: option A — both agreed A is reversible |' "$REPO/.harness/loop_status.md" \
-  && ok "resolve_record appends RESOLVE row" || bad "no RESOLVE row: $(grep RESOLVE "$REPO/.harness/loop_status.md")"
+grep -q '| RESOLVE | lane=[^|]* | DECIDE: option A — both agreed A is reversible |' "$HARNESS_LOOP_STATUS_PATH" \
+  && ok "resolve_record appends RESOLVE row" || bad "no RESOLVE row: $(grep RESOLVE "$HARNESS_LOOP_STATUS_PATH")"
 
 # 4) resolve_split appends a RESOLVE-SPLIT row.
 resolve_split "option A" "codex=A advisor=B; took safer"
-grep -q '| RESOLVE-SPLIT | SAFE-DEFAULT: option A — codex=A advisor=B; took safer |' "$REPO/.harness/loop_status.md" \
-  && ok "resolve_split appends RESOLVE-SPLIT row" || bad "no SPLIT row: $(grep SPLIT "$REPO/.harness/loop_status.md")"
+grep -q '| RESOLVE-SPLIT | lane=[^|]* | SAFE-DEFAULT: option A — codex=A advisor=B; took safer |' "$HARNESS_LOOP_STATUS_PATH" \
+  && ok "resolve_split appends RESOLVE-SPLIT row" || bad "no SPLIT row: $(grep SPLIT "$HARNESS_LOOP_STATUS_PATH")"
 
 echo "----"
 echo "resolve_lib: $PASS passed, $FAIL failed"

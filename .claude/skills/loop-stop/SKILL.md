@@ -20,5 +20,5 @@ echo "loop mode: $(loop_mode_active && echo ON || echo OFF)"
 - Removes the `.harness/.loop-active` file marker and logs a `DEACTIVATE` row.
 - **`HARNESS_LOOP=1` in the environment overrides the marker** — if loop mode still
   reports ON after this, an env var is forcing it; unset `HARNESS_LOOP` to fully disable.
-- Review `.harness/loop_status.md` for what the run deferred (`DEFERRED-HIL` rows are
+- Review the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`) for what the run deferred (`DEFERRED-HIL` rows are
   the genuine gates — creds / paid calls / destructive ops — that need your attention).

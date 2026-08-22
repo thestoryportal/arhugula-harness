@@ -16,6 +16,10 @@ REPO="$(mktemp -d)"
 trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 mkdir -p "$REPO/.harness"
+# C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
+# no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
+
 : > "$REPO/Project_Roadmap_v1.md"
 echo seed > "$REPO/.harness/seed"
 git -C "$REPO" add -A; git -C "$REPO" commit -qm "base commit"
@@ -92,7 +96,7 @@ printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "mis-titled substantive commi
 #    rows, EVERY emit branch appends the operator-facing summary (so the last unattended
 #    run's deferrals are "clearly presented when the operator engages next"). Absent when
 #    there is no ledger. Branch-agnostic: the suffix rides whatever audit verdict fires.
-cat > "$REPO/.harness/loop_status.md" <<'EOF'
+cat > "$HARNESS_LOOP_STATUS_PATH" <<'EOF'
 | ts | kind | detail |
 |---|---|---|
 | t1 | ACTIVATE | run |
@@ -101,7 +105,7 @@ EOF
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && printf '%s' "$OUT" | grep -q "R-410" \
   && ok "pending-HIL summary appended to SessionStart ($OUT)" || bad "no pending-HIL suffix: $OUT"
-rm -f "$REPO/.harness/loop_status.md"
+rm -f "$HARNESS_LOOP_STATUS_PATH"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
 

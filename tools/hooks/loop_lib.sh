@@ -3,7 +3,8 @@
 #
 # Sourced by the Wave-2 autonomy hooks (permission-guard, stop-loop, resolve) and
 # the /loop-start | /loop-stop skills. Provides the loop-mode marker toggle and an
-# append-only status ledger at .harness/loop_status.md that records the things a
+# append-only status ledger at the SHARED venue `loop_status_path()` (C-HE-09 §2 --
+# one file for every lane, outside every worktree) that records the things a
 # human will want to review after an unattended run: deferred genuinely-blocking
 # HILs (creds / vendor / paid calls), what the loop completed AROUND them, hard-stop
 # denials, Codex+Advisor decision splits, and resume state.
@@ -20,10 +21,17 @@ loop_marker_path() {
   [ -n "$d" ] && printf '%s' "$d/.harness/.loop-active"
 }
 
-# Path to the append-only status ledger.
+# Path to the append-only status ledger -- the SHARED venue (C-HE-09 §2): ONE file for
+# every lane and every caller, hook or raw shell. QUEUE_DIR-adjacent (outside every
+# worktree), never per-worktree: DEFERRED-HIL / RESOLVED-HIL / NOTIFY / COALESCE-DELIVERED
+# rows must reduce to one answer for every lane (X6/E10). A per-worktree venue split the
+# ledger so lane B could not see lane A's open deferral and re-attempted a gated item.
+# CONTROL markers (the .loop-active marker, .loop-iter, .loop-halt) deliberately stay
+# per-lane under hook_project_dir() -- they scope one lane's run, not the shared queue.
 loop_status_path() {
-  local d; d=$(hook_project_dir)
-  [ -n "$d" ] && printf '%s' "$d/.harness/loop_status.md"
+  if [ -n "${HARNESS_LOOP_STATUS_PATH:-}" ]; then printf '%s' "$HARNESS_LOOP_STATUS_PATH"; return 0; fi
+  local q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
+  printf '%s' "$(dirname "$q")/loop_status.md"
 }
 
 # Path to the Stop-continue iteration counter (U-HK-14 bound). Presence + integer
@@ -53,36 +61,112 @@ loop_status_ensure() {
     cat > "$p" <<'EOF'
 # Loop status ledger
 
-*Append-only record of autonomous loop-mode activity (Wave 2, U-HK-11). OFF by
-default — rows are written only while loop mode is active (`HARNESS_LOOP=1` or the
-`.harness/.loop-active` marker). Review after an unattended run: each `DEFERRED-HIL`
-is a genuine gate (creds / vendor / paid call / destructive op) the loop refused to
-auto-fire and worked around; a later `RESOLVED-HIL` row for the same item-id clears it
-once the gate is answered (ratification, operator selection, etc.); `DENY` is a
-hard-stop the permission guard blocked; `RESOLVE-SPLIT` is a Codex+Advisor disagreement
-where the safer default was taken.*
+*Append-only record of autonomous loop-mode activity (Wave 2, U-HK-11), SHARED by every
+lane (C-HE-09 §1/§2 — one file, never a per-worktree copy). OFF by default: rows are
+written only while loop mode is active (`HARNESS_LOOP=1` or a lane's `.loop-active`
+marker). Review after an unattended run: each `DEFERRED-HIL` is a genuine gate (creds /
+vendor / paid call / destructive op) the loop refused to auto-fire and worked around; a
+later `RESOLVED-HIL` row for the same item-id is the ONLY thing that clears it (C-HE-09
+§4 — a lane's `ACTIVATE` never resets another lane's row); `NOTIFY` is append-only
+informational, rendered beside the pending summary and never part of it;
+`COALESCE-DELIVERED` records one batched-prompt delivery (C-HE-10); `DENY` is a hard-stop
+the permission guard blocked; `RESOLVE-SPLIT` is a Codex+Advisor disagreement where the
+safer default was taken.*
 
-| timestamp | kind | detail |
-|---|---|---|
+| timestamp | kind | lane;cause | detail |
+|---|---|---|---|
 EOF
   fi
   printf '%s' "$p"
 }
 
+# The structured column (C-HE-09 §3), built in ONE place so the writer and loop_resolve's
+# own-write verification can never disagree about its spelling. Column separators and
+# whitespace are stripped: the token must contain no `|` (it would split the row) and no
+# space (the reducers' item-token split keys on whitespace). Usage: _loop_structured_col
+# <lane> <cause> -> `lane=<lane>;cause=<cause>`, each defaulting to `-`.
+_loop_structured_col() {
+  local lane cause
+  lane=$(printf '%s' "${1:--}" | tr -d ' \t|'); cause=$(printf '%s' "${2:--}" | tr -d ' \t|')
+  printf 'lane=%s;cause=%s' "${lane:--}" "${cause:--}"
+}
+
+# Escape pipes + collapse newlines so one logical row stays one table row. Shared by the
+# writer and by loop_resolve, which must reproduce the exact bytes it wrote.
+_loop_escape_detail() { printf '%s' "$*" | tr '\n' ' ' | sed 's/|/\\|/g'; }
+
 # Append a ledger row. Usage: loop_log <kind> <detail...>
 # kind is a short uppercase token (ACTIVATE / DEACTIVATE / DEFERRED-HIL / RESOLVED-HIL /
-# COMPLETED / DENY / RESOLVE-SPLIT / RESUME). detail is free text (pipes are escaped so the
-# markdown table stays well-formed). Always exits 0 (a ledger write must never break
-# the calling hook). No-op if the project dir cannot be resolved.
+# NOTIFY / COALESCE-DELIVERED / COMPLETED / DENY / RESOLVE-SPLIT / RESUME). detail is free
+# text. The lane / cause_signature carried in the structured column come from the ambient
+# HARNESS_LANE_ID / LOOP_CAUSE (`-` when unset) -- callers that know them explicitly should
+# use loop_log_structured. Always exits 0: this is the HOOK contract (a ledger write must
+# never break the calling hook), which is exactly why coordination callers must NOT use it.
 loop_log() {
   local kind="$1"; shift
-  local detail="$*"
-  local p; p=$(loop_status_ensure)
-  [ -z "$p" ] && return 0
-  # Escape pipes + collapse newlines so one logical row stays one table row.
-  detail=$(printf '%s' "$detail" | tr '\n' ' ' | sed 's/|/\\|/g')
-  printf '| %s | %s | %s |\n' "$(loop_now)" "$kind" "$detail" >> "$p" 2>/dev/null || true
+  loop_log_structured "$kind" "${HARNESS_LANE_ID:--}" "${LOOP_CAUSE:--}" "$@" || true
+  return 0
 }
+
+# The single ledger writer. Usage: loop_log_structured <kind> <lane_id> <cause> <detail...>
+# Row shape (C-HE-09 §3): | ts | kind | lane=<lane_id>;cause=<cause|-> | detail |
+# The structured column goes BEFORE detail deliberately: _loop_pending_hil_rows rejoins
+# $start..NF-1 to restore escaped pipes, so ANY column appended after detail would be
+# glued into the rendered reason (C7 verified this against a trailing-column draft).
+# Returns 1 when the shared ledger cannot be written -- coordination callers
+# (reservations.py, merge_door.py via emit_loop_row) MUST propagate: an unrecorded
+# DEFERRED-HIL / NOTIFY is a lost operator recovery signal, not a cosmetic miss. Legacy
+# hook callers go through loop_log above, which keeps its always-0 contract.
+loop_log_structured() {
+  local kind="$1" lane="$2" cause="$3"; shift 3
+  local p; p=$(loop_status_ensure)
+  [ -z "$p" ] && { echo "loop_log_structured: no ledger venue" >&2; return 1; }
+  if ! printf '| %s | %s | %s | %s |\n' \
+      "$(loop_now)" "$kind" "$(_loop_structured_col "$lane" "$cause")" "$(_loop_escape_detail "$@")" \
+      >> "$p" 2>/dev/null; then
+    echo "loop_log_structured: cannot write $p" >&2; return 1
+  fi
+  return 0
+}
+
+# ── Shared AWK preludes ───────────────────────────────────────────────────────
+# ONE row parser for every reducer below. A second copy would be free to drift on the
+# structured-vs-legacy detection, the escaped-pipe rejoin, or the item-token split -- the
+# exact three rules the ledger's correctness rests on.
+#
+# rowparse() sets, for the current line:
+#   k    -- the kind column ($3, trimmed). Matching the COLUMN (never a whole-row regex)
+#           is what stops a reason CONTAINING the word "DEFERRED-HIL" from forging a row.
+#   lane -- the lane id from the structured column, or "-" for a legacy 3-column row.
+#   d    -- the detail, rejoined from $start..NF-1 with escaped pipes preserved.
+#   tok  -- detail's LEADING whitespace token = the item id. Scanning the whole detail
+#           would wrongly match an item merely MENTIONED in a reason.
+_LOOP_AWK_ROW='
+  function rowparse(   i, start) {
+    k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k)
+    if ($4 ~ /^[ \t]*lane=/) { lane = $4; sub(/^[ \t]*lane=/, "", lane); sub(/;.*$/, "", lane); gsub(/^[ \t]+|[ \t]+$/, "", lane); start = 5 }
+    else { lane = "-"; start = 4 }
+    d = $start; for (i = start + 1; i < NF; i++) d = d "|" $i
+    sub(/^[ \t]+/, "", d); sub(/[ \t]+$/, "", d)
+    split(d, _a, /[ \t]/); tok = _a[1]
+  }'
+
+# epoch(ts): `YYYY-MM-DDTHH:MM:SSZ` -> seconds, or -1 if unparseable. Pure awk (Hinnant
+# days-from-civil) so no `date` fork happens per row and macOS/Linux behave identically.
+_LOOP_AWK_EPOCH='
+  function dfc(y, m, d,   era, yoe, doy, doe) {
+    if (m <= 2) y -= 1
+    era = int((y >= 0 ? y : y - 399) / 400); yoe = y - era * 400
+    doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+    doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+    return era * 146097 + doe - 719468
+  }
+  function epoch(ts) {
+    gsub(/^[ \t]+|[ \t]+$/, "", ts)
+    if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) return -1
+    return dfc(substr(ts,1,4)+0, substr(ts,6,2)+0, substr(ts,9,2)+0) * 86400 \
+           + substr(ts,12,2)*3600 + substr(ts,15,2)*60 + substr(ts,18,2)
+  }'
 
 # Log a per-item deferral (the "worked AROUND a gate" disposition). The loop is designed
 # to NEVER halt the whole run at a single gated item: it builds whatever slice does not
@@ -121,12 +205,16 @@ loop_resolve() {
   # so it is unaffected by any OTHER process's concurrent activity.
   local p; p=$(loop_status_path)
   [ -n "$p" ] || return 1
-  local escaped; escaped=$(printf '%s' "${item} — ${note}" | tr '\n' ' ' | sed 's/|/\\|/g')
-  grep -qF "| RESOLVED-HIL | ${escaped} |" "$p" 2>/dev/null
+  # Rebuild the EXACT row loop_log just wrote -- same column builder, same escaper, so the
+  # structured column can never drift between the write and this check (C-HE-09 §3).
+  local col escaped
+  col=$(_loop_structured_col "${HARNESS_LANE_ID:--}" "${LOOP_CAUSE:--}")
+  escaped=$(_loop_escape_detail "${item} — ${note}")
+  grep -qF "| RESOLVED-HIL | ${col} | ${escaped} |" "$p" 2>/dev/null
 }
 
-# The run-scoped SKIP-SET: item-IDs deferred SINCE the last ACTIVATE and not subsequently
-# RESOLVED. This is the mechanical anti-re-loop guard — `stop-loop.sh` injects it so a
+# The SKIP-SET: every item-ID with an open deferral across ALL lanes, i.e. deferred and not
+# subsequently RESOLVED. This is the mechanical anti-re-loop guard — `stop-loop.sh` injects it so a
 # fresh headless `claude -p` child (no memory of prior turns) does not re-attempt an item
 # a prior turn already deferred against the single static dashboard pointer. Echoes
 # space-separated item-IDs (unique), empty if none. The persistent ledger IS the
@@ -134,23 +222,22 @@ loop_resolve() {
 loop_skip_set() {
   local p; p=$(loop_status_path)
   [ -f "$p" ] || return 0
-  # Extract ONLY the LEADING item token of each DEFERRED-HIL/RESOLVED-HIL detail
-  # (loop_defer/loop_resolve write "<item> — <reason>"). Scanning the whole detail would
-  # wrongly match an item merely MENTIONED in a reason, e.g. `loop_defer R-410 "blocked
-  # until R-300 decides"` must key on R-410 only, never R-300.
+  # The item key is rowparse()'s leading detail token (see _LOOP_AWK_ROW): scanning the
+  # whole detail would wrongly match an item merely MENTIONED in a reason, e.g.
+  # `loop_defer R-410 "blocked until R-300 decides"` must key on R-410 only, never R-300.
   # Accept BOTH canonical item-ID families: `R-*` (roadmap register, Project_Roadmap_v1.md)
   # and `B-*` (forward-register, .harness/forward-register.yaml) — a filter scoped to `R-`
   # alone silently dropped every real-world B-* deferral (codex [P2] round 2 on this arc;
   # e.g. the live `B-48-EXECUTOR-SELECTION` row was never actually in the skip-set).
-  # Match the KIND COLUMN ($3) exactly — a whole-row regex would let a reason CONTAINING
-  # the word "ACTIVATE"/"DEFERRED-HIL" reset the run boundary and drop real deferrals.
-  # Per-token LAST-WRITE-WINS since the last ACTIVATE: a later RESOLVED-HIL row clears a
-  # prior DEFERRED-HIL for the same item; a later re-DEFERRED-HIL row re-flags it.
-  awk -F'|' '
-    { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
-    k == "ACTIVATE" { delete state }
+  # Per-token LAST-WRITE-WINS across ALL lanes: a later RESOLVED-HIL row clears a prior
+  # DEFERRED-HIL for the same item; a later re-DEFERRED-HIL row re-flags it. There is NO
+  # ACTIVATE reset (C-HE-09 §4, option b): with one shared venue, honouring a lane's
+  # ACTIVATE here would drop another lane's still-open deferral and the loop would
+  # re-attempt a gated item. Over-skipping is safe; under-skipping re-loops.
+  # NOTIFY / COALESCE-DELIVERED are informational kinds and never reach `state`.
+  awk -F'|' "$_LOOP_AWK_ROW"'
+    { rowparse() }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
-      s = $4; sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
       state[tok] = (k == "DEFERRED-HIL") ? "PENDING" : "RESOLVED"
     }
     END { for (t in state) if (state[t] == "PENDING") print t }
@@ -167,19 +254,17 @@ _loop_pending_hil_rows() {
   [ -f "$p" ] || return 0
   # awk runs FIRST, alone, so its exit status is preserved — a pipeline would return
   # sort's status and make an unreadable ledger indistinguishable from an empty one
-  # (codex: the report must never render an UNKNOWN list as []). The detail field is
-  # rejoined from $4..NF-1: loop_log escapes literal pipes as `\|`, which -F'|' still
-  # splits, so taking $4 alone truncated any reason containing a pipe; the rejoin
-  # restores the escaped text and the final sed unescapes it.
+  # (codex: the report must never render an UNKNOWN list as []). rowparse() rejoins the
+  # detail across escaped pipes (loop_log_structured writes them as `\|`, which -F'|'
+  # still splits) and the final sed unescapes them. Each item is rendered `[<lane_id>]
+  # <detail>` (C-HE-09 §3) so an operator reading one shared ledger can tell WHICH lane
+  # is gated; legacy 3-column rows render `[-]`. No ACTIVATE reset (§4) — same rule as
+  # loop_skip_set, which is why they share this one extraction.
   local out
-  out=$(awk -F'|' '
-    { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
-    k == "ACTIVATE" { delete state; delete detail }
+  out=$(awk -F'|' "$_LOOP_AWK_ROW"'
+    { rowparse() }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
-      s = $4
-      for (i = 5; i < NF; i++) s = s "|" $i
-      sub(/^[ \t]+/, "", s); split(s, a, /[ \t]/); tok = a[1]
-      if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; detail[tok] = s }
+      if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; detail[tok] = "[" lane "] " d }
       else { state[tok] = "RESOLVED" }
     }
     END { for (t in state) if (state[t] == "PENDING") print detail[t] }
@@ -228,7 +313,31 @@ loop_pending_hil_summary() {
   [ -z "$rows" ] && return 0
   n=$(printf '%s\n' "$rows" | grep -c .)
   local cap; cap=$(printf '%s\n' "$rows" | loop_cap_list)
-  printf '[loop] ⏸ %s item(s) await your input from the last loop run: %s. See .harness/loop_status.md' "$n" "$cap"
+  printf '[loop] ⏸ %s item(s) await your input from the last loop run: %s. See %s' "$n" "$cap" "$(loop_status_path)"
+}
+
+# NOTIFY rows (C-HE-09 §5): append-only informational signals -- an aged reservation, a
+# blocked lease tier, a RAM shortfall, a demoted reviewer. Rendered at SessionStart
+# BESIDE the DEFERRED-HIL summary, never merged into it, and never in the skip-set: a
+# NOTIFY is "you may want to know", not "the loop is gated on you". Newest 5 within the
+# horizon (default 24 h, matching the C-HE-20 TTL that generates most of them), one line,
+# each carrying its emitting lane. Empty when there is nothing recent. Always exits 0.
+loop_notify_summary() {
+  local p; p=$(loop_status_path); [ -f "$p" ] || return 0
+  local rows
+  rows=$(awk -F'|' -v now_ts="$(loop_now)" -v horizon="${HARNESS_NOTIFY_HORIZON_S:-86400}" \
+    "$_LOOP_AWK_EPOCH$_LOOP_AWK_ROW"'
+    BEGIN { now = epoch(now_ts) }
+    { rowparse() }
+    k == "NOTIFY" {
+      ts = epoch($2)
+      # An unparseable now/ts is not evidence of recency -- drop the row rather than
+      # render a notice whose age is unknown.
+      if (now < 0 || ts < 0 || now - ts > horizon) next
+      print "[" lane "] " d
+    }' "$p" 2>/dev/null | tail -5 | sed 's/\\|/|/g')
+  [ -n "$rows" ] && printf '[loop] ℹ notify: %s' "$(printf '%s\n' "$rows" | paste -sd';' - | sed 's/;/; /g')"
+  return 0
 }
 
 # C-HE-20: TTL is a NOTIFICATION threshold. Re-surface pending deferrals older than
@@ -271,29 +380,19 @@ PY
 
 _loop_hil_ttl_resurface_unlocked() {
   local p="$1" ttl="$2" now="$3"
-  awk -F'|' -v now_ts="$now" -v ttl="$ttl" '
-    function dfc(y, m, d,   era, yoe, doy, doe) {          # days from civil (Hinnant)
-      if (m <= 2) y -= 1
-      era = int((y >= 0 ? y : y - 399) / 400); yoe = y - era * 400
-      doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
-      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
-      return era * 146097 + doe - 719468
-    }
-    function epoch(ts) {                                    # YYYY-MM-DDTHH:MM:SSZ -> seconds
-      gsub(/^[ \t]+|[ \t]+$/, "", ts)
-      if (ts !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) return -1
-      return dfc(substr(ts,1,4)+0, substr(ts,6,2)+0, substr(ts,9,2)+0) * 86400 \
-             + substr(ts,12,2)*3600 + substr(ts,15,2)*60 + substr(ts,18,2)
-    }
-    function detail(   s) { s = $4; if (s ~ /^[ \t]*lane=/) s = $5; sub(/^[ \t]+/, "", s); return s }
+  # Shares the ONE row parser + epoch helper with every other reducer (see the preludes
+  # above): the structured-vs-legacy detection and the item-token split must be identical
+  # here or an aged deferral would be keyed differently than the skip-set keys it. No
+  # ACTIVATE reset (C-HE-09 §4) -- honouring one here would let a sibling lane's ACTIVATE
+  # silence another lane's aged deferral, which is precisely the notification the TTL exists
+  # to deliver.
+  awk -F'|' -v now_ts="$now" -v ttl="$ttl" "$_LOOP_AWK_EPOCH$_LOOP_AWK_ROW"'
     BEGIN { now = epoch(now_ts) }
-    { k = $3; gsub(/^[ \t]+|[ \t]+$/, "", k) }
-    k == "ACTIVATE" { delete state; delete at }
+    { rowparse() }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
-      split(detail(), a, /[ \t]/); tok = a[1]
       if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; at[tok] = epoch($2) } else { state[tok] = "RESOLVED" }
     }
-    k == "NOTIFY" { split(detail(), b, /[ \t]+/); if (b[1] == "ttl-expired") last[b[2]] = epoch($2) }
+    k == "NOTIFY" { split(d, b, /[ \t]+/); if (b[1] == "ttl-expired") last[b[2]] = epoch($2) }
     END {
       if (now < 0) exit 0
       for (t in state) {

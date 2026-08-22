@@ -14,7 +14,7 @@ Output: `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` — PR-keyed and DATE
 closeout resumed on a later date overwrites the same file instead of orphaning a stale
 sibling. The directory is gitignored (`.gitignore:106`): this is a local operator artifact
 with zero CI/ledger surface. One `EXIT-REPORT` row is also appended to
-`.harness/loop_status.md` as the index, through `loop_lib.sh`'s own `loop_log` (a bash
+the shared loop ledger as the index, through `loop_lib.sh`'s own `loop_log` (a bash
 shim — NOT a second copy of the row format).
 
 Both land under the MAIN checkout, not the (disposable) arc worktree a Codex-flow run is
@@ -94,7 +94,14 @@ YAML_FIELDS = (
 )
 
 REPORT_DIR = ".harness/.checkpoints"
-LEDGER_REL = ".harness/loop_status.md"
+# The ledger is the SHARED venue (C-HE-09 §2) resolved by `loop_status_path` in
+# tools/hooks/loop_lib.sh -- NOT a per-worktree copy under a checkout's .harness/. It is resolved
+# by ASKING that function (see `ledger_path`) rather than re-deriving the path here: a
+# second derivation would be a second authority, free to drift the moment the venue moves
+# again, and this module both READS pending rows from the ledger and APPENDS its own
+# EXIT-REPORT index row to it -- a split would make the growth check watch a file the
+# writer never touches and fail every arc closed (exit 3).
+LEDGER_NAME = "loop_status.md"
 # CLAUDE.md §12.2.1 terminating-refresh discriminators (BOTH required).
 REFRESH_PREFIX = "ops: roadmap status refresh "
 REFRESH_ONLY_FILE = ".harness/roadmap_status.md"
@@ -121,6 +128,35 @@ def run(cmd: list[str], cwd: Path, timeout: int = 20) -> tuple[int, str]:
         return 124, ""
     except OSError:
         return 126, ""
+
+
+def ledger_path(code_root: Path) -> Path | None:
+    """The shared loop ledger's absolute path, or None when it cannot be resolved.
+
+    Asks `loop_lib.sh`'s `loop_status_path` (the single authority, C-HE-09 §2) in the
+    caller's own environment, so a `HARNESS_LOOP_STATUS_PATH` override or a relocated
+    `ARC_METRICS_QUEUE_DIR` is honoured identically here and in every hook. Returns None
+    -- never a guessed fallback -- when the helper is absent or answers empty: callers
+    must degrade to UNKNOWN rather than read or grow the wrong file.
+    """
+    lib = code_root / "tools" / "hooks" / "lib.sh"
+    loop_lib = code_root / "tools" / "hooks" / "loop_lib.sh"
+    if not (lib.is_file() and loop_lib.is_file()):
+        return None
+    # Constant bash source; both paths travel as argv values (never interpolated) so a
+    # metacharacter-bearing repo path cannot execute as code.
+    rc, out = run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; . "$2"; loop_status_path',
+            "arc_exit_report",
+            str(lib),
+            str(loop_lib),
+        ],
+        code_root,
+    )
+    return Path(out) if rc == 0 and out else None
 
 
 # --- collect ---------------------------------------------------------------------------
@@ -238,26 +274,23 @@ def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Roots | None,
         f"were written to the MAIN checkout ({main_root}) so they survive worktree "
         "disposition and a rerun overwrites the same PR-keyed file."
     )
-    # The READ root stays on the worktree — that is where this arc's own loop_defer rows
-    # landed. Only the two honest exceptions move it (see the docstring).
+    # The READ root stays on the worktree, but since U-HE-29 it no longer selects WHICH
+    # ledger is read: there is exactly one, the shared venue (C-HE-09 §2), and every lane
+    # appends to it. What read_root still carries is the invoking worktree identity for
+    # the helper invocation below.
+    #
+    # The pre-U-HE-29 worktree-ledger-vs-main-ledger discrimination is deliberately gone.
+    # It existed because each worktree kept its OWN ledger copy, so "which
+    # file holds this arc's deferrals" was a real question with a wrong answer (borrowing
+    # main's ledger serialized a PARALLEL session's rows as this arc's todo_for_human,
+    # codex round-10). One shared venue dissolves the question — and re-stating either
+    # note here would now be a FALSE claim about how the rows were sourced.
     read_root = toplevel
-    wt_ledger = (toplevel / LEDGER_REL).is_file()
-    main_ledger = (main_root / LEDGER_REL).is_file()
-    if not wt_ledger and main_ledger:
-        # A ledger-less worktree is the NORMAL no-deferral case. Borrowing main's ledger
-        # here would serialize a PARALLEL session's pending rows as THIS arc's
-        # todo_for_human (codex round-10) — the honest answer is the arc's own truth:
-        # it deferred nothing. read_root stays on the worktree; the read yields [].
-        notes.append(
-            f"the invoking worktree has no {LEDGER_REL} — this arc recorded no deferrals; "
-            "the main checkout's SEPARATE ledger (a parallel session's) was NOT borrowed."
-        )
-    elif wt_ledger and main_ledger:
-        notes.append(
-            f"pending-HIL rows were read from the INVOKING worktree's {LEDGER_REL} (where "
-            "this arc's deferrals landed); the main checkout keeps a SEPARATE ledger whose "
-            "rows were NOT merged into this report."
-        )
+    notes.append(
+        "pending-HIL rows were read from the SHARED loop ledger (C-HE-09 §2) — one venue "
+        "for every lane; rows from concurrent lanes are keyed by their own lane id and "
+        "are reduced together by design, not merged in by this report."
+    )
     return Roots(main_root, read_root), notes
 
 
@@ -535,10 +568,12 @@ def _todos(
     ledger parse has exactly one implementation (`_loop_pending_hil_rows`), shared with
     the bounded `loop_pending_hil_summary` the SessionStart hook surfaces.
 
-    The two roots are deliberately independent. `ledger_root` becomes `CLAUDE_PROJECT_DIR`,
-    which is what `hook_project_dir` keys the ledger LOCATION off — for a linked-worktree
-    closeout that is the worktree, where this arc's `loop_defer` rows landed. The helper
-    CODE is sourced from `code_root` (the main checkout) instead, because a linked worktree
+    The two roots are deliberately independent. `ledger_root` becomes `CLAUDE_PROJECT_DIR`
+    for the helper invocation — since U-HE-29 that no longer selects the ledger (the venue
+    is shared and worktree-independent, C-HE-09 §2), but it still scopes the per-lane
+    control markers the helper may consult, so the invoking worktree remains the honest
+    value to pass. The helper CODE is sourced from `code_root` (the main checkout),
+    because a linked worktree
     is checked out at whatever revision its arc used: witnessed live against a real
     worktree whose `loop_lib.sh` predates `loop_pending_hil_list`, sourcing the worktree's
     copy exited 127 and degraded the whole field to UNKNOWN. The ledger FORMAT is stable
@@ -562,7 +597,8 @@ def _todos(
     # seconds the CI/refresh queries took). The helper would return rc 0 + empty for a
     # missing file — an authoritative [] under a note claiming the rows "were read",
     # which is the one false claim this design could otherwise make. UNKNOWN instead.
-    if ledger_was_present and not (ledger_root / LEDGER_REL).is_file():
+    ledger = ledger_path(code_root)
+    if ledger_was_present and not (ledger is not None and ledger.is_file()):
         notes.append(
             "the pending-HIL ledger vanished between root resolution and this read "
             "(concurrent worktree disposition?) — todo_for_human is UNKNOWN (null)."
@@ -641,7 +677,8 @@ def collect(
     # Snapshot NOW, before the (seconds-long) gh/git queries: if the ledger exists here
     # but is gone by the _todos read, that is the vanish window (merge-gate lens-1) and
     # the field must degrade to UNKNOWN rather than an authoritative [].
-    ledger_was_present = ((read_root or repo_root) / LEDGER_REL).is_file()
+    _pre_ledger = ledger_path(repo_root)
+    ledger_was_present = _pre_ledger is not None and _pre_ledger.is_file()
     pr_view = _as_dict(
         _gh_json(
             ["pr", "view", str(pr), "--json", "state,mergeCommit"], repo_root, notes, "merge_state"
@@ -809,7 +846,12 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
     loop_lib = repo_root / "tools" / "hooks" / "loop_lib.sh"
     if not (lib.is_file() and loop_lib.is_file()):
         return False
-    ledger = repo_root / LEDGER_REL
+    ledger = ledger_path(repo_root)
+    if ledger is None:
+        # The writer below would still append SOMEWHERE, but with no resolved path the
+        # growth check cannot witness it -- and an unwitnessed index row is exactly the
+        # false-pass this function fails closed against. Report failure.
+        return False
     # Pre/post growth check (codex round-1 P3): a substring match alone can false-pass on
     # an idempotent rerun by matching the PREVIOUS invocation's identical row while
     # loop_log's failure-invisible append silently did nothing (unwritable ledger, full
@@ -923,7 +965,7 @@ def main(argv: list[str] | None = None) -> int:
         # the deliverable; the message says so) — exit 3 distinguishes index-append
         # failure from unusable-inputs (2) so the runner repairs the ledger and re-runs.
         print(
-            f"ERROR: EXIT-REPORT index row could not be appended to {LEDGER_REL} "
+            f"ERROR: EXIT-REPORT index row could not be appended to the shared {LEDGER_NAME} "
             f"(report itself written at {rel}) — failing closed; repair the ledger and re-run.",
             file=sys.stderr,
         )

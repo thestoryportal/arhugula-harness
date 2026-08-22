@@ -12,7 +12,7 @@ without a human round-trip — but only for genuinely reversible choices.
 ## When NOT to resolve (hard-stop → defer, do not auto-decide)
 
 If the decision involves any of these, STOP — log a `DEFERRED-HIL` row to
-`.harness/loop_status.md` and continue with other work (the permission guard U-HK-12
+the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`) and continue with other work (the permission guard U-HK-12
 already hard-stops the *tool*; this is the *decision-level* mirror):
 
 - a **paid external call** (live LLM inference, metered API),

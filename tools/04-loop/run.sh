@@ -5,7 +5,7 @@
 # guard auto-approves safe tools + hard-stops dangerous ones, and the U-HK-14
 # Stop-continue keeps each session going) and re-invokes `claude -p` in a BOUNDED bash
 # loop until a genuine gate (halt marker) or the iteration cap. Every iteration is
-# recorded to .harness/loop_status.md; the run prints the ledger tail on exit.
+# recorded to the shared loop_status.md (C-HE-09 §2); the run prints the ledger tail on exit.
 #
 # Safety:
 #   - bounded by --max (default HARNESS_LOOP_MAX or 25) — never an unbounded run;

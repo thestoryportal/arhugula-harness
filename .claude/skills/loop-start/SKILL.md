@@ -13,7 +13,7 @@ auto-driven.
 ## What it does
 
 1. Creates the `.harness/.loop-active` marker (detected by `loop_mode_active()` in
-   `tools/hooks/lib.sh`) and logs an `ACTIVATE` row to `.harness/loop_status.md`.
+   `tools/hooks/lib.sh`) and logs an `ACTIVATE` row to the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`).
 2. Reaps stale merged worktrees (U-HK-26 `loop_gc_worktrees`) — the in-session
    activation case the SessionStart hook can't cover (it already ran with loop mode
    off). Worktrees only, merged+clean+non-current; logged to the ledger.
@@ -31,7 +31,7 @@ echo "loop mode: $(loop_mode_active && echo ON || echo OFF)"
 
 ## The guardrails (locked, even in loop mode)
 
-These NEVER auto-fire — they hard-stop and log to `.harness/loop_status.md`, and the
+These NEVER auto-fire — they hard-stop and log to the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`), and the
 loop works AROUND them (per `[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`):
 
 - **Paid external calls** (live LLM inference, metered APIs) — surface, don't fire.
