@@ -1034,19 +1034,30 @@ def emit_refresh_pr(
         "--state",
         "open",
         "--json",
-        "number,headRefOid,baseRefName,title",
+        "number,headRefOid,baseRefName,title,isCrossRepository",
         "--jq",
-        '.[0] | select(.) | "\\(.number)\\t\\(.headRefOid)\\t\\(.baseRefName)\\t\\(.title)"',
+        '.[0] | select(.) | "\\(.number)\\t\\(.headRefOid)\\t\\(.baseRefName)\\t\\(.isCrossRepository)\\t\\(.title)"',
     )
     if existing:
-        n, head, base_ref, found_title = existing.split("\t", 3)
-        # r7 P2: identity-gate the resumed PR — a retargeted or reused PR on the
-        # deterministic branch must never be persisted for the door to merge.
-        if base_ref != "main" or found_title.strip() != title:
+        n, head, base_ref, cross_repo, found_title = existing.split("\t", 4)
+        # r7 P2 + r10 P1: identity-gate the resumed PR — a retargeted or reused PR,
+        # or a FORK PR squatting the predictable branch name (attacker-controlled
+        # head the door's title/base/file gates cannot distinguish), must never be
+        # persisted for the door to merge.
+        if base_ref != "main" or cross_repo != "false" or found_title.strip() != title:
             raise SystemExit(
                 f"emit-refresh-pr: open PR #{n} on {branch} is not this landing's "
-                f"terminating refresh (base {base_ref!r}, title {found_title!r}); "
-                "inspect/close it before retrying"
+                f"terminating refresh (base {base_ref!r}, cross-repo {cross_repo!r}, "
+                f"title {found_title!r}); inspect/close it before retrying"
+            )
+        if notes is not None or next_action is not None or date is not None:
+            # r10 P2 (supersedes the r7 warn-and-continue): a resume cannot apply
+            # supplied flags — silently handing the stale PR to the door would land
+            # the OLD pointer while the operator believes the correction applied.
+            raise SystemExit(
+                f"emit-refresh-pr: open refresh PR #{n} already exists; supplied "
+                "--notes/--date/--next-action cannot be applied to it. Close the PR "
+                "(or drop the flags) and re-run"
             )
         # retire a matching draft ONLY if its body is verifiably in the pushed
         # refresh commit (codex r3 P2 + r6 P2 correction-preserving rule)
@@ -1071,17 +1082,16 @@ def emit_refresh_pr(
     if probe.returncode == 0:
         sh("git", "fetch", "-q", "origin", branch)
         sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
-        # r7 P2: this path recovers a branch whose refresh commit ALREADY exists —
-        # re-running the refresh here would add a second commit whose recorded
-        # git_head is the first refresh commit, breaking the §12.2.1 fixed point on
-        # squash. Supplied flags therefore CANNOT apply; say so loudly in the PR.
-        recovery_body = body
+        # r7 P2 + r10 P2: this path recovers a branch whose refresh commit ALREADY
+        # exists — re-running the refresh here would add a second commit whose
+        # recorded git_head is the first refresh commit, breaking the §12.2.1 fixed
+        # point on squash. Supplied flags therefore cannot apply: REFUSE rather than
+        # warn (the r10 posture, unified with the open-PR path above).
         if notes is not None or next_action is not None or date is not None:
-            recovery_body = (
-                f"{body}\n\nWARNING: recovered a pre-pushed refresh branch — the "
-                "supplied --notes/--date/--next-action were NOT applied (the pushed "
-                "commit's content stands); land a follow-up pointer via the next "
-                "arc's draft if it matters"
+            raise SystemExit(
+                f"emit-refresh-pr: a pushed refresh branch {branch} already exists; "
+                "supplied --notes/--date/--next-action cannot be applied to its "
+                "commit. Delete the remote branch (or drop the flags) and re-run"
             )
         url = sh(
             "gh",
@@ -1094,7 +1104,7 @@ def emit_refresh_pr(
             "--title",
             title,
             "--body",
-            recovery_body,
+            body,
         )
         # the branch is checked out here, but verify against the PUSHED content the
         # same way as the sibling path (r6 P2)

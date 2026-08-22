@@ -1190,7 +1190,7 @@ def test_emit_refresh_pr_idempotent_existing_open_pr():
         [
             (
                 ("gh", "pr", "list"),
-                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
             )
         ],
         calls,
@@ -1433,7 +1433,7 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
         [
             (
                 ("gh", "pr", "list"),
-                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
             ),
             # live pointer body EQUALS the draft body (r8 P2) -> retire
             (
@@ -1452,7 +1452,7 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
         [
             (
                 ("gh", "pr", "list"),
-                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
             ),
             # OLD pointer content only — the correction is not represented
             (
@@ -1471,7 +1471,7 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
         [
             (
                 ("gh", "pr", "list"),
-                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
             )
         ],
         calls3,
@@ -1484,8 +1484,10 @@ def test_emit_refresh_pr_rejects_retargeted_or_reused_open_pr():
     """r7 P2: the idempotent resume must identity-gate the found PR — a retargeted or
     reused PR on the deterministic branch never persists for the door to merge."""
     for bad in (
-        "321\tabc123def\trelease-x\tops: roadmap status refresh post-#55",
-        "321\tabc123def\tmain\tsome unrelated PR title",
+        "321\tabc123def\trelease-x\tfalse\tops: roadmap status refresh post-#55",
+        "321\tabc123def\tmain\tfalse\tsome unrelated PR title",
+        # r10 P1: a FORK PR squatting the deterministic branch name
+        "321\tabc123def\tmain\ttrue\tops: roadmap status refresh post-#55",
     ):
         calls: list[list[str]] = []
         run = _scripted_run([(("gh", "pr", "list"), _P(stdout=bad))], calls)
@@ -1505,7 +1507,7 @@ def test_emit_refresh_pr_draft_body_elsewhere_in_file_is_not_representation(monk
         [
             (
                 ("gh", "pr", "list"),
-                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
             ),
             (
                 ("git", "show"),
@@ -1521,19 +1523,31 @@ def test_emit_refresh_pr_draft_body_elsewhere_in_file_is_not_representation(monk
     assert draft.exists()
 
 
-def test_emit_refresh_pr_pushed_branch_recovery_warns_on_unappliable_flags(monkeypatch):
-    """r7 P2: the pushed-branch recovery cannot apply supplied flags — the PR body
-    must say so instead of silently dropping them."""
+def test_emit_refresh_pr_resume_paths_refuse_unappliable_flags(monkeypatch):
+    """r10 P2 (supersedes the r7 warn-and-continue): a resume cannot apply supplied
+    flags — both resume paths REFUSE instead of silently landing the old pointer."""
+    # pushed-branch path
     calls: list[list[str]] = []
     run = _scripted_run(
         [
             (("gh", "pr", "list"), _P(stdout="")),
             (("git", "ls-remote"), _P(returncode=0)),
-            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
-            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
         ],
         calls,
     )
-    rsr.emit_refresh_pr(55, next_action="late pointer", run=run, do_refresh=lambda: None)
-    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
-    assert "NOT applied" in create[create.index("--body") + 1]
+    with pytest.raises(SystemExit, match="cannot be applied"):
+        rsr.emit_refresh_pr(55, next_action="late pointer", run=run, do_refresh=lambda: None)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+    # existing-open-PR path
+    calls2: list[list[str]] = []
+    run2 = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            )
+        ],
+        calls2,
+    )
+    with pytest.raises(SystemExit, match="cannot be applied"):
+        rsr.emit_refresh_pr(55, notes="late notes", run=run2, do_refresh=lambda: None)

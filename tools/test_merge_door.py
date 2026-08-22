@@ -1298,6 +1298,32 @@ def test_resume_refuses_moved_head_bound_to_another_landing(door, monkeypatch):
     assert (2, "s" * 40) not in g.merge_calls
 
 
+# mutation-probe: drop the post-wait identity revalidation (45-min TOCTOU fence)
+def test_refresh_identity_mutated_during_wait_blocks_without_merge(door, monkeypatch):
+    """r10 P3 witness for the r8 fence: the PR is retargeted DURING the checks wait
+    (same head) — the post-wait revalidation must fail the door with no merge issued."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: None)
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 2:
+                return []  # checks pending — the wait is in progress
+            # the retarget lands while we were waiting; head unchanged
+            g.states[2]["baseRefName"] = "release-x"
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) not in g.merge_calls
+    assert md.read_lease()["state"] == "blocked"
+
+
 def test_wait_for_door_backoff_numbers_and_budget(door):
     t = {"now": 0.0}
     sleeps = []
