@@ -117,9 +117,12 @@ grep -Eq '(^|[^`])gh pr merge' "$SP" \
   && bad "ship-pr still carries a raw gh pr merge instruction" || ok "no raw merge verb in ship-pr"
 grep -q 'merge-door-unblock' "$JF" \
   && ok "unblock recipe present" || bad "no unblock recipe"
-grep -q 'HARNESS_LANE_ID:?' "$JF" \
-  && ok "unblock recipe refuses an unset lane id (codex r1: empty lane mints an unresumable lease)" \
-  || bad "unblock recipe lacks the \${HARNESS_LANE_ID:?} guard"
+grep -q '\.harness/\.lane-id' "$JF" \
+  && ok "unblock recipe derives the lane from .harness/.lane-id (codex r9: the door's emitted recovery carries no env prefix)" \
+  || bad "unblock recipe lacks the .lane-id fallback"
+grep -q 'no HARNESS_LANE_ID and no .harness/.lane-id' "$JF" \
+  && ok "unblock recipe aborts loud when NO lane source exists (codex r1: empty lane mints an unresumable lease)" \
+  || bad "unblock recipe lacks the empty-lane abort"
 grep -q 'emit-refresh-pr-json' "$RSR" \
   && ok "refresh tool emits PR json" || bad "no --emit-refresh-pr-json"
 grep -q 'next-action-draft' "$SP" \

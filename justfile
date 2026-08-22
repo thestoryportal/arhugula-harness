@@ -293,9 +293,16 @@ main-protection-tiebreaker:
     uv run python tools/main_protection.py tiebreaker
 
 # C-HE-06 §6: clear a `blocked` merge-door lease -- operator-confirmed reclaim through the marker CAS,
-# keyed to the blocked SHA. There is NO raw-unlink recipe by design.
+# keyed to the blocked SHA. There is NO raw-unlink recipe by design. The lane id falls back to the
+# persisted .harness/.lane-id (the door's emitted recovery command carries no env prefix, and shell
+# exports do not survive across Bash tool calls); an empty lane would mint an unresumable successor
+# lease, so absence of BOTH sources aborts loud (U-HE-28 codex r1+r9).
 merge-door-unblock pr sha:
-    uv run python tools/merge_door.py unblock {{pr}} {{sha}} --lane-id "${HARNESS_LANE_ID:?HARNESS_LANE_ID must be set (lane-init) -- an empty lane would mint an unresumable successor lease}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    lane="${HARNESS_LANE_ID:-$(cat .harness/.lane-id 2>/dev/null || true)}"
+    [ -n "$lane" ] || { echo "merge-door-unblock: no HARNESS_LANE_ID and no .harness/.lane-id (run lane-init)" >&2; exit 64; }
+    uv run python tools/merge_door.py unblock {{pr}} {{sha}} --lane-id "$lane"
 merge-door-status:
     uv run python tools/merge_door.py status
 
