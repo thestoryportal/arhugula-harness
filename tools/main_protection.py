@@ -272,7 +272,26 @@ def diff_report(current: dict | None, desired: dict) -> str:
 
 
 def _loop_mode() -> bool:
-    return os.environ.get("HARNESS_LOOP") == "1" or (REPO / ".harness" / ".loop-active").exists()
+    """Loop-mode is repo-wide, not worktree-local (codex r10 P2): a loop active in ANY
+    linked worktree means the merge-door serialization is live and this tool's direct
+    `gh pr merge` probes must not run."""
+    if os.environ.get("HARNESS_LOOP") == "1" or (REPO / ".harness" / ".loop-active").exists():
+        return True
+    q = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=REPO,
+    )
+    if q.returncode != 0:
+        return False
+    for line in q.stdout.splitlines():
+        if line.startswith("worktree "):
+            root = Path(line.removeprefix("worktree ").strip())
+            if (root / ".harness" / ".loop-active").exists():
+                return True
+    return False
 
 
 def _apply_lock_path() -> Path:
@@ -292,16 +311,21 @@ def _apply_lock_path() -> Path:
     return common / "main-protection-apply.lock"
 
 
-def _confirmed_apply(cur: dict | None, desired: dict) -> int:
+def _confirmed_apply(slug: str, cur: dict | None, desired: dict) -> int:
     """The digest-validated mutation transaction: evidence append → PUT → tiebreaker →
-    (on FAIL) rollback to the captured pre-state. Caller holds the apply lockfile."""
+    (on FAIL) rollback to the captured pre-state. Caller holds the apply lockfile.
+
+    `slug` is the APPROVED repository from the digest triple — every mutation in the
+    transaction uses it verbatim; recomputing the target after digest validation would let
+    an origin change redirect the confirmed PUT to an unapproved repository (codex r10 P1).
+    """
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with EVIDENCE_LOG.open("a") as f:
         f.write(f"\n## main-protection apply {stamp}\n```\n{diff_report(cur, desired)}\n```\n")
     put_err: str | None = None
     try:
         r = subprocess.run(
-            ["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
+            ["gh", "api", "-X", "PUT", f"repos/{slug}/branches/main/protection", "--input", "-"],
             input=json.dumps(desired),
             capture_output=True,
             text=True,
@@ -356,7 +380,7 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
         if cur is None:
             # Pre-change state was unprotected: DELETE, and VALIDATE that the deletion
             # actually landed — a failed DELETE must not be reported as a rollback (r1 P2).
-            rb = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
+            rb = _gh("api", "-X", "DELETE", f"repos/{slug}/branches/main/protection", timeout=60)
             if rb.returncode != 0 or current_protection() is not None:
                 raise SystemExit(
                     "tiebreaker FAILED and the rollback DELETE did not restore the "
@@ -375,7 +399,7 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
                 "api",
                 "-X",
                 "PUT",
-                f"repos/{_repo()}/branches/main/protection",
+                f"repos/{slug}/branches/main/protection",
                 "--input",
                 "-",
             ],
@@ -398,10 +422,10 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
     return 0
 
 
-def _rollback_delete() -> int:
+def _rollback_delete(slug: str) -> int:
     """DELETE + read-back validation: an authorization/network failure must not print
     success while protection remains live (codex r4 P2)."""
-    r = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
+    r = _gh("api", "-X", "DELETE", f"repos/{slug}/branches/main/protection", timeout=60)
     if r.returncode != 0 or current_protection() is not None:
         print(f"rollback FAILED — protection is still live ({r.stderr.strip()[:200]})")
         return 1
@@ -488,7 +512,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"(approved={a.approved_digest or '<none>'}, current={digest}) — "
                     "re-run `just main-protection-apply` and re-approve"
                 )
-            return _confirmed_apply(cur, desired)
+            return _confirmed_apply(slug, cur, desired)
         finally:
             lock.unlink(missing_ok=True)
     if a.cmd == "rollback":
@@ -520,7 +544,12 @@ def main(argv: list[str] | None = None) -> int:
                     "delete a policy this tool did not apply; use `gh api` directly if "
                     "that is really intended"
                 )
-            return _rollback_delete()
+            print(
+                "NOTE: DELETE restores the unprotected (404) pre-state; if the evidence "
+                "log's most recent BEFORE block shows a prior policy, restore THAT payload "
+                "instead of deleting (codex r10 P2)"
+            )
+            return _rollback_delete(_repo())
         finally:
             lock.unlink(missing_ok=True)
     # tiebreaker: scratch PR under strict:true + stale-refresh-branch check (HE-1 O4; C10-T8).
@@ -555,7 +584,6 @@ def main(argv: list[str] | None = None) -> int:
 _STRICT_REFUSAL_SIGS = (
     "required status check",
     "behind",
-    "base branch",
 )
 _GENERIC_MERGEABILITY_SIGS = (
     "not mergeable",
@@ -563,6 +591,9 @@ _GENERIC_MERGEABILITY_SIGS = (
     "branch protection",
     "protected branch",
     "review is required",
+    # "base branch" also appears in generic ruleset/policy/base-race wording — it earns a
+    # PASS only alongside the independent BEHIND reading (codex r10 P2).
+    "base branch",
 )
 
 

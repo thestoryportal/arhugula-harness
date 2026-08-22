@@ -2249,3 +2249,13 @@ same spec leg.
 - **Close-out steps.** (1) Land U-HE-27 (server-side branch protection, C-HE-08 §2) — the fence closes both classes for `main` regardless of client parsing (invariant R-20); (2) record in U-HE-27's evidence log that B-190's residuals (P1/P2 and the folded lens-P3 untested `branch.<b>.remote` tier) are bounded by the fence; (3) no client-side narrowing owed.
 
 - **Council.** NO — the terminal is prescribed by the cleared spec itself (C-HE-08 §2 + R-20); the only open work is the already-scheduled next unit.
+
+### B-191 · C-HE-08 §2 apply/rollback transaction residual classes premised on concurrent REMOTE writers *(surfaced by out-of-family Codex r10 against the U-HE-27 recipes unit at the 10-round cap, 2026-08-21; register-and-held)*
+
+- **What it is.** Two r10 residuals with no clean upstream primitive: (P1) the rollback CAS is a non-atomic read-then-DELETE — GitHub's branch-protection endpoint documents no conditional-write (If-Match/ETag) support, so a remote administrator writing between the compare and the DELETE can have their policy erased; the window is milliseconds and the local lockfile cannot serialize remote writers. (P2) `main-protection-rollback` after an apply that replaced a NON-null prior policy restores only the unprotected 404 pre-state; the captured prior payload lives in the evidence-log BEFORE block and is surfaced by an explicit NOTE, but is not auto-restored (would require parsing the evidence log as a data store).
+
+- **Current state.** Nine absorption rounds (r1–r9, 34 findings) hardened every client-side-fixable class: digest-bound approval (repo, BEFORE, AFTER), common-dir lockfile, CAS re-read before rollback, ambiguous-PUT/merge reconciliation, fence-liveness + enforcement-witness probe arms, ownership-tracked timeout-safe GC. The remaining window presumes a concurrent trusted administrator — outside the X9 threat model (accidental/haywire-agent pushes), which the fence itself closes.
+
+- **Close-out steps.** (1) If GitHub ships conditional writes for the protection endpoint, upgrade the rollback to If-Match; (2) optionally teach rollback to offer the evidence-log BEFORE payload as the restore target; (3) no further client-side narrowing owed — the class is non-convergent by the same measurement pattern as B-190.
+
+- **Council.** NO — single-tool hardening residual; no cross-axis consumer; the fence (C-HE-08 §2 + R-20) is the systemic guard.
