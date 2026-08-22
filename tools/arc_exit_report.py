@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -622,7 +623,56 @@ def _todos(
     if rc != 0:
         notes.append(f"`loop_pending_hil_list` exited {rc} — todo_for_human is UNKNOWN (null).")
         return None
-    return [line.strip() for line in out.splitlines() if line.strip()]
+    rows = [line.strip() for line in out.splitlines() if line.strip()]
+    return _scope_to_lane(rows, ledger_root, notes)
+
+
+def _lane_id(ledger_root: Path) -> str:
+    """This arc's lane id, or '' when the invoking worktree has none.
+
+    Read from the worktree-local `.harness/.lane-id` (the pre-U-HE-31 persisted lane
+    identity), falling back to `HARNESS_LANE_ID`. Both are per-lane; the ledger is not.
+    """
+    marker = ledger_root / ".harness" / ".lane-id"
+    try:
+        val = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        val = ""
+    return val or os.environ.get("HARNESS_LANE_ID", "").strip()
+
+
+def _scope_to_lane(rows: list[str], ledger_root: Path, notes: list[str]) -> list[str]:
+    """Narrow the shared venue's pending rows to THIS arc's lane (U-WT-03 per-arc contract).
+
+    The ledger became shared at U-HE-29, so `loop_pending_hil_list` now returns every lane's
+    open gates, each rendered `[lane] detail` (C-HE-09 §3). Reporting all of them verbatim
+    would quietly redefine `todo_for_human` from "what THIS arc leaves for a human" to "what
+    the whole workspace does — attaching a sibling lane's obligations to this PR's closure
+    record. So rows are filtered by lane, and the count of excluded sibling rows is stated in
+    the notes rather than dropped silently: they are real obligations, just not this arc's.
+
+    With no resolvable lane id there is nothing to filter BY, so every row is kept and the
+    note says so — an unfiltered list the reader knows is unfiltered beats a confident
+    filter applied on a guess.
+    """
+    lane = _lane_id(ledger_root)
+    if not lane:
+        if rows:
+            notes.append(
+                "this arc's lane id could not be resolved (.harness/.lane-id absent and "
+                "HARNESS_LANE_ID unset) — todo_for_human lists EVERY lane's open rows, not "
+                "just this arc's; each row names its own lane."
+            )
+        return rows
+    mine = [r for r in rows if r.startswith(f"[{lane}] ")]
+    others = len(rows) - len(mine)
+    if others:
+        notes.append(
+            f"{others} open row(s) belonging to other lanes were excluded from "
+            f"todo_for_human (this arc's lane is {lane}); they remain open in the shared "
+            "ledger and surface at the next SessionStart."
+        )
+    return mine
 
 
 def identity_error(pr: int, merge_state: str | None, pr_oid: str, resolved_sha: str) -> str | None:

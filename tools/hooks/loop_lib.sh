@@ -145,10 +145,22 @@ _loop_escape_detail() { printf '%s' "$*" | tr '\n' ' ' | sed 's/|/\\|/g'; }
 # blocked on -- the exact failure this ledger exists to prevent. Grounded before writing
 # this: the root checkout's legacy ledger alone carried 2 genuinely open obligations.
 #
-# The import is append-only and idempotent. Legacy rows are the 3-column shape the
-# reducers already accept (rowparse falls back to `lane = "-"`), so they are copied
-# VERBATIM -- rewriting them into the structured shape would forge a lane attribution the
-# original row never had. Each imported file is then renamed `.migrated-<ts>` so it can
+# ONLY each legacy ledger's still-OPEN DEFERRED-HIL rows are imported -- never its whole
+# history (codex r2 P2 -> r3 P2). Concatenating whole files would be unsound in two ways
+# the reducers cannot defend against, because they reduce by PHYSICAL order and ignore
+# timestamps: (a) worktree B's older RESOLVED-HIL would land after worktree A's newer
+# DEFERRED-HIL and silently clear a gate that is genuinely open; (b) any imported historical
+# row lands after rows ALREADY in the shared venue, inverting their true age. Reducing each
+# legacy file ALONE first -- in its own correct physical order -- and importing only what
+# that reduction says is still pending sidesteps both: the import then consists purely of
+# DEFERRED-HIL rows, and appending a DEFERRED-HIL can only ADD to the skip-set. That is the
+# safe direction by §4's own rule (over-skipping is safe; under-skipping re-loops). Nothing
+# is lost: the full history stays in the retired `.migrated-<ts>` file for forensics.
+#
+# Imported rows are re-emitted through the normal writer with the ORIGINAL detail intact and
+# a `legacy-import` cause, so an operator can see where a row came from; the lane is the
+# legacy file's own (`-` for 3-column rows) rather than a forged attribution.
+# The import is idempotent: each file is renamed `.migrated-<ts>` once imported, so it can
 # neither be re-imported nor keep collecting writes from a stale checkout.
 # Usage: loop_status_migrate [--dry-run]   → prints one line per file considered.
 loop_status_migrate() {
@@ -164,14 +176,26 @@ loop_status_migrate() {
     # Never import the shared venue into itself (a checkout could be configured to point
     # at it), and never import a file that is already the same inode.
     [ "$legacy" -ef "$shared" ] && { echo "skip (is the shared venue): $legacy"; continue; }
-    rows=$(grep -cE '^\| [^|]+ \| [A-Z-]+ \|' "$legacy" 2>/dev/null || echo 0)
-    if [ -n "$dry" ]; then echo "would import $rows row(s): $legacy"; continue; fi
-    if ! grep -E '^\| [^|]+ \| [A-Z-]+ \|' "$legacy" >> "$shared" 2>/dev/null; then
-      echo "loop_status_migrate: import FAILED for $legacy" >&2; return 1
+    # Reduce the legacy file ALONE, in its own physical order, and take only what is still
+    # pending there. `loop_pending_hil_list` renders "[lane] <detail>"; the lane prefix is
+    # stripped back off so the re-emitted row carries the original detail verbatim.
+    local open_rows; open_rows=$(HARNESS_LOOP_STATUS_PATH="$legacy" loop_pending_hil_list 2>/dev/null)
+    rows=$(printf '%s' "$open_rows" | grep -c . 2>/dev/null || echo 0)
+    if [ -n "$dry" ]; then echo "would import $rows still-open row(s): $legacy"; continue; fi
+    if [ "$rows" -gt 0 ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        local lane detail
+        lane=$(printf '%s' "$line" | sed -n 's/^\[\([^]]*\)\] .*$/\1/p'); [ -n "$lane" ] || lane="-"
+        detail=$(printf '%s' "$line" | sed 's/^\[[^]]*\] //')
+        if ! loop_log_structured DEFERRED-HIL "$lane" "legacy-import:cutover:u-he-29" "$detail"; then
+          echo "loop_status_migrate: import FAILED for $legacy" >&2; return 1
+        fi
+      done <<< "$open_rows"
     fi
     mv "$legacy" "${legacy}.migrated-$(loop_now)" 2>/dev/null \
       || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
-    echo "imported $rows row(s): $legacy"
+    echo "imported $rows still-open row(s): $legacy"
     imported=$((imported + 1))
   done < <(git -C "$root" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')
   echo "loop_status_migrate: $imported file(s) imported into $shared"
@@ -272,6 +296,11 @@ loop_defer() {
 loop_resolve() {
   local item="$1"; shift
   local note="$*"
+  # Byte offset BEFORE our append, so the verification below can look at our own write
+  # rather than the whole shared history (see the tail -c note there). A missing/unreadable
+  # venue gives 0, which degrades to the old whole-file search rather than failing here.
+  local _before; _before=$(wc -c < "$(loop_status_path)" 2>/dev/null | tr -d ' ') || _before=0
+  [ -n "$_before" ] || _before=0
   loop_log RESOLVED-HIL "${item} — ${note}"
   # loop_log ALWAYS exits 0 by design (a ledger write must never break the calling hook),
   # so an unwritable ledger would otherwise make this report success while the item stays
@@ -293,7 +322,15 @@ loop_resolve() {
   local col escaped
   col=$(_loop_structured_col "${HARNESS_LANE_ID:--}" "${LOOP_CAUSE:--}")
   escaped=$(_loop_escape_detail "${item} — ${note}")
-  grep -qF "| RESOLVED-HIL | ${col} | ${escaped} |" "$p" 2>/dev/null
+  # Search ONLY the bytes appended since our own write began (codex r3 P2). Scanning the
+  # whole file proves a matching row EXISTS, not that THIS call wrote one: on a shared,
+  # cross-run, never-truncated venue an identical RESOLVED-HIL row from a previous run is
+  # entirely plausible, and if the item was re-deferred since and our append then failed,
+  # the whole-file grep would find that stale row and report success while the reducer
+  # still (correctly) sees the item as pending -- a false "resolved" is the one answer this
+  # function must never give. `$_before` is captured by the caller before loop_log runs.
+  tail -c "+$(( ${_before:-0} + 1 ))" "$p" 2>/dev/null \
+    | grep -qF "| RESOLVED-HIL | ${col} | ${escaped} |"
 }
 
 # The SKIP-SET: every item-ID with an open deferral across ALL lanes, i.e. deferred and not

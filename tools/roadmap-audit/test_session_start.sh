@@ -135,6 +135,30 @@ OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
 printf '%s' "$OUT" | grep -q "notify:" && bad "NOTIFY segment present with no ledger: $OUT" || ok "no NOTIFY segment when no ledger"
 
+# 5d) C-HE-09 §2 cutover (U-HE-29, codex r3 P2): the migration must be reachable from a
+#     PRODUCTION path, not just its own unit test. A legacy per-worktree ledger holding an
+#     open gate must be drained into the shared venue by simply starting a session, and the
+#     sentinel must stop it from running again.
+rm -f "$HARNESS_LOOP_STATUS_PATH" "$(dirname "$HARNESS_LOOP_STATUS_PATH")/.migrated-u-he-29"
+mkdir -p "$REPO/.harness"
+cat > "$REPO/.harness/loop_status.md" <<'EOF'
+| ts | kind | detail |
+|---|---|---|
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-124 — open in the pre-U-HE-29 venue |
+EOF
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "B-124" && ok "SessionStart drains the legacy venue (migration is reachable)" || bad "legacy gate not migrated: $OUT"
+[ -f "$(dirname "$HARNESS_LOOP_STATUS_PATH")/.migrated-u-he-29" ] && ok "cutover sentinel written" || bad "no cutover sentinel"
+[ -f "$REPO/.harness/loop_status.md" ] && bad "legacy ledger still collecting writes" || ok "legacy ledger retired by the session-start cutover"
+# a second session must not re-import (idempotent + sentinel-guarded)
+cat > "$REPO/.harness/loop_status.md" <<'EOF'
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-500 — should NOT be imported after the sentinel |
+EOF
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "B-500" && bad "sentinel did not stop a second import: $OUT" || ok "sentinel stops the cutover running twice"
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrated-*
+rm -f "$HARNESS_LOOP_STATUS_PATH"
+
 # 6) Reservation reconcile-log surfacing (U-HE-18, gate r1 witness P2): the log-READER
 #    block is UNGATED by the U-HE-29 activation gate, so its behavior needs witnesses now.
 #    The fixture repo has no tools/reservations.py, so the spawn gate stays cold -- only

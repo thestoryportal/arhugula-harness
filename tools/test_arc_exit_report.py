@@ -1116,8 +1116,63 @@ def test_u_he_29_worktree_read_reaches_the_shared_venue_with_lane_attribution(
         "[L1] B-77 — needs paid-call authorization",
         "[L1] R-501 — needs a vendor pick",
         "[L2] R-999 — a sibling lane's item",
-    ], "every open deferral, each carrying its lane (C-HE-09 §3)"
+    ], "with no resolvable lane id, every open deferral is kept, each carrying its lane"
     assert "SHARED loop ledger" in body, "the venue must be stated honestly"
+    assert "EVERY lane's open rows" in body, "an unfiltered list must SAY it is unfiltered"
+
+
+def test_u_he_29_todo_for_human_is_scoped_to_this_arcs_lane(
+    worktree_pair, gstack, monkeypatch, shared_ledger
+):
+    """U-WT-03's per-arc contract survives the shared venue: `todo_for_human` is what THIS
+    arc leaves for a human, not what the whole workspace does.
+
+    The ledger is shared, so `loop_pending_hil_list` returns every lane's open gates. Left
+    unfiltered, PR A's closure record would attach a sibling lane's obligations to A — so
+    rows are scoped by the invoking worktree's `.harness/.lane-id`, and the excluded count
+    is STATED (they are real obligations, just not this arc's)."""
+    main, wt = worktree_pair
+    write_ledger(shared_ledger, "R-501 — needs a vendor pick", lane="L1")
+    write_ledger(shared_ledger, "R-999 — a sibling lane's item", lane="L2")
+    write_ledger(shared_ledger, "R-888 — a third lane's item", lane="L3")
+    (wt / ".harness").mkdir(exist_ok=True)
+    (wt / ".harness" / ".lane-id").write_text("L1\n", encoding="utf-8")
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")
+    assert yaml.safe_load(yaml_block(body))["todo_for_human"] == [
+        "[L1] R-501 — needs a vendor pick"
+    ], "only this lane's obligations belong in this arc's closure record"
+    assert "2 open row(s) belonging to other lanes were excluded" in body, (
+        "excluded sibling rows must be COUNTED, never silently dropped"
+    )
+    assert "this arc's lane is L1" in body
+
+
+def test_u_he_29_lane_id_falls_back_to_the_environment(tmp_path, monkeypatch):
+    """`.harness/.lane-id` is the persisted identity; HARNESS_LANE_ID is the fallback the
+    review/ship wrappers already export."""
+    root = tmp_path / "wt"
+    (root / ".harness").mkdir(parents=True)
+    monkeypatch.delenv("HARNESS_LANE_ID", raising=False)
+    assert aer._lane_id(root) == ""
+    monkeypatch.setenv("HARNESS_LANE_ID", "L9")
+    assert aer._lane_id(root) == "L9"
+    (root / ".harness" / ".lane-id").write_text("  L1  \n", encoding="utf-8")
+    assert aer._lane_id(root) == "L1", "the persisted marker wins over the environment"
+
+
+def test_u_he_29_lane_scoping_keeps_everything_when_the_lane_is_unknown():
+    """No lane id means nothing to filter BY. Keep every row and say the list is unfiltered
+    — an unfiltered list the reader knows is unfiltered beats a filter applied on a guess."""
+    notes: list[str] = []
+    rows = ["[L1] a — x", "[L2] b — y"]
+    assert aer._scope_to_lane(rows, Path("/nonexistent"), notes) == rows
+    assert any("EVERY lane's open rows" in n for n in notes)
 
 
 def test_u_he_29_no_shared_ledger_is_an_honest_empty(worktree_pair, gstack, monkeypatch):

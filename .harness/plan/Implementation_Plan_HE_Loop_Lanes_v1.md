@@ -5561,6 +5561,63 @@ is RETAINED rather than removed — it is a live precondition, not a countdown: 
 `loop_lib.sh` predates U-HE-29 (a bisect, an old worktree) would otherwise run an unattended pass
 that can only fail closed into the log.
 
+(xi) **Out-of-family review, rounds 1-3 (11 findings absorbed).** Recorded because three are
+contract-shaped, not cosmetic.
+
+*r1.* (a) A first-writer TOCTOU on the now-SHARED venue: `loop_status_ensure` tested `-f`
+then truncated with `cat >`, so a losing lane could erase rows the winner had appended.
+(b) A RELATIVE `HARNESS_LOOP_STATUS_PATH` / `ARC_METRICS_QUEUE_DIR` silently defeated §2 --
+each lane resolved the same string against its own CWD while every string comparison still
+reported the venue identical; now rejected, since absolutizing against CWD cannot help when
+the CWD is what differs. (c) The SessionStart NOTIFY wiring had no witness. (d) Two ship-pr
+instructions still said worktree disposition deletes the ledger.
+
+*r2.* (e) `set -o noclobber` did NOT close (a): O_EXCL publishes the file at open() time, so
+a second lane's `-f` test passes and it appends while the winner is still writing the header
+through a non-append fd whose absolute-offset writes land on top. Replaced with a publication
+protocol -- stage the header to a temp file, publish with `ln` (atomic, EEXIST) -- so the
+venue never exists partially written. (f) **The cutover would have STRANDED every still-open
+deferral in the pre-U-HE-29 per-worktree ledgers.** Grounded, not hypothetical: the root
+checkout's legacy ledger alone carried 2 genuinely open obligations (B-124, B-137) invisible
+to the new reducer. (g) `_loop_structured_col` stripped spaces/tabs/pipes but not newlines,
+so a newline-bearing lane id split one row across two lines and the reducer could drop the
+gate.
+
+*r3.* (h) The migration from (f) was **dead code** -- no production path called it, so
+production would still have switched venues with those rows unread. Wired into SessionStart
+behind a sentinel, witnessed by a test that drives it through the hook rather than calling
+the helper directly. (i) The migration concatenated whole legacy ledgers in worktree-
+enumeration order, but reducers use PHYSICAL last-write-wins and ignore timestamps -- an
+older `RESOLVED-HIL` from a later-enumerated worktree could follow and clear a newer open
+gate. Narrowed to import only each file's still-OPEN rows, each reduced in its own correct
+order: the import is then purely `DEFERRED-HIL`, which can only ADD to the skip-set, the safe
+direction by §4's own rule. (j) **`todo_for_human` had quietly changed meaning.** The shared
+venue made `loop_pending_hil_list` return every lane's gates, so PR A's closure record would
+carry a sibling lane's obligations -- and the re-cut test in (iii) *blessed* it. U-WT-03's
+per-arc contract is restored by scoping rows to the invoking worktree's `.harness/.lane-id`
+(falling back to `HARNESS_LANE_ID`), with the excluded count STATED in the notes; with no
+resolvable lane id every row is kept and the report says it is unfiltered. (k) `loop_resolve`
+verified its write by grepping the WHOLE file, which proves a matching row exists, not that
+this call wrote one -- on a shared, never-truncated, cross-run venue an identical historical
+row is plausible, and a false "resolved" is the one answer that function must never give. It
+now searches only the bytes appended since its own write began.
+
+(xii) **A probe non-kill was reported, not tuned away.** The 12-lane create race added for
+r1(a) was mutation-probed with the fix removed and stayed GREEN -- forked subshells almost
+never interleave inside the microseconds between the `-f` test and the redirect. Rather than
+tune the race until it flaked red (pinning luck, not the mechanism), the fix is pinned
+structurally, exactly as tests 15c/15d in the same file already pin `loop_resolve`'s own-write
+check and for the same stated reason. The race test remains an end-to-end sanity check and is
+labelled as one.
+
+(xiii) **Test pollution found in the operator's live shared venue.** Because the venue is
+resolved from the environment rather than the repo, suites that had not yet pinned
+`HARNESS_LOOP_STATUS_PATH` wrote four rows (`B-777`, `B-779`, `R-300`, `R-410`) into the real
+`~/.gstack/projects/arhugula-v2/loop_status.md` during this arc. Cleared through the ledger's
+own append-only mechanism (`RESOLVED-HIL` rows naming them as test artifacts) rather than by
+editing the file. This is why the pins in (vii) are load-bearing rather than tidiness.
+
+
 ---
 
 ### U-HE-30: Gate coalescing by `cause_signature`, 10 min window, pull-based delivery
