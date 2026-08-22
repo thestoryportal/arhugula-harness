@@ -935,17 +935,26 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
         if not (m and int(m.group(1)) == post_pr):
             return  # another arc's authoring — always left alone
         body = rest.strip()
-        # r7 P2 + r8 P2: the proof is EQUALITY with the LIVE pointer body — substring
-        # membership would retire a corrected draft that happens to be contained in
-        # the stale installed pointer (or in a notes cell).
+        # r7 P2 + r8 P2 + r11 P2: the proof is EQUALITY with the LIVE pointer body
+        # AND the pointer's own post-# label naming THIS landing — a stale post-#54
+        # pointer that happens to equal the draft body is not installation of the
+        # post-#55 pointer.
         live = _CURRENT_PARAGRAPH_RE.search(represented_in) if represented_in else None
-        live_body = (
-            re.sub(r"^\*\*Current next action \(post-#[^)]*\)\.\*\*\s*", "", live.group(0)).strip()
-            if live is not None
-            else None
-        )
+        live_body = None
+        if live is not None:
+            lm = re.match(
+                r"^\*\*Current next action \(post-#(\d+)[^)]*\)\.\*\*\s*(.*)\Z",
+                live.group(0),
+                re.DOTALL,
+            )
+            if lm and int(lm.group(1)) == post_pr:
+                live_body = lm.group(2).strip()
         if body and live_body == body:
-            NEXT_ACTION_DRAFT.unlink()
+            # r11 P2 best-effort recheck: another agent may have replaced the draft
+            # since the read above — unlink only if the content is unchanged (the
+            # read-vs-unlink instant remains an irreducible non-atomic window).
+            if NEXT_ACTION_DRAFT.read_text() == raw:
+                NEXT_ACTION_DRAFT.unlink()
         else:
             print(
                 "emit-refresh-pr: keeping next-action draft — its body is not "
@@ -1036,7 +1045,8 @@ def emit_refresh_pr(
         "--json",
         "number,headRefOid,baseRefName,title,isCrossRepository",
         "--jq",
-        '.[0] | select(.) | "\\(.number)\\t\\(.headRefOid)\\t\\(.baseRefName)\\t\\(.isCrossRepository)\\t\\(.title)"',
+        '.[0] | select(.) | "\\(.number)\\t\\(.headRefOid)\\t\\(.baseRefName)\\t'
+        '\\(.isCrossRepository)\\t\\(.title)"',
     )
     if existing:
         n, head, base_ref, cross_repo, found_title = existing.split("\t", 4)
@@ -1300,6 +1310,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.emit_refresh_pr_json is not None:
+        if args.dry_run:
+            # r11 P2: the emitter checks out branches, commits, pushes, and creates a
+            # PR — there is no side-effect-free preview. Refuse the combination.
+            print(
+                "--emit-refresh-pr-json is a mutating mode (checkout/commit/push/PR) "
+                "and does not support --dry-run",
+                file=sys.stderr,
+            )
+            return 2
         # STDOUT PURITY (codex r1 P1): merge_door.py json-parses this mode's ENTIRE
         # captured stdout, and the in-process `--refresh` re-invocation (plus anything
         # nested) prints progress lines. Route every nested write to stderr for the

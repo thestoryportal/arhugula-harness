@@ -1224,6 +1224,8 @@ def test_emit_refresh_pr_pushed_branch_without_pr_creates_on_it():
         "origin/roadmap-refresh-post-55",
     ] in calls
     assert not any(c[:2] == ["git", "commit"] for c in calls)
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert create[3:5] == ["--base", "main"]  # r10 P1 pin, r11 P3 witness
 
 
 def test_emit_refresh_pr_fresh_path_branches_from_main_then_refreshes():
@@ -1251,6 +1253,8 @@ def test_emit_refresh_pr_fresh_path_branches_from_main_then_refreshes():
     checkout = ["git", "checkout", "-q", "-B", "roadmap-refresh-post-55", "origin/main"]
     assert checkout in calls
     assert ["git", "fetch", "-q", "origin", "main"] in calls
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert create[3:5] == ["--base", "main"]  # r10 P1 pin, r11 P3 witness
     assert seen["refresh_at_call_index"] >= calls.index(checkout) + 1
     assert ["git", "commit", "-m", "ops: roadmap status refresh post-#55"] in calls
     assert ["git", "push", "-u", "origin", "roadmap-refresh-post-55"] in calls
@@ -1551,3 +1555,35 @@ def test_emit_refresh_pr_resume_paths_refuse_unappliable_flags(monkeypatch):
     )
     with pytest.raises(SystemExit, match="cannot be applied"):
         rsr.emit_refresh_pr(55, notes="late notes", run=run2, do_refresh=lambda: None)
+
+
+def test_cli_emit_mode_refuses_dry_run(capsys):
+    """r11 P2: the emitter mutates (checkout/commit/push/PR) — --dry-run refuses."""
+    rc = rsr.main(["--emit-refresh-pr-json", "55", "--dry-run"])
+    assert rc == 2
+    assert "does not support --dry-run" in capsys.readouterr().err
+
+
+def test_emit_refresh_pr_stale_label_pointer_is_not_representation(monkeypatch, tmp_path):
+    """r11 P2: a pushed pointer labeled post-#54 whose body equals the post-#55 draft
+    is NOT installation of this landing's pointer — the draft survives."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#54).** pointer body here."),
+            ),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()
