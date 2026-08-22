@@ -1201,9 +1201,10 @@ def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
 
     g.gh_runs_for_sha = runs
     lease = md.read_lease()
-    assert md.land(
-        1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease
-    ) == "released"
+    assert (
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+        == "released"
+    )
     assert (2, "s" * 40) in g.merge_calls  # merged the CORRECTED head
     assert (2, "r" * 40) not in g.merge_calls
 
