@@ -1322,6 +1322,32 @@ def land(
                 )
             else:
                 rpr, rhead = rpr_rhead
+                # U-HE-28 codex r3 P1: the durable record pins the head at creation,
+                # but the sanctioned recovery for a red refresh head is a fix commit
+                # on the SAME refresh PR — which moves the real head. Without
+                # re-adoption the resume polls the dead old SHA forever and the
+                # documented unblock recovery can never succeed. Re-adopt the PR's
+                # CURRENT head iff it still satisfies the full terminating-refresh
+                # identity gate; MERGED/closed states fall through to the
+                # ground-truth branches below unchanged.
+                rv1 = ground.gh_view(rpr)
+                cur_head = rv1.get("headRefOid")
+                if rv1.get("state") == "OPEN" and cur_head and cur_head != rhead:
+                    rfiles1 = [f.get("path") for f in (rv1.get("files") or [])]
+                    if not str(rv1.get("title") or "").startswith(
+                        REFRESH_TITLE_PREFIX
+                    ) or rfiles1 != [REFRESH_ONLY_FILE]:
+                        raise DoorFailed(
+                            f"refresh pr #{rpr} head moved to {str(cur_head)[:12]} but "
+                            "no longer satisfies the terminating-refresh identity gate"
+                        )
+                    rhead = cur_head
+                    # refresh the durable record so a crash-resume sees the adopted
+                    # head; a crash inside this two-step window merely re-runs the
+                    # (idempotent) adoption on the next pass
+                    sidecar = _sidecar(lease["lease_token"], "refresh")
+                    sidecar.unlink(missing_ok=True)
+                    publish_exclusive(sidecar, json.dumps({"pr": rpr, "head_sha": rhead}))
             refresh_resumed = (
                 recorded is not None and recorded.get("merge_attempted_at") is not None
             )

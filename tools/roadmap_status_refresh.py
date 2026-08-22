@@ -918,6 +918,20 @@ def check_head_refresh_shape(
     return []
 
 
+def _discard_matching_draft(post_pr: int) -> None:
+    """Remove the next-action draft iff it names post_pr — called only once the draft's
+    content is durably represented by the pushed refresh branch (codex r3 P2). A
+    mismatched draft is another arc's authoring and is always left alone."""
+    try:
+        if NEXT_ACTION_DRAFT.is_file():
+            first = NEXT_ACTION_DRAFT.read_text().partition("\n")[0]
+            m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
+            if m and int(m.group(1)) == post_pr:
+                NEXT_ACTION_DRAFT.unlink()
+    except OSError:
+        pass
+
+
 def emit_refresh_pr(
     post_pr: int,
     *,
@@ -974,6 +988,9 @@ def emit_refresh_pr(
     )
     if existing:
         n, head = existing.split()
+        # the pushed refresh commit already carries whatever a matching draft held
+        # when it was created (codex r3 P2) — retire it so it cannot go stale
+        _discard_matching_draft(post_pr)
         return {"pr": int(n), "head_sha": head}
     # Remote-branch probe: `--exit-code` means exit 2 is the ONLY "no matching ref"
     # signal; auth/transport/timeout failures use other codes (codex r1 P2 — same
@@ -995,6 +1012,7 @@ def emit_refresh_pr(
         sh("git", "fetch", "-q", "origin", branch)
         sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
         url = sh("gh", "pr", "create", "--head", branch, "--title", title, "--body", body)
+        _discard_matching_draft(post_pr)  # content durable in the pushed branch (r3 P2)
         return {
             "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
             "head_sha": sh("git", "rev-parse", "HEAD"),
@@ -1010,8 +1028,10 @@ def emit_refresh_pr(
         first, _, rest = raw.partition("\n")
         m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
         if m and int(m.group(1)) == post_pr and rest.strip():
+            # READ ONLY — the draft is retired after `gh pr create` succeeds (codex
+            # r3 P2): a crash between here and the push must leave the draft for the
+            # retry, else the re-run silently lands a pointer-less refresh.
             next_action = rest.strip()
-            NEXT_ACTION_DRAFT.unlink()
         else:
             print(
                 f"emit-refresh-pr: ignoring next-action draft ({first.strip()!r} does "
@@ -1051,6 +1071,9 @@ def emit_refresh_pr(
     sh("git", "commit", "-m", title)
     sh("git", "push", "-u", "origin", branch)
     url = sh("gh", "pr", "create", "--title", title, "--body", body)
+    # the pointer is now durably represented by the pushed branch + PR — only here
+    # may the draft be retired (codex r3 P2)
+    _discard_matching_draft(post_pr)
     return {
         "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
         "head_sha": sh("git", "rev-parse", "HEAD"),

@@ -1385,4 +1385,46 @@ def test_emit_refresh_pr_explicit_flag_wins_over_draft(monkeypatch, tmp_path):
     )
     argv = argv_seen["argv"]
     assert argv[argv.index("--next-action") + 1] == "explicit body"
+    # content-wise the flag won; the draft named THIS completed landing, so it is
+    # retired at the durability point all the same (it could never be consumed later)
+    assert not draft.exists()
+
+
+def test_emit_refresh_pr_push_failure_keeps_draft(monkeypatch, tmp_path):
+    """codex r3 P2: the draft is retired only once its content is durably represented
+    by the pushed branch — a push failure must leave it for the retry."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+            (("git", "push"), _P(returncode=1, stderr="remote rejected")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit):
+        rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()  # the retry re-reads it
+
+
+def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_path):
+    """A matching draft at a resume path is already represented by the pushed refresh
+    commit — retired there; a mismatched draft is another arc's and stays."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body\n")
+    calls: list[list[str]] = []
+    run = _scripted_run([(("gh", "pr", "list"), _P(stdout="321 abc123def"))], calls)
+    rsr.emit_refresh_pr(55, run=run)
+    assert not draft.exists()
+    draft.write_text("post-pr: 54\nother arc's body\n")
+    calls2: list[list[str]] = []
+    run2 = _scripted_run([(("gh", "pr", "list"), _P(stdout="321 abc123def"))], calls2)
+    rsr.emit_refresh_pr(55, run=run2)
     assert draft.exists()

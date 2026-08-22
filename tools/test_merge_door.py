@@ -1178,6 +1178,57 @@ def test_resume_uses_recorded_refresh_never_a_second_pr(door, monkeypatch):
     assert calls == [1]  # refresh() called ONCE across crash + resume
 
 
+# mutation-probe: drop the recorded-resume head re-adoption (resume polls the dead old SHA)
+def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
+    """U-HE-28 codex r3 P1: a red refresh head's sanctioned recovery is a fix commit on
+    the SAME refresh PR, which moves the real head. The resume must adopt the current
+    head (identity-gated) instead of polling the dead recorded SHA forever."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    # the fix commit moved the refresh PR's head; the old recorded head stays red
+    g.states[2]["headRefOid"] = "s" * 40
+
+    def runs(sha):
+        if sha == "r" * 40:  # the dead recorded head — red forever
+            return [{"status": "completed", "conclusion": "failure", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    lease = md.read_lease()
+    assert md.land(
+        1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease
+    ) == "released"
+    assert (2, "s" * 40) in g.merge_calls  # merged the CORRECTED head
+    assert (2, "r" * 40) not in g.merge_calls
+
+
+def test_resume_refuses_moved_head_that_lost_refresh_identity(door, monkeypatch):
+    """A moved head that no longer satisfies the terminating-refresh identity gate is
+    never adopted (the pair would squash-merge under the global lease)."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40
+    g.states[2]["files"] = [{"path": ".harness/roadmap_status.md"}, {"path": "x.py"}]
+    lease = md.read_lease()
+    # the refresh.attempted marker from the crashed pass makes this a post-attempt
+    # escape, which land() adjudicates into a BLOCKED door (never a blind release)
+    with pytest.raises(md.DoorBlocked, match="identity gate"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
+    assert md.read_lease()["state"] == "blocked"
+
+
 def test_wait_for_door_backoff_numbers_and_budget(door):
     t = {"now": 0.0}
     sleeps = []
