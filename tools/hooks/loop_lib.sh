@@ -74,17 +74,25 @@ loop_status_ensure() {
   [ -z "$p" ] && return 0
   if [ ! -f "$p" ]; then
     mkdir -p "$(dirname "$p")" 2>/dev/null
-    # EXCLUSIVE create (codex round-1 P2). A plain `cat > "$p"` after the -f test is a
-    # first-writer TOCTOU: two lanes can both see the venue absent, and the loser's
-    # truncating redirect would erase a row the winner had already appended -- silently
-    # destroying a durable DEFERRED-HIL / NOTIFY signal while loop_log_structured still
-    # reported success. Now that the venue is SHARED across lanes this race is reachable
-    # in normal operation, not just in principle. `set -o noclobber` makes `>` open with
-    # O_EXCL, so exactly one writer creates the header and the loser is a harmless no-op
-    # (the winner's header is equally valid -- there is nothing to merge).
+    # PUBLICATION PROTOCOL (codex r1 P2, tightened at r2 P2). A plain `cat > "$p"` after
+    # the -f test is a first-writer TOCTOU: two lanes both see the venue absent and the
+    # loser's truncating redirect erases rows the winner already appended -- destroying a
+    # durable DEFERRED-HIL / NOTIFY signal while the writer still reports success. Now that
+    # the venue is SHARED this is reachable in normal operation.
+    #
+    # `set -o noclobber` alone (the r1 fix) does NOT close it: O_EXCL makes the file appear
+    # at open() time, so a second lane's `-f` test passes and it starts appending while the
+    # winner is still writing the header through a NON-append fd -- whose later writes go to
+    # absolute offsets and can land on top of that appended row.
+    #
+    # So the header is written to a temp file FIRST and published by `ln`, which is atomic
+    # and fails with EEXIST if the venue already exists. The venue therefore never exists in
+    # a partially-written state: by the time any other lane can see it, the header is
+    # complete and every subsequent write is an O_APPEND row. The loser of the link race is
+    # a harmless no-op (the winner's header is equally valid -- there is nothing to merge).
+    local _tmp="${p}.$$-${RANDOM}.tmp"
     (
-      set -o noclobber
-      cat > "$p" <<'EOF'
+      cat > "$_tmp" <<'EOF'
 # Loop status ledger
 
 *Append-only record of autonomous loop-mode activity (Wave 2, U-HK-11), SHARED by every
@@ -102,7 +110,9 @@ safer default was taken.*
 | timestamp | kind | lane;cause | detail |
 |---|---|---|---|
 EOF
-    ) 2>/dev/null || true   # lost the create race: the winner's header stands
+    ) 2>/dev/null
+    ln "$_tmp" "$p" 2>/dev/null || true   # lost the publish race: the winner's header stands
+    rm -f "$_tmp" 2>/dev/null
   fi
   printf '%s' "$p"
 }
@@ -114,13 +124,59 @@ EOF
 # <lane> <cause> -> `lane=<lane>;cause=<cause>`, each defaulting to `-`.
 _loop_structured_col() {
   local lane cause
-  lane=$(printf '%s' "${1:--}" | tr -d ' \t|'); cause=$(printf '%s' "${2:--}" | tr -d ' \t|')
+  # NEWLINES must go too, not just spaces/tabs/pipes (codex r2 P2). A lane id inherits
+  # arbitrary worktree-name text, and an embedded newline would split ONE row across two
+  # physical lines: the reducer then reads a malformed detail and can drop the gate
+  # entirely -- a silently lost operator obligation, the worst failure this ledger has.
+  # \r is stripped for the same reason (a lone CR corrupts the row for line-oriented awk).
+  lane=$(printf '%s' "${1:--}" | tr -d ' \t\n\r|'); cause=$(printf '%s' "${2:--}" | tr -d ' \t\n\r|')
   printf 'lane=%s;cause=%s' "${lane:--}" "${cause:--}"
 }
 
 # Escape pipes + collapse newlines so one logical row stays one table row. Shared by the
 # writer and by loop_resolve, which must reproduce the exact bytes it wrote.
 _loop_escape_detail() { printf '%s' "$*" | tr '\n' ' ' | sed 's/|/\\|/g'; }
+
+# ── Legacy venue migration (U-HE-29 cutover) ─────────────────────────────────
+# Before U-HE-29 every worktree kept its OWN legacy ledger copy. Moving to the
+# shared venue without importing those files would STRAND every still-open DEFERRED-HIL
+# row in them: the new reducer reads only the shared venue, so those gates would vanish
+# from the skip-set and the loop would silently re-attempt items an operator is still
+# blocked on -- the exact failure this ledger exists to prevent. Grounded before writing
+# this: the root checkout's legacy ledger alone carried 2 genuinely open obligations.
+#
+# The import is append-only and idempotent. Legacy rows are the 3-column shape the
+# reducers already accept (rowparse falls back to `lane = "-"`), so they are copied
+# VERBATIM -- rewriting them into the structured shape would forge a lane attribution the
+# original row never had. Each imported file is then renamed `.migrated-<ts>` so it can
+# neither be re-imported nor keep collecting writes from a stale checkout.
+# Usage: loop_status_migrate [--dry-run]   → prints one line per file considered.
+loop_status_migrate() {
+  local dry=""; [ "${1:-}" = "--dry-run" ] && dry=1
+  local shared; shared=$(loop_status_ensure) || return 1
+  [ -n "$shared" ] || { echo "loop_status_migrate: no shared venue" >&2; return 1; }
+  local root; root=$(hook_project_dir); [ -n "$root" ] || return 1
+  local imported=0 wt legacy rows
+  while IFS= read -r wt; do
+    [ -n "$wt" ] || continue
+    legacy="$wt/.harness/loop_status.md"
+    [ -f "$legacy" ] || continue
+    # Never import the shared venue into itself (a checkout could be configured to point
+    # at it), and never import a file that is already the same inode.
+    [ "$legacy" -ef "$shared" ] && { echo "skip (is the shared venue): $legacy"; continue; }
+    rows=$(grep -cE '^\| [^|]+ \| [A-Z-]+ \|' "$legacy" 2>/dev/null || echo 0)
+    if [ -n "$dry" ]; then echo "would import $rows row(s): $legacy"; continue; fi
+    if ! grep -E '^\| [^|]+ \| [A-Z-]+ \|' "$legacy" >> "$shared" 2>/dev/null; then
+      echo "loop_status_migrate: import FAILED for $legacy" >&2; return 1
+    fi
+    mv "$legacy" "${legacy}.migrated-$(loop_now)" 2>/dev/null \
+      || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
+    echo "imported $rows row(s): $legacy"
+    imported=$((imported + 1))
+  done < <(git -C "$root" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')
+  echo "loop_status_migrate: $imported file(s) imported into $shared"
+  return 0
+}
 
 # Append a ledger row. Usage: loop_log <kind> <detail...>
 # kind is a short uppercase token (ACTIVATE / DEACTIVATE / DEFERRED-HIL / RESOLVED-HIL /

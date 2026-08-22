@@ -374,12 +374,20 @@ unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 ( HARNESS_LOOP_STATUS_PATH=/nonexistent-dir/x.md loop_log NOTIFY "detail" ) 2>/dev/null
 [ $? -eq 0 ] && ok "loop_log preserves its always-0 hook contract" || bad "loop_log broke its always-0 contract"
 
-# 25) §2 pointer sweep: no live carrier still cites the per-worktree ledger path.
-SWEEP=$(cd "$SCRIPT_DIR/../.." && grep -rl '\.harness/loop_status\.md' \
+# 25) §2 pointer sweep: no live carrier still points a reader or a writer at the
+#     per-worktree ledger path. `loop_status_migrate` is the ONE legitimate mention -- it
+#     exists precisely to drain those files -- so lines belonging to it are excluded by
+#     their `legacy` marker; everything else must be zero.
+SWEEP=$(cd "$SCRIPT_DIR/../.." && grep -rn '\.harness/loop_status\.md' \
   tools/hooks/loop_lib.sh tools/roadmap-audit/session-start.sh tools/arc_exit_report.py \
   .claude/skills/loop-start/SKILL.md .claude/skills/loop-stop/SKILL.md \
-  .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md 2>/dev/null | wc -l | tr -d ' ')
-[ "$SWEEP" = "0" ] && ok "pointer sweep: 0 literal .harness/loop_status.md hits in live carriers" || bad "stale pointers remain in $SWEEP file(s)"
+  .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md 2>/dev/null \
+  | grep -v 'legacy' | wc -l | tr -d ' ')
+[ "$SWEEP" = "0" ] && ok "pointer sweep: 0 literal .harness/loop_status.md hits in live carriers" || bad "stale pointers remain ($SWEEP line(s))"
+# ... and the migration's own mention is genuinely there (the exclusion above must not be
+# silently covering an empty set — that would make this whole sweep vacuous).
+MIGREF=$(cd "$SCRIPT_DIR/../.." && grep -c 'legacy="\$wt/\.harness/loop_status\.md"' tools/hooks/loop_lib.sh 2>/dev/null)
+[ "$MIGREF" = "1" ] && ok "the excluded mention is the migration's legacy path (sweep is not vacuous)" || bad "migration legacy path not found: $MIGREF"
 
 # 26) codex r1 P2 — first-writer TOCTOU on the SHARED venue. N lanes racing to log into a
 #     venue that does not exist yet must ALL keep their rows: a truncating create by a
@@ -407,9 +415,36 @@ done
 #      the creating redirect must run under noclobber (O_EXCL), never as a bare truncating
 #      `>`. Tuning the race until it flakes red would be pinning luck, not the mechanism.
 ENSURE_BODY=$(declare -f loop_status_ensure)
-printf '%s' "$ENSURE_BODY" | grep -q 'noclobber' \
-  && ok "loop_status_ensure creates the venue exclusively (noclobber/O_EXCL)" \
-  || bad "loop_status_ensure creates with a truncating redirect (first-writer TOCTOU)"
+printf '%s' "$ENSURE_BODY" | grep -qE 'ln "\$_tmp" "\$p"|ln .*_tmp' \
+  && ok "loop_status_ensure publishes a COMPLETE header atomically via ln" \
+  || bad "loop_status_ensure does not publish atomically (partial-header window)"
+printf '%s' "$ENSURE_BODY" | grep -qE 'cat > "\$p"' \
+  && bad "loop_status_ensure still writes the header directly to the venue" \
+  || ok "the venue is never opened for a truncating/non-append write"
+
+# 26c) The published venue is COMPLETE the instant it exists (codex r2 P2): noclobber alone
+#      let the file appear at open() while the header was still being written, so a second
+#      lane could append into the gap and have the winner's absolute-offset writes land on
+#      top of it. Witness the property that rules the whole class out — no writer ever
+#      appends to a venue carrying a partial header.
+rm -rf "$REPO/pub"; PUB="$REPO/pub/loop_status.md"
+HARNESS_LOOP_STATUS_PATH="$PUB" loop_status_ensure >/dev/null
+{ head -1 "$PUB" | grep -q '^# Loop status ledger$' && tail -1 "$PUB" | grep -q '^|---|---|---|---|$'; } \
+  && ok "the venue's header is whole at publication (first + last header line present)" \
+  || bad "published venue has a partial header: $(wc -l < "$PUB") line(s)"
+[ -z "$(find "$REPO/pub" -name '*.tmp' 2>/dev/null)" ] && ok "no staging temp file is left behind" || bad "staging temp leaked: $(find "$REPO/pub" -name '*.tmp')"
+
+# 26d) codex r2 P2 — an embedded NEWLINE in a lane id must never split one row into two.
+#      Lane ids inherit worktree-name text; a split row makes the reducer read a malformed
+#      detail and drop the gate, silently losing an operator obligation.
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+BEFORE_LINES=$(wc -l < "$(loop_status_path)")
+loop_log_structured DEFERRED-HIL "$(printf 'lane\nbroken')" "$(printf 'g:f\n:c')" "B-13 — newline lane"
+[ "$(( $(wc -l < "$(loop_status_path)") - BEFORE_LINES ))" -eq 1 ] \
+  && ok "a newline-bearing lane id still writes exactly ONE physical row" || bad "row split across lines"
+[ "$(loop_skip_set)" = "B-13" ] && ok "the gate survives a newline-bearing lane id" || bad "gate lost: [$(loop_skip_set)]"
+[[ "$(loop_pending_hil_list)" == '[lanebroken] B-13 — newline lane' ]] \
+  && ok "the newline is stripped from the rendered lane" || bad "lane render: [$(loop_pending_hil_list)]"
 
 # 27) codex r1 P2 — a RELATIVE venue is rejected, not silently resolved per-CWD. Returning
 #     the relative text unchanged would make two lanes with different CWDs write different
@@ -425,6 +460,45 @@ RELQ=$(cd "$REPO/relcwd" && env -u HARNESS_LOOP_STATUS_PATH ARC_METRICS_QUEUE_DI
 [ -z "$RELQ" ] && ok "relative ARC_METRICS_QUEUE_DIR is rejected" || bad "relative queue dir accepted: [$RELQ]"
 ( cd "$REPO/relcwd" && HARNESS_LOOP_STATUS_PATH="rel/loop_status.md" loop_log_structured NOTIFY L1 g:f:c "d" ) 2>/dev/null
 [ $? -eq 1 ] && ok "an unusable venue fails the structured write closed" || bad "structured write succeeded on an unusable venue"
+
+# 28) codex r2 P2 — the U-HE-29 cutover must not STRAND still-open deferrals held in the
+#     pre-U-HE-29 per-worktree ledgers. Import them, verbatim, exactly once.
+# wt1/wt2 must be REAL linked worktrees: the migration enumerates them through
+# `git worktree list`, which is the only thing that sees a pre-U-HE-29 ledger sitting in a
+# checkout nobody is currently in. Plain directories would make this fixture pass a scan it
+# never actually exercised. Git identity is passed inline -- CI has none configured.
+MIG="$REPO/mig"; rm -rf "$MIG"; mkdir -p "$MIG"
+( cd "$MIG" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b wt1br wt1 && git worktree add -q -b wt2br wt2 ) >/dev/null 2>&1
+mkdir -p "$MIG/wt1/.harness" "$MIG/wt2/.harness"
+cat > "$MIG/wt1/.harness/loop_status.md" <<'EOF'
+# Loop status ledger
+| timestamp | kind | detail |
+|---|---|---|
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-124 — still open in the old venue |
+| 2026-08-01T00:01:00Z | DEFERRED-HIL | B-137 — also still open |
+| 2026-08-01T00:02:00Z | DEFERRED-HIL | B-140 — this one was answered |
+| 2026-08-01T00:03:00Z | RESOLVED-HIL | B-140 — answered before the cutover |
+EOF
+MIGV="$MIG/shared/loop_status.md"
+OUT=$(cd "$MIG" && CLAUDE_PROJECT_DIR="$MIG" HARNESS_LOOP_STATUS_PATH="$MIGV" loop_status_migrate 2>&1)
+SKIP=$(HARNESS_LOOP_STATUS_PATH="$MIGV" loop_skip_set)
+[ "$SKIP" = "B-124 B-137" ] && ok "migration carries the still-open deferrals across ($SKIP)" || bad "stranded/extra rows: [$SKIP] — $OUT"
+[ -f "$MIG/wt1/.harness/loop_status.md" ] && bad "legacy ledger left in place (can still collect writes)" || ok "legacy ledger retired after import"
+[ -n "$(find "$MIG/wt1/.harness" -name 'loop_status.md.migrated-*' 2>/dev/null)" ] && ok "legacy ledger retained under a .migrated- name (nothing destroyed)" || bad "legacy ledger not preserved"
+# idempotent: a second pass finds nothing to import and cannot double-count
+OUT2=$(cd "$MIG" && CLAUDE_PROJECT_DIR="$MIG" HARNESS_LOOP_STATUS_PATH="$MIGV" loop_status_migrate 2>&1)
+printf '%s' "$OUT2" | grep -q '0 file(s) imported' && ok "a second migration pass imports nothing" || bad "migration not idempotent: $OUT2"
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIGV" loop_skip_set)" = "B-124 B-137" ] && ok "skip-set unchanged after the second pass" || bad "second pass altered the skip-set"
+# --dry-run reports without importing or retiring
+cat > "$MIG/wt2/.harness/loop_status.md" <<'EOF'
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-200 — a second worktree's open gate |
+EOF
+DRY=$(cd "$MIG" && CLAUDE_PROJECT_DIR="$MIG" HARNESS_LOOP_STATUS_PATH="$MIGV" loop_status_migrate --dry-run 2>&1)
+printf '%s' "$DRY" | grep -q 'would import' && ok "--dry-run reports what it would import" || bad "--dry-run silent: $DRY"
+[ -f "$MIG/wt2/.harness/loop_status.md" ] && ok "--dry-run retires nothing" || bad "--dry-run retired a legacy ledger"
+printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIGV" loop_skip_set)" | grep -q 'B-200' && bad "--dry-run imported rows" || ok "--dry-run imports nothing"
 
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
