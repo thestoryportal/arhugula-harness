@@ -1344,7 +1344,7 @@ def test_emit_refresh_pr_consumes_matching_next_action_draft(monkeypatch, tmp_pa
     """codex r2 P2: the ship-pr-authored draft names THIS landing -> its body flows
     into the in-process refresh as --next-action and the draft is consumed."""
     argv_seen: dict[str, list[str]] = {}
-    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
     draft = tmp_path / "draft"
     monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
     draft.write_text("post-pr: 55\nThe next implementable unit is `U-HE-29` per the S4c order.\n")
@@ -1361,7 +1361,7 @@ def test_emit_refresh_pr_ignores_mismatched_draft(monkeypatch, tmp_path, capsys)
     """A stale draft from an aborted arc must never install another arc's pointer:
     left in place, warned on stderr, no --next-action in the refresh argv."""
     argv_seen: dict[str, list[str]] = {}
-    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
     draft = tmp_path / "draft"
     monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
     draft.write_text("post-pr: 54\nstale pointer body\n")
@@ -1375,7 +1375,7 @@ def test_emit_refresh_pr_ignores_mismatched_draft(monkeypatch, tmp_path, capsys)
 def test_emit_refresh_pr_explicit_flag_wins_over_draft(monkeypatch, tmp_path):
     """--next-action passed explicitly is authoritative; the draft is not consumed."""
     argv_seen: dict[str, list[str]] = {}
-    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
     draft = tmp_path / "draft"
     monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
     draft.write_text("post-pr: 55\ndraft body\n")
