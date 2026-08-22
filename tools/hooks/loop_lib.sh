@@ -140,6 +140,21 @@ _loop_structured_col() {
 # writer and by loop_resolve, which must reproduce the exact bytes it wrote.
 _loop_escape_detail() { printf '%s' "$*" | tr '\n' ' ' | sed 's/|/\\|/g'; }
 
+# This lane's id for attribution purposes (C-HE-09 §3), or `-` when there is none.
+# HARNESS_LANE_ID first, then the worktree-local PERSISTED marker (codex r4 P2). The env var
+# alone is not enough: the canonical deferral wrapper `tools/04-loop/defer.sh` and the
+# ordinary hooks never export it, so every row they wrote landed unattributed as `-` even in
+# a worktree that has had a lane id on disk the whole time -- losing exactly the attribution
+# §3 requires, and the attribution the arc-exit report reads.
+_loop_lane_id() {
+  local l="${HARNESS_LANE_ID:-}"
+  if [ -z "$l" ]; then
+    local d; d=$(hook_project_dir 2>/dev/null)
+    [ -n "$d" ] && [ -f "$d/.harness/.lane-id" ] && l=$(cat "$d/.harness/.lane-id" 2>/dev/null)
+  fi
+  printf '%s' "${l:--}"
+}
+
 # ── Legacy venue migration (U-HE-29 cutover) ─────────────────────────────────
 # Before U-HE-29 every worktree kept its OWN legacy ledger copy. Moving to the
 # shared venue without importing those files would STRAND every still-open DEFERRED-HIL
@@ -193,30 +208,52 @@ loop_status_migrate() {
     # Reduce the legacy file ALONE, in its own physical order, and take only what is still
     # pending there. `loop_pending_hil_list` renders "[lane] <detail>"; the lane prefix is
     # stripped back off so the re-emitted row carries the original detail verbatim.
-    # HONOUR the reducer's exit status (codex r4 P2). An unreadable legacy ledger returns
-    # rc!=0 with empty output; treating that as "nothing pending" would archive the file and
-    # report success while its open gates vanished for good. "Could not read" and "nothing to
-    # read" are different claims -- fail closed on the first.
+    # CLAIM FIRST, then read (codex r5 P2). Reducing the live file and renaming afterwards
+    # left a window in which a still-running pre-U-HE-29 writer could append a NEW deferral
+    # that was then carried into the archive without ever reaching the shared venue -- and
+    # since later passes look only at the original filename, it would never be seen again.
+    # `mv` is atomic: exactly one process claims the file, and a concurrent writer that
+    # recreates the original path simply produces a file the NEXT pass handles normally.
+    local claim="${legacy}.migrating-$(loop_now)"
+    if [ -n "$dry" ]; then
+      local n_dry; n_dry=$(HARNESS_LOOP_STATUS_PATH="$legacy" loop_pending_hil_list 2>/dev/null | grep -c . || echo 0)
+      echo "would import $n_dry still-open row(s): $legacy"; continue
+    fi
+    mv "$legacy" "$claim" 2>/dev/null || { echo "loop_status_migrate: could not claim $legacy" >&2; return 1; }
+    # HONOUR the reducer's exit status (codex r4 P2). An unreadable ledger returns rc!=0 with
+    # empty output; treating that as "nothing pending" would retire the file and report a
+    # completed cutover while its open gates disappeared for good. "Could not read" and
+    # "nothing to read" are different claims -- fail closed on the first, restoring the
+    # original name so the next pass retries it.
     local open_rows rc
-    open_rows=$(HARNESS_LOOP_STATUS_PATH="$legacy" loop_pending_hil_list 2>/dev/null); rc=$?
+    open_rows=$(HARNESS_LOOP_STATUS_PATH="$claim" loop_pending_hil_list 2>/dev/null); rc=$?
     if [ "$rc" -ne 0 ]; then
+      mv "$claim" "$legacy" 2>/dev/null
       echo "loop_status_migrate: could not READ $legacy (rc=$rc) — not imported, not retired" >&2
       return 1
     fi
     rows=$(printf '%s' "$open_rows" | grep -c . 2>/dev/null || echo 0)
-    if [ -n "$dry" ]; then echo "would import $rows still-open row(s): $legacy"; continue; fi
     if [ "$rows" -gt 0 ]; then
       while IFS= read -r line; do
         [ -n "$line" ] || continue
-        local lane detail
+        local lane detail item
         lane=$(printf '%s' "$line" | sed -n 's/^\[\([^]]*\)\] .*$/\1/p'); [ -n "$lane" ] || lane="-"
         detail=$(printf '%s' "$line" | sed 's/^\[[^]]*\] //')
+        item=$(printf '%s' "$detail" | awk '{print $1}')
+        # DEDUPE across retries (codex r5 P2). A pass that appended some rows and then failed
+        # would, on retry, re-append a DEFERRED-HIL for an item the operator may have
+        # RESOLVED in between -- silently reopening an answered gate. Imported rows are
+        # stamped with a distinctive cause, so a prior import of the SAME item is detectable
+        # and skipped; the operator's later RESOLVED-HIL keeps the last word.
+        if grep -qF ";cause=legacy-import:cutover:u-he-29 | ${item} " "$shared" 2>/dev/null; then
+          continue
+        fi
         if ! loop_log_structured DEFERRED-HIL "$lane" "legacy-import:cutover:u-he-29" "$detail"; then
           echo "loop_status_migrate: import FAILED for $legacy" >&2; return 1
         fi
       done <<< "$open_rows"
     fi
-    mv "$legacy" "${legacy}.migrated-$(loop_now)" 2>/dev/null \
+    mv "$claim" "${legacy}.migrated-$(loop_now)" 2>/dev/null \
       || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
     echo "imported $rows still-open row(s): $legacy"
     imported=$((imported + 1))
@@ -234,7 +271,7 @@ loop_status_migrate() {
 # never break the calling hook), which is exactly why coordination callers must NOT use it.
 loop_log() {
   local kind="$1"; shift
-  loop_log_structured "$kind" "${HARNESS_LANE_ID:--}" "${LOOP_CAUSE:--}" "$@" || true
+  loop_log_structured "$kind" "$(_loop_lane_id)" "${LOOP_CAUSE:--}" "$@" || true
   return 0
 }
 
@@ -343,7 +380,7 @@ loop_resolve() {
   # Rebuild the EXACT row loop_log just wrote -- same column builder, same escaper, so the
   # structured column can never drift between the write and this check (C-HE-09 §3).
   local col escaped
-  col=$(_loop_structured_col "${HARNESS_LANE_ID:--}" "${LOOP_CAUSE:--}")
+  col=$(_loop_structured_col "$(_loop_lane_id)" "${LOOP_CAUSE:--}")
   escaped=$(_loop_escape_detail "${item} — ${note}")
   # Search ONLY the bytes appended since our own write began (codex r3 P2). Scanning the
   # whole file proves a matching row EXISTS, not that THIS call wrote one: on a shared,

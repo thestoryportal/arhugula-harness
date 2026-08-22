@@ -642,29 +642,26 @@ def _lane_id(ledger_root: Path) -> str:
 
 
 def _scope_to_lane(rows: list[str], ledger_root: Path, notes: list[str]) -> list[str]:
-    """Annotate the shared venue's pending rows with whose lane they belong to. Never drop any.
+    """Narrow the shared venue's pending rows to those that can be THIS arc's (U-WT-03).
 
     Since U-HE-29 the ledger is shared, so `loop_pending_hil_list` returns every lane's open
-    gates, each rendered `[lane] detail` (C-HE-09 §3). U-WT-03's per-arc contract makes it
-    tempting to FILTER to this lane -- an earlier cut of this function did exactly that, and
-    it was wrong in the dangerous direction. Three production paths write rows this arc owns
-    under a lane that does not equal the persisted `.lane-id`:
+    gates, each rendered `[lane] detail` (C-HE-09 §3). Two wrong shapes were tried first and
+    both are recorded here because the right one sits between them:
 
-      * `tools/04-loop/defer.sh`, the canonical deferral wrapper, sets no `HARNESS_LANE_ID`,
-        so its rows carry `lane=-`;
-      * rows migrated from the pre-U-HE-29 per-worktree ledgers carry the legacy `-`;
-      * the writer sanitizes separators out of the lane id, so the recorded lane can differ
-        from the persisted spelling it would be compared against.
+      * keep everything — a sibling lane's obligations end up in THIS PR's closure record and
+        its todo count describes unrelated arcs;
+      * drop everything whose lane != mine — this arc's OWN rows disappear whenever they were
+        written without a lane, and `-` rows are common (a pre-`_loop_lane_id` deferral, or a
+        row migrated from a legacy per-worktree ledger).
 
-    An exclusive filter therefore turns a real, still-open obligation into `todo_for_human:
-    []` -- silently, and in the arc's own CLOSURE record. That is strictly worse than naming
-    a sibling lane's row: §4 already rules on this asymmetry for the skip-set (over-skipping
-    is safe; under-skipping re-loops), and the same asymmetry governs here. Over-report and
-    label; never under-report.
+    So the rule keys on what is actually KNOWN: a row whose lane is some OTHER lane's id is
+    demonstrably not this arc's and is excluded; a row that is mine, or that carries no
+    attribution at all (`-`), is kept. Unattributed rows are kept deliberately — an
+    unattributed row MIGHT be this arc's, and over-reporting a maybe beats hiding a real
+    open gate inside the record that closes the arc. Every exclusion is counted in the notes.
 
-    So every row is kept, each already carrying its own lane, and the notes say how the set
-    divides. The reader gets U-WT-03's per-arc signal without the report ever being able to
-    hide an open gate.
+    With no resolvable lane id there is no "other lane" to recognise, so everything is kept
+    and the note says the list spans lanes.
     """
     if not rows:
         return rows
@@ -676,17 +673,16 @@ def _scope_to_lane(rows: list[str], ledger_root: Path, notes: list[str]) -> list
             "every open row across lanes; each row names the lane that deferred it."
         )
         return rows
-    mine = sum(1 for r in rows if r.startswith(f"[{lane}] "))
-    others = len(rows) - mine
-    if others:
+    kept = [r for r in rows if r.startswith(f"[{lane}] ") or r.startswith("[-] ")]
+    dropped = len(rows) - len(kept)
+    if dropped:
         notes.append(
-            f"the ledger is SHARED (C-HE-09 §2): of {len(rows)} open row(s), {mine} carry "
-            f"this arc's lane ({lane}) and {others} carry another lane's or the unattributed "
-            "`-` (deferrals written without a lane id, and rows migrated from the "
-            "pre-U-HE-29 per-worktree ledgers, both land as `-`). ALL are listed — an "
-            "exclusive lane filter would silently drop this arc's own `-` rows."
+            f"the ledger is SHARED (C-HE-09 §2): {dropped} open row(s) belonging to other "
+            f"lanes were excluded from todo_for_human (this arc's lane is {lane}). They "
+            "remain open in the shared ledger and surface at the next SessionStart. "
+            "Unattributed `-` rows are KEPT — they may be this arc's own."
         )
-    return rows
+    return kept
 
 
 def identity_error(pr: int, merge_state: str | None, pr_oid: str, resolved_sha: str) -> str | None:

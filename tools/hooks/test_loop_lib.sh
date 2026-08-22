@@ -542,6 +542,54 @@ chmod 0644 "$(loop_status_path)"
 [ "$RC" -ne 0 ] && ok "a failed resolve does not match the identical historical row" || bad "stale row produced a false 'resolved'"
 [ "$(loop_skip_set)" = "R-555" ] && ok "the re-deferred item stays pending after the failed resolve" || bad "item wrongly cleared: [$(loop_skip_set)]"
 
+# 32) codex r4/r5 P2 — the lane must come from the PERSISTED marker when the env var is
+#     unset. defer.sh and the ordinary hooks never export HARNESS_LANE_ID, so without this
+#     every row they write lands unattributed even in a worktree that has had a lane id on
+#     disk all along — losing the §3 attribution the arc-exit report reads.
+mkdir -p "$REPO/.harness"; printf 'L-persisted\n' > "$REPO/.harness/.lane-id"
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+( unset HARNESS_LANE_ID; loop_log DEFERRED-HIL "B-15 — no env lane" )
+[[ "$(loop_pending_hil_list)" == '[L-persisted] B-15 — no env lane' ]] \
+  && ok "the persisted .lane-id attributes a row when the env var is unset" || bad "lane fallback: [$(loop_pending_hil_list)]"
+# the env var still wins when both are present
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+HARNESS_LANE_ID=L-env loop_log DEFERRED-HIL "B-16 — env wins"
+[[ "$(loop_pending_hil_list)" == '[L-env] B-16 — env wins' ]] && ok "HARNESS_LANE_ID wins over the persisted marker" || bad "env precedence: [$(loop_pending_hil_list)]"
+rm -f "$REPO/.harness/.lane-id"
+
+# 33) codex r5 P2 — the migration CLAIMS a legacy ledger by rename before reading it. Reading
+#     first left a window where a still-running pre-U-HE-29 writer's new deferral was carried
+#     into the archive without ever reaching the shared venue, and later passes look only at
+#     the original filename — so it would never be seen again.
+MIG3="$REPO/mig3"; rm -rf "$MIG3"; mkdir -p "$MIG3"
+( cd "$MIG3" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m3wt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIG3/wt1/.harness"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-301 — claimed gate |\n' > "$MIG3/wt1/.harness/loop_status.md"
+MIG3V="$MIG3/shared/loop_status.md"
+MBODY=$(declare -f loop_status_migrate)
+printf '%s' "$MBODY" | grep -q 'migrating-' && ok "the migration claims by rename before reading" || bad "no claim-before-read rename"
+( cd "$MIG3" && CLAUDE_PROJECT_DIR="$MIG3" HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_status_migrate ) >/dev/null 2>&1
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_skip_set)" = "B-301" ] && ok "the claimed ledger's gate reaches the shared venue" || bad "claimed gate lost"
+[ -z "$(find "$MIG3/wt1/.harness" -name '*.migrating-*' 2>/dev/null)" ] && ok "no claim file is left behind on success" || bad "claim file leaked"
+
+# 34) codex r5 P2 — a retry must not RE-OPEN a gate the operator resolved between passes.
+#     A legacy ledger that reappears with the same item, after the operator answered the
+#     imported row, must not be re-imported as a fresh DEFERRED-HIL.
+HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_resolve B-301 "operator answered it after the import" >/dev/null
+[ -z "$(HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_skip_set)" ] && ok "the imported gate is resolvable" || bad "could not resolve the imported gate"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-301 — the same legacy row, seen again |\n' > "$MIG3/wt1/.harness/loop_status.md"
+( cd "$MIG3" && CLAUDE_PROJECT_DIR="$MIG3" HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_status_migrate ) >/dev/null 2>&1
+[ -z "$(HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_skip_set)" ] \
+  && ok "a re-seen legacy row does not reopen a RESOLVED gate" || bad "retry reopened a resolved gate: [$(HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_skip_set)]"
+
+# 35) codex r5 P2 — the cutover residue must be gitignored, or hook_worktree_local_state
+#     treats it as precious untracked state and the worktree GC refuses disposition forever.
+IGN=$(cd "$SCRIPT_DIR/../.." && cat .gitignore)
+printf '%s' "$IGN" | grep -q 'loop_status\.md\.migrated-\*' && ok "the .migrated- archive is gitignored" || bad "archive residue not ignored"
+printf '%s' "$IGN" | grep -q 'loop_status\.md\.migrating-\*' && ok "the .migrating- claim is gitignored" || bad "claim residue not ignored"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

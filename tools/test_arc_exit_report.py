@@ -1121,17 +1121,15 @@ def test_u_he_29_worktree_read_reaches_the_shared_venue_with_lane_attribution(
     assert "every open row across lanes" in body, "an unfiltered list must SAY it is unfiltered"
 
 
-def test_u_he_29_todo_for_human_annotates_lanes_but_never_drops_a_row(
+def test_u_he_29_todo_for_human_excludes_known_foreign_lanes_only(
     worktree_pair, gstack, monkeypatch, shared_ledger
 ):
-    """The shared venue is reported in full, with the lane split STATED — never filtered.
+    """A row whose lane is demonstrably some OTHER lane's is not this arc's — exclude it.
 
-    An earlier cut of this arc filtered `todo_for_human` to the invoking lane, honouring
-    U-WT-03's per-arc wording. That was wrong in the dangerous direction: `defer.sh` (the
-    canonical deferral wrapper) sets no lane, migrated legacy rows carry `-`, and the writer
-    sanitizes the id — so an exclusive filter turns this arc's OWN open gate into `[]`,
-    silently, inside its closure record. Naming a sibling's row is a mild over-report;
-    hiding your own gate is the failure this ledger exists to prevent."""
+    The rule keys on what is KNOWN. Keeping everything put sibling obligations in this PR's
+    closure record; dropping everything whose lane != mine deleted this arc's own
+    unattributed rows. Excluding only the demonstrably-foreign lanes honours U-WT-03 without
+    ever hiding a row that might be this arc's (see the sibling test for the `-` case)."""
     main, wt = worktree_pair
     write_ledger(shared_ledger, "R-501 — needs a vendor pick", lane="L1")
     write_ledger(shared_ledger, "R-999 — a sibling lane's item", lane="L2")
@@ -1146,12 +1144,12 @@ def test_u_he_29_todo_for_human_annotates_lanes_but_never_drops_a_row(
 
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")
     assert yaml.safe_load(yaml_block(body))["todo_for_human"] == [
-        "[L1] R-501 — needs a vendor pick",
-        "[L2] R-999 — a sibling lane's item",
-        "[L3] R-888 — a third lane's item",
-    ], "every open row is kept; an exclusive filter would drop this arc's own `-` rows"
-    assert "1 carry this arc's lane (L1)" in body, "the split must be stated"
-    assert "2 carry another lane's" in body
+        "[L1] R-501 — needs a vendor pick"
+    ], "rows demonstrably belonging to another lane are excluded"
+    assert "2 open row(s) belonging to other lanes were excluded" in body, (
+        "excluded rows must be COUNTED, never silently dropped"
+    )
+    assert "this arc's lane is L1" in body
 
 
 def test_u_he_29_lane_id_falls_back_to_the_environment(tmp_path, monkeypatch):
@@ -1176,8 +1174,11 @@ def test_u_he_29_lane_annotation_never_drops_an_unattributed_row(tmp_path):
     (root / ".harness" / ".lane-id").write_text("L1\n", encoding="utf-8")
     notes: list[str] = []
     rows = ["[-] deferred-via-defer.sh — needs creds", "[L1] mine — x", "[L2] sibling — y"]
-    assert aer._scope_to_lane(rows, root, notes) == rows, "the `-` row must survive"
-    assert any("would silently drop this arc's own `-` rows" in n for n in notes)
+    assert aer._scope_to_lane(rows, root, notes) == [
+        "[-] deferred-via-defer.sh — needs creds",
+        "[L1] mine — x",
+    ], "the unattributed row must survive; only the demonstrably-foreign lane is excluded"
+    assert any("Unattributed `-` rows are KEPT" in n for n in notes)
 
 
 def test_u_he_29_lane_annotation_with_no_resolvable_lane(tmp_path):
