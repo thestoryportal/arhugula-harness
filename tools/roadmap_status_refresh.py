@@ -935,10 +935,16 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
         if not (m and int(m.group(1)) == post_pr):
             return  # another arc's authoring — always left alone
         body = rest.strip()
-        # r7 P2: the proof must live in the LIVE pointer paragraph — the same text
-        # in a notes cell or archive line is not pointer installation.
+        # r7 P2 + r8 P2: the proof is EQUALITY with the LIVE pointer body — substring
+        # membership would retire a corrected draft that happens to be contained in
+        # the stale installed pointer (or in a notes cell).
         live = _CURRENT_PARAGRAPH_RE.search(represented_in) if represented_in else None
-        if live is not None and body and body in live.group(0):
+        live_body = (
+            re.sub(r"^\*\*Current next action \(post-#[^)]*\)\.\*\*\s*", "", live.group(0)).strip()
+            if live is not None
+            else None
+        )
+        if body and live_body == body:
             NEXT_ACTION_DRAFT.unlink()
         else:
             print(
@@ -992,7 +998,11 @@ def emit_refresh_pr(
     IDEMPOTENT by branch name (plan Codex round-4 P1): a crash between `gh pr create` and
     the door's sidecar publish must not orphan/duplicate the refresh. If the branch
     already has an open PR, return it; if the branch was pushed but no PR exists, create
-    the PR on it; only otherwise create the branch.
+    the PR on it; only otherwise create the branch. NOTE (r8): after such a crash the
+    door deliberately blocks on `refresh_intent_unresolved` (U-HE-23 codex r1 P2 — a
+    blind re-call could mint a second PR); this idempotency is what makes BOTH documented
+    recoveries converge — `record-refresh` records the pair, and `clear-refresh-intent`
+    + re-land re-enters here and resumes the existing branch/PR instead of duplicating.
 
     As-built correction vs the plan-time sketch (recorded in the U-HE-28 rev note): the
     fresh path branches from the JUST-MERGED `origin/main` tip (fetch first), and runs
@@ -1073,7 +1083,19 @@ def emit_refresh_pr(
                 "commit's content stands); land a follow-up pointer via the next "
                 "arc's draft if it matters"
             )
-        url = sh("gh", "pr", "create", "--head", branch, "--title", title, "--body", recovery_body)
+        url = sh(
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            recovery_body,
+        )
         # the branch is checked out here, but verify against the PUSHED content the
         # same way as the sibling path (r6 P2)
         _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch))
@@ -1141,7 +1163,7 @@ def emit_refresh_pr(
     sh("git", "commit", "-m", title)
     sh("git", "push", "-u", "origin", branch)
     pr_body = body if draft_warning is None else f"{body}\n\n{draft_warning}"
-    url = sh("gh", "pr", "create", "--title", title, "--body", pr_body)
+    url = sh("gh", "pr", "create", "--base", "main", "--title", title, "--body", pr_body)
     # only a draft whose body was ADOPTED into this refresh is represented by
     # construction — retire it now that the branch + PR are durable (r3 P2). An
     # overridden (explicit --next-action) or mismatched draft is unrepresented

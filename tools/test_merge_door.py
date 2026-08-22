@@ -1208,8 +1208,9 @@ def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
     )
     assert (2, "s" * 40) in g.merge_calls  # merged the CORRECTED head
     assert (2, "r" * 40) not in g.merge_calls
-    # r5 P2: the record replacement is atomic (os.replace) — no tmp residue on disk
-    assert not list(md.DOOR.glob("*.tmp.*"))
+    # r5 P2 (glob fixed r8 P3 — the replacement tmp is named *.adopt.<hex>): the
+    # record swap is atomic; no adoption-tmp residue survives on disk
+    assert not list(md.DOOR.glob("*.adopt.*"))
 
 
 def test_resume_refuses_moved_head_that_lost_refresh_identity(door, monkeypatch):
@@ -1934,11 +1935,13 @@ def test_ambiguous_refresh_attempt_blocks_even_without_main_attempt(door, monkey
     g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
 
     def refresh():
-        pr, head = FakeGround.add_refresh_pr(g)
-        g.states[pr].update(state="CLOSED")  # attempt lands in an unreconcilable state
-        return pr, head
+        return FakeGround.add_refresh_pr(g)
 
     def merge_fail(pr, head, timeout):
+        # the external CLOSED transition lands DURING the attempt (r8 revalidation
+        # correctly rejects an already-CLOSED PR pre-attempt, which would be a clean
+        # pre-attempt release — not this test's ambiguous-attempt subject)
+        g.states[pr].update(state="CLOSED")
         raise subprocess.TimeoutExpired(cmd="gh", timeout=timeout)
 
     g.gh_merge = merge_fail
@@ -2115,6 +2118,7 @@ def test_ac2_c_refresh_crash_resume(door, tmp_path, monkeypatch):
                 "mergedAt": None,
                 "mergeCommit": None,
                 "title": "ops: roadmap status refresh post-#1",
+                "baseRefName": "main",
                 "files": [{"path": ".harness/roadmap_status.md"}],
             }
         )

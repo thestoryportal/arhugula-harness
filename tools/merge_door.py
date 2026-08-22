@@ -1417,6 +1417,30 @@ def land(
                         f"`just merge-door-unblock {rpr} {rhead}`",
                     )
                     raise DoorBlocked(pstatus)
+                # r8 P2: the wait above is bounded at 45 min — re-validate the FULL
+                # identity immediately before driving the merge (mirror of the §4(ii)
+                # re-confirm for the content PR): a retarget/title/file mutation during
+                # the wait must fail the door, and a moved head must not be merged
+                # against a stale --match-head-commit.
+                rv2 = ground.gh_view(rpr)
+                rfiles2 = [f.get("path") for f in (rv2.get("files") or [])]
+                title2 = str(rv2.get("title") or "")
+                bound2 = f"{REFRESH_TITLE_PREFIX}post-#{pr}"
+                if (
+                    rv2.get("state") != "OPEN"
+                    or rv2.get("headRefOid") != rhead
+                    or rv2.get("baseRefName") != "main"
+                    or not (
+                        title2 == bound2
+                        or (title2.startswith(bound2) and not title2[len(bound2) :][:1].isdigit())
+                    )
+                    or rfiles2 != [REFRESH_ONLY_FILE]
+                ):
+                    raise DoorFailed(
+                        f"refresh pr #{rpr} identity changed during the checks wait "
+                        f"(state {rv2.get('state')!r}, head {str(rv2.get('headRefOid'))[:12]}, "
+                        f"base {rv2.get('baseRefName')!r}, title {title2[:40]!r})"
+                    )
                 reconciled = (
                     _merge_once(lease, rpr, rhead, ground, suffix="refresh", budget=refresh_budget)
                     or reconciled

@@ -1405,7 +1405,7 @@ def test_emit_refresh_pr_push_failure_keeps_draft(monkeypatch, tmp_path):
     monkeypatch.setattr(rsr, "main", lambda argv: 0)
     draft = tmp_path / "draft"
     monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
-    draft.write_text("post-pr: 55\npointer body\n")
+    draft.write_text("post-pr: 55\npointer body here.\n")
     calls: list[list[str]] = []
     run = _scripted_run(
         [
@@ -1427,7 +1427,7 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
     monkeypatch.setattr(rsr, "main", lambda argv: 0)
     draft = tmp_path / "draft"
     monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
-    draft.write_text("post-pr: 55\npointer body\n")
+    draft.write_text("post-pr: 55\npointer body here.\n")
     calls: list[list[str]] = []
     run = _scripted_run(
         [
@@ -1435,10 +1435,10 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
                 ("gh", "pr", "list"),
                 _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
             ),
-            # represented IN THE LIVE POINTER PARAGRAPH (r7 P2) -> retire
+            # live pointer body EQUALS the draft body (r8 P2) -> retire
             (
                 ("git", "show"),
-                _P(stdout="**Current next action (post-#55).** pointer body here.\\n"),
+                _P(stdout="**Current next action (post-#55).** pointer body here."),
             ),
         ],
         calls,
