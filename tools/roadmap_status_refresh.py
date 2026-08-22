@@ -1140,13 +1140,16 @@ def emit_refresh_pr(
             f"(ls-remote exit {probe.returncode}): {probe.stderr.strip()}"
         )
     if probe.returncode == 0:
-        sh("git", "fetch", "-q", "origin", branch)
+        # r16 P1: fetch with EXPLICIT refspecs — a bare `git fetch origin <name>`
+        # updates FETCH_HEAD but does not guarantee the remote-tracking ref this
+        # code reads next advances.
+        sh("git", "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
         # r12 P2 provenance: the genuine crash-recovery branch is exactly ONE commit
         # whose first parent is the just-merged main tip. A pre-pushed same-name
         # branch of any other shape must never be wrapped in the trusted refresh PR.
         # r13 P2: resolve via the remote-tracking refs — FETCH_HEAD is clobbered by
         # the second fetch, which made every genuine recovery fail this check.
-        sh("git", "fetch", "-q", "origin", "main")
+        sh("git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
         parent = sh("git", "rev-parse", f"origin/{branch}^")
         main_tip = sh("git", "rev-parse", "origin/main")
         if parent != main_tip:
@@ -1194,7 +1197,9 @@ def emit_refresh_pr(
             "head_sha": sh("git", "rev-parse", "HEAD"),
         }
     # Fresh path: branch from the just-merged main tip (see docstring), then refresh.
-    sh("git", "fetch", "-q", "origin", "main")
+    # r16 P1: explicit refspec — the checkout below reads the TRACKING ref, which a
+    # bare `git fetch origin main` does not guarantee to advance.
+    sh("git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
     sh("git", "checkout", "-q", "-B", branch, "origin/main")
     draft_warning = None
     draft_used = False

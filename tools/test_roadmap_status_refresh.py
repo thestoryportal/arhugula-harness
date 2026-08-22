@@ -1252,7 +1252,7 @@ def test_emit_refresh_pr_fresh_path_branches_from_main_then_refreshes():
     assert out == {"pr": 88, "head_sha": "cafebabe"}
     checkout = ["git", "checkout", "-q", "-B", "roadmap-refresh-post-55", "origin/main"]
     assert checkout in calls
-    assert ["git", "fetch", "-q", "origin", "main"] in calls
+    assert ["git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"] in calls
     create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
     assert create[3:5] == ["--base", "main"]  # r10 P1 pin, r11 P3 witness
     assert seen["refresh_at_call_index"] >= calls.index(checkout) + 1
