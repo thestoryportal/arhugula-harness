@@ -285,15 +285,28 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with EVIDENCE_LOG.open("a") as f:
         f.write(f"\n## main-protection apply {stamp}\n```\n{diff_report(cur, desired)}\n```\n")
-    r = subprocess.run(
-        ["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
-        input=json.dumps(desired),
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    if r.returncode != 0:
-        raise SystemExit(f"apply failed: {r.stderr.strip()}")
+    try:
+        r = subprocess.run(
+            ["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
+            input=json.dumps(desired),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if r.returncode != 0:
+            raise SystemExit(f"apply failed: {r.stderr.strip()}")
+    except subprocess.TimeoutExpired:
+        # GitHub can accept the mutation before the client times out — reconcile against
+        # the observed live state instead of exiting with the lock released and a possibly
+        # half-applied fence (codex r8 P1).
+        live = current_protection()
+        if live is not None and not verify(live, desired):
+            print("provisional PUT timed out client-side but LANDED on GitHub; continuing")
+        else:
+            raise SystemExit(
+                "provisional PUT timed out and did not land (live state unchanged) — "
+                "nothing to roll back; re-run `just main-protection-apply`"
+            ) from None
     # C-HE-08 §4: the settings are exercised BEFORE they are allowed to persist. The
     # tiebreaker needs strict:true live to be meaningful, so apply is provisional: a FAIL
     # rolls back to the pre-change state (Codex round-3 P1).
@@ -366,6 +379,17 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
             "tiebreaker FAILED → prior protection restored (PUT); new settings NOT persisted"
         )
     print("tiebreaker PASS; protection persists. Run `just main-protection-verify`.")
+    return 0
+
+
+def _rollback_delete() -> int:
+    """DELETE + read-back validation: an authorization/network failure must not print
+    success while protection remains live (codex r4 P2)."""
+    r = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
+    if r.returncode != 0 or current_protection() is not None:
+        print(f"rollback FAILED — protection is still live ({r.stderr.strip()[:200]})")
+        return 1
+    print("rolled back and verified unprotected (pre-change show is in the evidence log)")
     return 0
 
 
@@ -452,14 +476,33 @@ def main(argv: list[str] | None = None) -> int:
             # The guard cannot inspect the `gh api -X DELETE` this helper spawns — the
             # refusal must live here, like apply's and tiebreaker's (codex r5 P1).
             raise SystemExit("rollback refuses to run in loop mode (operator-gated)")
-        r = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
-        # Validate like the auto-rollback path does: an authorization/network failure must
-        # not print success while protection remains live (codex r4 P2).
-        if r.returncode != 0 or current_protection() is not None:
-            print(f"rollback FAILED — protection is still live ({r.stderr.strip()[:200]})")
-            return 1
-        print("rolled back and verified unprotected (pre-change show is in the evidence log)")
-        return 0
+        # Serialized + CAS-guarded like the auto-rollback (codex r8 P2): never interleave
+        # with an in-flight apply-confirm, and never delete a policy this tool did not put
+        # there (a concurrently strengthened administrator policy stays untouched).
+        lock = _apply_lock_path()
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise SystemExit(
+                f"an apply-confirm appears to be in flight ({lock} exists) — wait for it, "
+                "or remove the lockfile if its process is dead"
+            ) from None
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        try:
+            live = current_protection()
+            if live is None:
+                print("main is already unprotected — nothing to roll back")
+                return 0
+            if verify(live, desired):
+                raise SystemExit(
+                    "live protection does not match this tool's §2 payload — refusing to "
+                    "delete a policy this tool did not apply; use `gh api` directly if "
+                    "that is really intended"
+                )
+            return _rollback_delete()
+        finally:
+            lock.unlink(missing_ok=True)
     # tiebreaker: scratch PR under strict:true + stale-refresh-branch check (HE-1 O4; C10-T8).
     if _loop_mode():
         raise SystemExit("tiebreaker is a live probe; run outside loop mode")
@@ -675,16 +718,41 @@ def tiebreaker() -> int:
                 )
                 sh("git", "fetch", "-q", "origin")
                 first_parent = sh("git", "rev-parse", f"{oid}^1")
-                verdict, why = (
-                    ("PASS", "stale PR fast-forwarded cleanly onto the pre-merge main")
-                    if first_parent == pre
-                    else (
-                        "FAIL",
-                        f"stale PR landed off the pre-merge main "
-                        f"(merge commit {oid[:12]} first parent {first_parent[:12]} "
-                        f"!= {pre[:12]})",
-                    )
+                # Another lane may advance main between the `pre` sample and GitHub creating
+                # the squash commit — a correct landing then has a DESCENDANT of `pre` as its
+                # first parent, not `pre` itself; only an off-lineage parent is a failure
+                # (codex r8 P2).
+                on_lineage = first_parent == pre or (
+                    subprocess.run(
+                        ["git", "merge-base", "--is-ancestor", pre, first_parent],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        cwd=wt,
+                    ).returncode
+                    == 0
                 )
+                if on_lineage:
+                    # A clean fast-forward is ALSO what no-protection produces — re-verify
+                    # the fence survived the whole probe before letting this arm PASS
+                    # (codex r8 P2; the refusal arm carries its own enforcement witness).
+                    still = verify(current_protection(), desired_payload(blocking_contexts()))
+                    verdict, why = (
+                        ("PASS", "stale PR fast-forwarded cleanly onto the pre-merge lineage")
+                        if not still
+                        else (
+                            "FAIL",
+                            f"fence changed during the probe ({'; '.join(still[:3])}) — "
+                            "the fast-forward landing does not witness strict:true",
+                        )
+                    )
+                else:
+                    verdict, why = (
+                        "FAIL",
+                        f"stale PR landed off the pre-merge lineage "
+                        f"(merge commit {oid[:12]} first parent {first_parent[:12]} "
+                        f"not descended from {pre[:12]})",
+                    )
         print(f"tiebreaker: {verdict} — {why}")
         # No explicit pr2 close here: closing with --delete-branch would delete the remote
         # ref BEFORE the finally-block's documented worktree→local→remote order and re-open
@@ -705,12 +773,19 @@ def tiebreaker() -> int:
         # local state and refuse), then local refs, then remote refs. Failures are REPORTED,
         # not swallowed — silent GC failure would contradict the cleanup contract while
         # looking identical to success (codex r4 P3).
-        wtrm = subprocess.run(
+        def _gc_run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+            # A timeout in ONE cleanup step must not abort the remaining steps and bypass
+            # the failure accounting (codex r8 P2).
+            try:
+                return subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=timeout, cwd=REPO
+                )
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                return subprocess.CompletedProcess(cmd, 124, "", f"{exc!r}")
+
+        wtrm = _gc_run(
             ["bash", str(REPO / "tools" / "hooks" / "safe-worktree-remove.sh"), str(wt)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=REPO,
+            120,
         )
         if wtrm.returncode != 0:
             cleanup_failures.append(f"temporary worktree {wt} not removed")
@@ -719,13 +794,7 @@ def tiebreaker() -> int:
                 f"({wtrm.stderr.strip()[:120]})"
             )
         for local in created_local:
-            lgc = subprocess.run(
-                ["git", "branch", "-D", local],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                cwd=REPO,
-            )
+            lgc = _gc_run(["git", "branch", "-D", local], 60)
             if lgc.returncode != 0 and "not found" not in lgc.stderr:
                 cleanup_failures.append(f"local branch {local} not deleted")
                 print(
@@ -733,13 +802,7 @@ def tiebreaker() -> int:
                     f"({lgc.stderr.strip()[:120]})"
                 )
         for scratch in created:
-            gc = subprocess.run(
-                ["git", "push", "-q", "origin", "--delete", scratch],
-                capture_output=True,
-                text=True,
-                timeout=60,
-                cwd=REPO,
-            )
+            gc = _gc_run(["git", "push", "-q", "origin", "--delete", scratch], 60)
             if gc.returncode != 0 and "remote ref does not exist" not in gc.stderr:
                 cleanup_failures.append(f"remote branch origin/{scratch} (and its PR) not deleted")
                 print(
