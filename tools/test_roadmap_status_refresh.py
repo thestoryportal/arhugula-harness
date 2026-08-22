@@ -1653,4 +1653,7 @@ def test_emit_refresh_pr_refuses_symlinked_draft(monkeypatch, tmp_path):
     assert "--next-action" not in argv_seen["argv"]
     assert draft.is_symlink()  # left in place
     create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
-    assert "exfiltrated" not in create[create.index("--body") + 1]
+    body_arg = create[create.index("--body") + 1]
+    assert "exfiltrated" not in body_arg
+    # r19 P2: the refusal is VISIBLE in the PR body (stderr is discarded by the door)
+    assert "symlinked next-action draft was REFUSED" in body_arg

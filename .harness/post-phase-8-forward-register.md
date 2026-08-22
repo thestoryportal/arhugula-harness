@@ -2269,3 +2269,11 @@ same spec leg.
 - **Close-out steps.** (1) If the U-HE-28 merge-gate spec-conformance lens ALSO blocks on this (decorrelated agreement), flip to fail-closed in a follow-up arc and document the blocked-door recovery; (2) otherwise hold the self-healing posture with the dissent recorded here; (3) derivation is unaffected either way (terminal-head dedup).
 
 - **Council.** NO — two-option policy fork with a decorrelated arbiter already scheduled (the 3-lens merge gate).
+
+### B-193 · C-HE-06 §4(viii) converging recovery for a BEHIND refresh + the mid-landing-correction intent chain *(surfaced by out-of-family Codex r18/r19 against U-HE-28, 2026-08-22; register-and-held after an absorb-revert cycle)*
+
+- **Finding.** (a) If main advances during the refresh checks wait (an out-of-band human merge while the door holds the global lease), the refresh PR is BEHIND under strict protection: merges are refused, the door blocks, and no verb converges the recovery — the refresh record survives unblock and pins the old pair, `record-refresh` refuses an existing record, and the r18 baseRefOid pin WEDGED (every valid re-mint carries the NEW tip; reverted r19). (b) The r17 mid-landing-correction refusal exits after PR creation with an unresolved intent; `record-refresh` can attach the stale PR and a resumed land performs no draft-representation check.
+
+- **Close-out steps.** (1) Design a record-clearing/re-mint verb (operator-gated) so the BEHIND class converges without hand-editing door state; (2) decide whether record-refresh should consult the draft channel (the operator running the verb holds the correction context — possibly the right answer as-is); (3) fold into the B-192 posture decision.
+
+- **Council.** NO — single-mechanism recovery design; the U-HE-28 merge-gate concurrency lens is the scheduled decorrelated check.

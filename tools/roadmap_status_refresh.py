@@ -933,7 +933,7 @@ def _read_draft_nofollow() -> str | None:
                 f"{NEXT_ACTION_DRAFT} (containment)",
                 file=sys.stderr,
             )
-            return None
+            return "SYMLINK_REFUSED"  # sentinel: surfaced in the PR body (r19 P2)
         # r18 P2: a draft that EXISTS but cannot be read (PermissionError, EIO)
         # must not silently land a stale pointer — fail loud, no JSON, door blocks.
         raise SystemExit(
@@ -954,7 +954,7 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> str:
     """
     try:
         raw = _read_draft_nofollow()
-        if raw is None:
+        if raw is None or raw == "SYMLINK_REFUSED":
             return "absent"
         first, _, rest = raw.partition("\n")
         m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
@@ -1225,6 +1225,13 @@ def emit_refresh_pr(
     draft_warning = None
     draft_used = False
     draft_raw = _read_draft_nofollow() if next_action is None else None
+    if draft_raw == "SYMLINK_REFUSED":
+        # r19 P2: stderr is discarded by the door on success — the refusal must be
+        # visible where the operator reads (the PR body), never silent.
+        draft_warning = (
+            "WARNING: a symlinked next-action draft was REFUSED (containment); pointer left as-is"
+        )
+        draft_raw = None
     if next_action is None and draft_raw is not None:
         # §12.2 pointer re-derivation through the door (codex r2 P2): consume the
         # ship-pr-authored draft iff it names THIS landing; a stale draft from an
