@@ -130,6 +130,32 @@ def test_verify_flags_app_bound_checks_against_anyapp_target():
     assert mp.verify(cur, d) == []
 
 
+def test_verify_flags_live_optional_controls_against_omitting_target():
+    """Differential witness for the _OPTIONAL_CONTROLS always-compare loop (codex r3 P2;
+    merge-gate witness lens, PR #1418): a target that OMITS an optional control pins it to
+    False, so a live-enabled lock_branch/block_creations/required_conversation_resolution/
+    allow_fork_syncing must each flag a mismatch — deleting the loop (or weakening its
+    default to True) turns this red."""
+    d = mp.desired_payload(["a — blocking"])  # omits every optional control
+    base = {
+        "required_status_checks": {"strict": True, "contexts": ["a — blocking"]},
+        "enforce_admins": {"enabled": True},
+        "required_pull_request_reviews": None,
+        "allow_force_pushes": {"enabled": False},
+        "allow_deletions": {"enabled": False},
+        "required_linear_history": {"enabled": False},
+    }
+    assert mp.verify(base, d) == []
+    for control in mp._OPTIONAL_CONTROLS:
+        cur = dict(base)
+        cur[control] = {"enabled": True}
+        mismatches = mp.verify(cur, d)
+        assert any(control in m for m in mismatches), (control, mismatches)
+        # And the live-absent / live-False readings stay clean (no false positive).
+        cur[control] = {"enabled": False}
+        assert mp.verify(cur, d) == []
+
+
 def test_prr_put_payload_preserves_strengthening_fields():
     """Rollback must never restore a WEAKER review policy than captured (codex r1 P2):
     require_last_push_approval / dismissal_restrictions / bypass allowances survive the
