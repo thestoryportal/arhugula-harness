@@ -358,29 +358,22 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(
                 "apply refuses to run in loop mode (operator-gated; CLAUDE.md §12.4.1)"
             )
-        cur = current_protection()
-        digest = _approval_digest(cur, desired)
-        print(diff_report(cur, desired))
         if not a.confirm:
+            cur = current_protection()
+            digest = _approval_digest(cur, desired)
+            print(diff_report(cur, desired))
             print(
                 f"\nDRY RUN — nothing changed. approval digest: {digest}\n"
                 "After the operator approves THIS diff, run "
                 f"`just main-protection-apply-confirm {digest}`."
             )
             return 3
-        # The confirmation is bound to the exact BEFORE/AFTER pair the operator approved:
-        # if the live protection or the ci.yml-derived payload changed between the dry run
-        # and this confirm, the digest differs and NOTHING is mutated (codex r2 P1).
-        if a.approved_digest != digest:
-            raise SystemExit(
-                "approval digest mismatch: the live protection or the ci.yml-derived payload "
-                f"changed since the approved diff (approved={a.approved_digest or '<none>'}, "
-                f"current={digest}) — re-run `just main-protection-apply` and re-approve"
-            )
         # The mutation transaction is serialized by an exclusive-create lockfile: without it,
         # two confirms could both capture the same pre-state and the FAILING one's rollback
-        # would tear down the SUCCEEDING one's protection (codex r4 P1). Same-host scope is
-        # the real cardinality — the recipe is operator-gated and runs on this machine.
+        # would tear down the SUCCEEDING one's protection (codex r4 P1). The lock is taken
+        # BEFORE the pre-state read + digest validation — reading first would let a confirm
+        # that waited out another's lock proceed on a stale capture (codex r5 P1). Same-host
+        # scope is the real cardinality — the recipe is operator-gated on this machine.
         try:
             fd = os.open(_APPLY_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
@@ -391,10 +384,27 @@ def main(argv: list[str] | None = None) -> int:
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
         try:
+            cur = current_protection()
+            digest = _approval_digest(cur, desired)
+            print(diff_report(cur, desired))
+            # The confirmation is bound to the exact BEFORE/AFTER pair the operator
+            # approved: if the live protection or the ci.yml-derived payload changed since
+            # the dry run, the digest differs and NOTHING is mutated (codex r2 P1).
+            if a.approved_digest != digest:
+                raise SystemExit(
+                    "approval digest mismatch: the live protection or the ci.yml-derived "
+                    f"payload changed since the approved diff "
+                    f"(approved={a.approved_digest or '<none>'}, current={digest}) — "
+                    "re-run `just main-protection-apply` and re-approve"
+                )
             return _confirmed_apply(cur, desired)
         finally:
             _APPLY_LOCK.unlink(missing_ok=True)
     if a.cmd == "rollback":
+        if _loop_mode():
+            # The guard cannot inspect the `gh api -X DELETE` this helper spawns — the
+            # refusal must live here, like apply's and tiebreaker's (codex r5 P1).
+            raise SystemExit("rollback refuses to run in loop mode (operator-gated)")
         r = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
         # Validate like the auto-rollback path does: an authorization/network failure must
         # not print success while protection remains live (codex r4 P2).
@@ -466,6 +476,7 @@ def tiebreaker() -> int:
     br2 = f"mp-tiebreaker-stale-{ts}"
     wt = Path(tempfile.mkdtemp(prefix="mp-tiebreaker-"))
     created: list[str] = []  # only branches THIS invocation pushed are GC'd (codex r3 P2)
+    created_local: list[str] = []  # local refs are repo-global; GC'd after worktree removal
 
     def sh(*c: str, cwd: Path | None = None) -> str:
         q = subprocess.run(list(c), capture_output=True, text=True, timeout=180, cwd=cwd or wt)
@@ -473,11 +484,40 @@ def tiebreaker() -> int:
             raise SystemExit(f"{' '.join(c)}: {q.stderr.strip()}")
         return q.stdout.strip()
 
+    def merge_attempt(prno: str, head: str) -> tuple[bool, str]:
+        """(merged, stderr) — RECONCILED against authoritative PR state: `gh pr merge` can
+        time out or error AFTER GitHub lands the merge, and treating that as a refusal
+        would roll a persisted protection back over an already-advanced main (codex r5 P1).
+        """
+        err = ""
+        try:
+            mm = subprocess.run(
+                ["gh", "pr", "merge", prno, "--squash", "--match-head-commit", head],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=wt,
+            )
+            err = mm.stderr.strip()
+            if mm.returncode == 0:
+                return True, err
+        except subprocess.TimeoutExpired:
+            err = "gh pr merge timed out"
+        st = subprocess.run(
+            ["gh", "pr", "view", prno, "--json", "state", "--jq", ".state"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=wt,
+        )
+        return (st.returncode == 0 and st.stdout.strip() == "MERGED"), err
+
     sh("git", "fetch", "-q", "origin", cwd=REPO)
     sh("git", "worktree", "add", "-q", "--detach", str(wt), "origin/main", cwd=REPO)
     try:
         base = sh("git", "rev-parse", "origin/main")
         sh("git", "checkout", "-q", "-b", br)
+        created_local.append(br)
         sh("git", "commit", "-q", "--allow-empty", "-m", f"chore: main-protection tiebreaker {ts}")
         sh("git", "push", "-q", "-u", "origin", br)
         created.append(br)
@@ -489,25 +529,20 @@ def tiebreaker() -> int:
             f"chore: main-protection tiebreaker {ts}",
             "--body",
             "scratch PR; C-HE-08 §4",
+            "--base",
+            "main",
         )
         pr = url.rsplit("/", 1)[-1]
         print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
         sh("gh", "pr", "checks", pr, "--watch")
         head = sh("git", "rev-parse", "HEAD")
-        m = subprocess.run(
-            ["gh", "pr", "merge", pr, "--squash", "--match-head-commit", head],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=wt,
-        )
-        if m.returncode != 0:
-            print(
-                f"precondition failed: scratch merge refused under strict:true ({m.stderr.strip()})"
-            )
+        merged, merr = merge_attempt(pr, head)
+        if not merged:
+            print(f"precondition failed: scratch merge refused under strict:true ({merr})")
             return 1
         # The load-bearing parameter: a refresh-shaped PR branched from the since-superseded main.
         sh("git", "checkout", "-q", "-b", br2, base)
+        created_local.append(br2)
         sh("git", "commit", "-q", "--allow-empty", "-m", "ops: stale refresh-shaped commit")
         sh("git", "push", "-q", "-u", "origin", br2)
         created.append(br2)
@@ -519,6 +554,8 @@ def tiebreaker() -> int:
             f"chore: stale-base tiebreaker {ts}",
             "--body",
             "C-HE-08 §4 stale-branch check",
+            "--base",
+            "main",
         )
         pr2 = url2.rsplit("/", 1)[-1]
         # BLOCKED is ambiguous straight after creation — pending or failing required checks
@@ -549,15 +586,8 @@ def tiebreaker() -> int:
             sh("git", "fetch", "-q", "origin")
             pre = sh("git", "rev-parse", "origin/main")  # main BEFORE the stale merge
             head2 = sh("git", "rev-parse", "HEAD")
-            m2 = subprocess.run(
-                ["gh", "pr", "merge", pr2, "--squash", "--match-head-commit", head2],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                cwd=wt,
-            )
-            if m2.returncode != 0:
-                err = m2.stderr.strip()
+            merged2, err = merge_attempt(pr2, head2)
+            if not merged2:
                 kind = _classify_merge_refusal(err)
                 if kind == "strict" or (kind == "generic" and state == "BEHIND"):
                     # A generic refusal ("not mergeable") counts only when the independent
@@ -600,10 +630,39 @@ def tiebreaker() -> int:
         return 0 if verdict == "PASS" else 1
     finally:
         # External-state GC on EVERY exit path — a failed probe must not leave scratch PRs
-        # open or remote branches behind (codex r1 P3): deleting a remote branch auto-closes
-        # its open PR, and an already-deleted/merged branch makes this a no-op. Failures are
-        # REPORTED, not swallowed — silent GC failure would contradict the cleanup contract
-        # while looking identical to success (codex r4 P3).
+        # open, remote branches, local refs, or the temporary worktree behind (codex r1 P3):
+        # deleting a remote branch auto-closes its open PR, and an already-deleted/merged
+        # branch makes this a no-op. ORDER MATTERS (codex r5 P2): the worktree is removed
+        # FIRST (it holds a checkout of a scratch branch and its -u upstream config; remote
+        # refs deleted first would make the remover classify that upstream as unresolvable
+        # local state and refuse), then local refs, then remote refs. Failures are REPORTED,
+        # not swallowed — silent GC failure would contradict the cleanup contract while
+        # looking identical to success (codex r4 P3).
+        wtrm = subprocess.run(
+            ["bash", str(REPO / "tools" / "hooks" / "safe-worktree-remove.sh"), str(wt)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=REPO,
+        )
+        if wtrm.returncode != 0:
+            print(
+                f"WARNING: cleanup incomplete — temporary worktree {wt} was not removed "
+                f"({wtrm.stderr.strip()[:120]})"
+            )
+        for local in created_local:
+            lgc = subprocess.run(
+                ["git", "branch", "-D", local],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=REPO,
+            )
+            if lgc.returncode != 0 and "not found" not in lgc.stderr:
+                print(
+                    f"WARNING: cleanup incomplete — local branch {local} was not deleted "
+                    f"({lgc.stderr.strip()[:120]})"
+                )
         for scratch in created:
             gc = subprocess.run(
                 ["git", "push", "-q", "origin", "--delete", scratch],
@@ -617,18 +676,6 @@ def tiebreaker() -> int:
                     f"WARNING: cleanup incomplete — could not delete origin/{scratch} "
                     f"({gc.stderr.strip()[:120]}); delete it (and its PR) by hand"
                 )
-        wtrm = subprocess.run(
-            ["bash", str(REPO / "tools" / "hooks" / "safe-worktree-remove.sh"), str(wt)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=REPO,
-        )
-        if wtrm.returncode != 0:
-            print(
-                f"WARNING: cleanup incomplete — temporary worktree {wt} was not removed "
-                f"({wtrm.stderr.strip()[:120]})"
-            )
 
 
 if __name__ == "__main__":
