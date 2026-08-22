@@ -295,7 +295,7 @@ main-protection-tiebreaker:
 # C-HE-06 §6: clear a `blocked` merge-door lease -- operator-confirmed reclaim through the marker CAS,
 # keyed to the blocked SHA. There is NO raw-unlink recipe by design.
 merge-door-unblock pr sha:
-    uv run python tools/merge_door.py unblock {{pr}} {{sha}} --lane-id "$HARNESS_LANE_ID"
+    uv run python tools/merge_door.py unblock {{pr}} {{sha}} --lane-id "${HARNESS_LANE_ID:?HARNESS_LANE_ID must be set (lane-init) -- an empty lane would mint an unresumable successor lease}"
 merge-door-status:
     uv run python tools/merge_door.py status
 

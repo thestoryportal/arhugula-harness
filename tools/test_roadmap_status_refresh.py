@@ -1293,3 +1293,38 @@ def test_cli_dispatch_emit_refresh_pr_json(monkeypatch, capsys):
     rc = rsr.main(["--emit-refresh-pr-json", "55"])
     assert rc == 0
     assert '"pr": 56' in capsys.readouterr().out
+
+
+def test_cli_emit_mode_stdout_is_json_only(monkeypatch, capsys):
+    """codex r1 P1: merge_door json-parses the ENTIRE captured stdout of this mode.
+    Nested progress prints (the in-process --refresh, anything else) must land on
+    stderr; real stdout carries exactly the one JSON line."""
+
+    def noisy_emit(n, **kw):
+        print("refreshed .harness/roadmap_status.md: hash=abc")  # nested progress line
+        return {"pr": n, "head_sha": "aa"}
+
+    monkeypatch.setattr(rsr, "emit_refresh_pr", noisy_emit)
+    rc = rsr.main(["--emit-refresh-pr-json", "55"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    import json as _json
+
+    assert _json.loads(captured.out) == {"pr": 55, "head_sha": "aa"}
+    assert "refreshed" in captured.err
+
+
+def test_emit_refresh_pr_indeterminate_ls_remote_aborts():
+    """codex r1 P2: only ls-remote exit 2 means 'no matching ref'. Auth/transport
+    failures must abort — NOT select the fresh path and reset a pushed branch."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=128, stderr="fatal: could not read")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="could not verify remote state"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)

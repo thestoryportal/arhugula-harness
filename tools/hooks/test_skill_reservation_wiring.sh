@@ -117,6 +117,9 @@ grep -Eq '(^|[^`])gh pr merge' "$SP" \
   && bad "ship-pr still carries a raw gh pr merge instruction" || ok "no raw merge verb in ship-pr"
 grep -q 'merge-door-unblock' "$JF" \
   && ok "unblock recipe present" || bad "no unblock recipe"
+grep -q 'HARNESS_LANE_ID:?' "$JF" \
+  && ok "unblock recipe refuses an unset lane id (codex r1: empty lane mints an unresumable lease)" \
+  || bad "unblock recipe lacks the \${HARNESS_LANE_ID:?} guard"
 grep -q 'emit-refresh-pr-json' "$RSR" \
   && ok "refresh tool emits PR json" || bad "no --emit-refresh-pr-json"
 

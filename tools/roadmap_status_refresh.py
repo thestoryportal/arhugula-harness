@@ -37,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import hashlib
 import json
@@ -967,15 +968,23 @@ def emit_refresh_pr(
     if existing:
         n, head = existing.split()
         return {"pr": int(n), "head_sha": head}
-    if (
-        run(
-            ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        ).returncode
-        == 0
-    ):
+    # Remote-branch probe: `--exit-code` means exit 2 is the ONLY "no matching ref"
+    # signal; auth/transport/timeout failures use other codes (codex r1 P2 — same
+    # contract ship-pr's branch-hygiene step documents). Treating those as "absent"
+    # would reset a previously-pushed branch onto origin/main and then fail the
+    # non-fast-forward push, blocking the door instead of resuming the branch.
+    probe = run(
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if probe.returncode not in (0, 2):
+        raise SystemExit(
+            f"emit-refresh-pr: could not verify remote state of {branch} "
+            f"(ls-remote exit {probe.returncode}): {probe.stderr.strip()}"
+        )
+    if probe.returncode == 0:
         sh("git", "fetch", "-q", "origin", branch)
         sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
         url = sh("gh", "pr", "create", "--head", branch, "--title", title, "--body", body)
@@ -1135,13 +1144,19 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.emit_refresh_pr_json is not None:
-        out = emit_refresh_pr(
-            args.emit_refresh_pr_json,
-            notes=args.notes,
-            next_action=args.next_action,
-            date=args.date,
-        )
-        print(json.dumps(out))
+        # STDOUT PURITY (codex r1 P1): merge_door.py json-parses this mode's ENTIRE
+        # captured stdout, and the in-process `--refresh` re-invocation (plus anything
+        # nested) prints progress lines. Route every nested write to stderr for the
+        # whole emit; the one JSON line below is the only thing real stdout ever sees.
+        real_stdout = sys.stdout
+        with contextlib.redirect_stdout(sys.stderr):
+            out = emit_refresh_pr(
+                args.emit_refresh_pr_json,
+                notes=args.notes,
+                next_action=args.next_action,
+                date=args.date,
+            )
+        print(json.dumps(out), file=real_stdout)
         return 0
 
     if args.state:
