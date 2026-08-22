@@ -159,8 +159,11 @@ def verify(current: dict | None, desired: dict) -> list[str]:
             # exact-compare therefore accepts null / -1 / the GitHub Actions app id
             # (GitHub's own representation of our any-app submission) and still flags any
             # OTHER binding — an arbitrary third-party app restriction IS a different
-            # policy (fix-round r1). An app-bound RESTORED policy still gets the strict
-            # pair-compare via the `checks` branch above.
+            # policy (fix-round r1). Fix-round r2's "distinguish an explicitly
+            # Actions-bound policy from the auto-binding" is REFUTED BY MEASUREMENT:
+            # both produce byte-identical GET output, so the distinction is unobservable
+            # and this allowance is the maximally-strict OBSERVABLE compare. An app-bound
+            # RESTORED policy still gets the strict pair-compare via the `checks` branch.
             foreign = sorted(
                 c["context"]
                 for c in rsc.get("checks") or []
