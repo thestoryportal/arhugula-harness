@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `0b63840c9221` |
+| `workspace_state_hash` | `3eaf31c852eb` |
 | `last_refreshed` | 2026-08-21T00:00:00Z |
-| `git_head` | `afc15753` —  |
+| `git_head` | `fe4ea8dc` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1417).** The next implementable unit is `U-HE-27` — `tools/main_protection.py` + `just main-protection-{show,apply,rollback,tiebreaker,verify}` (C-HE-08 §2–§5; server-side X9 fence; its landing also bounds the B-190 register-and-held classes per R-20 — record that in its evidence log, and fold the merge-gate witness lens P3 (untested branch.<b>.remote resolution tier) into B-190's close-out scope); `apply` runs OUTSIDE loop mode with one operator AskUserQuestion; then U-HE-28 (`--emit-refresh-pr-json` refresh producer — flips safe-merge.sh's exit-69 pre-lease guard and its real-CLI test pin per the U-HE-25 rev note).
+**Current next action (post-#1418).** The U-HE-27 recipes are landed but the fence is NOT live: the immediate next step is the ONE operator gate — run `just main-protection-apply` OUTSIDE loop mode (diff + approval digest, mutates nothing), surface the single AskUserQuestion ("Apply branch protection to main now?"), and on approval `just main-protection-apply-confirm <digest>` (provisional apply + §4 tiebreaker + auto-rollback on FAIL), then `just main-protection-verify` GREEN with evidence appended to the plan evidence log. After (or independent of) that gate, the next implementable unit is `U-HE-28` — `just merge-door-unblock` + ship-pr merge-door steps + `tools/roadmap_status_refresh.py --emit-refresh-pr-json` (flips safe-merge.sh's exit-69 pre-lease guard and its real-CLI test pin per the U-HE-25 rev note); then U-HE-29 per the S4c order.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1418 | 2026-08-21 | S4c U-HE-27 main branch-protection recipes (squash fe4ea8dc): C-HE-08 §2-§5 — tools/main_protection.py show/apply(digest-bound dry-run+confirm, lockfile-serialized, CAS rollback)/rollback/tiebreaker(fence-liveness + exercised reconciled merges)/verify + 6 just recipes + C-HE-08 phase0/operator-gated manifest rows; 10 codex rounds (34 absorbed; r10 cap terminal B-191 register-and-held); merge-gate r1 witness BLOCK (optional-controls differential gap) fixed + mutation-probed live, r2 3x APPROVE; B-190 close-out step 2 recorded PENDING-APPLY in evidence log; as-built plan rev note (i)-(vii) + clearance marker; u-he-27 reservation full open-time lifecycle with attested merge tuple |
 | PR #1417 | 2026-08-21 | S4c U-HE-26 push-to-main client-side emit_deny predicates (squash afc15753): C-HE-08 §1 parser-based deny in the audited deny block reading the prefix-STRIPPED command (U-HE-25 rev (v) witness discharged); 10 codex rounds (r7 --repo claim refuted by measurement; r9/r10 register-and-hold: B-189 range-collapse, B-190 adversarial-config classes bounded by §2 fence per R-20); 292 guard rows green incl. hermetic-identity CI fix; combined C-HE-07/08 manifest row + shell-annotation probe targets in lanes_verify; 3-lens gate 3x APPROVE r1; as-built rev note (i)-(xiii) + clearance marker; u-he-26 reservation full open-time lifecycle with attested merge tuple |
 | PR #1416 | 2026-08-21 | S4c U-HE-25 safe-merge wrapper + guard deny-raw/allow-wrapper (squash b6f55ba0): C-HE-07 §1-§3 byte-verbatim (matcher, deny, test inversion, --admin invariant) + registered U-HE-21 exact-shape allowlist additions (reservations carrier verbs; transition --to open ONLY via token-parse; HARNESS_* bareword prefix strip; git merge-tree); safe-merge.sh pre-lease availability guard (exit 69 until U-HE-28 lands --emit-refresh-pr-json) after 3-lens gate r1 3x BLOCK traced the door-wedge; guard suite 203->229; codex r1-r5 (2 classes register-and-held: U-HE-28 owner + B-188 filed); gate r3 delta re-gate 3x APPROVE; as-built plan rev note + clearance marker; u-he-25 reservation full open-time lifecycle with attested merge tuple |
 | PR #1415 | 2026-08-21 | S4c U-HE-24 ci.yml main-push concurrency keyed by SHA (squash 6bbb61e8b): group ci-workflow-(ref==main && sha || ref) per C-HE-06 §4 verbatim, PR-event semantics unchanged, tradeoff comment inline; NEW tools/test_ci_yml_concurrency.py wired into codex-parity-check.sh; codex APPROVE r1 zero findings; LEAN gate-skip (config/tooling, no harness-*/src|tests); N>=2 landing precondition now satisfied |
 | 1414 | 2026-08-21 | S4c U-HE-23 merge-door landing driver (squash 8d89cd281): land() steps (ii)-(ix), §5 reconcile, §8 backoff + rate-limit deadline, §9 gate rows, AC#2(c) subprocess crash-resume incl. refresh half; 10-round codex chain to cap + 3-lens gate all-approve r2; B-187 filed |
-| PR #1413 | 2026-08-21 | S4c U-HE-22 on main (#1413, squash 35f3d07b): tools/merge_door.py lease primitive — fail-fast acquire (P2 holder invariant + reservation-tuple cross-check + post-publication re-validation), one-shot transition markers (closed action set), token-named sidecars (sidecars-before-LEASE crash order), reclaim/unblock with persisted-lease adjudication + terminal retraction + refresh-continuation carry, dead-marker completion with exclusive claim + adjudicate-after-rename break + ground-truth gate, symlink-hardened writers/GC, marker-before-tombstone GC ordering; spec v1.4 X4a-X4d discharge (flip-timing, merged-gate carve-out, keep-loudly, six interleavings) + ship-pr production pending→open flip; 10 codex rounds to register-and-hold terminal + merge-gate r1 2 BLOCKs fixed (pre-rename re-stamp, cross-host witnesses) r2 3x APPROVE; 36 probes PINNED coverage 0; u-he-22 reservation ran the FULL C-HE-03 lifecycle in production (pending→open at final gate→merged by ground-truth reconcile) |
 
 ---
 
