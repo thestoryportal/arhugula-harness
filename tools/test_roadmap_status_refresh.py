@@ -1568,7 +1568,11 @@ def test_cli_emit_mode_refuses_dry_run(capsys):
     """r11 P2: the emitter mutates (checkout/commit/push/PR) — --dry-run refuses."""
     rc = rsr.main(["--emit-refresh-pr-json", "55", "--dry-run"])
     assert rc == 2
-    assert "does not support --dry-run" in capsys.readouterr().err
+    assert "cannot be combined with --dry-run" in capsys.readouterr().err
+    # r18 P2: every other operation selector refuses too
+    rc = rsr.main(["--emit-refresh-pr-json", "55", "--check"])
+    assert rc == 2
+    assert "cannot be combined with --check" in capsys.readouterr().err
 
 
 def test_emit_refresh_pr_stale_label_pointer_is_not_representation(monkeypatch, tmp_path):

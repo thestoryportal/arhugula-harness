@@ -924,14 +924,22 @@ def _read_draft_nofollow() -> str | None:
     body or the committed pointer. None = absent or refused (symlink -> warned)."""
     try:
         fd = os.open(NEXT_ACTION_DRAFT, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
         if NEXT_ACTION_DRAFT.is_symlink():
             print(
                 f"emit-refresh-pr: refusing symlinked next-action draft "
                 f"{NEXT_ACTION_DRAFT} (containment)",
                 file=sys.stderr,
             )
-        return None
+            return None
+        # r18 P2: a draft that EXISTS but cannot be read (PermissionError, EIO)
+        # must not silently land a stale pointer — fail loud, no JSON, door blocks.
+        raise SystemExit(
+            f"emit-refresh-pr: next-action draft exists but is unreadable ({exc}); "
+            "fix permissions or remove it, then re-run"
+        )
     with os.fdopen(fd, "r") as f:
         return f.read()
 
@@ -1410,12 +1418,23 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.emit_refresh_pr_json is not None:
-        if args.dry_run:
-            # r11 P2: the emitter checks out branches, commits, pushes, and creates a
-            # PR — there is no side-effect-free preview. Refuse the combination.
+        conflicting = [
+            name
+            for name, on in (
+                ("--dry-run", args.dry_run),
+                ("--check", args.check),
+                ("--state", args.state),
+                ("--refresh", args.refresh),
+                ("--trim-drift-log", args.trim_drift_log),
+                ("--archive-superseded", args.archive_superseded),
+            )
+            if on
+        ]
+        if conflicting:
+            # r11/r18 P2: the emitter is a whole mutating operation of its own
+            # (checkout/commit/push/PR) — every other operation selector refuses.
             print(
-                "--emit-refresh-pr-json is a mutating mode (checkout/commit/push/PR) "
-                "and does not support --dry-run",
+                f"--emit-refresh-pr-json cannot be combined with {' '.join(conflicting)}",
                 file=sys.stderr,
             )
             return 2

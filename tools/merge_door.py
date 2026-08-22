@@ -1442,6 +1442,17 @@ def land(
                         f"(state {rv2.get('state')!r}, head {str(rv2.get('headRefOid'))[:12]}, "
                         f"base {rv2.get('baseRefName')!r}, title {title2[:40]!r})"
                     )
+                # r18 P2: base NAME equality cannot see main ADVANCING during the
+                # 45-min wait (e.g. a human UI-merge of another PR) — the refresh
+                # would be BEHIND under strict protection and both merge attempts
+                # refused, burning the budget. Pin the base SHA to OUR content
+                # merge tip and block with a clear cause instead.
+                if merge_sha and rv2.get("baseRefOid") not in (None, merge_sha):
+                    raise DoorFailed(
+                        f"main advanced during the refresh checks wait (base "
+                        f"{str(rv2.get('baseRefOid'))[:12]} != content merge "
+                        f"{merge_sha[:12]}); the refresh is BEHIND and needs re-minting"
+                    )
                 reconciled = (
                     _merge_once(lease, rpr, rhead, ground, suffix="refresh", budget=refresh_budget)
                     or reconciled

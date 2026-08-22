@@ -1324,6 +1324,25 @@ def test_refresh_identity_mutated_during_wait_blocks_without_merge(door, monkeyp
     assert md.read_lease()["state"] == "blocked"
 
 
+# mutation-probe: drop baseRefName from default_ground's gh_view --json field list
+def test_default_ground_gh_view_requests_the_adoption_gate_fields(monkeypatch):
+    """r18 P3: the fakes inject fields directly, so reverting the REAL query's field
+    list would leave the suite green while production revalidation blocks every
+    refresh. Pin the argv the real Ground sends to gh."""
+    seen = {}
+
+    def fake_gh(*args, timeout):
+        seen["args"] = args
+        return subprocess.CompletedProcess([], 0, '{"state": "OPEN"}', "")
+
+    monkeypatch.setattr(md, "_gh", fake_gh)
+    md.default_ground().gh_view(7)
+    joined = " ".join(seen["args"])
+    assert "--json" in seen["args"]
+    for field in ("baseRefName", "baseRefOid", "headRefOid", "title", "files", "state"):
+        assert field in joined, f"gh_view no longer requests {field}"
+
+
 def test_wait_for_door_backoff_numbers_and_budget(door):
     t = {"now": 0.0}
     sleeps = []
