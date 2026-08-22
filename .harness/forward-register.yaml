@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 190
+  total: 191
   open: 1
   design_substrate_gated: 3
-  registered_finding: 41
+  registered_finding: 42
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: 8e0144d6e0882a91
+  identity_digest: 41bbafef05eb57e5
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -9997,9 +9997,32 @@ items:
   close_out: '(1) Land U-HE-27 (`tools/main_protection.py` + recipes) and run the §4
     tiebreaker + §5 verify — the server fence closes both classes for main regardless of
     client parsing; (2) at U-HE-27''s landing, record in its evidence log that B-190''s
-    residual classes are bounded by the fence; (3) no client-side narrowing is owed — further
-    parser hardening against adversarial config is non-convergent by measurement (rounds
-    r1-r10).'
+    residual classes (P1/P2 and the folded merge-gate witness lens P3 from PR #1417 — the
+    bare-push predicate''s untested `branch.<b>.remote` resolution tier) are bounded by the
+    fence; (3) no client-side narrowing is owed — further parser hardening against
+    adversarial config is non-convergent by measurement (rounds r1-r10).'
   council: 'NO — the terminal is prescribed by the cleared spec itself (C-HE-08 §2 + R-20);
     the only open work is the already-scheduled next unit.'
   heading: '### B-190 · C-HE-08 §1 client-side push parser residual classes premised on adversarial local git config *(surfaced by out-of-family Codex r10 against the U-HE-26 guard unit at the 10-round cap, 2026-08-21; register-and-held; bounded by the C-HE-08 §2 server fence at U-HE-27 per R-20)*'
+- id: B-191
+  title: >-
+    C-HE-08 §2 apply/rollback transaction — residual classes premised on CONCURRENT REMOTE
+    WRITERS (non-atomic read-then-DELETE rollback CAS; manual rollback after a non-null
+    prior policy restores 404, prior payload surfaced via evidence-log NOTE only)
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (r10) against the U-HE-27 recipes unit at the
+    10-round cap and register-and-held. (P1) GitHub''s branch-protection endpoint has no
+    conditional-write (If-Match/ETag) primitive, so the rollback compare-then-DELETE has a
+    milliseconds-wide window a concurrent remote administrator write can fall into; the
+    local lockfile serializes local processes only. (P2) manual rollback after an apply
+    that replaced a NON-null prior restores the unprotected pre-state; the captured prior
+    payload lives in the evidence-log BEFORE block (explicit NOTE printed), not
+    auto-restored. Both presume a concurrent trusted administrator — outside the X9
+    threat model the fence closes; r1-r9 absorbed all 34 client-side-fixable findings.'
+  close_out: '(1) Upgrade rollback to conditional writes if GitHub ships If-Match for the
+    protection endpoint; (2) optionally offer the evidence-log BEFORE payload as the
+    restore target; (3) no further client-side narrowing owed — non-convergent by the same
+    measurement pattern as B-190.'
+  council: 'NO — single-tool hardening residual; no cross-axis consumer; the fence
+    (C-HE-08 §2 + R-20) is the systemic guard.'
+  heading: '### B-191 · C-HE-08 §2 apply/rollback transaction residual classes premised on concurrent REMOTE writers *(surfaced by out-of-family Codex r10 against the U-HE-27 recipes unit at the 10-round cap, 2026-08-21; register-and-held)*'
