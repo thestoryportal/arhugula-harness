@@ -983,20 +983,31 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> str:
                 os.rename(NEXT_ACTION_DRAFT, claim)
             except FileNotFoundError:
                 return "absent"  # another process already acted on it
-            if claim.read_text() == raw:
-                claim.unlink()
-                return "retired"
             try:
-                os.link(claim, NEXT_ACTION_DRAFT)  # restore; refuses if a newer draft exists
-            except FileExistsError:
+                if claim.read_text() == raw:
+                    claim.unlink()
+                    return "retired"
+                try:
+                    os.link(claim, NEXT_ACTION_DRAFT)  # restore; refuses if newer exists
+                except FileExistsError:
+                    print(
+                        f"emit-refresh-pr: a newer draft appeared during retirement; "
+                        f"the displaced correction is preserved at {claim}",
+                        file=sys.stderr,
+                    )
+                    return "unrepresented"
+                claim.unlink()
+                return "unrepresented"
+            except OSError:
+                # r17 P2: once the draft is CLAIMED, an I/O failure must fail toward
+                # refusal — never report "absent" and let a stale refresh proceed
+                # while authoring sits stranded at the claim path.
                 print(
-                    f"emit-refresh-pr: a newer draft appeared during retirement; "
-                    f"the displaced correction is preserved at {claim}",
+                    f"emit-refresh-pr: I/O error during retirement; authored draft "
+                    f"state is preserved at {claim}",
                     file=sys.stderr,
                 )
                 return "unrepresented"
-            claim.unlink()
-            return "unrepresented"
         print(
             "emit-refresh-pr: keeping next-action draft — its body is not "
             "verified in the pushed refresh content (a correction survives "
@@ -1013,15 +1024,17 @@ def _pushed_refresh_text(run, branch: str) -> str | None:
     retirement verification). None on any failure — never aborts the emit."""
     try:
         f = run(
-            ["git", "fetch", "-q", "origin", branch],
+            ["git", "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
             capture_output=True,
             text=True,
             timeout=60,
         )
         if f.returncode != 0:
             return None
+        # r17 P2: FETCH_HEAD is shared across worktrees and raceable by another
+        # lane's fetch — read through the explicit tracking ref this fetch updated.
         s = run(
-            ["git", "show", "FETCH_HEAD:.harness/roadmap_status.md"],
+            ["git", "show", f"origin/{branch}:.harness/roadmap_status.md"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -1269,9 +1282,18 @@ def emit_refresh_pr(
     if draft_used:
         # mirror exactly what install_next_action just wrote, so the helper's
         # live-paragraph proof holds by construction
-        _discard_matching_draft(
+        status = _discard_matching_draft(
             post_pr, f"**Current next action (post-#{post_pr}).** {next_action}"
         )
+        if status == "unrepresented":
+            # r17 P2: the draft was CORRECTED between the initial read and this
+            # retirement — the just-created PR carries the superseded pointer.
+            # Refuse (same rule as the resume paths); the correction survives.
+            raise SystemExit(
+                "emit-refresh-pr: the next-action draft was corrected mid-landing; "
+                f"the refresh PR just created for post-#{post_pr} carries the "
+                "superseded pointer. Close it, delete its branch, and re-run"
+            )
     return {
         "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
         "head_sha": sh("git", "rev-parse", "HEAD"),
