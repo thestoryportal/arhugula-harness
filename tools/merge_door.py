@@ -845,7 +845,7 @@ def default_ground() -> Ground:
             "view",
             str(pr),
             "--json",
-            "state,mergedAt,headRefOid,baseRefOid,mergeCommit,title,files",
+            "state,mergedAt,headRefOid,baseRefOid,baseRefName,mergeCommit,title,files",
             timeout=30,
         )
         if p.returncode != 0 or not p.stdout.strip():
@@ -1039,6 +1039,31 @@ def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str
             notified = True
         ground.sleep(30)
     return "blocked:post_merge_ci_not_green:timeout"
+
+
+def wait_pr_head_checks(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
+    """Poll a PRE-merge PR HEAD's checks until completed green (U-HE-28 codex r2 P1).
+
+    C-HE-08 made `main` strict with required checks, and `gh pr merge` REFUSES a
+    pending/red PR outright — not a timeout — so driving the §4(viii) refresh merge the
+    moment the PR is created burns the §5 re-issue budget deterministically on every
+    normal landing. Same polling shape as wait_post_merge_ci; no event filter (the
+    head's completed run may register as pull_request or push depending on triggers)."""
+    deadline = ground.clock() + bound_s
+    while ground.clock() < deadline:
+        runs = ground.gh_runs_for_sha(sha)
+        # A rerun/edited event reuses the SHA (codex r5 P2): while ANY run is still in
+        # progress, an older completed run must not be read as the verdict — wait until
+        # the SHA has no pending runs, then judge the completed set.
+        if not any(r.get("status") != "completed" for r in runs):
+            done = [r for r in runs if r.get("status") == "completed"]
+            if done:
+                concl = done[0].get("conclusion")
+                if not ci_is_green(concl):
+                    return f"blocked:refresh_pr_ci_not_green:{concl}"
+                return "success"
+        ground.sleep(30)
+    return "blocked:refresh_pr_ci_not_green:timeout"
 
 
 def reconcile_ground(lease: dict, ground: Ground) -> str:
@@ -1302,6 +1327,53 @@ def land(
                 )
             else:
                 rpr, rhead = rpr_rhead
+                # U-HE-28 codex r3 P1: the durable record pins the head at creation,
+                # but the sanctioned recovery for a red refresh head is a fix commit
+                # on the SAME refresh PR — which moves the real head. Without
+                # re-adoption the resume polls the dead old SHA forever and the
+                # documented unblock recovery can never succeed. Re-adopt the PR's
+                # CURRENT head iff it still satisfies the full terminating-refresh
+                # identity gate; MERGED/closed states fall through to the
+                # ground-truth branches below unchanged.
+                rv1 = ground.gh_view(rpr)
+                cur_head = rv1.get("headRefOid")
+                if rv1.get("state") == "OPEN" and cur_head and cur_head != rhead:
+                    rfiles1 = [f.get("path") for f in (rv1.get("files") or [])]
+                    # r6 P2 hardening over the r3 gate: bind adoption to THIS landing
+                    # (title carries `post-#<content-pr>`) and to the `main` base — a
+                    # refresh PR retargeted while receiving its fix commit must never
+                    # be squash-merged into another branch under the global lease.
+                    bound_title = f"{REFRESH_TITLE_PREFIX}post-#{pr}"
+                    title1 = str(rv1.get("title") or "")
+                    # delimiter-safe (r7 P2): post-#1 must not accept post-#10
+                    title_bound = title1 == bound_title or (
+                        title1.startswith(bound_title)
+                        and not title1[len(bound_title) :][:1].isdigit()
+                    )
+                    if (
+                        rv1.get("baseRefName") != "main"
+                        or not title_bound
+                        or rfiles1 != [REFRESH_ONLY_FILE]
+                    ):
+                        raise DoorFailed(
+                            f"refresh pr #{rpr} head moved to {str(cur_head)[:12]} but "
+                            "no longer satisfies the terminating-refresh identity gate "
+                            f"(base {rv1.get('baseRefName')!r}, title "
+                            f"{str(rv1.get('title'))[:40]!r})"
+                        )
+                    rhead = cur_head
+                    # ATOMIC record replacement (codex r5 P2) with the door's own
+                    # exclusive-create primitive on an UNPREDICTABLE tmp name + symlink
+                    # containment (r6 P2): a planted sidecar/tmp symlink must neither
+                    # redirect the write outside the queue nor become the record.
+                    _check_door()  # r15 P2: writer-side containment on this path too
+                    sidecar = _sidecar(lease["lease_token"], "refresh")
+                    tmp = sidecar.with_name(f"{sidecar.name}.adopt.{secrets.token_hex(8)}")
+                    publish_exclusive(tmp, json.dumps({"pr": rpr, "head_sha": rhead}))
+                    if sidecar.is_symlink() or tmp.is_symlink():
+                        tmp.unlink(missing_ok=True)
+                        raise DoorFailed("refresh sidecar containment violated (symlink)")
+                    os.replace(tmp, sidecar)
             refresh_resumed = (
                 recorded is not None and recorded.get("merge_attempted_at") is not None
             )
@@ -1319,6 +1391,65 @@ def land(
             if refresh_landed:
                 reconciled = True
             else:
+                # U-HE-28 codex r2 P1: under the LIVE strict fence the just-created
+                # refresh PR's checks are pending; wait for its HEAD to go green
+                # BEFORE issuing the fixed merge string (which GitHub would refuse
+                # outright, exhausting the re-issue budget on first use).
+                pstatus = wait_pr_head_checks(
+                    rhead, ground, bound_s=REFRESH_BOUND_S, lane_id=lane_id
+                )
+                if pstatus != "success":
+                    mark_blocked(lease, sha=rhead, reason="refresh_pr_ci_not_green")
+                    _emit_gate(
+                        lease,
+                        gate="merge-door-post-merge-ci",
+                        fail_class="HITL-recoverable",
+                        cause="refresh_pr_ci_not_green",
+                        evidence=pstatus,
+                        arc_id=arc_id,
+                        lane_id=lane_id,
+                    )
+                    _notify(
+                        "DEFERRED-HIL",
+                        lane_id,
+                        "merge-door-post-merge-ci:HITL-recoverable:refresh_pr_ci_not_green",
+                        f"{arc_id} — terminating refresh #{rpr} checks for {rhead[:12]} "
+                        f"{pstatus}; door blocked; fix, then "
+                        f"`just merge-door-unblock {rpr} {rhead}`",
+                    )
+                    raise DoorBlocked(pstatus)
+                # r8 P2: the wait above is bounded at 45 min — re-validate the FULL
+                # identity immediately before driving the merge (mirror of the §4(ii)
+                # re-confirm for the content PR): a retarget/title/file mutation during
+                # the wait must fail the door, and a moved head must not be merged
+                # against a stale --match-head-commit.
+                rv2 = ground.gh_view(rpr)
+                rfiles2 = [f.get("path") for f in (rv2.get("files") or [])]
+                title2 = str(rv2.get("title") or "")
+                bound2 = f"{REFRESH_TITLE_PREFIX}post-#{pr}"
+                if (
+                    rv2.get("state") != "OPEN"
+                    or rv2.get("headRefOid") != rhead
+                    or rv2.get("baseRefName") != "main"
+                    or not (
+                        title2 == bound2
+                        or (title2.startswith(bound2) and not title2[len(bound2) :][:1].isdigit())
+                    )
+                    or rfiles2 != [REFRESH_ONLY_FILE]
+                ):
+                    raise DoorFailed(
+                        f"refresh pr #{rpr} identity changed during the checks wait "
+                        f"(state {rv2.get('state')!r}, head {str(rv2.get('headRefOid'))[:12]}, "
+                        f"base {rv2.get('baseRefName')!r}, title {title2[:40]!r})"
+                    )
+                # r19 P1 (REVERTS the r18 base-SHA pin): pinning baseRefOid to OUR
+                # content merge tip WEDGED the door — after main advances, every
+                # valid re-minted refresh necessarily carries the NEW tip as base
+                # and is rejected against the original merge_sha forever. The
+                # main-advances-during-held-lease class (an out-of-band human merge
+                # while the door serializes landings) blocks via the ordinary
+                # merge-refusal adjudication below; its converging recovery verb is
+                # a registered design item (B-193).
                 reconciled = (
                     _merge_once(lease, rpr, rhead, ground, suffix="refresh", budget=refresh_budget)
                     or reconciled

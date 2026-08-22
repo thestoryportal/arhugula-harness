@@ -2259,3 +2259,25 @@ same spec leg.
 - **Close-out steps.** (1) If GitHub ships conditional writes for the protection endpoint, upgrade the rollback to If-Match; (2) optionally teach rollback to offer the evidence-log BEFORE payload as the restore target; (3) no further client-side narrowing owed — the class is non-convergent by the same measurement pattern as B-190.
 
 - **Council.** NO — single-tool hardening residual; no cross-axis consumer; the fence (C-HE-08 §2 + R-20) is the systemic guard.
+
+### B-192 · C-HE-06 §4(viii) door-driven refresh pointer-freshness posture on a missing draft *(surfaced by out-of-family Codex r15 against U-HE-28, 2026-08-22; register-and-held; merge-gate spec lens is the scheduled arbiter)*
+
+- **What it is.** A held policy fork: when the door-driven `--emit-refresh-pr-json` finds NO `.harness/.next-action-draft` and no explicit `--next-action`, it lands the terminating refresh with the pointer untouched — the documented self-healing posture (the pointer's standing "then <next unit>" tail + C-HE-03 terminal-head dedup keep next-action derivation correct). Codex r15 reads CLAUDE.md §12.2 strictly: the refresh must carry a re-derived pointer, so a forgotten draft should fail closed.
+
+- **Current state.** Held; the self-healing posture is live at HEAD (documented at ship-pr + the U-HE-28 rev note); the merge-gate spec-conformance lens on the U-HE-28 PR is the scheduled arbiter.
+
+- **Why held.** Fail-closed here fails the refresh AFTER the irreversible content merge, BLOCKING the shared global door on every forgotten-draft landing (operator unblock + refresh-branch cleanup) — a heavy failure mode traded against a silent-but-self-healing stale pointer. An UNREPRESENTED or malformed draft already fails loud (r14 refusal + sanitized warning); only the fully-absent-draft case is at issue, and both postures are defensible.
+
+- **Close-out steps.** (1) If the U-HE-28 merge-gate spec-conformance lens ALSO blocks on this (decorrelated agreement), flip to fail-closed in a follow-up arc and document the blocked-door recovery; (2) otherwise hold the self-healing posture with the dissent recorded here; (3) derivation is unaffected either way (terminal-head dedup).
+
+- **Council.** NO — two-option policy fork with a decorrelated arbiter already scheduled (the 3-lens merge gate).
+
+### B-193 · C-HE-06 §4(viii) converging recovery for a BEHIND refresh + the mid-landing-correction intent chain *(surfaced by out-of-family Codex r18/r19 against U-HE-28, 2026-08-22; register-and-held after an absorb-revert cycle)*
+
+- **What it is.** A registered recovery-design gap: (a) if main advances during the refresh checks wait (an out-of-band human merge while the door holds the global lease), the refresh PR is BEHIND under strict protection: merges are refused, the door blocks, and no verb converges the recovery — the refresh record survives unblock and pins the old pair, `record-refresh` refuses an existing record, and the r18 baseRefOid pin WEDGED (every valid re-mint carries the NEW tip; reverted r19). (b) The r17 mid-landing-correction refusal exits after PR creation with an unresolved intent; `record-refresh` can attach the stale PR and a resumed land performs no draft-representation check.
+
+- **Current state.** Registered; at HEAD the BEHIND class blocks via the ordinary post-attempt adjudication (the r18 base-pin that wedged is reverted) and the mid-landing-correction refusal stands; no converging verb exists yet.
+
+- **Close-out steps.** (1) Design a record-clearing/re-mint verb (operator-gated) so the BEHIND class converges without hand-editing door state; (2) decide whether record-refresh should consult the draft channel (the operator running the verb holds the correction context — possibly the right answer as-is); (3) fold into the B-192 posture decision.
+
+- **Council.** NO — single-mechanism recovery design; the U-HE-28 merge-gate concurrency lens is the scheduled decorrelated check.

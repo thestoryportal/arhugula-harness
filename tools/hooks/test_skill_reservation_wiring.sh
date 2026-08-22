@@ -108,6 +108,27 @@ grep -q 'reservations.py transition --arc-id <arc-id> --to open' "$SP" \
   && ok "ship-pr performs the pending→open flip pre-acquire (v1.4 X4a, U-HE-22)" \
   || bad "no pending→open flip in ship-pr final gate"
 
+# --- ship-pr: merge-door landing (C-HE-06 §1/§4/§6, U-HE-28) ---
+JF="$SCRIPT_DIR/../../justfile"
+RSR="$SCRIPT_DIR/../../tools/roadmap_status_refresh.py"
+grep -q 'bash tools/hooks/safe-merge.sh' "$SP" \
+  && ok "ship-pr merges through the wrapper" || bad "ship-pr lacks safe-merge"
+grep -Eq '(^|[^`])gh pr merge' "$SP" \
+  && bad "ship-pr still carries a raw gh pr merge instruction" || ok "no raw merge verb in ship-pr"
+grep -q 'merge-door-unblock' "$JF" \
+  && ok "unblock recipe present" || bad "no unblock recipe"
+grep -q '\.harness/\.lane-id' "$JF" \
+  && ok "unblock recipe derives the lane from .harness/.lane-id (codex r9: the door's emitted recovery carries no env prefix)" \
+  || bad "unblock recipe lacks the .lane-id fallback"
+grep -q 'no HARNESS_LANE_ID and no .harness/.lane-id' "$JF" \
+  && ok "unblock recipe aborts loud when NO lane source exists (codex r1: empty lane mints an unresumable lease)" \
+  || bad "unblock recipe lacks the empty-lane abort"
+grep -q 'emit-refresh-pr-json' "$RSR" \
+  && ok "refresh tool emits PR json" || bad "no --emit-refresh-pr-json"
+grep -q 'next-action-draft' "$SP" \
+  && ok "ship-pr authors the pointer draft the door's refresh consumes (§12.2 re-derivation)" \
+  || bad "ship-pr lacks the next-action-draft step"
+
 # --- session-start: C-HE-03 §5 ground-truth reconcile pass (landed U-HE-18; pinned here) ---
 grep -q 'reservations.py reconcile-all' "$SS" \
   && ok "session-start runs reconcile-all" || bad "no reconcile-all in session-start hook"

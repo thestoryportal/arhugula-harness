@@ -7,6 +7,7 @@ every future session's SessionStart hook report false `[ROADMAP DRIFT]`.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1155,3 +1156,657 @@ def test_refresh_is_not_blocked_by_the_soft_byte_budget(tmp_path, capsys):
     assert rc == 0, capsys.readouterr()
     assert not archive.exists(), "still a ONE-FILE write"
     assert "**Current next action (post-#1338).** Next is the B-71 impl leg." in status.read_text()
+
+
+# --- U-HE-28: --emit-refresh-pr-json (C-HE-06 §4(viii) continuation producer) ---------
+
+
+class _P:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _scripted_run(script, calls):
+    """Fake subprocess.run: first matching prefix wins; unmatched → success/empty.
+
+    `script` is a list of (prefix_tuple, _P); `calls` records every argv.
+    """
+
+    def run(args, **kw):
+        calls.append(list(args))
+        for prefix, resp in script:
+            if tuple(args[: len(prefix)]) == tuple(prefix):
+                return resp
+        return _P()
+
+    return run
+
+
+def test_emit_refresh_pr_idempotent_existing_open_pr():
+    """Crash after `gh pr create`: the branch's open PR is returned, nothing re-created."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            )
+        ],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert out == {"pr": 321, "head_sha": "abc123def"}
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+
+
+def test_emit_refresh_pr_pushed_branch_without_pr_creates_on_it():
+    """Crash between push and create: PR is created ON the pushed branch, no new commit."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
+            (
+                ("git", "rev-parse", "origin/roadmap-refresh-post-55"),
+                _P(stdout="feedbeef"),
+            ),
+        ],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert out == {"pr": 77, "head_sha": "feedbeef"}
+    # merge-gate r1 (concurrency): the resume leg performs NO checkout — the
+    # invoking worktree's HEAD is never touched and no local branch can collide
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)
+    assert not any(c[:2] == ["git", "commit"] for c in calls)
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert create[3:5] == ["--base", "main"]  # r10 P1 pin, r11 P3 witness
+
+
+def test_emit_refresh_pr_fresh_path_branches_from_main_then_refreshes():
+    """As-built correction: fetch + branch from origin/main BEFORE the refresh runs, so
+    the refresh commit's recorded git_head is its own parent and the PR diff is
+    roadmap-status-only. Commit title carries the §12.2.1 prefix."""
+    calls: list[list[str]] = []
+    seen: dict[str, int] = {}
+
+    def do_refresh():
+        seen["refresh_at_call_index"] = len(calls)
+
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/88")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="cafebabe")),
+        ],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=do_refresh)
+    assert out == {"pr": 88, "head_sha": "cafebabe"}
+    # merge-gate r1 (concurrency P1): the build happens in an EPHEMERAL DETACHED
+    # worktree — never a checkout in the invoking worktree, never a local branch
+    wt_add = next(c for c in calls if c[:3] == ["git", "worktree", "add"])
+    assert wt_add[3:5] == ["-q", "--detach"] and wt_add[6] == "origin/main"
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)
+    assert ["git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"] in calls
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert create[3:5] == ["--base", "main"]  # r10 P1 pin, r11 P3 witness
+    assert seen["refresh_at_call_index"] >= calls.index(wt_add) + 1
+    assert ["git", "commit", "-m", "ops: roadmap status refresh post-#55"] in calls
+    # push uses an explicit refspec — no local branch ref ever exists
+    assert [
+        "git",
+        "push",
+        "-q",
+        "origin",
+        "HEAD:refs/heads/roadmap-refresh-post-55",
+    ] in calls
+    # cleanup: the ephemeral worktree is removed
+    assert any(c[:3] == ["git", "worktree", "remove"] for c in calls)
+
+
+def test_emit_refresh_pr_refuses_two_file_commit():
+    """§12.2.1: a staged set that is not exactly roadmap_status.md aborts pre-commit."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (
+                ("git", "diff", "--cached", "--name-only"),
+                _P(stdout=".harness/roadmap_status.md\n.harness/arc-ledger.yaml"),
+            ),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match=r"exactly \.harness/roadmap_status\.md"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:2] == ["git", "commit"] for c in calls)
+    # merge-gate r2 witness P3: the ephemeral worktree is cleaned up on the
+    # exception path too (the remove rides the finally)
+    assert any(c[:3] == ["git", "worktree", "remove"] for c in calls)
+
+
+def test_emit_refresh_pr_subcommand_failure_aborts_nonzero():
+    """Any failing git/gh step raises (non-zero exit, no JSON) → the door blocks (viii)."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+            (("git", "push"), _P(returncode=1, stderr="remote rejected")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="remote rejected"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+    # merge-gate r2 witness P3: cleanup fires on this exception path too
+    assert any(c[:3] == ["git", "worktree", "remove"] for c in calls)
+
+
+def test_cli_dispatch_emit_refresh_pr_json(monkeypatch, capsys):
+    """--emit-refresh-pr-json N dispatches before any status read and prints the JSON."""
+    monkeypatch.setattr(rsr, "emit_refresh_pr", lambda n, **kw: {"pr": n + 1, "head_sha": "aa"})
+    rc = rsr.main(["--emit-refresh-pr-json", "55"])
+    assert rc == 0
+    assert '"pr": 56' in capsys.readouterr().out
+
+
+def test_cli_emit_mode_stdout_is_json_only(monkeypatch, capsys):
+    """codex r1 P1: merge_door json-parses the ENTIRE captured stdout of this mode.
+    Nested progress prints (the in-process --refresh, anything else) must land on
+    stderr; real stdout carries exactly the one JSON line."""
+
+    def noisy_emit(n, **kw):
+        print("refreshed .harness/roadmap_status.md: hash=abc")  # nested progress line
+        return {"pr": n, "head_sha": "aa"}
+
+    monkeypatch.setattr(rsr, "emit_refresh_pr", noisy_emit)
+    rc = rsr.main(["--emit-refresh-pr-json", "55"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    import json as _json
+
+    assert _json.loads(captured.out) == {"pr": 55, "head_sha": "aa"}
+    assert "refreshed" in captured.err
+
+
+def test_emit_refresh_pr_indeterminate_ls_remote_aborts():
+    """codex r1 P2: only ls-remote exit 2 means 'no matching ref'. Auth/transport
+    failures must abort — NOT select the fresh path and reset a pushed branch."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=128, stderr="fatal: could not read")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="could not verify remote state"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)
+
+
+def _fresh_path_script():
+    return [
+        (("gh", "pr", "list"), _P(stdout="")),
+        (("git", "ls-remote"), _P(returncode=2)),
+        (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+        (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/90")),
+        (("git", "rev-parse", "HEAD"), _P(stdout="beadfeed")),
+    ]
+
+
+def test_emit_refresh_pr_consumes_matching_next_action_draft(monkeypatch, tmp_path):
+    """codex r2 P2: the ship-pr-authored draft names THIS landing -> its body flows
+    into the in-process refresh as --next-action and the draft is consumed."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\nThe next implementable unit is `U-HE-29` per the S4c order.\n")
+    calls: list[list[str]] = []
+    out = rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert out["pr"] == 90
+    assert not draft.exists()
+    argv = argv_seen["argv"]
+    assert "--next-action" in argv
+    assert argv[argv.index("--next-action") + 1].startswith("The next implementable unit")
+
+
+def test_emit_refresh_pr_ignores_mismatched_draft(monkeypatch, tmp_path, capsys):
+    """A stale draft from an aborted arc must never install another arc's pointer:
+    left in place, warned on stderr, no --next-action in the refresh argv."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 54\nstale pointer body\n")
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert draft.exists()  # left for inspection
+    assert "--next-action" not in argv_seen["argv"]
+    err = capsys.readouterr().err
+    assert "does not name post-pr: 55" in err
+    assert "post-pr: 54" not in err  # r14 P2: content never interpolated
+    # codex r5 P2: the door discards stderr on success — the warning must ALSO ride
+    # the refresh PR body, the venue the operator reads
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    body_arg = create[create.index("--body") + 1]
+    assert "a next-action draft was present" in body_arg
+    assert "post-pr: 54" not in body_arg  # r14 P2: nothing from the file is published
+
+
+def test_emit_refresh_pr_explicit_flag_wins_over_draft(monkeypatch, tmp_path):
+    """--next-action passed explicitly is authoritative; the draft is not consumed."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\ndraft body\n")
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(
+        55, next_action="explicit body", run=_scripted_run(_fresh_path_script(), calls)
+    )
+    argv = argv_seen["argv"]
+    assert argv[argv.index("--next-action") + 1] == "explicit body"
+    # r6 P2 rule (supersedes the r5 retire-on-override): the draft's body was NOT
+    # represented in this refresh — unrepresented authoring is never deleted
+    assert draft.exists()
+
+
+def test_emit_refresh_pr_push_failure_keeps_draft(monkeypatch, tmp_path):
+    """codex r3 P2: the draft is retired only once its content is durably represented
+    by the pushed branch — a push failure must leave it for the retry."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+            (("git", "push"), _P(returncode=1, stderr="remote rejected")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit):
+        rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()  # the retry re-reads it
+
+
+def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_path):
+    """A matching draft at a resume path is already represented by the pushed refresh
+    commit — retired there; a mismatched draft is another arc's and stays."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            # live pointer body EQUALS the draft body (r8 P2) -> retire
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#55).** pointer body here."),
+            ),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, run=run)
+    assert not draft.exists()
+    # a CORRECTED same-PR draft whose body is NOT in the pushed commit survives (r6 P2)
+    draft.write_text("post-pr: 55\ncorrected pointer body\n")
+    calls2: list[list[str]] = []
+    run2 = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            # OLD pointer content only — the correction is not represented
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#55).** pointer body here.\\n"),
+            ),
+        ],
+        calls2,
+    )
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run2)
+    assert draft.exists()
+    # another arc's draft is untouched regardless
+    draft.write_text("post-pr: 54\nother arc's body\n")
+    calls3: list[list[str]] = []
+    run3 = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            )
+        ],
+        calls3,
+    )
+    rsr.emit_refresh_pr(55, run=run3)
+    assert draft.exists()
+
+
+def test_emit_refresh_pr_rejects_retargeted_or_reused_open_pr():
+    """r7 P2: the idempotent resume must identity-gate the found PR — a retargeted or
+    reused PR on the deterministic branch never persists for the door to merge."""
+    for bad in (
+        "321\tabc123def\trelease-x\tfalse\tops: roadmap status refresh post-#55",
+        "321\tabc123def\tmain\tfalse\tsome unrelated PR title",
+        # r10 P1: a FORK PR squatting the deterministic branch name
+        "321\tabc123def\tmain\ttrue\tops: roadmap status refresh post-#55",
+    ):
+        calls: list[list[str]] = []
+        run = _scripted_run([(("gh", "pr", "list"), _P(stdout=bad))], calls)
+        with pytest.raises(SystemExit, match="not this landing's terminating refresh"):
+            rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+
+
+def test_emit_refresh_pr_draft_body_elsewhere_in_file_is_not_representation(monkeypatch, tmp_path):
+    """r7 P2: the draft body appearing in a notes cell (not the live pointer
+    paragraph) is NOT pointer installation — the draft survives."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            (
+                ("git", "show"),
+                _P(
+                    stdout="**Current next action (post-#55).** something else.\n\n"
+                    "| PR #55 | 2026-08-22 | pointer body here. |\n"
+                ),
+            ),
+        ],
+        calls,
+    )
+    # r14 P2: an unrepresented same-PR draft REFUSES the resume (it survives)
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()
+
+
+def test_emit_refresh_pr_resume_paths_refuse_unappliable_flags(monkeypatch):
+    """r10 P2 (supersedes the r7 warn-and-continue): a resume cannot apply supplied
+    flags — both resume paths REFUSE instead of silently landing the old pointer."""
+    # pushed-branch path
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="cannot be applied"):
+        rsr.emit_refresh_pr(55, next_action="late pointer", run=run, do_refresh=lambda: None)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+    # existing-open-PR path
+    calls2: list[list[str]] = []
+    run2 = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            )
+        ],
+        calls2,
+    )
+    with pytest.raises(SystemExit, match="cannot be applied"):
+        rsr.emit_refresh_pr(55, notes="late notes", run=run2, do_refresh=lambda: None)
+
+
+def test_cli_emit_mode_refuses_dry_run(capsys):
+    """r11 P2: the emitter mutates (checkout/commit/push/PR) — --dry-run refuses."""
+    rc = rsr.main(["--emit-refresh-pr-json", "55", "--dry-run"])
+    assert rc == 2
+    assert "cannot be combined with --dry-run" in capsys.readouterr().err
+    # r18 P2: every other operation selector refuses too
+    rc = rsr.main(["--emit-refresh-pr-json", "55", "--check"])
+    assert rc == 2
+    assert "cannot be combined with --check" in capsys.readouterr().err
+
+
+def test_emit_refresh_pr_stale_label_pointer_is_not_representation(monkeypatch, tmp_path):
+    """r11 P2: a pushed pointer labeled post-#54 whose body equals the post-#55 draft
+    is NOT installation of this landing's pointer — the draft survives."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#54).** pointer body here."),
+            ),
+        ],
+        calls,
+    )
+    # r14 P2: the stale-label pointer leaves the draft unrepresented -> refuse
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()
+
+
+def test_emit_refresh_pr_pushed_branch_provenance_refusal():
+    """r12 P2: a pre-pushed same-name branch NOT descending directly from the
+    just-merged main tip is never wrapped in the trusted refresh PR."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("git", "rev-parse", "origin/roadmap-refresh-post-55^"), _P(stdout="a" * 40)),
+            (("git", "rev-parse", "origin/main"), _P(stdout="b" * 40)),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="does not descend directly"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+
+
+def test_emit_refresh_pr_pushed_branch_provenance_pass():
+    """The genuine crash-recovery branch (parent == main tip) proceeds to PR creation."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("git", "rev-parse", "origin/roadmap-refresh-post-55^"), _P(stdout="m" * 40)),
+            (("git", "rev-parse", "origin/main"), _P(stdout="m" * 40)),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
+        ],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert out["pr"] == 77
+
+
+def test_emit_refresh_pr_refuses_symlinked_draft(monkeypatch, tmp_path):
+    """r13 P1: a planted symlink at the draft path must never leak an outside file
+    into the refresh PR body or the committed pointer — refused no-follow, left."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("post-pr: 55\nexfiltrated content\n")
+    draft = tmp_path / "draft"
+    draft.symlink_to(outside)
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert "--next-action" not in argv_seen["argv"]
+    assert draft.is_symlink()  # left in place
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    body_arg = create[create.index("--body") + 1]
+    assert "exfiltrated" not in body_arg
+    # r19 P2: the refusal is VISIBLE in the PR body (stderr is discarded by the door)
+    assert "symlinked next-action draft was REFUSED" in body_arg
+
+
+def test_discard_rename_claim_preserves_concurrent_correction(monkeypatch, tmp_path):
+    """r20 P2: a correction written between verification and retirement survives —
+    a plain unlink would delete it; the rename-claim restores it."""
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\nold body\n")
+    real_rename = rsr.os.rename
+
+    def rename_with_injected_correction(src, dst):
+        # the concurrent correction lands JUST before our claim takes the path
+        draft.write_text("post-pr: 55\ncorrected body\n")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(rsr.os, "rename", rename_with_injected_correction)
+    status = rsr._discard_matching_draft(55, "**Current next action (post-#55).** old body")
+    assert status == "unrepresented"
+    assert draft.read_text() == "post-pr: 55\ncorrected body\n"  # correction survives
+
+
+def test_resume_retire_uses_tracking_ref_fetch_and_show(monkeypatch, tmp_path):
+    """r20 P2/P3: the anti-race reader must fetch the explicit tracking-ref refspec
+    and read through origin/<branch> — argv-exact, so a bare-fetch/FETCH_HEAD revert
+    cannot stay green."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#55).** pointer body here."),
+            ),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, run=run)
+    branch = "roadmap-refresh-post-55"
+    assert [
+        "git",
+        "fetch",
+        "-q",
+        "origin",
+        f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+    ] in calls
+    assert ["git", "show", f"origin/{branch}:.harness/roadmap_status.md"] in calls
+
+
+def test_pushed_branch_provenance_fetch_uses_explicit_refspec():
+    """r20 P3: the provenance path's branch fetch pins the tracking ref explicitly."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("git", "rev-parse", "origin/roadmap-refresh-post-55^"), _P(stdout="m" * 40)),
+            (("git", "rev-parse", "origin/main"), _P(stdout="m" * 40)),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    branch = "roadmap-refresh-post-55"
+    assert [
+        "git",
+        "fetch",
+        "-q",
+        "origin",
+        f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+    ] in calls
+
+
+import stat  # noqa: E402
+
+
+def test_read_draft_unreadable_fails_loud(monkeypatch, tmp_path):
+    """merge-gate r1 witness P2 (r18 fix): a draft that EXISTS but cannot be read
+    must fail loud — collapsing it to silent-absent must turn this row red."""
+    if os.geteuid() == 0:
+        pytest.skip("permission bits are advisory under root")
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\nbody\n")
+    draft.chmod(0)
+    try:
+        with pytest.raises(SystemExit, match="unreadable"):
+            rsr._read_draft_nofollow()
+    finally:
+        draft.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_failed_verification_refuses_rather_than_retires(monkeypatch, tmp_path):
+    """merge-gate r1 witness P3: when the pushed content CANNOT be fetched, a matching
+    draft is kept and the resume REFUSES — a failed verification never reads as
+    'represented'."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            (("git", "fetch"), _P(returncode=1, stderr="network down")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()
+
+
+def test_default_refresh_threads_status_and_archive_into_the_worktree(monkeypatch, tmp_path):
+    """merge-gate r2 witness P2: the DEFAULT do_refresh closure must aim the recursive
+    refresh at the EPHEMERAL worktree via --status/--archive — dropping the threading
+    would silently write the invoking repo's live status file while every other
+    assertion stays green."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    wt_add = next(c for c in calls if c[:3] == ["git", "worktree", "add"])
+    wt = wt_add[5]  # git worktree add -q --detach <wt> origin/main
+    argv = argv_seen["argv"]
+    assert argv[argv.index("--status") + 1] == f"{wt}/.harness/roadmap_status.md"
+    assert argv[argv.index("--archive") + 1] == f"{wt}/.harness/roadmap_drift_log_archive.md"

@@ -292,6 +292,29 @@ main-protection-verify:
 main-protection-tiebreaker:
     uv run python tools/main_protection.py tiebreaker
 
+# C-HE-06 §6: clear a `blocked` merge-door lease -- operator-confirmed reclaim through the marker CAS,
+# keyed to the blocked SHA. There is NO raw-unlink recipe by design. The lane id falls back to the
+# persisted .harness/.lane-id (the door's emitted recovery command carries no env prefix, and shell
+# exports do not survive across Bash tool calls); an empty lane would mint an unresumable successor
+# lease, so absence of BOTH sources aborts loud (U-HE-28 codex r1+r9).
+merge-door-unblock pr sha='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    lane="${HARNESS_LANE_ID:-$(cat .harness/.lane-id 2>/dev/null || true)}"
+    [ -n "$lane" ] || { echo "merge-door-unblock: no HARNESS_LANE_ID and no .harness/.lane-id (run lane-init)" >&2; exit 64; }
+    # C-HE-06 §6 canonical ONE-arg form (U-HE-28 codex r18): with no sha, read the
+    # blocked lease's own blocked_at_sha from door state and confirm it. The explicit
+    # two-arg form stays for the DEFERRED-HIL rows that name both.
+    sha="{{sha}}"
+    if [ -z "$sha" ]; then
+      sha="$(uv run python tools/merge_door.py status | uv run python -c 'import json,sys; d=json.load(sys.stdin) or {}; print(d.get("blocked_at_sha") or "")')"
+      [ -n "$sha" ] || { echo "merge-door-unblock: no blocked lease (or no blocked_at_sha) in door state" >&2; exit 65; }
+      echo "merge-door-unblock: using blocked_at_sha=$sha from door state" >&2
+    fi
+    uv run python tools/merge_door.py unblock {{pr}} "$sha" --lane-id "$lane"
+merge-door-status:
+    uv run python tools/merge_door.py status
+
 # C-HE-23 §2 consistency reducer over merge-gate-log.md <-> .jsonl (U-HE-13).
 # Exit 1 on a markdown row with no JSONL sibling; orphans are listed and
 # reconciled by `uv run python tools/merge_gate_log.py reconcile`.

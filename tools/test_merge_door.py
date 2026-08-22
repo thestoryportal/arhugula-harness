@@ -922,6 +922,7 @@ class FakeGround:
             "mergeCommit": None,
             # the §12.2.1 terminating-refresh shape record-refresh validates (r8 P1)
             "title": "ops: roadmap status refresh post-#1",
+            "baseRefName": "main",  # r6 P2: adoption binds to the main base
             "files": [{"path": ".harness/roadmap_status.md"}],
         }
         return 2, "r" * 40
@@ -1071,8 +1072,12 @@ def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
     calls = {"n": 0}
 
     def runs(sha):
+        if sha == "r" * 40:
+            # the refresh PR's own pre-merge checks are green (U-HE-28: the door now
+            # gates on them first) — this test's subject is the POST-merge run
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
         calls["n"] += 1
-        # main run green, refresh run red
+        # main run green, refresh post-merge run red
         concl = "success" if calls["n"] == 1 else "failure"
         return [{"status": "completed", "conclusion": concl, "event": "push"}]
 
@@ -1083,6 +1088,53 @@ def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
     assert (
         "DEFERRED-HIL",
         "merge-door-post-merge-ci:HITL-recoverable:refresh_ci_not_green",
+    ) in rows
+
+
+# mutation-probe: drop land()'s pre-merge wait_pr_head_checks gate (U-HE-28 codex r2 P1)
+def test_refresh_pr_pending_checks_waited_before_merge(door):
+    """No completed run on the refresh HEAD yet (strict fence: gh pr merge would be
+    REFUSED outright) -> the door WAITS, then merges once the head goes green."""
+    g = FakeGround()
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 3:
+                return []  # checks not yet registered/completed
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) in g.merge_calls  # merged only AFTER the wait
+    assert polls["n"] >= 3
+    assert md.read_lease() is None
+
+
+def test_refresh_pr_red_checks_block_before_any_merge(door, monkeypatch):
+    """Red checks on the refresh HEAD block the door BEFORE the merge string is ever
+    issued (the budget is never spent on a strict-protection refusal)."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    g = FakeGround()
+
+    def runs(sha):
+        if sha == "r" * 40:
+            return [{"status": "completed", "conclusion": "failure", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert md.read_lease()["blocked_reason"] == "refresh_pr_ci_not_green"
+    assert (2, "r" * 40) not in g.merge_calls
+    assert (
+        "DEFERRED-HIL",
+        "merge-door-post-merge-ci:HITL-recoverable:refresh_pr_ci_not_green",
     ) in rows
 
 
@@ -1125,6 +1177,273 @@ def test_resume_uses_recorded_refresh_never_a_second_pr(door, monkeypatch):
         "released"
     )
     assert calls == [1]  # refresh() called ONCE across crash + resume
+
+
+# mutation-probe: drop the recorded-resume head re-adoption (resume polls the dead old SHA)
+def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
+    """U-HE-28 codex r3 P1: a red refresh head's sanctioned recovery is a fix commit on
+    the SAME refresh PR, which moves the real head. The resume must adopt the current
+    head (identity-gated) instead of polling the dead recorded SHA forever."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    # the fix commit moved the refresh PR's head; the old recorded head stays red
+    g.states[2]["headRefOid"] = "s" * 40
+
+    def runs(sha):
+        if sha == "r" * 40:  # the dead recorded head — red forever
+            return [{"status": "completed", "conclusion": "failure", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    lease = md.read_lease()
+    assert (
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+        == "released"
+    )
+    assert (2, "s" * 40) in g.merge_calls  # merged the CORRECTED head
+    assert (2, "r" * 40) not in g.merge_calls
+    # r5 P2 (glob fixed r8 P3 — the replacement tmp is named *.adopt.<hex>): the
+    # record swap is atomic; no adoption-tmp residue survives on disk
+    assert not list(md.DOOR.glob("*.adopt.*"))
+
+
+def test_resume_refuses_moved_head_that_lost_refresh_identity(door, monkeypatch):
+    """A moved head that no longer satisfies the terminating-refresh identity gate is
+    never adopted (the pair would squash-merge under the global lease)."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40
+    g.states[2]["files"] = [{"path": ".harness/roadmap_status.md"}, {"path": "x.py"}]
+    lease = md.read_lease()
+    # the refresh.attempted marker from the crashed pass makes this a post-attempt
+    # escape, which land() adjudicates into a BLOCKED door (never a blind release)
+    with pytest.raises(md.DoorBlocked, match="identity gate"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
+    assert md.read_lease()["state"] == "blocked"
+
+
+# mutation-probe: drop the pending-run guard in wait_pr_head_checks (stale verdict read)
+def test_pr_head_wait_ignores_stale_completed_run_while_rerun_pending(door):
+    """codex r5 P2: a rerun reuses the SHA — an older completed FAILURE must not be
+    judged while a newer run is still in progress; the wait holds, then merges on the
+    rerun's green."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 3:  # stale red + live rerun: hold, don't judge
+                return [
+                    {"status": "completed", "conclusion": "failure", "event": "pull_request"},
+                    {"status": "in_progress", "conclusion": None, "event": "pull_request"},
+                ]
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr) == "released"
+    assert (2, "r" * 40) in g.merge_calls
+    assert polls["n"] >= 3
+
+
+# mutation-probe: drop the baseRefName check in the adoption gate (wrong-branch merge)
+def test_resume_refuses_moved_head_on_retargeted_base(door, monkeypatch):
+    """r6 P2: a refresh PR retargeted off `main` while receiving its fix commit must
+    never be adopted — the squash would land on the wrong branch irreversibly."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40
+    g.states[2]["baseRefName"] = "release-x"  # retargeted during recovery
+    lease = md.read_lease()
+    with pytest.raises(md.DoorBlocked, match="identity gate"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
+
+
+# mutation-probe: weaken the delimiter-safe title binding (post-#1 accepting post-#10)
+def test_resume_refuses_moved_head_bound_to_another_landing(door, monkeypatch):
+    """r7 P2: content PR #1 must not adopt a refresh titled post-#10 — prefix match
+    alone would repurpose another landing's refresh under this lease."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40
+    g.states[2]["title"] = "ops: roadmap status refresh post-#10"
+    lease = md.read_lease()
+    with pytest.raises(md.DoorBlocked, match="identity gate"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
+
+
+# mutation-probe: drop the post-wait identity revalidation (45-min TOCTOU fence)
+def test_refresh_identity_mutated_during_wait_blocks_without_merge(door, monkeypatch):
+    """r10 P3 witness for the r8 fence: the PR is retargeted DURING the checks wait
+    (same head) — the post-wait revalidation must fail the door with no merge issued."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: None)
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 2:
+                return []  # checks pending — the wait is in progress
+            # the retarget lands while we were waiting; head unchanged
+            g.states[2]["baseRefName"] = "release-x"
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) not in g.merge_calls
+    assert md.read_lease()["state"] == "blocked"
+
+
+# mutation-probe: drop baseRefName from default_ground's gh_view --json field list
+def test_default_ground_gh_view_requests_the_adoption_gate_fields(monkeypatch):
+    """r18 P3: the fakes inject fields directly, so reverting the REAL query's field
+    list would leave the suite green while production revalidation blocks every
+    refresh. Pin the argv the real Ground sends to gh."""
+    seen = {}
+
+    def fake_gh(*args, timeout):
+        seen["args"] = args
+        return subprocess.CompletedProcess([], 0, '{"state": "OPEN"}', "")
+
+    monkeypatch.setattr(md, "_gh", fake_gh)
+    md.default_ground().gh_view(7)
+    joined = " ".join(seen["args"])
+    assert "--json" in seen["args"]
+    for field in ("baseRefName", "baseRefOid", "headRefOid", "title", "files", "state"):
+        assert field in joined, f"gh_view no longer requests {field}"
+
+
+# mutation-probe: swap the adoption os.replace for unlink-then-create (record gap)
+def test_adoption_record_never_in_a_gap_on_replace_fault(door, monkeypatch):
+    """r20 P2: at the replacement boundary either the OLD or NEW record must remain
+    readable — a replace fault must leave the old pair intact, never a gap."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40  # fix commit moved the head -> adoption path
+
+    def replace_fault(src, dst):
+        raise OSError("replace fault injected")
+
+    monkeypatch.setattr(md.os, "replace", replace_fault)
+    lease = md.read_lease()
+    with pytest.raises((md.DoorBlocked, OSError)):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    live = md.read_lease()
+    assert live is not None
+    # the OLD durable record is still readable — no gap at the boundary
+    assert live.get("refresh", {}).get("pr") == 2
+    assert live["refresh"]["head_sha"] == "r" * 40
+
+
+# mutation-probe: drop the adoption-path symlink containment (merge-gate r1 witness P2)
+def test_adoption_refuses_symlinked_sidecar(door, monkeypatch):
+    """A planted symlink at the refresh sidecar must fail the adoption closed —
+    deleting merge_door's containment check must turn this row red."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    lease = md.read_lease()
+    sidecar = md._sidecar(lease["lease_token"], "refresh")
+    outside = md.DOOR.parent / "outside-refresh.json"
+    outside.write_text(sidecar.read_text())
+    sidecar.unlink()
+    sidecar.symlink_to(outside)  # planted symlink; content still reads valid
+    g.states[2]["headRefOid"] = "s" * 40  # force the adoption path
+    with pytest.raises(md.DoorBlocked, match="containment"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
+    outside.unlink()
+
+
+# mutation-probe: drop the headRefOid arm of the rv2 post-wait revalidation
+def test_refresh_head_moved_during_wait_blocks_without_merge(door, monkeypatch):
+    """merge-gate r1 witness P2: the rv2 head arm — a head that moves DURING the
+    checks wait must fail the door with NO merge against the stale --match-head."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: None)
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 2:
+                return []
+            g.states[2]["headRefOid"] = "z" * 40  # head moved mid-wait
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) not in g.merge_calls
+    assert (2, "z" * 40) not in g.merge_calls
+
+
+# mutation-probe: drop the files arm of the rv2 post-wait revalidation
+def test_refresh_files_mutated_during_wait_blocks_without_merge(door, monkeypatch):
+    """merge-gate r1 witness P2: the rv2 file-set arm — a second file appearing on the
+    refresh PR during the wait must fail the door with no merge issued."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: None)
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 2:
+                return []
+            g.states[2]["files"] = [
+                {"path": ".harness/roadmap_status.md"},
+                {"path": "x.py"},
+            ]
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) not in g.merge_calls
 
 
 def test_wait_for_door_backoff_numbers_and_budget(door):
@@ -1215,6 +1534,143 @@ esac
     )
     for f in ("gh", "git"):
         (bindir / f).chmod(0o755)
+
+
+def test_e2e_refresh_continuation_through_real_producer_cli(door, tmp_path):
+    """MERGE-GATE r1 witness P1: the production refresh() closure (bash -c + whole-stdout
+    json.loads) composed against the REAL roadmap_status_refresh.py CLI — the JSON-key
+    contract and stdout purity are witnessed ACROSS the process boundary, not in
+    isolation. git/gh are PATH shims; the ephemeral worktree is materialized by the git
+    shim copying the real repo's status file."""
+    q = door
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    state = tmp_path / "state.json"
+    state2 = tmp_path / "state2.json"
+    log = tmp_path / "merge-calls.log"
+    state.write_text(
+        json.dumps(
+            {
+                "state": "OPEN",
+                "headRefOid": "a" * 40,
+                "baseRefOid": "b" * 40,
+                "mergedAt": None,
+                "mergeCommit": None,
+            }
+        )
+    )
+    state2.write_text(
+        json.dumps(
+            {
+                "state": "OPEN",
+                "headRefOid": "r" * 40,
+                "baseRefOid": "c" * 40,
+                "mergedAt": None,
+                "mergeCommit": None,
+                "title": "ops: roadmap status refresh post-#1",
+                "baseRefName": "main",
+                "files": [{"path": ".harness/roadmap_status.md"}],
+            }
+        )
+    )
+    real_status = ROOT_REPO / ".harness" / "roadmap_status.md"
+    real_archive = ROOT_REPO / ".harness" / "roadmap_drift_log_archive.md"
+    (bindir / "gh").write_text(
+        f"""#!/usr/bin/env bash
+case "$*" in
+  *"pr list"*) echo -n "" ;;
+  *"pr view 2"*) cat "{state2}" ;;
+  *"pr view"*) cat "{state}" ;;
+  *"pr create"*) echo "https://github.com/o/r/pull/2" ;;
+  *"pr merge 2"*) echo "$*" >> "{log}"; python3 - <<'PY2B'
+import json
+p = "{state2}"
+s = json.load(open(p))
+s.update(state="MERGED", mergedAt="now", mergeCommit={{"oid": "9" * 40}})
+json.dump(s, open(p, "w"))
+PY2B
+  ;;
+  *"pr merge"*) echo "$*" >> "{log}"; python3 - <<'PY2'
+import json
+p = "{state}"
+s = json.load(open(p))
+s.update(state="MERGED", mergedAt="now", mergeCommit={{"oid": "c" * 40}})
+json.dump(s, open(p, "w"))
+PY2
+  ;;
+  *"run list"*"--commit"*)
+    echo '[{{"status":"completed","conclusion":"success","event":"push"}}]' ;;
+  *"run list"*) echo '[]' ;;
+  *) echo "fake gh: unhandled $*" >&2; exit 1 ;;
+esac
+"""
+    )
+    (bindir / "git").write_text(
+        f"""#!/usr/bin/env bash
+if [ "$1" = "-C" ]; then shift 2; fi
+case "$1 $2" in
+  "merge-tree --write-tree") echo "{"d" * 40}" ;;
+  "ls-remote --exit-code") exit 2 ;;
+  "worktree add")
+    # materialize the ephemeral worktree: last-but-one arg is the path
+    wt="$4"; [ "$3" = "--detach" ] && wt="$4"; [ "$2" = "add" ] && for a in "$@"; do :; done
+    # positional: git worktree add -q --detach <wt> origin/main -> $5 is <wt>
+    mkdir -p "$5/.harness"
+    cp "{real_status}" "$5/.harness/roadmap_status.md"
+    cp "{real_archive}" "$5/.harness/roadmap_drift_log_archive.md" 2>/dev/null || true
+    ;;
+  "worktree remove") ;;
+  "worktree list") echo "worktree /x" ;;
+  "fetch origin") ;;
+  "add .harness/roadmap_status.md") ;;
+  "diff --cached") echo ".harness/roadmap_status.md" ;;
+  "commit -m") ;;
+  "push -q") ;;
+  "rev-parse {"c" * 40}^1") echo "{"b" * 40}" ;;
+  "rev-parse HEAD") echo "{"r" * 40}" ;;
+  "rev-parse "*) echo "{"b" * 40}" ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+"""
+    )
+    for f in ("gh", "git"):
+        (bindir / f).chmod(0o755)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "ARC_METRICS_QUEUE_DIR": str(q),
+        "HARNESS_GATE_LOG": str(tmp_path / "gate-log.jsonl"),
+        "PYTHONPATH": str(TOOLS),
+        "HARNESS_LANE_ID": "A",
+    }
+    refresh_cmd = f"{sys.executable} {TOOLS / 'roadmap_status_refresh.py'} --emit-refresh-pr-json 1"
+    p = subprocess.run(
+        [
+            sys.executable,
+            str(TOOLS / "merge_door.py"),
+            "land",
+            "1",
+            "--lane-id",
+            "A",
+            "--arc-id",
+            "pr-1",
+            "--refresh-cmd",
+            refresh_cmd,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert p.returncode == 0, f"stdout: {p.stdout}\nstderr: {p.stderr}"
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert sum("pr merge 1 " in c for c in calls) == 1
+    assert sum("pr merge 2 " in c for c in calls) == 1  # the REAL producer's pair merged
+    assert md.read_lease() is None
+
+
+ROOT_REPO = Path(__file__).resolve().parents[1]
 
 
 def _land_cmd() -> list[str]:
@@ -1764,11 +2220,13 @@ def test_ambiguous_refresh_attempt_blocks_even_without_main_attempt(door, monkey
     g.states[1].update(state="MERGED", mergedAt="now", mergeCommit={"oid": "c" * 40})
 
     def refresh():
-        pr, head = FakeGround.add_refresh_pr(g)
-        g.states[pr].update(state="CLOSED")  # attempt lands in an unreconcilable state
-        return pr, head
+        return FakeGround.add_refresh_pr(g)
 
     def merge_fail(pr, head, timeout):
+        # the external CLOSED transition lands DURING the attempt (r8 revalidation
+        # correctly rejects an already-CLOSED PR pre-attempt, which would be a clean
+        # pre-attempt release — not this test's ambiguous-attempt subject)
+        g.states[pr].update(state="CLOSED")
         raise subprocess.TimeoutExpired(cmd="gh", timeout=timeout)
 
     g.gh_merge = merge_fail
@@ -1945,6 +2403,7 @@ def test_ac2_c_refresh_crash_resume(door, tmp_path, monkeypatch):
                 "mergedAt": None,
                 "mergeCommit": None,
                 "title": "ops: roadmap status refresh post-#1",
+                "baseRefName": "main",
                 "files": [{"path": ".harness/roadmap_status.md"}],
             }
         )

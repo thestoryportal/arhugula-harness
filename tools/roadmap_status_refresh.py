@@ -37,12 +37,15 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import datetime as _dt
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +58,13 @@ DEFAULT_ARCHIVE = ROOT / ".harness" / "roadmap_drift_log_archive.md"
 # it is populated by hand at each next-action update, mirroring the existing
 # DEFAULT_ARCHIVE convention for the drift log.
 NEXT_ACTION_ARCHIVE = ROOT / ".harness" / "roadmap-next-action-archive.md"
+# U-HE-28 codex r2 P2: the merge door's fixed wrapper string cannot carry an authored
+# `--next-action`, but §12.2 requires the pointer re-derived at the refresh. ship-pr
+# writes this gitignored draft (first line `post-pr: <N>`, pointer body below) BEFORE
+# invoking safe-merge; the emit mode consumes it when N matches its own POST_PR and
+# leaves (with a stderr warning) any mismatched/stale draft. An explicit --next-action
+# flag always wins over the draft.
+NEXT_ACTION_DRAFT = ROOT / ".harness" / ".next-action-draft"
 
 RECENTLY_COMPLETED_HEADING = "Recently completed (last 5)"
 IN_FLIGHT_HEADING = "In-flight (open PRs)"
@@ -909,6 +919,447 @@ def check_head_refresh_shape(
     return []
 
 
+def _read_draft_nofollow() -> str | None:
+    """Read the next-action draft with O_NOFOLLOW (r13 P1): a planted symlink at the
+    gitignored path must never leak an outside file's content into the refresh PR
+    body or the committed pointer. None = absent or refused (symlink -> warned)."""
+    try:
+        fd = os.open(NEXT_ACTION_DRAFT, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if NEXT_ACTION_DRAFT.is_symlink():
+            print(
+                f"emit-refresh-pr: refusing symlinked next-action draft "
+                f"{NEXT_ACTION_DRAFT} (containment)",
+                file=sys.stderr,
+            )
+            return "SYMLINK_REFUSED"  # sentinel: surfaced in the PR body (r19 P2)
+        # r18 P2: a draft that EXISTS but cannot be read (PermissionError, EIO)
+        # must not silently land a stale pointer — fail loud, no JSON, door blocks.
+        raise SystemExit(
+            f"emit-refresh-pr: next-action draft exists but is unreadable ({exc}); "
+            "fix permissions or remove it, then re-run"
+        ) from exc
+    with os.fdopen(fd, "r") as f:
+        return f.read()
+
+
+def _discard_matching_draft(post_pr: int, represented_in: str | None) -> str:
+    """Retire the next-action draft iff it names post_pr AND its body is verifiably
+    represented by the pushed refresh content (codex r6 P2: an operator may CORRECT a
+    same-PR draft after the branch was pushed — deleting the unrepresented correction
+    would silently land the older pointer). represented_in is the pushed refresh
+    commit's roadmap_status.md text, or None when it could not be obtained — in every
+    unverified case the draft is KEPT (fail toward retaining the operator's authoring).
+    """
+    try:
+        raw = _read_draft_nofollow()
+        if raw is None or raw == "SYMLINK_REFUSED":
+            return "absent"
+        first, _, rest = raw.partition("\n")
+        m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
+        if not (m and int(m.group(1)) == post_pr):
+            return "other"  # another arc's authoring — always left alone
+        body = rest.strip()
+        # r7 P2 + r8 P2 + r11 P2: the proof is EQUALITY with the LIVE pointer body
+        # AND the pointer's own post-# label naming THIS landing — a stale post-#54
+        # pointer that happens to equal the draft body is not installation of the
+        # post-#55 pointer.
+        live = _CURRENT_PARAGRAPH_RE.search(represented_in) if represented_in else None
+        live_body = None
+        if live is not None:
+            lm = re.match(
+                r"^\*\*Current next action \(post-#(\d+)[^)]*\)\.\*\*\s*(.*)\Z",
+                live.group(0),
+                re.DOTALL,
+            )
+            if lm and int(lm.group(1)) == post_pr:
+                live_body = lm.group(2).strip()
+        if body and live_body == body:
+            # r11/r12 P3: ATOMIC rename-claim retirement. os.rename atomically takes
+            # the path; only the claimed COPY we then verify is ever deleted, so a
+            # replacement written by another agent either survives at the path
+            # (written after our claim) or is restored from the claim (written
+            # before it). The restore link fails closed if a third write landed.
+            # NOTE (r14 P3, named residual): a process death between this rename and
+            # the unlink/restore below strands the claimed copy at *.claim.<pid> —
+            # gitignored alongside the draft; the micro-window needs a third writer
+            # to lose authored state and discovery machinery is deliberately NOT
+            # built for it.
+            claim = NEXT_ACTION_DRAFT.with_name(f"{NEXT_ACTION_DRAFT.name}.claim.{os.getpid()}")
+            try:
+                os.rename(NEXT_ACTION_DRAFT, claim)
+            except FileNotFoundError:
+                return "absent"  # another process already acted on it
+            try:
+                if claim.read_text() == raw:
+                    claim.unlink()
+                    return "retired"
+                try:
+                    os.link(claim, NEXT_ACTION_DRAFT)  # restore; refuses if newer exists
+                except FileExistsError:
+                    print(
+                        f"emit-refresh-pr: a newer draft appeared during retirement; "
+                        f"the displaced correction is preserved at {claim}",
+                        file=sys.stderr,
+                    )
+                    return "unrepresented"
+                claim.unlink()
+                return "unrepresented"
+            except OSError:
+                # r17 P2: once the draft is CLAIMED, an I/O failure must fail toward
+                # refusal — never report "absent" and let a stale refresh proceed
+                # while authoring sits stranded at the claim path.
+                print(
+                    f"emit-refresh-pr: I/O error during retirement; authored draft "
+                    f"state is preserved at {claim}",
+                    file=sys.stderr,
+                )
+                return "unrepresented"
+        print(
+            "emit-refresh-pr: keeping next-action draft — its body is not "
+            "verified in the pushed refresh content (a correction survives "
+            "for the retry / next manual refresh)",
+            file=sys.stderr,
+        )
+        return "unrepresented"
+    except OSError:
+        return "absent"
+
+
+def _pushed_refresh_text(run, branch: str) -> str | None:
+    """Best-effort read of the pushed refresh commit's roadmap_status.md (for draft
+    retirement verification). None on any failure — never aborts the emit."""
+    try:
+        f = run(
+            ["git", "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if f.returncode != 0:
+            return None
+        # r17 P2: FETCH_HEAD is shared across worktrees and raceable by another
+        # lane's fetch — read through the explicit tracking ref this fetch updated.
+        s = run(
+            ["git", "show", f"origin/{branch}:.harness/roadmap_status.md"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        return s.stdout if s.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def emit_refresh_pr(
+    post_pr: int,
+    *,
+    notes: str | None = None,
+    next_action: str | None = None,
+    date: str | None = None,
+    run=subprocess.run,
+    do_refresh=None,
+) -> dict:
+    """C-HE-06 §4(viii), U-HE-28: create the terminating refresh PR as the merge door's
+    continuation and return {pr, head_sha} for the door to merge under the same held lease.
+
+    Any failure raises -> non-zero exit, no JSON -> the door marks step (viii) blocked.
+    Never merges here (the door drives the merge).
+
+    IDEMPOTENT by branch name (plan Codex round-4 P1): a crash between `gh pr create` and
+    the door's sidecar publish must not orphan/duplicate the refresh. If the branch
+    already has an open PR, return it; if the branch was pushed but no PR exists, create
+    the PR on it; only otherwise create the branch. NOTE (r8): after such a crash the
+    door deliberately blocks on `refresh_intent_unresolved` (U-HE-23 codex r1 P2 — a
+    blind re-call could mint a second PR); this idempotency is what makes BOTH documented
+    recoveries converge — `record-refresh` records the pair, and `clear-refresh-intent`
+    + re-land re-enters here and resumes the existing branch/PR instead of duplicating.
+
+    As-built correction vs the plan-time sketch (recorded in the U-HE-28 rev note): the
+    fresh path branches from the JUST-MERGED `origin/main` tip (fetch first), and runs
+    the mechanical refresh AFTER that checkout — never from the invoking worktree's topic
+    HEAD. Both §12.2.1 halves depend on it: the refresh commit's recorded `git_head` must
+    equal its OWN parent (`_is_terminating_refresh_commit`), and the PR's base...head
+    diff must be roadmap-status-only (a topic-HEAD branch would drag the whole arc diff
+    into the shape gate).
+    """
+    branch = f"roadmap-refresh-post-{post_pr}"
+    title = f"ops: roadmap status refresh post-#{post_pr}"
+    body = (
+        "terminating refresh (CLAUDE.md §12.2.1); landed by the merge door as a "
+        "continuation (C-HE-06 §4(viii))"
+    )
+
+    def sh(*args: str, cwd: str | None = None) -> str:
+        p = run(list(args), capture_output=True, text=True, timeout=120, cwd=cwd)
+        if p.returncode != 0:
+            raise SystemExit(f"emit-refresh-pr: {' '.join(args)} failed: {p.stderr.strip()}")
+        return p.stdout.strip()
+
+    existing = sh(
+        "gh",
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,headRefOid,baseRefName,title,isCrossRepository",
+        "--jq",
+        '.[0] | select(.) | "\\(.number)\\t\\(.headRefOid)\\t\\(.baseRefName)\\t'
+        '\\(.isCrossRepository)\\t\\(.title)"',
+    )
+    if existing:
+        n, head, base_ref, cross_repo, found_title = existing.split("\t", 4)
+        # r7 P2 + r10 P1: identity-gate the resumed PR — a retargeted or reused PR,
+        # or a FORK PR squatting the predictable branch name (attacker-controlled
+        # head the door's title/base/file gates cannot distinguish), must never be
+        # persisted for the door to merge.
+        if base_ref != "main" or cross_repo != "false" or found_title.strip() != title:
+            raise SystemExit(
+                f"emit-refresh-pr: open PR #{n} on {branch} is not this landing's "
+                f"terminating refresh (base {base_ref!r}, cross-repo {cross_repo!r}, "
+                f"title {found_title!r}); inspect/close it before retrying"
+            )
+        if notes is not None or next_action is not None or date is not None:
+            # r10 P2 (supersedes the r7 warn-and-continue): a resume cannot apply
+            # supplied flags — silently handing the stale PR to the door would land
+            # the OLD pointer while the operator believes the correction applied.
+            raise SystemExit(
+                f"emit-refresh-pr: open refresh PR #{n} already exists; supplied "
+                "--notes/--date/--next-action cannot be applied to it. Close the PR "
+                "(or drop the flags) and re-run"
+            )
+        # retire a matching draft ONLY if its body is verifiably in the pushed
+        # refresh commit (codex r3 P2 + r6 P2); an UNREPRESENTED correction refuses
+        # the resume outright (r14 P2 — mirroring the flags refusal above: handing
+        # the stale pair to the door would silently land the old pointer while the
+        # one-refresh-per-landing rule forecloses applying the correction later)
+        if _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch)) == "unrepresented":
+            raise SystemExit(
+                f"emit-refresh-pr: open refresh PR #{n} does not represent the "
+                "authored next-action draft. Close the PR and delete its branch "
+                "(or remove the draft) and re-run"
+            )
+        return {"pr": int(n), "head_sha": head}
+    # Remote-branch probe: `--exit-code` means exit 2 is the ONLY "no matching ref"
+    # signal; auth/transport/timeout failures use other codes (codex r1 P2 — same
+    # contract ship-pr's branch-hygiene step documents). Treating those as "absent"
+    # would reset a previously-pushed branch onto origin/main and then fail the
+    # non-fast-forward push, blocking the door instead of resuming the branch.
+    probe = run(
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if probe.returncode not in (0, 2):
+        raise SystemExit(
+            f"emit-refresh-pr: could not verify remote state of {branch} "
+            f"(ls-remote exit {probe.returncode}): {probe.stderr.strip()}"
+        )
+    if probe.returncode == 0:
+        # r16 P1: fetch with EXPLICIT refspecs — a bare `git fetch origin <name>`
+        # updates FETCH_HEAD but does not guarantee the remote-tracking ref this
+        # code reads next advances.
+        sh("git", "fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+        # r12 P2 provenance: the genuine crash-recovery branch is exactly ONE commit
+        # whose first parent is the just-merged main tip. A pre-pushed same-name
+        # branch of any other shape must never be wrapped in the trusted refresh PR.
+        # r13 P2: resolve via the remote-tracking refs — FETCH_HEAD is clobbered by
+        # the second fetch, which made every genuine recovery fail this check.
+        sh("git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
+        parent = sh("git", "rev-parse", f"origin/{branch}^")
+        main_tip = sh("git", "rev-parse", "origin/main")
+        if parent != main_tip:
+            raise SystemExit(
+                f"emit-refresh-pr: pushed branch {branch} does not descend directly "
+                f"from the just-merged main tip (parent {parent[:12]}, main "
+                f"{main_tip[:12]}); delete the remote branch and re-run"
+            )
+        # MERGE-GATE r1 (concurrency P1/P2): NO checkout — this leg previously
+        # switched the INVOKING worktree's HEAD and could collide with a branch
+        # checked out elsewhere. Everything below is read-only or remote-side.
+        # r7 P2 + r10 P2: this path recovers a branch whose refresh commit ALREADY
+        # exists — re-running the refresh here would add a second commit whose
+        # recorded git_head is the first refresh commit, breaking the §12.2.1 fixed
+        # point on squash. Supplied flags therefore cannot apply: REFUSE rather than
+        # warn (the r10 posture, unified with the open-PR path above).
+        if notes is not None or next_action is not None or date is not None:
+            raise SystemExit(
+                f"emit-refresh-pr: a pushed refresh branch {branch} already exists; "
+                "supplied --notes/--date/--next-action cannot be applied to its "
+                "commit. Delete the remote branch (or drop the flags) and re-run"
+            )
+        url = sh(
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        )
+        # verify against the PUSHED content the same way as the sibling path (r6
+        # P2; no local checkout exists on this leg — merge-gate r1); an
+        # unrepresented correction refuses (r14 P2 — same rule as the open-PR path)
+        if _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch)) == "unrepresented":
+            raise SystemExit(
+                f"emit-refresh-pr: pushed refresh branch {branch} does not represent "
+                "the authored next-action draft. Delete the remote branch (or remove "
+                "the draft) and re-run"
+            )
+        return {
+            "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
+            "head_sha": sh("git", "rev-parse", f"origin/{branch}"),
+        }
+    # Fresh path: build the refresh in an EPHEMERAL DETACHED worktree (merge-gate r1
+    # concurrency P1): the previous `git checkout -B` here switched the INVOKING
+    # worktree's HEAD for the whole door hold and never restored it. No local branch
+    # is ever created (the push uses an explicit HEAD:refs/heads/<branch> refspec),
+    # so the cross-worktree already-checked-out collision cannot exist either.
+    # r16 P1: explicit refspec — the worktree base below reads the TRACKING ref,
+    # which a bare `git fetch origin main` does not guarantee to advance.
+    sh("git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
+    draft_warning = None
+    draft_used = False
+    draft_raw = _read_draft_nofollow() if next_action is None else None
+    if draft_raw == "SYMLINK_REFUSED":
+        # r19 P2: stderr is discarded by the door on success — the refusal must be
+        # visible where the operator reads (the PR body), never silent.
+        draft_warning = (
+            "WARNING: a symlinked next-action draft was REFUSED (containment); pointer left as-is"
+        )
+        draft_raw = None
+    if next_action is None and draft_raw is not None:
+        # §12.2 pointer re-derivation through the door (codex r2 P2): consume the
+        # ship-pr-authored draft iff it names THIS landing; a stale draft from an
+        # aborted arc must never install another arc's pointer.
+        first, _, rest = draft_raw.partition("\n")
+        m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
+        if m and int(m.group(1)) == post_pr and rest.strip():
+            # READ ONLY — the draft is retired after `gh pr create` succeeds (codex
+            # r3 P2): a crash between here and the push must leave the draft for the
+            # retry, else the re-run silently lands a pointer-less refresh.
+            next_action = rest.strip()
+            draft_used = True
+        else:
+            # The door captures and discards this process's stderr on success (codex
+            # r5 P2), so the condition is ALSO surfaced durably in the refresh PR
+            # body below — the venue the operator actually reads.
+            # r14 P2: NEVER interpolate draft content — this string reaches the
+            # public PR body, and a pasted token in the gitignored file must not
+            # be published. Generic text only.
+            draft_warning = (
+                f"WARNING: a next-action draft was present but does not name "
+                f"post-pr: {post_pr} (or has an empty body); pointer left as-is"
+            )
+            print(f"emit-refresh-pr: {draft_warning}", file=sys.stderr)
+    wt = tempfile.mkdtemp(prefix="refresh-emit-")
+    try:
+        sh("git", "worktree", "add", "-q", "--detach", wt, "origin/main")
+        if do_refresh is None:
+
+            def do_refresh() -> None:
+                argv = [
+                    "--refresh",
+                    "--status",
+                    f"{wt}/.harness/roadmap_status.md",
+                    "--archive",
+                    f"{wt}/.harness/roadmap_drift_log_archive.md",
+                    "--pr",
+                    f"PR #{post_pr}",
+                    "--date",
+                    date or _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
+                    "--notes",
+                    notes
+                    if notes is not None
+                    else (
+                        "landed through the merge door; terminating refresh as "
+                        "continuation (C-HE-06 §4(viii))"
+                    ),
+                ]
+                if next_action is not None:
+                    argv += ["--next-action", next_action]
+                rc = main(argv)
+                if rc != 0:
+                    raise SystemExit(f"emit-refresh-pr: mechanical refresh exited {rc}")
+
+        do_refresh()
+        sh("git", "add", ".harness/roadmap_status.md", cwd=wt)  # the ONLY file (§12.2.1)
+        changed = sh("git", "diff", "--cached", "--name-only", cwd=wt).splitlines()
+        if changed != [".harness/roadmap_status.md"]:
+            raise SystemExit(
+                f"emit-refresh-pr: refresh must touch exactly "
+                f".harness/roadmap_status.md, got {changed}"
+            )
+        sh("git", "commit", "-m", title, cwd=wt)
+        sh("git", "push", "-q", "origin", f"HEAD:refs/heads/{branch}", cwd=wt)
+        pr_body = body if draft_warning is None else f"{body}\n\n{draft_warning}"
+        url = sh(
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            pr_body,
+            cwd=wt,
+        )
+        head_sha = sh("git", "rev-parse", "HEAD", cwd=wt)
+    finally:
+        # best-effort ephemeral-worktree cleanup; a leak is disk residue only —
+        # never a HEAD/branch mutation anywhere (no local branch exists). Guarded
+        # (merge-gate r2 concurrency P3): a raising cleanup inside finally would
+        # mask the genuine in-flight failure from the try block.
+        try:
+            run(
+                ["git", "worktree", "remove", "--force", wt],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:
+            print(
+                f"emit-refresh-pr: ephemeral worktree cleanup failed; residue at {wt}",
+                file=sys.stderr,
+            )
+    # only a draft whose body was ADOPTED into this refresh is represented by
+    # construction — retire it now that the branch + PR are durable (r3 P2). An
+    # overridden (explicit --next-action) or mismatched draft is unrepresented
+    # authoring and is KEPT (r6 P2 rule; supersedes the r5 retire-on-override).
+    if draft_used:
+        # mirror exactly what install_next_action just wrote, so the helper's
+        # live-paragraph proof holds by construction
+        status = _discard_matching_draft(
+            post_pr, f"**Current next action (post-#{post_pr}).** {next_action}"
+        )
+        if status == "unrepresented":
+            # r17 P2: the draft was CORRECTED between the initial read and this
+            # retirement — the just-created PR carries the superseded pointer.
+            # Refuse (same rule as the resume paths); the correction survives.
+            raise SystemExit(
+                "emit-refresh-pr: the next-action draft was corrected mid-landing; "
+                f"the refresh PR just created for post-#{post_pr} carries the "
+                "superseded pointer. Close it, delete its branch, and re-run"
+            )
+    return {
+        "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
+        "head_sha": head_sha,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Deterministic roadmap_status.md skeleton refresh.")
     ap.add_argument("--status", type=Path, default=DEFAULT_STATUS)
@@ -964,6 +1415,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--git-head-note", default="", help="free-text note appended after the git_head hash"
     )
+    ap.add_argument(
+        "--emit-refresh-pr-json",
+        type=int,
+        metavar="POST_PR",
+        help="C-HE-06 §4(viii), U-HE-28: run the mechanical refresh for the "
+        "just-landed PR POST_PR (branching from the just-merged origin/main "
+        "tip), commit on roadmap-refresh-post-POST_PR, push, create the "
+        "terminating refresh PR, and print {pr, head_sha} for the merge door. "
+        "--notes/--next-action/--date compose when given; the door's fixed "
+        "wrapper invocation passes none, so those default mechanically. "
+        "Idempotent by branch name; any failure exits non-zero with no JSON",
+    )
     ap.add_argument("--drift-source", help="optional: also prepend a drift-log row")
     ap.add_argument("--drift-resolution", help="resolution text for --drift-source")
     ap.add_argument("--dry-run", action="store_true", help="print the diff instead of writing")
@@ -1005,6 +1468,42 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.emit_refresh_pr_json is not None:
+        conflicting = [
+            name
+            for name, on in (
+                ("--dry-run", args.dry_run),
+                ("--check", args.check),
+                ("--state", args.state),
+                ("--refresh", args.refresh),
+                ("--trim-drift-log", args.trim_drift_log),
+                ("--archive-superseded", args.archive_superseded),
+            )
+            if on
+        ]
+        if conflicting:
+            # r11/r18 P2: the emitter is a whole mutating operation of its own
+            # (checkout/commit/push/PR) — every other operation selector refuses.
+            print(
+                f"--emit-refresh-pr-json cannot be combined with {' '.join(conflicting)}",
+                file=sys.stderr,
+            )
+            return 2
+        # STDOUT PURITY (codex r1 P1): merge_door.py json-parses this mode's ENTIRE
+        # captured stdout, and the in-process `--refresh` re-invocation (plus anything
+        # nested) prints progress lines. Route every nested write to stderr for the
+        # whole emit; the one JSON line below is the only thing real stdout ever sees.
+        real_stdout = sys.stdout
+        with contextlib.redirect_stdout(sys.stderr):
+            out = emit_refresh_pr(
+                args.emit_refresh_pr_json,
+                notes=args.notes,
+                next_action=args.next_action,
+                date=args.date,
+            )
+        print(json.dumps(out), file=real_stdout)
+        return 0
 
     if args.state:
         print(json.dumps(compute_state().as_dict(), indent=2))
