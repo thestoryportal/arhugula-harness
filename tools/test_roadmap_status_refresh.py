@@ -1802,7 +1802,7 @@ def test_default_refresh_threads_status_and_archive_into_the_worktree(monkeypatc
     would silently write the invoking repo's live status file while every other
     assertion stays green."""
     argv_seen: dict[str, list[str]] = {}
-    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
     calls: list[list[str]] = []
     rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
     wt_add = next(c for c in calls if c[:3] == ["git", "worktree", "add"])
