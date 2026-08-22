@@ -59,7 +59,14 @@ def _gh(*args: str, timeout: float = 30) -> subprocess.CompletedProcess[str]:
 
 
 def _repo() -> str:
-    return _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").stdout.strip()
+    p = _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
+    slug = p.stdout.strip()
+    if p.returncode != 0 or "/" not in slug:
+        # An empty/malformed slug would turn the protection request itself into a 404 that
+        # reads as "unprotected", contaminating show/digest/evidence — stop at the failed
+        # observation instead (codex r4 P3).
+        raise SystemExit(f"repo discovery failed: {p.stderr.strip() or slug!r}")
+    return slug
 
 
 def current_protection() -> dict | None:
@@ -241,6 +248,81 @@ def _loop_mode() -> bool:
     return os.environ.get("HARNESS_LOOP") == "1" or (REPO / ".harness" / ".loop-active").exists()
 
 
+_APPLY_LOCK = REPO / ".harness" / ".main-protection-apply.lock"
+
+
+def _confirmed_apply(cur: dict | None, desired: dict) -> int:
+    """The digest-validated mutation transaction: evidence append → PUT → tiebreaker →
+    (on FAIL) rollback to the captured pre-state. Caller holds the apply lockfile."""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with EVIDENCE_LOG.open("a") as f:
+        f.write(f"\n## main-protection apply {stamp}\n```\n{diff_report(cur, desired)}\n```\n")
+    r = subprocess.run(
+        ["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
+        input=json.dumps(desired),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r.returncode != 0:
+        raise SystemExit(f"apply failed: {r.stderr.strip()}")
+    # C-HE-08 §4: the settings are exercised BEFORE they are allowed to persist. The
+    # tiebreaker needs strict:true live to be meaningful, so apply is provisional: a FAIL
+    # rolls back to the pre-change state (Codex round-3 P1).
+    print("applied provisionally; running the tiebreaker (FAIL → automatic rollback)")
+    try:
+        rc = tiebreaker()
+    except BaseException as e:  # sh() raises SystemExit; subprocess raises
+        # TimeoutExpired. ANY escape after the PUT must still reach the rollback below —
+        # exiting here would leave the new protection silently live (codex r1 P1).
+        rc = 1
+        print(f"tiebreaker raised instead of returning: {e!r}")
+    if rc != 0:
+        if cur is None:
+            # Pre-change state was unprotected: DELETE, and VALIDATE that the deletion
+            # actually landed — a failed DELETE must not be reported as a rollback (r1 P2).
+            rb = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
+            if rb.returncode != 0 or current_protection() is not None:
+                raise SystemExit(
+                    "tiebreaker FAILED and the rollback DELETE did not restore the "
+                    "unprotected pre-change state — the new protection REMAINS LIVE on "
+                    "main; run `just main-protection-rollback` and re-verify "
+                    f"({rb.stderr.strip()[:200]})"
+                )
+            raise SystemExit(
+                "tiebreaker FAILED → protection rolled back (DELETE); settings NOT persisted"
+            )
+        # Prior policy exists: restore it with a single PUT — PUT replaces in place, so
+        # there is no reason to open an unprotected DELETE window first (codex r2 P1).
+        restore = subprocess.run(
+            [
+                "gh",
+                "api",
+                "-X",
+                "PUT",
+                f"repos/{_repo()}/branches/main/protection",
+                "--input",
+                "-",
+            ],
+            input=json.dumps(_to_put_payload(cur)),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if restore.returncode != 0 or verify(current_protection(), _to_put_payload(cur)):
+            raise SystemExit(
+                "tiebreaker FAILED and the prior protection could NOT be verified as "
+                "restored — inspect `just main-protection-show` against the evidence-log "
+                "BEFORE block and restore by hand "
+                f"({restore.stderr.strip()[:200]})"
+            )
+        raise SystemExit(
+            "tiebreaker FAILED → prior protection restored (PUT); new settings NOT persisted"
+        )
+    print("tiebreaker PASS; protection persists. Run `just main-protection-verify`.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("cmd", choices=["show", "apply", "rollback", "verify", "tiebreaker"])
@@ -295,100 +377,58 @@ def main(argv: list[str] | None = None) -> int:
                 f"changed since the approved diff (approved={a.approved_digest or '<none>'}, "
                 f"current={digest}) — re-run `just main-protection-apply` and re-approve"
             )
-        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        with EVIDENCE_LOG.open("a") as f:
-            f.write(f"\n## main-protection apply {stamp}\n```\n{diff_report(cur, desired)}\n```\n")
-        r = subprocess.run(
-            ["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
-            input=json.dumps(desired),
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if r.returncode != 0:
-            raise SystemExit(f"apply failed: {r.stderr.strip()}")
-        # C-HE-08 §4: the settings are exercised BEFORE they are allowed to persist. The
-        # tiebreaker needs strict:true live to be meaningful, so apply is provisional: a FAIL
-        # rolls back to the pre-change state (Codex round-3 P1).
-        print("applied provisionally; running the tiebreaker (FAIL → automatic rollback)")
+        # The mutation transaction is serialized by an exclusive-create lockfile: without it,
+        # two confirms could both capture the same pre-state and the FAILING one's rollback
+        # would tear down the SUCCEEDING one's protection (codex r4 P1). Same-host scope is
+        # the real cardinality — the recipe is operator-gated and runs on this machine.
         try:
-            rc = tiebreaker()
-        except BaseException as e:  # sh() raises SystemExit; subprocess raises
-            # TimeoutExpired. ANY escape after the PUT must still reach the rollback below —
-            # exiting here would leave the new protection silently live (codex r1 P1).
-            rc = 1
-            print(f"tiebreaker raised instead of returning: {e!r}")
-        if rc != 0:
-            if cur is None:
-                # Pre-change state was unprotected: DELETE, and VALIDATE that the deletion
-                # actually landed — a failed DELETE must not be reported as a rollback (r1 P2).
-                rb = _gh(
-                    "api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60
-                )
-                if rb.returncode != 0 or current_protection() is not None:
-                    raise SystemExit(
-                        "tiebreaker FAILED and the rollback DELETE did not restore the "
-                        "unprotected pre-change state — the new protection REMAINS LIVE on "
-                        "main; run `just main-protection-rollback` and re-verify "
-                        f"({rb.stderr.strip()[:200]})"
-                    )
-                raise SystemExit(
-                    "tiebreaker FAILED → protection rolled back (DELETE); settings NOT persisted"
-                )
-            # Prior policy exists: restore it with a single PUT — PUT replaces in place, so
-            # there is no reason to open an unprotected DELETE window first (codex r2 P1).
-            restore = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    "-X",
-                    "PUT",
-                    f"repos/{_repo()}/branches/main/protection",
-                    "--input",
-                    "-",
-                ],
-                input=json.dumps(_to_put_payload(cur)),
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if restore.returncode != 0 or verify(current_protection(), _to_put_payload(cur)):
-                raise SystemExit(
-                    "tiebreaker FAILED and the prior protection could NOT be verified as "
-                    "restored — inspect `just main-protection-show` against the evidence-log "
-                    "BEFORE block and restore by hand "
-                    f"({restore.stderr.strip()[:200]})"
-                )
+            fd = os.open(_APPLY_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
             raise SystemExit(
-                "tiebreaker FAILED → prior protection restored (PUT); new settings NOT persisted"
-            )
-        print("tiebreaker PASS; protection persists. Run `just main-protection-verify`.")
-        return 0
+                f"another apply-confirm appears to be in flight ({_APPLY_LOCK} exists) — "
+                "wait for it, or remove the lockfile if its process is dead"
+            ) from None
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        try:
+            return _confirmed_apply(cur, desired)
+        finally:
+            _APPLY_LOCK.unlink(missing_ok=True)
     if a.cmd == "rollback":
         r = _gh("api", "-X", "DELETE", f"repos/{_repo()}/branches/main/protection", timeout=60)
-        print("rolled back (pre-change show output is in the evidence log)")
-        return r.returncode
+        # Validate like the auto-rollback path does: an authorization/network failure must
+        # not print success while protection remains live (codex r4 P2).
+        if r.returncode != 0 or current_protection() is not None:
+            print(f"rollback FAILED — protection is still live ({r.stderr.strip()[:200]})")
+            return 1
+        print("rolled back and verified unprotected (pre-change show is in the evidence log)")
+        return 0
     # tiebreaker: scratch PR under strict:true + stale-refresh-branch check (HE-1 O4; C10-T8).
     if _loop_mode():
         raise SystemExit("tiebreaker is a live probe; run outside loop mode")
     return tiebreaker()
 
 
-#: Three-way refusal attribution (codex r1 P2 + r3 P2). "strict" signatures name the
-#: protection/base-freshness mechanism itself; "generic" signatures ("not mergeable",
-#: "merge state") also cover conflicts and unrelated restrictions, so they count as
-#: enforcement evidence only when the PR's own mergeStateStatus independently read BEHIND
-#: (the strict staleness reading); anything else (auth/rate-limit/network/head-race) is an
-#: indeterminate probe, never a PASS.
+#: Three-way refusal attribution (codex r1/r3/r4 P2). "strict" signatures name the
+#: base-freshness/status-check mechanism ITSELF — broader protection wording ("branch
+#: protection", "review is required") can come from reviews, rulesets, or other rules that
+#: would refuse the merge even without strict:true, so it sits in the "generic" tier with
+#: the mergeability errors and counts as enforcement evidence only when the PR's own
+#: mergeStateStatus independently read BEHIND (the strict staleness reading) AND the §2
+#: fence was verified live at probe start; anything else (auth/rate-limit/network/
+#: head-race) is an indeterminate probe, never a PASS.
 _STRICT_REFUSAL_SIGS = (
     "required status check",
-    "branch protection",
-    "protected branch",
     "behind",
     "base branch",
+)
+_GENERIC_MERGEABILITY_SIGS = (
+    "not mergeable",
+    "merge state",
+    "branch protection",
+    "protected branch",
     "review is required",
 )
-_GENERIC_MERGEABILITY_SIGS = ("not mergeable", "merge state")
 
 
 def _classify_merge_refusal(stderr: str) -> str:
@@ -409,6 +449,16 @@ def tiebreaker() -> int:
     Runs in an ISOLATED temporary worktree (never switches the operator's checkout; never
     picks up staged changes — Codex round-3 P1) and compares the stale landing against the
     main SHA captured BEFORE that merge."""
+    # Fence-liveness precondition (codex r4 P2): a clean fast-forward landing is ALSO what
+    # happens with no protection at all, so the probe witnesses strict:true only if the §2
+    # fence is verified live first — otherwise every arm of the verdict is meaningless.
+    live_problems = verify(current_protection(), desired_payload(blocking_contexts()))
+    if live_problems:
+        print(
+            "tiebreaker: FAIL — the §2 fence is not live "
+            f"({'; '.join(live_problems[:3])}); the probe cannot witness strict:true"
+        )
+        return 1
     # PID suffix: one-second timestamp uniqueness is not enough — concurrent tiebreakers
     # must never collide on (or GC) each other's scratch branches (codex r3 P2).
     ts = f"{time.strftime('%Y%m%d%H%M%S', time.gmtime())}-{os.getpid()}"
@@ -549,24 +599,36 @@ def tiebreaker() -> int:
         )
         return 0 if verdict == "PASS" else 1
     finally:
-        # Best-effort external-state GC on EVERY exit path — a failed probe must not leave
-        # scratch PRs open or remote branches behind (codex r1 P3): deleting a remote branch
-        # auto-closes its open PR, and an already-deleted/merged branch makes this a no-op.
+        # External-state GC on EVERY exit path — a failed probe must not leave scratch PRs
+        # open or remote branches behind (codex r1 P3): deleting a remote branch auto-closes
+        # its open PR, and an already-deleted/merged branch makes this a no-op. Failures are
+        # REPORTED, not swallowed — silent GC failure would contradict the cleanup contract
+        # while looking identical to success (codex r4 P3).
         for scratch in created:
-            subprocess.run(
+            gc = subprocess.run(
                 ["git", "push", "-q", "origin", "--delete", scratch],
                 capture_output=True,
                 text=True,
                 timeout=60,
                 cwd=REPO,
             )
-        subprocess.run(
+            if gc.returncode != 0 and "remote ref does not exist" not in gc.stderr:
+                print(
+                    f"WARNING: cleanup incomplete — could not delete origin/{scratch} "
+                    f"({gc.stderr.strip()[:120]}); delete it (and its PR) by hand"
+                )
+        wtrm = subprocess.run(
             ["bash", str(REPO / "tools" / "hooks" / "safe-worktree-remove.sh"), str(wt)],
             capture_output=True,
             text=True,
             timeout=120,
             cwd=REPO,
         )
+        if wtrm.returncode != 0:
+            print(
+                f"WARNING: cleanup incomplete — temporary worktree {wt} was not removed "
+                f"({wtrm.stderr.strip()[:120]})"
+            )
 
 
 if __name__ == "__main__":

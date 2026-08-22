@@ -178,6 +178,7 @@ def _wire_apply(monkeypatch, tmp_path, *, cur, tiebreaker):
     monkeypatch.setattr(mp, "current_protection", lambda: cur)
     monkeypatch.setattr(mp, "tiebreaker", tiebreaker)
     monkeypatch.setattr(mp, "EVIDENCE_LOG", tmp_path / "evidence.md")
+    monkeypatch.setattr(mp, "_APPLY_LOCK", tmp_path / "apply.lock")
     return calls
 
 
@@ -197,6 +198,31 @@ def test_apply_confirm_refuses_stale_approval_digest(monkeypatch, tmp_path):
         mp.main(["apply", "--confirm", "--approved-digest", "0000000000000000"])
     assert "digest mismatch" in str(e.value)
     assert _puts(calls) == [] and _deletes(calls) == []
+
+
+def test_apply_confirm_refuses_when_lock_held(monkeypatch, tmp_path):
+    """The mutation transaction is lockfile-serialized: a concurrent confirm must abort
+    before any mutation, and the pre-existing lock survives (codex r4 P1)."""
+    calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 0)
+    (tmp_path / "apply.lock").write_text("12345")
+    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    with pytest.raises(SystemExit) as e:
+        mp.main(["apply", "--confirm", "--approved-digest", digest])
+    assert "in flight" in str(e.value)
+    assert _puts(calls) == [] and _deletes(calls) == []
+    assert (tmp_path / "apply.lock").read_text() == "12345"
+
+
+def test_apply_confirm_releases_lock_on_every_exit(monkeypatch, tmp_path):
+    """The lockfile is released on success AND on the rollback-raise path."""
+    _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 0)
+    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    assert mp.main(["apply", "--confirm", "--approved-digest", digest]) == 0
+    assert not (tmp_path / "apply.lock").exists()
+    _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 1)
+    with pytest.raises(SystemExit):
+        mp.main(["apply", "--confirm", "--approved-digest", digest])
+    assert not (tmp_path / "apply.lock").exists()
 
 
 def test_apply_rollback_deletes_only_when_previously_unprotected(monkeypatch, tmp_path):
