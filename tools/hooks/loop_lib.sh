@@ -90,7 +90,12 @@ loop_status_ensure() {
     # a partially-written state: by the time any other lane can see it, the header is
     # complete and every subsequent write is an O_APPEND row. The loser of the link race is
     # a harmless no-op (the winner's header is equally valid -- there is nothing to merge).
-    local _tmp="${p}.$$-${RANDOM}.tmp"
+    # EXCLUSIVE staging name (codex r6 P2). `$$` is shared by every subshell of one bash and
+    # $RANDOM is 15 bits, so two concurrent callers could pick the SAME staging path, both
+    # write it, and one could publish it while the other was still writing -- reintroducing
+    # the partial-publication race this protocol exists to remove. mktemp creates with
+    # O_EXCL and never returns a name it did not just create.
+    local _tmp; _tmp=$(mktemp "${p}.XXXXXXXX" 2>/dev/null) || _tmp="${p}.$$-${RANDOM}.tmp"
     (
       cat > "$_tmp" <<'EOF'
 # Loop status ledger
@@ -201,6 +206,24 @@ loop_status_migrate() {
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
     legacy="$wt/.harness/loop_status.md"
+    # RECOVER an orphaned claim first (codex r6 P2). A crash -- or the import failure below --
+    # between the claim rename and the final retire leaves a `.migrating-*` file that later
+    # passes would never look at, because they only inspect the original filename: the sole
+    # legacy ledger would be permanently invisible and its open gates stranded outside the
+    # skip-set. Restoring it to the original name hands it back to the normal path in this
+    # same pass; the row-level dedupe below makes re-importing an already-imported row a
+    # no-op, so recovery cannot double-count.
+    local orphan
+    for orphan in "$wt/.harness"/loop_status.md.migrating-*; do
+      [ -f "$orphan" ] || continue
+      if [ -f "$legacy" ]; then
+        # A concurrent old writer already recreated the live path. Both hold real rows, so
+        # neither may be discarded: fold the orphan's rows into the live file and drop it.
+        cat "$orphan" >> "$legacy" 2>/dev/null && rm -f "$orphan" 2>/dev/null
+      else
+        mv "$orphan" "$legacy" 2>/dev/null
+      fi
+    done
     [ -f "$legacy" ] || continue
     # Never import the shared venue into itself (a checkout could be configured to point
     # at it), and never import a file that is already the same inode.
@@ -240,12 +263,19 @@ loop_status_migrate() {
         lane=$(printf '%s' "$line" | sed -n 's/^\[\([^]]*\)\] .*$/\1/p'); [ -n "$lane" ] || lane="-"
         detail=$(printf '%s' "$line" | sed 's/^\[[^]]*\] //')
         item=$(printf '%s' "$detail" | awk '{print $1}')
-        # DEDUPE across retries (codex r5 P2). A pass that appended some rows and then failed
-        # would, on retry, re-append a DEFERRED-HIL for an item the operator may have
-        # RESOLVED in between -- silently reopening an answered gate. Imported rows are
-        # stamped with a distinctive cause, so a prior import of the SAME item is detectable
-        # and skipped; the operator's later RESOLVED-HIL keeps the last word.
-        if grep -qF ";cause=legacy-import:cutover:u-he-29 | ${item} " "$shared" 2>/dev/null; then
+        # DEDUPE on the ROW, not the item (codex r5 P2 -> r6 P2). A pass that appended some
+        # rows and then failed would, on retry, re-append a DEFERRED-HIL for an item the
+        # operator may have RESOLVED in between -- silently reopening an answered gate. But
+        # keying the skip on the ITEM alone was too broad: it suppressed EVERY future legacy
+        # deferral for that item, so a genuinely NEW deferral (a still-running old checkout
+        # recording a fresh gate after the earlier one was answered) would be archived
+        # unimported, breaking the last-write-wins rule that a later deferral reopens a gate.
+        # Keying on the full imported DETAIL distinguishes them: a re-seen identical row is a
+        # retry and is skipped; a new deferral carries different reason text and is imported.
+        # A byte-identical re-deferral is genuinely ambiguous, and skipping is the safe read
+        # there -- the operator's RESOLVED-HIL keeps the last word.
+        local _esc; _esc=$(_loop_escape_detail "$detail")
+        if grep -qF ";cause=legacy-import:cutover:u-he-29 | ${_esc} |" "$shared" 2>/dev/null; then
           continue
         fi
         if ! loop_log_structured DEFERRED-HIL "$lane" "legacy-import:cutover:u-he-29" "$detail"; then

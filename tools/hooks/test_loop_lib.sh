@@ -579,7 +579,9 @@ printf '%s' "$MBODY" | grep -q 'migrating-' && ok "the migration claims by renam
 #     imported row, must not be re-imported as a fresh DEFERRED-HIL.
 HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_resolve B-301 "operator answered it after the import" >/dev/null
 [ -z "$(HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_skip_set)" ] && ok "the imported gate is resolvable" || bad "could not resolve the imported gate"
-printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-301 — the same legacy row, seen again |\n' > "$MIG3/wt1/.harness/loop_status.md"
+# BYTE-IDENTICAL to the row already imported above — that is what makes it a retry rather
+# than a new gate (r6 narrowed the dedupe from the item to the row; see test 37).
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-301 — claimed gate |\n' > "$MIG3/wt1/.harness/loop_status.md"
 ( cd "$MIG3" && CLAUDE_PROJECT_DIR="$MIG3" HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_status_migrate ) >/dev/null 2>&1
 [ -z "$(HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_skip_set)" ] \
   && ok "a re-seen legacy row does not reopen a RESOLVED gate" || bad "retry reopened a resolved gate: [$(HARNESS_LOOP_STATUS_PATH="$MIG3V" loop_skip_set)]"
@@ -589,6 +591,54 @@ printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-301 — the same legacy row, s
 IGN=$(cd "$SCRIPT_DIR/../.." && cat .gitignore)
 printf '%s' "$IGN" | grep -q 'loop_status\.md\.migrated-\*' && ok "the .migrated- archive is gitignored" || bad "archive residue not ignored"
 printf '%s' "$IGN" | grep -q 'loop_status\.md\.migrating-\*' && ok "the .migrating- claim is gitignored" || bad "claim residue not ignored"
+
+# 36) codex r6 P2 — an ORPHANED claim must be recovered. A crash between the claim rename
+#     and the retire leaves a `.migrating-*` file that later passes never inspect (they look
+#     only at the original name), so the sole legacy ledger would be permanently invisible.
+MIG4="$REPO/mig4"; rm -rf "$MIG4"; mkdir -p "$MIG4"
+( cd "$MIG4" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m4wt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIG4/wt1/.harness"
+MIG4V="$MIG4/shared/loop_status.md"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-401 — orphaned by a crash |\n' \
+  > "$MIG4/wt1/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z"
+( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" = "B-401" ] && ok "an orphaned claim is recovered and imported" || bad "orphaned claim stranded"
+[ -z "$(find "$MIG4/wt1/.harness" -name '*.migrating-*' 2>/dev/null)" ] && ok "the recovered claim is not left behind" || bad "claim still present after recovery"
+# ... and when a concurrent old writer already recreated the live path, NEITHER file's rows
+# may be discarded.
+printf '| 2026-08-02T00:00:00Z | DEFERRED-HIL | B-402 — orphan rows |\n' \
+  > "$MIG4/wt1/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z"
+printf '| 2026-08-02T00:01:00Z | DEFERRED-HIL | B-403 — live rows |\n' \
+  > "$MIG4/wt1/.harness/loop_status.md"
+( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
+SK=$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)
+{ printf '%s' "$SK" | grep -q 'B-402' && printf '%s' "$SK" | grep -q 'B-403'; } \
+  && ok "an orphan colliding with a recreated live ledger loses neither's rows" || bad "rows lost in the collision path: [$SK]"
+
+# 37) codex r6 P2 — dedupe on the ROW, not the item forever. A genuinely NEW legacy deferral
+#     for an already-imported item must still be imported (last-write-wins reopens a gate);
+#     only a byte-identical re-seen row is a retry to skip.
+HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_resolve B-403 "answered" >/dev/null
+printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-403 — a NEW gate, different reason |\n' \
+  > "$MIG4/wt1/.harness/loop_status.md"
+( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
+printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" | grep -q 'B-403' \
+  && ok "a NEW legacy deferral for a resolved item reopens the gate" || bad "new deferral suppressed by item-level dedupe"
+# a byte-identical re-seen row is still a retry and must NOT reopen
+HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_resolve B-403 "answered again" >/dev/null
+printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-403 — a NEW gate, different reason |\n' \
+  > "$MIG4/wt1/.harness/loop_status.md"
+( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
+printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" | grep -q 'B-403' \
+  && bad "an identical re-seen row reopened a resolved gate" || ok "an identical re-seen row is a retry, not a reopen"
+
+# 38) codex r6 P2 — the staging file is created EXCLUSIVELY. `$$` is shared across a bash's
+#     subshells and $RANDOM is 15 bits, so a guessable name lets two callers write one inode
+#     and publish it half-written — the very race the ln protocol removes.
+printf '%s' "$(declare -f loop_status_ensure)" | grep -q 'mktemp' \
+  && ok "the staging file is created exclusively (mktemp)" || bad "staging name is guessable"
 
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"

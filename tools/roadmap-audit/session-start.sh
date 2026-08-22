@@ -49,7 +49,16 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   # `git worktree list` plus a handful of `[ -f ]` tests, and it self-heals every session.
   # Failure is non-fatal here and simply retries next session; the import only ever ADDS
   # still-open rows, so a retry cannot corrupt the skip-set.
-  command -v loop_status_migrate >/dev/null 2>&1 && loop_status_migrate >/dev/null 2>&1
+  # Its failure must SURFACE (codex r6 P2). Discarding the status rendered the ledger as
+  # though the cutover had succeeded, so an unreadable / unclaimable / partially imported
+  # legacy ledger would leave gates invisible with nothing at all shown to the operator --
+  # a silent hole exactly where the loop's durable obligations live. Same `*=ERR(...)` shape
+  # the reservation reader below uses.
+  _MIG=""
+  if command -v loop_status_migrate >/dev/null 2>&1; then
+    _migerr=$(loop_status_migrate 2>&1 >/dev/null) || \
+      _MIG=" mig=ERR(legacy loop_status cutover incomplete: $(printf '%s' "$_migerr" | tr '\n' ';' | cut -c1-160))"
+  fi
   # C-HE-20 (U-HE-09): re-surface deferrals older than the 24 h TTL as NOTIFY rows first --
   # a notification threshold only; it never resolves, reclaims, or transitions anything.
   command -v loop_hil_ttl_resurface >/dev/null 2>&1 && loop_hil_ttl_resurface 2>/dev/null
@@ -122,7 +131,7 @@ fi
 # Single-line additionalContext for the SessionStart event (wraps the lib helper). The
 # pending-HIL summary is appended so an operator opening a fresh session always sees what
 # the last unattended loop run deferred for them.
-emit() { hook_emit "SessionStart" "$1${_HIL}${_RESV}"; }
+emit() { hook_emit "SessionStart" "$1${_HIL}${_MIG:-}${_RESV}"; }
 
 [ -f "$ROADMAP_STATUS" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
 [ -f "$ROADMAP" ] || emit "[ROADMAP] roadmap_status.md exists but roadmap absent"

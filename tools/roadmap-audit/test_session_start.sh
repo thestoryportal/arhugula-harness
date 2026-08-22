@@ -163,6 +163,20 @@ OUT=$(run)
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrated-*
 rm -f "$HARNESS_LOOP_STATUS_PATH"
 
+# 5f) codex r6 P2 — a FAILED cutover must surface, not be swallowed. Discarding the status
+#     rendered the ledger as though the migration had succeeded, so an unreadable legacy
+#     ledger left gates invisible with nothing shown to the operator.
+mkdir -p "$REPO/.harness"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-777 — unreadable |\n' > "$REPO/.harness/loop_status.md"
+chmod 000 "$REPO/.harness/loop_status.md"
+OUT=$(run)
+chmod 644 "$REPO/.harness/loop_status.md"
+printf '%s' "$OUT" | grep -q 'mig=ERR' && ok "a failed cutover surfaces as mig=ERR at SessionStart" || bad "failed cutover swallowed: $OUT"
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat*
+rm -f "$HARNESS_LOOP_STATUS_PATH"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "clean cutover reported an error: $OUT" || ok "a clean pass emits no mig= segment"
+
 # 6) Reservation reconcile-log surfacing (U-HE-18, gate r1 witness P2): the log-READER
 #    block is UNGATED by the U-HE-29 activation gate, so its behavior needs witnesses now.
 #    The fixture repo has no tools/reservations.py, so the spawn gate stays cold -- only

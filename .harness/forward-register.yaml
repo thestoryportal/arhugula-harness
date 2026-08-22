@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 193
+  total: 194
   open: 1
   design_substrate_gated: 3
-  registered_finding: 44
+  registered_finding: 45
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: ec511db7b4c1b853
+  identity_digest: 4cca1573c5e2abae
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10081,3 +10081,33 @@ items:
   council: 'NO — single-mechanism recovery design; the merge-gate concurrency lens on
     the U-HE-28 PR is the scheduled decorrelated check.'
   heading: '### B-193 · C-HE-06 §4(viii) converging recovery for a BEHIND refresh + the mid-landing-correction intent chain *(surfaced by out-of-family Codex r18/r19 against U-HE-28, 2026-08-22; register-and-held after an absorb-revert cycle)*'
+- id: B-194
+  title: >-
+    C-HE-09 §3 lane-id encoding is lossy — reject unsafe ids or adopt one reversible
+    canonical encoding across writer, reducer and arc-exit report
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-29 r6) and register-and-held at the
+    round cap. `_loop_structured_col` strips ` `, tab, newline, CR, `|` and `;` from the
+    lane before writing it, because each of those characters corrupts the row or the
+    parse (`|` splits the row, whitespace breaks the item-token split, `;` terminates the
+    lane, newlines split the row across physical lines). The strip is DESTRUCTIVE rather
+    than an encoding: two distinct legal ids differing only in stripped characters
+    (`lane;evil` and `laneevil`) render identically in the ledger, so one lane can read as
+    another. The MISCLASSIFICATION half was fixed in the landing PR — `arc_exit_report`
+    now sanitizes its own `.lane-id` identically before comparing, so a lane bearing those
+    characters no longer has its own obligations classified as foreign — but the collision
+    itself is inherent to any lossy mapping and remains. Not exploitable at HEAD: lane ids
+    are minted from a host+repo+random-suffix template that produces none of the stripped
+    characters, so a colliding pair requires a hand-set HARNESS_LANE_ID or a worktree name
+    carrying a separator.'
+  close_out: '(1) Decide the shape: REJECT ids containing the unsafe set at mint time (in
+    `reservations.py mint-lane-id`, which is where identity is created) and fail closed at
+    the writer, OR adopt one reversible encoding (percent-escape the unsafe set) applied
+    identically in `_loop_structured_col`, `rowparse` and `arc_exit_report._sanitize_lane`;
+    (2) whichever is chosen, the three carriers must move in one commit — a writer and a
+    reader disagreeing about the encoding is the same misclassification defect in a new
+    place; (3) add a witness pinning that two ids differing only in unsafe characters
+    cannot render the same lane.'
+  council: 'NO — a single-mechanism encoding decision with two well-understood options;
+    the out-of-family reviewer is the scheduled decorrelated check.'
+  heading: '### B-194 · C-HE-09 §3 lossy lane-id encoding (collision half) *(surfaced by out-of-family Codex r6 against U-HE-29, 2026-08-22; misclassification half fixed in the landing PR, collision half register-and-held)*'

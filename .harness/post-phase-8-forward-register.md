@@ -2281,3 +2281,11 @@ same spec leg.
 - **Close-out steps.** (1) Design a record-clearing/re-mint verb (operator-gated) so the BEHIND class converges without hand-editing door state; (2) decide whether record-refresh should consult the draft channel (the operator running the verb holds the correction context — possibly the right answer as-is); (3) fold into the B-192 posture decision.
 
 - **Council.** NO — single-mechanism recovery design; the U-HE-28 merge-gate concurrency lens is the scheduled decorrelated check.
+
+### B-194 · C-HE-09 §3 lossy lane-id encoding (collision half) *(surfaced by out-of-family Codex r6 against U-HE-29, 2026-08-22; misclassification half fixed in the landing PR, collision half register-and-held)*
+
+- **What it is.** `_loop_structured_col` STRIPS ` `, tab, newline, CR, `|` and `;` out of a lane id before writing it, because each of those corrupts the row or the parse (`|` splits the row, whitespace breaks the item-token split, `;` terminates the lane, newlines split the row across lines). The strip is destructive rather than an encoding, so two distinct legal ids differing only in stripped characters (`lane;evil`, `laneevil`) render identically — one lane can read as another.
+
+- **Current state.** The MISCLASSIFICATION half is fixed at HEAD: `arc_exit_report._sanitize_lane` applies the identical strip to its own `.lane-id` before comparing, so a lane bearing those characters no longer has its own obligations classified as foreign. The collision itself is inherent to a lossy mapping and remains. Not exploitable at HEAD — lane ids are minted from a host+repo+random-suffix template that produces none of the stripped characters, so a colliding pair needs a hand-set `HARNESS_LANE_ID` or a worktree name carrying a separator.
+
+- **Close-out steps.** (1) Decide the shape: REJECT unsafe ids at mint time (`reservations.py mint-lane-id`, where identity is created) plus a fail-closed writer, OR one reversible encoding (percent-escape the unsafe set); (2) move all three carriers in ONE commit — `_loop_structured_col`, `rowparse`, `arc_exit_report._sanitize_lane` — since a writer and reader disagreeing about the encoding is the same defect in a new place; (3) pin a witness that two ids differing only in unsafe characters cannot render the same lane.

@@ -5614,6 +5614,50 @@ labelled as one.
 resolved from the environment rather than the repo, suites that had not yet pinned
 `HARNESS_LOOP_STATUS_PATH` wrote four rows (`B-777`, `B-779`, `R-300`, `R-410`) into the real
 `~/.gstack/projects/arhugula-v2/loop_status.md` during this arc. Cleared through the ledger's
+
+(xiv) **Rounds 4-6: the absorption rounds became the defect source, and the arc converged by
+narrowing, not by adding.** r4's six findings, r5's five and r6's five were almost entirely
+about machinery r1-r3 had *introduced* -- the migration and the lane rule. Two shape
+corrections, not more patches, did the work:
+
+*The lane rule settled on its third shape.* r3 filtered `todo_for_human` to the invoking
+lane; r4 showed that drops this arc's OWN rows (the canonical `defer.sh` sets no lane, and
+migrated rows carry `-`), so it was reverted to keep everything; r5 showed keeping everything
+puts a sibling's obligations in this PR's closure record. The settled rule keys on what is
+KNOWN: exclude a row whose lane is demonstrably some OTHER lane's, keep mine and keep the
+unattributed, count every exclusion. Neither extreme was right, and the middle is not a
+compromise -- it is the only rule that never hides a row that might be this arc's.
+
+*The migration hardened along one axis: claim, then read.* r5 moved the atomic rename BEFORE
+the reduce (a concurrent pre-U-HE-29 writer's row was being carried into the archive
+unimported and never seen again, since later passes look only at the original filename), and
+r6 added recovery of orphaned `.migrating-*` claims so a crash between claim and retire
+cannot hide a ledger permanently. r6 also narrowed the retry dedupe from the ITEM to the ROW:
+keyed on the item it suppressed every future legacy deferral for that item forever, breaking
+the last-write-wins rule that a later deferral reopens a gate; keyed on the row, a re-seen
+identical row is a retry and a genuinely new deferral still lands.
+
+Also absorbed across these rounds: `mktemp` for the staging file (`$$` is shared across a
+bash's subshells and `$RANDOM` is 15 bits, so a guessable staging name reopened the
+partial-publication race the `ln` protocol exists to close); `_loop_lane_id` resolving the
+persisted `.harness/.lane-id` when `HARNESS_LANE_ID` is unset (the canonical `defer.sh` and
+the ordinary hooks never export it, so rows lost their §3 attribution in a worktree that had
+carried a lane id all along); a `mig=ERR(...)` SessionStart segment so a failed cutover
+surfaces instead of rendering as success; and gitignore entries for the `.migrated-*` /
+`.migrating-*` residue, which `hook_worktree_local_state` would otherwise treat as precious
+untracked state and refuse to dispose the worktree forever.
+
+(xv) **One residual REGISTERED, not fixed: B-194.** The lane encoding is a destructive strip,
+not a reversible encoding, so two ids differing only in stripped characters render the same.
+The *misclassification* half is fixed here (`arc_exit_report._sanitize_lane` applies the
+identical strip before comparing, so a separator-bearing lane no longer reads its own rows as
+foreign); the *collision* half is inherent to a lossy mapping and needs a decision between
+rejecting unsafe ids at mint time and adopting one reversible encoding across all three
+carriers. It is not exploitable at HEAD -- minted ids contain none of the stripped
+characters. Registered at `.harness/forward-register.yaml` B-194 with both options and the
+one-commit-across-three-carriers constraint recorded, per the register-and-hold discipline
+at the round cap.
+
 own append-only mechanism (`RESOLVED-HIL` rows naming them as test artifacts) rather than by
 editing the file. This is why the pins in (vii) are load-bearing rather than tidiness.
 

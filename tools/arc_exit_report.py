@@ -638,7 +638,26 @@ def _lane_id(ledger_root: Path) -> str:
         val = marker.read_text(encoding="utf-8").strip()
     except OSError:
         val = ""
-    return val or os.environ.get("HARNESS_LANE_ID", "").strip()
+    return _sanitize_lane(val or os.environ.get("HARNESS_LANE_ID", "").strip())
+
+
+#: Separators `_loop_structured_col` strips before writing a lane into the ledger column.
+#: They cannot survive: `|` splits the row, whitespace breaks the item-token split, `;`
+#: terminates the lane, and newlines split the row across physical lines.
+_LANE_STRIP = str.maketrans("", "", " \t\n\r|;")
+
+
+def _sanitize_lane(lane: str) -> str:
+    """Render a lane id the way the LEDGER stores it (codex r6 P2).
+
+    The writer strips separators out of the lane before recording it, so comparing a raw
+    `.harness/.lane-id` against a row's rendered lane would classify this arc's own rows as
+    foreign the moment the id contained one of those characters — the exact
+    misclassification the lane rule must not make. Both sides are sanitized identically.
+    (This encoding is lossy by construction: two ids differing only in stripped characters
+    render the same. That residual is registered rather than papered over here.)
+    """
+    return lane.translate(_LANE_STRIP)
 
 
 def _scope_to_lane(rows: list[str], ledger_root: Path, notes: list[str]) -> list[str]:
