@@ -936,7 +936,7 @@ def _read_draft_nofollow() -> str | None:
         return f.read()
 
 
-def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
+def _discard_matching_draft(post_pr: int, represented_in: str | None) -> str:
     """Retire the next-action draft iff it names post_pr AND its body is verifiably
     represented by the pushed refresh content (codex r6 P2: an operator may CORRECT a
     same-PR draft after the branch was pushed — deleting the unrepresented correction
@@ -947,11 +947,11 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
     try:
         raw = _read_draft_nofollow()
         if raw is None:
-            return
+            return "absent"
         first, _, rest = raw.partition("\n")
         m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
         if not (m and int(m.group(1)) == post_pr):
-            return  # another arc's authoring — always left alone
+            return "other"  # another arc's authoring — always left alone
         body = rest.strip()
         # r7 P2 + r8 P2 + r11 P2: the proof is EQUALITY with the LIVE pointer body
         # AND the pointer's own post-# label naming THIS landing — a stale post-#54
@@ -973,33 +973,39 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
             # replacement written by another agent either survives at the path
             # (written after our claim) or is restored from the claim (written
             # before it). The restore link fails closed if a third write landed.
+            # NOTE (r14 P3, named residual): a process death between this rename and
+            # the unlink/restore below strands the claimed copy at *.claim.<pid> —
+            # gitignored alongside the draft; the micro-window needs a third writer
+            # to lose authored state and discovery machinery is deliberately NOT
+            # built for it.
             claim = NEXT_ACTION_DRAFT.with_name(f"{NEXT_ACTION_DRAFT.name}.claim.{os.getpid()}")
             try:
                 os.rename(NEXT_ACTION_DRAFT, claim)
             except FileNotFoundError:
-                return  # another process already acted on it
+                return "absent"  # another process already acted on it
             if claim.read_text() == raw:
                 claim.unlink()
-            else:
-                try:
-                    os.link(claim, NEXT_ACTION_DRAFT)  # restore; refuses if a newer draft exists
-                except FileExistsError:
-                    print(
-                        f"emit-refresh-pr: a newer draft appeared during retirement; "
-                        f"the displaced correction is preserved at {claim}",
-                        file=sys.stderr,
-                    )
-                    return
-                claim.unlink()
-        else:
-            print(
-                "emit-refresh-pr: keeping next-action draft — its body is not "
-                "verified in the pushed refresh content (a correction survives "
-                "for the retry / next manual refresh)",
-                file=sys.stderr,
-            )
+                return "retired"
+            try:
+                os.link(claim, NEXT_ACTION_DRAFT)  # restore; refuses if a newer draft exists
+            except FileExistsError:
+                print(
+                    f"emit-refresh-pr: a newer draft appeared during retirement; "
+                    f"the displaced correction is preserved at {claim}",
+                    file=sys.stderr,
+                )
+                return "unrepresented"
+            claim.unlink()
+            return "unrepresented"
+        print(
+            "emit-refresh-pr: keeping next-action draft — its body is not "
+            "verified in the pushed refresh content (a correction survives "
+            "for the retry / next manual refresh)",
+            file=sys.stderr,
+        )
+        return "unrepresented"
     except OSError:
-        pass
+        return "absent"
 
 
 def _pushed_refresh_text(run, branch: str) -> str | None:
@@ -1106,8 +1112,16 @@ def emit_refresh_pr(
                 "(or drop the flags) and re-run"
             )
         # retire a matching draft ONLY if its body is verifiably in the pushed
-        # refresh commit (codex r3 P2 + r6 P2 correction-preserving rule)
-        _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch))
+        # refresh commit (codex r3 P2 + r6 P2); an UNREPRESENTED correction refuses
+        # the resume outright (r14 P2 — mirroring the flags refusal above: handing
+        # the stale pair to the door would silently land the old pointer while the
+        # one-refresh-per-landing rule forecloses applying the correction later)
+        if _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch)) == "unrepresented":
+            raise SystemExit(
+                f"emit-refresh-pr: open refresh PR #{n} does not represent the "
+                "authored next-action draft. Close the PR and delete its branch "
+                "(or remove the draft) and re-run"
+            )
         return {"pr": int(n), "head_sha": head}
     # Remote-branch probe: `--exit-code` means exit 2 is the ONLY "no matching ref"
     # signal; auth/transport/timeout failures use other codes (codex r1 P2 — same
@@ -1167,8 +1181,14 @@ def emit_refresh_pr(
             body,
         )
         # the branch is checked out here, but verify against the PUSHED content the
-        # same way as the sibling path (r6 P2)
-        _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch))
+        # same way as the sibling path (r6 P2); an unrepresented correction refuses
+        # (r14 P2 — same rule as the open-PR path)
+        if _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch)) == "unrepresented":
+            raise SystemExit(
+                f"emit-refresh-pr: pushed refresh branch {branch} does not represent "
+                "the authored next-action draft. Delete the remote branch (or remove "
+                "the draft) and re-run"
+            )
         return {
             "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
             "head_sha": sh("git", "rev-parse", "HEAD"),
@@ -1195,9 +1215,12 @@ def emit_refresh_pr(
             # The door captures and discards this process's stderr on success (codex
             # r5 P2), so the condition is ALSO surfaced durably in the refresh PR
             # body below — the venue the operator actually reads.
+            # r14 P2: NEVER interpolate draft content — this string reaches the
+            # public PR body, and a pasted token in the gitignored file must not
+            # be published. Generic text only.
             draft_warning = (
-                f"WARNING: next-action draft ignored ({first.strip()!r} does not "
-                f"name post-pr: {post_pr}, or empty body); pointer left as-is"
+                f"WARNING: a next-action draft was present but does not name "
+                f"post-pr: {post_pr} (or has an empty body); pointer left as-is"
             )
             print(f"emit-refresh-pr: {draft_warning}", file=sys.stderr)
     if do_refresh is None:

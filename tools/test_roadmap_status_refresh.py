@@ -1378,11 +1378,15 @@ def test_emit_refresh_pr_ignores_mismatched_draft(monkeypatch, tmp_path, capsys)
     rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
     assert draft.exists()  # left for inspection
     assert "--next-action" not in argv_seen["argv"]
-    assert "next-action draft ignored" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "does not name post-pr: 55" in err
+    assert "post-pr: 54" not in err  # r14 P2: content never interpolated
     # codex r5 P2: the door discards stderr on success — the warning must ALSO ride
     # the refresh PR body, the venue the operator reads
     create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
-    assert "next-action draft ignored" in create[create.index("--body") + 1]
+    body_arg = create[create.index("--body") + 1]
+    assert "a next-action draft was present" in body_arg
+    assert "post-pr: 54" not in body_arg  # r14 P2: nothing from the file is published
 
 
 def test_emit_refresh_pr_explicit_flag_wins_over_draft(monkeypatch, tmp_path):
@@ -1466,7 +1470,8 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
         ],
         calls2,
     )
-    rsr.emit_refresh_pr(55, run=run2)
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run2)
     assert draft.exists()
     # another arc's draft is untouched regardless
     draft.write_text("post-pr: 54\nother arc's body\n")
@@ -1523,7 +1528,9 @@ def test_emit_refresh_pr_draft_body_elsewhere_in_file_is_not_representation(monk
         ],
         calls,
     )
-    rsr.emit_refresh_pr(55, run=run)
+    # r14 P2: an unrepresented same-PR draft REFUSES the resume (it survives)
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run)
     assert draft.exists()
 
 
@@ -1585,7 +1592,9 @@ def test_emit_refresh_pr_stale_label_pointer_is_not_representation(monkeypatch, 
         ],
         calls,
     )
-    rsr.emit_refresh_pr(55, run=run)
+    # r14 P2: the stale-label pointer leaves the draft unrepresented -> refuse
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run)
     assert draft.exists()
 
 
@@ -1629,7 +1638,7 @@ def test_emit_refresh_pr_refuses_symlinked_draft(monkeypatch, tmp_path):
     """r13 P1: a planted symlink at the draft path must never leak an outside file
     into the refresh PR body or the committed pointer — refused no-follow, left."""
     argv_seen: dict[str, list[str]] = {}
-    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
     outside = tmp_path / "outside.txt"
     outside.write_text("post-pr: 55\nexfiltrated content\n")
     draft = tmp_path / "draft"
