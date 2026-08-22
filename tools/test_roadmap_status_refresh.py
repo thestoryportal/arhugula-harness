@@ -1187,7 +1187,12 @@ def test_emit_refresh_pr_idempotent_existing_open_pr():
     """Crash after `gh pr create`: the branch's open PR is returned, nothing re-created."""
     calls: list[list[str]] = []
     run = _scripted_run(
-        [(("gh", "pr", "list"), _P(stdout="321 abc123def"))],
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+            )
+        ],
         calls,
     )
     out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
@@ -1426,8 +1431,15 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
     calls: list[list[str]] = []
     run = _scripted_run(
         [
-            (("gh", "pr", "list"), _P(stdout="321 abc123def")),
-            (("git", "show"), _P(stdout="... pointer body ...")),  # represented: retire
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+            ),
+            # represented IN THE LIVE POINTER PARAGRAPH (r7 P2) -> retire
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#55).** pointer body here.\\n"),
+            ),
         ],
         calls,
     )
@@ -1438,8 +1450,15 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
     calls2: list[list[str]] = []
     run2 = _scripted_run(
         [
-            (("gh", "pr", "list"), _P(stdout="321 abc123def")),
-            (("git", "show"), _P(stdout="... pointer body ...")),  # OLD content only
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+            ),
+            # OLD pointer content only — the correction is not represented
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#55).** pointer body here.\\n"),
+            ),
         ],
         calls2,
     )
@@ -1448,6 +1467,73 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
     # another arc's draft is untouched regardless
     draft.write_text("post-pr: 54\nother arc's body\n")
     calls3: list[list[str]] = []
-    run3 = _scripted_run([(("gh", "pr", "list"), _P(stdout="321 abc123def"))], calls3)
+    run3 = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+            )
+        ],
+        calls3,
+    )
     rsr.emit_refresh_pr(55, run=run3)
     assert draft.exists()
+
+
+def test_emit_refresh_pr_rejects_retargeted_or_reused_open_pr():
+    """r7 P2: the idempotent resume must identity-gate the found PR — a retargeted or
+    reused PR on the deterministic branch never persists for the door to merge."""
+    for bad in (
+        "321\tabc123def\trelease-x\tops: roadmap status refresh post-#55",
+        "321\tabc123def\tmain\tsome unrelated PR title",
+    ):
+        calls: list[list[str]] = []
+        run = _scripted_run([(("gh", "pr", "list"), _P(stdout=bad))], calls)
+        with pytest.raises(SystemExit, match="not this landing's terminating refresh"):
+            rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+
+
+def test_emit_refresh_pr_draft_body_elsewhere_in_file_is_not_representation(monkeypatch, tmp_path):
+    """r7 P2: the draft body appearing in a notes cell (not the live pointer
+    paragraph) is NOT pointer installation — the draft survives."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tops: roadmap status refresh post-#55"),
+            ),
+            (
+                ("git", "show"),
+                _P(
+                    stdout="**Current next action (post-#55).** something else.\n\n"
+                    "| PR #55 | 2026-08-22 | pointer body here. |\n"
+                ),
+            ),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()
+
+
+def test_emit_refresh_pr_pushed_branch_recovery_warns_on_unappliable_flags(monkeypatch):
+    """r7 P2: the pushed-branch recovery cannot apply supplied flags — the PR body
+    must say so instead of silently dropping them."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, next_action="late pointer", run=run, do_refresh=lambda: None)
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert "NOT applied" in create[create.index("--body") + 1]

@@ -1278,6 +1278,25 @@ def test_resume_refuses_moved_head_on_retargeted_base(door, monkeypatch):
     assert (2, "s" * 40) not in g.merge_calls
 
 
+# mutation-probe: weaken the delimiter-safe title binding (post-#1 accepting post-#10)
+def test_resume_refuses_moved_head_bound_to_another_landing(door, monkeypatch):
+    """r7 P2: content PR #1 must not adopt a refresh titled post-#10 — prefix match
+    alone would repurpose another landing's refresh under this lease."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40
+    g.states[2]["title"] = "ops: roadmap status refresh post-#10"
+    lease = md.read_lease()
+    with pytest.raises(md.DoorBlocked, match="identity gate"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
+
+
 def test_wait_for_door_backoff_numbers_and_budget(door):
     t = {"now": 0.0}
     sleeps = []

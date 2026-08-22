@@ -935,7 +935,10 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
         if not (m and int(m.group(1)) == post_pr):
             return  # another arc's authoring — always left alone
         body = rest.strip()
-        if represented_in is not None and body and body in represented_in:
+        # r7 P2: the proof must live in the LIVE pointer paragraph — the same text
+        # in a notes cell or archive line is not pointer installation.
+        live = _CURRENT_PARAGRAPH_RE.search(represented_in) if represented_in else None
+        if live is not None and body and body in live.group(0):
             NEXT_ACTION_DRAFT.unlink()
         else:
             print(
@@ -1021,12 +1024,20 @@ def emit_refresh_pr(
         "--state",
         "open",
         "--json",
-        "number,headRefOid",
+        "number,headRefOid,baseRefName,title",
         "--jq",
-        '.[0] | select(.) | "\\(.number) \\(.headRefOid)"',
+        '.[0] | select(.) | "\\(.number)\\t\\(.headRefOid)\\t\\(.baseRefName)\\t\\(.title)"',
     )
     if existing:
-        n, head = existing.split()
+        n, head, base_ref, found_title = existing.split("\t", 3)
+        # r7 P2: identity-gate the resumed PR — a retargeted or reused PR on the
+        # deterministic branch must never be persisted for the door to merge.
+        if base_ref != "main" or found_title.strip() != title:
+            raise SystemExit(
+                f"emit-refresh-pr: open PR #{n} on {branch} is not this landing's "
+                f"terminating refresh (base {base_ref!r}, title {found_title!r}); "
+                "inspect/close it before retrying"
+            )
         # retire a matching draft ONLY if its body is verifiably in the pushed
         # refresh commit (codex r3 P2 + r6 P2 correction-preserving rule)
         _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch))
@@ -1050,7 +1061,19 @@ def emit_refresh_pr(
     if probe.returncode == 0:
         sh("git", "fetch", "-q", "origin", branch)
         sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
-        url = sh("gh", "pr", "create", "--head", branch, "--title", title, "--body", body)
+        # r7 P2: this path recovers a branch whose refresh commit ALREADY exists —
+        # re-running the refresh here would add a second commit whose recorded
+        # git_head is the first refresh commit, breaking the §12.2.1 fixed point on
+        # squash. Supplied flags therefore CANNOT apply; say so loudly in the PR.
+        recovery_body = body
+        if notes is not None or next_action is not None or date is not None:
+            recovery_body = (
+                f"{body}\n\nWARNING: recovered a pre-pushed refresh branch — the "
+                "supplied --notes/--date/--next-action were NOT applied (the pushed "
+                "commit's content stands); land a follow-up pointer via the next "
+                "arc's draft if it matters"
+            )
+        url = sh("gh", "pr", "create", "--head", branch, "--title", title, "--body", recovery_body)
         # the branch is checked out here, but verify against the PUSHED content the
         # same way as the sibling path (r6 P2)
         _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch))
@@ -1124,7 +1147,11 @@ def emit_refresh_pr(
     # overridden (explicit --next-action) or mismatched draft is unrepresented
     # authoring and is KEPT (r6 P2 rule; supersedes the r5 retire-on-override).
     if draft_used:
-        _discard_matching_draft(post_pr, next_action or "")
+        # mirror exactly what install_next_action just wrote, so the helper's
+        # live-paragraph proof holds by construction
+        _discard_matching_draft(
+            post_pr, f"**Current next action (post-#{post_pr}).** {next_action}"
+        )
     return {
         "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
         "head_sha": sh("git", "rev-parse", "HEAD"),

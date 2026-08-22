@@ -1344,9 +1344,15 @@ def land(
                     # refresh PR retargeted while receiving its fix commit must never
                     # be squash-merged into another branch under the global lease.
                     bound_title = f"{REFRESH_TITLE_PREFIX}post-#{pr}"
+                    title1 = str(rv1.get("title") or "")
+                    # delimiter-safe (r7 P2): post-#1 must not accept post-#10
+                    title_bound = title1 == bound_title or (
+                        title1.startswith(bound_title)
+                        and not title1[len(bound_title) :][:1].isdigit()
+                    )
                     if (
                         rv1.get("baseRefName") != "main"
-                        or not str(rv1.get("title") or "").startswith(bound_title)
+                        or not title_bound
                         or rfiles1 != [REFRESH_ONLY_FILE]
                     ):
                         raise DoorFailed(
