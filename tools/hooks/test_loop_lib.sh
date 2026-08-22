@@ -691,6 +691,38 @@ printf '%s' "$WBODY" | grep -q 'HARNESS_LANE_ID' && ok "the writer consults HARN
 PYSRC=$(cd "$SCRIPT_DIR/../.." && sed -n '/^def _lane_id/,/^def _sanitize_lane/p' tools/arc_exit_report.py)
 printf '%s' "$PYSRC" | grep -q 'env = os.environ.get' && ok "the reader consults HARNESS_LANE_ID FIRST, matching the writer" || bad "reader lane precedence diverged from the writer"
 
+# 42) codex r8 P2 — MULTIPLE orphaned claims must fold in CHRONOLOGICAL order. Folding them
+#     one at a time (each prepended) reversed the order, letting an older RESOLVED-HIL follow
+#     and clear a newer DEFERRED-HIL.
+MIG6="$REPO/mig6"; rm -rf "$MIG6"; mkdir -p "$MIG6"
+( cd "$MIG6" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m6wt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIG6/wt1/.harness"
+MIG6V="$MIG6/shared/loop_status.md"
+# Three claims, oldest first: DEFER(08-01) then RESOLVE(08-02) then DEFER(08-03).
+# Correct chronology leaves B-601 PENDING; any reversal clears it.
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-601 — first raised |\n' \
+  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z"
+printf '| 2026-08-02T00:00:00Z | RESOLVED-HIL | B-601 — answered |\n' \
+  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z"
+printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-601 — raised AGAIN, still open |\n' \
+  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-03T00:00:00Z"
+( cd "$MIG6" && CLAUDE_PROJECT_DIR="$MIG6" HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_status_migrate ) >/dev/null 2>&1
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_skip_set)" = "B-601" ] \
+  && ok "three orphaned claims fold oldest-first (the newest deferral survives)" || bad "orphan chronology reversed: [$(HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_skip_set)]"
+[ -z "$(find "$MIG6/wt1/.harness" -name '*.migrating-*' 2>/dev/null)" ] && ok "every folded claim is consumed" || bad "a claim survived the fold"
+
+# 43) codex r8 P3 — an unreadable ledger must PROPAGATE, not read as empty, even when the
+#     caller has not enabled pipefail (this library documents direct raw-shell use, and the
+#     migration retires a file it believes it has fully read).
+UNREAD="$REPO/unreadable-loop_status.md"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-700 — hidden |\n' > "$UNREAD"
+chmod 000 "$UNREAD"
+( set +o pipefail; _loop_pending_rows_with_ts "$UNREAD" >/dev/null 2>&1 )
+[ $? -ne 0 ] && ok "an unreadable ledger propagates failure without pipefail" || bad "unreadable ledger read as empty"
+chmod 644 "$UNREAD"; rm -f "$UNREAD"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

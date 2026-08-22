@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 194
+  total: 195
   open: 1
   design_substrate_gated: 3
-  registered_finding: 45
+  registered_finding: 46
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: 4cca1573c5e2abae
+  identity_digest: f726ea511cbef83a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10111,3 +10111,34 @@ items:
   council: 'NO — a single-mechanism encoding decision with two well-understood options;
     the out-of-family reviewer is the scheduled decorrelated check.'
   heading: '### B-194 · C-HE-09 §3 lossy lane-id encoding (collision half) *(surfaced by out-of-family Codex r6 against U-HE-29, 2026-08-22; misclassification half fixed in the landing PR, collision half register-and-held)*'
+- id: B-195
+  title: >-
+    U-HE-29 cutover-window concurrency against a still-running pre-U-HE-29 writer —
+    check-then-append staleness race and the open-fd-survives-rename hole
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-29 r8) and register-and-held at the round
+    cap. Two residual classes in `loop_status_migrate`, both scoped to the cutover window in
+    which a checkout still running PRE-U-HE-29 code is actively writing. (a) STALENESS RACE:
+    the timestamp check (`_loop_last_resolved_ts`) and the import append are not atomic, so a
+    RESOLVED-HIL landing between them lets an imported legacy DEFERRED-HIL become physically
+    last and reopen a just-answered gate. Its consequence is the SAFE direction under C-HE-09
+    §4 (over-skipping is safe; under-skipping re-loops): the item stays in the skip-set, the
+    loop does not retry a gated item, and the operator sees it at the next SessionStart and
+    can re-resolve — no data loss and no wrongly-retried gate, which is why it is held rather
+    than fixed under time pressure. (b) OPEN-FD SURVIVES RENAME: a pre-U-HE-29 process holding
+    an fd on the legacy inode keeps appending after the claim rename, so a deferral written
+    after the reduce reaches EOF lands only in the `.migrated-*` archive and no later pass
+    looks there. This one is NOT fixable from this side — the old writer takes no lock of ours
+    and holds the inode regardless of its name.'
+  close_out: '(1) For (a): hold the existing `.loop-status.lock` (the fd-8 flock
+    `loop_hil_ttl_resurface` already uses) across the staleness check AND the conditional
+    append, so the decision and the write are one critical section; confirm the added
+    contention is acceptable given the lock is otherwise taken only by the TTL pass. (2) For
+    (b): have later passes ALSO scan `.migrated-*` archives for rows appended after their
+    recorded archive timestamp, re-importing under the same staleness rule — the only
+    mitigation available without cooperation from the old writer. (3) Both close naturally
+    once no pre-U-HE-29 checkout remains; re-assess whether either is still worth building
+    then, since the window is self-closing.'
+  council: 'NO — bounded concurrency hardening on one mechanism with a self-closing window;
+    the out-of-family reviewer is the scheduled decorrelated check.'
+  heading: '### B-195 · U-HE-29 cutover-window concurrency vs a live pre-U-HE-29 writer *(surfaced by out-of-family Codex r8 against U-HE-29, 2026-08-22; register-and-held — (a) fails in the C-HE-09 §4 safe direction, (b) is not fixable from this side)*'

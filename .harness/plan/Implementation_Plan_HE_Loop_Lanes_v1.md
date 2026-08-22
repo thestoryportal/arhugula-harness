@@ -5656,6 +5656,38 @@ rejecting unsafe ids at mint time and adopting one reversible encoding across al
 carriers. It is not exploitable at HEAD -- minted ids contain none of the stripped
 characters. Registered at `.harness/forward-register.yaml` B-194 with both options and the
 one-commit-across-three-carriers constraint recorded, per the register-and-hold discipline
+
+(xvi) **Rounds 7-8, and where the arc stopped.** r7 replaced the dedupe heuristic outright:
+imported rows are necessarily appended LAST into a log the reducers read by PHYSICAL order,
+so no text-similarity key can be right. The import now compares the legacy row's own
+timestamp against the shared venue's last resolution of that item — skip only what the venue
+already answered AT OR AFTER the row was written. That single rule subsumes both earlier keys
+and is witnessed in all three directions (stale skipped, newer imported, never-answered
+imported regardless of age). r7 also fixed orphan-fold ordering, matched the lane precedence
+across writer and reader (they disagreed, so an arc could classify its own rows foreign), and
+stripped `[`/`]` from lane ids because the rendered `[lane] detail` form is parsed back by
+brackets. Its P3 caught a second suite (`test_loop_gc.sh`) mutating the operator's live
+ledger — the same class as (xiii), found in a place the first sweep missed.
+
+r8 returned four findings, and their SHAPE is what closed the arc rather than fatigue. Two
+were cheap and clearly right and were taken: multi-orphan chronological folding (folding one
+at a time reversed the order whenever more than one claim existed), and a masked `awk`
+failure inside a pipeline that made an unreadable ledger read as empty in any caller without
+`pipefail` — which the migration would then retire as fully imported. The other two are
+**registered as B-195**, with reasons rather than deferral: (a) the staleness check and the
+import append are not atomic, but the consequence is C-HE-09 §4's SAFE direction — the item
+stays in the skip-set and resurfaces for the operator, no data loss and no wrongly-retried
+gate; (b) a pre-U-HE-29 writer holding an fd on the legacy inode keeps appending after the
+claim rename, which is **not fixable from this side** — that process takes none of our locks
+and holds the inode regardless of its name. Both windows are self-closing: they exist only
+while a pre-U-HE-29 checkout is still running.
+
+Eight rounds, ~30 findings absorbed. The honest summary is that r1-r3 hardened the UNIT and
+r4-r8 hardened the machinery r1-r3 had introduced — the cutover migration in particular. Each
+round's fix was the previous round's defect surface, and the arc converged only when two
+shapes were NARROWED (the lane rule to "exclude the demonstrably foreign"; the import rule to
+"compare timestamps") rather than patched again.
+
 at the round cap.
 
 own append-only mechanism (`RESOLVED-HIL` rows naming them as test artifacts) rather than by

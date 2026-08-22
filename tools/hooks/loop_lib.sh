@@ -171,7 +171,13 @@ _loop_lane_id() {
 # shared venue. Same prelude, so the reduction rules cannot diverge from the public one.
 _loop_pending_rows_with_ts() {
   [ -f "$1" ] || return 1
-  awk -F'|' "$_LOOP_AWK_ROW"'
+  # awk runs ALONE and its status is captured before any post-processing (codex r8 P3).
+  # Piping it into sed|sort returns the LAST stage's status unless the caller happens to have
+  # enabled pipefail -- and this library documents direct raw-shell use, where it is not set.
+  # An unreadable ledger would then look identical to an empty one, and the migration would
+  # retire a file whose gates it never read. Same shape _loop_pending_hil_rows already uses.
+  local out
+  out=$(awk -F'|' "$_LOOP_AWK_ROW"'
     { rowparse() }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
       ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts)
@@ -179,7 +185,9 @@ _loop_pending_rows_with_ts() {
       else { state[tok] = "RESOLVED" }
     }
     END { for (t in state) if (state[t] == "PENDING") print at[t] "\t" ln[t] "\t" det[t] }
-  ' "$1" 2>/dev/null | sed 's/\\|/|/g' | sort
+  ' "$1" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | sed 's/\\|/|/g' | grep -v '^$' | sort
+  return 0
 }
 
 # The timestamp of the LAST RESOLVED-HIL recorded for <item> in <ledger>, or empty.
@@ -245,27 +253,28 @@ loop_status_migrate() {
     # skip-set. Restoring it to the original name hands it back to the normal path in this
     # same pass; the row-level dedupe below makes re-importing an already-imported row a
     # no-op, so recovery cannot double-count.
-    local orphan
+    # Orphan names embed their claim timestamp, so a lexicographic sort IS chronological.
+    # Folding them one at a time -- each prepended to the growing file -- reversed that order
+    # whenever more than one existed (codex r8 P2), letting an older RESOLVED-HIL follow and
+    # clear a newer DEFERRED-HIL. They are concatenated in ONE pass instead, oldest first,
+    # with the live file (the newest rows, if a concurrent old writer recreated it) last.
+    local orphans=() orphan
     for orphan in "$wt/.harness"/loop_status.md.migrating-*; do
-      [ -f "$orphan" ] || continue
-      if [ -f "$legacy" ]; then
-        # A concurrent old writer already recreated the live path. Both hold real rows, so
-        # neither may be discarded -- but ORDER matters (codex r7 P2): the reducers key on
-        # PHYSICAL order, and the orphan was claimed EARLIER, so its rows are the older ones.
-        # Appending it after the live file would let an old RESOLVED-HIL in the orphan clear
-        # a NEWER DEFERRED-HIL in the live file and archive both with the real gate unimported.
-        # The orphan therefore goes FIRST.
-        local _merged="${legacy}.merge-$$"
-        if cat "$orphan" "$legacy" > "$_merged" 2>/dev/null && mv "$_merged" "$legacy" 2>/dev/null; then
-          rm -f "$orphan" 2>/dev/null
-        else
-          rm -f "$_merged" 2>/dev/null
-          echo "loop_status_migrate: could not fold orphan $orphan into $legacy" >&2; return 1
-        fi
-      else
-        mv "$orphan" "$legacy" 2>/dev/null
-      fi
+      [ -f "$orphan" ] && orphans+=("$orphan")
     done
+    if [ "${#orphans[@]}" -gt 0 ]; then
+      local _merged="${legacy}.merge-$$"
+      local _sorted=()
+      while IFS= read -r orphan; do [ -n "$orphan" ] && _sorted+=("$orphan"); done \
+        < <(printf '%s\n' "${orphans[@]}" | sort)
+      if cat "${_sorted[@]}" ${legacy:+$([ -f "$legacy" ] && printf '%s' "$legacy")} > "$_merged" 2>/dev/null \
+        && mv "$_merged" "$legacy" 2>/dev/null; then
+        rm -f "${_sorted[@]}" 2>/dev/null
+      else
+        rm -f "$_merged" 2>/dev/null
+        echo "loop_status_migrate: could not fold orphaned claim(s) into $legacy" >&2; return 1
+      fi
+    fi
     [ -f "$legacy" ] || continue
     # Never import the shared venue into itself (a checkout could be configured to point
     # at it), and never import a file that is already the same inode.
