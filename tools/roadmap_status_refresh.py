@@ -45,6 +45,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -1091,8 +1092,8 @@ def emit_refresh_pr(
         "continuation (C-HE-06 §4(viii))"
     )
 
-    def sh(*args: str) -> str:
-        p = run(list(args), capture_output=True, text=True, timeout=120)
+    def sh(*args: str, cwd: str | None = None) -> str:
+        p = run(list(args), capture_output=True, text=True, timeout=120, cwd=cwd)
         if p.returncode != 0:
             raise SystemExit(f"emit-refresh-pr: {' '.join(args)} failed: {p.stderr.strip()}")
         return p.stdout.strip()
@@ -1179,7 +1180,9 @@ def emit_refresh_pr(
                 f"from the just-merged main tip (parent {parent[:12]}, main "
                 f"{main_tip[:12]}); delete the remote branch and re-run"
             )
-        sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
+        # MERGE-GATE r1 (concurrency P1/P2): NO checkout — this leg previously
+        # switched the INVOKING worktree's HEAD and could collide with a branch
+        # checked out elsewhere. Everything below is read-only or remote-side.
         # r7 P2 + r10 P2: this path recovers a branch whose refresh commit ALREADY
         # exists — re-running the refresh here would add a second commit whose
         # recorded git_head is the first refresh commit, breaking the §12.2.1 fixed
@@ -1215,13 +1218,16 @@ def emit_refresh_pr(
             )
         return {
             "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
-            "head_sha": sh("git", "rev-parse", "HEAD"),
+            "head_sha": sh("git", "rev-parse", f"origin/{branch}"),
         }
-    # Fresh path: branch from the just-merged main tip (see docstring), then refresh.
-    # r16 P1: explicit refspec — the checkout below reads the TRACKING ref, which a
-    # bare `git fetch origin main` does not guarantee to advance.
+    # Fresh path: build the refresh in an EPHEMERAL DETACHED worktree (merge-gate r1
+    # concurrency P1): the previous `git checkout -B` here switched the INVOKING
+    # worktree's HEAD for the whole door hold and never restored it. No local branch
+    # is ever created (the push uses an explicit HEAD:refs/heads/<branch> refspec),
+    # so the cross-worktree already-checked-out collision cannot exist either.
+    # r16 P1: explicit refspec — the worktree base below reads the TRACKING ref,
+    # which a bare `git fetch origin main` does not guarantee to advance.
     sh("git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
-    sh("git", "checkout", "-q", "-B", branch, "origin/main")
     draft_warning = None
     draft_used = False
     draft_raw = _read_draft_nofollow() if next_action is None else None
@@ -1256,40 +1262,71 @@ def emit_refresh_pr(
                 f"post-pr: {post_pr} (or has an empty body); pointer left as-is"
             )
             print(f"emit-refresh-pr: {draft_warning}", file=sys.stderr)
-    if do_refresh is None:
+    wt = tempfile.mkdtemp(prefix="refresh-emit-")
+    try:
+        sh("git", "worktree", "add", "-q", "--detach", wt, "origin/main")
+        if do_refresh is None:
 
-        def do_refresh() -> None:
-            argv = [
-                "--refresh",
-                "--pr",
-                f"PR #{post_pr}",
-                "--date",
-                date or _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
-                "--notes",
-                notes
-                if notes is not None
-                else (
-                    "landed through the merge door; terminating refresh as "
-                    "continuation (C-HE-06 §4(viii))"
-                ),
-            ]
-            if next_action is not None:
-                argv += ["--next-action", next_action]
-            rc = main(argv)
-            if rc != 0:
-                raise SystemExit(f"emit-refresh-pr: mechanical refresh exited {rc}")
+            def do_refresh() -> None:
+                argv = [
+                    "--refresh",
+                    "--status",
+                    f"{wt}/.harness/roadmap_status.md",
+                    "--archive",
+                    f"{wt}/.harness/roadmap_drift_log_archive.md",
+                    "--pr",
+                    f"PR #{post_pr}",
+                    "--date",
+                    date or _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
+                    "--notes",
+                    notes
+                    if notes is not None
+                    else (
+                        "landed through the merge door; terminating refresh as "
+                        "continuation (C-HE-06 §4(viii))"
+                    ),
+                ]
+                if next_action is not None:
+                    argv += ["--next-action", next_action]
+                rc = main(argv)
+                if rc != 0:
+                    raise SystemExit(f"emit-refresh-pr: mechanical refresh exited {rc}")
 
-    do_refresh()
-    sh("git", "add", ".harness/roadmap_status.md")  # the ONLY file (§12.2.1)
-    changed = sh("git", "diff", "--cached", "--name-only").splitlines()
-    if changed != [".harness/roadmap_status.md"]:
-        raise SystemExit(
-            f"emit-refresh-pr: refresh must touch exactly .harness/roadmap_status.md, got {changed}"
+        do_refresh()
+        sh("git", "add", ".harness/roadmap_status.md", cwd=wt)  # the ONLY file (§12.2.1)
+        changed = sh("git", "diff", "--cached", "--name-only", cwd=wt).splitlines()
+        if changed != [".harness/roadmap_status.md"]:
+            raise SystemExit(
+                f"emit-refresh-pr: refresh must touch exactly "
+                f".harness/roadmap_status.md, got {changed}"
+            )
+        sh("git", "commit", "-m", title, cwd=wt)
+        sh("git", "push", "-q", "origin", f"HEAD:refs/heads/{branch}", cwd=wt)
+        pr_body = body if draft_warning is None else f"{body}\n\n{draft_warning}"
+        url = sh(
+            "gh",
+            "pr",
+            "create",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            pr_body,
+            cwd=wt,
         )
-    sh("git", "commit", "-m", title)
-    sh("git", "push", "-u", "origin", branch)
-    pr_body = body if draft_warning is None else f"{body}\n\n{draft_warning}"
-    url = sh("gh", "pr", "create", "--base", "main", "--title", title, "--body", pr_body)
+        head_sha = sh("git", "rev-parse", "HEAD", cwd=wt)
+    finally:
+        # best-effort ephemeral-worktree cleanup; a leak is disk residue only —
+        # never a HEAD/branch mutation anywhere (no local branch exists)
+        run(
+            ["git", "worktree", "remove", "--force", wt],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
     # only a draft whose body was ADOPTED into this refresh is represented by
     # construction — retire it now that the branch + PR are durable (r3 P2). An
     # overridden (explicit --next-action) or mismatched draft is unrepresented
@@ -1311,7 +1348,7 @@ def emit_refresh_pr(
             )
     return {
         "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
-        "head_sha": sh("git", "rev-parse", "HEAD"),
+        "head_sha": head_sha,
     }
 
 

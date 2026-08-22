@@ -1370,6 +1370,82 @@ def test_adoption_record_never_in_a_gap_on_replace_fault(door, monkeypatch):
     assert live["refresh"]["head_sha"] == "r" * 40
 
 
+# mutation-probe: drop the adoption-path symlink containment (merge-gate r1 witness P2)
+def test_adoption_refuses_symlinked_sidecar(door, monkeypatch):
+    """A planted symlink at the refresh sidecar must fail the adoption closed —
+    deleting merge_door's containment check must turn this row red."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    lease = md.read_lease()
+    sidecar = md._sidecar(lease["lease_token"], "refresh")
+    outside = md.DOOR.parent / "outside-refresh.json"
+    outside.write_text(sidecar.read_text())
+    sidecar.unlink()
+    sidecar.symlink_to(outside)  # planted symlink; content still reads valid
+    g.states[2]["headRefOid"] = "s" * 40  # force the adoption path
+    with pytest.raises(md.DoorBlocked, match="containment"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
+    outside.unlink()
+
+
+# mutation-probe: drop the headRefOid arm of the rv2 post-wait revalidation
+def test_refresh_head_moved_during_wait_blocks_without_merge(door, monkeypatch):
+    """merge-gate r1 witness P2: the rv2 head arm — a head that moves DURING the
+    checks wait must fail the door with NO merge against the stale --match-head."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: None)
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 2:
+                return []
+            g.states[2]["headRefOid"] = "z" * 40  # head moved mid-wait
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) not in g.merge_calls
+    assert (2, "z" * 40) not in g.merge_calls
+
+
+# mutation-probe: drop the files arm of the rv2 post-wait revalidation
+def test_refresh_files_mutated_during_wait_blocks_without_merge(door, monkeypatch):
+    """merge-gate r1 witness P2: the rv2 file-set arm — a second file appearing on the
+    refresh PR during the wait must fail the door with no merge issued."""
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: None)
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 2:
+                return []
+            g.states[2]["files"] = [
+                {"path": ".harness/roadmap_status.md"},
+                {"path": "x.py"},
+            ]
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) not in g.merge_calls
+
+
 def test_wait_for_door_backoff_numbers_and_budget(door):
     t = {"now": 0.0}
     sleeps = []
@@ -1458,6 +1534,143 @@ esac
     )
     for f in ("gh", "git"):
         (bindir / f).chmod(0o755)
+
+
+def test_e2e_refresh_continuation_through_real_producer_cli(door, tmp_path):
+    """MERGE-GATE r1 witness P1: the production refresh() closure (bash -c + whole-stdout
+    json.loads) composed against the REAL roadmap_status_refresh.py CLI — the JSON-key
+    contract and stdout purity are witnessed ACROSS the process boundary, not in
+    isolation. git/gh are PATH shims; the ephemeral worktree is materialized by the git
+    shim copying the real repo's status file."""
+    q = door
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    state = tmp_path / "state.json"
+    state2 = tmp_path / "state2.json"
+    log = tmp_path / "merge-calls.log"
+    state.write_text(
+        json.dumps(
+            {
+                "state": "OPEN",
+                "headRefOid": "a" * 40,
+                "baseRefOid": "b" * 40,
+                "mergedAt": None,
+                "mergeCommit": None,
+            }
+        )
+    )
+    state2.write_text(
+        json.dumps(
+            {
+                "state": "OPEN",
+                "headRefOid": "r" * 40,
+                "baseRefOid": "c" * 40,
+                "mergedAt": None,
+                "mergeCommit": None,
+                "title": "ops: roadmap status refresh post-#1",
+                "baseRefName": "main",
+                "files": [{"path": ".harness/roadmap_status.md"}],
+            }
+        )
+    )
+    real_status = ROOT_REPO / ".harness" / "roadmap_status.md"
+    real_archive = ROOT_REPO / ".harness" / "roadmap_drift_log_archive.md"
+    (bindir / "gh").write_text(
+        f"""#!/usr/bin/env bash
+case "$*" in
+  *"pr list"*) echo -n "" ;;
+  *"pr view 2"*) cat "{state2}" ;;
+  *"pr view"*) cat "{state}" ;;
+  *"pr create"*) echo "https://github.com/o/r/pull/2" ;;
+  *"pr merge 2"*) echo "$*" >> "{log}"; python3 - <<'PY2B'
+import json
+p = "{state2}"
+s = json.load(open(p))
+s.update(state="MERGED", mergedAt="now", mergeCommit={{"oid": "9" * 40}})
+json.dump(s, open(p, "w"))
+PY2B
+  ;;
+  *"pr merge"*) echo "$*" >> "{log}"; python3 - <<'PY2'
+import json
+p = "{state}"
+s = json.load(open(p))
+s.update(state="MERGED", mergedAt="now", mergeCommit={{"oid": "c" * 40}})
+json.dump(s, open(p, "w"))
+PY2
+  ;;
+  *"run list"*"--commit"*)
+    echo '[{{"status":"completed","conclusion":"success","event":"push"}}]' ;;
+  *"run list"*) echo '[]' ;;
+  *) echo "fake gh: unhandled $*" >&2; exit 1 ;;
+esac
+"""
+    )
+    (bindir / "git").write_text(
+        f"""#!/usr/bin/env bash
+if [ "$1" = "-C" ]; then shift 2; fi
+case "$1 $2" in
+  "merge-tree --write-tree") echo "{"d" * 40}" ;;
+  "ls-remote --exit-code") exit 2 ;;
+  "worktree add")
+    # materialize the ephemeral worktree: last-but-one arg is the path
+    wt="$4"; [ "$3" = "--detach" ] && wt="$4"; [ "$2" = "add" ] && for a in "$@"; do :; done
+    # positional: git worktree add -q --detach <wt> origin/main -> $5 is <wt>
+    mkdir -p "$5/.harness"
+    cp "{real_status}" "$5/.harness/roadmap_status.md"
+    cp "{real_archive}" "$5/.harness/roadmap_drift_log_archive.md" 2>/dev/null || true
+    ;;
+  "worktree remove") ;;
+  "worktree list") echo "worktree /x" ;;
+  "fetch origin") ;;
+  "add .harness/roadmap_status.md") ;;
+  "diff --cached") echo ".harness/roadmap_status.md" ;;
+  "commit -m") ;;
+  "push -q") ;;
+  "rev-parse {"c" * 40}^1") echo "{"b" * 40}" ;;
+  "rev-parse HEAD") echo "{"r" * 40}" ;;
+  "rev-parse "*) echo "{"b" * 40}" ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+"""
+    )
+    for f in ("gh", "git"):
+        (bindir / f).chmod(0o755)
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    env = {
+        **os.environ,
+        "PATH": f"{bindir}:{os.environ['PATH']}",
+        "ARC_METRICS_QUEUE_DIR": str(q),
+        "HARNESS_GATE_LOG": str(tmp_path / "gate-log.jsonl"),
+        "PYTHONPATH": str(TOOLS),
+        "HARNESS_LANE_ID": "A",
+    }
+    refresh_cmd = f"{sys.executable} {TOOLS / 'roadmap_status_refresh.py'} --emit-refresh-pr-json 1"
+    p = subprocess.run(
+        [
+            sys.executable,
+            str(TOOLS / "merge_door.py"),
+            "land",
+            "1",
+            "--lane-id",
+            "A",
+            "--arc-id",
+            "pr-1",
+            "--refresh-cmd",
+            refresh_cmd,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert p.returncode == 0, f"stdout: {p.stdout}\nstderr: {p.stderr}"
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert sum("pr merge 1 " in c for c in calls) == 1
+    assert sum("pr merge 2 " in c for c in calls) == 1  # the REAL producer's pair merged
+    assert md.read_lease() is None
+
+
+ROOT_REPO = Path(__file__).resolve().parents[1]
 
 
 def _land_cmd() -> list[str]:

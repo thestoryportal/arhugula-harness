@@ -7,6 +7,7 @@ every future session's SessionStart hook report false `[ROADMAP DRIFT]`.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1209,20 +1210,18 @@ def test_emit_refresh_pr_pushed_branch_without_pr_creates_on_it():
             (("gh", "pr", "list"), _P(stdout="")),
             (("git", "ls-remote"), _P(returncode=0)),
             (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
-            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
+            (
+                ("git", "rev-parse", "origin/roadmap-refresh-post-55"),
+                _P(stdout="feedbeef"),
+            ),
         ],
         calls,
     )
     out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
     assert out == {"pr": 77, "head_sha": "feedbeef"}
-    assert [
-        "git",
-        "checkout",
-        "-q",
-        "-B",
-        "roadmap-refresh-post-55",
-        "origin/roadmap-refresh-post-55",
-    ] in calls
+    # merge-gate r1 (concurrency): the resume leg performs NO checkout — the
+    # invoking worktree's HEAD is never touched and no local branch can collide
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)
     assert not any(c[:2] == ["git", "commit"] for c in calls)
     create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
     assert create[3:5] == ["--base", "main"]  # r10 P1 pin, r11 P3 witness
@@ -1250,14 +1249,26 @@ def test_emit_refresh_pr_fresh_path_branches_from_main_then_refreshes():
     )
     out = rsr.emit_refresh_pr(55, run=run, do_refresh=do_refresh)
     assert out == {"pr": 88, "head_sha": "cafebabe"}
-    checkout = ["git", "checkout", "-q", "-B", "roadmap-refresh-post-55", "origin/main"]
-    assert checkout in calls
+    # merge-gate r1 (concurrency P1): the build happens in an EPHEMERAL DETACHED
+    # worktree — never a checkout in the invoking worktree, never a local branch
+    wt_add = next(c for c in calls if c[:3] == ["git", "worktree", "add"])
+    assert wt_add[3:5] == ["-q", "--detach"] and wt_add[6] == "origin/main"
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)
     assert ["git", "fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main"] in calls
     create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
     assert create[3:5] == ["--base", "main"]  # r10 P1 pin, r11 P3 witness
-    assert seen["refresh_at_call_index"] >= calls.index(checkout) + 1
+    assert seen["refresh_at_call_index"] >= calls.index(wt_add) + 1
     assert ["git", "commit", "-m", "ops: roadmap status refresh post-#55"] in calls
-    assert ["git", "push", "-u", "origin", "roadmap-refresh-post-55"] in calls
+    # push uses an explicit refspec — no local branch ref ever exists
+    assert [
+        "git",
+        "push",
+        "-q",
+        "origin",
+        "HEAD:refs/heads/roadmap-refresh-post-55",
+    ] in calls
+    # cleanup: the ephemeral worktree is removed
+    assert any(c[:3] == ["git", "worktree", "remove"] for c in calls)
 
 
 def test_emit_refresh_pr_refuses_two_file_commit():
@@ -1735,3 +1746,46 @@ def test_pushed_branch_provenance_fetch_uses_explicit_refspec():
         "origin",
         f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
     ] in calls
+
+
+import stat  # noqa: E402
+
+
+def test_read_draft_unreadable_fails_loud(monkeypatch, tmp_path):
+    """merge-gate r1 witness P2 (r18 fix): a draft that EXISTS but cannot be read
+    must fail loud — collapsing it to silent-absent must turn this row red."""
+    if os.geteuid() == 0:
+        pytest.skip("permission bits are advisory under root")
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\nbody\n")
+    draft.chmod(0)
+    try:
+        with pytest.raises(SystemExit, match="unreadable"):
+            rsr._read_draft_nofollow()
+    finally:
+        draft.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def test_failed_verification_refuses_rather_than_retires(monkeypatch, tmp_path):
+    """merge-gate r1 witness P3: when the pushed content CANNOT be fetched, a matching
+    draft is kept and the resume REFUSES — a failed verification never reads as
+    'represented'."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            (("git", "fetch"), _P(returncode=1, stderr="network down")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="does not represent the authored"):
+        rsr.emit_refresh_pr(55, run=run)
+    assert draft.exists()
