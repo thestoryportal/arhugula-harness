@@ -44,9 +44,10 @@ loop_status_path() {
   # an empty path as "no venue": the reducers return empty and loop_log_structured fails
   # closed with a message, which is the correct outcome for an unusable venue.
   case "$p" in
-    /*) printf '%s' "$p" ;;
-    *)  echo "loop_status_path: venue must be an absolute path, got '$p'" >&2; return 1 ;;
+    /*) ;;
+    *) echo "loop_status_path: venue must be an absolute path, got '$p'" >&2; return 1 ;;
   esac
+  printf '%s' "$p"
 }
 
 # Path to the Stop-continue iteration counter (U-HK-14 bound). Presence + integer
@@ -81,7 +82,9 @@ loop_status_ensure() {
     # in normal operation, not just in principle. `set -o noclobber` makes `>` open with
     # O_EXCL, so exactly one writer creates the header and the loser is a harmless no-op
     # (the winner's header is equally valid -- there is nothing to merge).
-    ( set -o noclobber; cat > "$p" <<'EOF'
+    (
+      set -o noclobber
+      cat > "$p" <<'EOF'
 # Loop status ledger
 
 *Append-only record of autonomous loop-mode activity (Wave 2, U-HK-11), SHARED by every
