@@ -67,16 +67,17 @@ def test_to_put_payload_normalizes_get_shape():
         "required_linear_history": False,
     }
     assert mp.verify(got, put) == []
-    # A null app_id means "any app" and is expressed by omitting the key on the PUT.
     got_anyapp = dict(got)
     got_anyapp["required_status_checks"] = {
         "strict": True,
         "checks": [{"context": "a — blocking", "app_id": None}],
     }
     put_anyapp = mp._to_put_payload(got_anyapp)
+    # Any-app is the EXPLICIT -1 sentinel on the PUT (omission would mean auto-select,
+    # codex r7 P2); verify() normalizes null↔-1 so the round-trip still compares clean.
     assert put_anyapp["required_status_checks"] == {
         "strict": True,
-        "checks": [{"context": "a — blocking"}],
+        "checks": [{"context": "a — blocking", "app_id": -1}],
     }
     assert mp.verify(got_anyapp, put_anyapp) == []
     got["restrictions"] = {
@@ -180,9 +181,34 @@ _PRIOR_GET = {
 }
 
 
-def _wire_apply(monkeypatch, tmp_path, *, cur, tiebreaker):
-    """Hermetic apply harness: records every gh/api subprocess, never leaves the process."""
+def _live_get(desired):
+    """A GET-shaped policy that verifies clean against the §2 desired payload — what the
+    CAS re-read sees while OUR provisional payload is live."""
+    return {
+        "required_status_checks": {
+            "strict": True,
+            "contexts": list(desired["required_status_checks"]["contexts"]),
+        },
+        "enforce_admins": {"enabled": True},
+        "required_pull_request_reviews": None,
+        "allow_force_pushes": {"enabled": False},
+        "allow_deletions": {"enabled": False},
+        "required_linear_history": {"enabled": False},
+    }
+
+
+def _wire_apply(monkeypatch, tmp_path, *, cur, tiebreaker, states=None):
+    """Hermetic apply harness: records every gh/api subprocess, never leaves the process.
+    `states` is the current_protection() read sequence (falls back to its last entry);
+    default: first read `cur`, then the provisional payload live (CAS re-read), then `cur`
+    again (rollback validation / restore-verify)."""
     calls: list[list[str]] = []
+    if states is None:
+        states = [cur, _live_get(mp.desired_payload(mp.blocking_contexts())), cur]
+    seq = list(states)
+
+    def fake_protection():
+        return seq.pop(0) if len(seq) > 1 else seq[0]
 
     def fake_run(cmd, **kw):
         calls.append(list(cmd))
@@ -196,10 +222,10 @@ def _wire_apply(monkeypatch, tmp_path, *, cur, tiebreaker):
     monkeypatch.setattr(mp, "_gh", fake_gh)
     monkeypatch.setattr(mp, "_repo", lambda: "o/r")
     monkeypatch.setattr(mp, "_loop_mode", lambda: False)
-    monkeypatch.setattr(mp, "current_protection", lambda: cur)
+    monkeypatch.setattr(mp, "current_protection", fake_protection)
     monkeypatch.setattr(mp, "tiebreaker", tiebreaker)
     monkeypatch.setattr(mp, "EVIDENCE_LOG", tmp_path / "evidence.md")
-    monkeypatch.setattr(mp, "_APPLY_LOCK", tmp_path / "apply.lock")
+    monkeypatch.setattr(mp, "_apply_lock_path", lambda: tmp_path / "apply.lock")
     return calls
 
 
@@ -281,6 +307,28 @@ def test_apply_rolls_back_when_tiebreaker_raises(monkeypatch, tmp_path):
         mp.main(["apply", "--confirm", "--approved-digest", digest])
     assert "rolled back" in str(e.value)
     assert len(_deletes(calls)) == 1
+
+
+def test_apply_rollback_cas_aborts_when_live_policy_changed(monkeypatch, tmp_path):
+    """Rollback only fires when the live policy is still OUR provisional payload — a
+    concurrent change during the long-running probe must not be erased (codex r7 P1)."""
+    calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 1, states=[None, None])
+    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    with pytest.raises(SystemExit) as e:
+        mp.main(["apply", "--confirm", "--approved-digest", digest])
+    assert "NOT rolling back" in str(e.value)
+    assert len(_puts(calls)) == 1 and _deletes(calls) == []
+
+
+def test_apply_keeps_validated_fence_on_cleanup_failure(monkeypatch, tmp_path):
+    """tiebreaker rc 2 (PASS but cleanup incomplete): the transaction exits nonzero but the
+    validated fence is NOT torn down (codex r7 P2)."""
+    calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 2)
+    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    with pytest.raises(SystemExit) as e:
+        mp.main(["apply", "--confirm", "--approved-digest", digest])
+    assert "cleanup incomplete" in str(e.value) and "PERSISTS" in str(e.value)
+    assert len(_puts(calls)) == 1 and _deletes(calls) == []
 
 
 def test_verify_restore_check_accepts_prior_policy_with_reviews():

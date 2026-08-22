@@ -114,9 +114,15 @@ def verify(current: dict | None, desired: dict) -> list[str]:
             )
         if "checks" in want_rsc:
             # App-bound target (a restored prior policy): compare (context, app_id) pairs so
-            # an any-app policy is never certified as an app-bound one (codex r3 P2).
-            have_pairs = sorted((c["context"], c.get("app_id")) for c in rsc.get("checks") or [])
-            want_pairs = sorted((c["context"], c.get("app_id")) for c in want_rsc["checks"])
+            # an any-app policy is never certified as an app-bound one (codex r3 P2). GET
+            # expresses any-app as null, the PUT as -1 — normalize both to None (r7 P2).
+            def _app(v: object) -> object:
+                return None if v in (None, -1) else v
+
+            have_pairs = sorted(
+                (c["context"], _app(c.get("app_id"))) for c in rsc.get("checks") or []
+            )
+            want_pairs = sorted((c["context"], _app(c.get("app_id"))) for c in want_rsc["checks"])
             if have_pairs != want_pairs:
                 out.append(
                     f"checks differ: missing={sorted(set(want_pairs) - set(have_pairs))} "
@@ -133,7 +139,7 @@ def verify(current: dict | None, desired: dict) -> list[str]:
             # A contexts target is ANY-app: a live policy whose checks are app-bound differs
             # even when the names match — same names, stricter binding (codex r6 P2).
             bound = sorted(
-                c["context"] for c in rsc.get("checks") or [] if c.get("app_id") is not None
+                c["context"] for c in rsc.get("checks") or [] if c.get("app_id") not in (None, -1)
             )
             if bound:
                 out.append(f"checks are app-bound but the target policy is any-app: {bound}")
@@ -205,15 +211,16 @@ def _to_put_payload(got: dict) -> dict:
         put_rsc = None
     elif rsc.get("checks"):
         # Preserve per-check app bindings — flattening checks to bare contexts would restore
-        # an app-bound prior policy as an any-app policy (codex r3 P2). A null app_id means
-        # "any app" and is expressed by omitting the key on the PUT.
+        # an app-bound prior policy as an any-app policy (codex r3 P2). A null app_id in the
+        # GET means "any app"; on the PUT that is the EXPLICIT -1 sentinel — omitting the
+        # key would ask GitHub to auto-select an app instead (codex r7 P2).
         put_rsc = {
             "strict": bool(rsc.get("strict")),
             "checks": sorted(
                 (
                     {
                         "context": c["context"],
-                        **({"app_id": c["app_id"]} if c.get("app_id") is not None else {}),
+                        "app_id": c["app_id"] if c.get("app_id") is not None else -1,
                     }
                     for c in rsc["checks"]
                 ),
@@ -255,7 +262,21 @@ def _loop_mode() -> bool:
     return os.environ.get("HARNESS_LOOP") == "1" or (REPO / ".harness" / ".loop-active").exists()
 
 
-_APPLY_LOCK = REPO / ".harness" / ".main-protection-apply.lock"
+def _apply_lock_path() -> Path:
+    """Lock in the git COMMON dir so every linked worktree of this repository shares ONE
+    lock — a REPO-relative path would give each worktree its own file and void the
+    serialization (codex r7 P1)."""
+    q = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=REPO,
+    )
+    common = Path(q.stdout.strip()) if q.returncode == 0 and q.stdout.strip() else REPO / ".git"
+    if not common.is_absolute():
+        common = REPO / common
+    return common / "main-protection-apply.lock"
 
 
 def _confirmed_apply(cur: dict | None, desired: dict) -> int:
@@ -284,7 +305,25 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
         # exiting here would leave the new protection silently live (codex r1 P1).
         rc = 1
         print(f"tiebreaker raised instead of returning: {e!r}")
+    if rc == 2:
+        # Probe PASSED but its cleanup is incomplete: the fence is validated — do NOT tear
+        # it down over scratch leftovers — but the transaction must not read as success
+        # (codex r7 P2). The leftovers are listed in the tiebreaker output above.
+        raise SystemExit(
+            "tiebreaker PASS but cleanup incomplete — protection PERSISTS; remove the "
+            "listed scratch state by hand, then run `just main-protection-verify`"
+        )
     if rc != 0:
+        # CAS guard (codex r7 P1): the tiebreaker can run for many minutes — only roll back
+        # if the live policy is still OUR provisional payload. A concurrent administrator
+        # or process change must not be erased by this rollback.
+        live = current_protection()
+        if live is None or verify(live, desired):
+            raise SystemExit(
+                "tiebreaker FAILED but the live protection no longer matches the "
+                "provisional payload (changed concurrently during the probe) — NOT rolling "
+                "back; inspect `just main-protection-show` against the evidence log"
+            )
         if cur is None:
             # Pre-change state was unprotected: DELETE, and VALIDATE that the deletion
             # actually landed — a failed DELETE must not be reported as a rollback (r1 P2).
@@ -381,11 +420,12 @@ def main(argv: list[str] | None = None) -> int:
         # BEFORE the pre-state read + digest validation — reading first would let a confirm
         # that waited out another's lock proceed on a stale capture (codex r5 P1). Same-host
         # scope is the real cardinality — the recipe is operator-gated on this machine.
+        lock = _apply_lock_path()
         try:
-            fd = os.open(_APPLY_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             raise SystemExit(
-                f"another apply-confirm appears to be in flight ({_APPLY_LOCK} exists) — "
+                f"another apply-confirm appears to be in flight ({lock} exists) — "
                 "wait for it, or remove the lockfile if its process is dead"
             ) from None
         os.write(fd, str(os.getpid()).encode())
@@ -406,7 +446,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             return _confirmed_apply(cur, desired)
         finally:
-            _APPLY_LOCK.unlink(missing_ok=True)
+            lock.unlink(missing_ok=True)
     if a.cmd == "rollback":
         if _loop_mode():
             # The guard cannot inspect the `gh api -X DELETE` this helper spawns — the
@@ -521,7 +561,8 @@ def tiebreaker() -> int:
 
     sh("git", "fetch", "-q", "origin", cwd=REPO)
     sh("git", "worktree", "add", "-q", "--detach", str(wt), "origin/main", cwd=REPO)
-    try:
+
+    def run() -> int:
         base = sh("git", "rev-parse", "origin/main")
         sh("git", "checkout", "-q", "-b", br)
         created_local.append(br)
@@ -650,6 +691,10 @@ def tiebreaker() -> int:
         # the leak it prevents (codex r6 P2); the finally-block's remote-ref deletion
         # auto-closes the still-open PR.
         return 0 if verdict == "PASS" else 1
+
+    cleanup_failures: list[str] = []
+    try:
+        result = run()
     finally:
         # External-state GC on EVERY exit path — a failed probe must not leave scratch PRs
         # open, remote branches, local refs, or the temporary worktree behind (codex r1 P3):
@@ -668,6 +713,7 @@ def tiebreaker() -> int:
             cwd=REPO,
         )
         if wtrm.returncode != 0:
+            cleanup_failures.append(f"temporary worktree {wt} not removed")
             print(
                 f"WARNING: cleanup incomplete — temporary worktree {wt} was not removed "
                 f"({wtrm.stderr.strip()[:120]})"
@@ -681,6 +727,7 @@ def tiebreaker() -> int:
                 cwd=REPO,
             )
             if lgc.returncode != 0 and "not found" not in lgc.stderr:
+                cleanup_failures.append(f"local branch {local} not deleted")
                 print(
                     f"WARNING: cleanup incomplete — local branch {local} was not deleted "
                     f"({lgc.stderr.strip()[:120]})"
@@ -694,10 +741,18 @@ def tiebreaker() -> int:
                 cwd=REPO,
             )
             if gc.returncode != 0 and "remote ref does not exist" not in gc.stderr:
+                cleanup_failures.append(f"remote branch origin/{scratch} (and its PR) not deleted")
                 print(
                     f"WARNING: cleanup incomplete — could not delete origin/{scratch} "
                     f"({gc.stderr.strip()[:120]}); delete it (and its PR) by hand"
                 )
+    if result == 0 and cleanup_failures:
+        # The probe PASSED but the every-exit cleanup contract was not met — that must not
+        # read as a successful transaction (codex r7 P2). rc 2 lets the apply keep the
+        # VALIDATED fence while still exiting nonzero with the leftovers listed.
+        print("tiebreaker: PASS but cleanup incomplete — " + "; ".join(cleanup_failures))
+        return 2
+    return result
 
 
 if __name__ == "__main__":
