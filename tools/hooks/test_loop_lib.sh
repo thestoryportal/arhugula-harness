@@ -381,6 +381,33 @@ SWEEP=$(cd "$SCRIPT_DIR/../.." && grep -rl '\.harness/loop_status\.md' \
   .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md 2>/dev/null | wc -l | tr -d ' ')
 [ "$SWEEP" = "0" ] && ok "pointer sweep: 0 literal .harness/loop_status.md hits in live carriers" || bad "stale pointers remain in $SWEEP file(s)"
 
+# 26) codex r1 P2 — first-writer TOCTOU on the SHARED venue. N lanes racing to log into a
+#     venue that does not exist yet must ALL keep their rows: a truncating create by a
+#     loser would erase a row the winner already appended, silently destroying a durable
+#     operator signal while the writer still reported success.
+RACE="$REPO/race/loop_status.md"
+for round in 1 2 3; do
+  rm -rf "$REPO/race"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    ( HARNESS_LOOP_STATUS_PATH="$RACE" loop_log_structured DEFERRED-HIL "L$i" g:f:c "B-$i — racer $i" ) &
+  done
+  wait
+  N=$(grep -c '| DEFERRED-HIL |' "$RACE" 2>/dev/null || echo 0)
+  [ "$N" = "12" ] || break
+done
+[ "$N" = "12" ] && ok "12 lanes racing to create the venue keep all 12 rows" || bad "create race lost rows: $N/12"
+[ "$(grep -c '^# Loop status ledger$' "$RACE" 2>/dev/null)" = "1" ] && ok "exactly one header survives the create race" || bad "header count: $(grep -c '^# Loop status ledger$' "$RACE" 2>/dev/null)"
+
+# 27) codex r1 P2 — a RELATIVE venue is rejected, not silently resolved per-CWD. Returning
+#     the relative text unchanged would make two lanes with different CWDs write different
+#     physical files while every string comparison still reported them equal.
+REL=$(HARNESS_LOOP_STATUS_PATH="rel/loop_status.md" loop_status_path 2>/dev/null); RC=$?
+{ [ "$RC" -ne 0 ] && [ -z "$REL" ]; } && ok "relative HARNESS_LOOP_STATUS_PATH is rejected" || bad "relative venue accepted: rc=$RC [$REL]"
+RELQ=$(env -u HARNESS_LOOP_STATUS_PATH ARC_METRICS_QUEUE_DIR="rel/queue" bash -c '. "$1"; . "$2"; loop_status_path' _ "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" 2>/dev/null)
+[ -z "$RELQ" ] && ok "relative ARC_METRICS_QUEUE_DIR is rejected" || bad "relative queue dir accepted: [$RELQ]"
+( HARNESS_LOOP_STATUS_PATH="rel/loop_status.md" loop_log_structured NOTIFY L1 g:f:c "d" ) 2>/dev/null
+[ $? -eq 1 ] && ok "an unusable venue fails the structured write closed" || bad "structured write succeeded on an unusable venue"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

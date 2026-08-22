@@ -134,9 +134,11 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    `ops: roadmap status refresh ` and its closed changed-file set is only
    `.harness/roadmap_status.md`. Do not recurse on a terminating refresh.
 7. Wait for the refresh merge's own main CI to be green and fast-forward local `main`.
-   DEFER removing the arc worktree and pruning the topic branch until AFTER the arc exit
-   report below — the report reads the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`) for this
-   arc's pending-HIL rows, and disposition deletes that ledger.
+   Order the arc exit report before removing the arc worktree and pruning the topic branch.
+   The ledger itself is no longer at risk from disposition — since U-HE-29 it is the SHARED
+   venue (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`),
+   outside every worktree, and no disposition path deletes it. The report is still ordered
+   first because it records the worktree's own closure facts.
 6. Record loop gates through `worktree_disposition` (the disposition itself now happens
    after the exit report) and require `just codex-loop-check`.
 
@@ -154,8 +156,10 @@ for a pure terminating-refresh PR.
 ## Arc exit report (U-WT-03/04)
 
 Run this as the last REPORTING step — after the reflect and `context-save` step above, never
-before it, BEFORE the arc worktree's disposition (the report reads that worktree's
-pending-HIL ledger, which disposition deletes), and BEFORE launching the next arc. Only
+before it, BEFORE the arc worktree's disposition, and BEFORE launching the next arc. (The
+pending-HIL ledger it reads is the SHARED venue since U-HE-29, so disposition no longer
+destroys it — the ordering now exists for the closure facts below, not to outrun a delete.)
+Only
 at that point do the merge SHA, the post-merge main CI conclusion, the terminating
 refresh commit, and the checkpoint just written all exist, so the report records the
 arc's real final checkpoint instead of a stale one. Skip entirely for a pure

@@ -29,9 +29,24 @@ loop_marker_path() {
 # CONTROL markers (the .loop-active marker, .loop-iter, .loop-halt) deliberately stay
 # per-lane under hook_project_dir() -- they scope one lane's run, not the shared queue.
 loop_status_path() {
-  if [ -n "${HARNESS_LOOP_STATUS_PATH:-}" ]; then printf '%s' "$HARNESS_LOOP_STATUS_PATH"; return 0; fi
-  local q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
-  printf '%s' "$(dirname "$q")/loop_status.md"
+  local p
+  if [ -n "${HARNESS_LOOP_STATUS_PATH:-}" ]; then
+    p="$HARNESS_LOOP_STATUS_PATH"
+  else
+    local q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
+    p="$(dirname "$q")/loop_status.md"
+  fi
+  # A RELATIVE override would silently defeat the whole contract: each lane would resolve
+  # the same string against its own CWD and write a DIFFERENT physical file, while any
+  # test comparing the returned strings still sees them as equal. Absolutizing against
+  # CWD would not help (it is the CWD that differs), so a non-absolute venue is rejected
+  # as the misconfiguration it is -- echo nothing and say why. Every caller already treats
+  # an empty path as "no venue": the reducers return empty and loop_log_structured fails
+  # closed with a message, which is the correct outcome for an unusable venue.
+  case "$p" in
+    /*) printf '%s' "$p" ;;
+    *)  echo "loop_status_path: venue must be an absolute path, got '$p'" >&2; return 1 ;;
+  esac
 }
 
 # Path to the Stop-continue iteration counter (U-HK-14 bound). Presence + integer
@@ -58,7 +73,15 @@ loop_status_ensure() {
   [ -z "$p" ] && return 0
   if [ ! -f "$p" ]; then
     mkdir -p "$(dirname "$p")" 2>/dev/null
-    cat > "$p" <<'EOF'
+    # EXCLUSIVE create (codex round-1 P2). A plain `cat > "$p"` after the -f test is a
+    # first-writer TOCTOU: two lanes can both see the venue absent, and the loser's
+    # truncating redirect would erase a row the winner had already appended -- silently
+    # destroying a durable DEFERRED-HIL / NOTIFY signal while loop_log_structured still
+    # reported success. Now that the venue is SHARED across lanes this race is reachable
+    # in normal operation, not just in principle. `set -o noclobber` makes `>` open with
+    # O_EXCL, so exactly one writer creates the header and the loser is a harmless no-op
+    # (the winner's header is equally valid -- there is nothing to merge).
+    ( set -o noclobber; cat > "$p" <<'EOF'
 # Loop status ledger
 
 *Append-only record of autonomous loop-mode activity (Wave 2, U-HK-11), SHARED by every
@@ -76,6 +99,7 @@ safer default was taken.*
 | timestamp | kind | lane;cause | detail |
 |---|---|---|---|
 EOF
+    ) 2>/dev/null || true   # lost the create race: the winner's header stands
   fi
   printf '%s' "$p"
 }
