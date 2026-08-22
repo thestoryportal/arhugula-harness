@@ -108,6 +108,27 @@ def test_verify_flags_live_restrictions():
     assert any("restrictions" in m for m in mp.verify(cur, d))
 
 
+def test_verify_flags_app_bound_checks_against_anyapp_target():
+    """A contexts target is any-app: a live app-bound policy with the SAME context names is
+    still a mismatch — same names, stricter binding (codex r6 P2)."""
+    d = mp.desired_payload(["a — blocking"])
+    cur = {
+        "required_status_checks": {
+            "strict": True,
+            "contexts": ["a — blocking"],
+            "checks": [{"context": "a — blocking", "app_id": 15368}],
+        },
+        "enforce_admins": {"enabled": True},
+        "required_pull_request_reviews": None,
+        "allow_force_pushes": {"enabled": False},
+        "allow_deletions": {"enabled": False},
+        "required_linear_history": {"enabled": False},
+    }
+    assert any("app-bound" in m for m in mp.verify(cur, d))
+    cur["required_status_checks"]["checks"] = [{"context": "a — blocking", "app_id": None}]
+    assert mp.verify(cur, d) == []
+
+
 def test_prr_put_payload_preserves_strengthening_fields():
     """Rollback must never restore a WEAKER review policy than captured (codex r1 P2):
     require_last_push_approval / dismissal_restrictions / bypass allowances survive the

@@ -130,6 +130,13 @@ def verify(current: dict | None, desired: dict) -> list[str]:
                     f"contexts differ: missing={sorted(set(want) - set(have))} "
                     f"extra={sorted(set(have) - set(want))}"
                 )
+            # A contexts target is ANY-app: a live policy whose checks are app-bound differs
+            # even when the names match — same names, stricter binding (codex r6 P2).
+            bound = sorted(
+                c["context"] for c in rsc.get("checks") or [] if c.get("app_id") is not None
+            )
+            if bound:
+                out.append(f"checks are app-bound but the target policy is any-app: {bound}")
     want_prr = desired.get("required_pull_request_reviews")
     cur_prr = current.get("required_pull_request_reviews")
     if want_prr is None:
@@ -534,7 +541,18 @@ def tiebreaker() -> int:
         )
         pr = url.rsplit("/", 1)[-1]
         print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
-        sh("gh", "pr", "checks", pr, "--watch")
+        # Same 1800 s allowance as the stale PR's watch — sh()'s 180 s would misread any
+        # healthy CI run longer than three minutes as a tiebreaker failure (codex r6 P2).
+        chk1 = subprocess.run(
+            ["gh", "pr", "checks", pr, "--watch"],
+            capture_output=True,
+            text=True,
+            timeout=1800,
+            cwd=wt,
+        )
+        if chk1.returncode != 0:
+            print(f"precondition failed: scratch PR checks did not go green (rc={chk1.returncode})")
+            return 1
         head = sh("git", "rev-parse", "HEAD")
         merged, merr = merge_attempt(pr, head)
         if not merged:
@@ -607,26 +625,30 @@ def tiebreaker() -> int:
                         f"base-freshness (kind={kind}, mergeStateStatus={state}; {err[:160]})",
                     )
             else:
+                # Validate the PR's OWN merge commit — the origin/main tip can have been
+                # advanced by another lane between the merge and this read, and judging by
+                # the tip would fail a correct landing and roll the protection back
+                # (codex r6 P1).
+                oid = sh(
+                    "gh", "pr", "view", pr2, "--json", "mergeCommit", "--jq", ".mergeCommit.oid"
+                )
                 sh("git", "fetch", "-q", "origin")
-                new_main = sh("git", "rev-parse", "origin/main")
-                first_parent = sh("git", "rev-parse", f"{new_main}^1")
+                first_parent = sh("git", "rev-parse", f"{oid}^1")
                 verdict, why = (
                     ("PASS", "stale PR fast-forwarded cleanly onto the pre-merge main")
                     if first_parent == pre
                     else (
                         "FAIL",
                         f"stale PR landed off the pre-merge main "
-                        f"(first parent {first_parent[:12]} != {pre[:12]})",
+                        f"(merge commit {oid[:12]} first parent {first_parent[:12]} "
+                        f"!= {pre[:12]})",
                     )
                 )
         print(f"tiebreaker: {verdict} — {why}")
-        subprocess.run(
-            ["gh", "pr", "close", pr2, "--delete-branch"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            cwd=wt,
-        )
+        # No explicit pr2 close here: closing with --delete-branch would delete the remote
+        # ref BEFORE the finally-block's documented worktree→local→remote order and re-open
+        # the leak it prevents (codex r6 P2); the finally-block's remote-ref deletion
+        # auto-closes the still-open PR.
         return 0 if verdict == "PASS" else 1
     finally:
         # External-state GC on EVERY exit path — a failed probe must not leave scratch PRs
