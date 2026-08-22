@@ -81,13 +81,13 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `update` on a nonexistent reservation aborts, and the arc's reservation will instead be
   minted at closure by the U-HE-19 drain bootstrap.
 
-## Pre-merge gate — CI green + decorrelated 3-lens review (before `gh pr merge`)
+## Pre-merge gate — CI green + decorrelated 3-lens review (before the merge door)
 
 Once the PR's HEAD sha shows CI fully green (`check-runs`, rerunning known flakes first, per
 `[[wait-for-main-ci-green-before-forward-work]]`), and for any PR that touches
 `harness-*/src|tests` (or equivalent code surface — skip doc-only and terminating
-`ops: roadmap status refresh` PRs), invoke the **`merge-gate`** skill before running
-`gh pr merge`: three parallel Agent-tool subagents (concurrency/race-conditions,
+`ops: roadmap status refresh` PRs), invoke the **`merge-gate`** skill before the merge
+door: three parallel Agent-tool subagents (concurrency/race-conditions,
 spec-conformance-against-ledgers, test-witness-adequacy), each returning a structured
 `VERDICT: APPROVE`/`VERDICT: BLOCK: <reason>` line. All-approve → merge without HIL, per
 `[[feedback-merge-without-hil-once-ci-green]]` (CI-green remains the base precondition; this
@@ -127,9 +127,50 @@ payload-only and valid on the still-`pending` head; the flip block above then re
 formerly-registered flip-timing class (U-HE-19 rev item (vii) → spec v1.4 X4a): the merge
 lane opens pre-acquire, drain-start remains the closure-capture opener.
 
+## Land through the merge door (C-HE-06/07, U-HE-28)
+
+After CI green + `merge-gate` all-APPROVE + the final-gate back-fill/flip above, land with
+the C-HE-07 allowlisted wrapper — the ONLY merge invocation:
+
+```bash
+bash tools/hooks/safe-merge.sh <pr>
+```
+
+(In loop mode use the guard's exact-shape prefixed form when the ids are not already in the
+shell: `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> bash tools/hooks/safe-merge.sh <pr>`.)
+
+This acquires the lease (fail-fast; on `held` it yields — do the next natural gate-pass,
+then retry; the wrapper's own `wait_for_door` applies base 30 s ×2 cap 10 min ×12 then
+routes `HITL-recoverable`), verifies head/base + `local-base-cas-check` against the
+attested tuple, merges with the fixed string, confirms MERGED, flips the reservation,
+**holds the lease through the merge SHA's own `main` run and the terminating refresh PR
+as a continuation** (`.harness/roadmap_status.md`-only, §12.2.1 shape unchanged — the
+door invokes `tools/roadmap_status_refresh.py --emit-refresh-pr-json <pr>`, which
+branches from the just-merged `main` tip, runs the mechanical refresh, opens the refresh
+PR, and hands `{pr, head_sha}` back for the door to merge under the SAME held lease),
+then releases. Exit 0 = landed + refreshed; 3 = door blocked (a `DEFERRED-HIL` row names
+`just merge-door-unblock <pr> <sha>`); 4 = re-gate (base moved / door failed); 5 = budget
+exhausted (HITL). `just merge-door-status` prints the live lease. Never issue
+`gh pr merge` yourself; the guard denies the raw verb in loop mode (C-HE-07).
+
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 
-This is the step most often done wrong. After the PR merges:
+**The mechanical half now rides the merge door.** The door's §4(viii) continuation above
+already ran `just roadmap-status`'s refresh, opened the terminating refresh PR, and merged
+it under the held lease — do NOT open a second refresh PR for the same landing (§12.2.1:
+one terminating refresh per content merge; the door's is it). The door's refresh carries a
+mechanical notes cell and leaves the `## Next action` pointer untouched (the pointer's
+standing "then <next unit>" tail plus the reservation store's terminal-head dedup keep
+next-action derivation correct; author a pointer update by passing `--next-action` to
+`--emit-refresh-pr-json` when invoking the refresh tool manually on the recovery path).
+
+What ship-pr still owes after the door releases: the `--archive-superseded` content-PR
+step below (it rides the NEXT substantive PR, never the refresh), the R-NNN registry
+prose, and the reflect/exit-report/metrics steps at the end of this skill.
+
+The manual recipe below is retained for the RECOVERY path only — a blocked door
+(`refresh_skipped_by_operator`, `record-refresh`/`clear-refresh-intent`), a headless
+unreserved arc, or a checkout where the door cannot run. On that path, after the PR merges:
 
 1. **§12.2, mechanical half — run the script, don't hand-Edit.** Per
    `[[roadmap-ledger-edits-via-idempotent-script]]`, `.harness/roadmap_status.md`'s
@@ -263,7 +304,7 @@ case "$concl" in
 esac
 [ "$concl" = success ] || { echo "ABORT: post-merge CI on main is not confirmed green (got '${concl:-empty}')"; exit 1; }
 
-# 3. If gh pr merge --delete-branch already removed the ref, there's nothing left to
+# 3. If a `--delete-branch` merge already removed the ref, there's nothing left to
 #    delete — treat that as done, not a failure. Exit 2 from `ls-remote --exit-code` is the
 #    ONLY "genuinely absent" signal; any other nonzero (network unreachable, auth failure,
 #    ...) must abort, not be silently read as "already gone". Otherwise, lease-guarded
@@ -275,7 +316,7 @@ esac
 git ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1; rc=$?
 case "$rc" in
   0) git push --force-with-lease="refs/heads/${branch}:${head_oid}" origin ":refs/heads/${branch}" ;;
-  2) echo "Already gone (gh pr merge --delete-branch or a prior run) — nothing to do." ;;
+  2) echo "Already gone (a --delete-branch merge or a prior run) — nothing to do." ;;
   *) echo "ABORT: could not verify remote ref state (ls-remote exit $rc — network/auth issue?)"; exit 1 ;;
 esac
 ```

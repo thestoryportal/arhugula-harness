@@ -292,6 +292,13 @@ main-protection-verify:
 main-protection-tiebreaker:
     uv run python tools/main_protection.py tiebreaker
 
+# C-HE-06 §6: clear a `blocked` merge-door lease -- operator-confirmed reclaim through the marker CAS,
+# keyed to the blocked SHA. There is NO raw-unlink recipe by design.
+merge-door-unblock pr sha:
+    uv run python tools/merge_door.py unblock {{pr}} {{sha}} --lane-id "$HARNESS_LANE_ID"
+merge-door-status:
+    uv run python tools/merge_door.py status
+
 # C-HE-23 §2 consistency reducer over merge-gate-log.md <-> .jsonl (U-HE-13).
 # Exit 1 on a markdown row with no JSONL sibling; orphans are listed and
 # reconciled by `uv run python tools/merge_gate_log.py reconcile`.

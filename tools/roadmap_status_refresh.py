@@ -37,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import hashlib
 import json
 import os
@@ -909,6 +910,121 @@ def check_head_refresh_shape(
     return []
 
 
+def emit_refresh_pr(
+    post_pr: int,
+    *,
+    notes: str | None = None,
+    next_action: str | None = None,
+    date: str | None = None,
+    run=subprocess.run,
+    do_refresh=None,
+) -> dict:
+    """C-HE-06 §4(viii), U-HE-28: create the terminating refresh PR as the merge door's
+    continuation and return {pr, head_sha} for the door to merge under the same held lease.
+
+    Any failure raises -> non-zero exit, no JSON -> the door marks step (viii) blocked.
+    Never merges here (the door drives the merge).
+
+    IDEMPOTENT by branch name (plan Codex round-4 P1): a crash between `gh pr create` and
+    the door's sidecar publish must not orphan/duplicate the refresh. If the branch
+    already has an open PR, return it; if the branch was pushed but no PR exists, create
+    the PR on it; only otherwise create the branch.
+
+    As-built correction vs the plan-time sketch (recorded in the U-HE-28 rev note): the
+    fresh path branches from the JUST-MERGED `origin/main` tip (fetch first), and runs
+    the mechanical refresh AFTER that checkout — never from the invoking worktree's topic
+    HEAD. Both §12.2.1 halves depend on it: the refresh commit's recorded `git_head` must
+    equal its OWN parent (`_is_terminating_refresh_commit`), and the PR's base...head
+    diff must be roadmap-status-only (a topic-HEAD branch would drag the whole arc diff
+    into the shape gate).
+    """
+    branch = f"roadmap-refresh-post-{post_pr}"
+    title = f"ops: roadmap status refresh post-#{post_pr}"
+    body = (
+        "terminating refresh (CLAUDE.md §12.2.1); landed by the merge door as a "
+        "continuation (C-HE-06 §4(viii))"
+    )
+
+    def sh(*args: str) -> str:
+        p = run(list(args), capture_output=True, text=True, timeout=120)
+        if p.returncode != 0:
+            raise SystemExit(f"emit-refresh-pr: {' '.join(args)} failed: {p.stderr.strip()}")
+        return p.stdout.strip()
+
+    existing = sh(
+        "gh",
+        "pr",
+        "list",
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,headRefOid",
+        "--jq",
+        '.[0] | select(.) | "\\(.number) \\(.headRefOid)"',
+    )
+    if existing:
+        n, head = existing.split()
+        return {"pr": int(n), "head_sha": head}
+    if (
+        run(
+            ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        ).returncode
+        == 0
+    ):
+        sh("git", "fetch", "-q", "origin", branch)
+        sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
+        url = sh("gh", "pr", "create", "--head", branch, "--title", title, "--body", body)
+        return {
+            "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
+            "head_sha": sh("git", "rev-parse", "HEAD"),
+        }
+    # Fresh path: branch from the just-merged main tip (see docstring), then refresh.
+    sh("git", "fetch", "-q", "origin", "main")
+    sh("git", "checkout", "-q", "-B", branch, "origin/main")
+    if do_refresh is None:
+
+        def do_refresh() -> None:
+            argv = [
+                "--refresh",
+                "--pr",
+                f"PR #{post_pr}",
+                "--date",
+                date or _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%d"),
+                "--notes",
+                notes
+                if notes is not None
+                else (
+                    "landed through the merge door; terminating refresh as "
+                    "continuation (C-HE-06 §4(viii))"
+                ),
+            ]
+            if next_action is not None:
+                argv += ["--next-action", next_action]
+            rc = main(argv)
+            if rc != 0:
+                raise SystemExit(f"emit-refresh-pr: mechanical refresh exited {rc}")
+
+    do_refresh()
+    sh("git", "add", ".harness/roadmap_status.md")  # the ONLY file (§12.2.1)
+    changed = sh("git", "diff", "--cached", "--name-only").splitlines()
+    if changed != [".harness/roadmap_status.md"]:
+        raise SystemExit(
+            f"emit-refresh-pr: refresh must touch exactly .harness/roadmap_status.md, got {changed}"
+        )
+    sh("git", "commit", "-m", title)
+    sh("git", "push", "-u", "origin", branch)
+    url = sh("gh", "pr", "create", "--title", title, "--body", body)
+    return {
+        "pr": int(url.rstrip("/").rsplit("/", 1)[-1]),
+        "head_sha": sh("git", "rev-parse", "HEAD"),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Deterministic roadmap_status.md skeleton refresh.")
     ap.add_argument("--status", type=Path, default=DEFAULT_STATUS)
@@ -964,6 +1080,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--git-head-note", default="", help="free-text note appended after the git_head hash"
     )
+    ap.add_argument(
+        "--emit-refresh-pr-json",
+        type=int,
+        metavar="POST_PR",
+        help="C-HE-06 §4(viii), U-HE-28: run the mechanical refresh for the "
+        "just-landed PR POST_PR (branching from the just-merged origin/main "
+        "tip), commit on roadmap-refresh-post-POST_PR, push, create the "
+        "terminating refresh PR, and print {pr, head_sha} for the merge door. "
+        "--notes/--next-action/--date compose when given; the door's fixed "
+        "wrapper invocation passes none, so those default mechanically. "
+        "Idempotent by branch name; any failure exits non-zero with no JSON",
+    )
     ap.add_argument("--drift-source", help="optional: also prepend a drift-log row")
     ap.add_argument("--drift-resolution", help="resolution text for --drift-source")
     ap.add_argument("--dry-run", action="store_true", help="print the diff instead of writing")
@@ -1005,6 +1133,16 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    if args.emit_refresh_pr_json is not None:
+        out = emit_refresh_pr(
+            args.emit_refresh_pr_json,
+            notes=args.notes,
+            next_action=args.next_action,
+            date=args.date,
+        )
+        print(json.dumps(out))
+        return 0
 
     if args.state:
         print(json.dumps(compute_state().as_dict(), indent=2))

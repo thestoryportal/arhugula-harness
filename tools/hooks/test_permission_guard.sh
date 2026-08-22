@@ -234,7 +234,7 @@ lane-1
 --arc-id
 u-he-25
 --refresh-cmd
-uv run python tools/roadmap_status_refresh.py --emit-refresh-pr-json'
+uv run python tools/roadmap_status_refresh.py --emit-refresh-pr-json 268'
 if [ "$(cat "$SMDIR/args" 2>/dev/null)" = "$SM_EXPECT" ]; then
   ok "safe-merge: delegates the exact merge_door land invocation"
 else
@@ -251,19 +251,24 @@ if [ $? -eq 69 ] && [ ! -f "$SMDIR/args" ]; then
 else
   bad "safe-merge ran despite unsupported refresh flag (args: $(cat "$SMDIR/args" 2>/dev/null))"
 fi
-# REAL-CLI posture pin: at this HEAD the real roadmap_status_refresh.py does not yet
-# support --emit-refresh-pr-json (it lands at U-HE-28), so the wrapper against the REAL
-# repo + REAL uv must fail closed pre-lease. U-HE-28's own scope flips this expectation
-# to a successful probe — update this pin there.
+# REAL-CLI posture pin (flipped by U-HE-28 per the U-HE-25 rev note): the real
+# roadmap_status_refresh.py now supports --emit-refresh-pr-json, so the wrapper's
+# pre-lease availability probe PASSES against the REAL repo + REAL uv and delegation
+# proceeds — where the REAL merge_door refuses the nonexistent witness reservation
+# fail-fast (DoorFailed "no reservation" → rc 4) BEFORE any lease is taken or merge
+# attempted. rc 69 here means the flag regressed out of the CLI; rc 0/3/5 would mean
+# the door somehow engaged real state for a witness arc — both are defects.
 REALROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ( cd "$REALROOT" && HARNESS_LANE_ID=lane-witness HARNESS_ARC_ID=arc-witness bash "$SMWRAP" 999999 ) >/dev/null 2>&1
 RC=$?
-if [ "$RC" -eq 69 ]; then
-  ok "safe-merge: REAL CLI probe fails closed pre-lease at this HEAD (exit 69)"
+if [ "$RC" -eq 4 ]; then
+  ok "safe-merge: REAL CLI probe passes; door refuses the witness arc fail-fast (rc 4)"
+elif [ "$RC" -eq 69 ]; then
+  bad "safe-merge real-CLI pin: pre-lease abort 69 — --emit-refresh-pr-json regressed out of roadmap_status_refresh.py"
 elif [ "$RC" -eq 64 ]; then
   bad "safe-merge real-CLI pin hit arity path unexpectedly"
 else
-  bad "safe-merge real-CLI pin: expected pre-lease abort 69, got rc=$RC (has U-HE-28 landed the flag? update this pin per its scope)"
+  bad "safe-merge real-CLI pin: expected door fail-fast rc 4, got rc=$RC"
 fi
 OUT=$(run_on "$(pl Bash 'gh run view 5' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "gh run view → allow" || bad "gh run view not allowed: $OUT"

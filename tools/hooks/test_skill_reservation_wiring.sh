@@ -108,6 +108,18 @@ grep -q 'reservations.py transition --arc-id <arc-id> --to open' "$SP" \
   && ok "ship-pr performs the pending→open flip pre-acquire (v1.4 X4a, U-HE-22)" \
   || bad "no pending→open flip in ship-pr final gate"
 
+# --- ship-pr: merge-door landing (C-HE-06 §1/§4/§6, U-HE-28) ---
+JF="$SCRIPT_DIR/../../justfile"
+RSR="$SCRIPT_DIR/../../tools/roadmap_status_refresh.py"
+grep -q 'bash tools/hooks/safe-merge.sh' "$SP" \
+  && ok "ship-pr merges through the wrapper" || bad "ship-pr lacks safe-merge"
+grep -Eq '(^|[^`])gh pr merge' "$SP" \
+  && bad "ship-pr still carries a raw gh pr merge instruction" || ok "no raw merge verb in ship-pr"
+grep -q 'merge-door-unblock' "$JF" \
+  && ok "unblock recipe present" || bad "no unblock recipe"
+grep -q 'emit-refresh-pr-json' "$RSR" \
+  && ok "refresh tool emits PR json" || bad "no --emit-refresh-pr-json"
+
 # --- session-start: C-HE-03 §5 ground-truth reconcile pass (landed U-HE-18; pinned here) ---
 grep -q 'reservations.py reconcile-all' "$SS" \
   && ok "session-start runs reconcile-all" || bad "no reconcile-all in session-start hook"

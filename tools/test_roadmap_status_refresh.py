@@ -1155,3 +1155,141 @@ def test_refresh_is_not_blocked_by_the_soft_byte_budget(tmp_path, capsys):
     assert rc == 0, capsys.readouterr()
     assert not archive.exists(), "still a ONE-FILE write"
     assert "**Current next action (post-#1338).** Next is the B-71 impl leg." in status.read_text()
+
+
+# --- U-HE-28: --emit-refresh-pr-json (C-HE-06 §4(viii) continuation producer) ---------
+
+
+class _P:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def _scripted_run(script, calls):
+    """Fake subprocess.run: first matching prefix wins; unmatched → success/empty.
+
+    `script` is a list of (prefix_tuple, _P); `calls` records every argv.
+    """
+
+    def run(args, **kw):
+        calls.append(list(args))
+        for prefix, resp in script:
+            if tuple(args[: len(prefix)]) == tuple(prefix):
+                return resp
+        return _P()
+
+    return run
+
+
+def test_emit_refresh_pr_idempotent_existing_open_pr():
+    """Crash after `gh pr create`: the branch's open PR is returned, nothing re-created."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [(("gh", "pr", "list"), _P(stdout="321 abc123def"))],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert out == {"pr": 321, "head_sha": "abc123def"}
+    assert not any(c[:2] == ["git", "checkout"] for c in calls)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+
+
+def test_emit_refresh_pr_pushed_branch_without_pr_creates_on_it():
+    """Crash between push and create: PR is created ON the pushed branch, no new commit."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
+        ],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert out == {"pr": 77, "head_sha": "feedbeef"}
+    assert [
+        "git",
+        "checkout",
+        "-q",
+        "-B",
+        "roadmap-refresh-post-55",
+        "origin/roadmap-refresh-post-55",
+    ] in calls
+    assert not any(c[:2] == ["git", "commit"] for c in calls)
+
+
+def test_emit_refresh_pr_fresh_path_branches_from_main_then_refreshes():
+    """As-built correction: fetch + branch from origin/main BEFORE the refresh runs, so
+    the refresh commit's recorded git_head is its own parent and the PR diff is
+    roadmap-status-only. Commit title carries the §12.2.1 prefix."""
+    calls: list[list[str]] = []
+    seen: dict[str, int] = {}
+
+    def do_refresh():
+        seen["refresh_at_call_index"] = len(calls)
+
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/88")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="cafebabe")),
+        ],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=do_refresh)
+    assert out == {"pr": 88, "head_sha": "cafebabe"}
+    checkout = ["git", "checkout", "-q", "-B", "roadmap-refresh-post-55", "origin/main"]
+    assert checkout in calls
+    assert ["git", "fetch", "-q", "origin", "main"] in calls
+    assert seen["refresh_at_call_index"] >= calls.index(checkout) + 1
+    assert ["git", "commit", "-m", "ops: roadmap status refresh post-#55"] in calls
+    assert ["git", "push", "-u", "origin", "roadmap-refresh-post-55"] in calls
+
+
+def test_emit_refresh_pr_refuses_two_file_commit():
+    """§12.2.1: a staged set that is not exactly roadmap_status.md aborts pre-commit."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (
+                ("git", "diff", "--cached", "--name-only"),
+                _P(stdout=".harness/roadmap_status.md\n.harness/arc-ledger.yaml"),
+            ),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match=r"exactly \.harness/roadmap_status\.md"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:2] == ["git", "commit"] for c in calls)
+
+
+def test_emit_refresh_pr_subcommand_failure_aborts_nonzero():
+    """Any failing git/gh step raises (non-zero exit, no JSON) → the door blocks (viii)."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=2)),
+            (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+            (("git", "push"), _P(returncode=1, stderr="remote rejected")),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="remote rejected"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+
+
+def test_cli_dispatch_emit_refresh_pr_json(monkeypatch, capsys):
+    """--emit-refresh-pr-json N dispatches before any status read and prints the JSON."""
+    monkeypatch.setattr(rsr, "emit_refresh_pr", lambda n, **kw: {"pr": n + 1, "head_sha": "aa"})
+    rc = rsr.main(["--emit-refresh-pr-json", "55"])
+    assert rc == 0
+    assert '"pr": 56' in capsys.readouterr().out
