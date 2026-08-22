@@ -129,7 +129,10 @@ _loop_structured_col() {
   # physical lines: the reducer then reads a malformed detail and can drop the gate
   # entirely -- a silently lost operator obligation, the worst failure this ledger has.
   # \r is stripped for the same reason (a lone CR corrupts the row for line-oriented awk).
-  lane=$(printf '%s' "${1:--}" | tr -d ' \t\n\r|'); cause=$(printf '%s' "${2:--}" | tr -d ' \t\n\r|')
+  # `;` goes too (codex r4 P2): rowparse terminates the lane at the FIRST semicolon, so a
+  # lane id containing one would be silently truncated at read time -- two distinct lanes
+  # could then render as the same id, and neither would match its persisted spelling.
+  lane=$(printf '%s' "${1:--}" | tr -d ' \t\n\r|;'); cause=$(printf '%s' "${2:--}" | tr -d ' \t\n\r|;')
   printf 'lane=%s;cause=%s' "${lane:--}" "${cause:--}"
 }
 
@@ -168,6 +171,17 @@ loop_status_migrate() {
   local shared; shared=$(loop_status_ensure) || return 1
   [ -n "$shared" ] || { echo "loop_status_migrate: no shared venue" >&2; return 1; }
   local root; root=$(hook_project_dir); [ -n "$root" ] || return 1
+  # Enumerate FIRST and check the status (codex r4 P2). Piping `git worktree list` straight
+  # into the loop through process substitution hid its failure: a git error yielded zero
+  # worktrees, the loop body never ran, and the function returned SUCCESS -- so the caller
+  # would record a completed cutover having inspected nothing at all.
+  local wt_list wt_rc
+  wt_list=$(git -C "$root" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')
+  wt_rc=$?
+  if [ "$wt_rc" -ne 0 ] || [ -z "$wt_list" ]; then
+    echo "loop_status_migrate: could not enumerate worktrees (rc=$wt_rc) — nothing inspected" >&2
+    return 1
+  fi
   local imported=0 wt legacy rows
   while IFS= read -r wt; do
     [ -n "$wt" ] || continue
@@ -179,7 +193,16 @@ loop_status_migrate() {
     # Reduce the legacy file ALONE, in its own physical order, and take only what is still
     # pending there. `loop_pending_hil_list` renders "[lane] <detail>"; the lane prefix is
     # stripped back off so the re-emitted row carries the original detail verbatim.
-    local open_rows; open_rows=$(HARNESS_LOOP_STATUS_PATH="$legacy" loop_pending_hil_list 2>/dev/null)
+    # HONOUR the reducer's exit status (codex r4 P2). An unreadable legacy ledger returns
+    # rc!=0 with empty output; treating that as "nothing pending" would archive the file and
+    # report success while its open gates vanished for good. "Could not read" and "nothing to
+    # read" are different claims -- fail closed on the first.
+    local open_rows rc
+    open_rows=$(HARNESS_LOOP_STATUS_PATH="$legacy" loop_pending_hil_list 2>/dev/null); rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "loop_status_migrate: could not READ $legacy (rc=$rc) — not imported, not retired" >&2
+      return 1
+    fi
     rows=$(printf '%s' "$open_rows" | grep -c . 2>/dev/null || echo 0)
     if [ -n "$dry" ]; then echo "would import $rows still-open row(s): $legacy"; continue; fi
     if [ "$rows" -gt 0 ]; then
@@ -197,7 +220,7 @@ loop_status_migrate() {
       || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
     echo "imported $rows still-open row(s): $legacy"
     imported=$((imported + 1))
-  done < <(git -C "$root" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')
+  done < <(printf '%s\n' "$wt_list")
   echo "loop_status_migrate: $imported file(s) imported into $shared"
   return 0
 }

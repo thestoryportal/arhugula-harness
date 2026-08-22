@@ -35,20 +35,21 @@ ROADMAP="Project_Roadmap_v1.md"
 # engages next", regardless of which audit branch (match / lag-expected / drift) fires.
 _HIL=""
 if command -v loop_pending_hil_summary >/dev/null 2>&1; then
-  # C-HE-09 §2 CUTOVER (U-HE-29, codex r3 P2): drain the pre-U-HE-29 per-worktree ledgers
-  # into the shared venue ONCE, on the first session after this lands. Without a production
-  # caller the migration would be dead code and production would switch to the shared venue
-  # with every still-open deferral in those files unread — the loop would then re-attempt
-  # items an operator is still blocked on, which is the whole failure the ledger prevents.
-  # Guarded by a sentinel beside the venue so this costs one `[ -f ]` on every later
-  # session; failure is non-fatal and simply retries next session (the import is idempotent
-  # and only ever ADDS still-open rows, so a retry cannot corrupt the skip-set).
-  if command -v loop_status_migrate >/dev/null 2>&1; then
-    _MIGMARK="$(dirname "$(loop_status_path 2>/dev/null)")/.migrated-u-he-29"
-    if [ -n "${_MIGMARK#/.migrated-u-he-29}" ] && [ ! -f "$_MIGMARK" ]; then
-      if loop_status_migrate >/dev/null 2>&1; then : > "$_MIGMARK" 2>/dev/null; fi
-    fi
-  fi
+  # C-HE-09 §2 CUTOVER (U-HE-29, codex r3 P2): drain any pre-U-HE-29 per-worktree ledger into
+  # the shared venue. Without a production caller the migration would be dead code and
+  # production would switch to the shared venue with every still-open deferral in those files
+  # unread — the loop would then re-attempt items an operator is still blocked on, which is
+  # the whole failure the ledger prevents.
+  # Deliberately NOT sentinel-guarded (codex r4 P2). A one-shot marker made the cutover
+  # unrepeatable, which is the wrong failure mode three ways: a migration that FAILED (an
+  # unreadable ledger, a git error) would still be recorded done; a checkout still running
+  # pre-U-HE-29 code could recreate its legacy ledger after the drain and never be drained
+  # again; and a worktree added later would never be inspected at all. The pass is idempotent
+  # instead -- each imported file is renamed, so a run with nothing to import is a
+  # `git worktree list` plus a handful of `[ -f ]` tests, and it self-heals every session.
+  # Failure is non-fatal here and simply retries next session; the import only ever ADDS
+  # still-open rows, so a retry cannot corrupt the skip-set.
+  command -v loop_status_migrate >/dev/null 2>&1 && loop_status_migrate >/dev/null 2>&1
   # C-HE-20 (U-HE-09): re-surface deferrals older than the 24 h TTL as NOTIFY rows first --
   # a notification threshold only; it never resolves, reclaims, or transitions anything.
   command -v loop_hil_ttl_resurface >/dev/null 2>&1 && loop_hil_ttl_resurface 2>/dev/null

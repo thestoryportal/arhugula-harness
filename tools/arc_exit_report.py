@@ -642,37 +642,51 @@ def _lane_id(ledger_root: Path) -> str:
 
 
 def _scope_to_lane(rows: list[str], ledger_root: Path, notes: list[str]) -> list[str]:
-    """Narrow the shared venue's pending rows to THIS arc's lane (U-WT-03 per-arc contract).
+    """Annotate the shared venue's pending rows with whose lane they belong to. Never drop any.
 
-    The ledger became shared at U-HE-29, so `loop_pending_hil_list` now returns every lane's
-    open gates, each rendered `[lane] detail` (C-HE-09 §3). Reporting all of them verbatim
-    would quietly redefine `todo_for_human` from "what THIS arc leaves for a human" to "what
-    the whole workspace does — attaching a sibling lane's obligations to this PR's closure
-    record. So rows are filtered by lane, and the count of excluded sibling rows is stated in
-    the notes rather than dropped silently: they are real obligations, just not this arc's.
+    Since U-HE-29 the ledger is shared, so `loop_pending_hil_list` returns every lane's open
+    gates, each rendered `[lane] detail` (C-HE-09 §3). U-WT-03's per-arc contract makes it
+    tempting to FILTER to this lane -- an earlier cut of this function did exactly that, and
+    it was wrong in the dangerous direction. Three production paths write rows this arc owns
+    under a lane that does not equal the persisted `.lane-id`:
 
-    With no resolvable lane id there is nothing to filter BY, so every row is kept and the
-    note says so — an unfiltered list the reader knows is unfiltered beats a confident
-    filter applied on a guess.
+      * `tools/04-loop/defer.sh`, the canonical deferral wrapper, sets no `HARNESS_LANE_ID`,
+        so its rows carry `lane=-`;
+      * rows migrated from the pre-U-HE-29 per-worktree ledgers carry the legacy `-`;
+      * the writer sanitizes separators out of the lane id, so the recorded lane can differ
+        from the persisted spelling it would be compared against.
+
+    An exclusive filter therefore turns a real, still-open obligation into `todo_for_human:
+    []` -- silently, and in the arc's own CLOSURE record. That is strictly worse than naming
+    a sibling lane's row: §4 already rules on this asymmetry for the skip-set (over-skipping
+    is safe; under-skipping re-loops), and the same asymmetry governs here. Over-report and
+    label; never under-report.
+
+    So every row is kept, each already carrying its own lane, and the notes say how the set
+    divides. The reader gets U-WT-03's per-arc signal without the report ever being able to
+    hide an open gate.
     """
+    if not rows:
+        return rows
     lane = _lane_id(ledger_root)
     if not lane:
-        if rows:
-            notes.append(
-                "this arc's lane id could not be resolved (.harness/.lane-id absent and "
-                "HARNESS_LANE_ID unset) — todo_for_human lists EVERY lane's open rows, not "
-                "just this arc's; each row names its own lane."
-            )
+        notes.append(
+            "the ledger is SHARED (C-HE-09 §2) and this arc's lane id could not be resolved "
+            "(.harness/.lane-id absent and HARNESS_LANE_ID unset) — todo_for_human lists "
+            "every open row across lanes; each row names the lane that deferred it."
+        )
         return rows
-    mine = [r for r in rows if r.startswith(f"[{lane}] ")]
-    others = len(rows) - len(mine)
+    mine = sum(1 for r in rows if r.startswith(f"[{lane}] "))
+    others = len(rows) - mine
     if others:
         notes.append(
-            f"{others} open row(s) belonging to other lanes were excluded from "
-            f"todo_for_human (this arc's lane is {lane}); they remain open in the shared "
-            "ledger and surface at the next SessionStart."
+            f"the ledger is SHARED (C-HE-09 §2): of {len(rows)} open row(s), {mine} carry "
+            f"this arc's lane ({lane}) and {others} carry another lane's or the unattributed "
+            "`-` (deferrals written without a lane id, and rows migrated from the "
+            "pre-U-HE-29 per-worktree ledgers, both land as `-`). ALL are listed — an "
+            "exclusive lane filter would silently drop this arc's own `-` rows."
         )
-    return mine
+    return rows
 
 
 def identity_error(pr: int, merge_state: str | None, pr_oid: str, resolved_sha: str) -> str | None:

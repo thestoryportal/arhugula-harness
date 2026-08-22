@@ -139,7 +139,7 @@ printf '%s' "$OUT" | grep -q "notify:" && bad "NOTIFY segment present with no le
 #     PRODUCTION path, not just its own unit test. A legacy per-worktree ledger holding an
 #     open gate must be drained into the shared venue by simply starting a session, and the
 #     sentinel must stop it from running again.
-rm -f "$HARNESS_LOOP_STATUS_PATH" "$(dirname "$HARNESS_LOOP_STATUS_PATH")/.migrated-u-he-29"
+rm -f "$HARNESS_LOOP_STATUS_PATH"
 mkdir -p "$REPO/.harness"
 cat > "$REPO/.harness/loop_status.md" <<'EOF'
 | ts | kind | detail |
@@ -148,14 +148,18 @@ cat > "$REPO/.harness/loop_status.md" <<'EOF'
 EOF
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "B-124" && ok "SessionStart drains the legacy venue (migration is reachable)" || bad "legacy gate not migrated: $OUT"
-[ -f "$(dirname "$HARNESS_LOOP_STATUS_PATH")/.migrated-u-he-29" ] && ok "cutover sentinel written" || bad "no cutover sentinel"
 [ -f "$REPO/.harness/loop_status.md" ] && bad "legacy ledger still collecting writes" || ok "legacy ledger retired by the session-start cutover"
-# a second session must not re-import (idempotent + sentinel-guarded)
+# 5e) The cutover is NOT one-shot (codex r4 P2): a legacy ledger that reappears — a checkout
+#     still running pre-U-HE-29 code recreating it, or a worktree added later — must still be
+#     drained. A sentinel-guarded cutover would strand it forever.
 cat > "$REPO/.harness/loop_status.md" <<'EOF'
-| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-500 — should NOT be imported after the sentinel |
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-500 — a legacy ledger that reappeared after the drain |
 EOF
 OUT=$(run)
-printf '%s' "$OUT" | grep -q "B-500" && bad "sentinel did not stop a second import: $OUT" || ok "sentinel stops the cutover running twice"
+printf '%s' "$OUT" | grep -q "B-500" && ok "a reappearing legacy ledger is drained on a later session" || bad "cutover is one-shot; the reappeared gate is stranded: $OUT"
+# ... and a pass with nothing left to import neither re-imports nor loses anything.
+OUT=$(run)
+[ "$(printf '%s' "$OUT" | grep -c 'B-500')" = "1" ] && ok "an idempotent pass does not duplicate the imported row" || bad "row duplicated by a second pass: $OUT"
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrated-*
 rm -f "$HARNESS_LOOP_STATUS_PATH"
 

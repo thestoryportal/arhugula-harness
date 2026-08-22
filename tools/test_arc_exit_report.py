@@ -1118,19 +1118,20 @@ def test_u_he_29_worktree_read_reaches_the_shared_venue_with_lane_attribution(
         "[L2] R-999 — a sibling lane's item",
     ], "with no resolvable lane id, every open deferral is kept, each carrying its lane"
     assert "SHARED loop ledger" in body, "the venue must be stated honestly"
-    assert "EVERY lane's open rows" in body, "an unfiltered list must SAY it is unfiltered"
+    assert "every open row across lanes" in body, "an unfiltered list must SAY it is unfiltered"
 
 
-def test_u_he_29_todo_for_human_is_scoped_to_this_arcs_lane(
+def test_u_he_29_todo_for_human_annotates_lanes_but_never_drops_a_row(
     worktree_pair, gstack, monkeypatch, shared_ledger
 ):
-    """U-WT-03's per-arc contract survives the shared venue: `todo_for_human` is what THIS
-    arc leaves for a human, not what the whole workspace does.
+    """The shared venue is reported in full, with the lane split STATED — never filtered.
 
-    The ledger is shared, so `loop_pending_hil_list` returns every lane's open gates. Left
-    unfiltered, PR A's closure record would attach a sibling lane's obligations to A — so
-    rows are scoped by the invoking worktree's `.harness/.lane-id`, and the excluded count
-    is STATED (they are real obligations, just not this arc's)."""
+    An earlier cut of this arc filtered `todo_for_human` to the invoking lane, honouring
+    U-WT-03's per-arc wording. That was wrong in the dangerous direction: `defer.sh` (the
+    canonical deferral wrapper) sets no lane, migrated legacy rows carry `-`, and the writer
+    sanitizes the id — so an exclusive filter turns this arc's OWN open gate into `[]`,
+    silently, inside its closure record. Naming a sibling's row is a mild over-report;
+    hiding your own gate is the failure this ledger exists to prevent."""
     main, wt = worktree_pair
     write_ledger(shared_ledger, "R-501 — needs a vendor pick", lane="L1")
     write_ledger(shared_ledger, "R-999 — a sibling lane's item", lane="L2")
@@ -1145,12 +1146,12 @@ def test_u_he_29_todo_for_human_is_scoped_to_this_arcs_lane(
 
     body = aer.report_path(main, 1202).read_text(encoding="utf-8")
     assert yaml.safe_load(yaml_block(body))["todo_for_human"] == [
-        "[L1] R-501 — needs a vendor pick"
-    ], "only this lane's obligations belong in this arc's closure record"
-    assert "2 open row(s) belonging to other lanes were excluded" in body, (
-        "excluded sibling rows must be COUNTED, never silently dropped"
-    )
-    assert "this arc's lane is L1" in body
+        "[L1] R-501 — needs a vendor pick",
+        "[L2] R-999 — a sibling lane's item",
+        "[L3] R-888 — a third lane's item",
+    ], "every open row is kept; an exclusive filter would drop this arc's own `-` rows"
+    assert "1 carry this arc's lane (L1)" in body, "the split must be stated"
+    assert "2 carry another lane's" in body
 
 
 def test_u_he_29_lane_id_falls_back_to_the_environment(tmp_path, monkeypatch):
@@ -1166,13 +1167,25 @@ def test_u_he_29_lane_id_falls_back_to_the_environment(tmp_path, monkeypatch):
     assert aer._lane_id(root) == "L1", "the persisted marker wins over the environment"
 
 
-def test_u_he_29_lane_scoping_keeps_everything_when_the_lane_is_unknown():
-    """No lane id means nothing to filter BY. Keep every row and say the list is unfiltered
-    — an unfiltered list the reader knows is unfiltered beats a filter applied on a guess."""
+def test_u_he_29_lane_annotation_never_drops_an_unattributed_row(tmp_path):
+    """The regression this shape exists to prevent: rows written WITHOUT a lane (`-`) are
+    this arc's own — `tools/04-loop/defer.sh` sets no HARNESS_LANE_ID — so a lane-equality
+    filter would delete exactly the obligations most likely to be real."""
+    root = tmp_path / "wt"
+    (root / ".harness").mkdir(parents=True)
+    (root / ".harness" / ".lane-id").write_text("L1\n", encoding="utf-8")
+    notes: list[str] = []
+    rows = ["[-] deferred-via-defer.sh — needs creds", "[L1] mine — x", "[L2] sibling — y"]
+    assert aer._scope_to_lane(rows, root, notes) == rows, "the `-` row must survive"
+    assert any("would silently drop this arc's own `-` rows" in n for n in notes)
+
+
+def test_u_he_29_lane_annotation_with_no_resolvable_lane(tmp_path):
+    """No lane id: still every row, and the note says the list spans lanes."""
     notes: list[str] = []
     rows = ["[L1] a — x", "[L2] b — y"]
-    assert aer._scope_to_lane(rows, Path("/nonexistent"), notes) == rows
-    assert any("EVERY lane's open rows" in n for n in notes)
+    assert aer._scope_to_lane(rows, tmp_path / "nonexistent", notes) == rows
+    assert any("every open row across lanes" in n for n in notes)
 
 
 def test_u_he_29_no_shared_ledger_is_an_honest_empty(worktree_pair, gstack, monkeypatch):

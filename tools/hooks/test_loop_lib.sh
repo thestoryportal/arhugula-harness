@@ -500,6 +500,48 @@ printf '%s' "$DRY" | grep -q 'would import' && ok "--dry-run reports what it wou
 [ -f "$MIG/wt2/.harness/loop_status.md" ] && ok "--dry-run retires nothing" || bad "--dry-run retired a legacy ledger"
 printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIGV" loop_skip_set)" | grep -q 'B-200' && bad "--dry-run imported rows" || ok "--dry-run imports nothing"
 
+# 29) codex r4 P2 — the migration must FAIL CLOSED. "Could not read" and "nothing to read"
+#     are different claims: swallowing the first archives a legacy ledger and reports a
+#     completed cutover while its open gates disappear for good.
+MIG2="$REPO/mig2"; rm -rf "$MIG2"; mkdir -p "$MIG2"
+( cd "$MIG2" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m2wt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIG2/wt1/.harness"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-900 — unreadable gate |\n' > "$MIG2/wt1/.harness/loop_status.md"
+chmod 000 "$MIG2/wt1/.harness/loop_status.md"
+MIG2V="$MIG2/shared/loop_status.md"
+( cd "$MIG2" && CLAUDE_PROJECT_DIR="$MIG2" HARNESS_LOOP_STATUS_PATH="$MIG2V" loop_status_migrate ) >/dev/null 2>&1
+[ $? -ne 0 ] && ok "an unreadable legacy ledger fails the migration closed" || bad "unreadable ledger reported a successful migration"
+chmod 644 "$MIG2/wt1/.harness/loop_status.md"
+[ -f "$MIG2/wt1/.harness/loop_status.md" ] && ok "the unreadable ledger was NOT retired" || bad "ledger retired despite an unread import"
+# ... and a git-enumeration failure must not read as "no worktrees, all done".
+NOGIT=$(cd "$REPO" && CLAUDE_PROJECT_DIR="$REPO/definitely-not-a-repo" HARNESS_LOOP_STATUS_PATH="$MIG2V" loop_status_migrate 2>&1); RC=$?
+[ "$RC" -ne 0 ] && ok "a worktree-enumeration failure fails the migration closed" || bad "enumeration failure reported success: $NOGIT"
+
+# 30) codex r4 P2 — `;` terminates the lane in rowparse, so it must never survive into the
+#     column: two distinct lanes would otherwise render as the same truncated id.
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+loop_log_structured DEFERRED-HIL 'lane;evil' 'g:f:c' "B-14 — semicolon lane"
+[[ "$(loop_pending_hil_list)" == '[laneevil] B-14 — semicolon lane' ]] \
+  && ok "a semicolon in the lane id is stripped, not truncated at read time" || bad "semicolon lane: [$(loop_pending_hil_list)]"
+[ "$(loop_skip_set)" = "B-14" ] && ok "the gate survives a semicolon-bearing lane id" || bad "gate lost: [$(loop_skip_set)]"
+
+# 31) codex r3 P2 — loop_resolve must verify its OWN write, not a byte-identical historical
+#     row. On a shared never-truncated venue the same RESOLVED-HIL text can already exist
+#     from a previous run; if the item was re-deferred since and this append fails, a
+#     whole-file grep would report a false "resolved" while the reducer still sees it pending.
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+loop_defer R-555 "needs a decision"
+loop_resolve R-555 "answered" >/dev/null
+loop_defer R-555 "re-deferred after the answer went stale"
+chmod 0444 "$(loop_status_path)"
+loop_resolve R-555 "answered" 2>/dev/null
+RC=$?
+chmod 0644 "$(loop_status_path)"
+[ "$RC" -ne 0 ] && ok "a failed resolve does not match the identical historical row" || bad "stale row produced a false 'resolved'"
+[ "$(loop_skip_set)" = "R-555" ] && ok "the re-deferred item stays pending after the failed resolve" || bad "item wrongly cleared: [$(loop_skip_set)]"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
