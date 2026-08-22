@@ -129,8 +129,15 @@ lane opens pre-acquire, drain-start remains the closure-capture opener.
 
 ## Land through the merge door (C-HE-06/07, U-HE-28)
 
-After CI green + `merge-gate` all-APPROVE + the final-gate back-fill/flip above, land with
-the C-HE-07 allowlisted wrapper — the ONLY merge invocation:
+After CI green + `merge-gate` all-APPROVE + the final-gate back-fill/flip above, first
+**author the next-action pointer** (§12.2 requires the refresh to carry the re-derived
+pointer, and the wrapper's fixed refresh string cannot take flags): Write the gitignored
+draft `.harness/.next-action-draft` — first line exactly `post-pr: <N>` (this PR's
+number), the new pointer prose (ONE paragraph, ending with the "then <next unit>" tail)
+below it. The door's refresh consumes the draft iff the number matches this landing and
+installs it via the tool's normal `--next-action` path; a mismatched or stale draft is
+ignored with a warning and left in place. Then land with the C-HE-07 allowlisted
+wrapper — the ONLY merge invocation:
 
 ```bash
 bash tools/hooks/safe-merge.sh <pr>
@@ -159,10 +166,10 @@ exhausted (HITL). `just merge-door-status` prints the live lease. Never issue
 already ran `just roadmap-status`'s refresh, opened the terminating refresh PR, and merged
 it under the held lease — do NOT open a second refresh PR for the same landing (§12.2.1:
 one terminating refresh per content merge; the door's is it). The door's refresh carries a
-mechanical notes cell and leaves the `## Next action` pointer untouched (the pointer's
-standing "then <next unit>" tail plus the reservation store's terminal-head dedup keep
-next-action derivation correct; author a pointer update by passing `--next-action` to
-`--emit-refresh-pr-json` when invoking the refresh tool manually on the recovery path).
+mechanical notes cell and installs the pointer from the `.harness/.next-action-draft` you
+wrote above (no draft → the pointer is left untouched, and the standing "then <next
+unit>" tail plus the reservation store's terminal-head dedup keep derivation correct;
+on the manual recovery path pass `--next-action` to `--emit-refresh-pr-json` directly).
 
 What ship-pr still owes after the door releases: the `--archive-superseded` content-PR
 step below (it rides the NEXT substantive PR, never the refresh), the R-NNN registry
@@ -320,6 +327,15 @@ case "$rc" in
   *) echo "ABORT: could not verify remote ref state (ls-remote exit $rc — network/auth issue?)"; exit 1 ;;
 esac
 ```
+
+**The door's refresh branch is a second known branch — close it out the same way.** Each
+landing pushes `roadmap-refresh-post-<content-pr>` for the §4(viii) continuation, the
+repo does NOT auto-delete merged head branches (`deleteBranchOnMerge: false`), and the
+door's fixed merge string carries no `--delete-branch` — so successful arcs accumulate
+refresh branches unless this step covers them (U-HE-28 codex r2). Run the same guarded
+block a second time with `<PR#>` = the refresh PR the door reported and
+`expected_branch=roadmap-refresh-post-<content-pr>`; its step-2 post-merge-CI check is
+the run the door already confirmed green before releasing.
 
 Local branch refs are left alone entirely; they carry no unique cleanup obligation. Worktree
 removal is a separate, structurally later step (a session can't remove the worktree it's

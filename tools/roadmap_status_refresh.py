@@ -57,6 +57,13 @@ DEFAULT_ARCHIVE = ROOT / ".harness" / "roadmap_drift_log_archive.md"
 # it is populated by hand at each next-action update, mirroring the existing
 # DEFAULT_ARCHIVE convention for the drift log.
 NEXT_ACTION_ARCHIVE = ROOT / ".harness" / "roadmap-next-action-archive.md"
+# U-HE-28 codex r2 P2: the merge door's fixed wrapper string cannot carry an authored
+# `--next-action`, but §12.2 requires the pointer re-derived at the refresh. ship-pr
+# writes this gitignored draft (first line `post-pr: <N>`, pointer body below) BEFORE
+# invoking safe-merge; the emit mode consumes it when N matches its own POST_PR and
+# leaves (with a stderr warning) any mismatched/stale draft. An explicit --next-action
+# flag always wins over the draft.
+NEXT_ACTION_DRAFT = ROOT / ".harness" / ".next-action-draft"
 
 RECENTLY_COMPLETED_HEADING = "Recently completed (last 5)"
 IN_FLIGHT_HEADING = "In-flight (open PRs)"
@@ -995,6 +1002,22 @@ def emit_refresh_pr(
     # Fresh path: branch from the just-merged main tip (see docstring), then refresh.
     sh("git", "fetch", "-q", "origin", "main")
     sh("git", "checkout", "-q", "-B", branch, "origin/main")
+    if next_action is None and NEXT_ACTION_DRAFT.is_file():
+        # §12.2 pointer re-derivation through the door (codex r2 P2): consume the
+        # ship-pr-authored draft iff it names THIS landing; a stale draft from an
+        # aborted arc must never install another arc's pointer.
+        raw = NEXT_ACTION_DRAFT.read_text()
+        first, _, rest = raw.partition("\n")
+        m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
+        if m and int(m.group(1)) == post_pr and rest.strip():
+            next_action = rest.strip()
+            NEXT_ACTION_DRAFT.unlink()
+        else:
+            print(
+                f"emit-refresh-pr: ignoring next-action draft ({first.strip()!r} does "
+                f"not name post-pr: {post_pr}, or empty body); pointer left as-is",
+                file=sys.stderr,
+            )
     if do_refresh is None:
 
         def do_refresh() -> None:

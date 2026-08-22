@@ -122,6 +122,9 @@ grep -q 'HARNESS_LANE_ID:?' "$JF" \
   || bad "unblock recipe lacks the \${HARNESS_LANE_ID:?} guard"
 grep -q 'emit-refresh-pr-json' "$RSR" \
   && ok "refresh tool emits PR json" || bad "no --emit-refresh-pr-json"
+grep -q 'next-action-draft' "$SP" \
+  && ok "ship-pr authors the pointer draft the door's refresh consumes (§12.2 re-derivation)" \
+  || bad "ship-pr lacks the next-action-draft step"
 
 # --- session-start: C-HE-03 §5 ground-truth reconcile pass (landed U-HE-18; pinned here) ---
 grep -q 'reservations.py reconcile-all' "$SS" \

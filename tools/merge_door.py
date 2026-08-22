@@ -1041,6 +1041,26 @@ def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str
     return "blocked:post_merge_ci_not_green:timeout"
 
 
+def wait_pr_head_checks(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
+    """Poll a PRE-merge PR HEAD's checks until completed green (U-HE-28 codex r2 P1).
+
+    C-HE-08 made `main` strict with required checks, and `gh pr merge` REFUSES a
+    pending/red PR outright — not a timeout — so driving the §4(viii) refresh merge the
+    moment the PR is created burns the §5 re-issue budget deterministically on every
+    normal landing. Same polling shape as wait_post_merge_ci; no event filter (the
+    head's completed run may register as pull_request or push depending on triggers)."""
+    deadline = ground.clock() + bound_s
+    while ground.clock() < deadline:
+        done = [r for r in ground.gh_runs_for_sha(sha) if r.get("status") == "completed"]
+        if done:
+            concl = done[0].get("conclusion")
+            if not ci_is_green(concl):
+                return f"blocked:refresh_pr_ci_not_green:{concl}"
+            return "success"
+        ground.sleep(30)
+    return "blocked:refresh_pr_ci_not_green:timeout"
+
+
 def reconcile_ground(lease: dict, ground: Ground) -> str:
     """§5 timeout/crash reconciliation by ground truth. MERGED ⇒ never re-issue.
     OPEN ⇒ the caller may re-issue at most ONCE per pass."""
@@ -1319,6 +1339,33 @@ def land(
             if refresh_landed:
                 reconciled = True
             else:
+                # U-HE-28 codex r2 P1: under the LIVE strict fence the just-created
+                # refresh PR's checks are pending; wait for its HEAD to go green
+                # BEFORE issuing the fixed merge string (which GitHub would refuse
+                # outright, exhausting the re-issue budget on first use).
+                pstatus = wait_pr_head_checks(
+                    rhead, ground, bound_s=REFRESH_BOUND_S, lane_id=lane_id
+                )
+                if pstatus != "success":
+                    mark_blocked(lease, sha=rhead, reason="refresh_pr_ci_not_green")
+                    _emit_gate(
+                        lease,
+                        gate="merge-door-post-merge-ci",
+                        fail_class="HITL-recoverable",
+                        cause="refresh_pr_ci_not_green",
+                        evidence=pstatus,
+                        arc_id=arc_id,
+                        lane_id=lane_id,
+                    )
+                    _notify(
+                        "DEFERRED-HIL",
+                        lane_id,
+                        "merge-door-post-merge-ci:HITL-recoverable:refresh_pr_ci_not_green",
+                        f"{arc_id} — terminating refresh #{rpr} checks for {rhead[:12]} "
+                        f"{pstatus}; door blocked; fix, then "
+                        f"`just merge-door-unblock {rpr} {rhead}`",
+                    )
+                    raise DoorBlocked(pstatus)
                 reconciled = (
                     _merge_once(lease, rpr, rhead, ground, suffix="refresh", budget=refresh_budget)
                     or reconciled

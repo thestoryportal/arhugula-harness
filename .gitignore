@@ -145,6 +145,7 @@ tools/dashboard/public/
 .harness/.lane-id
 .harness/.loop-active
 .harness/.loop-status.lock
+.harness/.next-action-draft
 .harness/loop_status.md
 .harness/.loop-iter
 .harness/.loop-halt

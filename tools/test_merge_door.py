@@ -1071,8 +1071,12 @@ def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
     calls = {"n": 0}
 
     def runs(sha):
+        if sha == "r" * 40:
+            # the refresh PR's own pre-merge checks are green (U-HE-28: the door now
+            # gates on them first) — this test's subject is the POST-merge run
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
         calls["n"] += 1
-        # main run green, refresh run red
+        # main run green, refresh post-merge run red
         concl = "success" if calls["n"] == 1 else "failure"
         return [{"status": "completed", "conclusion": concl, "event": "push"}]
 
@@ -1083,6 +1087,53 @@ def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
     assert (
         "DEFERRED-HIL",
         "merge-door-post-merge-ci:HITL-recoverable:refresh_ci_not_green",
+    ) in rows
+
+
+# mutation-probe: drop land()'s pre-merge wait_pr_head_checks gate (U-HE-28 codex r2 P1)
+def test_refresh_pr_pending_checks_waited_before_merge(door):
+    """No completed run on the refresh HEAD yet (strict fence: gh pr merge would be
+    REFUSED outright) -> the door WAITS, then merges once the head goes green."""
+    g = FakeGround()
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 3:
+                return []  # checks not yet registered/completed
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert (2, "r" * 40) in g.merge_calls  # merged only AFTER the wait
+    assert polls["n"] >= 3
+    assert md.read_lease() is None
+
+
+def test_refresh_pr_red_checks_block_before_any_merge(door, monkeypatch):
+    """Red checks on the refresh HEAD block the door BEFORE the merge string is ever
+    issued (the budget is never spent on a strict-protection refusal)."""
+    rows = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    g = FakeGround()
+
+    def runs(sha):
+        if sha == "r" * 40:
+            return [{"status": "completed", "conclusion": "failure", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    with pytest.raises(md.DoorBlocked):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    assert md.read_lease()["blocked_reason"] == "refresh_pr_ci_not_green"
+    assert (2, "r" * 40) not in g.merge_calls
+    assert (
+        "DEFERRED-HIL",
+        "merge-door-post-merge-ci:HITL-recoverable:refresh_pr_ci_not_green",
     ) in rows
 
 

@@ -1328,3 +1328,61 @@ def test_emit_refresh_pr_indeterminate_ls_remote_aborts():
     with pytest.raises(SystemExit, match="could not verify remote state"):
         rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
     assert not any(c[:2] == ["git", "checkout"] for c in calls)
+
+
+def _fresh_path_script():
+    return [
+        (("gh", "pr", "list"), _P(stdout="")),
+        (("git", "ls-remote"), _P(returncode=2)),
+        (("git", "diff", "--cached", "--name-only"), _P(stdout=".harness/roadmap_status.md")),
+        (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/90")),
+        (("git", "rev-parse", "HEAD"), _P(stdout="beadfeed")),
+    ]
+
+
+def test_emit_refresh_pr_consumes_matching_next_action_draft(monkeypatch, tmp_path):
+    """codex r2 P2: the ship-pr-authored draft names THIS landing -> its body flows
+    into the in-process refresh as --next-action and the draft is consumed."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\nThe next implementable unit is `U-HE-29` per the S4c order.\n")
+    calls: list[list[str]] = []
+    out = rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert out["pr"] == 90
+    assert not draft.exists()
+    argv = argv_seen["argv"]
+    assert "--next-action" in argv
+    assert argv[argv.index("--next-action") + 1].startswith("The next implementable unit")
+
+
+def test_emit_refresh_pr_ignores_mismatched_draft(monkeypatch, tmp_path, capsys):
+    """A stale draft from an aborted arc must never install another arc's pointer:
+    left in place, warned on stderr, no --next-action in the refresh argv."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 54\nstale pointer body\n")
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert draft.exists()  # left for inspection
+    assert "--next-action" not in argv_seen["argv"]
+    assert "ignoring next-action draft" in capsys.readouterr().err
+
+
+def test_emit_refresh_pr_explicit_flag_wins_over_draft(monkeypatch, tmp_path):
+    """--next-action passed explicitly is authoritative; the draft is not consumed."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\ndraft body\n")
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(
+        55, next_action="explicit body", run=_scripted_run(_fresh_path_script(), calls)
+    )
+    argv = argv_seen["argv"]
+    assert argv[argv.index("--next-action") + 1] == "explicit body"
+    assert draft.exists()
