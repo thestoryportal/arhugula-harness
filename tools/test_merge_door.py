@@ -922,6 +922,7 @@ class FakeGround:
             "mergeCommit": None,
             # the §12.2.1 terminating-refresh shape record-refresh validates (r8 P1)
             "title": "ops: roadmap status refresh post-#1",
+            "baseRefName": "main",  # r6 P2: adoption binds to the main base
             "files": [{"path": ".harness/roadmap_status.md"}],
         }
         return 2, "r" * 40
@@ -1256,6 +1257,25 @@ def test_pr_head_wait_ignores_stale_completed_run_while_rerun_pending(door):
     assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr) == "released"
     assert (2, "r" * 40) in g.merge_calls
     assert polls["n"] >= 3
+
+
+# mutation-probe: drop the baseRefName check in the adoption gate (wrong-branch merge)
+def test_resume_refuses_moved_head_on_retargeted_base(door, monkeypatch):
+    """r6 P2: a refresh PR retargeted off `main` while receiving its fix commit must
+    never be adopted — the squash would land on the wrong branch irreversibly."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40
+    g.states[2]["baseRefName"] = "release-x"  # retargeted during recovery
+    lease = md.read_lease()
+    with pytest.raises(md.DoorBlocked, match="identity gate"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    assert (2, "s" * 40) not in g.merge_calls
 
 
 def test_wait_for_door_backoff_numbers_and_budget(door):

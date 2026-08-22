@@ -1389,9 +1389,9 @@ def test_emit_refresh_pr_explicit_flag_wins_over_draft(monkeypatch, tmp_path):
     )
     argv = argv_seen["argv"]
     assert argv[argv.index("--next-action") + 1] == "explicit body"
-    # content-wise the flag won; the draft named THIS completed landing, so it is
-    # retired at the durability point all the same (it could never be consumed later)
-    assert not draft.exists()
+    # r6 P2 rule (supersedes the r5 retire-on-override): the draft's body was NOT
+    # represented in this refresh — unrepresented authoring is never deleted
+    assert draft.exists()
 
 
 def test_emit_refresh_pr_push_failure_keeps_draft(monkeypatch, tmp_path):
@@ -1424,11 +1424,30 @@ def test_emit_refresh_pr_resume_paths_retire_matching_draft(monkeypatch, tmp_pat
     monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
     draft.write_text("post-pr: 55\npointer body\n")
     calls: list[list[str]] = []
-    run = _scripted_run([(("gh", "pr", "list"), _P(stdout="321 abc123def"))], calls)
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="321 abc123def")),
+            (("git", "show"), _P(stdout="... pointer body ...")),  # represented: retire
+        ],
+        calls,
+    )
     rsr.emit_refresh_pr(55, run=run)
     assert not draft.exists()
-    draft.write_text("post-pr: 54\nother arc's body\n")
+    # a CORRECTED same-PR draft whose body is NOT in the pushed commit survives (r6 P2)
+    draft.write_text("post-pr: 55\ncorrected pointer body\n")
     calls2: list[list[str]] = []
-    run2 = _scripted_run([(("gh", "pr", "list"), _P(stdout="321 abc123def"))], calls2)
+    run2 = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="321 abc123def")),
+            (("git", "show"), _P(stdout="... pointer body ...")),  # OLD content only
+        ],
+        calls2,
+    )
     rsr.emit_refresh_pr(55, run=run2)
+    assert draft.exists()
+    # another arc's draft is untouched regardless
+    draft.write_text("post-pr: 54\nother arc's body\n")
+    calls3: list[list[str]] = []
+    run3 = _scripted_run([(("gh", "pr", "list"), _P(stdout="321 abc123def"))], calls3)
+    rsr.emit_refresh_pr(55, run=run3)
     assert draft.exists()

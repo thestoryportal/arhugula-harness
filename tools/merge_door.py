@@ -845,7 +845,7 @@ def default_ground() -> Ground:
             "view",
             str(pr),
             "--json",
-            "state,mergedAt,headRefOid,baseRefOid,mergeCommit,title,files",
+            "state,mergedAt,headRefOid,baseRefOid,baseRefName,mergeCommit,title,files",
             timeout=30,
         )
         if p.returncode != 0 or not p.stdout.strip():
@@ -1339,21 +1339,33 @@ def land(
                 cur_head = rv1.get("headRefOid")
                 if rv1.get("state") == "OPEN" and cur_head and cur_head != rhead:
                     rfiles1 = [f.get("path") for f in (rv1.get("files") or [])]
-                    if not str(rv1.get("title") or "").startswith(
-                        REFRESH_TITLE_PREFIX
-                    ) or rfiles1 != [REFRESH_ONLY_FILE]:
+                    # r6 P2 hardening over the r3 gate: bind adoption to THIS landing
+                    # (title carries `post-#<content-pr>`) and to the `main` base — a
+                    # refresh PR retargeted while receiving its fix commit must never
+                    # be squash-merged into another branch under the global lease.
+                    bound_title = f"{REFRESH_TITLE_PREFIX}post-#{pr}"
+                    if (
+                        rv1.get("baseRefName") != "main"
+                        or not str(rv1.get("title") or "").startswith(bound_title)
+                        or rfiles1 != [REFRESH_ONLY_FILE]
+                    ):
                         raise DoorFailed(
                             f"refresh pr #{rpr} head moved to {str(cur_head)[:12]} but "
-                            "no longer satisfies the terminating-refresh identity gate"
+                            "no longer satisfies the terminating-refresh identity gate "
+                            f"(base {rv1.get('baseRefName')!r}, title "
+                            f"{str(rv1.get('title'))[:40]!r})"
                         )
                     rhead = cur_head
-                    # ATOMIC record replacement (codex r5 P2): unlink-then-create left a
-                    # crash window with intent-but-no-record, which resumes as the
-                    # manual refresh_intent_unresolved recovery instead of idempotent
-                    # re-adoption. os.replace swaps the payload in one step.
+                    # ATOMIC record replacement (codex r5 P2) with the door's own
+                    # exclusive-create primitive on an UNPREDICTABLE tmp name + symlink
+                    # containment (r6 P2): a planted sidecar/tmp symlink must neither
+                    # redirect the write outside the queue nor become the record.
                     sidecar = _sidecar(lease["lease_token"], "refresh")
-                    tmp = sidecar.with_name(f"{sidecar.name}.tmp.{os.getpid()}")
-                    tmp.write_text(json.dumps({"pr": rpr, "head_sha": rhead}))
+                    tmp = sidecar.with_name(f"{sidecar.name}.adopt.{secrets.token_hex(8)}")
+                    publish_exclusive(tmp, json.dumps({"pr": rpr, "head_sha": rhead}))
+                    if sidecar.is_symlink() or tmp.is_symlink():
+                        tmp.unlink(missing_ok=True)
+                        raise DoorFailed("refresh sidecar containment violated (symlink)")
                     os.replace(tmp, sidecar)
             refresh_resumed = (
                 recorded is not None and recorded.get("merge_attempted_at") is not None
