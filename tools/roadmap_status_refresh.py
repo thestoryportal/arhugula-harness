@@ -950,11 +950,29 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
             if lm and int(lm.group(1)) == post_pr:
                 live_body = lm.group(2).strip()
         if body and live_body == body:
-            # r11 P2 best-effort recheck: another agent may have replaced the draft
-            # since the read above — unlink only if the content is unchanged (the
-            # read-vs-unlink instant remains an irreducible non-atomic window).
-            if NEXT_ACTION_DRAFT.read_text() == raw:
-                NEXT_ACTION_DRAFT.unlink()
+            # r11/r12 P3: ATOMIC rename-claim retirement. os.rename atomically takes
+            # the path; only the claimed COPY we then verify is ever deleted, so a
+            # replacement written by another agent either survives at the path
+            # (written after our claim) or is restored from the claim (written
+            # before it). The restore link fails closed if a third write landed.
+            claim = NEXT_ACTION_DRAFT.with_name(f"{NEXT_ACTION_DRAFT.name}.claim.{os.getpid()}")
+            try:
+                os.rename(NEXT_ACTION_DRAFT, claim)
+            except FileNotFoundError:
+                return  # another process already acted on it
+            if claim.read_text() == raw:
+                claim.unlink()
+            else:
+                try:
+                    os.link(claim, NEXT_ACTION_DRAFT)  # restore; refuses if a newer draft exists
+                except FileExistsError:
+                    print(
+                        f"emit-refresh-pr: a newer draft appeared during retirement; "
+                        f"the displaced correction is preserved at {claim}",
+                        file=sys.stderr,
+                    )
+                    return
+                claim.unlink()
         else:
             print(
                 "emit-refresh-pr: keeping next-action draft — its body is not "
@@ -1091,6 +1109,18 @@ def emit_refresh_pr(
         )
     if probe.returncode == 0:
         sh("git", "fetch", "-q", "origin", branch)
+        # r12 P2 provenance: the genuine crash-recovery branch is exactly ONE commit
+        # whose first parent is the just-merged main tip. A pre-pushed same-name
+        # branch of any other shape must never be wrapped in the trusted refresh PR.
+        sh("git", "fetch", "-q", "origin", "main")
+        parent = sh("git", "rev-parse", "FETCH_HEAD^")
+        main_tip = sh("git", "rev-parse", "origin/main")
+        if parent != main_tip:
+            raise SystemExit(
+                f"emit-refresh-pr: pushed branch {branch} does not descend directly "
+                f"from the just-merged main tip (parent {parent[:12]}, main "
+                f"{main_tip[:12]}); delete the remote branch and re-run"
+            )
         sh("git", "checkout", "-q", "-B", branch, f"origin/{branch}")
         # r7 P2 + r10 P2: this path recovers a branch whose refresh commit ALREADY
         # exists — re-running the refresh here would add a second commit whose

@@ -1587,3 +1587,39 @@ def test_emit_refresh_pr_stale_label_pointer_is_not_representation(monkeypatch, 
     )
     rsr.emit_refresh_pr(55, run=run)
     assert draft.exists()
+
+
+def test_emit_refresh_pr_pushed_branch_provenance_refusal():
+    """r12 P2: a pre-pushed same-name branch NOT descending directly from the
+    just-merged main tip is never wrapped in the trusted refresh PR."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("git", "rev-parse", "FETCH_HEAD^"), _P(stdout="a" * 40)),
+            (("git", "rev-parse", "origin/main"), _P(stdout="b" * 40)),
+        ],
+        calls,
+    )
+    with pytest.raises(SystemExit, match="does not descend directly"):
+        rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+
+
+def test_emit_refresh_pr_pushed_branch_provenance_pass():
+    """The genuine crash-recovery branch (parent == main tip) proceeds to PR creation."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("git", "rev-parse", "FETCH_HEAD^"), _P(stdout="m" * 40)),
+            (("git", "rev-parse", "origin/main"), _P(stdout="m" * 40)),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
+        ],
+        calls,
+    )
+    out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    assert out["pr"] == 77

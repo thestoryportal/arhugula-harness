@@ -137,14 +137,17 @@ number), the new pointer prose (ONE paragraph, ending with the "then <next unit>
 below it. The door's refresh consumes the draft iff the number matches this landing and
 installs it via the tool's normal `--next-action` path; a mismatched or stale draft is
 ignored with a warning and left in place. Then land with the C-HE-07 allowlisted
-wrapper — the ONLY merge invocation:
+wrapper — the ONLY merge invocation. The wrapper REQUIRES both ids in its environment
+and shell exports do not survive across Bash tool calls, so the prefixed form is the
+PRIMARY invocation in every venue (it is also the guard's exact-shape allowlisted form
+in loop mode):
 
 ```bash
-bash tools/hooks/safe-merge.sh <pr>
+HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> bash tools/hooks/safe-merge.sh <pr>
 ```
 
-(In loop mode use the guard's exact-shape prefixed form when the ids are not already in the
-shell: `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> bash tools/hooks/safe-merge.sh <pr>`.)
+(A bare `bash tools/hooks/safe-merge.sh <pr>` works only in a shell where both ids are
+already exported — the wrapper aborts pre-lease otherwise.)
 
 This acquires the lease (fail-fast; on `held` it yields — do the next natural gate-pass,
 then retry; the wrapper's own `wait_for_door` applies base 30 s ×2 cap 10 min ×12 then
@@ -176,8 +179,11 @@ step below (it rides the NEXT substantive PR, never the refresh), the R-NNN regi
 prose, and the reflect/exit-report/metrics steps at the end of this skill.
 
 The manual recipe below is retained for the RECOVERY path only — a blocked door
-(`refresh_skipped_by_operator`, `record-refresh`/`clear-refresh-intent`), a headless
-unreserved arc, or a checkout where the door cannot run. On that path, after the PR merges:
+(`refresh_skipped_by_operator`, `record-refresh`/`clear-refresh-intent`) or a checkout
+where the door cannot run. (An unreserved/headless arc has no door path at all until the
+U-HE-19 drain bootstrap mints its reservation at closure — it reaches this section only
+through that bootstrap, never by a raw merge, which the guard denies.) On that path,
+after the PR merges:
 
 1. **§12.2, mechanical half — run the script, don't hand-Edit.** Per
    `[[roadmap-ledger-edits-via-idempotent-script]]`, `.harness/roadmap_status.md`'s
