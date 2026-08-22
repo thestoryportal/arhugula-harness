@@ -1597,7 +1597,7 @@ def test_emit_refresh_pr_pushed_branch_provenance_refusal():
         [
             (("gh", "pr", "list"), _P(stdout="")),
             (("git", "ls-remote"), _P(returncode=0)),
-            (("git", "rev-parse", "FETCH_HEAD^"), _P(stdout="a" * 40)),
+            (("git", "rev-parse", "origin/roadmap-refresh-post-55^"), _P(stdout="a" * 40)),
             (("git", "rev-parse", "origin/main"), _P(stdout="b" * 40)),
         ],
         calls,
@@ -1614,7 +1614,7 @@ def test_emit_refresh_pr_pushed_branch_provenance_pass():
         [
             (("gh", "pr", "list"), _P(stdout="")),
             (("git", "ls-remote"), _P(returncode=0)),
-            (("git", "rev-parse", "FETCH_HEAD^"), _P(stdout="m" * 40)),
+            (("git", "rev-parse", "origin/roadmap-refresh-post-55^"), _P(stdout="m" * 40)),
             (("git", "rev-parse", "origin/main"), _P(stdout="m" * 40)),
             (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
             (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
@@ -1623,3 +1623,21 @@ def test_emit_refresh_pr_pushed_branch_provenance_pass():
     )
     out = rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
     assert out["pr"] == 77
+
+
+def test_emit_refresh_pr_refuses_symlinked_draft(monkeypatch, tmp_path):
+    """r13 P1: a planted symlink at the draft path must never leak an outside file
+    into the refresh PR body or the committed pointer — refused no-follow, left."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("post-pr: 55\nexfiltrated content\n")
+    draft = tmp_path / "draft"
+    draft.symlink_to(outside)
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert "--next-action" not in argv_seen["argv"]
+    assert draft.is_symlink()  # left in place
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert "exfiltrated" not in create[create.index("--body") + 1]

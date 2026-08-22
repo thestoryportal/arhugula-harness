@@ -918,6 +918,24 @@ def check_head_refresh_shape(
     return []
 
 
+def _read_draft_nofollow() -> str | None:
+    """Read the next-action draft with O_NOFOLLOW (r13 P1): a planted symlink at the
+    gitignored path must never leak an outside file's content into the refresh PR
+    body or the committed pointer. None = absent or refused (symlink -> warned)."""
+    try:
+        fd = os.open(NEXT_ACTION_DRAFT, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        if NEXT_ACTION_DRAFT.is_symlink():
+            print(
+                f"emit-refresh-pr: refusing symlinked next-action draft "
+                f"{NEXT_ACTION_DRAFT} (containment)",
+                file=sys.stderr,
+            )
+        return None
+    with os.fdopen(fd, "r") as f:
+        return f.read()
+
+
 def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
     """Retire the next-action draft iff it names post_pr AND its body is verifiably
     represented by the pushed refresh content (codex r6 P2: an operator may CORRECT a
@@ -927,9 +945,9 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> None:
     unverified case the draft is KEPT (fail toward retaining the operator's authoring).
     """
     try:
-        if not NEXT_ACTION_DRAFT.is_file():
+        raw = _read_draft_nofollow()
+        if raw is None:
             return
-        raw = NEXT_ACTION_DRAFT.read_text()
         first, _, rest = raw.partition("\n")
         m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
         if not (m and int(m.group(1)) == post_pr):
@@ -1112,8 +1130,10 @@ def emit_refresh_pr(
         # r12 P2 provenance: the genuine crash-recovery branch is exactly ONE commit
         # whose first parent is the just-merged main tip. A pre-pushed same-name
         # branch of any other shape must never be wrapped in the trusted refresh PR.
+        # r13 P2: resolve via the remote-tracking refs — FETCH_HEAD is clobbered by
+        # the second fetch, which made every genuine recovery fail this check.
         sh("git", "fetch", "-q", "origin", "main")
-        parent = sh("git", "rev-parse", "FETCH_HEAD^")
+        parent = sh("git", "rev-parse", f"origin/{branch}^")
         main_tip = sh("git", "rev-parse", "origin/main")
         if parent != main_tip:
             raise SystemExit(
@@ -1158,12 +1178,12 @@ def emit_refresh_pr(
     sh("git", "checkout", "-q", "-B", branch, "origin/main")
     draft_warning = None
     draft_used = False
-    if next_action is None and NEXT_ACTION_DRAFT.is_file():
+    draft_raw = _read_draft_nofollow() if next_action is None else None
+    if next_action is None and draft_raw is not None:
         # §12.2 pointer re-derivation through the door (codex r2 P2): consume the
         # ship-pr-authored draft iff it names THIS landing; a stale draft from an
         # aborted arc must never install another arc's pointer.
-        raw = NEXT_ACTION_DRAFT.read_text()
-        first, _, rest = raw.partition("\n")
+        first, _, rest = draft_raw.partition("\n")
         m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
         if m and int(m.group(1)) == post_pr and rest.strip():
             # READ ONLY — the draft is retired after `gh pr create` succeeds (codex
