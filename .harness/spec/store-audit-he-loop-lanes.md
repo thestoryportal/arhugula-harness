@@ -59,6 +59,8 @@ Locks and stagers that carry no durable fact — never read for state, never an 
 
 ## Referenced pre-existing workspace stores (not created or extended by this spec)
 
+`tools/hooks/loop_lib.sh` *reads* `.harness/.lane-id` — the pre-U-HE-31 persisted lane identity, whose authority is the lane-init mint (`tools/reservations.py mint-lane-id`), not this module. `_loop_lane_id` consults it only when `HARNESS_LANE_ID` is unset, so a row's recorded lane has ONE authority (the environment when set, the persisted marker otherwise) and `tools/arc_exit_report.py` resolves it in the SAME order when reading rows back — a reader using the opposite precedence would be a second authority for "which lane is this", and would make an arc classify its own rows as another lane's.
+
 `tools/hooks/loop_lib.sh` *reads* `.harness/forward-register.yaml` and `.harness/post-phase-8-forward-register.md` to scope the `R-` / `B-` filter — their authorities are `tools/forward_register.py` / the post-Phase-8 register protocol (CLAUDE.md §12), unchanged here. Listed so the witness names every `.harness` literal the module spells.
 
 ## Two-authority checks performed
