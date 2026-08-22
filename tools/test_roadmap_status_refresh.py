@@ -1657,3 +1657,81 @@ def test_emit_refresh_pr_refuses_symlinked_draft(monkeypatch, tmp_path):
     assert "exfiltrated" not in body_arg
     # r19 P2: the refusal is VISIBLE in the PR body (stderr is discarded by the door)
     assert "symlinked next-action draft was REFUSED" in body_arg
+
+
+def test_discard_rename_claim_preserves_concurrent_correction(monkeypatch, tmp_path):
+    """r20 P2: a correction written between verification and retirement survives —
+    a plain unlink would delete it; the rename-claim restores it."""
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\nold body\n")
+    real_rename = rsr.os.rename
+
+    def rename_with_injected_correction(src, dst):
+        # the concurrent correction lands JUST before our claim takes the path
+        draft.write_text("post-pr: 55\ncorrected body\n")
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(rsr.os, "rename", rename_with_injected_correction)
+    status = rsr._discard_matching_draft(55, "**Current next action (post-#55).** old body")
+    assert status == "unrepresented"
+    assert draft.read_text() == "post-pr: 55\ncorrected body\n"  # correction survives
+
+
+def test_resume_retire_uses_tracking_ref_fetch_and_show(monkeypatch, tmp_path):
+    """r20 P2/P3: the anti-race reader must fetch the explicit tracking-ref refspec
+    and read through origin/<branch> — argv-exact, so a bare-fetch/FETCH_HEAD revert
+    cannot stay green."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\npointer body here.\n")
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (
+                ("gh", "pr", "list"),
+                _P(stdout="321\tabc123def\tmain\tfalse\tops: roadmap status refresh post-#55"),
+            ),
+            (
+                ("git", "show"),
+                _P(stdout="**Current next action (post-#55).** pointer body here."),
+            ),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, run=run)
+    branch = "roadmap-refresh-post-55"
+    assert [
+        "git",
+        "fetch",
+        "-q",
+        "origin",
+        f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+    ] in calls
+    assert ["git", "show", f"origin/{branch}:.harness/roadmap_status.md"] in calls
+
+
+def test_pushed_branch_provenance_fetch_uses_explicit_refspec():
+    """r20 P3: the provenance path's branch fetch pins the tracking ref explicitly."""
+    calls: list[list[str]] = []
+    run = _scripted_run(
+        [
+            (("gh", "pr", "list"), _P(stdout="")),
+            (("git", "ls-remote"), _P(returncode=0)),
+            (("git", "rev-parse", "origin/roadmap-refresh-post-55^"), _P(stdout="m" * 40)),
+            (("git", "rev-parse", "origin/main"), _P(stdout="m" * 40)),
+            (("gh", "pr", "create"), _P(stdout="https://github.com/o/r/pull/77")),
+            (("git", "rev-parse", "HEAD"), _P(stdout="feedbeef")),
+        ],
+        calls,
+    )
+    rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
+    branch = "roadmap-refresh-post-55"
+    assert [
+        "git",
+        "fetch",
+        "-q",
+        "origin",
+        f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+    ] in calls

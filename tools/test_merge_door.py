@@ -1343,6 +1343,33 @@ def test_default_ground_gh_view_requests_the_adoption_gate_fields(monkeypatch):
         assert field in joined, f"gh_view no longer requests {field}"
 
 
+# mutation-probe: swap the adoption os.replace for unlink-then-create (record gap)
+def test_adoption_record_never_in_a_gap_on_replace_fault(door, monkeypatch):
+    """r20 P2: at the replacement boundary either the OLD or NEW record must remain
+    readable — a replace fault must leave the old pair intact, never a gap."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    monkeypatch.setenv("MERGE_DOOR_TEST_KILL_AFTER", "refresh-attempted")
+    monkeypatch.setattr(md.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+    monkeypatch.delenv("MERGE_DOOR_TEST_KILL_AFTER")
+    g.states[2]["headRefOid"] = "s" * 40  # fix commit moved the head -> adoption path
+
+    def replace_fault(src, dst):
+        raise OSError("replace fault injected")
+
+    monkeypatch.setattr(md.os, "replace", replace_fault)
+    lease = md.read_lease()
+    with pytest.raises((md.DoorBlocked, OSError)):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
+    live = md.read_lease()
+    assert live is not None
+    # the OLD durable record is still readable — no gap at the boundary
+    assert live.get("refresh", {}).get("pr") == 2
+    assert live["refresh"]["head_sha"] == "r" * 40
+
+
 def test_wait_for_door_backoff_numbers_and_budget(door):
     t = {"now": 0.0}
     sleeps = []

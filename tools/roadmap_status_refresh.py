@@ -939,7 +939,7 @@ def _read_draft_nofollow() -> str | None:
         raise SystemExit(
             f"emit-refresh-pr: next-action draft exists but is unreadable ({exc}); "
             "fix permissions or remove it, then re-run"
-        )
+        ) from exc
     with os.fdopen(fd, "r") as f:
         return f.read()
 
