@@ -414,11 +414,16 @@ printf '%s' "$ENSURE_BODY" | grep -q 'noclobber' \
 # 27) codex r1 P2 — a RELATIVE venue is rejected, not silently resolved per-CWD. Returning
 #     the relative text unchanged would make two lanes with different CWDs write different
 #     physical files while every string comparison still reported them equal.
-REL=$(HARNESS_LOOP_STATUS_PATH="rel/loop_status.md" loop_status_path 2>/dev/null); RC=$?
+# Run every relative-venue probe from a scratch CWD: if this guard ever regresses, the
+# relative path resolves against the CALLER's cwd, and a bare invocation here would write
+# a stray ledger into the repo root (witnessed exactly that way while mutation-probing
+# this guard). The scratch dir contains the blast radius to the temp tree.
+mkdir -p "$REPO/relcwd"
+REL=$(cd "$REPO/relcwd" && HARNESS_LOOP_STATUS_PATH="rel/loop_status.md" loop_status_path 2>/dev/null); RC=$?
 { [ "$RC" -ne 0 ] && [ -z "$REL" ]; } && ok "relative HARNESS_LOOP_STATUS_PATH is rejected" || bad "relative venue accepted: rc=$RC [$REL]"
-RELQ=$(env -u HARNESS_LOOP_STATUS_PATH ARC_METRICS_QUEUE_DIR="rel/queue" bash -c '. "$1"; . "$2"; loop_status_path' _ "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" 2>/dev/null)
+RELQ=$(cd "$REPO/relcwd" && env -u HARNESS_LOOP_STATUS_PATH ARC_METRICS_QUEUE_DIR="rel/queue" bash -c '. "$1"; . "$2"; loop_status_path' _ "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" 2>/dev/null)
 [ -z "$RELQ" ] && ok "relative ARC_METRICS_QUEUE_DIR is rejected" || bad "relative queue dir accepted: [$RELQ]"
-( HARNESS_LOOP_STATUS_PATH="rel/loop_status.md" loop_log_structured NOTIFY L1 g:f:c "d" ) 2>/dev/null
+( cd "$REPO/relcwd" && HARNESS_LOOP_STATUS_PATH="rel/loop_status.md" loop_log_structured NOTIFY L1 g:f:c "d" ) 2>/dev/null
 [ $? -eq 1 ] && ok "an unusable venue fails the structured write closed" || bad "structured write succeeded on an unusable venue"
 
 echo "----"
