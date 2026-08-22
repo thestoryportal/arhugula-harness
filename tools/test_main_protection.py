@@ -252,7 +252,7 @@ def test_apply_confirm_refuses_when_lock_held(monkeypatch, tmp_path):
     before any mutation, and the pre-existing lock survives (codex r4 P1)."""
     calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 0)
     (tmp_path / "apply.lock").write_text("12345")
-    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    digest = mp._approval_digest("o/r", None, mp.desired_payload(mp.blocking_contexts()))
     with pytest.raises(SystemExit) as e:
         mp.main(["apply", "--confirm", "--approved-digest", digest])
     assert "in flight" in str(e.value)
@@ -263,7 +263,7 @@ def test_apply_confirm_refuses_when_lock_held(monkeypatch, tmp_path):
 def test_apply_confirm_releases_lock_on_every_exit(monkeypatch, tmp_path):
     """The lockfile is released on success AND on the rollback-raise path."""
     _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 0)
-    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    digest = mp._approval_digest("o/r", None, mp.desired_payload(mp.blocking_contexts()))
     assert mp.main(["apply", "--confirm", "--approved-digest", digest]) == 0
     assert not (tmp_path / "apply.lock").exists()
     _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 1)
@@ -276,7 +276,7 @@ def test_apply_rollback_deletes_only_when_previously_unprotected(monkeypatch, tm
     """cur=None + tiebreaker FAIL → exactly one PUT (the provisional apply), a validated
     DELETE, and NO restore PUT (codex r2 P1 sequencing)."""
     calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 1)
-    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    digest = mp._approval_digest("o/r", None, mp.desired_payload(mp.blocking_contexts()))
     with pytest.raises(SystemExit) as e:
         mp.main(["apply", "--confirm", "--approved-digest", digest])
     assert "rolled back" in str(e.value)
@@ -287,7 +287,7 @@ def test_apply_rollback_restores_prior_policy_via_put_without_delete(monkeypatch
     """cur=prior + tiebreaker FAIL → the prior policy is restored with a single PUT and NO
     DELETE — PUT replaces in place, so an unprotected window must never be opened (r2 P1)."""
     calls = _wire_apply(monkeypatch, tmp_path, cur=_PRIOR_GET, tiebreaker=lambda: 1)
-    digest = mp._approval_digest(_PRIOR_GET, mp.desired_payload(mp.blocking_contexts()))
+    digest = mp._approval_digest("o/r", _PRIOR_GET, mp.desired_payload(mp.blocking_contexts()))
     with pytest.raises(SystemExit) as e:
         mp.main(["apply", "--confirm", "--approved-digest", digest])
     assert "prior protection restored" in str(e.value)
@@ -302,7 +302,7 @@ def test_apply_rolls_back_when_tiebreaker_raises(monkeypatch, tmp_path):
         raise SystemExit("gh pr checks: boom")
 
     calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=raising_tiebreaker)
-    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    digest = mp._approval_digest("o/r", None, mp.desired_payload(mp.blocking_contexts()))
     with pytest.raises(SystemExit) as e:
         mp.main(["apply", "--confirm", "--approved-digest", digest])
     assert "rolled back" in str(e.value)
@@ -313,7 +313,7 @@ def test_apply_rollback_cas_aborts_when_live_policy_changed(monkeypatch, tmp_pat
     """Rollback only fires when the live policy is still OUR provisional payload — a
     concurrent change during the long-running probe must not be erased (codex r7 P1)."""
     calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 1, states=[None, None])
-    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    digest = mp._approval_digest("o/r", None, mp.desired_payload(mp.blocking_contexts()))
     with pytest.raises(SystemExit) as e:
         mp.main(["apply", "--confirm", "--approved-digest", digest])
     assert "NOT rolling back" in str(e.value)
@@ -324,11 +324,25 @@ def test_apply_keeps_validated_fence_on_cleanup_failure(monkeypatch, tmp_path):
     """tiebreaker rc 2 (PASS but cleanup incomplete): the transaction exits nonzero but the
     validated fence is NOT torn down (codex r7 P2)."""
     calls = _wire_apply(monkeypatch, tmp_path, cur=None, tiebreaker=lambda: 2)
-    digest = mp._approval_digest(None, mp.desired_payload(mp.blocking_contexts()))
+    digest = mp._approval_digest("o/r", None, mp.desired_payload(mp.blocking_contexts()))
     with pytest.raises(SystemExit) as e:
         mp.main(["apply", "--confirm", "--approved-digest", digest])
     assert "cleanup incomplete" in str(e.value) and "PERSISTS" in str(e.value)
     assert len(_puts(calls)) == 1 and _deletes(calls) == []
+
+
+def test_real_tiebreaker_refuses_when_fence_not_live(monkeypatch, capsys):
+    """Drives the REAL tiebreaker (no stub, codex r9 P2): with the fence not live it must
+    FAIL at the precondition — before creating any scratch state (no subprocess runs)."""
+
+    def no_subprocess(*a, **k):
+        raise AssertionError("no subprocess may run before the fence-liveness gate")
+
+    monkeypatch.setattr(mp.subprocess, "run", no_subprocess)
+    monkeypatch.setattr(mp, "current_protection", lambda: None)
+    assert mp.tiebreaker() == 1
+    out = capsys.readouterr().out
+    assert "fence is not live" in out and "unprotected (404)" in out
 
 
 def test_verify_restore_check_accepts_prior_policy_with_reviews():

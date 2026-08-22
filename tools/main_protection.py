@@ -59,13 +59,24 @@ def _gh(*args: str, timeout: float = 30) -> subprocess.CompletedProcess[str]:
 
 
 def _repo() -> str:
-    p = _gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
-    slug = p.stdout.strip()
-    if p.returncode != 0 or "/" not in slug:
-        # An empty/malformed slug would turn the protection request itself into a 404 that
-        # reads as "unprotected", contaminating show/digest/evidence — stop at the failed
-        # observation instead (codex r4 P3).
-        raise SystemExit(f"repo discovery failed: {p.stderr.strip() or slug!r}")
+    """owner/repo derived from THIS repository's origin remote — never from gh's ambient
+    default-repo selection or GH_REPO, which could redirect the confirmed mutation to a
+    different repository (codex r9 P1). Loud on failure: an empty/malformed slug would turn
+    the protection request into a 404 that reads as "unprotected" (codex r4 P3)."""
+    q = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=REPO,
+    )
+    url = q.stdout.strip()
+    if q.returncode != 0 or not url:
+        raise SystemExit(f"repo discovery failed: {q.stderr.strip() or url!r}")
+    tail = url.split(":", 1)[-1] if url.startswith("git@") else "/".join(url.split("/")[-2:])
+    slug = tail.removesuffix(".git").strip("/")
+    if slug.count("/") != 1 or not all(slug.split("/")):
+        raise SystemExit(f"repo discovery failed: cannot parse owner/repo from {url!r}")
     return slug
 
 
@@ -243,9 +254,11 @@ def _to_put_payload(got: dict) -> dict:
     }
 
 
-def _approval_digest(current: dict | None, desired: dict) -> str:
-    """Binds an operator approval to the exact (BEFORE, AFTER) pair shown at the dry run."""
-    blob = json.dumps([current, desired], sort_keys=True).encode()
+def _approval_digest(repo: str, current: dict | None, desired: dict) -> str:
+    """Binds an operator approval to the exact (REPOSITORY, BEFORE, AFTER) triple shown at
+    the dry run — the repo slug is part of the approval so an ambient-state redirect can
+    never ride an approved digest (codex r9 P1)."""
+    blob = json.dumps([repo, current, desired], sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
@@ -285,6 +298,7 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with EVIDENCE_LOG.open("a") as f:
         f.write(f"\n## main-protection apply {stamp}\n```\n{diff_report(cur, desired)}\n```\n")
+    put_err: str | None = None
     try:
         r = subprocess.run(
             ["gh", "api", "-X", "PUT", f"repos/{_repo()}/branches/main/protection", "--input", "-"],
@@ -294,18 +308,20 @@ def _confirmed_apply(cur: dict | None, desired: dict) -> int:
             timeout=60,
         )
         if r.returncode != 0:
-            raise SystemExit(f"apply failed: {r.stderr.strip()}")
+            put_err = r.stderr.strip() or f"gh api exit {r.returncode}"
     except subprocess.TimeoutExpired:
-        # GitHub can accept the mutation before the client times out — reconcile against
-        # the observed live state instead of exiting with the lock released and a possibly
-        # half-applied fence (codex r8 P1).
+        put_err = "PUT timed out client-side"
+    if put_err is not None:
+        # ANY reported failure is ambiguous — GitHub can accept the mutation before the
+        # client errors (timeout, dropped connection, proxy 5xx). Reconcile against the
+        # observed live state instead of exiting with a possibly half-applied fence and a
+        # released lock (codex r8/r9 P1).
         live = current_protection()
         if live is not None and not verify(live, desired):
-            print("provisional PUT timed out client-side but LANDED on GitHub; continuing")
+            print(f"provisional PUT reported failure ({put_err[:120]}) but LANDED; continuing")
         else:
             raise SystemExit(
-                "provisional PUT timed out and did not land (live state unchanged) — "
-                "nothing to roll back; re-run `just main-protection-apply`"
+                f"apply failed and did not land (live state unchanged): {put_err}"
             ) from None
     # C-HE-08 §4: the settings are exercised BEFORE they are allowed to persist. The
     # tiebreaker needs strict:true live to be meaningful, so apply is provisional: a FAIL
@@ -429,8 +445,10 @@ def main(argv: list[str] | None = None) -> int:
                 "apply refuses to run in loop mode (operator-gated; CLAUDE.md §12.4.1)"
             )
         if not a.confirm:
+            slug = _repo()
             cur = current_protection()
-            digest = _approval_digest(cur, desired)
+            digest = _approval_digest(slug, cur, desired)
+            print(f"repository: {slug}")
             print(diff_report(cur, desired))
             print(
                 f"\nDRY RUN — nothing changed. approval digest: {digest}\n"
@@ -455,8 +473,10 @@ def main(argv: list[str] | None = None) -> int:
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
         try:
+            slug = _repo()
             cur = current_protection()
-            digest = _approval_digest(cur, desired)
+            digest = _approval_digest(slug, cur, desired)
+            print(f"repository: {slug}")
             print(diff_report(cur, desired))
             # The confirmation is bound to the exact BEFORE/AFTER pair the operator
             # approved: if the live protection or the ci.yml-derived payload changed since
@@ -506,7 +526,22 @@ def main(argv: list[str] | None = None) -> int:
     # tiebreaker: scratch PR under strict:true + stale-refresh-branch check (HE-1 O4; C10-T8).
     if _loop_mode():
         raise SystemExit("tiebreaker is a live probe; run outside loop mode")
-    return tiebreaker()
+    # Serialized with apply/rollback (codex r9 P2): the probe advances main and samples the
+    # live policy — overlapping an in-flight mutation transaction would invalidate either.
+    lock = _apply_lock_path()
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise SystemExit(
+            f"an apply-confirm/rollback appears to be in flight ({lock} exists) — wait for "
+            "it, or remove the lockfile if its process is dead"
+        ) from None
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+    try:
+        return tiebreaker()
+    finally:
+        lock.unlink(missing_ok=True)
 
 
 #: Three-way refusal attribution (codex r1/r3/r4 P2). "strict" signatures name the
@@ -602,10 +637,12 @@ def tiebreaker() -> int:
         )
         return (st.returncode == 0 and st.stdout.strip() == "MERGED"), err
 
-    sh("git", "fetch", "-q", "origin", cwd=REPO)
-    sh("git", "worktree", "add", "-q", "--detach", str(wt), "origin/main", cwd=REPO)
-
     def run() -> int:
+        # Setup runs INSIDE the cleanup scope: a failure in fetch/worktree-add must still
+        # reach the finally-block GC — the temp dir and any partial worktree registration
+        # are its to reap (codex r9 P3).
+        sh("git", "fetch", "-q", "origin", cwd=REPO)
+        sh("git", "worktree", "add", "-q", "--detach", str(wt), "origin/main", cwd=REPO)
         base = sh("git", "rev-parse", "origin/main")
         sh("git", "checkout", "-q", "-b", br)
         created_local.append(br)
@@ -793,6 +830,13 @@ def tiebreaker() -> int:
                 f"WARNING: cleanup incomplete — temporary worktree {wt} was not removed "
                 f"({wtrm.stderr.strip()[:120]})"
             )
+            # Deleting local/remote refs under a RETAINED worktree would strand it with
+            # unresolvable upstreams — exactly the state the ordering exists to prevent.
+            # Leave the refs; they are accounted as leftovers with the worktree (r9 P2).
+            for leftover in [*created_local, *created]:
+                cleanup_failures.append(f"ref {leftover} left for the retained worktree")
+            created_local.clear()
+            created.clear()
         for local in created_local:
             lgc = _gc_run(["git", "branch", "-D", local], 60)
             if lgc.returncode != 0 and "not found" not in lgc.stderr:
