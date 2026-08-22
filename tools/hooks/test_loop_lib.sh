@@ -398,6 +398,19 @@ done
 [ "$N" = "12" ] && ok "12 lanes racing to create the venue keep all 12 rows" || bad "create race lost rows: $N/12"
 [ "$(grep -c '^# Loop status ledger$' "$RACE" 2>/dev/null)" = "1" ] && ok "exactly one header survives the create race" || bad "header count: $(grep -c '^# Loop status ledger$' "$RACE" 2>/dev/null)"
 
+# 26b) STRUCTURAL invariant, and the load-bearing half. The 12-lane race above is an
+#      end-to-end sanity check, NOT a reproduction: it was mutation-probed with the
+#      `set -o noclobber` line removed and stayed GREEN, because forked subshells rarely
+#      interleave inside the few microseconds between the `-f` test and the redirect. Same
+#      situation as 15c/15d above — true concurrent interleaving is not deterministically
+#      reproducible in this harness, so the fix is pinned at the level that IS checkable:
+#      the creating redirect must run under noclobber (O_EXCL), never as a bare truncating
+#      `>`. Tuning the race until it flakes red would be pinning luck, not the mechanism.
+ENSURE_BODY=$(declare -f loop_status_ensure)
+printf '%s' "$ENSURE_BODY" | grep -q 'noclobber' \
+  && ok "loop_status_ensure creates the venue exclusively (noclobber/O_EXCL)" \
+  || bad "loop_status_ensure creates with a truncating redirect (first-writer TOCTOU)"
+
 # 27) codex r1 P2 — a RELATIVE venue is rejected, not silently resolved per-CWD. Returning
 #     the relative text unchanged would make two lanes with different CWDs write different
 #     physical files while every string comparison still reported them equal.
