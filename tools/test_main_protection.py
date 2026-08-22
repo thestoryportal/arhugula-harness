@@ -109,9 +109,11 @@ def test_verify_flags_live_restrictions():
     assert any("restrictions" in m for m in mp.verify(cur, d))
 
 
-def test_verify_flags_app_bound_checks_against_anyapp_target():
-    """A contexts target is any-app: a live app-bound policy with the SAME context names is
-    still a mismatch — same names, stricter binding (codex r6 P2)."""
+def test_verify_accepts_github_auto_app_binding_for_contexts_target():
+    """EMPIRICAL round-trip witness (2026-08-21 live apply, evidence log): GitHub stores a
+    `contexts` submission as `checks` auto-bound to the providing app (app_id 15368), so a
+    contexts target must accept the app-bound read-back — flagging it turned the
+    fence-liveness gate RED against a correctly-applied fence. Name drift still flags."""
     d = mp.desired_payload(["a — blocking"])
     cur = {
         "required_status_checks": {
@@ -125,9 +127,13 @@ def test_verify_flags_app_bound_checks_against_anyapp_target():
         "allow_deletions": {"enabled": False},
         "required_linear_history": {"enabled": False},
     }
-    assert any("app-bound" in m for m in mp.verify(cur, d))
+    assert mp.verify(cur, d) == []
     cur["required_status_checks"]["checks"] = [{"context": "a — blocking", "app_id": None}]
     assert mp.verify(cur, d) == []
+    # Context-NAME drift still flags regardless of binding.
+    cur["required_status_checks"]["contexts"] = ["b — blocking"]
+    cur["required_status_checks"]["checks"] = [{"context": "b — blocking", "app_id": 15368}]
+    assert any("contexts differ" in m for m in mp.verify(cur, d))
 
 
 def test_verify_flags_live_optional_controls_against_omitting_target():

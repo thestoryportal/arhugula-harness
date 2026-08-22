@@ -147,13 +147,16 @@ def verify(current: dict | None, desired: dict) -> list[str]:
                     f"contexts differ: missing={sorted(set(want) - set(have))} "
                     f"extra={sorted(set(have) - set(want))}"
                 )
-            # A contexts target is ANY-app: a live policy whose checks are app-bound differs
-            # even when the names match — same names, stricter binding (codex r6 P2).
-            bound = sorted(
-                c["context"] for c in rsc.get("checks") or [] if c.get("app_id") not in (None, -1)
-            )
-            if bound:
-                out.append(f"checks are app-bound but the target policy is any-app: {bound}")
+            # NO app-binding comparison for a contexts target — EMPIRICALLY FALSIFIED live
+            # at the 2026-08-21 apply (evidence log): GitHub stores a `contexts` submission
+            # as `checks` auto-bound to the app that recently provided each check
+            # (app_id 15368, GitHub Actions), so the codex r6 "app-bound differs from
+            # any-app" comparison flagged OUR OWN payload's round-trip as drift and turned
+            # the fence-liveness gate RED against a correctly-applied fence. The binding is
+            # GitHub's own representation choice for contexts-submitted policies, not an
+            # operator-visible strengthening; name-compare is the stable exact-compare here.
+            # (An app-bound RESTORED policy still gets the pair-compare via the `checks`
+            # branch above.)
     want_prr = desired.get("required_pull_request_reviews")
     cur_prr = current.get("required_pull_request_reviews")
     if want_prr is None:
@@ -668,6 +671,28 @@ def tiebreaker() -> int:
         )
         return (st.returncode == 0 and st.stdout.strip() == "MERGED"), err
 
+    def watch_checks(prno: str) -> bool:
+        """`gh pr checks --watch` with a not-yet-started retry. LIVE-WITNESSED 2026-08-21
+        (scratch PR #1419): the watch exits 1 with "no checks reported" when it polls
+        before CI registers any check-run on the fresh branch — that is not-yet-started,
+        never a red (the workspace's standing benign-nonzero class); re-poll with backoff
+        and only report failure on a genuinely failed/errored final state."""
+        for _ in range(8):
+            w = subprocess.run(
+                ["gh", "pr", "checks", prno, "--watch"],
+                capture_output=True,
+                text=True,
+                timeout=1800,
+                cwd=wt,
+            )
+            if w.returncode == 0:
+                return True
+            if "no checks reported" in (w.stdout + w.stderr).lower():
+                time.sleep(20)
+                continue
+            return False
+        return False
+
     def run() -> int:
         # Setup runs INSIDE the cleanup scope: a failure in fetch/worktree-add must still
         # reach the finally-block GC — the temp dir and any partial worktree registration
@@ -695,15 +720,8 @@ def tiebreaker() -> int:
         print(f"tiebreaker: waiting for checks on #{pr} (strict:true requires up-to-date + green)")
         # Same 1800 s allowance as the stale PR's watch — sh()'s 180 s would misread any
         # healthy CI run longer than three minutes as a tiebreaker failure (codex r6 P2).
-        chk1 = subprocess.run(
-            ["gh", "pr", "checks", pr, "--watch"],
-            capture_output=True,
-            text=True,
-            timeout=1800,
-            cwd=wt,
-        )
-        if chk1.returncode != 0:
-            print(f"precondition failed: scratch PR checks did not go green (rc={chk1.returncode})")
+        if not watch_checks(pr):
+            print("precondition failed: scratch PR checks did not go green")
             return 1
         head = sh("git", "rev-parse", "HEAD")
         merged, merr = merge_attempt(pr, head)
@@ -731,23 +749,17 @@ def tiebreaker() -> int:
         # BLOCKED is ambiguous straight after creation — pending or failing required checks
         # also report BLOCKED, so an immediate read could "PASS" without strict:true ever
         # being exercised (codex r1 P1). Let the stale PR's checks settle first, then read.
-        chk = subprocess.run(
-            ["gh", "pr", "checks", pr2, "--watch"],
-            capture_output=True,
-            text=True,
-            timeout=1800,
-            cwd=wt,
-        )
+        stale_green = watch_checks(pr2)
         state = sh(
             "gh", "pr", "view", pr2, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"
         )
-        if chk.returncode != 0:
+        if not stale_green:
             # Non-green checks contaminate the probe: any merge refusal would be attributable
             # to failing checks rather than base-staleness, so strict:true is not isolable.
             verdict, why = (
                 "FAIL",
-                f"indeterminate: stale PR checks did not go green (gh pr checks "
-                f"rc={chk.returncode}, mergeStateStatus={state}) — strict:true not exercised",
+                f"indeterminate: stale PR checks did not go green "
+                f"(mergeStateStatus={state}) — strict:true not exercised",
             )
         else:
             # EXERCISE the merge rather than inferring from mergeStateStatus — BEHIND/BLOCKED
