@@ -1020,6 +1020,7 @@ def emit_refresh_pr(
     # Fresh path: branch from the just-merged main tip (see docstring), then refresh.
     sh("git", "fetch", "-q", "origin", "main")
     sh("git", "checkout", "-q", "-B", branch, "origin/main")
+    draft_warning = None
     if next_action is None and NEXT_ACTION_DRAFT.is_file():
         # §12.2 pointer re-derivation through the door (codex r2 P2): consume the
         # ship-pr-authored draft iff it names THIS landing; a stale draft from an
@@ -1033,11 +1034,14 @@ def emit_refresh_pr(
             # retry, else the re-run silently lands a pointer-less refresh.
             next_action = rest.strip()
         else:
-            print(
-                f"emit-refresh-pr: ignoring next-action draft ({first.strip()!r} does "
-                f"not name post-pr: {post_pr}, or empty body); pointer left as-is",
-                file=sys.stderr,
+            # The door captures and discards this process's stderr on success (codex
+            # r5 P2), so the condition is ALSO surfaced durably in the refresh PR
+            # body below — the venue the operator actually reads.
+            draft_warning = (
+                f"WARNING: next-action draft ignored ({first.strip()!r} does not "
+                f"name post-pr: {post_pr}, or empty body); pointer left as-is"
             )
+            print(f"emit-refresh-pr: {draft_warning}", file=sys.stderr)
     if do_refresh is None:
 
         def do_refresh() -> None:
@@ -1070,7 +1074,8 @@ def emit_refresh_pr(
         )
     sh("git", "commit", "-m", title)
     sh("git", "push", "-u", "origin", branch)
-    url = sh("gh", "pr", "create", "--title", title, "--body", body)
+    pr_body = body if draft_warning is None else f"{body}\n\n{draft_warning}"
+    url = sh("gh", "pr", "create", "--title", title, "--body", pr_body)
     # the pointer is now durably represented by the pushed branch + PR — only here
     # may the draft be retired (codex r3 P2)
     _discard_matching_draft(post_pr)

@@ -1369,7 +1369,11 @@ def test_emit_refresh_pr_ignores_mismatched_draft(monkeypatch, tmp_path, capsys)
     rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
     assert draft.exists()  # left for inspection
     assert "--next-action" not in argv_seen["argv"]
-    assert "ignoring next-action draft" in capsys.readouterr().err
+    assert "next-action draft ignored" in capsys.readouterr().err
+    # codex r5 P2: the door discards stderr on success — the warning must ALSO ride
+    # the refresh PR body, the venue the operator reads
+    create = next(c for c in calls if c[:3] == ["gh", "pr", "create"])
+    assert "next-action draft ignored" in create[create.index("--body") + 1]
 
 
 def test_emit_refresh_pr_explicit_flag_wins_over_draft(monkeypatch, tmp_path):

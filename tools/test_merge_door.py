@@ -1207,6 +1207,8 @@ def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
     )
     assert (2, "s" * 40) in g.merge_calls  # merged the CORRECTED head
     assert (2, "r" * 40) not in g.merge_calls
+    # r5 P2: the record replacement is atomic (os.replace) — no tmp residue on disk
+    assert not list(md.DOOR.glob("*.tmp.*"))
 
 
 def test_resume_refuses_moved_head_that_lost_refresh_identity(door, monkeypatch):
@@ -1228,6 +1230,32 @@ def test_resume_refuses_moved_head_that_lost_refresh_identity(door, monkeypatch)
         md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
     assert (2, "s" * 40) not in g.merge_calls
     assert md.read_lease()["state"] == "blocked"
+
+
+# mutation-probe: drop the pending-run guard in wait_pr_head_checks (stale verdict read)
+def test_pr_head_wait_ignores_stale_completed_run_while_rerun_pending(door):
+    """codex r5 P2: a rerun reuses the SHA — an older completed FAILURE must not be
+    judged while a newer run is still in progress; the wait holds, then merges on the
+    rerun's green."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+    polls = {"n": 0}
+
+    def runs(sha):
+        if sha == "r" * 40:
+            polls["n"] += 1
+            if polls["n"] < 3:  # stale red + live rerun: hold, don't judge
+                return [
+                    {"status": "completed", "conclusion": "failure", "event": "pull_request"},
+                    {"status": "in_progress", "conclusion": None, "event": "pull_request"},
+                ]
+            return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
+        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+
+    g.gh_runs_for_sha = runs
+    assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr) == "released"
+    assert (2, "r" * 40) in g.merge_calls
+    assert polls["n"] >= 3
 
 
 def test_wait_for_door_backoff_numbers_and_budget(door):

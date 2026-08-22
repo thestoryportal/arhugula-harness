@@ -1051,12 +1051,17 @@ def wait_pr_head_checks(sha: str, ground: Ground, *, bound_s: float, lane_id: st
     head's completed run may register as pull_request or push depending on triggers)."""
     deadline = ground.clock() + bound_s
     while ground.clock() < deadline:
-        done = [r for r in ground.gh_runs_for_sha(sha) if r.get("status") == "completed"]
-        if done:
-            concl = done[0].get("conclusion")
-            if not ci_is_green(concl):
-                return f"blocked:refresh_pr_ci_not_green:{concl}"
-            return "success"
+        runs = ground.gh_runs_for_sha(sha)
+        # A rerun/edited event reuses the SHA (codex r5 P2): while ANY run is still in
+        # progress, an older completed run must not be read as the verdict — wait until
+        # the SHA has no pending runs, then judge the completed set.
+        if not any(r.get("status") != "completed" for r in runs):
+            done = [r for r in runs if r.get("status") == "completed"]
+            if done:
+                concl = done[0].get("conclusion")
+                if not ci_is_green(concl):
+                    return f"blocked:refresh_pr_ci_not_green:{concl}"
+                return "success"
         ground.sleep(30)
     return "blocked:refresh_pr_ci_not_green:timeout"
 
@@ -1342,12 +1347,14 @@ def land(
                             "no longer satisfies the terminating-refresh identity gate"
                         )
                     rhead = cur_head
-                    # refresh the durable record so a crash-resume sees the adopted
-                    # head; a crash inside this two-step window merely re-runs the
-                    # (idempotent) adoption on the next pass
+                    # ATOMIC record replacement (codex r5 P2): unlink-then-create left a
+                    # crash window with intent-but-no-record, which resumes as the
+                    # manual refresh_intent_unresolved recovery instead of idempotent
+                    # re-adoption. os.replace swaps the payload in one step.
                     sidecar = _sidecar(lease["lease_token"], "refresh")
-                    sidecar.unlink(missing_ok=True)
-                    publish_exclusive(sidecar, json.dumps({"pr": rpr, "head_sha": rhead}))
+                    tmp = sidecar.with_name(f"{sidecar.name}.tmp.{os.getpid()}")
+                    tmp.write_text(json.dumps({"pr": rpr, "head_sha": rhead}))
+                    os.replace(tmp, sidecar)
             refresh_resumed = (
                 recorded is not None and recorded.get("merge_attempted_at") is not None
             )

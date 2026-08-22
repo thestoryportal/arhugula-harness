@@ -332,8 +332,15 @@ esac
 landing pushes `roadmap-refresh-post-<content-pr>` for the §4(viii) continuation, the
 repo does NOT auto-delete merged head branches (`deleteBranchOnMerge: false`), and the
 door's fixed merge string carries no `--delete-branch` — so successful arcs accumulate
-refresh branches unless this step covers them (U-HE-28 codex r2). Run the same guarded
-block a second time with `<PR#>` = the refresh PR the door reported and
+refresh branches unless this step covers them (U-HE-28 codex r2). The branch name is
+deterministic from the content PR you just landed — recover the refresh PR's number from
+it (the wrapper prints only `released`, so this lookup, not door output, is the source):
+
+```bash
+gh pr view roadmap-refresh-post-<content-pr> --json number,state,mergeCommit
+```
+
+Then run the same guarded block a second time with `<PR#>` = that number and
 `expected_branch=roadmap-refresh-post-<content-pr>`; its step-2 post-merge-CI check is
 the run the door already confirmed green before releasing.
 
