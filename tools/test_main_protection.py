@@ -109,9 +109,11 @@ def test_verify_flags_live_restrictions():
     assert any("restrictions" in m for m in mp.verify(cur, d))
 
 
-def test_verify_flags_app_bound_checks_against_anyapp_target():
-    """A contexts target is any-app: a live app-bound policy with the SAME context names is
-    still a mismatch — same names, stricter binding (codex r6 P2)."""
+def test_verify_accepts_github_auto_app_binding_for_contexts_target():
+    """EMPIRICAL round-trip witness (2026-08-21 live apply, evidence log): GitHub stores a
+    `contexts` submission as `checks` auto-bound to the providing app (app_id 15368), so a
+    contexts target must accept the app-bound read-back — flagging it turned the
+    fence-liveness gate RED against a correctly-applied fence. Name drift still flags."""
     d = mp.desired_payload(["a — blocking"])
     cur = {
         "required_status_checks": {
@@ -125,9 +127,19 @@ def test_verify_flags_app_bound_checks_against_anyapp_target():
         "allow_deletions": {"enabled": False},
         "required_linear_history": {"enabled": False},
     }
-    assert any("app-bound" in m for m in mp.verify(cur, d))
+    assert mp.verify(cur, d) == []
     cur["required_status_checks"]["checks"] = [{"context": "a — blocking", "app_id": None}]
     assert mp.verify(cur, d) == []
+    cur["required_status_checks"]["checks"] = [{"context": "a — blocking", "app_id": -1}]
+    assert mp.verify(cur, d) == []  # the explicit any-app sentinel is accepted too
+    # A binding to any OTHER app is a genuinely different policy and still flags (fix r1).
+    cur["required_status_checks"]["checks"] = [{"context": "a — blocking", "app_id": 999999}]
+    assert any("non-Actions app" in m for m in mp.verify(cur, d))
+    cur["required_status_checks"]["checks"] = [{"context": "a — blocking", "app_id": 15368}]
+    # Context-NAME drift still flags regardless of binding.
+    cur["required_status_checks"]["contexts"] = ["b — blocking"]
+    cur["required_status_checks"]["checks"] = [{"context": "b — blocking", "app_id": 15368}]
+    assert any("contexts differ" in m for m in mp.verify(cur, d))
 
 
 def test_verify_flags_live_optional_controls_against_omitting_target():
@@ -407,3 +419,61 @@ def test_verify_flags_404_and_mismatch():
     assert any("strict" in m for m in mp.verify(cur, d))
     cur["required_status_checks"]["strict"] = True
     assert mp.verify(cur, d) == []
+
+
+def _watch_seq(monkeypatch, results):
+    """Wire subprocess.run to pop scripted (cmd-kind → CompletedProcess) results.
+    Returns the live seq list so tests can assert FULL CONSUMPTION — the merge-gate
+    witness lens (PR #1422) proved a final-boolean-only assertion cannot distinguish
+    retry-then-pass from pass-on-first-partial."""
+    seq = list(results)
+
+    def fake_run(cmd, **kw):
+        kind = "names" if "--json" in cmd else "watch"
+        rc, out = seq.pop(0)[1:] if seq and seq[0][0] == kind else (1, "")
+        return subprocess.CompletedProcess(cmd, rc, out, "")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    monkeypatch.setattr(mp.time, "sleep", lambda s: None)
+    return seq
+
+
+def test_watch_checks_retries_not_yet_started_then_green(monkeypatch, tmp_path):
+    """The 'no checks reported' exit is not-yet-started, never a red (scratch PR #1419
+    live witness): retry, then accept a green watch whose reported names cover every
+    required context."""
+    seq = _watch_seq(
+        monkeypatch,
+        [
+            ("watch", 1, "no checks reported on the 'x' branch"),
+            ("watch", 0, ""),
+            ("names", 0, "a — blocking\nb — blocking\nextra job\n"),
+        ],
+    )
+    assert mp._watch_checks("7", tmp_path, ["a — blocking", "b — blocking"]) is True
+    assert seq == []  # every scripted step consumed: the retry actually happened
+
+
+def test_watch_checks_green_during_partial_registration_does_not_count(monkeypatch, tmp_path):
+    """A green watch while only SOME required contexts have registered must retry, not
+    pass — a later refusal for the missing required check would masquerade as strict
+    enforcement (fix r1)."""
+    seq = _watch_seq(
+        monkeypatch,
+        [
+            ("watch", 0, ""),
+            ("names", 0, "a — blocking\n"),  # b missing: partial registration
+            ("watch", 0, ""),
+            ("names", 0, "a — blocking\nb — blocking\n"),
+        ],
+    )
+    assert mp._watch_checks("7", tmp_path, ["a — blocking", "b — blocking"]) is True
+    # FULL consumption is the load-bearing assertion (merge-gate lens, PR #1422): a
+    # regression to "any green watch + any successful names call counts" returns True
+    # after step 2 and leaves the last two scripted steps unconsumed.
+    assert seq == []
+
+
+def test_watch_checks_genuine_failure_is_false(monkeypatch, tmp_path):
+    _watch_seq(monkeypatch, [("watch", 1, "X ruff (lint + format) — blocking fail")])
+    assert mp._watch_checks("7", tmp_path, ["a — blocking"]) is False
