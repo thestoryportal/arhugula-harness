@@ -2259,3 +2259,13 @@ same spec leg.
 - **Close-out steps.** (1) If GitHub ships conditional writes for the protection endpoint, upgrade the rollback to If-Match; (2) optionally teach rollback to offer the evidence-log BEFORE payload as the restore target; (3) no further client-side narrowing owed — the class is non-convergent by the same measurement pattern as B-190.
 
 - **Council.** NO — single-tool hardening residual; no cross-axis consumer; the fence (C-HE-08 §2 + R-20) is the systemic guard.
+
+### B-192 · C-HE-06 §4(viii) door-driven refresh pointer-freshness posture on a missing draft *(surfaced by out-of-family Codex r15 against U-HE-28, 2026-08-22; register-and-held; merge-gate spec lens is the scheduled arbiter)*
+
+- **Finding.** When the door-driven `--emit-refresh-pr-json` finds NO `.harness/.next-action-draft` and no explicit `--next-action`, it lands the terminating refresh with the pointer untouched — the documented self-healing posture (the pointer's standing "then <next unit>" tail + C-HE-03 terminal-head dedup keep next-action derivation correct). Codex r15 reads CLAUDE.md §12.2 strictly: the refresh must carry a re-derived pointer, so a forgotten draft should fail closed.
+
+- **Why held.** Fail-closed here fails the refresh AFTER the irreversible content merge, BLOCKING the shared global door on every forgotten-draft landing (operator unblock + refresh-branch cleanup) — a heavy failure mode traded against a silent-but-self-healing stale pointer. An UNREPRESENTED or malformed draft already fails loud (r14 refusal + sanitized warning); only the fully-absent-draft case is at issue, and both postures are defensible.
+
+- **Close-out steps.** (1) If the U-HE-28 merge-gate spec-conformance lens ALSO blocks on this (decorrelated agreement), flip to fail-closed in a follow-up arc and document the blocked-door recovery; (2) otherwise hold the self-healing posture with the dissent recorded here; (3) derivation is unaffected either way (terminal-head dedup).
+
+- **Council.** NO — two-option policy fork with a decorrelated arbiter already scheduled (the 3-lens merge gate).

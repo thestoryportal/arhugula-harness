@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 191
+  total: 192
   open: 1
   design_substrate_gated: 3
-  registered_finding: 42
+  registered_finding: 43
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: 41bbafef05eb57e5
+  identity_digest: 18c3a53fe285ed32
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10026,3 +10026,29 @@ items:
   council: 'NO — single-tool hardening residual; no cross-axis consumer; the fence
     (C-HE-08 §2 + R-20) is the systemic guard.'
   heading: '### B-191 · C-HE-08 §2 apply/rollback transaction residual classes premised on concurrent REMOTE writers *(surfaced by out-of-family Codex r10 against the U-HE-27 recipes unit at the 10-round cap, 2026-08-21; register-and-held)*'
+- id: B-192
+  title: >-
+    C-HE-06 §4(viii) door-driven refresh — pointer-freshness posture on a MISSING next-action
+    draft (self-healing fallback vs strict §12.2 fail-closed)
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-28 r15 P2) against a DOCUMENTED design
+    choice and register-and-held per the oscillation discipline. When the door-driven emit
+    finds NO draft and no explicit --next-action, it lands the terminating refresh with the
+    pointer untouched — the documented self-healing posture (the pointer''s standing "then
+    <next unit>" tail + C-HE-03 terminal-head dedup keep derivation correct; rev note (ii)).
+    Codex reads CLAUDE.md §12.2 strictly: the refresh must carry a re-derived pointer, so a
+    forgotten draft should fail closed. Fail-closed here means the refresh fails AFTER the
+    irreversible content merge, BLOCKING the shared door on every forgotten-draft landing
+    (operator unblock + branch cleanup) — a heavy failure mode traded against a silent-but-
+    self-healing stale pointer. Both postures are defensible; the current one is documented
+    at ship-pr + the U-HE-28 rev note. An UNREPRESENTED or malformed draft already fails
+    loud (r14); only the fully-ABSENT-draft case is at issue.'
+  close_out: '(1) If the U-HE-28 merge-gate spec-conformance lens ALSO blocks on this
+    (decorrelated agreement), flip to fail-closed in a follow-up arc: refuse the fresh path
+    when the door-driven invocation has neither draft nor explicit pointer, and document the
+    blocked-door recovery (write draft -> delete refresh branch -> unblock -> land); (2)
+    otherwise hold the self-healing posture and record the dissent here; (3) either way,
+    the next arc''s session-start derivation is unaffected (terminal-head dedup).'
+  council: 'NO — a two-option policy fork with a decorrelated arbiter already scheduled
+    (the 3-lens merge gate); council disproportionate.'
+  heading: '### B-192 · C-HE-06 §4(viii) door-driven refresh pointer-freshness posture on a missing draft *(surfaced by out-of-family Codex r15 against U-HE-28, 2026-08-22; register-and-held; merge-gate spec lens is the scheduled arbiter)*'

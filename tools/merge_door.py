@@ -1366,6 +1366,7 @@ def land(
                     # exclusive-create primitive on an UNPREDICTABLE tmp name + symlink
                     # containment (r6 P2): a planted sidecar/tmp symlink must neither
                     # redirect the write outside the queue nor become the record.
+                    _check_door()  # r15 P2: writer-side containment on this path too
                     sidecar = _sidecar(lease["lease_token"], "refresh")
                     tmp = sidecar.with_name(f"{sidecar.name}.adopt.{secrets.token_hex(8)}")
                     publish_exclusive(tmp, json.dumps({"pr": rpr, "head_sha": rhead}))
