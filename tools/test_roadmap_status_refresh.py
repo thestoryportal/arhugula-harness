@@ -1288,6 +1288,9 @@ def test_emit_refresh_pr_refuses_two_file_commit():
     with pytest.raises(SystemExit, match=r"exactly \.harness/roadmap_status\.md"):
         rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
     assert not any(c[:2] == ["git", "commit"] for c in calls)
+    # merge-gate r2 witness P3: the ephemeral worktree is cleaned up on the
+    # exception path too (the remove rides the finally)
+    assert any(c[:3] == ["git", "worktree", "remove"] for c in calls)
 
 
 def test_emit_refresh_pr_subcommand_failure_aborts_nonzero():
@@ -1305,6 +1308,8 @@ def test_emit_refresh_pr_subcommand_failure_aborts_nonzero():
     with pytest.raises(SystemExit, match="remote rejected"):
         rsr.emit_refresh_pr(55, run=run, do_refresh=lambda: None)
     assert not any(c[:3] == ["gh", "pr", "create"] for c in calls)
+    # merge-gate r2 witness P3: cleanup fires on this exception path too
+    assert any(c[:3] == ["git", "worktree", "remove"] for c in calls)
 
 
 def test_cli_dispatch_emit_refresh_pr_json(monkeypatch, capsys):
@@ -1789,3 +1794,19 @@ def test_failed_verification_refuses_rather_than_retires(monkeypatch, tmp_path):
     with pytest.raises(SystemExit, match="does not represent the authored"):
         rsr.emit_refresh_pr(55, run=run)
     assert draft.exists()
+
+
+def test_default_refresh_threads_status_and_archive_into_the_worktree(monkeypatch, tmp_path):
+    """merge-gate r2 witness P2: the DEFAULT do_refresh closure must aim the recursive
+    refresh at the EPHEMERAL worktree via --status/--archive — dropping the threading
+    would silently write the invoking repo's live status file while every other
+    assertion stays green."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: argv_seen.setdefault("argv", argv) and 0 or 0)
+    calls: list[list[str]] = []
+    rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    wt_add = next(c for c in calls if c[:3] == ["git", "worktree", "add"])
+    wt = wt_add[5]  # git worktree add -q --detach <wt> origin/main
+    argv = argv_seen["argv"]
+    assert argv[argv.index("--status") + 1] == f"{wt}/.harness/roadmap_status.md"
+    assert argv[argv.index("--archive") + 1] == f"{wt}/.harness/roadmap_drift_log_archive.md"

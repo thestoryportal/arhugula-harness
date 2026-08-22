@@ -1207,9 +1207,9 @@ def emit_refresh_pr(
             "--body",
             body,
         )
-        # the branch is checked out here, but verify against the PUSHED content the
-        # same way as the sibling path (r6 P2); an unrepresented correction refuses
-        # (r14 P2 — same rule as the open-PR path)
+        # verify against the PUSHED content the same way as the sibling path (r6
+        # P2; no local checkout exists on this leg — merge-gate r1); an
+        # unrepresented correction refuses (r14 P2 — same rule as the open-PR path)
         if _discard_matching_draft(post_pr, _pushed_refresh_text(run, branch)) == "unrepresented":
             raise SystemExit(
                 f"emit-refresh-pr: pushed refresh branch {branch} does not represent "
@@ -1320,13 +1320,21 @@ def emit_refresh_pr(
         head_sha = sh("git", "rev-parse", "HEAD", cwd=wt)
     finally:
         # best-effort ephemeral-worktree cleanup; a leak is disk residue only —
-        # never a HEAD/branch mutation anywhere (no local branch exists)
-        run(
-            ["git", "worktree", "remove", "--force", wt],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
+        # never a HEAD/branch mutation anywhere (no local branch exists). Guarded
+        # (merge-gate r2 concurrency P3): a raising cleanup inside finally would
+        # mask the genuine in-flight failure from the try block.
+        try:
+            run(
+                ["git", "worktree", "remove", "--force", wt],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:
+            print(
+                f"emit-refresh-pr: ephemeral worktree cleanup failed; residue at {wt}",
+                file=sys.stderr,
+            )
     # only a draft whose body was ADOPTED into this refresh is represented by
     # construction — retire it now that the branch + PR are durable (r3 P2). An
     # overridden (explicit --next-action) or mismatched draft is unrepresented
