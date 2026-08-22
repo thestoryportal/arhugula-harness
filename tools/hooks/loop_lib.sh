@@ -137,7 +137,11 @@ _loop_structured_col() {
   # `;` goes too (codex r4 P2): rowparse terminates the lane at the FIRST semicolon, so a
   # lane id containing one would be silently truncated at read time -- two distinct lanes
   # could then render as the same id, and neither would match its persisted spelling.
-  lane=$(printf '%s' "${1:--}" | tr -d ' \t\n\r|;'); cause=$(printf '%s' "${2:--}" | tr -d ' \t\n\r|;')
+  # `[` and `]` go too (codex r7 P2): pending rows are RENDERED as `[<lane>] <detail>`, and
+  # every consumer that reads that form back -- the migration's own re-import parse among
+  # them -- delimits on the brackets. A lane carrying one would make the bracketed prefix
+  # bleed into the detail, losing the leading item token and with it the whole gate.
+  lane=$(printf '%s' "${1:--}" | tr -d ' \t\n\r|;[]'); cause=$(printf '%s' "${2:--}" | tr -d ' \t\n\r|;[]')
   printf 'lane=%s;cause=%s' "${lane:--}" "${cause:--}"
 }
 
@@ -158,6 +162,34 @@ _loop_lane_id() {
     [ -n "$d" ] && [ -f "$d/.harness/.lane-id" ] && l=$(cat "$d/.harness/.lane-id" 2>/dev/null)
   fi
   printf '%s' "${l:--}"
+}
+
+# Still-PENDING rows of ONE ledger file, WITH their original timestamps:
+# `<ts>\t<lane>\t<detail>` per row, reduced in that file's own physical order. The public
+# loop_pending_hil_list renders `[lane] detail` and drops the timestamp; the migration needs
+# the timestamp to decide whether a legacy row predates a resolution already recorded in the
+# shared venue. Same prelude, so the reduction rules cannot diverge from the public one.
+_loop_pending_rows_with_ts() {
+  [ -f "$1" ] || return 1
+  awk -F'|' "$_LOOP_AWK_ROW"'
+    { rowparse() }
+    k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
+      ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts)
+      if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; at[tok] = ts; det[tok] = d; ln[tok] = lane }
+      else { state[tok] = "RESOLVED" }
+    }
+    END { for (t in state) if (state[t] == "PENDING") print at[t] "\t" ln[t] "\t" det[t] }
+  ' "$1" 2>/dev/null | sed 's/\\|/|/g' | sort
+}
+
+# The timestamp of the LAST RESOLVED-HIL recorded for <item> in <ledger>, or empty.
+_loop_last_resolved_ts() {
+  [ -f "$1" ] || return 0
+  awk -F'|' -v want="$2" "$_LOOP_AWK_ROW"'
+    { rowparse() }
+    k == "RESOLVED-HIL" && tok == want { ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts); last = ts }
+    END { if (last != "") print last }
+  ' "$1" 2>/dev/null
 }
 
 # ── Legacy venue migration (U-HE-29 cutover) ─────────────────────────────────
@@ -218,8 +250,18 @@ loop_status_migrate() {
       [ -f "$orphan" ] || continue
       if [ -f "$legacy" ]; then
         # A concurrent old writer already recreated the live path. Both hold real rows, so
-        # neither may be discarded: fold the orphan's rows into the live file and drop it.
-        cat "$orphan" >> "$legacy" 2>/dev/null && rm -f "$orphan" 2>/dev/null
+        # neither may be discarded -- but ORDER matters (codex r7 P2): the reducers key on
+        # PHYSICAL order, and the orphan was claimed EARLIER, so its rows are the older ones.
+        # Appending it after the live file would let an old RESOLVED-HIL in the orphan clear
+        # a NEWER DEFERRED-HIL in the live file and archive both with the real gate unimported.
+        # The orphan therefore goes FIRST.
+        local _merged="${legacy}.merge-$$"
+        if cat "$orphan" "$legacy" > "$_merged" 2>/dev/null && mv "$_merged" "$legacy" 2>/dev/null; then
+          rm -f "$orphan" 2>/dev/null
+        else
+          rm -f "$_merged" 2>/dev/null
+          echo "loop_status_migrate: could not fold orphan $orphan into $legacy" >&2; return 1
+        fi
       else
         mv "$orphan" "$legacy" 2>/dev/null
       fi
@@ -249,7 +291,7 @@ loop_status_migrate() {
     # "nothing to read" are different claims -- fail closed on the first, restoring the
     # original name so the next pass retries it.
     local open_rows rc
-    open_rows=$(HARNESS_LOOP_STATUS_PATH="$claim" loop_pending_hil_list 2>/dev/null); rc=$?
+    open_rows=$(_loop_pending_rows_with_ts "$claim"); rc=$?
     if [ "$rc" -ne 0 ]; then
       mv "$claim" "$legacy" 2>/dev/null
       echo "loop_status_migrate: could not READ $legacy (rc=$rc) — not imported, not retired" >&2
@@ -257,25 +299,23 @@ loop_status_migrate() {
     fi
     rows=$(printf '%s' "$open_rows" | grep -c . 2>/dev/null || echo 0)
     if [ "$rows" -gt 0 ]; then
-      while IFS= read -r line; do
-        [ -n "$line" ] || continue
-        local lane detail item
-        lane=$(printf '%s' "$line" | sed -n 's/^\[\([^]]*\)\] .*$/\1/p'); [ -n "$lane" ] || lane="-"
-        detail=$(printf '%s' "$line" | sed 's/^\[[^]]*\] //')
-        item=$(printf '%s' "$detail" | awk '{print $1}')
-        # DEDUPE on the ROW, not the item (codex r5 P2 -> r6 P2). A pass that appended some
-        # rows and then failed would, on retry, re-append a DEFERRED-HIL for an item the
-        # operator may have RESOLVED in between -- silently reopening an answered gate. But
-        # keying the skip on the ITEM alone was too broad: it suppressed EVERY future legacy
-        # deferral for that item, so a genuinely NEW deferral (a still-running old checkout
-        # recording a fresh gate after the earlier one was answered) would be archived
-        # unimported, breaking the last-write-wins rule that a later deferral reopens a gate.
-        # Keying on the full imported DETAIL distinguishes them: a re-seen identical row is a
-        # retry and is skipped; a new deferral carries different reason text and is imported.
-        # A byte-identical re-deferral is genuinely ambiguous, and skipping is the safe read
-        # there -- the operator's RESOLVED-HIL keeps the last word.
-        local _esc; _esc=$(_loop_escape_detail "$detail")
-        if grep -qF ";cause=legacy-import:cutover:u-he-29 | ${_esc} |" "$shared" 2>/dev/null; then
+      while IFS=$'\t' read -r src_ts lane detail; do
+        [ -n "$detail" ] || continue
+        [ -n "$lane" ] || lane="-"
+        local item; item=$(printf '%s' "$detail" | awk '{print $1}')
+        # STALENESS, not text similarity, decides (codex r5 -> r6 -> r7 P2). Imported rows
+        # are necessarily appended LAST, and the reducers key on physical order -- so an old
+        # legacy DEFERRED-HIL would land after a newer shared RESOLVED-HIL and reopen an
+        # answered gate. Dedupe heuristics (by item, then by detail text) each broke the
+        # other direction: keyed on the item they suppressed every genuinely NEW legacy
+        # deferral forever; keyed on the text they suppressed a real re-deferral that happened
+        # to repeat its reason. The timestamps settle it exactly: skip the row only when the
+        # shared venue already resolved that item AT OR AFTER the legacy row was written --
+        # then it is stale and must not reopen. A legacy row written AFTER the resolution is a
+        # genuinely newer gate and is imported, honouring last-write-wins. ISO-8601 second
+        # precision sorts lexicographically, so `>` on the strings is a true time comparison.
+        local resolved_ts; resolved_ts=$(_loop_last_resolved_ts "$shared" "$item")
+        if [ -n "$resolved_ts" ] && ! [[ "$src_ts" > "$resolved_ts" ]]; then
           continue
         fi
         if ! loop_log_structured DEFERRED-HIL "$lane" "legacy-import:cutover:u-he-29" "$detail"; then

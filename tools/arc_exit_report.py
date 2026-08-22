@@ -630,21 +630,30 @@ def _todos(
 def _lane_id(ledger_root: Path) -> str:
     """This arc's lane id, or '' when the invoking worktree has none.
 
-    Read from the worktree-local `.harness/.lane-id` (the pre-U-HE-31 persisted lane
-    identity), falling back to `HARNESS_LANE_ID`. Both are per-lane; the ledger is not.
+    `HARNESS_LANE_ID` first, then the worktree-local `.harness/.lane-id` (the pre-U-HE-31
+    persisted lane identity) — the same order `loop_lib.sh`'s `_loop_lane_id` uses when it
+    WRITES the lane into a row. Both are per-lane; the ledger is not.
     """
+    # SAME precedence as the writer's `_loop_lane_id` (codex r7 P2): env first, then the
+    # persisted marker. The writer is the authority — it decides the lane a row is RECORDED
+    # under — so a reader resolving the two sources in the opposite order would, whenever
+    # both exist and differ, classify this arc's own freshly-written rows as foreign and omit
+    # them from its own closure record.
+    env = os.environ.get("HARNESS_LANE_ID", "").strip()
+    if env:
+        return _sanitize_lane(env)
     marker = ledger_root / ".harness" / ".lane-id"
     try:
         val = marker.read_text(encoding="utf-8").strip()
     except OSError:
         val = ""
-    return _sanitize_lane(val or os.environ.get("HARNESS_LANE_ID", "").strip())
+    return _sanitize_lane(val)
 
 
 #: Separators `_loop_structured_col` strips before writing a lane into the ledger column.
 #: They cannot survive: `|` splits the row, whitespace breaks the item-token split, `;`
 #: terminates the lane, and newlines split the row across physical lines.
-_LANE_STRIP = str.maketrans("", "", " \t\n\r|;")
+_LANE_STRIP = str.maketrans("", "", " \t\n\r|;[]")
 
 
 def _sanitize_lane(lane: str) -> str:

@@ -153,6 +153,7 @@ tools/dashboard/public/
 # GC refuse to dispose the worktree forever (codex r5 P2).
 .harness/loop_status.md.migrated-*
 .harness/loop_status.md.migrating-*
+.harness/loop_status.md.merge-*
 .harness/.loop-iter
 .harness/.loop-halt
 .harness/codex_loop_state.json

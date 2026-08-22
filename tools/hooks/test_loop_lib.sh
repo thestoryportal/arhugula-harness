@@ -617,28 +617,79 @@ SK=$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)
 { printf '%s' "$SK" | grep -q 'B-402' && printf '%s' "$SK" | grep -q 'B-403'; } \
   && ok "an orphan colliding with a recreated live ledger loses neither's rows" || bad "rows lost in the collision path: [$SK]"
 
-# 37) codex r6 P2 — dedupe on the ROW, not the item forever. A genuinely NEW legacy deferral
-#     for an already-imported item must still be imported (last-write-wins reopens a gate);
-#     only a byte-identical re-seen row is a retry to skip.
-HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_resolve B-403 "answered" >/dev/null
-printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-403 — a NEW gate, different reason |\n' \
+# 37) codex r5->r6->r7 P2 — STALENESS decides, not text similarity. Imported rows are
+#     appended LAST and the reducers key on physical order, so an old legacy DEFERRED-HIL
+#     would land after a newer shared RESOLVED-HIL and reopen an answered gate. Both dedupe
+#     heuristics tried before this broke the other direction (by item: every future legacy
+#     deferral suppressed forever; by detail text: a real re-deferral that repeated its
+#     reason suppressed). The timestamps settle it exactly.
+loop_now() { echo "2026-08-10T00:00:00Z"; }
+HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_resolve B-403 "answered at 08-10" >/dev/null
+# (a) a legacy row written BEFORE the resolution is stale — it must NOT reopen the gate,
+#     even though its text differs from anything imported so far.
+printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-403 — written before the answer |\n' \
   > "$MIG4/wt1/.harness/loop_status.md"
 ( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
 printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" | grep -q 'B-403' \
-  && ok "a NEW legacy deferral for a resolved item reopens the gate" || bad "new deferral suppressed by item-level dedupe"
-# a byte-identical re-seen row is still a retry and must NOT reopen
-HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_resolve B-403 "answered again" >/dev/null
-printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-403 — a NEW gate, different reason |\n' \
+  && bad "a legacy row older than the resolution reopened the gate" || ok "a legacy row older than the resolution is stale and skipped"
+# (b) a legacy row written AFTER the resolution is a genuinely NEW gate — last-write-wins
+#     says it reopens, and it must be imported even though the item was resolved.
+printf '| 2026-08-20T00:00:00Z | DEFERRED-HIL | B-403 — a new gate raised after the answer |\n' \
   > "$MIG4/wt1/.harness/loop_status.md"
 ( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
 printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" | grep -q 'B-403' \
-  && bad "an identical re-seen row reopened a resolved gate" || ok "an identical re-seen row is a retry, not a reopen"
+  && ok "a legacy row newer than the resolution reopens the gate (last-write-wins)" || bad "a genuinely newer legacy deferral was suppressed"
+# (c) an unresolved item is imported regardless of age — staleness is only about resolutions.
+printf '| 2026-01-01T00:00:00Z | DEFERRED-HIL | B-404 — ancient but never answered |\n' \
+  > "$MIG4/wt1/.harness/loop_status.md"
+( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
+printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" | grep -q 'B-404' \
+  && ok "an old but never-answered gate is imported" || bad "an unresolved legacy gate was dropped as stale"
+unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # 38) codex r6 P2 — the staging file is created EXCLUSIVELY. `$$` is shared across a bash's
 #     subshells and $RANDOM is 15 bits, so a guessable name lets two callers write one inode
 #     and publish it half-written — the very race the ln protocol removes.
 printf '%s' "$(declare -f loop_status_ensure)" | grep -q 'mktemp' \
   && ok "the staging file is created exclusively (mktemp)" || bad "staging name is guessable"
+
+# 39) codex r7 P2 — an orphaned claim's rows are OLDER than a recreated live ledger's, so
+#     they must be folded in FIRST. Appended last, an old RESOLVED-HIL in the orphan would
+#     clear a NEWER DEFERRED-HIL in the live file and both would be archived with the real
+#     gate unimported.
+MIG5="$REPO/mig5"; rm -rf "$MIG5"; mkdir -p "$MIG5"
+( cd "$MIG5" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m5wt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIG5/wt1/.harness"
+MIG5V="$MIG5/shared/loop_status.md"
+# The orphan RESOLVED B-501 at 08-01; the live file re-DEFERRED it at 08-05. Correct order
+# leaves B-501 PENDING; the wrong order (orphan appended last) would clear it.
+printf '| 2026-08-01T00:00:00Z | RESOLVED-HIL | B-501 — answered long ago |\n' \
+  > "$MIG5/wt1/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z"
+printf '| 2026-08-05T00:00:00Z | DEFERRED-HIL | B-501 — raised again, still open |\n' \
+  > "$MIG5/wt1/.harness/loop_status.md"
+( cd "$MIG5" && CLAUDE_PROJECT_DIR="$MIG5" HARNESS_LOOP_STATUS_PATH="$MIG5V" loop_status_migrate ) >/dev/null 2>&1
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIG5V" loop_skip_set)" = "B-501" ] \
+  && ok "an orphan folds in BEFORE the recreated live rows (newer gate survives)" || bad "orphan ordering cleared a newer gate: [$(HARNESS_LOOP_STATUS_PATH="$MIG5V" loop_skip_set)]"
+[ -z "$(find "$MIG5/wt1/.harness" -name '*.merge-*' 2>/dev/null)" ] && ok "no merge temp is left behind" || bad "merge temp leaked"
+
+# 40) codex r7 P2 — `[`/`]` must not survive into a lane id. Pending rows are RENDERED as
+#     `[<lane>] <detail>` and every consumer reading that form back delimits on the brackets,
+#     so a bracket-bearing lane would bleed into the detail and lose the item token.
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+loop_log_structured DEFERRED-HIL 'la]ne[x' 'g:f:c' "B-17 — bracket lane"
+[[ "$(loop_pending_hil_list)" == '[lanex] B-17 — bracket lane' ]] \
+  && ok "brackets are stripped from the lane id" || bad "bracket lane: [$(loop_pending_hil_list)]"
+[ "$(loop_skip_set)" = "B-17" ] && ok "the gate survives a bracket-bearing lane id" || bad "gate lost: [$(loop_skip_set)]"
+
+# 41) codex r7 P2 — the writer and the arc-exit reader must resolve the lane in the SAME
+#     order (env, then persisted marker). Opposite orders would make an arc classify its own
+#     freshly-written rows as foreign whenever both sources exist and differ.
+WBODY=$(declare -f _loop_lane_id)
+printf '%s' "$WBODY" | grep -q 'HARNESS_LANE_ID' && ok "the writer consults HARNESS_LANE_ID" || bad "writer lane source changed"
+PYSRC=$(cd "$SCRIPT_DIR/../.." && sed -n '/^def _lane_id/,/^def _sanitize_lane/p' tools/arc_exit_report.py)
+printf '%s' "$PYSRC" | grep -q 'env = os.environ.get' && ok "the reader consults HARNESS_LANE_ID FIRST, matching the writer" || bad "reader lane precedence diverged from the writer"
 
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"

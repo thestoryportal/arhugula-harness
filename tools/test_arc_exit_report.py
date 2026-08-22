@@ -1152,17 +1152,32 @@ def test_u_he_29_todo_for_human_excludes_known_foreign_lanes_only(
     assert "this arc's lane is L1" in body
 
 
-def test_u_he_29_lane_id_falls_back_to_the_environment(tmp_path, monkeypatch):
-    """`.harness/.lane-id` is the persisted identity; HARNESS_LANE_ID is the fallback the
-    review/ship wrappers already export."""
+def test_u_he_29_lane_id_resolves_in_the_same_order_as_the_writer(tmp_path, monkeypatch):
+    """HARNESS_LANE_ID first, then the persisted `.harness/.lane-id` — the SAME order
+    `loop_lib.sh`'s `_loop_lane_id` uses when it writes the lane into a row.
+
+    The precedence must match the WRITER's, because the writer decides the lane a row is
+    recorded under. Resolving the two sources in the opposite order would, whenever both
+    exist and differ, make this arc classify its own freshly-written rows as foreign and omit
+    them from its own closure record (codex r7 P2)."""
     root = tmp_path / "wt"
     (root / ".harness").mkdir(parents=True)
     monkeypatch.delenv("HARNESS_LANE_ID", raising=False)
     assert aer._lane_id(root) == ""
-    monkeypatch.setenv("HARNESS_LANE_ID", "L9")
-    assert aer._lane_id(root) == "L9"
     (root / ".harness" / ".lane-id").write_text("  L1  \n", encoding="utf-8")
-    assert aer._lane_id(root) == "L1", "the persisted marker wins over the environment"
+    assert aer._lane_id(root) == "L1", "the persisted marker is used when the env is unset"
+    monkeypatch.setenv("HARNESS_LANE_ID", "L9")
+    assert aer._lane_id(root) == "L9", "HARNESS_LANE_ID wins, matching the writer"
+
+
+def test_u_he_29_lane_id_is_sanitized_the_way_the_ledger_stores_it(tmp_path, monkeypatch):
+    """The writer strips separators out of the lane before recording it, so the reader must
+    apply the identical strip — otherwise a separator-bearing id never matches its own rows
+    and the arc's obligations read as foreign (codex r6/r7 P2)."""
+    root = tmp_path / "wt"
+    (root / ".harness").mkdir(parents=True)
+    monkeypatch.setenv("HARNESS_LANE_ID", "la ne;x|y[z]")
+    assert aer._lane_id(root) == "lanexyz"
 
 
 def test_u_he_29_lane_annotation_never_drops_an_unattributed_row(tmp_path):
