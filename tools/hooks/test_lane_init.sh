@@ -315,6 +315,12 @@ printf '%s %s\n' "some-lane" "$ROOT/reaped-wt" > "$REL/lanes/5"
 grep -q 'compose -p arhugula-r420-self-hosted-local-lane5 .* down' "$ROOT/docker-calls.log" 2>/dev/null \
   && ok "release took lane 5's Compose project down before recycling the index" \
   || bad "no compose down for the released lane: [$(cat "$ROOT/docker-calls.log" 2>/dev/null | tr '\n' '/')]"
+# The NEGATIVE half, and the only thing that distinguishes the two branches: a VERIFIED-CLEAN
+# release must leave no fence. Both branches free the claim and both reach docker, so claim
+# absence and the call log are identical between them — without this, swapping the arms of the
+# rc case would pass, and every cleanly released index would gate the next lane on it.
+[ ! -f "$REL/lanes/.orphaned-5" ] && ok "a verified-clean release leaves NO orphan fence" \
+  || bad "clean release wrote .orphaned-5 — the next lane on this index would be gated"
 
 # --- 18. corpse repair NEVER proceeds without the exclusive repair lock ---------------
 # Atomic replace alone is not mutual exclusion: two repairers minting different ids and
@@ -343,6 +349,9 @@ printf '%s %s\n' "some-lane" "$ROOT/reaped-wt-b" > "$REL/lanes/6"
 grep -q 'down --volumes' "$ROOT/docker-calls.log" 2>/dev/null \
   && ok "teardown removes the lane's named volumes, not just its containers" \
   || bad "compose down ran without --volumes: [$(cat "$ROOT/docker-calls.log" 2>/dev/null | tr '\n' '/')]"
+{ [ ! -f "$REL/lanes/6" ] && [ ! -f "$REL/lanes/.orphaned-6" ]; } \
+  && ok "the volume-removing clean release frees the index and writes no fence" \
+  || bad "clean release left claim=$([ -f "$REL/lanes/6" ] && echo yes || echo no) fence=$([ -f "$REL/lanes/.orphaned-6" ] && echo yes || echo no)"
 
 # a cleanup that FAILS must not free the index — the containers still hold its ports
 cat > "$STUB/docker" <<STUBEOF
