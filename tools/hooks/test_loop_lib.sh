@@ -794,6 +794,22 @@ G4=$(loop_hil_groups)
 [[ "$G4" == *"with a tab after it"* ]] \
   && ok "a tab in the detail does not truncate the rendered gate" || bad "tab truncated the detail: $G4"
 
+# An UNOPENABLE delivery lock must fail loud, not report "nothing was due" (codex r5 P2):
+# a permission or ownership problem on the shared queue dir would otherwise skip every
+# batched delivery forever with no diagnostic anywhere.
+_coalesce_reset
+loop_now() { echo "2026-08-18T13:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'lk:e:f' 'B-110 — gated'
+loop_now() { echo "2026-08-18T13:11:00Z"; }
+_LOCKDIR="$(dirname "$(loop_status_path)")/.loop-status.lock"
+command rm -f "$_LOCKDIR"; mkdir -p "$_LOCKDIR"
+_LOUT=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver 2>&1); _LRC=$?
+[ "$_LRC" -ne 0 ] && ok "an unopenable delivery lock returns non-zero" || bad "unopenable lock reported success (rc=$_LRC)"
+[[ "$_LOUT" == *"cannot open the delivery lock"* ]] \
+  && ok "an unopenable delivery lock says so on stderr" || bad "no diagnostic for an unopenable lock: $_LOUT"
+rmdir "$_LOCKDIR"
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-110"* ]] \
+  && ok "the gate delivers once the lock is usable again" || bad "gate lost after a lock failure"
+
 # ONE epoch authority: the grouper must use the same awk implementation every other
 # reducer uses, not a second `date`-forking copy free to drift on the edges.
 [ "$(_loop_epoch_of '1970-01-01T00:00:00Z')" = "0" ] && ok "epoch helper agrees with the shared awk implementation" || bad "epoch helper wrong: $(_loop_epoch_of '1970-01-01T00:00:00Z')"

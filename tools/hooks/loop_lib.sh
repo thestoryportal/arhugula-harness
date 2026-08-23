@@ -564,7 +564,15 @@ loop_hil_deliver() {
   fi
   local lock out rc
   lock="$(dirname "$p")/.loop-status.lock"
-  exec 9>> "$lock" 2>/dev/null || return 0
+  # A lock file we cannot even OPEN is an error, not a quiet no-op (codex r5 P2): returning
+  # 0 here made a permission/ownership problem on the shared queue dir look like "nothing
+  # was due", and every batched delivery would be skipped forever with no diagnostic
+  # anywhere. Fail loud and non-zero. The gates themselves are not lost -- SessionStart
+  # renders the standing pending summary regardless of whether a batch was delivered.
+  if ! exec 9>> "$lock" 2>/dev/null; then
+    echo "loop_hil_deliver: cannot open the delivery lock at $lock; no batch delivered" >&2
+    return 1
+  fi
   if ! /usr/bin/python3 - 9 "${HARNESS_LOOP_STATUS_LOCK_TIMEOUT_SECONDS:-10}" <<'PY'
 import fcntl, sys, time
 fd = int(sys.argv[1]); deadline = time.monotonic() + float(sys.argv[2])

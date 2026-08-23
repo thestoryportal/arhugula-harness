@@ -53,7 +53,11 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   # standing register of what is still open, the batch is the once-per-generation notice
   # that these N gates share one cause and their window has closed.
   _d=""
-  command -v loop_hil_deliver >/dev/null 2>&1 && _d=$(loop_hil_deliver 2>/dev/null | paste -sd' ' -)
+  # stderr is deliberately NOT suppressed here (codex r5 P2): loop_hil_deliver writes to it
+  # only when delivery is genuinely broken (an unopenable lock, an unparseable clock), and
+  # swallowing that turns a permanently-skipped batch into a silent no-op. It cannot
+  # corrupt this hook's stdout contract -- only the pipeline below feeds `_d`.
+  command -v loop_hil_deliver >/dev/null 2>&1 && _d=$(loop_hil_deliver | paste -sd' ' -)
   _h=$(loop_pending_hil_summary 2>/dev/null)
   [ -n "$_d" ] && _HIL="${_HIL} $_d"
   [ -n "$_h" ] && _HIL="${_HIL} $_h"
