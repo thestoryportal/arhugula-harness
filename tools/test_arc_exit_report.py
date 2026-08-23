@@ -1169,9 +1169,20 @@ def test_u_he_29_closeout_drains_a_pre_cutover_legacy_ledger(
     # be a real repo for the drain to run at all. Identity is passed inline — CI has none.
     subprocess.run(["git", "init", "-q", "."], cwd=wt, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
-         "--allow-empty", "-m", "init"],
-        cwd=wt, check=True,
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+        cwd=wt,
+        check=True,
     )
     (wt / ".harness").mkdir(exist_ok=True)
     (wt / ".harness" / "loop_status.md").write_text(
