@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1150,6 +1151,65 @@ def test_u_he_29_todo_for_human_excludes_known_foreign_lanes_only(
         "excluded rows must be COUNTED, never silently dropped"
     )
     assert "this arc's lane is L1" in body
+
+
+def test_u_he_29_closeout_drains_a_pre_cutover_legacy_ledger(
+    worktree_pair, gstack, monkeypatch, shared_ledger
+):
+    """codex r10 P1: a worktree whose session began BEFORE the U-HE-29 cutover still holds
+    its pending rows in its own legacy ledger — SessionStart is the only other migration
+    caller, and it did not run for this session.
+
+    Reading only the shared venue would record an EMPTY todo list, and the worktree
+    disposition this report is ordered before would then delete those obligations
+    permanently. Closeout therefore drains first."""
+    main, wt = worktree_pair
+    # The migration enumerates through `git worktree list`, so the invoking worktree has to
+    # be a real repo for the drain to run at all. Identity is passed inline — CI has none.
+    subprocess.run(["git", "init", "-q", "."], cwd=wt, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+         "--allow-empty", "-m", "init"],
+        cwd=wt, check=True,
+    )
+    (wt / ".harness").mkdir(exist_ok=True)
+    (wt / ".harness" / "loop_status.md").write_text(
+        "| timestamp | kind | detail |\n|---|---|---|\n"
+        "| 2026-08-04T00:01:00Z | DEFERRED-HIL | R-720 — pending since before the cutover |\n",
+        encoding="utf-8",
+    )
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")
+    todos = yaml.safe_load(yaml_block(body))["todo_for_human"]
+    assert todos is not None, "a drainable legacy ledger must not read as UNKNOWN"
+    assert any("R-720" in t for t in todos), (
+        "the pre-cutover obligation must survive into this arc's closure record"
+    )
+    assert not (wt / ".harness" / "loop_status.md").exists(), "the legacy ledger is retired"
+
+
+def test_u_he_29_closeout_fails_closed_when_the_legacy_drain_fails(
+    repo, monkeypatch, tmp_path, shared_ledger
+):
+    """An UNDRAINABLE legacy ledger must degrade todo_for_human to UNKNOWN, never to [].
+
+    "Could not drain" and "nothing pending" are exactly the two claims that must not be
+    confused at the moment an arc closes and its worktree is disposed."""
+    notes: list[str] = []
+    root = tmp_path / "pre-cutover-wt"
+    (root / ".harness").mkdir(parents=True)
+    legacy = root / ".harness" / "loop_status.md"
+    legacy.write_text("| t | DEFERRED-HIL | R-721 — unreachable |\n", encoding="utf-8")
+    # `root` is not a git repo, so the migration cannot enumerate worktrees and fails.
+    got = aer._todos(root, repo, notes)
+    assert got is None, "an undrainable legacy ledger must be UNKNOWN, not []"
+    assert any("could not be drained" in n for n in notes)
+    assert any("before disposing the worktree" in n for n in notes)
 
 
 def test_u_he_29_lane_id_resolves_in_the_same_order_as_the_writer(tmp_path, monkeypatch):

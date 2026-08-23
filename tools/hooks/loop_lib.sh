@@ -340,7 +340,12 @@ loop_status_migrate() {
         # genuinely newer gate and is imported, honouring last-write-wins. ISO-8601 second
         # precision sorts lexicographically, so `>` on the strings is a true time comparison.
         local resolved_ts; resolved_ts=$(_loop_last_resolved_ts "$shared" "$item")
-        if [ -n "$resolved_ts" ] && ! [[ "$src_ts" > "$resolved_ts" ]]; then
+        # EQUALITY IMPORTS (codex r10 P2). loop_now has one-second precision, so a legacy
+        # DEFERRED-HIL written just AFTER a shared RESOLVED-HIL can carry the same stamp.
+        # Skipping on equality would archive a genuinely newer gate; importing on equality at
+        # worst re-opens an answered one, which is C-HE-09 §4's safe direction (over-skipping
+        # is safe; under-skipping re-loops). Skip only what is STRICTLY older.
+        if [ -n "$resolved_ts" ] && [[ "$src_ts" < "$resolved_ts" ]]; then
           continue
         fi
         if ! loop_log_structured DEFERRED-HIL "$lane" "legacy-import:cutover:u-he-29" "$detail"; then

@@ -605,6 +605,41 @@ def _todos(
             "(concurrent worktree disposition?) — todo_for_human is UNKNOWN (null)."
         )
         return None
+    # DRAIN THE LEGACY VENUE FIRST (codex r10 P1). The only production caller of
+    # `loop_status_migrate` is SessionStart, so a worktree whose session began BEFORE the
+    # U-HE-29 cutover reaches closeout with pending rows still in its own legacy ledger.
+    # Reading only the shared venue would then record an EMPTY todo list — and the
+    # disposition this report is ordered before goes on to delete the worktree, taking those
+    # obligations with it permanently. Migrating here makes the read complete; a FAILED
+    # migration degrades the field to UNKNOWN rather than to a confident [], because "could
+    # not drain" and "nothing pending" are exactly the two claims that must not be confused
+    # at the moment an arc closes.
+    # Gated on THIS worktree actually holding one. The P1 is specifically "this arc's session
+    # began before the cutover, so its own rows are still in its own legacy file" — a sibling
+    # worktree's legacy rows are not this arc's closure concern, and demanding a successful
+    # migration in a context where none is needed (a fixture, a repo whose worktree
+    # enumeration fails) would degrade every honest empty report to UNKNOWN.
+    if (ledger_root / ".harness" / "loop_status.md").is_file():
+        mrc, _mout = run(
+            [
+                "bash",
+                "-c",
+                'CLAUDE_PROJECT_DIR="$1"; . "$2"; . "$3"; loop_status_migrate',
+                "arc_exit_report",  # $0
+                str(ledger_root),
+                str(lib),
+                str(loop_lib),
+            ],
+            code_root,
+        )
+        if mrc != 0:
+            notes.append(
+                "this worktree still holds a pre-U-HE-29 legacy ledger and it could not be "
+                f"drained into the shared venue (`loop_status_migrate` exited {mrc}) — it may "
+                "carry pending rows the shared reducer cannot see, so todo_for_human is "
+                "UNKNOWN (null). Resolve before disposing the worktree."
+            )
+            return None
     # The bash source is a CONSTANT; every path travels as an argv value read through "$N"
     # (codex round-6 P2). Interpolating the paths into the source made a metacharacter-
     # bearing repo path — `…/re"po; touch /tmp/x; #` — execute as code.

@@ -647,6 +647,17 @@ printf '| 2026-08-20T00:00:00Z | DEFERRED-HIL | B-403 — a new gate raised afte
 ( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
 printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" | grep -q 'B-403' \
   && ok "a legacy row newer than the resolution reopens the gate (last-write-wins)" || bad "a genuinely newer legacy deferral was suppressed"
+# (b2) codex r10 P2 — EQUAL timestamps must IMPORT. loop_now has one-second precision, so a
+#      legacy deferral written just after a resolution can carry the same stamp; skipping on
+#      equality would archive a genuinely newer gate. Importing on equality at worst reopens
+#      an answered one, which is §4's safe direction.
+printf '| 2026-08-10T00:00:00Z | DEFERRED-HIL | B-403 — raised in the SAME second as the answer |\n' \
+  > "$MIG4/wt1/.harness/loop_status.md"
+HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_resolve B-403 "answered again at 08-10" >/dev/null
+( cd "$MIG4" && CLAUDE_PROJECT_DIR="$MIG4" HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_status_migrate ) >/dev/null 2>&1
+printf '%s' "$(HARNESS_LOOP_STATUS_PATH="$MIG4V" loop_skip_set)" | grep -q 'B-403' \
+  && ok "a same-second legacy deferral is imported, not skipped as stale" || bad "equal timestamps skipped a gate"
+
 # (c) an unresolved item is imported regardless of age — staleness is only about resolutions.
 printf '| 2026-01-01T00:00:00Z | DEFERRED-HIL | B-404 — ancient but never answered |\n' \
   > "$MIG4/wt1/.harness/loop_status.md"
