@@ -44,9 +44,28 @@ _lane_init_id() {
   # lane minted without uv is indistinguishable downstream from one minted with it.
   [ -n "$id" ] || id="$(hostname -s 2>/dev/null || echo host)-$(basename "$_LI_WT")-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
   mkdir -p "$(dirname "$f")" 2>/dev/null
-  ( set -o noclobber; printf '%s\n' "$id" > "$f" ) 2>/dev/null
-  # RE-READ after the exclusive create: if a concurrent session in this worktree won the
-  # race, ITS id is the lane id — adopting our own would fork the identity.
+  # A ZERO-BYTE marker is a corpse, not a claim: only the pre-publication-protocol code
+  # (or a stray `touch`) could produce one, and leaving it in place is unrecoverable —
+  # `[ -s ]` never adopts it and an exclusive create can never replace it, so every later
+  # session re-mints and none persists. Unlink it before publishing. Two shells both
+  # repairing is harmless: publication is atomic and both re-read the winner's id.
+  { [ -e "$f" ] && [ ! -s "$f" ]; } && rm -f "$f" 2>/dev/null
+  # PUBLICATION PROTOCOL, the same one loop_status_ensure uses and for the same reason. A
+  # bare `set -o noclobber; > "$f"` publishes the NAME at open() and the payload after: a
+  # concurrent loser can see a file that is still empty, keep its own id, and the two shells
+  # then hold divergent identities — and a crash inside that window leaves an empty marker
+  # that noclobber can never replace, so every later run re-mints and none can persist.
+  # Writing to an exclusively-created temp and publishing with `ln` makes the marker visible
+  # only once it is COMPLETE; the loser of the link race is a harmless no-op.
+  local tmp
+  if tmp=$(mktemp "$f.XXXXXXXX" 2>/dev/null) && [ -n "$tmp" ]; then
+    if printf '%s\n' "$id" > "$tmp" 2>/dev/null; then
+      ln "$tmp" "$f" 2>/dev/null || true
+    fi
+    rm -f "$tmp" 2>/dev/null
+  fi
+  # RE-READ after publication: if a concurrent session in this worktree won the race, ITS id
+  # is the lane id — adopting our own would fork the identity.
   if [ -s "$f" ]; then
     IFS= read -r id < "$f"
   fi
@@ -75,6 +94,11 @@ if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
       if ( set -o noclobber; printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_LI_Q/lanes/$_li_k" ) 2>/dev/null; then
         break
       fi
+      # The create can lose to a CONCURRENT init of THIS SAME worktree (two shells opening
+      # one lane). Incrementing past it would give one lane two indices and two stacks, so
+      # the occupant is inspected: if it is ours, adopt it instead of claiming another.
+      IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
+      [ "${_li_path:-}" = "$_LI_WT" ] && break
       _li_k=$((_li_k + 1))
       if [ "$_li_k" -ge 350 ]; then
         # Never fall through with an unset index: every consumer defaults to lane 0, so a
@@ -100,6 +124,11 @@ fi
 # ── RAM headroom probe (C-HE-11 §5) ──────────────────────────────────────────────────
 # True when this lane may bring the three-container R-420 stack up. Lanes 0 and 1 always
 # may: the floor exists to stop the THIRD concurrent stack on a 16 GB reference machine.
+# The floor is compared against TOTAL physical memory — the machine class — not free RAM:
+# the spec's quantified number is "a machine below an operator-configured RAM floor (default
+# 32 GB)", and a 32 GB default compared against *available* memory would refuse the third
+# stack on exactly the 32 GB machine the floor is written to admit. Docker-VM headroom is
+# therefore approximated by machine class here; see the as-built note on this unit.
 lane_stack_allowed() {
   local floor_gb="${HARNESS_RAM_FLOOR_GB:-32}" mem_gb k="${HARNESS_LANE_INDEX:-0}"
   [ "$k" -ge 2 ] || return 0

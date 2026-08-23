@@ -117,8 +117,15 @@ Two guard facts shape how that is actually executed:
 A finished lane's worktree is **reaped ONLY via `tools/hooks/safe-worktree-remove.sh`**:
 
 ```bash
+just r420-self-hosted-stack-down                 # FIRST, from inside the lane, if it ran a stack
 bash tools/hooks/safe-worktree-remove.sh <repo-root>/.codex-worktrees/<slug>
 ```
+
+Bring the lane's stack down **before** reaping. A successful removal frees the lane's
+`QUEUE_DIR/lanes/<k>` claim (C-HE-11 §1), and the next lane to take that index inherits its
+project name, ports and volumes — containers left running would hold them, and that lane's
+`up` fails on a port bind. The removal hook cannot do this itself without making teardown
+depend on a Docker daemon that is usually absent.
 
 Direct `git worktree remove` is denied for **every** parsed removal
 (`tools/hooks/permission-guard.sh:56-70`; the only bypass is the deliberate

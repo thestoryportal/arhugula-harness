@@ -128,6 +128,30 @@ grep -q 'cause=merge-door\|cause=reservation\|merge-door-\|reservation-' "$INIT"
   && bad "script names a coordination cause family" \
   || ok "script never emits a merge-door-/reservation- cause"
 
+# --- 10b. an EMPTY .lane-id marker never yields an empty lane id ---------------------
+# The failure the publication protocol removes: a crash (or a loser observing the file
+# between open() and the payload write) leaves a zero-byte marker. `>` under noclobber can
+# never replace it, so a naive re-read would export an EMPTY lane id forever.
+: > "$ROOT/wt2/.harness/.lane-id"
+ID_EMPTY=$(cd "$ROOT/wt2" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_ID")
+{ [ -n "$ID_EMPTY" ] && [ -s "$ROOT/wt2/.harness/.lane-id" ]; } \
+  && ok "an empty .lane-id corpse is repaired, not carried forever" \
+  || bad "empty marker: id='$ID_EMPTY', marker still empty: $([ -s "$ROOT/wt2/.harness/.lane-id" ] && echo no || echo yes)"
+ID_REPAIRED=$(cd "$ROOT/wt2" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_ID")
+[ "$ID_REPAIRED" = "$ID_EMPTY" ] && ok "the repaired marker is then stable" \
+  || bad "repaired marker churned: '$ID_EMPTY' -> '$ID_REPAIRED'"
+printf '%s\n' "$ID_OTHER" > "$ROOT/wt2/.harness/.lane-id"
+
+# --- 10c. losing the create race to OUR OWN path adopts that index, never k+1 ---------
+# Two shells opening the SAME worktree at once: both scan, both miss, one creates k. The
+# loser must adopt k — incrementing would give one lane two indices and two Docker stacks.
+RACE="$ROOT/race"; mkdir -p "$RACE/lanes"
+printf '%s %s\n' "someone-else" "$(cd "$ROOT/wt" && pwd -P)" > "$RACE/lanes/0"
+KR=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$RACE" HARNESS_LANE_INDEX_FORCE=0 \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+{ [ "$KR" = "0" ] && [ ! -f "$RACE/lanes/1" ]; } && ok "a lost create race for our own path adopts that index" \
+  || bad "lost race allocated a second index: k=$KR, lanes/1 present: $([ -f "$RACE/lanes/1" ] && echo yes || echo no)"
+
 # --- 11. teardown releases the claim, end to end through safe-worktree-remove.sh -----
 # The real removal path, not a direct call to the helper: the release only matters if the
 # script every teardown actually runs reaches it, and only on the success branch.

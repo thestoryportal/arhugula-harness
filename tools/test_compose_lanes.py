@@ -128,6 +128,12 @@ def test_stack_recipes_pass_a_per_lane_project() -> None:
     reason="docker-daemon-absent",
 )
 def test_two_lanes_disjoint_names_and_ports() -> None:
+    # Lane indices 300/301, never 1/2. This case brings stacks UP and tears them DOWN by
+    # project name; run on a machine where a real lane 1 or 2 is live, the low indices would
+    # reap that operator's running stack. 300/301 are inside the k<350 range, port-disjoint
+    # from every plausible lane, and are not handed out by lane-init (it allocates upward
+    # from 0), so the only stacks these names can name are this test's own.
+    a, b = 300, 301
     env = {**os.environ, "HARNESS_RAM_FLOOR_GB": "0"}  # the RAM guard is not under test here
 
     def up(k: int) -> None:
@@ -172,13 +178,13 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         return [json.loads(line) for line in out.splitlines() if line.strip()]
 
     try:
-        up(1)
-        up(2)
-        c1, c2 = ps(1), ps(2)
+        up(a)
+        up(b)
+        c1, c2 = ps(a), ps(b)
         assert len(c1) == 3 and len(c2) == 3, (c1, c2)
         assert {c["Name"] for c in c1}.isdisjoint({c["Name"] for c in c2})
         assert all(c["State"] == "running" for c in c1 + c2), "port bind conflict"
-        p1, p2 = lane_ports.ports(1), lane_ports.ports(2)
+        p1, p2 = lane_ports.ports(a), lane_ports.ports(b)
         pub1 = " ".join(str(c.get("Publishers", "")) for c in c1)
         pub2 = " ".join(str(c.get("Publishers", "")) for c in c2)
         assert str(p1["grafana"]) in pub1
@@ -189,8 +195,8 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
             capture_output=True,
             text=True,
         ).stdout
-        assert f"{lane_ports.project(1)}_grafana-data" in vols
-        assert f"{lane_ports.project(2)}_grafana-data" in vols
+        assert f"{lane_ports.project(a)}_grafana-data" in vols
+        assert f"{lane_ports.project(b)}_grafana-data" in vols
     finally:
-        down(1)
-        down(2)
+        down(a)
+        down(b)

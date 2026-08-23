@@ -249,6 +249,20 @@ MANIFEST: list[Row] = [
     ),
     Row(
         "C-HE-11",
+        "pytest:tools/test_compose_lanes.py::test_compose_uses_port_variables",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    Row(
+        "C-HE-11",
+        "pytest:tools/test_compose_lanes.py::test_stack_recipes_pass_a_per_lane_project",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    Row(
+        "C-HE-11",
         "pytest:tools/test_compose_lanes.py::test_two_lanes_disjoint_names_and_ports",
         "env",
         "local",

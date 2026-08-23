@@ -545,15 +545,15 @@ q4-packaging-check:
 # Start the local R-420 SELF_HOSTED_SERVER telemetry backend:
 # OTel Collector Contrib + Tempo + Grafana. Requires Docker Desktop/daemon.
 r420-self-hosted-stack-up:
-    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; lane_stack_allowed || { echo "self-hosted stack skipped: RAM floor (C-HE-11 5; NOTIFY emitted)"; exit 0; }; eval "$(uv run python tools/lane_ports.py --shell)"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml up -d'
+    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; lane_stack_allowed || { echo "self-hosted stack skipped: RAM floor (C-HE-11 5; NOTIFY emitted)"; exit 0; }; _e="$(uv run python tools/lane_ports.py --shell)" || exit 1; eval "$_e"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml up -d'
 
 # Stop and remove this lane's R-420 backend containers/network.
 r420-self-hosted-stack-down:
-    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; eval "$(uv run python tools/lane_ports.py --shell)"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml down'
+    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; _e="$(uv run python tools/lane_ports.py --shell)" || exit 1; eval "$_e"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml down'
 
 # Show this lane's R-420 backend container status.
 r420-self-hosted-stack-status:
-    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; eval "$(uv run python tools/lane_ports.py --shell)"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml ps'
+    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; _e="$(uv run python tools/lane_ports.py --shell)" || exit 1; eval "$_e"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml ps'
 
 # Static R-420 readiness for a copied self-hosted config. Does not start Docker,
 # the daemon, an OTLP probe, a secret fetch, or a provider call.

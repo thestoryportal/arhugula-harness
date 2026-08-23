@@ -774,6 +774,12 @@ _hook_worktree_matches_expected_identity() {
 # EVERY matching entry goes, not the first: a crash between the exclusive create and the
 # reuse scan can leave one path holding two, and a release that stops at the first would
 # strand the other. Never fails the caller — teardown already succeeded.
+# BOUND: this frees the INDEX, it does not stop that lane's Docker stack — reaping a
+# worktree whose stack is still up leaves containers holding the ports and volumes the
+# freed index hands to the next lane, whose `up` then fails on a port bind. Bringing Docker
+# down from a removal hook would make teardown depend on a daemon that is usually absent,
+# so the stack-down is a documented step of the reaping recipe instead
+# (.claude/skills/two-lane/SKILL.md), and the failure it guards against is loud, not silent.
 # Usage: hook_release_lane_index /physical/path/to/worktree
 hook_release_lane_index() {
   local wt="${1:-}" q f id path

@@ -646,6 +646,13 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # Git scopes these operations to this repository; this path helper limits destinations.
       # Removal uses the separately allowlisted mutex-backed wrapper.
       emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^(source|\.)[[:space:]]+tools/hooks/lane-init\.sh$'; then
+      # U-HE-31: two-lane / roadmap-continue open a lane by SOURCING lane-init, and in loop
+      # mode an unmatched command becomes ask -> headless denial, so the lane could never
+      # get its id or index. Anchored EXACT shape with no argument surface at all (`$`-end):
+      # the script takes no arguments, and anything chained, redirected or substituted was
+      # already rejected above. A different path after `source` does not match.
+      emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+transition([[:space:]]|$)' \
        && _transition_to_open_only "$TRIM" \
        && _bash_args_safe "$CMD"; then
