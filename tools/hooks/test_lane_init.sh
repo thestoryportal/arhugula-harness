@@ -543,6 +543,21 @@ K_SAN=$(cd "$ROOT/wt7" && ARC_METRICS_QUEUE_DIR="$SANQ" HARNESS_LANE_ID="bad id 
 ID_SAN=$(cd "$ROOT/wt7" && ARC_METRICS_QUEUE_DIR="$SANQ" \
   bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_ID\"")
 case "$ID_SAN" in *" "*) bad "an exported id's spaces reached the marker: '$ID_SAN'" ;; *) ok "an exported id is sanitised before it seeds the marker" ;; esac
+# A colon is MAPPED rather than deleted: reservations._check_id rejects one outright, so an
+# id carrying it would persist and then fail every reservation call this lane makes.
+COLONQ="$ROOT/colon-q"
+git -C "$ROOT/repo" worktree add -q "$ROOT/wt9" -b lane-i || { echo "FATAL: worktree i"; exit 1; }
+ID_COLON=$(cd "$ROOT/wt9" && ARC_METRICS_QUEUE_DIR="$COLONQ" HARNESS_LANE_ID="host:12345-lane" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_ID\"")
+case "$ID_COLON" in
+  *:*) bad "a colon survived into the lane id: '$ID_COLON'" ;;
+  "") bad "the colon-bearing id produced no lane id at all" ;;
+  *) ok "a colon is mapped, not carried into an id every reservation call would reject" ;;
+esac
+uv run python "$SCRIPT_DIR/../reservations.py" selectable --arc-id "probe-colon-$$" >/dev/null 2>&1
+grep -qF -- "$ID_COLON" "$ROOT/wt9/.harness/.lane-id" \
+  && ok "and the persisted marker carries that same usable id" \
+  || bad "marker disagrees with the exported id: [$(cat "$ROOT/wt9/.harness/.lane-id" 2>/dev/null)]"
 grep -qF -- "$ROOT/wt7" "$SANQ/lanes/$K_SAN" \
   && ok "the claim record still parses back to this worktree" \
   || bad "claim record corrupted: [$(cat "$SANQ/lanes/$K_SAN" 2>/dev/null)]"

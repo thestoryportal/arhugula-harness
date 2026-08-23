@@ -100,11 +100,15 @@ _lane_init_id() {
     # Sanitise FIRST, then test. An exported value is operator- or agent-supplied text, and
     # the sanitiser is what will actually be persisted — checking the raw form lets `bad id`
     # slip past a lane already holding `badid`, which is the same identity after stripping.
-    id=$(printf '%s' "$HARNESS_LANE_ID" | tr -d ' \t\n\r|;[]')
+    # `:` is MAPPED, not deleted: reservations._check_id rejects a lane_id containing one
+    # (it delimits finding ids), and mint_lane_id normalises it to '-'. Deleting the ledger's
+    # other delimiters while letting a colon through produced an id that persisted to the
+    # marker and then failed every reservation call, keeping the lane broken.
+    id=$(printf '%s' "$HARNESS_LANE_ID" | tr ':' '-' | tr -d ' \t\n\r|;[]')
     _lane_id_bound_elsewhere "$id" && id=""
   fi
   [ -n "$id" ] || id=$( (cd "$_LI_ROOT" && uv run --quiet python tools/reservations.py mint-lane-id \
-          --worktree "$_LI_WT") 2>/dev/null | tr -d ' \t\n\r|;[]' )
+          --worktree "$_LI_WT") 2>/dev/null | tr ':' '-' | tr -d ' \t\n\r|;[]' )
   # Fallback keeps the SAME shape as reservations.mint_lane_id (host-worktree-8hex) so a
   # lane minted without uv is indistinguishable downstream from one minted with it.
   # The fallback runs through the SAME sanitiser as the uv-minted id: the claim record is
@@ -112,7 +116,7 @@ _lane_init_id() {
   # misparse the path — the same worktree would claim extra indices and teardown would
   # match none of them.
   [ -n "$id" ] || id="$(printf '%s-%s-%s' "$(hostname -s 2>/dev/null || echo host)" \
-    "$(basename "$_LI_WT")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" | tr -d ' \t\n\r|;[]')"
+    "$(basename "$_LI_WT")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" | tr ':' '-' | tr -d ' \t\n\r|;[]')"
   mkdir -p "$(dirname "$f")" 2>/dev/null
   # A ZERO-BYTE marker is a corpse, not a claim: only the pre-publication-protocol code
   # (or a stray `touch`) could produce one, and leaving it in place is unrecoverable —
