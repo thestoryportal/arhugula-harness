@@ -196,9 +196,23 @@ K3=$(cd "$ROOT/wt3" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_L
 [ -f "$LANES/$K3" ] && ok "third lane claims an index" || bad "third lane did not claim"
 CLAUDE_PROJECT_DIR="$ROOT/repo" bash "$SCRIPT_DIR/safe-worktree-remove.sh" "$ROOT/wt3" >/dev/null 2>&1
 RM_RC=$?
-[ "$RM_RC" -eq 0 ] && ok "safe-worktree-remove.sh removed the lane worktree" \
-  || bad "safe-worktree-remove.sh rc=$RM_RC"
-[ ! -f "$LANES/$K3" ] && ok "teardown released the lane index" || bad "lane index $K3 leaked after teardown"
+# The removal path itself is environment-dependent: its open-reference probe needs /proc +
+# /usr/bin/python3 or lsof, and a runner with neither aborts at rc 9 BEFORE reaching the
+# release. Both outcomes are asserted rather than one being skipped — a removal that did not
+# happen must NOT free the index, which is its own real invariant.
+case "$RM_RC" in
+  0)
+    ok "safe-worktree-remove.sh removed the lane worktree"
+    [ ! -f "$LANES/$K3" ] && ok "teardown released the lane index" || bad "lane index $K3 leaked after teardown"
+    ;;
+  9)
+    ok "removal unavailable here (rc=9, no open-reference probe) — asserting the negative instead"
+    [ -f "$LANES/$K3" ] && ok "a removal that did not happen does not free the index" \
+      || bad "index $K3 freed by a FAILED removal"
+    rm -f "$LANES/$K3"        # the fixture's own cleanup; the release path is witnessed directly at case 17
+    ;;
+  *) bad "safe-worktree-remove.sh rc=$RM_RC (neither a completed removal nor the known probe-unavailable rc)" ;;
+esac
 { [ -f "$LANES/$K1" ] && [ -f "$LANES/$K2" ]; } && ok "teardown left the surviving lanes' claims alone" \
   || bad "teardown removed a surviving lane's entry"
 
@@ -217,9 +231,25 @@ K4=$(cd "$ROOT/wt4" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_L
   hook_safe_worktree_remove "$ROOT/repo" "$ROOT/wt4" "$BR" "$OID"
 ) >/dev/null 2>&1
 DIRECT_RC=$?
-[ "$DIRECT_RC" -eq 0 ] && ok "direct hook_safe_worktree_remove succeeded" || bad "direct removal rc=$DIRECT_RC"
-[ ! -f "$LANES/$K4" ] && ok "the direct removal path released the lane index too" \
-  || bad "lane index $K4 leaked through the direct (loop GC) removal path"
+case "$DIRECT_RC" in
+  0)
+    ok "direct hook_safe_worktree_remove succeeded"
+    [ ! -f "$LANES/$K4" ] && ok "the direct removal path released the lane index too" \
+      || bad "lane index $K4 leaked through the direct (loop GC) removal path"
+    ;;
+  9)
+    ok "direct removal unavailable here (rc=9, no open-reference probe) — asserting the negative"
+    [ -f "$LANES/$K4" ] && ok "a failed direct removal does not free the index" \
+      || bad "index $K4 freed by a FAILED direct removal"
+    rm -f "$LANES/$K4"
+    ;;
+  *) bad "direct removal rc=$DIRECT_RC (neither completed nor the known probe-unavailable rc)" ;;
+esac
+# The release itself — the thing loop GC's direct call must reach — is witnessed
+# environment-independently at case 17, which drives hook_release_lane_index directly.
+grep -q 'hook_release_lane_index "\$wt"' "$SCRIPT_DIR/lib.sh" \
+  && ok "the release is wired inside hook_safe_worktree_remove (every caller, incl. loop GC)" \
+  || bad "hook_safe_worktree_remove no longer calls hook_release_lane_index"
 
 # --- 13. a RELATIVE queue dir is refused (it would give every lane its own lanes/0) ---
 OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="relative/queue" \
