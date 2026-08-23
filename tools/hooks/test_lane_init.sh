@@ -841,5 +841,49 @@ OUT=$(
   || bad "the withdrawal deleted a live peer's claim — the P1 this guard exists to prevent"
 [ -f "$ADQ/lanes/9" ] && ok "and the peer's other claim stands" || bad "peer claim 9 removed"
 
+# --- 40. THREE-way: the survivor is the minimum, not the lexicographically first ------
+# `lanes/*` sorts lexicographically, so "10" precedes "2". A rule that acts on the first
+# duplicate it meets resolves two racers but not three: the source holding 3 would compare
+# only against "10", conclude it is the lower, and stand alongside 2 — two survivors for one
+# worktree. The fixture plants BOTH peers, so the source under test must find the minimum
+# across the whole directory rather than the first match.
+THREEQ="$ROOT/guard-three-q"; mkdir -p "$THREEQ/lanes"
+cat > "$GUARDBIN/mktemp" <<'MK3EOF'
+#!/usr/bin/env bash
+if [ -n "${PLANT_DIR:-}" ] && [ ! -f "$PLANT_DIR/lanes/.planted" ]; then
+  mkdir -p "$PLANT_DIR/lanes"
+  printf '%s %s\n' "peer-a" "$PLANT_PATH" > "$PLANT_DIR/lanes/2"
+  printf '%s %s\n' "peer-b" "$PLANT_PATH" > "$PLANT_DIR/lanes/10"
+  : > "$PLANT_DIR/lanes/.planted"
+fi
+exec /usr/bin/mktemp "$@"
+MK3EOF
+chmod +x "$GUARDBIN/mktemp"
+# This source holds 3: lower than the lex-first peer ("10") but HIGHER than the true
+# minimum ("2"), so it must withdraw. Acting on the first match would keep it.
+OUT=$(
+  PATH="$GUARDBIN:$PATH"; export PATH
+  cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$THREEQ" HARNESS_LANE_INDEX=3 \
+    PLANT_DIR="$THREEQ" PLANT_PATH="$WTP" \
+    bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?"
+)
+[ "$OUT" = "rc=1" ] && ok "the three-way racer refuses the lane" || bad "three-way init returned $OUT"
+[ ! -f "$THREEQ/lanes/3" ] \
+  && ok "it withdraws against the MINIMUM (2), not the lexicographically first (10)" \
+  || bad "claim 3 survived alongside 2 — two claims for one worktree"
+{ [ -f "$THREEQ/lanes/2" ] && [ -f "$THREEQ/lanes/10" ]; } \
+  && ok "and it touches neither peer's claim" || bad "a peer's claim was removed"
+# ...and the true minimum still stands when IT is the source under test.
+THREEQ2="$ROOT/guard-three-q2"; mkdir -p "$THREEQ2/lanes"
+rm -f "$THREEQ/lanes/.planted"
+OUT=$(
+  PATH="$GUARDBIN:$PATH"; export PATH
+  cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$THREEQ2" HARNESS_LANE_INDEX=1 \
+    PLANT_DIR="$THREEQ2" PLANT_PATH="$WTP" \
+    bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?"
+)
+[ -f "$THREEQ2/lanes/1" ] && ok "the minimum of three keeps its claim — exactly one survivor" \
+  || bad "the minimum withdrew too; the worktree would hold no claim"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

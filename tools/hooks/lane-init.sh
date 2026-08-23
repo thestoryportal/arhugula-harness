@@ -336,44 +336,47 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   # concurrent sources in THIS worktree asking for different indices can both pass the scan
   # and both link a claim. Re-scanning afterwards catches that; the newer claim (ours) is
   # withdrawn and the peer's stands, so the lane converges on one index instead of two.
+  # The MINIMUM of this worktree's duplicate claims, not the first one the glob happens to
+  # yield. `lanes/*` sorts lexicographically, so "10" precedes "2" — acting on the first
+  # match resolves a two-way race correctly but not a three-way one: with claims at 2, 10 and
+  # 3, the source holding 3 compares only against "10", concludes it is the lower, and stands
+  # alongside 2. Two survivors for one worktree, which is the invariant this block exists to
+  # hold. Comparing against the minimum is correct for ANY number of racing sources, because
+  # exactly one of them can be the minimum.
+  _li_min=""
   for _li_f in "$_LI_Q"/lanes/*; do
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
-    if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$HARNESS_LANE_INDEX" ]; then
-      # Withdraw ONLY a claim this source published. Adopting a peer's claim and then deleting
-      # it on our way out would strip a lane that has already returned success — it would run
-      # unclaimed while another worktree is free to take its index, ports and volumes.
-      # DEFENCE IN DEPTH, stated so nobody mistakes it for the deciding factor: with the
-      # index order below, the `_li_published` half can no longer be what saves an adopted
-      # claim. Adoption in this file always lands on the LOWEST index this worktree holds
-      # (the loop scans upward and stops at the first claim that is ours; the preset branch
-      # refuses before publishing if it already holds a different one), so an adopted claim
-      # is never the higher of the pair and the order alone keeps it. The check is retained
-      # because it costs nothing and states the rule the order merely happens to imply —
-      # but its mutation does NOT redden the suite, and that is a property of the states
-      # reachable here, not a missing test.
-      #
-      # WHICH of the two withdraws is decided by a total order on the index, not by who
-      # looks first. Both sources scan before either unlink lands, so a symmetric "the peer's
-      # stands, mine goes" rule has both of them delete and the worktree ends with ZERO
-      # claims — the opposite of the convergence this block exists to produce. The HIGHER
-      # index withdraws; the lower one keeps its claim, so exactly one survives however the
-      # two interleave, with no lock. (And still only if WE published it: a claim adopted
-      # from a peer is never ours to delete.)
-      if [ -n "$_li_published" ] && [ "$HARNESS_LANE_INDEX" -gt "$(basename "$_li_f")" ]; then
-        rm -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
-        echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $HARNESS_LANE_INDEX" >&2
-      elif [ -z "$_li_published" ]; then
-        echo "lane-init: this worktree holds lane index $(basename "$_li_f"); the claim on $HARNESS_LANE_INDEX was published by another source and is left alone" >&2
-      else
-        echo "lane-init: raced a concurrent init of this worktree holding lane index $(basename "$_li_f"); this claim on $HARNESS_LANE_INDEX is the lower index and stands — the other source withdraws" >&2
-      fi
-    unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-      unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
-      return 1 2>/dev/null || exit 1
-    fi
+    [ "${_li_path:-}" = "$_LI_WT" ] || continue
+    _li_n="$(basename "$_li_f")"
+    [ "$_li_n" = "$HARNESS_LANE_INDEX" ] && continue
+    { [ -z "$_li_min" ] || [ "$_li_n" -lt "$_li_min" ]; } && _li_min="$_li_n"
   done
-  unset _li_f _li_id _li_path
+  if [ -n "$_li_min" ]; then
+    # WHICH of the racing sources withdraws is decided by a total order on the index, not by
+    # who looks first: all of them scan before any unlink lands, so a symmetric "the peer's
+    # stands, mine goes" rule has every one of them delete and the worktree ends with ZERO
+    # claims. Comparing against the MINIMUM makes exactly one source keep its claim for any
+    # number of racers, with no lock.
+    #
+    # The `_li_published` half is defence in depth, stated so nobody mistakes it for the
+    # deciding factor: a claim this source merely ADOPTED is never ours to delete, and in
+    # the states reachable here the order alone already keeps it (adoption lands on the
+    # lowest index this worktree holds). Its mutation does not redden the suite, and that is
+    # a property of those states rather than a missing test.
+    if [ -n "$_li_published" ] && [ "$HARNESS_LANE_INDEX" -gt "$_li_min" ]; then
+      rm -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
+      echo "lane-init: raced a concurrent init of this worktree, whose lowest claim is lane index $_li_min — withdrew the duplicate claim on $HARNESS_LANE_INDEX" >&2
+    elif [ -z "$_li_published" ]; then
+      echo "lane-init: this worktree holds lane index $_li_min; the claim on $HARNESS_LANE_INDEX was published by another source and is left alone" >&2
+    else
+      echo "lane-init: raced a concurrent init of this worktree holding lane index $_li_min; this claim on $HARNESS_LANE_INDEX is the lowest and stands — the other sources withdraw" >&2
+    fi
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX
+    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_published _li_min _li_n
+    return 1 2>/dev/null || exit 1
+  fi
+  unset _li_f _li_id _li_path _li_published _li_min _li_n
 elif [ -n "$_li_have" ]; then
   export HARNESS_LANE_INDEX="$_li_have"
 else
@@ -452,47 +455,48 @@ else
   # existing claim and the link below are not one atomic step, so a concurrent preset init
   # of this worktree could have taken a different index in between. One lane, one claim —
   # the newer claim (ours) is withdrawn and the peer's stands.
+  # The MINIMUM of this worktree's duplicate claims, not the first one the glob happens to
+  # yield. `lanes/*` sorts lexicographically, so "10" precedes "2" — acting on the first
+  # match resolves a two-way race correctly but not a three-way one: with claims at 2, 10 and
+  # 3, the source holding 3 compares only against "10", concludes it is the lower, and stands
+  # alongside 2. Two survivors for one worktree, which is the invariant this block exists to
+  # hold. Comparing against the minimum is correct for ANY number of racing sources, because
+  # exactly one of them can be the minimum.
+  _li_min=""
   for _li_f in "$_LI_Q"/lanes/*; do
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
-    if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$_li_k" ]; then
-      # Withdraw ONLY what this source created. The loop above reaches its index by two
-      # routes — it either published the claim or ADOPTED one a peer in this worktree had
-      # already published — and deleting an adopted claim destroys a lane that is live and
-      # running, freeing its index while its Compose project is still up, so the next lane
-      # to take that index has `up` adopt those containers. Same rule the preset branch has.
-      # DEFENCE IN DEPTH, stated so nobody mistakes it for the deciding factor: with the
-      # index order below, the `_li_published` half can no longer be what saves an adopted
-      # claim. Adoption in this file always lands on the LOWEST index this worktree holds
-      # (the loop scans upward and stops at the first claim that is ours; the preset branch
-      # refuses before publishing if it already holds a different one), so an adopted claim
-      # is never the higher of the pair and the order alone keeps it. The check is retained
-      # because it costs nothing and states the rule the order merely happens to imply —
-      # but its mutation does NOT redden the suite, and that is a property of the states
-      # reachable here, not a missing test.
-      #
-      # WHICH of the two withdraws is decided by a total order on the index, not by who
-      # looks first. Both sources scan before either unlink lands, so a symmetric "the peer's
-      # stands, mine goes" rule has both of them delete and the worktree ends with ZERO
-      # claims — the opposite of the convergence this block exists to produce. The HIGHER
-      # index withdraws; the lower one keeps its claim, so exactly one survives however the
-      # two interleave, with no lock. (And still only if WE published it: a claim adopted
-      # from a peer is never ours to delete.)
-      if [ -n "$_li_published" ] && [ "$_li_k" -gt "$(basename "$_li_f")" ]; then
-        rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null
-        echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $_li_k" >&2
-      elif [ -z "$_li_published" ]; then
-        echo "lane-init: this worktree holds lane index $(basename "$_li_f"); the claim on $_li_k was published by another source and is left alone" >&2
-      else
-        echo "lane-init: raced a concurrent init of this worktree holding lane index $(basename "$_li_f"); this claim on $_li_k is the lower index and stands — the other source withdraws" >&2
-      fi
-      unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-      unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_f _li_id _li_path _li_tmp _li_retried _li_published
-      return 1 2>/dev/null || exit 1
-    fi
+    [ "${_li_path:-}" = "$_LI_WT" ] || continue
+    _li_n="$(basename "$_li_f")"
+    [ "$_li_n" = "$_li_k" ] && continue
+    { [ -z "$_li_min" ] || [ "$_li_n" -lt "$_li_min" ]; } && _li_min="$_li_n"
   done
+  if [ -n "$_li_min" ]; then
+    # WHICH of the racing sources withdraws is decided by a total order on the index, not by
+    # who looks first: all of them scan before any unlink lands, so a symmetric "the peer's
+    # stands, mine goes" rule has every one of them delete and the worktree ends with ZERO
+    # claims. Comparing against the MINIMUM makes exactly one source keep its claim for any
+    # number of racers, with no lock.
+    #
+    # The `_li_published` half is defence in depth, stated so nobody mistakes it for the
+    # deciding factor: a claim this source merely ADOPTED is never ours to delete, and in
+    # the states reachable here the order alone already keeps it (adoption lands on the
+    # lowest index this worktree holds). Its mutation does not redden the suite, and that is
+    # a property of those states rather than a missing test.
+    if [ -n "$_li_published" ] && [ "$_li_k" -gt "$_li_min" ]; then
+      rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null
+      echo "lane-init: raced a concurrent init of this worktree, whose lowest claim is lane index $_li_min — withdrew the duplicate claim on $_li_k" >&2
+    elif [ -z "$_li_published" ]; then
+      echo "lane-init: this worktree holds lane index $_li_min; the claim on $_li_k was published by another source and is left alone" >&2
+    else
+      echo "lane-init: raced a concurrent init of this worktree holding lane index $_li_min; this claim on $_li_k is the lowest and stands — the other sources withdraw" >&2
+    fi
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX
+    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_tmp _li_retried _li_f _li_id _li_path _li_published _li_min _li_n
+    return 1 2>/dev/null || exit 1
+  fi
   export HARNESS_LANE_INDEX="$_li_k"
-  unset _li_k _li_f _li_id _li_path _li_tmp _li_retried _li_published
+  unset _li_k _li_f _li_id _li_path _li_tmp _li_retried _li_published _li_min _li_n
 fi
 unset _li_have
 
