@@ -767,6 +767,27 @@ _hook_worktree_matches_expected_identity() {
   [ "$branch" = "$expected_branch" ] && [ "$head" = "$expected_head" ]
 }
 
+# Release the lane-index claim (C-HE-11 §1) a worktree holds at QUEUE_DIR/lanes/<k>,
+# matching on the PHYSICAL path recorded by tools/hooks/lane-init.sh. Called after a
+# successful worktree removal: an unreleased entry burns an index forever, and the next
+# lane silently starts one higher until the 350 ceiling refuses to open a lane at all.
+# EVERY matching entry goes, not the first: a crash between the exclusive create and the
+# reuse scan can leave one path holding two, and a release that stops at the first would
+# strand the other. Never fails the caller — teardown already succeeded.
+# Usage: hook_release_lane_index /physical/path/to/worktree
+hook_release_lane_index() {
+  local wt="${1:-}" q f id path
+  [ -n "$wt" ] || return 0
+  q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}/lanes"
+  [ -d "$q" ] || return 0
+  for f in "$q"/*; do
+    [ -f "$f" ] || continue
+    IFS=' ' read -r id path < "$f"
+    [ "${path:-}" = "$wt" ] && rm -f "$f" 2>/dev/null
+  done
+  return 0
+}
+
 # Remove a registered worktree only while holding the same mutex used by SessionStart
 # lease registration. The worktree is moved to an unpublished sibling quarantine before
 # the final status and open-reference scans. Return 2 when the mutex is unavailable, 3

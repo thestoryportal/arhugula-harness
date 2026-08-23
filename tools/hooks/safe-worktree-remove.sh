@@ -29,6 +29,9 @@ if { [ -z "$EXPECTED_BRANCH" ] && [ -n "$EXPECTED_HEAD" ]; } \
   exit 2
 fi
 TARGET="$1"
+# Capture the PHYSICAL path while the worktree still exists: the lane-index registry
+# records it in that form, and after removal there is nothing left to resolve it from.
+TARGET_PHYS="$(cd "$TARGET" 2>/dev/null && pwd -P)"
 
 if [ "$MODE" = "status" ]; then
   [ "$(git -C "$TARGET" rev-parse --is-inside-work-tree 2>/dev/null)" = "true" ] \
@@ -43,7 +46,7 @@ PROJECT_DIR=$(hook_project_dir)
 hook_safe_worktree_remove "$PROJECT_DIR" "$TARGET" "$EXPECTED_BRANCH" "$EXPECTED_HEAD"
 rc=$?
 case "$rc" in
-  0) exit 0 ;;
+  0) hook_release_lane_index "$TARGET_PHYS"; exit 0 ;;
   3) echo "safe-worktree-remove: target has a live Claude/Codex session" >&2 ;;
   2) echo "safe-worktree-remove: session/removal mutex unavailable" >&2 ;;
   4) echo "safe-worktree-remove: target has local state" >&2 ;;

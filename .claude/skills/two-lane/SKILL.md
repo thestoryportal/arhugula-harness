@@ -31,6 +31,11 @@ git worktree add <repo-root>/.codex-worktrees/<slug-a> -b <branch-a> <that-liter
 git worktree add <repo-root>/.codex-worktrees/<slug-b> -b <branch-b> <that-literal-sha>
 ```
 
+At lane start, inside each worktree: `source tools/hooks/lane-init.sh` (exports `HARNESS_LANE_ID`,
+`HARNESS_LANE_INDEX`; C-HE-11). The index is what keeps the two lanes' Docker project names,
+host ports and volumes disjoint — without it both lanes bring up the same stack and the second
+`docker compose up` fails on a port bind.
+
 Use the LITERAL SHA in both adds, not a shell variable: in loop mode the permission guard
 rejects multiline commands and `$var`/command-substitution forms, and separate Bash calls do
 not share shell locals — a `"$base"` setup stalls non-interactively even on an admitted path.

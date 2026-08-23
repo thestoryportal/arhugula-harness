@@ -235,6 +235,26 @@ MANIFEST: list[Row] = [
     # writer never touches and fail every arc closed (exit 3). Registered separately from
     # the shell row above because it is a different artifact (rows are keyed by artifact).
     Row("C-HE-09", "pytest:tools/test_arc_exit_report.py", "phase0", "local + CI", False),
+    # C-HE-11 (U-HE-31): lane env isolation — index registry, gc.auto once, RAM probe,
+    # per-lane compose project/ports. The two-lanes-up row is the only one that can prove
+    # "no port bind conflict", so it stays env-tagged rather than being folded into the
+    # daemon-free formula row.
+    Row("C-HE-11", "shell:tools/hooks/test_lane_init.sh", "phase0", "local + CI", False),
+    Row(
+        "C-HE-11",
+        "pytest:tools/test_compose_lanes.py::test_lane_port_formula",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    Row(
+        "C-HE-11",
+        "pytest:tools/test_compose_lanes.py::test_two_lanes_disjoint_names_and_ports",
+        "env",
+        "local",
+        False,
+        ("docker-daemon-absent",),
+    ),
     # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)
     Row("C-HE-15/16/18", "pytest:tools/test_review_wrapper.py", "phase0", "local + CI", True),
     Row(
