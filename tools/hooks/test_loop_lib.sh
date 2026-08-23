@@ -729,17 +729,23 @@ MIG6="$REPO/mig6"; rm -rf "$MIG6"; mkdir -p "$MIG6"
   && git worktree add -q -b m6wt wt1 ) >/dev/null 2>&1
 mkdir -p "$MIG6/wt1/.harness"
 MIG6V="$MIG6/shared/loop_status.md"
-# Three claims, oldest first: DEFER(08-01) then RESOLVE(08-02) then DEFER(08-03).
-# Correct chronology leaves B-601 PENDING; any reversal clears it.
-printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-601 — first raised |\n' \
-  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z"
-printf '| 2026-08-02T00:00:00Z | RESOLVED-HIL | B-601 — answered |\n' \
-  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z"
-printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-601 — raised AGAIN, still open |\n' \
-  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-03T00:00:00Z"
+# The fixture must DISCRIMINATE, which the first cut of this test did not (merge-gate
+# witness lens on this PR): with DEFER/RESOLVE/DEFER on one item, a FULL reversal still
+# leaves a DEFERRED-HIL row physically last, so the reducer returned the same skip-set under
+# both the correct fold AND the exact prepend bug — the test would have stayed green through
+# the regression it names. This shape discriminates: the RESOLVE is NEWEST, so correct
+# chronology clears B-601 and leaves only B-602, while the prepend bug puts B-601's DEFER
+# last and wrongly reopens it.
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-601 — raised first |\n' \
+  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z-999999-1"
+printf '| 2026-08-02T00:00:00Z | DEFERRED-HIL | B-602 — a second, still-open item |\n' \
+  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z-999999-2"
+printf '| 2026-08-03T00:00:00Z | RESOLVED-HIL | B-601 — answered LAST |\n' \
+  > "$MIG6/wt1/.harness/loop_status.md.migrating-2026-08-03T00:00:00Z-999999-3"
 ( cd "$MIG6" && CLAUDE_PROJECT_DIR="$MIG6" HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_status_migrate ) >/dev/null 2>&1
-[ "$(HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_skip_set)" = "B-601" ] \
-  && ok "three orphaned claims fold oldest-first (the newest deferral survives)" || bad "orphan chronology reversed: [$(HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_skip_set)]"
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_skip_set)" = "B-602" ] \
+  && ok "three orphaned claims fold oldest-first (newest RESOLVE wins; only B-602 stays open)" \
+  || bad "orphan chronology wrong: [$(HARNESS_LOOP_STATUS_PATH="$MIG6V" loop_skip_set)] (expected B-602; B-601 present means the fold reversed)"
 [ -z "$(find "$MIG6/wt1/.harness" -name '*.migrating-*' 2>/dev/null)" ] && ok "every folded claim is consumed" || bad "a claim survived the fold"
 
 # 43) codex r8 P3 — an unreadable ledger must PROPAGATE, not read as empty, even when the
@@ -808,9 +814,30 @@ MBODY2=$(declare -f loop_status_migrate)
 printf '%s' "$MBODY2" | grep -q 'wt_rc=$?' \
   && ok "git's own exit status is captured, not a pipeline's" || bad "git status masked by a pipeline"
 printf '%s' "$MBODY2" | grep -q 'worktree list --porcelain -z' \
-  && ok "worktrees are enumerated NUL-delimited (quoted paths parse)" || bad "line-oriented porcelain still in use"
+  && ok "worktrees are enumerated NUL-delimited" || bad "line-oriented porcelain still in use"
 printf '%s' "$MBODY2" | grep -q 'read -r -d' \
   && ok "NUL records are read without command substitution (which drops NULs)" || bad "NUL output read through a NUL-dropping path"
+# BEHAVIOURAL companion (merge-gate witness lens on this PR): the two greps above are text
+# pins. git emits a newline-bearing worktree path RAW in non-`-z` porcelain (verified with
+# `od -c` on git 2.39), so a line-oriented parse splits it into two nonexistent paths and
+# that worktree's legacy ledger is silently skipped. A worktree literally named with a
+# newline is the regression test the flag-grep cannot be.
+NLR="$REPO/nlrepo"; rm -rf "$NLR"; mkdir -p "$NLR"
+( cd "$NLR" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b nlwt "$(printf 'wt\nbroken')" ) >/dev/null 2>&1
+NLWT="$NLR/$(printf 'wt\nbroken')"
+if [ -d "$NLWT" ]; then
+  mkdir -p "$NLWT/.harness"
+  printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-995 — behind a newline-named worktree |\n' \
+    > "$NLWT/.harness/loop_status.md"
+  NLV="$NLR/shared/loop_status.md"
+  ( cd "$NLR" && CLAUDE_PROJECT_DIR="$NLR" HARNESS_LOOP_STATUS_PATH="$NLV" loop_status_migrate ) >/dev/null 2>&1
+  [ "$(HARNESS_LOOP_STATUS_PATH="$NLV" loop_skip_set)" = "B-995" ] \
+    && ok "a newline-named worktree's legacy ledger is still drained" || bad "newline-named worktree skipped: [$(HARNESS_LOOP_STATUS_PATH="$NLV" loop_skip_set)]"
+else
+  ok "newline-named worktree not creatable on this filesystem — behavioural case skipped"
+fi
 
 # 48) codex r12 P2 — an UNREADABLE shared venue must not read as "nothing was ever
 #     resolved". That would let every imported row reopen an answered gate, and the claim
