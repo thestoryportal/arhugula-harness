@@ -852,6 +852,38 @@ SKA=$(HARNESS_LOOP_STATUS_PATH="$MIGAV" loop_skip_set)
   && ok "both recreations' gates reach the shared venue" || bad "a same-second recreation was lost: [$SKA]"
 unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# 52) codex r14 P2 — LEGACY files are reduced under LEGACY semantics. Those rows were written
+#     when ACTIVATE cleared prior-run state, so a DEFERRED-HIL followed by an ACTIVATE was
+#     already not pending. Reducing with the new no-reset rule would RESURRECT it into the
+#     shared skip-set and make the loop refuse an item nobody was ever gated on.
+LEG="$REPO/legacy-semantics.md"
+cat > "$LEG" <<'EOF'
+| ts | kind | detail |
+|---|---|---|
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-970 — deferred in a PRIOR run |
+| 2026-08-02T00:00:00Z | ACTIVATE | a new run begins |
+| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-971 — deferred in THIS run |
+EOF
+LEGOUT=$(_loop_pending_rows_with_ts "$LEG")
+printf '%s' "$LEGOUT" | grep -q 'B-971' && ok "a post-ACTIVATE legacy deferral is still pending" || bad "post-ACTIVATE row lost: [$LEGOUT]"
+printf '%s' "$LEGOUT" | grep -q 'B-970' && bad "a pre-ACTIVATE legacy deferral was resurrected: [$LEGOUT]" || ok "a pre-ACTIVATE legacy deferral is NOT resurrected"
+# ... while the SHARED venue keeps the new semantics (C-HE-09 §4): ACTIVATE resets nothing.
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+loop_defer B-972 "deferred before the activate"
+loop_activate "new run" >/dev/null
+[ "$(loop_skip_set)" = "B-972" ] && ok "the SHARED venue still ignores ACTIVATE (§4 unchanged)" || bad "shared-venue semantics regressed: [$(loop_skip_set)]"
+# and the migration honours the legacy boundary end-to-end
+MIGB="$REPO/migb"; rm -rf "$MIGB"; mkdir -p "$MIGB"
+( cd "$MIGB" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b mbwt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIGB/wt1/.harness"
+MIGBV="$MIGB/shared/loop_status.md"
+cp "$LEG" "$MIGB/wt1/.harness/loop_status.md"
+( cd "$MIGB" && CLAUDE_PROJECT_DIR="$MIGB" HARNESS_LOOP_STATUS_PATH="$MIGBV" loop_status_migrate ) >/dev/null 2>&1
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIGBV" loop_skip_set)" = "B-971" ] \
+  && ok "migration imports only what was pending under the OLD rule" || bad "migration resurrected a pre-ACTIVATE row: [$(HARNESS_LOOP_STATUS_PATH="$MIGBV" loop_skip_set)]"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -951,7 +951,9 @@ def report_path(repo_root: Path, pr: int) -> Path:
     return repo_root / REPORT_DIR / f"arc-exit-report-pr{pr}.md"
 
 
-def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> bool:
+def append_ledger_row(
+    repo_root: Path, data: dict[str, Any], rel_path: str, lane_root: Path | None = None
+) -> bool:
     """Append the `EXIT-REPORT` index row through `loop_lib.sh`'s own `loop_log`.
 
     A bash shim, deliberately: the row's timestamp + pipe-escaping + table format have
@@ -995,7 +997,13 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
             "-c",
             'CLAUDE_PROJECT_DIR="$1"; . "$2"; . "$3"; loop_log EXIT-REPORT "$4"',
             "arc_exit_report",  # $0
-            str(repo_root),
+            # CLAUDE_PROJECT_DIR is what `_loop_lane_id` reads the persisted `.lane-id` from,
+            # so it must name the INVOKING arc worktree, not the redirected main checkout
+            # (codex r14 P3). Passing the write root recorded this row under main's lane — or
+            # `-` — on every normal linked-worktree closeout, attributing the arc's own exit
+            # report to a lane that did not run it. The venue itself is unaffected either way
+            # (it is worktree-independent since U-HE-29); only the attribution was wrong.
+            str(lane_root or repo_root),
             str(lib),
             str(loop_lib),
             detail,
@@ -1086,7 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     rel = str(out.relative_to(root))
-    if not append_ledger_row(root, data, rel):
+    if not append_ledger_row(root, data, rel, lane_root=roots.read):
         # Fail CLOSED (codex round-9): both skill carriers treat exit 0 + the report path
         # as closure, so a warn-and-return-0 here would let an arc claim closure without
         # its required EXIT-REPORT index row. The report file itself IS written (it is

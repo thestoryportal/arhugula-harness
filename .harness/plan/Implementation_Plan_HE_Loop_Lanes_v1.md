@@ -5578,8 +5578,8 @@ through a non-append fd whose absolute-offset writes land on top. Replaced with 
 protocol -- stage the header to a temp file, publish with `ln` (atomic, EEXIST) -- so the
 venue never exists partially written. (f) **The cutover would have STRANDED every still-open
 deferral in the pre-U-HE-29 per-worktree ledgers.** Grounded, not hypothetical: the root
-checkout's legacy ledger alone carried 2 genuinely open obligations (B-124, B-137) invisible
-to the new reducer. (g) `_loop_structured_col` stripped spaces/tabs/pipes but not newlines,
+checkout's legacy ledger alone appeared to carry 2 open obligations invisible to the new
+reducer — a measurement later shown to be WRONG; see (xvii). (g) `_loop_structured_col` stripped spaces/tabs/pipes but not newlines,
 so a newline-bearing lane id split one row across two lines and the reducer could drop the
 gate.
 
@@ -5687,6 +5687,32 @@ r4-r8 hardened the machinery r1-r3 had introduced — the cutover migration in p
 round's fix was the previous round's defect surface, and the arc converged only when two
 shapes were NARROWED (the lane rule to "exclude the demonstrably foreign"; the import rule to
 "compare timestamps") rather than patched again.
+
+(xvii) **CORRECTION — the migration's founding measurement was wrong, and codex r14 caught
+it.** Rounds 2-13 justified the cutover migration with "the root checkout's legacy ledger
+carries 2 genuinely open obligations (B-124, B-137) that the venue move would strand." That
+number is an ARTIFACT. It came from reducing an OLD-semantics file with the NEW rule: C-HE-09
+§4 strikes the `ACTIVATE` reset, but every legacy row was WRITTEN under the old rule, in which
+`ACTIVATE` cleared prior-run state. Measured both ways on the real file (3204 lines, 18
+`ACTIVATE` rows): the new rule reports `B-124 B-137` pending; the old rule — the one those
+rows were actually written under — reports **nothing** pending.
+
+So the migration was not rescuing two stranded gates. It was about to RESURRECT two rows that
+their own run had already closed, import them into the shared venue, and put them in the
+global skip-set until a human explicitly resolved each one — making the loop refuse items
+nobody was ever blocked on. `_loop_pending_rows_with_ts` now reduces legacy files under
+LEGACY semantics, and a witness pins both halves (a pre-ACTIVATE row is not resurrected; a
+post-ACTIVATE row still migrates) alongside one confirming the SHARED venue keeps §4's
+no-reset rule unchanged.
+
+The migration is still correct to exist — a genuinely pending legacy row would otherwise be
+stranded, and the C-HE-09 §2 venue move is what creates that possibility. But on THIS
+workspace it imports nothing, and the earlier claims are corrected in place rather than left
+standing: in this note above, and in `loop_status_migrate`'s own header comment, which had
+frozen the wrong number into the code as its rationale. Two lessons worth keeping: a
+semantics change makes every historical file a DIFFERENT format, and a measurement taken with
+the new rule is not evidence about data written under the old one.
+
 
 at the round cap.
 

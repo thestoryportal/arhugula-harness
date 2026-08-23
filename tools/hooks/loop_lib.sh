@@ -164,11 +164,22 @@ _loop_lane_id() {
   printf '%s' "${l:--}"
 }
 
-# Still-PENDING rows of ONE ledger file, WITH their original timestamps:
-# `<ts>\t<lane>\t<detail>` per row, reduced in that file's own physical order. The public
-# loop_pending_hil_list renders `[lane] detail` and drops the timestamp; the migration needs
-# the timestamp to decide whether a legacy row predates a resolution already recorded in the
-# shared venue. Same prelude, so the reduction rules cannot diverge from the public one.
+# Still-PENDING rows of ONE LEGACY ledger file, WITH their original timestamps:
+# `<ts>\t<lane>\t<detail>` per row. The public loop_pending_hil_list renders `[lane] detail`
+# and drops the timestamp; the migration needs the timestamp to decide whether a legacy row
+# predates a resolution already recorded in the shared venue.
+#
+# LEGACY SEMANTICS, deliberately (codex r14 P2): this honours the `ACTIVATE` reset that
+# C-HE-09 §4 strikes for the shared venue. A legacy file was WRITTEN under the old rule, in
+# which `ACTIVATE` cleared prior-run state -- so a `DEFERRED-HIL` followed by an `ACTIVATE`
+# was already not pending when that file was last touched. Reducing it with the NEW rule
+# resurrects those rows: they would be imported, enter the global skip-set, and make the loop
+# refuse items nobody was ever gated on until a human explicitly resolved each one.
+#
+# Measured on this workspace's own root-checkout ledger (3204 lines, 18 ACTIVATE rows): the
+# new rule reports `B-124 B-137` pending, the old rule -- the one those rows were written
+# under -- reports NOTHING pending. Both of this arc's earlier claims that the cutover would
+# strand "2 genuinely open obligations" were that artifact, not real obligations.
 _loop_pending_rows_with_ts() {
   [ -f "$1" ] || return 1
   # awk runs ALONE and its status is captured before any post-processing (codex r8 P3).
@@ -179,6 +190,7 @@ _loop_pending_rows_with_ts() {
   local out
   out=$(awk -F'|' "$_LOOP_AWK_ROW"'
     { rowparse() }
+    k == "ACTIVATE" { delete state; delete at; delete det; delete ln }
     k == "DEFERRED-HIL" || k == "RESOLVED-HIL" {
       ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts)
       if (k == "DEFERRED-HIL") { state[tok] = "PENDING"; at[tok] = ts; det[tok] = d; ln[tok] = lane }
@@ -212,7 +224,16 @@ _loop_resolved_map() {
 # row in them: the new reducer reads only the shared venue, so those gates would vanish
 # from the skip-set and the loop would silently re-attempt items an operator is still
 # blocked on -- the exact failure this ledger exists to prevent. Grounded before writing
-# this: the root checkout's legacy ledger alone carried 2 genuinely open obligations.
+# this -- but see the CORRECTION below.
+#
+# CORRECTION (codex r14). An earlier version of this comment claimed the root checkout's
+# legacy ledger "carried 2 genuinely open obligations" (B-124, B-137). It does not. That
+# number came from reducing an OLD-semantics file with the NEW no-ACTIVATE-reset rule; under
+# the rule those rows were actually written with, its open set is EMPTY (3204 lines, 18
+# ACTIVATE rows, measured). `_loop_pending_rows_with_ts` now reduces legacy files under
+# legacy semantics, so the migration no longer resurrects them. It is still correct to
+# exist -- a genuinely pending legacy row would otherwise be stranded -- but on THIS
+# workspace it imports nothing, and the claim is corrected rather than left standing.
 #
 # ONLY each legacy ledger's still-OPEN DEFERRED-HIL rows are imported -- never its whole
 # history (codex r2 P2 -> r3 P2). Concatenating whole files would be unsound in two ways
@@ -322,7 +343,17 @@ loop_status_migrate() {
         echo "loop_status_migrate: could not fold orphaned claim(s) into $legacy" >&2; return 1
       fi
     fi
-    [ -f "$legacy" ] || continue
+    # ABSENCE vs INABILITY (codex r14 P2). A `.harness` we cannot read is not evidence that
+    # no legacy ledger is there; skipping it silently would let a worktree carrying pending
+    # gates be reported clean and then deleted with the worktree. Absent dir = nothing to do;
+    # present-but-unreadable = fail closed.
+    if [ ! -f "$legacy" ]; then
+      if [ -d "$wt/.harness" ] && [ ! -r "$wt/.harness" ]; then
+        echo "loop_status_migrate: $wt/.harness is not readable — cutover state UNKNOWN" >&2
+        return 1
+      fi
+      continue
+    fi
     # Never import the shared venue into itself (a checkout could be configured to point
     # at it), and never import a file that is already the same inode.
     [ "$legacy" -ef "$shared" ] && { echo "skip (is the shared venue): $legacy"; continue; }
