@@ -5553,7 +5553,7 @@ U-HE-09); the manifest keys rows by artifact, so it was not duplicated. A second
 newly-load-bearing carrier from (ii): `Row("C-HE-09", "pytest:tools/test_arc_exit_report.py",
 "phase0", "local + CI", False)`.
 
-(x) **The U-HE-18 SessionStart activation gate self-activated.** `session-start.sh:100-101` gates
+(x) **The U-HE-18 SessionStart activation gate self-activated.** `tools/roadmap-audit/session-start.sh:124-125` gates
 its detached `reconcile-all` spawn on `grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh`.
 That writer now exists, so the pass runs and its C-HE-20 escalation rows reach the shared ledger
 instead of only the store-local `.reconcile.log` (the pre-U-HE-29 registered residual). The gate
