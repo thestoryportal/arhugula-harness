@@ -842,6 +842,9 @@ OUT=$(
 [ -f "$ADQ/lanes/9" ] && ok "and the peer's other claim stands" || bad "peer claim 9 removed"
 
 # --- 40. THREE-way: the survivor is the minimum, not the lexicographically first ------
+# BOUND: these cases pin convergence when the racers SEE each other's claims. They do not
+# pin at-most-one in general, because scan-and-decide cannot enforce it — a source that
+# publishes and scans before any peer exists keeps its claim and never re-checks (B-202).
 # `lanes/*` sorts lexicographically, so "10" precedes "2". A rule that acts on the first
 # duplicate it meets resolves two racers but not three: the source holding 3 would compare
 # only against "10", conclude it is the lower, and stand alongside 2 — two survivors for one

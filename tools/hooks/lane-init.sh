@@ -228,8 +228,11 @@ unset _LI_ID
 
 # ── lane index ───────────────────────────────────────────────────────────────────────
 # ── lane index ───────────────────────────────────────────────────────────────────────
-# ONE rule governs every path below: a worktree holds AT MOST ONE claim, and an index is
-# usable only when a claim positively names this worktree. HARNESS_LANE_INDEX is the single
+# ONE rule governs every path below: a worktree SHOULD hold one claim, and an index is
+# usable only when a claim positively names this worktree. "Should", not "does" — see the
+# post-verify blocks: without a lock shared with the release path (B-202) the duplicate
+# withdrawal is best-effort, and a race whose participants cannot see each other's claims
+# can leave two standing. HARNESS_LANE_INDEX is the single
 # knob — it asks for a specific index rather than the next free one; it is not an escape
 # from the rule, and a lane that already holds a different index is refused.
 
@@ -356,8 +359,20 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
     # WHICH of the racing sources withdraws is decided by a total order on the index, not by
     # who looks first: all of them scan before any unlink lands, so a symmetric "the peer's
     # stands, mine goes" rule has every one of them delete and the worktree ends with ZERO
-    # claims. Comparing against the MINIMUM makes exactly one source keep its claim for any
-    # number of racers, with no lock.
+    # claims. Comparing against the MINIMUM removes that, and converges to one survivor
+    # whenever the racers can see each other's claims.
+    #
+    # WHAT THIS DOES NOT GUARANTEE, stated because three review rounds each found the next
+    # interleaving and the honest answer is the shape of the problem, not a fourth rule:
+    # scan-and-decide without synchronisation cannot enforce at-most-one. A source whose
+    # scan runs before any peer has published sees no duplicate at all, keeps its claim
+    # unconditionally, and never looks again — so a later source holding a LOWER index finds
+    # it, correctly declines to withdraw, and both stand. Closing that needs a source either
+    # to re-check after publishing or to delete a peer's file, and both are the same
+    # coordination this file does not have: the claim-to-cleanup lock registered as B-202,
+    # whose absence is already the reason teardown cannot be made race-free either. What is
+    # kept here is real and cheap — it converges the visible cases and can never leave zero
+    # — and the residual is registered rather than papered over.
     #
     # The `_li_published` half is defence in depth, stated so nobody mistakes it for the
     # deciding factor: a claim this source merely ADOPTED is never ours to delete, and in
@@ -475,8 +490,20 @@ else
     # WHICH of the racing sources withdraws is decided by a total order on the index, not by
     # who looks first: all of them scan before any unlink lands, so a symmetric "the peer's
     # stands, mine goes" rule has every one of them delete and the worktree ends with ZERO
-    # claims. Comparing against the MINIMUM makes exactly one source keep its claim for any
-    # number of racers, with no lock.
+    # claims. Comparing against the MINIMUM removes that, and converges to one survivor
+    # whenever the racers can see each other's claims.
+    #
+    # WHAT THIS DOES NOT GUARANTEE, stated because three review rounds each found the next
+    # interleaving and the honest answer is the shape of the problem, not a fourth rule:
+    # scan-and-decide without synchronisation cannot enforce at-most-one. A source whose
+    # scan runs before any peer has published sees no duplicate at all, keeps its claim
+    # unconditionally, and never looks again — so a later source holding a LOWER index finds
+    # it, correctly declines to withdraw, and both stand. Closing that needs a source either
+    # to re-check after publishing or to delete a peer's file, and both are the same
+    # coordination this file does not have: the claim-to-cleanup lock registered as B-202,
+    # whose absence is already the reason teardown cannot be made race-free either. What is
+    # kept here is real and cheap — it converges the visible cases and can never leave zero
+    # — and the residual is registered rather than papered over.
     #
     # The `_li_published` half is defence in depth, stated so nobody mistakes it for the
     # deciding factor: a claim this source merely ADOPTED is never ours to delete, and in
