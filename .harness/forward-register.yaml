@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 198
+  total: 199
   open: 1
   design_substrate_gated: 3
-  registered_finding: 47
+  registered_finding: 48
   operator_gated: 0
   held: 2
   closed: 145
-  identity_digest: cb8f03da41f79b94
+  identity_digest: acf0b190b4e1d0fa
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10264,3 +10264,31 @@ items:
   council: 'NO — the decision is already made and measured; this row exists to stop a future
     session re-deriving it or rebuilding the machinery on the same false premise.'
   heading: '### B-198 · pre-U-HE-29 legacy ledgers carry nothing under their own semantics — no drain built *(measured during the U-HE-29 PR, 2026-08-22; the migration built there was CUT on this measurement, and B-195/B-197 closed with it)*'
+- id: B-199
+  title: >-
+    `merge_door._notify` cannot make a DEFERRED-HIL row durable when every write attempt
+    fails — C-HE-20 §1 requires one, and raising would wedge the global lease
+  status: registered_finding
+  summary: 'SURFACED REPEATEDLY BY OUT-OF-FAMILY CODEX across the U-HE-29 PR (r18, r19, r21,
+    r23 and the pre-merge round) and register-and-held with the reasoning, because it kept
+    being re-litigated without one. C-HE-20 §1 makes a blocking escalation MUST-durable in the
+    HITL queue and forbids a NEW escalation store. `_notify` retries a DEFERRED-HIL write 3x
+    (which converts the common transient failure into the durable row the contract wants) and,
+    if every attempt fails, prints a loud ROW LOST line naming the contract and returns. It
+    does NOT raise, and that is a deliberate trade rather than an oversight: this module has
+    NO `finally:` releasing the lease around the 8 DEFERRED-HIL call sites, so an exception
+    escaping `_notify` can leave the GLOBAL merge-door lease held — wedging EVERY lane, an
+    unrecoverable coordination failure, in exchange for a recoverable reporting one. The
+    residual is therefore real and precisely bounded: a PERSISTENT write failure leaves the
+    escalation only in that stderr line, invisible at the next SessionStart.'
+  close_out: '(1) Make the call sites release-safe FIRST — wrap the lease-holding region in a
+    `try/finally` (or an equivalent guard) so an exception cannot strand the global lease;
+    only then is propagation affordable. (2) With that in place, propagate on the MUST-durable
+    kind (`DEFERRED-HIL`) while keeping the tolerant path for the informational `NOTIFY`,
+    which C-HE-20 §1 itself distinguishes. (3) Do NOT add a second escalation store as a
+    fallback — §1 forbids it, and the sidecar/lease state is not a HITL queue. (4) Witness the
+    release-safety directly (force a raise mid-landing, assert the lease is released) rather
+    than inferring it from the absence of a wedge in tests that never raise.'
+  council: 'NO — one mechanism with an enumerated ordering constraint (release-safety before
+    propagation); the out-of-family reviewer is the scheduled decorrelated check.'
+  heading: '### B-199 · `merge_door._notify` cannot durably record a DEFERRED-HIL when every write fails *(surfaced repeatedly by out-of-family Codex across the U-HE-29 PR, 2026-08-22; register-and-held — raising would wedge the global merge-door lease, so release-safety has to come first)*'

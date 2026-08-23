@@ -98,14 +98,13 @@ while [ "$i" -lt "$MAX" ]; do
     [ "$i" -ge "${DRY_ITERS:-1}" ] && break
     continue
   fi
-  # DRAIN ANY PRE-U-HE-29 LEDGER FIRST (merge-gate concurrency lens, #1426). The skip-set
-  # now reads the SHARED venue, so a worktree whose legacy per-worktree ledger has not been
-  # drained yet contributes NOTHING to it — and this runner computes SKIP before the child it
-  # spawns has ever run its own SessionStart migration. On iteration 1 that is deterministic,
-  # not racy: a genuinely still-open DEFERRED-HIL would be omitted and the loop would
-  # re-attempt an item the operator already declined, which is the exact under-skip C-HE-09's
-  # ledger exists to prevent. Before this venue move `loop_skip_set` read that same
-  # per-worktree file directly, so leaving this unwired would be a REGRESSION, not a gap.
+  # The skip-set reads the SHARED venue (C-HE-09 §2), not a per-worktree ledger. No drain of
+  # pre-U-HE-29 ledgers happens here, and that is DELIBERATE: measured on this workspace,
+  # those files carry nothing still open under the semantics their rows were WRITTEN with
+  # (the ACTIVATE reset the new rule strikes was in force when they were recorded), so there
+  # is nothing for a drain to carry across. B-198 records the measurement in full, including
+  # the conditions under which a drain WOULD be warranted — re-run it there before assuming
+  # this is a gap.
   # Compute the run-scoped skip-set HERE (the fresh child cannot — loop_skip_set is a
   # chained/sourced command the guard denies) and append it to the prompt so the child
   # advances past already-deferred items instead of re-attempting the static next-action.

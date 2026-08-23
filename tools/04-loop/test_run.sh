@@ -20,10 +20,9 @@ mkdir -p "$REPO/.harness" "$REPO/tools" "$REPO/bin"
 # no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
 export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
 
-# The loop always runs inside a git checkout, and `loop_status_migrate` enumerates worktrees
-# through git. A non-repo scratch dir makes it report "could not inspect" (rc 3), which the
-# callers correctly treat as dangerous — so the fixture has to BE a repo or every test would
-# stand the loop down for a reason that never occurs in production.
+# The loop always runs inside a git checkout, and several hook paths shell out to git. A
+# non-repo scratch dir makes those degrade in ways production never sees, so the fixture is
+# a real repo.
 ( cd "$REPO" && git init -q . \
   && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init ) >/dev/null 2>&1
 

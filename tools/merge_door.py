@@ -963,7 +963,8 @@ def _notify(kind: str, lane_id: str, cause: str, detail: str) -> None:
     escaping `_notify` can leave the GLOBAL merge-door lease held — wedging every lane, which
     is a categorically worse outcome than one loud lost row. Propagation would trade a
     recoverable reporting failure for an unrecoverable coordination failure. The residual
-    (a PERSISTENT write failure leaves only the stderr line) is registered, not hidden."""
+    (a PERSISTENT write failure leaves only the stderr line) is registered at B-199, which
+    records the ordering this needs: make the call sites release-safe FIRST, then propagate."""
     attempts = 3 if kind == "DEFERRED-HIL" else 1
     last: Exception | None = None
     for i in range(attempts):
