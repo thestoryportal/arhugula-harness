@@ -502,5 +502,39 @@ grep -qF -- "$ROOT/wt7" "$SANQ/lanes/$K_SAN" \
   && ok "the claim record still parses back to this worktree" \
   || bad "claim record corrupted: [$(cat "$SANQ/lanes/$K_SAN" 2>/dev/null)]"
 
+# --- 28. a BLANK (newline-only) marker is a corpse too, not a valid identity ----------
+# `-s` is a size test and a lone newline passes it: publication then cannot replace the file
+# while every read of it yields an empty id, which no claim scan or teardown can ever match.
+BLANKQ="$ROOT/blank-q"
+git -C "$ROOT/repo" worktree add -q "$ROOT/wt8" -b lane-h || { echo "FATAL: worktree h"; exit 1; }
+mkdir -p "$ROOT/wt8/.harness"; printf '\n' > "$ROOT/wt8/.harness/.lane-id"
+ID_BLANK=$(cd "$ROOT/wt8" && ARC_METRICS_QUEUE_DIR="$BLANKQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\${HARNESS_LANE_ID:-}\"")
+[ -n "$ID_BLANK" ] && ok "a newline-only marker is repaired like any other corpse" \
+  || bad "blank marker yielded an empty lane id"
+K_BLANK=$(cd "$ROOT/wt8" && ARC_METRICS_QUEUE_DIR="$BLANKQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+grep -qF -- "$ROOT/wt8" "$BLANKQ/lanes/$K_BLANK" && ok "its claim is matchable for reuse and teardown" \
+  || bad "claim unmatched: [$(cat "$BLANKQ/lanes/$K_BLANK" 2>/dev/null)]"
+
+# --- 29. an inherited claim is adopted only if its FENCE can be written ---------------
+FENCEQ="$ROOT/fence-q"; mkdir -p "$FENCEQ/lanes"
+printf '%s %s\n' "previous-occupant" "$(cd "$ROOT/wt" && pwd -P)" > "$FENCEQ/lanes/2"
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$FENCEQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+{ [ "$OUT" = "2" ] && [ -f "$FENCEQ/lanes/.orphaned-2" ]; } \
+  && ok "a claim from a previous occupant of this path is adopted AND fenced" \
+  || bad "inherited claim: k='$OUT', fence present: $([ -f "$FENCEQ/lanes/.orphaned-2" ] && echo yes || echo no)"
+grep -qF -- "$ROOT/wt" "$FENCEQ/lanes/2" && ok "the adopted claim is rebound to this lane" \
+  || bad "claim still names the previous occupant"
+# ...and refused outright when the fence cannot land
+FENCEQ2="$ROOT/fence-q2"; mkdir -p "$FENCEQ2/lanes"
+printf '%s %s\n' "previous-occupant" "$(cd "$ROOT/wt" && pwd -P)" > "$FENCEQ2/lanes/2"
+mkdir -p "$FENCEQ2/lanes/.orphaned-2"      # a directory: the fence file cannot be written
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$FENCEQ2" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=1" ] && ok "an unfenceable inherited claim is refused, not adopted" \
+  || bad "adopted an unfenceable inherited stack: $OUT"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

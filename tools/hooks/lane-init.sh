@@ -83,7 +83,11 @@ _lane_init_id() {
   # THE MARKER IS THE AUTHORITY, ahead of the environment: it is per-worktree and durable,
   # while an exported id is per-shell and follows a `cd`. When both exist and disagree, the
   # marker wins and the stale export is corrected.
-  if [ -s "$f" ]; then
+  # `-s` is a SIZE test, and a file holding just a newline passes it: publication then
+  # cannot replace it (not a corpse by size) while every read yields an empty id. Emptiness
+  # is therefore judged on the CONTENT of the first line, everywhere this file inspects it.
+  _li_marker_blank() { [ ! -s "$1" ] && return 0; IFS= read -r _b < "$1"; [ -z "${_b:-}" ]; }
+  if ! _li_marker_blank "$f"; then
     IFS= read -r id < "$f"
     if [ -n "$id" ]; then
       { [ -n "${HARNESS_LANE_ID:-}" ] && [ "$HARNESS_LANE_ID" != "$id" ]; } \
@@ -121,12 +125,12 @@ _lane_init_id() {
   # then hold different ids. `mv` replaces atomically — concurrent repairers simply order,
   # the last one wins, and BOTH re-read the published file below and converge on one id.
   local corpse_repair=""
-  if [ -e "$f" ] && [ ! -s "$f" ]; then
+  if [ -e "$f" ] && _li_marker_blank "$f"; then
     if _lane_repair_lock "$f"; then
       # RECHECK under the lock. The observation that sent us here was made BEFORE the wait,
       # and the repairer we waited for may have published in the meantime — replacing its
       # marker now would give this worktree a second identity after the first was exported.
-      if [ -s "$f" ]; then
+      if ! _li_marker_blank "$f"; then
         IFS= read -r id < "$f"
         _lane_repair_unlock "$f"
         printf '%s' "$id"
@@ -135,7 +139,7 @@ _lane_init_id() {
       corpse_repair=1
     else
       # Another repairer holds the lock. Whatever it published is authoritative; adopt it.
-      if [ -s "$f" ]; then
+      if ! _li_marker_blank "$f"; then
         IFS= read -r id < "$f"
         printf '%s' "$id"
         return 0
@@ -170,11 +174,16 @@ _lane_init_id() {
   # recover — it would mint a different one for the same worktree, which is precisely the
   # split identity the persisted marker exists to prevent. An unwritable `.harness/` is a
   # broken lane, not a lane with a temporary id.
-  if [ ! -s "$f" ]; then
+  if _li_marker_blank "$f"; then
     echo "lane-init: could not persist a lane id at $f — refusing to continue with an unrecoverable identity" >&2
     return 1
   fi
   IFS= read -r id < "$f"
+  # Final gate: an empty id would be exported, written into claims, and matched by nothing.
+  if [ -z "$id" ]; then
+    echo "lane-init: the persisted lane id at $f is empty — refusing to continue" >&2
+    return 1
+  fi
   printf '%s' "$id"
 }
 if ! _LI_ID="$(_lane_init_id)"; then
@@ -225,8 +234,15 @@ for _li_f in "$_LI_Q"/lanes/*; do
     # path). Reuse is by path, so it is adopted — but its stack is unaccounted for, and the
     # missing fence is written now rather than letting this lane adopt those containers.
     if [ -n "${_li_id:-}" ] && [ "${_li_id:-}" != "$HARNESS_LANE_ID" ]; then
-      printf '%s inherited-claim %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_li_id:-}" \
-        > "$_LI_Q/lanes/.orphaned-$_li_have" 2>/dev/null
+      # The fence must LAND before the claim is rebound. Rebinding first and failing to write
+      # the marker would leave the new lane owning an index whose stack is unaccounted for —
+      # with nothing left to say so.
+      if ! printf '%s inherited-claim %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_li_id:-}" \
+           > "$_LI_Q/lanes/.orphaned-$_li_have" 2>/dev/null; then
+        echo "lane-init: cannot fence inherited lane index $_li_have (marker unwritable) — refusing to adopt a stack this lane cannot account for" >&2
+        unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
+        return 1 2>/dev/null || exit 1
+      fi
       printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_f" 2>/dev/null
       echo "lane-init: adopted lane index $_li_have from a previous occupant of this path (${_li_id:-unknown}) — its stack is fenced until cleanup succeeds" >&2
     fi
@@ -346,8 +362,22 @@ else
       return 1 2>/dev/null || exit 1
     fi
   done
+  # SAME post-verify the preset branch does, for the same reason: the scan that found no
+  # existing claim and the link below are not one atomic step, so a concurrent preset init
+  # of this worktree could have taken a different index in between. One lane, one claim —
+  # the newer claim (ours) is withdrawn and the peer's stands.
+  for _li_f in "$_LI_Q"/lanes/*; do
+    [ -f "$_li_f" ] || continue
+    IFS=' ' read -r _li_id _li_path < "$_li_f"
+    if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$_li_k" ]; then
+      rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null
+      echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $_li_k" >&2
+      unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_f _li_id _li_path _li_tmp _li_retried
+      return 1 2>/dev/null || exit 1
+    fi
+  done
   export HARNESS_LANE_INDEX="$_li_k"
-  unset _li_k _li_id _li_path _li_tmp _li_retried
+  unset _li_k _li_f _li_id _li_path _li_tmp _li_retried
 fi
 unset _li_have
 
@@ -434,12 +464,23 @@ lane_stack_allowed() {
   # different numbers: the containers live inside Docker Desktop's VM, whose ceiling is set
   # independently of host RAM. When a daemon answers, ITS total is the figure that decides
   # whether three containers fit; host availability is the fallback when it cannot.
-  avail_gb=""
+  # `docker info` reports the VM's TOTAL capacity, not its free headroom — a VM sized large
+  # but already full would pass a ceiling-only test and then OOM opaquely, which is the
+  # failure this probe exists to replace. So the ceiling is a NECESSARY condition checked
+  # alongside host availability, never a substitute for it: both must clear the bar.
+  local vm_gb=""
   if command -v docker >/dev/null 2>&1 && hook_bounded 10 docker info >/dev/null 2>&1; then
-    avail_gb=$(hook_bounded 10 docker info --format '{{.MemTotal}}' 2>/dev/null \
+    vm_gb=$(hook_bounded 10 docker info --format '{{.MemTotal}}' 2>/dev/null \
       | awk '/^[0-9]+$/ { printf "%d", $1 / 1073741824 }')
+    if [ -n "$vm_gb" ] && [ "$vm_gb" -lt "$need_gb" ]; then
+      if ! loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" "lane-env:transient-retry:ram_floor" \
+          "lane $k: Docker VM total ${vm_gb}GB < ${need_gb}GB needed; self-hosted stack skipped (stack=absent)"; then
+        echo "lane-init: Docker VM too small for lane $k, and the NOTIFY row could NOT be written" >&2
+      fi
+      return 1
+    fi
   fi
-  [ -n "$avail_gb" ] || avail_gb="$(_lane_available_gb)"
+  avail_gb="$(_lane_available_gb)"
   if [ -n "$avail_gb" ] && [ "$avail_gb" -ge "$need_gb" ]; then
     return 0
   fi

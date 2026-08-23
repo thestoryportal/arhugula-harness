@@ -788,7 +788,7 @@ _hook_worktree_matches_expected_identity() {
 # a machine with no Docker, or with the daemon down, costs nothing and cannot hang.
 # Usage: hook_release_lane_index /physical/path/to/worktree
 hook_release_lane_index() {
-  local wt="${1:-}" q f id path
+  local wt="${1:-}" q f id path _rc _now_id _now_path
   [ -n "$wt" ] || return 0
   q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}/lanes"
   [ -d "$q" ] || return 0
@@ -801,7 +801,16 @@ hook_release_lane_index() {
       # volumes, so recycling the index would hand them to the next lane; the claim is kept
       # instead — a visible, retryable state rather than a silent cross-lane adoption.
       _hook_lane_stack_down "$(basename "$f")" >/dev/null 2>&1
-      case $? in
+      _rc=$?
+      # Docker cleanup can take minutes. RE-READ the claim before removing it: a worktree
+      # recreated at this path during that window rebinds the claim to itself, and deleting
+      # it then would strip the NEW lane's ownership record and free its index to a peer.
+      IFS=' ' read -r _now_id _now_path < "$f" 2>/dev/null
+      if [ "${_now_path:-}" != "$wt" ] || [ "${_now_id:-}" != "${id:-}" ]; then
+        echo "hook_release_lane_index: claim $(basename "$f") was rebound during cleanup — leaving the new owner's record alone" >&2
+        continue
+      fi
+      case "$_rc" in
         0) rm -f "$f" 2>/dev/null ;;                       # verified clean
         *) # NOT verified clean — whether the cleanup failed outright or could not be
            # attempted. Either way the index must not be handed on unfenced: a claim can be

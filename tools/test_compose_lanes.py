@@ -304,7 +304,11 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
             # case, or to a real lane on that index — an ignored rc would pass regardless.
             if rc != 0 and k not in failed:
                 failed.append(k)
-        for c in claimed:
+        # Only for lanes that actually cleaned up. Releasing a claim whose containers or
+        # volumes survive hands that index — and that state — to the next lane to take it.
+        for k, c in zip((a, b), claimed, strict=False):
+            if k in failed:
+                continue
             c.unlink(missing_ok=True)
         shutil.rmtree(scratch, ignore_errors=True)
         if failed and sys.exc_info()[0] is None:
