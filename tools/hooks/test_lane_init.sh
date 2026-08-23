@@ -267,5 +267,64 @@ grep -q 'compose -p arhugula-r420-self-hosted-local-lane5 .* down' "$ROOT/docker
   && ok "release took lane 5's Compose project down before recycling the index" \
   || bad "no compose down for the released lane: [$(cat "$ROOT/docker-calls.log" 2>/dev/null | tr '\n' '/')]"
 
+# --- 18. corpse repair NEVER proceeds without the exclusive repair lock ---------------
+# Atomic replace alone is not mutual exclusion: two repairers minting different ids and
+# replacing in sequence each walk away with a different identity for one worktree. A held
+# lock must therefore make the repair FAIL LOUD, not fall back to an unlocked repair.
+git -C "$ROOT/repo" worktree add -q "$ROOT/wt5" -b lane-e || { echo "FATAL: worktree e"; exit 1; }
+mkdir -p "$ROOT/wt5/.harness"; : > "$ROOT/wt5/.harness/.lane-id"
+mkdir -p "$ROOT/wt5/.harness/.lane-id.repair"          # a peer repairer holds the lock
+OUT=$(cd "$ROOT/wt5" && bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset}\"")
+case "$OUT" in
+  "rc=1 id=unset") ok "a held repair lock refuses the repair instead of racing it" ;;
+  *) bad "locked corpse repair proceeded anyway: $OUT" ;;
+esac
+rmdir "$ROOT/wt5/.harness/.lane-id.repair"
+ID5=$(cd "$ROOT/wt5" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_ID")
+[ -n "$ID5" ] && ok "with the lock free the corpse is repaired normally" || bad "repair did not recover: '$ID5'"
+
+# --- 19. the released lane's VOLUMES go too, and a FAILED cleanup keeps the claim -----
+rm -f "$ROOT/docker-calls.log"
+printf '%s %s\n' "some-lane" "$ROOT/reaped-wt-b" > "$REL/lanes/6"
+(
+  PATH="$STUB:$PATH"; export PATH
+  CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+    bash -c "source '$SCRIPT_DIR/lib.sh'; hook_release_lane_index '$ROOT/reaped-wt-b'"
+) >/dev/null 2>&1
+grep -q 'down --volumes' "$ROOT/docker-calls.log" 2>/dev/null \
+  && ok "teardown removes the lane's named volumes, not just its containers" \
+  || bad "compose down ran without --volumes: [$(cat "$ROOT/docker-calls.log" 2>/dev/null | tr '\n' '/')]"
+
+# a cleanup that FAILS must not free the index — the containers still hold its ports
+cat > "$STUB/docker" <<STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "info" ] && exit 0
+echo "\$@" >> "$ROOT/docker-calls.log"
+exit 1
+STUBEOF
+chmod +x "$STUB/docker"
+printf '%s %s\n' "some-lane" "$ROOT/reaped-wt-c" > "$REL/lanes/7"
+ERR=$(
+  PATH="$STUB:$PATH"; export PATH
+  CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+    bash -c "source '$SCRIPT_DIR/lib.sh'; hook_release_lane_index '$ROOT/reaped-wt-c'" 2>&1 >/dev/null
+)
+[ -f "$REL/lanes/7" ] && ok "a failed stack cleanup keeps the index claimed" \
+  || bad "index freed despite a failed cleanup"
+case "$ERR" in
+  *"cleanup FAILED"*) ok "the failed cleanup is reported, not swallowed" ;;
+  *) bad "no diagnostic for a failed cleanup: [$ERR]" ;;
+esac
+
+# --- 20. a failed gc.auto write is reported (C-HE-11 §2 must not fail silently) -------
+# Outside any git repository `git config` cannot write, which is the deterministic stand-in
+# for the unwritable/locked shared config the contract's guard depends on.
+ERR=$(cd "$ROOT" && HARNESS_LANE_ID=probe-lane ARC_METRICS_QUEUE_DIR="$ROOT/gcq" \
+  bash -c "source '$INIT'" 2>&1 >/dev/null)
+case "$ERR" in
+  *"could NOT set gc.auto=0"*) ok "a failed gc.auto write is reported" ;;
+  *) bad "gc.auto failure was silent: [$ERR]" ;;
+esac
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

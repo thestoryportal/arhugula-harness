@@ -27,6 +27,25 @@ _LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=loop_lib.sh
 . "$_LI_ROOT/tools/hooks/loop_lib.sh"
 
+# Corpse repair (of a zero-byte marker or claim) must be MUTUALLY EXCLUSIVE. Atomic replace
+# alone is not enough: two repairers each minting a value, replacing in sequence, and each
+# re-reading at a different moment can walk away with different answers for one worktree.
+# `mkdir` is the atomic exclusive primitive here. A repairer that cannot take the lock NEVER
+# repairs — it waits briefly, re-reads what the holder published, and otherwise fails loud.
+# There is deliberately no unlocked fallback: a stale lock (a crash mid-repair) leaves a
+# visible `<path>.repair` directory and a named error, which is recoverable; an unlocked
+# repair reintroduces exactly the divergence this lock exists to remove.
+_lane_repair_lock() {
+  local d="$1.repair" i=0
+  while ! mkdir "$d" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -ge 25 ] && return 1     # ~2.5s — the holder published, or its lock is stale
+    sleep 0.1
+  done
+  return 0
+}
+_lane_repair_unlock() { rmdir "$1.repair" 2>/dev/null; return 0; }
+
 _LI_Q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
 _LI_WT="$(pwd -P)"   # physical path: the registry is compared against it at teardown
 # The registry only means anything if every lane resolves it to the SAME directory. A
@@ -71,7 +90,20 @@ _lane_init_id() {
   # then hold different ids. `mv` replaces atomically — concurrent repairers simply order,
   # the last one wins, and BOTH re-read the published file below and converge on one id.
   local corpse_repair=""
-  { [ -e "$f" ] && [ ! -s "$f" ]; } && corpse_repair=1
+  if [ -e "$f" ] && [ ! -s "$f" ]; then
+    if _lane_repair_lock "$f"; then
+      corpse_repair=1
+    else
+      # Another repairer holds the lock. Whatever it published is authoritative; adopt it.
+      if [ -s "$f" ]; then
+        IFS= read -r id < "$f"
+        printf '%s' "$id"
+        return 0
+      fi
+      echo "lane-init: a stale repair lock blocks $f.repair — remove it and re-open the lane" >&2
+      return 1
+    fi
+  fi
   # PUBLICATION PROTOCOL, the same one loop_status_ensure uses and for the same reason. A
   # bare `set -o noclobber; > "$f"` publishes the NAME at open() and the payload after: a
   # concurrent loser can see a file that is still empty, keep its own id, and the two shells
@@ -83,13 +115,14 @@ _lane_init_id() {
   if tmp=$(mktemp "$f.XXXXXXXX" 2>/dev/null) && [ -n "$tmp" ]; then
     if printf '%s\n' "$id" > "$tmp" 2>/dev/null; then
       if [ -n "$corpse_repair" ]; then
-        mv -f "$tmp" "$f" 2>/dev/null || true      # atomic replace of the corpse
+        mv -f "$tmp" "$f" 2>/dev/null || true      # atomic replace, under the repair lock
       else
         ln "$tmp" "$f" 2>/dev/null || true         # never clobbers a live marker
       fi
     fi
     rm -f "$tmp" 2>/dev/null
   fi
+  [ -n "$corpse_repair" ] && _lane_repair_unlock "$f"
   # RE-READ after publication: if a concurrent session in this worktree won the race, ITS id
   # is the lane id — adopting our own would fork the identity.
   # FAIL LOUD if nothing is there to read. Returning the freshly minted id from an
@@ -174,11 +207,17 @@ if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
         # already published, and both would then believe they hold this index. After the
         # rename the file is re-read: it is ours only if it says so, otherwise advance.
         _li_retried=1
-        if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
-           && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
-           && mv -f "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
-          IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
-          [ "${_li_path:-}" = "$_LI_WT" ] && break
+        if _lane_repair_lock "$_LI_Q/lanes/$_li_k"; then
+          if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
+             && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
+             && mv -f "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
+            IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
+            _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
+            [ "${_li_path:-}" = "$_LI_WT" ] && break
+            rm -f "${_li_tmp:-}" 2>/dev/null
+            _li_k=$((_li_k + 1)); _li_retried=""; continue
+          fi
+          _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
         fi
         rm -f "${_li_tmp:-}" 2>/dev/null
       fi
@@ -202,7 +241,12 @@ fi
 # writes the shared config — the read guard is what keeps it to ONE value, not a per-source
 # duplicate that `--get-all` would return twice.
 if [ "$(git config --get gc.auto 2>/dev/null)" != "0" ]; then
-  git config gc.auto 0 2>/dev/null
+  # A discarded failure here silently leaves automatic GC enabled — the very concurrency
+  # hazard §2 exists to remove — with nothing to notice. The lane still opens (gc.auto is
+  # hygiene, not a correctness invariant of the lane), but never quietly.
+  if ! git config gc.auto 0 2>/dev/null; then
+    echo "lane-init: could NOT set gc.auto=0 (C-HE-11 §2) — automatic git gc stays enabled for this repo" >&2
+  fi
 fi
 
 # ── RAM headroom probe (C-HE-11 §5) ──────────────────────────────────────────────────

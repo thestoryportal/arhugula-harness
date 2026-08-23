@@ -119,7 +119,10 @@ def test_stack_recipes_pass_a_per_lane_project() -> None:
     ):
         start = justfile.index(f"\n{recipe}:")
         body = justfile[start + 1 : justfile.index("\n\n", start)]
-        assert "R420_PROJECT" in body, f"{recipe} does not pass a per-lane -p project"
+        # The ARGUMENT, not merely the name: `R420_PROJECT` also appears in the
+        # lane_ports export/eval setup, so grepping the bare name leaves this gate green
+        # with the `-p` dropped — every lane back on Compose's fixed project name.
+        assert '-p "$R420_PROJECT"' in body, f'{recipe} does not pass -p "$R420_PROJECT"'
 
 
 @pytest.mark.skipif(
@@ -152,15 +155,15 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
             cwd=REPO,
         )
 
-    def down(k: int) -> None:
-        subprocess.run(
+    def down(k: int) -> int:
+        return subprocess.run(
             ["just", "r420-self-hosted-stack-down"],
             env={**env, "HARNESS_LANE_INDEX": str(k)},
             capture_output=True,
             text=True,
             timeout=300,
             cwd=REPO,
-        )
+        ).returncode
 
     def ps(k: int) -> list[dict]:
         out = subprocess.run(
@@ -212,5 +215,11 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         assert f"{lane_ports.project(a)}_grafana-data" in vols
         assert f"{lane_ports.project(b)}_grafana-data" in vols
     finally:
-        for k in started:
-            down(k)
+        # A swallowed cleanup failure leaves lane348/lane349 containers running and the test
+        # green — the next run of this same case then trips its own absence check, or a real
+        # lane inherits them. Reported unless a real failure is already propagating.
+        failed = [k for k in started if down(k) != 0]
+        if failed and sys.exc_info()[0] is None:
+            raise AssertionError(
+                f"stack-down failed for lane(s) {failed}; containers may still be running"
+            )

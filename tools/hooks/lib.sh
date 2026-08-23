@@ -796,8 +796,15 @@ hook_release_lane_index() {
     [ -f "$f" ] || continue
     IFS=' ' read -r id path < "$f"
     if [ "${path:-}" = "$wt" ]; then
-      _hook_lane_stack_down "$(basename "$f")"
-      rm -f "$f" 2>/dev/null
+      # The claim is freed ONLY when the stack is known not to be in the way. A cleanup
+      # that was ATTEMPTED and failed leaves containers holding this project's ports and
+      # volumes, so recycling the index would hand them to the next lane; the claim is kept
+      # instead — a visible, retryable state rather than a silent cross-lane adoption.
+      if _hook_lane_stack_down "$(basename "$f")"; then
+        rm -f "$f" 2>/dev/null
+      else
+        echo "hook_release_lane_index: lane $(basename "$f") stack cleanup FAILED — index kept claimed so it is not recycled under live containers" >&2
+      fi
     fi
   done
   return 0
@@ -818,7 +825,13 @@ _hook_lane_stack_down() {
   hook_bounded 15 docker info >/dev/null 2>&1 || return 0     # daemon unreachable → nothing runs
   project=$(HARNESS_LANE_INDEX="$k" python3 "$root/tools/lane_ports.py" --project 2>/dev/null)
   [ -n "$project" ] || return 0
-  hook_bounded 180 docker compose -p "$project" -f "$compose" down >/dev/null 2>&1 || true
+  # --volumes as well as the containers: grafana-data / tempo-data are declared named
+  # volumes, so a plain `down` leaves them under the project name and the next lane handed
+  # that index inherits the previous lane's persistent dashboards and traces. The lane is
+  # gone for good at this point — its state is not something to preserve.
+  if ! hook_bounded 180 docker compose -p "$project" -f "$compose" down --volumes >/dev/null 2>&1; then
+    return 1
+  fi
   return 0
 }
 
