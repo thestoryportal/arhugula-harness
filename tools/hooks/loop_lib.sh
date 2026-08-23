@@ -392,7 +392,11 @@ loop_status_migrate() {
         fi
       done <<< "$open_rows"
     fi
-    mv "$claim" "${legacy}.migrated-$(loop_now)" 2>/dev/null \
+    # UNIQUE per attempt, same reason as the claim name (codex r13 P2): two migrators
+    # processing successive recreations of one legacy ledger inside a single second would
+    # otherwise `mv` to the same `.migrated-<ts>` path, and the later one would OVERWRITE the
+    # first archive -- destroying the very history the archive is kept for.
+    mv "$claim" "${legacy}.migrated-$(loop_now)-$$-${RANDOM}" 2>/dev/null \
       || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
     echo "imported $rows still-open row(s): $legacy"
     imported=$((imported + 1))

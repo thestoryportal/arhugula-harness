@@ -827,6 +827,31 @@ printf '%s' "$MBODY3" | grep -q '_loop_resolved_map "$shared"' && ok "the resolv
 printf '%s' "$(declare -f loop_status_migrate)" | grep -q 'migrating-$(loop_now)-\$\$-' \
   && ok "the claim name carries a per-attempt suffix" || bad "claim name is only second-resolution"
 
+# 51) codex r13 P2 — the ARCHIVE name is unique per attempt too. Two migrators retiring
+#     successive recreations of one legacy ledger inside a single second would otherwise
+#     `mv` to the same `.migrated-<ts>` path and the later would overwrite the first,
+#     destroying the retained history the archive exists to keep.
+printf '%s' "$(declare -f loop_status_migrate)" | grep -q 'migrated-$(loop_now)-\$\$-' \
+  && ok "the archive name carries a per-attempt suffix" || bad "archive name is only second-resolution"
+# two retirements in the same stubbed second must leave TWO archives, not one
+MIGA="$REPO/miga"; rm -rf "$MIGA"; mkdir -p "$MIGA"
+( cd "$MIGA" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b mawt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIGA/wt1/.harness"
+MIGAV="$MIGA/shared/loop_status.md"
+loop_now() { echo "2026-08-11T00:00:00Z"; }
+printf '| 2026-08-11T00:00:00Z | DEFERRED-HIL | B-960 — first recreation |\n' > "$MIGA/wt1/.harness/loop_status.md"
+( cd "$MIGA" && CLAUDE_PROJECT_DIR="$MIGA" HARNESS_LOOP_STATUS_PATH="$MIGAV" loop_status_migrate ) >/dev/null 2>&1
+printf '| 2026-08-11T00:00:00Z | DEFERRED-HIL | B-961 — second recreation, same second |\n' > "$MIGA/wt1/.harness/loop_status.md"
+( cd "$MIGA" && CLAUDE_PROJECT_DIR="$MIGA" HARNESS_LOOP_STATUS_PATH="$MIGAV" loop_status_migrate ) >/dev/null 2>&1
+[ "$(find "$MIGA/wt1/.harness" -name '*.migrated-*' | wc -l | tr -d ' ')" = "2" ] \
+  && ok "two same-second retirements keep BOTH archives" || bad "an archive was overwritten: $(find "$MIGA/wt1/.harness" -name '*.migrated-*' | wc -l | tr -d ' ')"
+SKA=$(HARNESS_LOOP_STATUS_PATH="$MIGAV" loop_skip_set)
+{ printf '%s' "$SKA" | grep -q 'B-960' && printf '%s' "$SKA" | grep -q 'B-961'; } \
+  && ok "both recreations' gates reach the shared venue" || bad "a same-second recreation was lost: [$SKA]"
+unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
