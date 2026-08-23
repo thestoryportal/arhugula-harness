@@ -159,9 +159,9 @@ _loop_structured_col() {
   # lane id containing one would be silently truncated at read time -- two distinct lanes
   # could then render as the same id, and neither would match its persisted spelling.
   # `[` and `]` go too (codex r7 P2): pending rows are RENDERED as `[<lane>] <detail>`, and
-  # every consumer that reads that form back -- the migration's own re-import parse among
-  # them -- delimits on the brackets. A lane carrying one would make the bracketed prefix
-  # bleed into the detail, losing the leading item token and with it the whole gate.
+  # every consumer that reads that form back delimits on the brackets -- `arc_exit_report`'s
+  # `_scope_to_lane` is the live one. A lane carrying a bracket would make the prefix bleed
+  # into the detail, losing the leading item token and with it the whole gate.
   lane=$(printf '%s' "${1:--}" | tr -d ' \t\n\r|;[]'); cause=$(printf '%s' "${2:--}" | tr -d ' \t\n\r|;[]')
   printf 'lane=%s;cause=%s' "${lane:--}" "${cause:--}"
 }
