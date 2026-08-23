@@ -335,6 +335,10 @@ elif [ -n "$_li_have" ]; then
   export HARNESS_LANE_INDEX="$_li_have"
 else
   _li_k=0
+  # Did THIS source publish the claim it ends up holding, or adopt a peer's? The post-verify
+  # withdrawal below may only ever remove a claim we created — the preset branch has carried
+  # that distinction since round 13, and the loop below reaches its index by BOTH routes.
+  _li_published=""
   while :; do
     # SAME publication protocol as the lane-id marker, for the same reason: a bare noclobber
     # redirect makes the claim visible EMPTY between open() and the payload write, and a
@@ -344,6 +348,7 @@ else
        && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
        && ln "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
       rm -f "$_li_tmp" 2>/dev/null
+      _li_published=1
       break
     fi
     rm -f "${_li_tmp:-}" 2>/dev/null
@@ -368,7 +373,7 @@ else
            && mv -f "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
           IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
           _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
-          [ "${_li_path:-}" = "$_LI_WT" ] && break
+          [ "${_li_path:-}" = "$_LI_WT" ] && { _li_published=1; break; }
           rm -f "${_li_tmp:-}" 2>/dev/null
           _li_k=$((_li_k + 1)); _li_retried=""; continue
         fi
@@ -382,7 +387,7 @@ else
           [ "${_li_path:-}" = "$_LI_WT" ] && break
         else
           echo "lane-init: a stale repair lock blocks $_LI_Q/lanes/$_li_k.repair — remove it and re-open the lane" >&2
-    unset HARNESS_LANE_ID
+          unset HARNESS_LANE_ID
           unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
           return 1 2>/dev/null || exit 1
         fi
@@ -395,7 +400,7 @@ else
       # Never fall through with an unset index: every consumer defaults to lane 0, so a
       # silent miss puts this lane on lane 0's project name, ports and volumes.
       echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
-    unset HARNESS_LANE_ID
+      unset HARNESS_LANE_ID
       unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
       return 1 2>/dev/null || exit 1
     fi
@@ -408,15 +413,24 @@ else
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$_li_k" ]; then
-      rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null
-      echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $_li_k" >&2
-    unset HARNESS_LANE_ID
-      unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_f _li_id _li_path _li_tmp _li_retried
+      # Withdraw ONLY what this source created. The loop above reaches its index by two
+      # routes — it either published the claim or ADOPTED one a peer in this worktree had
+      # already published — and deleting an adopted claim destroys a lane that is live and
+      # running, freeing its index while its Compose project is still up, so the next lane
+      # to take that index has `up` adopt those containers. Same rule the preset branch has.
+      if [ -n "$_li_published" ]; then
+        rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null
+        echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $_li_k" >&2
+      else
+        echo "lane-init: this worktree holds lane index $(basename "$_li_f"); the claim on $_li_k was published by another source and is left alone" >&2
+      fi
+      unset HARNESS_LANE_ID
+      unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_f _li_id _li_path _li_tmp _li_retried _li_published
       return 1 2>/dev/null || exit 1
     fi
   done
   export HARNESS_LANE_INDEX="$_li_k"
-  unset _li_k _li_f _li_id _li_path _li_tmp _li_retried
+  unset _li_k _li_f _li_id _li_path _li_tmp _li_retried _li_published
 fi
 unset _li_have
 
