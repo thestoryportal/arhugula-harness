@@ -5614,6 +5614,8 @@ labelled as one.
 resolved from the environment rather than the repo, suites that had not yet pinned
 `HARNESS_LOOP_STATUS_PATH` wrote four rows (`B-777`, `B-779`, `R-300`, `R-410`) into the real
 `~/.gstack/projects/arhugula-v2/loop_status.md` during this arc. Cleared through the ledger's
+own append-only mechanism (`RESOLVED-HIL` rows naming them as test artifacts) rather than by
+editing the file. This is why the pins in (vii) are load-bearing rather than tidiness.
 
 (xiv) **Rounds 4-6: the absorption rounds became the defect source, and the arc converged by
 narrowing, not by adding.** r4's six findings, r5's five and r6's five were almost entirely
@@ -5656,6 +5658,7 @@ rejecting unsafe ids at mint time and adopting one reversible encoding across al
 carriers. It is not exploitable at HEAD -- minted ids contain none of the stripped
 characters. Registered at `.harness/forward-register.yaml` B-194 with both options and the
 one-commit-across-three-carriers constraint recorded, per the register-and-hold discipline
+at the round cap.
 
 (xvi) **Rounds 7-8, and where the arc stopped.** r7 replaced the dedupe heuristic outright:
 imported rows are necessarily appended LAST into a log the reducers read by PHYSICAL order,
@@ -5742,13 +5745,6 @@ r4-r16 almost entirely hardened the cutover MIGRATION that r2 introduced to prot
 move; and r14 then showed that migration's founding measurement had been wrong all along
 (xvii). The unit's own contracts — venue, structured column, ACTIVATE scoping, NOTIFY — were
 settled by r3 and never regressed.
-
-
-
-at the round cap.
-
-own append-only mechanism (`RESOLVED-HIL` rows naming them as test artifacts) rather than by
-editing the file. This is why the pins in (vii) are load-bearing rather than tidiness.
 
 
 ---
