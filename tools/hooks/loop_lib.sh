@@ -241,9 +241,14 @@ loop_status_migrate() {
   # into the loop through process substitution hid its failure: a git error yielded zero
   # worktrees, the loop body never ran, and the function returned SUCCESS -- so the caller
   # would record a completed cutover having inspected nothing at all.
-  local wt_list wt_rc
-  wt_list=$(git -C "$root" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10)}')
-  wt_rc=$?
+  # git's OWN status, not the pipeline's (codex r11 P2). Piping straight into awk made
+  # `wt_rc` awk's exit code, so with pipefail off -- and the arc-exit-report caller starts a
+  # fresh bash without it -- a git that emitted a PARTIAL list and then failed looked like a
+  # complete success, and the migration would drain that subset and report the cutover done
+  # while other legacy ledgers stayed untouched.
+  local wt_raw wt_rc wt_list
+  wt_raw=$(git -C "$root" worktree list --porcelain 2>/dev/null); wt_rc=$?
+  wt_list=$(printf '%s\n' "$wt_raw" | awk '/^worktree /{print substr($0,10)}')
   if [ "$wt_rc" -ne 0 ] || [ -z "$wt_list" ]; then
     echo "loop_status_migrate: could not enumerate worktrees (rc=$wt_rc) — nothing inspected" >&2
     return 1
@@ -267,7 +272,18 @@ loop_status_migrate() {
       local n_orph n_live
       n_orph=$(ls "$wt/.harness"/loop_status.md.migrating-* 2>/dev/null | wc -l | tr -d ' ')
       n_live=0
-      [ -f "$legacy" ] && n_live=$(_loop_pending_rows_with_ts "$legacy" 2>/dev/null | grep -c . || echo 0)
+      if [ -f "$legacy" ]; then
+        # PRESERVE the read status (codex r11 P3). Piping into `grep -c` and defaulting to 0
+        # turned an UNREADABLE ledger into "no rows", so a dry run over a broken file exited
+        # clean and told the operator the cutover had nothing to do.
+        local _live_rows _live_rc
+        _live_rows=$(_loop_pending_rows_with_ts "$legacy"); _live_rc=$?
+        if [ "$_live_rc" -ne 0 ]; then
+          echo "loop_status_migrate: could not READ $legacy — cutover state UNKNOWN" >&2
+          return 1
+        fi
+        n_live=$(printf '%s' "$_live_rows" | grep -c . || true)
+      fi
       if [ "$n_orph" != "0" ] || [ "$n_live" != "0" ]; then
         echo "would import $n_live still-open row(s) + fold $n_orph orphaned claim(s): $legacy"
       fi
@@ -287,7 +303,12 @@ loop_status_migrate() {
       local _sorted=()
       while IFS= read -r orphan; do [ -n "$orphan" ] && _sorted+=("$orphan"); done \
         < <(printf '%s\n' "${orphans[@]}" | sort)
-      if cat "${_sorted[@]}" ${legacy:+$([ -f "$legacy" ] && printf '%s' "$legacy")} > "$_merged" 2>/dev/null \
+      # The live ledger joins the list as an ARRAY element (codex r11 P3). Unquoted
+      # expansion word-split any worktree path containing a space into several `cat`
+      # arguments, so orphan recovery failed on every retry for such a checkout.
+      local _fold=("${_sorted[@]}")
+      [ -f "$legacy" ] && _fold+=("$legacy")
+      if cat "${_fold[@]}" > "$_merged" 2>/dev/null \
         && mv "$_merged" "$legacy" 2>/dev/null; then
         rm -f "${_sorted[@]}" 2>/dev/null
       else

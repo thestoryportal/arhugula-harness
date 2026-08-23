@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 195
+  total: 196
   open: 1
   design_substrate_gated: 3
-  registered_finding: 46
+  registered_finding: 47
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: f726ea511cbef83a
+  identity_digest: 8e26f2ff146dc0b6
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10147,3 +10147,35 @@ items:
   council: 'NO — bounded concurrency hardening on one mechanism with a self-closing window;
     the out-of-family reviewer is the scheduled decorrelated check.'
   heading: '### B-195 · U-HE-29 cutover-window concurrency vs a live pre-U-HE-29 writer *(surfaced by out-of-family Codex r8 against U-HE-29, 2026-08-22; register-and-held — (a) fails in the C-HE-09 §4 safe direction, (b) is not fixable from this side)*'
+- id: B-196
+  title: >-
+    Per-arc scoping of `todo_for_human` needs the SET of deferring lanes per item —
+    C-HE-09 §3 renders only one
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-29 r3/r5/r11) and register-and-held after
+    THREE flips on the same rule, per the reviewer-oscillation discipline. U-WT-03 says
+    `todo_for_human` is what THIS arc leaves for a human, but the ledger is shared since
+    U-HE-29 and `loop_pending_hil_list` returns every lane''s open gates. Filtering to this
+    lane was tried twice and hid a real row both times: (1) excluding every lane != mine
+    dropped this arc''s own UNATTRIBUTED rows, since the canonical `tools/04-loop/defer.sh`
+    writes no lane and migrated legacy rows carry `-`; (2) excluding only demonstrably-FOREIGN
+    lanes still hid rows, because the reducer collapses by ITEM TOKEN — when two lanes defer
+    the same item only the LAST deferrer''s row survives, so `[L2] B-1` can be the sole
+    rendering of an item L1 also has open and nobody resolved, and L1''s closeout would drop
+    it as foreign. (2) is decisive: the rendered lane is not evidence of sole ownership, so no
+    exclusion built on it is sound. AT HEAD the function annotates and never drops — the safe
+    direction (over-reporting a sibling''s row beats hiding this arc''s own gate in the record
+    that closes it, immediately before worktree disposition).'
+  close_out: '(1) Decide whether C-HE-09 §3''s rendered form should carry the SET of deferring
+    lanes (`[L1,L2] item — detail`) rather than one — a spec change, so it routes through
+    design-phase back-flow, NOT an execution-time edit; (2) if the rendered form stays
+    singular, decide whether `arc_exit_report` should make a SECOND query for per-item lane
+    membership instead of reading the rendering, and whether that second read is worth a
+    second parse of the ledger (the workspace''s one-parse-one-authority rule argues against
+    it); (3) whichever way, keep the current annotate-never-drop behaviour until the chosen
+    mechanism can prove sole ownership — the failure this row exists to prevent is a false
+    empty todo list at arc close.'
+  council: 'NO — a scoping/rendering decision on one field with two enumerated options; the
+    out-of-family reviewer is the scheduled decorrelated check. Note the spec-change branch
+    routes to back-flow if chosen.'
+  heading: '### B-196 · per-arc `todo_for_human` scoping needs a per-item lane SET *(surfaced by out-of-family Codex r3/r5/r11 against U-HE-29, 2026-08-22; register-and-held after three flips — HEAD annotates and never drops)*'

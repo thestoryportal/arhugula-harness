@@ -767,6 +767,36 @@ SK=$(HARNESS_LOOP_STATUS_PATH="$MIG7V" loop_skip_set)
 { printf '%s' "$SK" | grep -q 'B-801' && printf '%s' "$SK" | grep -q 'B-802'; } \
   && ok "a real pass after a dry-run imports both the live and orphaned rows" || bad "post-dry-run pass incomplete: [$SK]"
 
+# 45) codex r11 P3 — a worktree path containing a SPACE must not break orphan recovery. The
+#     live ledger used to join the fold list through an unquoted expansion, which word-split
+#     such a path into several `cat` arguments and failed every retry.
+MIG8="$REPO/mig 8"; rm -rf "$MIG8"; mkdir -p "$MIG8"
+( cd "$MIG8" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m8wt "wt one" ) >/dev/null 2>&1
+mkdir -p "$MIG8/wt one/.harness"
+MIG8V="$MIG8/shared/loop_status.md"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-901 — orphan on a spaced path |\n' \
+  > "$MIG8/wt one/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z"
+printf '| 2026-08-02T00:00:00Z | DEFERRED-HIL | B-902 — live on a spaced path |\n' \
+  > "$MIG8/wt one/.harness/loop_status.md"
+( cd "$MIG8" && CLAUDE_PROJECT_DIR="$MIG8" HARNESS_LOOP_STATUS_PATH="$MIG8V" loop_status_migrate ) >/dev/null 2>&1
+SK=$(HARNESS_LOOP_STATUS_PATH="$MIG8V" loop_skip_set)
+{ printf '%s' "$SK" | grep -q 'B-901' && printf '%s' "$SK" | grep -q 'B-902'; } \
+  && ok "orphan recovery works on a worktree path containing a space" || bad "spaced path broke the fold: [$SK]"
+
+# 46) codex r11 P3 — `--dry-run` must not turn an UNREADABLE ledger into "nothing to do".
+UNREAD2="$MIG8/wt one/.harness/loop_status.md"
+printf '| 2026-08-03T00:00:00Z | DEFERRED-HIL | B-903 — hidden |\n' > "$UNREAD2"
+chmod 000 "$UNREAD2"
+DRYOUT=$(cd "$MIG8" && CLAUDE_PROJECT_DIR="$MIG8" HARNESS_LOOP_STATUS_PATH="$MIG8V" loop_status_migrate --dry-run 2>&1); DRC=$?
+chmod 644 "$UNREAD2"
+[ "$DRC" -ne 0 ] && ok "--dry-run fails on an unreadable ledger instead of reporting clean" || bad "--dry-run reported clean over an unreadable ledger: $DRYOUT"
+
+# 47) codex r11 P2 — `git worktree list`'s OWN status must be captured, not the pipeline's.
+MBODY2=$(declare -f loop_status_migrate)
+printf '%s' "$MBODY2" | grep -q 'wt_raw=$(git' && ok "git's status is captured before the awk filter" || bad "git status still masked by the pipeline"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
