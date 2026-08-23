@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `220eca08b920` |
+| `workspace_state_hash` | `3feb6a2bbf4b` |
 | `last_refreshed` | 2026-08-23T00:00:00Z |
-| `git_head` | `5891168f` —  |
+| `git_head` | `309b4cc4` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1431).** The next implementable unit is `U-HE-30` (S4d — gate coalescing by `cause_signature`, 10-minute window, pull-based delivery) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. Its implementation is built, green and reviewed at PR #1430 (19/19 CI, 5 out-of-family codex rounds, 12/12 mutation probes) and lands next; this PR filed the Class 1 back-flow that #1430 depends on — C-HE-10 §2's "at/after their `first_seen`" delivery-coverage rule permanently swallows an adjacent same-cause generation, so the landed implementation uses per-member coverage and the spec amendment is owed on ratification of Reading B. After #1430 lands, the next implementable unit is `U-HE-31` (lane-init: `HARNESS_LANE_ID`/`HARNESS_LANE_INDEX`, `gc.auto 0`, RAM probe, compose port allocation).
+**Current next action (post-#1430).** The next implementable unit is `U-HE-31` (S4d — `tools/hooks/lane-init.sh`: mints `HARNESS_LANE_ID` / `HARNESS_LANE_INDEX` by exclusive create of `QUEUE_DIR/lanes/<k>`, sets `gc.auto 0` repo-wide once idempotently, probes RAM headroom before a lane-`k >= 2` stack below the 32 GB floor, and parameterizes the `compose.yaml` ports + `-p` project name per C-HE-11 §1-§5) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. U-HE-01..30 have landed; 15 units remain (U-HE-31..45). U-HE-30 landed HIL gate coalescing by `cause_signature` with windowed pull-based delivery (C-HE-10 §1-§4) after 5 out-of-family review rounds and 12/12 mutation probes; it carries one open obligation — the Class 1 fork filed at `.harness/class_1_fork_c_he_10_delivery_coverage_rule_swallows_adjacent_generation.md` (#1431) shows C-HE-10 §2 delivery-coverage rule permanently swallows an adjacent same-cause generation, so the implementation uses per-member coverage and the spec amendment (C-HE-10 §2 + C-HE-09 §5 row shape, version bump, change-note, clearance marker) is owed on ratification of Reading B.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,7 +43,6 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1430 | `feat/u-he-30-hil-coalescing` | — | — |
 
 ---
 
@@ -51,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1430 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1431 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1428 | 2026-08-23 | U-HE-29 session audit landed (doc-only); makes the roadmap_status pointer resolve |
 | 1426 | 2026-08-23 | U-HE-29 shared loop_status venue landed; merge-gate 3-lens all-approve (first gate run on this PR); the cutover migration was CUT at b1a099294 (-1483 lines) after its founding measurement was falsified |
 | PR #1424 | 2026-08-22 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1422 | 2026-08-22 | U-HE-27 Step-5 operator gate EXECUTED + as-built live-apply corrections (squash 69ad55f8): fence LIVE on main (strict:true, 12 contexts, enforce_admins) — apply-confirm digest-bound, §4 tiebreaker PASS (scratch #1420/#1421 clean-ffwd, fence re-verified), verify PASS; two live-witnessed fixes (contexts-target accepts GitHub Actions auto-binding null/-1/15368 + flags foreign apps — r6 comparison empirically falsified; _watch_checks not-yet-started retry + registration-complete validation, live witness #1419); codex fix-rounds r1-r2 (4 absorbed, 1 refuted-by-measurement); LEAN witness lens BLOCK→APPROVE r2 (full-consumption assertion, probe independently reproduced); B-190 bound IN FORCE; evidence log complete |
 
 ---
 
