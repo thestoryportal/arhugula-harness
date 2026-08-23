@@ -31,13 +31,13 @@ LANDED = [
     "tools/arc_metrics.py",
     "tools/hooks/loop_lib.sh",
     "tools/lanes_verify.py",  # C-HE-31 §4d evaluator site; reads the probe log today
+    "tools/hooks/lane-init.sh",  # U-HE-31: lane index registry + persisted lane id
     "tools/merge_door.py",  # U-HE-22
     "tools/reservations.py",  # U-HE-17
 ]
 #: Planned store creators -- skipped until they land; the landing unit (U-HE-17 / U-HE-22 /
 #: U-HE-31 lane-init) MUST move its module into LANDED in the same change.
 PENDING = [
-    "tools/hooks/lane-init.sh",
     "tools/mechanized_checks/__init__.py",  # STATE_PATH home (U-HE-40)
     "tools/mechanized_checks/runner.py",
 ]
@@ -138,11 +138,17 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # see an idiom reports "nothing unlisted" for exactly the same reason it would report a
     # clean sheet -- which is the failure this page's own rule exists to prevent.
     (re.compile(r"\$\{\w+\}(\.[A-Za-z0-9_\-]+)"), "shellsuffix"),
+    # shell: a `$root/`-anchored name whose tail is an INTERPOLATION -- `"$Q/.orphaned-$k"`,
+    # `"$q/.orphaned-$(basename "$f")"`. The `shell` pattern above ends its segment on a
+    # quote, slash, space or `;`, so a segment running straight into `$` matched nothing and
+    # U-HE-31's orphan-fence marker was invisible to the witness -- the same vacuous-pass
+    # shape `shellsuffix` was added for at U-HE-29, in a second idiom.
+    (re.compile(r"(?:\)|\}|\$\w+)/([A-Za-z0-9_.\-]*[A-Za-z0-9_\-])(?=\$)"), "shellinterp"),
 ]
 #: Python-only idioms; a shell module spells its paths textually or via the `shell` form, and
 #: `case` patterns like `"refs/heads/"*)` would otherwise read as joins.
 _PY_ONLY = frozenset({"join", "glob", "suffix", "tmp"})
-_SH_ONLY = frozenset({"shell", "shellsuffix"})
+_SH_ONLY = frozenset({"shell", "shellsuffix", "shellinterp"})
 _HAS_WORD = re.compile(r"[A-Za-z0-9]")
 _QUOTED = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 
@@ -163,6 +169,10 @@ def _token(kind: str, match: re.Match[str]) -> str | None:
         return f".harness/{raw}"
     if kind == "suffix":
         return f"*{raw}"
+    if kind == "shellinterp":
+        # `$Q/.orphaned-$k` -> `.orphaned-*`: the captured text is the fixed part of the name
+        # and everything after it is per-invocation.
+        return f"{raw}*"
     if kind == "shellsuffix":
         # `${legacy}.migrating-` -> `*.migrating-*`: the variable is the path, the captured
         # text is the appended name, and anything after it is per-invocation.

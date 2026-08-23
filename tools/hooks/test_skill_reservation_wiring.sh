@@ -70,10 +70,18 @@ grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-fail
 # Round-4 codex corrections (races + headless degradation):
 grep -q 'lost race' "$RC" || grep -q 'lost the race' "$RC" \
   && ok "reserve race-loss handled like the occupied path" || bad "no reserve race-loss clause"
-grep -q 'NEVER overwrite' "$RC" \
-  && ok "lane-id file content is authoritative (never overwrite)" || bad "no lane-id overwrite rule"
-grep -q 'RE-READ the file' "$RC" \
-  && ok "lane-id mint adopts the file content after write" || bad "no post-write re-read rule"
+# U-HE-31 SUPERSEDES the agent-writes-the-marker contract these two rows asserted: the agent
+# no longer mints or Writes `.harness/.lane-id` at all — `tools/hooks/lane-init.sh` is the one
+# writer (C-HE-11 §1), and a skill that still told an agent to Write it would reinstate the
+# second authority (and the non-atomic race) the sourced publication protocol removes.
+grep -q 'source tools/hooks/lane-init.sh' "$RC" \
+  && ok "lane open SOURCES lane-init for the id + index" || bad "no lane-init sourcing step"
+grep -q 'ONE writer' "$RC" \
+  && ok "lane-init is named the single lane-id writer" || bad "no single-writer rule for .lane-id"
+grep -q 'do NOT `Write` `.harness/.lane-id` yourself' "$RC" \
+  && ok "the agent is forbidden from writing the marker itself" || bad "no second-writer prohibition"
+grep -q 're-read `.harness/.lane-id` rather than trusting memory' "$RC" \
+  && ok "out-of-scope reads go back to the file, not to memory" || bad "no re-read rule"
 grep -q 'proceed with the arc UNRESERVED' "$RC" \
   && ok "headless denial degrades to unreserved-with-note (U-HE-19 drain bootstrap)" \
   || bad "no headless degradation clause"

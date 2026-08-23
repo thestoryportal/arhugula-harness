@@ -9,6 +9,11 @@ unset GOOGLE_GENAI_USE_VERTEXAI HARNESS_CODEX_REVIEW_ISOLATED
 export PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/arhugula-uv-cache}"
 
+# The C-HE-11 two-stacks-up witness is classified `env` / local-only in the §8.1 manifest
+# (tools/lanes_verify.py) and is DESELECTED here rather than left to its skipif: on any
+# host with a reachable daemon this gate would otherwise start two real stacks, write
+# claims into the production lane registry, and run destructive volume cleanup. It runs
+# from `just lanes-verify`, where an env-tagged row belongs.
 uv run pytest -q \
   tools/test_ac_claim_precision.py \
   tools/test_agy_review.py \
@@ -29,6 +34,8 @@ uv run pytest -q \
   tools/test_reservations.py \
   tools/test_store_audit.py \
   tools/test_closure_certification.py \
+  tools/test_compose_lanes.py \
+  --deselect tools/test_compose_lanes.py::test_two_lanes_disjoint_names_and_ports \
   tools/test_docs_completeness.py \
   tools/test_graft_reachability.py \
   tools/test_leg_selfcheck.py \

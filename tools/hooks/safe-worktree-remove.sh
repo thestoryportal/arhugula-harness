@@ -43,7 +43,7 @@ PROJECT_DIR=$(hook_project_dir)
 hook_safe_worktree_remove "$PROJECT_DIR" "$TARGET" "$EXPECTED_BRANCH" "$EXPECTED_HEAD"
 rc=$?
 case "$rc" in
-  0) exit 0 ;;
+  0) exit 0 ;;   # the lane-index release is inside hook_safe_worktree_remove (every caller)
   3) echo "safe-worktree-remove: target has a live Claude/Codex session" >&2 ;;
   2) echo "safe-worktree-remove: session/removal mutex unavailable" >&2 ;;
   4) echo "safe-worktree-remove: target has local state" >&2 ;;

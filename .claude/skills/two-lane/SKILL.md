@@ -31,6 +31,11 @@ git worktree add <repo-root>/.codex-worktrees/<slug-a> -b <branch-a> <that-liter
 git worktree add <repo-root>/.codex-worktrees/<slug-b> -b <branch-b> <that-literal-sha>
 ```
 
+At lane start, inside each worktree: `source tools/hooks/lane-init.sh` (exports `HARNESS_LANE_ID`,
+`HARNESS_LANE_INDEX`; C-HE-11). The index is what keeps the two lanes' Docker project names,
+host ports and volumes disjoint — without it both lanes bring up the same stack and the second
+`docker compose up` fails on a port bind.
+
 Use the LITERAL SHA in both adds, not a shell variable: in loop mode the permission guard
 rejects multiline commands and `$var`/command-substitution forms, and separate Bash calls do
 not share shell locals — a `"$base"` setup stalls non-interactively even on an admitted path.
@@ -112,8 +117,15 @@ Two guard facts shape how that is actually executed:
 A finished lane's worktree is **reaped ONLY via `tools/hooks/safe-worktree-remove.sh`**:
 
 ```bash
+just r420-self-hosted-stack-down                 # FIRST, from inside the lane, if it ran a stack
 bash tools/hooks/safe-worktree-remove.sh <repo-root>/.codex-worktrees/<slug>
 ```
+
+Bring the lane's stack down **before** reaping. A successful removal frees the lane's
+`QUEUE_DIR/lanes/<k>` claim (C-HE-11 §1), and the next lane to take that index inherits its
+project name, ports and volumes — containers left running would hold them, and that lane's
+`up` fails on a port bind. The removal hook cannot do this itself without making teardown
+depend on a Docker daemon that is usually absent.
 
 Direct `git worktree remove` is denied for **every** parsed removal
 (`tools/hooks/permission-guard.sh:56-70`; the only bypass is the deliberate

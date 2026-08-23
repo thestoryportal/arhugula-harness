@@ -767,6 +767,126 @@ _hook_worktree_matches_expected_identity() {
   [ "$branch" = "$expected_branch" ] && [ "$head" = "$expected_head" ]
 }
 
+# Release the lane-index claim (C-HE-11 §1) a worktree holds at QUEUE_DIR/lanes/<k>,
+# matching on the PHYSICAL path recorded by tools/hooks/lane-init.sh. Called after a
+# successful worktree removal: an unreleased entry burns an index forever, and the next
+# lane silently starts one higher until the 350 ceiling refuses to open a lane at all.
+# EVERY matching entry goes, not the first: a crash between the exclusive create and the
+# reuse scan can leave one path holding two, and a release that stops at the first would
+# strand the other. Never fails the caller — teardown already succeeded.
+# BOUND: this frees the INDEX, it does not stop that lane's Docker stack — reaping a
+# worktree whose stack is still up leaves containers holding the ports and volumes the
+# freed index hands to the next lane, whose `up` then fails on a port bind. Bringing Docker
+# down from a removal hook would make teardown depend on a daemon that is usually absent,
+# so the stack-down is a documented step of the reaping recipe instead
+# (.claude/skills/two-lane/SKILL.md), and the failure it guards against is loud, not silent.
+# The "it would fail loudly" argument for leaving containers alone is FALSE: `docker compose
+# up -d` under an existing project ADOPTS its containers rather than refusing, so a lane
+# handed a recycled index would silently inherit a dead lane's containers, volumes and
+# state. So the release takes the stack down first — but only in the one condition where
+# containers can actually exist (a reachable daemon), and always bounded, so a teardown on
+# a machine with no Docker, or with the daemon down, costs nothing and cannot hang.
+# Usage: hook_release_lane_index /physical/path/to/worktree
+hook_release_lane_index() {
+  local wt="${1:-}" q f id path _rc _now_id _now_path
+  [ -n "$wt" ] || return 0
+  q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}/lanes"
+  [ -d "$q" ] || return 0
+  for f in "$q"/*; do
+    [ -f "$f" ] || continue
+    IFS=' ' read -r id path < "$f"
+    if [ "${path:-}" = "$wt" ]; then
+      # The claim is freed ONLY when the stack is known not to be in the way. A cleanup
+      # that was ATTEMPTED and failed leaves containers holding this project's ports and
+      # volumes, so recycling the index would hand them to the next lane; the claim is kept
+      # instead — a visible, retryable state rather than a silent cross-lane adoption.
+      # Ownership is checked BEFORE the destructive cleanup as well as after. `down --volumes`
+      # can run for minutes, and a worktree recreated at this path may have already rebound
+      # the claim and started its own stack — the post-check protects its CLAIM but cannot
+      # un-destroy its containers. Re-reading first shrinks that window to the gap between
+      # this read and the compose call; the remainder is a registered residual (B-202).
+      IFS=' ' read -r _now_id _now_path < "$f" 2>/dev/null
+      if [ "${_now_path:-}" != "$wt" ] || [ "${_now_id:-}" != "${id:-}" ]; then
+        echo "hook_release_lane_index: claim $(basename "$f") was rebound before cleanup — leaving the new owner's stack and record alone" >&2
+        continue
+      fi
+      _hook_lane_stack_down "$(basename "$f")" >/dev/null 2>&1
+      _rc=$?
+      # Docker cleanup can take minutes. RE-READ the claim before removing it: a worktree
+      # recreated at this path during that window rebinds the claim to itself, and deleting
+      # it then would strip the NEW lane's ownership record and free its index to a peer.
+      IFS=' ' read -r _now_id _now_path < "$f" 2>/dev/null
+      if [ "${_now_path:-}" != "$wt" ] || [ "${_now_id:-}" != "${id:-}" ]; then
+        echo "hook_release_lane_index: claim $(basename "$f") was rebound during cleanup — leaving the new owner's record alone" >&2
+        continue
+      fi
+      case "$_rc" in
+        0) # Verified clean. A release that cannot REMOVE the claim has not released
+           # anything: the index stays consumed after its worktree is gone, with no marker
+           # and no retry path, so it is burned permanently. Say so rather than returning
+           # success on a stale claim.
+           if ! rm -f "$f" 2>/dev/null || [ -e "$f" ]; then
+             echo "hook_release_lane_index: lane $(basename "$f") cleaned, but its claim could NOT be removed — the index stays consumed until $f is deleted by hand" >&2
+           fi ;;
+        *) # NOT verified clean — whether the cleanup failed outright or could not be
+           # attempted. Either way the index must not be handed on unfenced: a claim can be
+           # inherited by a new worktree created at the SAME path (reuse is by path), which
+           # would adopt the surviving containers along with the index. So the obligation is
+           # recorded first, and the claim is released ONLY if that record actually landed —
+           # an unwritable marker leaves the claim in place rather than removing both fences.
+           if printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) reaped $wt" \
+                > "$q/.orphaned-$(basename "$f")" 2>/dev/null; then
+             rm -f "$f" 2>/dev/null
+           else
+             echo "hook_release_lane_index: lane $(basename "$f") stack is unverified AND its orphan marker could not be written — index kept claimed" >&2
+           fi ;;
+      esac
+    fi
+  done
+  return 0
+}
+
+# Bring lane <k>'s Compose stack down before its index is recycled.
+#   0 = verified clean (nothing could exist, or `down --volumes` succeeded)
+#   1 = attempted and FAILED — containers may survive; the caller must keep the claim
+#   2 = could not VERIFY (no reachable daemon) — the caller records a deferred obligation
+# Only the total absence of a docker binary counts as "nothing can exist". A daemon that
+# answers non-zero is NOT proof: a stopped daemon still retains this project's containers
+# and named volumes, which a later `up` would adopt. The project NAME is resolved by
+# tools/lane_ports.py — the one authority for it — never re-spelled here, because a second
+# spelling would silently stop targeting the real project the day the formula changes.
+_hook_lane_stack_down() {
+  local k="${1:-}" root project compose
+  case "$k" in ''|*[!0-9]*) return 0 ;; esac
+  # A missing docker EXECUTABLE is not proof that no docker STATE exists: hooks often run
+  # with a reduced PATH, and a client can be removed while its containers and volumes remain.
+  # Unverifiable, therefore fenced — on a machine that genuinely has no Docker the fence
+  # costs nothing, because there is no stack for the next lane to bring up either.
+  command -v docker >/dev/null 2>&1 || return 2
+  root=$(hook_project_dir); [ -n "$root" ] || return 2
+  compose="$root/deploy/self-hosted-local/compose.yaml"
+  { [ -f "$compose" ] && [ -f "$root/tools/lane_ports.py" ]; } || return 2
+  # A daemon that answers "unreachable" quickly is proof no container of this project is
+  # running, and skipping is free. A probe that TIMES OUT proves nothing — the daemon may be
+  # alive and slow, still holding this lane's containers — so it is a cleanup FAILURE, which
+  # keeps the claim rather than recycling an index under live containers.
+  hook_bounded 15 docker info >/dev/null 2>&1
+  case $? in
+    0) ;;         # daemon up: proceed to bring the project down
+    *) return 2 ;;  # unreachable / slow / permission-denied: unverifiable, not proof of clean
+  esac
+  project=$(HARNESS_LANE_INDEX="$k" python3 "$root/tools/lane_ports.py" --project 2>/dev/null)
+  [ -n "$project" ] || return 2
+  # --volumes as well as the containers: grafana-data / tempo-data are declared named
+  # volumes, so a plain `down` leaves them under the project name and the next lane handed
+  # that index inherits the previous lane's persistent dashboards and traces. The lane is
+  # gone for good at this point — its state is not something to preserve.
+  if ! hook_bounded 180 docker compose -p "$project" -f "$compose" down --volumes >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
 # Remove a registered worktree only while holding the same mutex used by SessionStart
 # lease registration. The worktree is moved to an unpublished sibling quarantine before
 # the final status and open-reference scans. Return 2 when the mutex is unavailable, 3
@@ -879,6 +999,10 @@ hook_safe_worktree_remove() {
     *) rc=9 ;;
   esac
   if [ "$rc" -eq 0 ]; then
+    # The lane-index release lives HERE, not in the safe-worktree-remove.sh wrapper:
+    # loop_gc_worktrees calls this function directly, and a release attached to the wrapper
+    # alone would let every GC-reaped lane leak its index permanently.
+    hook_release_lane_index "$wt"
     rm -f "$transaction" 2>/dev/null || rc=6
   elif [ -d "$quarantine" ]; then
     _hook_worktree_restore_transaction "$root" "$transaction" >/dev/null

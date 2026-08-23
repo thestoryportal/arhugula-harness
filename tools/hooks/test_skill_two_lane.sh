@@ -66,6 +66,10 @@ needle "$CLAUDE_SKILL" "claude two-lane" "the ignored lane-root path" \
   'own worktree under `.codex-worktrees/<slug>`'
 needle "$CLAUDE_SKILL" "claude two-lane" "the both-lanes-off-one-main rule" \
   'Both lanes branch off the **same** pinned base SHA'
+needle "$CLAUDE_SKILL" "claude two-lane" "the lane-init sourcing step" \
+  'source tools/hooks/lane-init.sh'
+needle "$CLAUDE_SKILL" "claude two-lane" "the stack-down-before-reaping rule" \
+  'Bring the lane'"'"'s stack down **before** reaping.'
 needle "$CLAUDE_SKILL" "claude two-lane" "the build-half-is-not-serialized statement" \
   'Nothing about the build half is serialized.'
 

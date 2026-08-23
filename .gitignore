@@ -143,6 +143,7 @@ tools/dashboard/public/
 # Loop-mode runtime artifacts (U-HK-11): the active-marker + append-only ledger
 # are transient per-run state, written only while loop mode is on. Never tracked.
 .harness/.lane-id
+.harness/.lane-id.*
 .harness/.loop-active
 .harness/.loop-status.lock
 .harness/.next-action-draft*

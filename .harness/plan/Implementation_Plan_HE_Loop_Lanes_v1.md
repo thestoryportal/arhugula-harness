@@ -6041,6 +6041,59 @@ r420-self-hosted-stack-status:
 `safe-worktree-remove.sh`: after a successful removal, `rm -f "$QUEUE_DIR/lanes/<k>"` for the entry whose second field equals the removed path. `two-lane/SKILL.md`: *"At lane start: `source tools/hooks/lane-init.sh` (exports `HARNESS_LANE_ID`, `HARNESS_LANE_INDEX`; C-HE-11)."*
 - [ ] **Step 4: GREEN**, register `Row("C-HE-11", "shell:tools/hooks/test_lane_init.sh", "phase0", "local + CI", False)`, `Row("C-HE-11", "pytest:tools/test_compose_lanes.py::test_lane_port_formula", "phase0", "local + CI", False)`, `Row("C-HE-11", "pytest:tools/test_compose_lanes.py::test_two_lanes_disjoint_names_and_ports", "env", "local", False, ("docker-daemon-absent",))`. Commit `feat(he-lanes): U-HE-31 lane-init (lane id/index, gc.auto once, RAM probe) + per-lane compose project/ports (C-HE-11)`.
 
+
+*As built (PR #1434).* The unit landed with its scope intact — lane id, lane index, `gc.auto`,
+the headroom probe, the per-lane Compose project and port block, and the teardown release —
+after thirteen out-of-family rounds and a 3-lens merge gate. Where the built form differs from
+the drafted bodies above, it is because a reviewer exhibited the interleaving that the drafted
+form permits:
+
+(i) **`HARNESS_LANE_INDEX_FORCE` is GONE.** The draft carried two index knobs with different
+rules (`FORCE` skipped the reuse-by-path scan; a preset claimed nothing), and that asymmetry
+WAS the defect: a preset issued after a normal init added a SECOND claim for one worktree, so
+two shells in one lane could drive different Compose projects. The built script has ONE rule —
+a worktree holds at most one claim, and an index is usable only when a claim positively names
+this worktree — and one knob, `HARNESS_LANE_INDEX`, which asks for a specific index rather
+than the next free one and is range-checked (canonical spelling, `< 350`) before it becomes a
+filename. The Step 1/Step 3 code above still spells the removed knob; it is the drafted form,
+superseded by this note.
+
+(ii) **Every registry write is a PUBLICATION, never a bare redirect.** The drafted
+`set -o noclobber; … > file` makes the NAME visible at `open()` and the payload visible after,
+so a concurrent reader sees an owner-less record and acts on it — taking `k+1` for a lane that
+already has `k`, or keeping its own identity when the marker's owner had already won. Both the
+`.lane-id` marker and each `lanes/<k>` claim are written to an exclusively-created temp and
+published with `ln` (or `mv -f` under a lock, for a repair). A zero-byte or blank-line record
+is a corpse the protocol cannot produce, so it is reclaimed — under an exclusive `mkdir` lock,
+with a re-check inside the lock and no unlocked fallback.
+
+(iii) **The RAM probe reads BOTH clauses of §5.** Total physical memory (the machine class)
+decides WHETHER to probe — that is what the 32 GB default is a floor on — and the probe itself
+is of available memory, plus the Docker VM's own ceiling when a daemon answers, against
+`HARNESS_LANE_STACK_NEED_GB` (an implementation estimate; §5 quantifies only the machine
+floor). A small-but-idle machine therefore runs its lane instead of being refused.
+
+(iv) **Teardown fences an index it cannot verify, rather than trusting or holding it.** The
+plan says the release frees `QUEUE_DIR/lanes/<k>`; built, it first brings that lane's Compose
+project down *with its volumes* — because `up` ADOPTS an existing project rather than failing,
+so a recycled index would silently inherit a dead lane's containers and state. Only the total
+absence of a `docker` binary counts as proof that nothing can exist; every other outcome is
+unverified and writes `lanes/.orphaned-<k>`, which `lane-init` honours before the next lane
+uses that index. The release lives inside `hook_safe_worktree_remove`, not the wrapper script,
+because `loop_gc_worktrees` calls the function directly.
+
+*Also owed and landed by this unit, outside its stated Files list:* the permission guard admits
+the sourced `lane-init.sh` and the three stack recipes (without them the two-lane carrier
+stalls at ask-then-deny in loop mode); `roadmap-continue/SKILL.md` no longer tells an agent to
+mint and write `.lane-id` itself, since lane-init is now its one writer; the store-audit page
+gains the orphan fence and the repair lock, and its extractor gains the `$var/<name>$interp`
+idiom that made those literals invisible to it.
+
+*Registered rather than absorbed:* **B-200** (per-lane telemetry endpoints — the stack is
+isolated, its consumers still dial lane 0), **B-201** (a failed `gc.auto 0` write warns rather
+than refusing the lane; its close-out is U-HE-32's bounded retry), and **B-202** (a claim↔
+cleanup lock and available-memory-inside-the-VM, both needing a primitive outside this unit).
+
 ---
 
 ### U-HE-32: git ref-lock bounded retry helper

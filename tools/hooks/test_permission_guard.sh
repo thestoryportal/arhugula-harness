@@ -468,6 +468,42 @@ for c in 'uv run python tools/reservations.py transition --arc-id x --to merged'
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "reservations hardening: '$c' → not allow" || bad "reservations over-matched: $c"
 done
+# (a''') U-HE-31: the reaping recipe's mandatory pre-step. two-lane/SKILL.md now requires the
+# lane's stack to come down BEFORE safe-worktree-remove frees its index; if that command is
+# ask-then-deny in loop mode, the carrier stalls one step short of the allowlisted reaper.
+for c in 'just r420-self-hosted-stack-down' \
+         'just r420-self-hosted-stack-up' \
+         'just r420-self-hosted-stack-status'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "stack recipe → allow: '$c'" || bad "stack recipe not allowed: $c → $OUT"
+done
+for c in 'just r420-self-hosted-readiness /etc/passwd' \
+         'just r420-self-hosted-stack-down; rm -rf /' \
+         'just r420-self-hosted-stack-nuke'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "stack-recipe hardening: '$c' → not allow" || bad "stack recipe over-matched: $c"
+done
+
+# (a'') U-HE-31: lane open SOURCES lane-init. Without an allowance the two-lane recipe's
+# mandatory first step becomes ask → headless denial, and the lane runs with no id/index.
+for c in 'source tools/hooks/lane-init.sh' \
+         '. tools/hooks/lane-init.sh' \
+         '  source tools/hooks/lane-init.sh'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "sourced lane-init → allow: '$c'" || bad "lane-init source not allowed: $c → $OUT"
+done
+# hardening: the allowance carries NO argument surface and names ONE path.
+for c in 'source tools/hooks/lane-init.sh --force' \
+         'source tools/hooks/other.sh' \
+         'source ../elsewhere/lane-init.sh' \
+         'source /etc/lane-init.sh' \
+         'sourced tools/hooks/lane-init.sh' \
+         'source tools/hooks/lane-init.sh; rm -rf /' \
+         'source tools/hooks/lane-init.sh && curl evil.example'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "lane-init hardening: '$c' → not allow" || bad "lane-init over-matched: $c"
+done
+
 # (a') ship-pr's pending→open flip: transition is allowed for --to open ONLY (codex r1 P1);
 # terminal targets reject the whole command wherever they appear (argparse last-wins).
 OUT=$(run_on "$(pl Bash 'uv run python tools/reservations.py transition --arc-id u-he-25 --to open --lane-id lane-1' '')")

@@ -556,3 +556,41 @@ Outcome: MERGE (all-approve). Out-of-family Codex: round 1 CLEAN, round 2 (post 
 | 2026-08-23T08:21:35Z | #1426 | 4fd61068d866 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
 | 2026-08-23T08:24:40Z | #1426 | 4fd61068d866 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
 | 2026-08-23T08:29:21Z | #1426 | 4fd61068d866 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-23T19:17:51Z | #1434 | 3b4b87bf67fe | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-23T19:22:40Z | #1434 | 3b4b87bf67fe | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+
+## PR #1434 — 2026-08-23 — `feat/u-he-31-lane-init` (U-HE-31 lane-init, C-HE-11)
+
+Three lens rounds were run as the head moved; the verdicts below are the terminal ones,
+each against the head named.
+
+| Lens | Verdict | Head |
+|---|---|---|
+| `merge-gate-concurrency` | **BLOCK** (B-202 residual — see below) | `024c3c700` |
+| `merge-gate-spec-conformance` | APPROVE | `6177e0686`, re-verified at `024c3c700` |
+| `merge-gate-witness-adequacy` | APPROVE | `024c3c700` |
+
+`blast-radius: 6 production consumers` — `hook_safe_worktree_remove` (lib.sh) and
+`loop_gc_worktrees` (loop_lib.sh) reach the teardown release; the three
+`r420-self-hosted-stack-*` recipes and both lane-opening skills source lane-init;
+`tools/lane_ports.py` is consumed by the recipes and by `_hook_lane_stack_down`.
+
+**Findings absorbed across the rounds.** Concurrency: the auto-assign branch withdrew a
+claim it may only have ADOPTED (P1, fixed and witnessed); the withdrawal was a symmetric
+check-then-act that let two racers both delete (fixed by a total order); the two-way order
+left two survivors in a three-way race, because `lanes/*` sorts lexicographically (fixed by
+comparing against the minimum). Witness: no test distinguished the two arms of the release's
+`rc` case, so a branch swap passed (fixed, mutation-probed); the colon test's downstream
+assertion was dead code (replaced with a real reservation-store round-trip). Spec: the
+`.orphaned-<lane>` store was undocumented AND invisible to the audit extractor (both fixed;
+deleting the page row now reddens the suite); this arc's `lib.sh` edit staled the C-HE-04
+mutation-probe pin (re-probed, back to the 14-unprobed baseline).
+
+**Outcome: MERGE, on an operator decision at a split verdict.** The concurrency BLOCK is the
+registered B-202 residual: the duplicate-claim withdrawal cannot enforce at-most-one without
+a lock shared with the release path, and three successive lock-free rules were each defeated
+by a new interleaving. The rule retained converges every case where racers see each other and
+can never leave zero survivors; the code, the tests and the register now state that bound
+instead of claiming the invariant. Surfaced via `AskUserQuestion`; the operator selected
+"land it; residual registered", consistent with the B-190/B-191 precedent of landing with a
+reasoned, registered residual rather than iterating past the point of convergence.

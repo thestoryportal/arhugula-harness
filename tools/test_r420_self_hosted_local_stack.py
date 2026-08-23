@@ -36,18 +36,18 @@ def test_r420_compose_declares_local_collector_tempo_grafana_stack() -> None:
     assert collector["image"].startswith(
         "${R420_OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:"
     )
-    assert "4317:4317" in collector["ports"]
-    assert "4318:4318" in collector["ports"]
+    assert "${R420_PORT_OTEL_GRPC:-4317}:4317" in collector["ports"]
+    assert "${R420_PORT_OTEL_HTTP:-4318}:4318" in collector["ports"]
     assert collector["depends_on"] == {"tempo": {"condition": "service_started"}}
     assert "./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" in collector["volumes"]
 
     tempo = services["tempo"]
     assert tempo["image"].startswith("${R420_TEMPO_IMAGE:-grafana/tempo:")
-    assert "3200:3200" in tempo["ports"]
+    assert "${R420_PORT_TEMPO:-3200}:3200" in tempo["ports"]
 
     grafana = services["grafana"]
     assert grafana["image"].startswith("${R420_GRAFANA_IMAGE:-grafana/grafana:")
-    assert "3000:3000" in grafana["ports"]
+    assert "${R420_PORT_GRAFANA:-3000}:3000" in grafana["ports"]
     assert grafana["depends_on"] == {"tempo": {"condition": "service_started"}}
 
 
