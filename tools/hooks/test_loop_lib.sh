@@ -719,6 +719,34 @@ loop_now() { echo "2026-08-18T06:11:00Z"; }; loop_log_structured DEFERRED-HIL L1
 [ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
   && ok "a NEW deferral after RESOLVED re-anchors the window" || bad "re-deferral did not re-anchor"
 
+# Resolving the EARLIEST member of a delivered group must not re-prompt the members that
+# were already in that batch (codex r3 P2). A generation id is recomputed from the earliest
+# still-PENDING member, so id-matching re-prompts here; comparing the delivery TIMESTAMP
+# against the group's first_seen -- C-HE-10 §2's literal rule -- does not.
+_coalesce_reset
+loop_now() { echo "2026-08-18T10:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'q:r:s' 'B-95 — earliest member'
+loop_now() { echo "2026-08-18T10:00:30Z"; }; loop_log_structured DEFERRED-HIL L2 'q:r:s' 'B-96 — later member'
+loop_now() { echo "2026-08-18T10:11:00Z"; }
+OUT_R=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_R" == *"B-95"* && "$OUT_R" == *"B-96"* ]] \
+  && ok "both members ride the one batch" || bad "batch incomplete: $OUT_R"
+loop_log_structured RESOLVED-HIL L1 'q:r:s' 'B-95 — answered'
+loop_now() { echo "2026-08-18T10:12:00Z"; }
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "resolving the earliest member does not re-prompt the rest of a delivered batch" \
+  || bad "delivered member re-prompted after an earlier member resolved"
+
+# Two DUE generations of one cause in a single pass are two genuinely undelivered
+# generations: both must be prompted, so the pass must not stamp itself into the map.
+_coalesce_reset
+loop_now() { echo "2026-08-18T11:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'u:v:w' 'B-97 — gen one'
+loop_now() { echo "2026-08-18T11:30:00Z"; }; loop_log_structured DEFERRED-HIL L2 'u:v:w' 'B-98 — gen two'
+loop_now() { echo "2026-08-18T11:45:00Z"; }
+OUT_T=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_T" == *"B-97"* && "$OUT_T" == *"B-98"* ]] \
+  && ok "two due generations of one cause both deliver in a single pass" \
+  || bad "one due generation suppressed the other in-pass: $OUT_T"
+
 # A CHANGED cause is a new gate and re-anchors the window (codex r2 P2). Without this the
 # item keeps cause A's first arrival while grouping under cause B, so B can be instantly
 # eligible instead of receiving its own coalescing window.

@@ -589,8 +589,27 @@ _loop_hil_deliver_unlocked() {
   # generation id (loop_log_structured writes it as the whole detail), so this shares
   # the one row parser rather than re-deriving the column layout. Read INSIDE the lock:
   # reading it outside is the check-then-act the lock exists to remove.
-  local delivered lane sig n first items gen
-  delivered=$(awk -F'|' "$_LOOP_AWK_ROW"'{ rowparse() } k == "COALESCE-DELIVERED" { print tok }' "$p" 2>/dev/null)
+  # Coverage is the spec's LITERAL rule (C-HE-10 §2): a row is delivered when a
+  # COALESCE-DELIVERED row for its cause exists AT/AFTER its first_seen. So the
+  # delivered-set is the LATEST delivery epoch per cause_signature, not a set of
+  # generation ids. Matching generation ids instead was wrong (codex r3 P2): a
+  # generation is recomputed from the earliest still-PENDING member, so resolving the
+  # earliest member of a delivered group moves first_seen forward, mints a different id,
+  # and re-prompts the members that WERE in the first batch. Comparing timestamps has no
+  # such dependence on who is still pending. It also still delivers a LATER generation of
+  # the same cause: that group's first_seen is after the earlier delivery, so no delivery
+  # at/after it exists yet.
+  local delivered lane sig n first items gen last
+  delivered=$(awk -F'|' "$_LOOP_AWK_EPOCH$_LOOP_AWK_ROW"'
+    { rowparse() }
+    k == "COALESCE-DELIVERED" {
+      cause = $4
+      if (cause ~ /^[ \t]*lane=/) { sub(/^[^;]*;cause=/, "", cause); gsub(/[ \t]/, "", cause) }
+      else next
+      e = epoch($2); if (e < 0) next
+      if (!(cause in mx) || e > mx[cause]) mx[cause] = e
+    }
+    END { for (c in mx) printf "%s\t%d\n", c, mx[c] }' "$p" 2>/dev/null)
   lane=$(_loop_lane_id)
   # Fed by here-doc rather than a pipe so the loop body runs in THIS shell: `delivered`
   # must accumulate across iterations, and a pipeline subshell would discard it.
@@ -598,7 +617,12 @@ _loop_hil_deliver_unlocked() {
     [ -n "$sig" ] || continue
     [ $(( now - first )) -ge "$w" ] || continue
     gen="gen-${first}-${sig}"
-    printf '%s\n' "$delivered" | grep -qxF "$gen" && continue
+    last=$(printf '%s\n' "$delivered" | awk -F'\t' -v s="$sig" '$1 == s { print $2 }')
+    # No in-pass update of `delivered`: loop_hil_groups emits each group exactly once, and
+    # two DUE generations of one cause in a single pass are two genuinely undelivered
+    # generations that must BOTH be prompted. Stamping this pass's `now` into the map
+    # would suppress the second.
+    [ -n "$last" ] && [ "$last" -ge "$first" ] && continue
     # Prompt FIRST, ledger row second -- both inside the lock. A concurrent second prompt
     # is impossible (the lock serialises, and the loser reads the row this branch
     # appended), so the only ordering that still matters is the crash case: a crash
@@ -607,7 +631,6 @@ _loop_hil_deliver_unlocked() {
     # mark a gate delivered that the operator never actually saw.
     printf '[loop] ⏸ %s item(s) need you (%s): %s\n' "$n" "$sig" "$items"
     loop_log_structured COALESCE-DELIVERED "$lane" "$sig" "$gen" || return 1
-    delivered=$(printf '%s\n%s' "$delivered" "$gen")
   done <<EOF
 $(loop_hil_groups)
 EOF
