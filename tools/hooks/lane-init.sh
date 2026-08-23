@@ -46,6 +46,13 @@ _lane_repair_lock() {
 }
 _lane_repair_unlock() { rmdir "$1.repair" 2>/dev/null; return 0; }
 
+# ONE sanitiser for every id source — the environment, the mint, the shell fallback, and a
+# marker persisted by an older version. `:` is MAPPED rather than deleted because
+# reservations._check_id REJECTS a lane_id containing one (it delimits finding ids) and
+# mint_lane_id normalises it to '-'; the rest are the ledger's own column delimiters, and a
+# space additionally breaks the claim record, which is space-delimited.
+_li_sanitize() { printf '%s' "${1:-}" | tr ':' '-' | tr -d ' \t\n\r|;[]'; }
+
 _LI_Q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
 _LI_WT="$(pwd -P)"   # physical path: the registry is compared against it at teardown
 # The registry only means anything if every lane resolves it to the SAME directory. A
@@ -56,6 +63,7 @@ _LI_WT="$(pwd -P)"   # physical path: the registry is compared against it at tea
 case "$_LI_Q" in
   /*) ;;
   *) echo "lane-init: ARC_METRICS_QUEUE_DIR must be an absolute path, got '$_LI_Q'" >&2
+     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
      unset _LI_ROOT _LI_Q _LI_WT
      return 1 2>/dev/null || exit 1 ;;
 esac
@@ -87,14 +95,28 @@ _lane_init_id() {
   # cannot replace it (not a corpse by size) while every read yields an empty id. Emptiness
   # is therefore judged on the CONTENT of the first line, everywhere this file inspects it.
   _li_marker_blank() { [ ! -s "$1" ] && return 0; IFS= read -r _b < "$1"; [ -z "${_b:-}" ]; }
+  # A PERSISTED marker is sanitised on READ as well as on write. Markers written before this
+  # unit came from `mint-lane-id`, which preserved a space in the worktree basename — so a
+  # legacy `host-with space-abc` would be adopted verbatim into the space-delimited claim,
+  # where every scan misparses the recorded path: the lane re-allocates an index on each
+  # source and its stack-down stops targeting the stack it started. A marker that does not
+  # match its own sanitised form is therefore migrated, by the same locked atomic republish
+  # a corpse gets, rather than trusted because it is non-empty.
   if ! _li_marker_blank "$f"; then
     IFS= read -r id < "$f"
-    if [ -n "$id" ]; then
+    _li_clean=$(_li_sanitize "$id")
+    if [ -n "$_li_clean" ] && [ "$_li_clean" = "$id" ]; then
       { [ -n "${HARNESS_LANE_ID:-}" ] && [ "$HARNESS_LANE_ID" != "$id" ]; } \
         && echo "lane-init: HARNESS_LANE_ID=$HARNESS_LANE_ID does not belong to this worktree — using the persisted $id" >&2
+      unset _li_clean
       printf '%s' "$id"
       return 0
     fi
+    if [ -n "$_li_clean" ]; then
+      echo "lane-init: migrating a persisted lane id that predates sanitisation ($id -> $_li_clean)" >&2
+      id="$_li_clean"; _li_migrate=1
+    fi
+    unset _li_clean
   fi
   if [ -n "${HARNESS_LANE_ID:-}" ]; then
     # Sanitise FIRST, then test. An exported value is operator- or agent-supplied text, and
@@ -104,19 +126,19 @@ _lane_init_id() {
     # (it delimits finding ids), and mint_lane_id normalises it to '-'. Deleting the ledger's
     # other delimiters while letting a colon through produced an id that persisted to the
     # marker and then failed every reservation call, keeping the lane broken.
-    id=$(printf '%s' "$HARNESS_LANE_ID" | tr ':' '-' | tr -d ' \t\n\r|;[]')
+    id=$(_li_sanitize "$HARNESS_LANE_ID")
     _lane_id_bound_elsewhere "$id" && id=""
   fi
-  [ -n "$id" ] || id=$( (cd "$_LI_ROOT" && uv run --quiet python tools/reservations.py mint-lane-id \
-          --worktree "$_LI_WT") 2>/dev/null | tr ':' '-' | tr -d ' \t\n\r|;[]' )
+  [ -n "$id" ] || id=$(_li_sanitize "$( (cd "$_LI_ROOT" && uv run --quiet python \
+          tools/reservations.py mint-lane-id --worktree "$_LI_WT") 2>/dev/null )")
   # Fallback keeps the SAME shape as reservations.mint_lane_id (host-worktree-8hex) so a
   # lane minted without uv is indistinguishable downstream from one minted with it.
   # The fallback runs through the SAME sanitiser as the uv-minted id: the claim record is
   # space-delimited and a worktree basename with a space would make every later read
   # misparse the path — the same worktree would claim extra indices and teardown would
   # match none of them.
-  [ -n "$id" ] || id="$(printf '%s-%s-%s' "$(hostname -s 2>/dev/null || echo host)" \
-    "$(basename "$_LI_WT")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" | tr ':' '-' | tr -d ' \t\n\r|;[]')"
+  [ -n "$id" ] || id=$(_li_sanitize "$(printf '%s-%s-%s' "$(hostname -s 2>/dev/null || echo host)" \
+    "$(basename "$_LI_WT")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')")")
   mkdir -p "$(dirname "$f")" 2>/dev/null
   # A ZERO-BYTE marker is a corpse, not a claim: only the pre-publication-protocol code
   # (or a stray `touch`) could produce one, and leaving it in place is unrecoverable —
@@ -129,12 +151,12 @@ _lane_init_id() {
   # then hold different ids. `mv` replaces atomically — concurrent repairers simply order,
   # the last one wins, and BOTH re-read the published file below and converge on one id.
   local corpse_repair=""
-  if [ -e "$f" ] && _li_marker_blank "$f"; then
+  if [ -e "$f" ] && { _li_marker_blank "$f" || [ -n "${_li_migrate:-}" ]; }; then
     if _lane_repair_lock "$f"; then
       # RECHECK under the lock. The observation that sent us here was made BEFORE the wait,
       # and the repairer we waited for may have published in the meantime — replacing its
       # marker now would give this worktree a second identity after the first was exported.
-      if ! _li_marker_blank "$f"; then
+      if ! _li_marker_blank "$f" && [ -z "${_li_migrate:-}" ]; then
         IFS= read -r id < "$f"
         _lane_repair_unlock "$f"
         printf '%s' "$id"
@@ -191,7 +213,8 @@ _lane_init_id() {
   printf '%s' "$id"
 }
 if ! _LI_ID="$(_lane_init_id)"; then
-  unset _LI_ROOT _LI_Q _LI_WT _LI_ID
+  unset HARNESS_LANE_ID HARNESS_LANE_INDEX
+  unset _LI_ROOT _LI_Q _LI_WT _LI_ID _li_migrate
   unset -f _lane_init_id
   return 1 2>/dev/null || exit 1
 fi
@@ -217,18 +240,18 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   case "$HARNESS_LANE_INDEX" in
     ''|*[!0-9]*)
       echo "lane-init: HARNESS_LANE_INDEX must be an integer 0..349, got '$HARNESS_LANE_INDEX'" >&2
-      unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
     0) ;;
     0*)
       echo "lane-init: HARNESS_LANE_INDEX must be canonical (no leading zeros), got '$HARNESS_LANE_INDEX'" >&2
-      unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
   esac
   # Bound the LENGTH before the comparison: a digit string too large for the shell's integer
   # type makes `test -ge` exit 2, which `if` reads as false — and a 30-digit index would then
   # be published as a claim filename. Every valid index is at most three digits.
   if [ "${#HARNESS_LANE_INDEX}" -gt 3 ] || [ "$HARNESS_LANE_INDEX" -ge 350 ]; then
     echo "lane-init: HARNESS_LANE_INDEX must be < 350 (no port block exists above it), got '$HARNESS_LANE_INDEX'" >&2
-    unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
   fi
 fi
 
@@ -251,7 +274,7 @@ for _li_f in "$_LI_Q"/lanes/*; do
       if ! printf '%s inherited-claim %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_li_id:-}" \
            > "$_LI_Q/lanes/.orphaned-$_li_have" 2>/dev/null; then
         echo "lane-init: cannot fence inherited lane index $_li_have (marker unwritable) — refusing to adopt a stack this lane cannot account for" >&2
-        unset HARNESS_LANE_ID
+        unset HARNESS_LANE_ID HARNESS_LANE_INDEX
         unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
         return 1 2>/dev/null || exit 1
       fi
@@ -263,7 +286,7 @@ for _li_f in "$_LI_Q"/lanes/*; do
              && mv -f "$_li_tmp" "$_li_f" 2>/dev/null; }; then
         rm -f "${_li_tmp:-}" 2>/dev/null
         echo "lane-init: could not rebind inherited lane index $_li_have to this lane — refusing rather than running on a claim that names someone else" >&2
-        unset HARNESS_LANE_ID
+        unset HARNESS_LANE_ID HARNESS_LANE_INDEX
         unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_tmp
         return 1 2>/dev/null || exit 1
       fi
@@ -278,7 +301,7 @@ unset _li_f _li_id _li_path
 if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   if [ -n "$_li_have" ] && [ "$_li_have" != "$HARNESS_LANE_INDEX" ]; then
     echo "lane-init: this worktree already holds lane index $_li_have — refusing to also take $HARNESS_LANE_INDEX" >&2
-    unset HARNESS_LANE_ID
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX
     unset _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
   fi
   _li_published=""
@@ -303,7 +326,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   fi
   if [ -z "$_li_ok" ]; then
     echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX could not be claimed for this worktree (claim: [$(cat "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null)]) — refusing to run on a project this lane does not own" >&2
-    unset HARNESS_LANE_ID
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX
     unset _LI_ROOT _LI_Q _LI_WT _li_have _li_id _li_path _li_ok
     return 1 2>/dev/null || exit 1
   fi
@@ -325,7 +348,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
       else
         echo "lane-init: this worktree holds lane index $(basename "$_li_f"); the claim on $HARNESS_LANE_INDEX was published by another source and is left alone" >&2
       fi
-    unset HARNESS_LANE_ID
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX
       unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
       return 1 2>/dev/null || exit 1
     fi
@@ -387,7 +410,7 @@ else
           [ "${_li_path:-}" = "$_LI_WT" ] && break
         else
           echo "lane-init: a stale repair lock blocks $_LI_Q/lanes/$_li_k.repair — remove it and re-open the lane" >&2
-          unset HARNESS_LANE_ID
+          unset HARNESS_LANE_ID HARNESS_LANE_INDEX
           unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
           return 1 2>/dev/null || exit 1
         fi
@@ -400,7 +423,7 @@ else
       # Never fall through with an unset index: every consumer defaults to lane 0, so a
       # silent miss puts this lane on lane 0's project name, ports and volumes.
       echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
-      unset HARNESS_LANE_ID
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX
       unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
       return 1 2>/dev/null || exit 1
     fi
@@ -424,7 +447,7 @@ else
       else
         echo "lane-init: this worktree holds lane index $(basename "$_li_f"); the claim on $_li_k was published by another source and is left alone" >&2
       fi
-      unset HARNESS_LANE_ID
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX
       unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_f _li_id _li_path _li_tmp _li_retried _li_published
       return 1 2>/dev/null || exit 1
     fi
@@ -572,5 +595,5 @@ lane_stack_allowed() {
   return 1
 }
 
-unset _LI_ROOT _LI_Q _LI_WT
-unset -f _lane_init_id
+unset _LI_ROOT _LI_Q _LI_WT _li_migrate
+unset -f _lane_init_id _li_sanitize

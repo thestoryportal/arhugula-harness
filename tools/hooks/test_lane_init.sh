@@ -723,5 +723,48 @@ OUT=$(
   && ok "lane_stack_allowed clears the fence and admits the lane" \
   || bad "stack-up path did not honour the fence: '$OUT'"
 
+# --- 37. a marker written BEFORE sanitisation is migrated, not adopted verbatim --------
+# `mint-lane-id` preserved a space in the worktree basename, so markers predating this unit
+# can hold `host-with space-abc`. Adopted as-is it goes into the space-delimited claim, where
+# every scan misparses the path: the lane re-allocates an index on each source and its
+# stack-down stops naming the stack it started. The migration path is the one a real
+# workspace takes, and it starts from an EXISTING marker — which the spaced-worktree case
+# above does not, because that one starts clean.
+MIGQ="$ROOT/migrate-q"
+git -C "$ROOT/repo" worktree add -q "$ROOT/wt10" -b lane-j || { echo "FATAL: worktree j"; exit 1; }
+mkdir -p "$ROOT/wt10/.harness"
+printf 'legacy host-with space-abc\n' > "$ROOT/wt10/.harness/.lane-id"
+ID_MIG=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\${HARNESS_LANE_ID:-}\"")
+case "$ID_MIG" in
+  *" "*) bad "the legacy marker's space reached the lane id: '$ID_MIG'" ;;
+  "") bad "the legacy marker produced no lane id" ;;
+  *) ok "a pre-sanitisation marker is migrated, not adopted verbatim" ;;
+esac
+case "$(cat "$ROOT/wt10/.harness/.lane-id" 2>/dev/null)" in
+  *" "*) bad "the marker on disk still holds the unsanitised id" ;;
+  *) ok "and the migration is PERSISTED, so the next source is already clean" ;;
+esac
+K_MIG=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+K_MIG2=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+{ [ -n "$K_MIG" ] && [ "$K_MIG" = "$K_MIG2" ]; } \
+  && ok "the migrated lane reuses one index instead of re-allocating each source" \
+  || bad "migrated lane churned its index: '$K_MIG' then '$K_MIG2'"
+
+# --- 38. a failed source leaves NO lane identity AND no lane index behind --------------
+# The index is as dangerous as the id: a shell that carries a stale one into another
+# worktree runs that lane on the previous lane's Compose project, ports and volumes.
+OUT=$(cd "$ROOT/wt" && HARNESS_LANE_ID=carried-over HARNESS_LANE_INDEX=5 \
+  ARC_METRICS_QUEUE_DIR="relative/not/absolute" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset} k=\${HARNESS_LANE_INDEX:-unset}\"")
+[ "$OUT" = "rc=1 id=unset k=unset" ] && ok "a failed source clears both the id and the index" \
+  || bad "failed source kept lane state: $OUT"
+OUT=$(cd "$ROOT/wt" && HARNESS_LANE_ID=carried-over HARNESS_LANE_INDEX=999 \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset} k=\${HARNESS_LANE_INDEX:-unset}\"")
+[ "$OUT" = "rc=1 id=unset k=unset" ] && ok "and so does a refused index, not just a refused registry" \
+  || bad "refused index kept lane state: $OUT"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
