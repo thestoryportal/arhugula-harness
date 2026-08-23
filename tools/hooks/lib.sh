@@ -780,6 +780,11 @@ _hook_worktree_matches_expected_identity() {
 # down from a removal hook would make teardown depend on a daemon that is usually absent,
 # so the stack-down is a documented step of the reaping recipe instead
 # (.claude/skills/two-lane/SKILL.md), and the failure it guards against is loud, not silent.
+# RESIDUAL, stated rather than hidden: automated reapers (loop_gc_worktrees,
+# codex_worktree_gc.py) do not run that manual step, so a GC-reaped lane whose stack was
+# left up frees its index while its containers still hold the ports. The next lane handed
+# that index fails its `up` on a port bind — visibly, at the moment of use, naming the
+# conflict. Making teardown itself stop containers is the follow-on, not this unit.
 # Usage: hook_release_lane_index /physical/path/to/worktree
 hook_release_lane_index() {
   local wt="${1:-}" q f id path
@@ -906,6 +911,10 @@ hook_safe_worktree_remove() {
     *) rc=9 ;;
   esac
   if [ "$rc" -eq 0 ]; then
+    # The lane-index release lives HERE, not in the safe-worktree-remove.sh wrapper:
+    # loop_gc_worktrees calls this function directly, and a release attached to the wrapper
+    # alone would let every GC-reaped lane leak its index permanently.
+    hook_release_lane_index "$wt"
     rm -f "$transaction" 2>/dev/null || rc=6
   elif [ -d "$quarantine" ]; then
     _hook_worktree_restore_transaction "$root" "$transaction" >/dev/null

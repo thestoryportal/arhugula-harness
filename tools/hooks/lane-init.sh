@@ -66,12 +66,25 @@ _lane_init_id() {
   fi
   # RE-READ after publication: if a concurrent session in this worktree won the race, ITS id
   # is the lane id — adopting our own would fork the identity.
-  if [ -s "$f" ]; then
-    IFS= read -r id < "$f"
+  # FAIL LOUD if nothing is there to read. Returning the freshly minted id from an
+  # unpersisted publication would hand this session an identity the NEXT session cannot
+  # recover — it would mint a different one for the same worktree, which is precisely the
+  # split identity the persisted marker exists to prevent. An unwritable `.harness/` is a
+  # broken lane, not a lane with a temporary id.
+  if [ ! -s "$f" ]; then
+    echo "lane-init: could not persist a lane id at $f — refusing to continue with an unrecoverable identity" >&2
+    return 1
   fi
+  IFS= read -r id < "$f"
   printf '%s' "$id"
 }
-export HARNESS_LANE_ID="$(_lane_init_id)"
+if ! _LI_ID="$(_lane_init_id)"; then
+  unset _LI_ROOT _LI_Q _LI_WT _LI_ID
+  unset -f _lane_init_id
+  return 1 2>/dev/null || exit 1
+fi
+export HARNESS_LANE_ID="$_LI_ID"
+unset _LI_ID
 
 # ── lane index ───────────────────────────────────────────────────────────────────────
 # A preset HARNESS_LANE_INDEX is honoured verbatim and claims nothing: the caller
@@ -91,26 +104,42 @@ if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
   if [ -z "$_li_k" ]; then
     _li_k="${HARNESS_LANE_INDEX_FORCE:-0}"
     while :; do
-      if ( set -o noclobber; printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_LI_Q/lanes/$_li_k" ) 2>/dev/null; then
+      # SAME publication protocol as the lane-id marker, for the same reason: a bare
+      # noclobber redirect makes the claim file visible EMPTY between open() and the
+      # payload write, and a concurrent initializer of this same worktree reading it in
+      # that window sees no owner, decides the claim is someone else's, and takes k+1 —
+      # one lane, two indices, two stacks. The payload is written to an exclusively-created
+      # temp and published with `ln`, so a claim is never observable without its owner.
+      if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
+         && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
+         && ln "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
+        rm -f "$_li_tmp" 2>/dev/null
         break
       fi
-      # The create can lose to a CONCURRENT init of THIS SAME worktree (two shells opening
-      # one lane). Incrementing past it would give one lane two indices and two stacks, so
-      # the occupant is inspected: if it is ours, adopt it instead of claiming another.
+      rm -f "${_li_tmp:-}" 2>/dev/null
+      # The claim can lose to a CONCURRENT init of THIS SAME worktree. Incrementing past it
+      # would give one lane two indices, so the occupant is inspected: adopt it when it is
+      # ours. A ZERO-BYTE occupant is a corpse the current protocol cannot produce (a
+      # pre-protocol crash, or a stray touch) — unlink it and retry this same k ONCE, never
+      # in a loop, so a genuinely contended index still advances.
       IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
       [ "${_li_path:-}" = "$_LI_WT" ] && break
+      if [ -e "$_LI_Q/lanes/$_li_k" ] && [ ! -s "$_LI_Q/lanes/$_li_k" ] && [ -z "${_li_retried:-}" ]; then
+        _li_retried=1; rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null; continue
+      fi
+      _li_retried=""
       _li_k=$((_li_k + 1))
       if [ "$_li_k" -ge 350 ]; then
         # Never fall through with an unset index: every consumer defaults to lane 0, so a
         # silent miss puts this lane on lane 0's project name, ports and volumes.
         echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
-        unset _li_k _li_f _li_id _li_path
+        unset _li_k _li_f _li_id _li_path _li_tmp _li_retried
         return 1 2>/dev/null || exit 1
       fi
     done
   fi
   export HARNESS_LANE_INDEX="$_li_k"
-  unset _li_k _li_f _li_id _li_path
+  unset _li_k _li_f _li_id _li_path _li_tmp _li_retried
 fi
 
 # ── git gc ───────────────────────────────────────────────────────────────────────────
@@ -124,25 +153,45 @@ fi
 # ── RAM headroom probe (C-HE-11 §5) ──────────────────────────────────────────────────
 # True when this lane may bring the three-container R-420 stack up. Lanes 0 and 1 always
 # may: the floor exists to stop the THIRD concurrent stack on a 16 GB reference machine.
-# The floor is compared against TOTAL physical memory — the machine class — not free RAM:
-# the spec's quantified number is "a machine below an operator-configured RAM floor (default
-# 32 GB)", and a 32 GB default compared against *available* memory would refuse the third
-# stack on exactly the 32 GB machine the floor is written to admit. Docker-VM headroom is
-# therefore approximated by machine class here; see the as-built note on this unit.
+# The contract has TWO clauses and they are not the same measurement. TOTAL physical memory
+# (the machine class) decides WHETHER to probe at all — that is what the 32 GB default is a
+# floor on, and comparing a 32 GB default against free memory would refuse the third stack on
+# exactly the machine the floor is written to admit. On a machine below that floor, the probe
+# itself is of AVAILABLE memory against what one stack needs, so a small-but-idle machine can
+# still run the lane and a small-and-loaded one is told why it cannot.
+#
+# HARNESS_LANE_STACK_NEED_GB is an implementation estimate for the three containers, not a
+# spec number (the spec quantifies only the machine floor) — hence the knob. Unreadable
+# availability is treated as a shortfall: refusing loudly beats an opaque `up` failure
+# mid-pilot, which is the outcome this whole probe exists to replace.
+_lane_available_gb() {
+  if [ "$(uname)" = "Darwin" ]; then
+    # vm_stat pages: free + inactive + speculative are reclaimable without swapping.
+    vm_stat 2>/dev/null | awk '
+      /page size of/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+$/) ps = $i }
+      /Pages free/ || /Pages inactive/ || /Pages speculative/ { gsub(/\./, "", $NF); pages += $NF }
+      END { if (ps > 0 && pages > 0) printf "%d", (pages * ps) / 1073741824 }'
+  else
+    awk '/MemAvailable/ { printf "%d", $2 / 1048576 }' /proc/meminfo 2>/dev/null
+  fi
+}
 lane_stack_allowed() {
-  local floor_gb="${HARNESS_RAM_FLOOR_GB:-32}" mem_gb k="${HARNESS_LANE_INDEX:-0}"
+  local floor_gb="${HARNESS_RAM_FLOOR_GB:-32}" need_gb="${HARNESS_LANE_STACK_NEED_GB:-6}"
+  local mem_gb avail_gb k="${HARNESS_LANE_INDEX:-0}"
   [ "$k" -ge 2 ] || return 0
   if [ "$(uname)" = "Darwin" ]; then
     mem_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
   else
     mem_gb=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1048576 ))
   fi
-  if [ "$mem_gb" -lt "$floor_gb" ]; then
-    loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" "lane-env:transient-retry:ram_floor" \
-      "lane $k: ${mem_gb}GB < floor ${floor_gb}GB; self-hosted stack skipped (stack=absent)"
-    return 1
+  [ "$mem_gb" -ge "$floor_gb" ] && return 0          # at or above the floor: no probe owed
+  avail_gb="$(_lane_available_gb)"
+  if [ -n "$avail_gb" ] && [ "$avail_gb" -ge "$need_gb" ]; then
+    return 0
   fi
-  return 0
+  loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" "lane-env:transient-retry:ram_floor" \
+    "lane $k: ${mem_gb}GB machine < floor ${floor_gb}GB and ${avail_gb:-unknown}GB available < ${need_gb}GB needed; self-hosted stack skipped (stack=absent)"
+  return 1
 }
 
 unset _LI_ROOT _LI_Q _LI_WT

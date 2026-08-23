@@ -128,12 +128,13 @@ def test_stack_recipes_pass_a_per_lane_project() -> None:
     reason="docker-daemon-absent",
 )
 def test_two_lanes_disjoint_names_and_ports() -> None:
-    # Lane indices 300/301, never 1/2. This case brings stacks UP and tears them DOWN by
-    # project name; run on a machine where a real lane 1 or 2 is live, the low indices would
-    # reap that operator's running stack. 300/301 are inside the k<350 range, port-disjoint
-    # from every plausible lane, and are not handed out by lane-init (it allocates upward
-    # from 0), so the only stacks these names can name are this test's own.
-    a, b = 300, 301
+    # Never the low indices: this case brings stacks UP and tears them DOWN by project name,
+    # so on a machine where a real lane 1 or 2 is live it would reap that operator's stack.
+    # 348/349 sit at the very top of the k<350 range and lane-init allocates upward from 0.
+    # That makes collision implausible, not impossible — so the projects are also checked to
+    # be ABSENT first, and only the stacks this test actually started are torn down. A
+    # pre-existing stack under either name fails the test loudly instead of being adopted.
+    a, b = 348, 349
     env = {**os.environ, "HARNESS_RAM_FLOOR_GB": "0"}  # the RAM guard is not under test here
 
     def up(k: int) -> None:
@@ -177,9 +178,18 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         ).stdout
         return [json.loads(line) for line in out.splitlines() if line.strip()]
 
+    for k in (a, b):
+        assert not ps(k), (
+            f"a stack already exists under {lane_ports.project(k)} — refusing to adopt or "
+            f"tear down a project this test did not create"
+        )
+
+    started: list[int] = []
     try:
         up(a)
+        started.append(a)
         up(b)
+        started.append(b)
         c1, c2 = ps(a), ps(b)
         assert len(c1) == 3 and len(c2) == 3, (c1, c2)
         assert {c["Name"] for c in c1}.isdisjoint({c["Name"] for c in c2})
@@ -198,5 +208,5 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         assert f"{lane_ports.project(a)}_grafana-data" in vols
         assert f"{lane_ports.project(b)}_grafana-data" in vols
     finally:
-        down(a)
-        down(b)
+        for k in started:
+            down(k)

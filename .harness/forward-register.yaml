@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 199
+  total: 200
   open: 1
   design_substrate_gated: 3
-  registered_finding: 48
+  registered_finding: 49
   operator_gated: 0
   held: 2
   closed: 145
-  identity_digest: acf0b190b4e1d0fa
+  identity_digest: 586b4978970bd1f3
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10292,3 +10292,25 @@ items:
   council: 'NO — one mechanism with an enumerated ordering constraint (release-safety before
     propagation); the out-of-family reviewer is the scheduled decorrelated check.'
   heading: '### B-199 · `merge_door._notify` cannot durably record a DEFERRED-HIL when every write fails *(surfaced repeatedly by out-of-family Codex across the U-HE-29 PR, 2026-08-22; register-and-held — raising would wedge the global merge-door lease, so release-safety has to come first)*'
+- id: B-200
+  title: >-
+    C-HE-11 §1 per-lane telemetry ENDPOINTS — the lane's stack is isolated but every
+    consumer still dials lane 0's fixed 4317/3200/3000
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-31 r2) against the landed lane-isolation
+    unit. U-HE-31 gives lane k>=1 its own Compose project and host-port block, and the
+    R420_PORT_* exports that carry those numbers live only inside the stack-up/down/status
+    child shells. Nothing else reads them: the self-hosted config surface and the live-E2E
+    recipes still name 4317 / 3200 / 3000 literally, so a k>=1 lane brings up a correctly
+    ISOLATED stack that its own harness run then does not talk to. The isolation contract
+    C-HE-11 §1 states (project name + the four host ports) is fully met; what is missing is
+    the CONSUMER half, which the contract does not mention and the unit''s Files list does
+    not touch — a named follow-on, not a defect in the landed unit.'
+  close_out: '(1) Decide the carrier: a lane-aware OTLP endpoint resolved at config load
+    from HARNESS_LANE_INDEX / R420_PORT_OTEL_GRPC versus per-lane config files; (2) thread
+    it through the R-420 live-E2E recipes and docs/how-to-deploy.md, whose port literals are
+    the other half of the gap; (3) witness with a two-lane run whose traces land in that
+    lane''s OWN Tempo. Blocked on nothing — scheduled behind the remaining S4 units.'
+  council: 'NO — one consumer surface, no cross-axis tension; the contract half is settled
+    and only the wiring target is open.'
+  heading: '### B-200 · C-HE-11 §1 per-lane telemetry endpoints — the lane''s stack is isolated, its consumers still dial lane 0 *(surfaced by out-of-family Codex r2 against U-HE-31, 2026-08-23; registered, not blocking the unit)*'

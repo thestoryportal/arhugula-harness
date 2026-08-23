@@ -83,7 +83,9 @@ GC_ALL=$(git -C "$ROOT/wt" config --get-all gc.auto | wc -l | tr -d ' ')
   && ok "gc.auto is repo-wide (visible from the main checkout)" || bad "gc.auto not repo-wide"
 
 # --- 6. RAM probe (C-HE-11 §5): shortfall at k>=2 -> NOTIFY + stack absent -----------
-OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX_FORCE=2 HARNESS_RAM_FLOOR_GB=99999 \
+# Both clauses must bite: the machine is below the floor AND less is available than one
+# stack needs. Either alone is not a shortfall (case 6b covers the small-but-idle machine).
+OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX_FORCE=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
   bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
 [ "$OUT" = "ABSENT" ] && ok "RAM shortfall at lane>=2 skips the stack" || bad "ram probe said '$OUT'"
 grep -q '| NOTIFY | .*ram_floor' "$HARNESS_LOOP_STATUS_PATH" \
@@ -94,6 +96,14 @@ case "$NOTIFY_ROW" in
   *cause=merge-door*|*cause=reservation*) bad "environmental shortfall used a coordination cause: $NOTIFY_ROW" ;;
   *) ok "cause is environmental, never merge-door-/reservation- (C-HE-13 §3)" ;;
 esac
+
+# --- 6b. below the floor but genuinely idle: the probe ALLOWS the lane ---------------
+# The machine-class floor decides whether to probe; the probe is of AVAILABLE memory. A
+# floor-only gate would refuse a lane on a small machine with the whole of it free.
+OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=0 \
+  bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
+[ "$OUT" = "ALLOWED" ] && ok "below the floor but with headroom, the lane is allowed" \
+  || bad "idle small machine refused: '$OUT'"
 
 # --- 7. RAM probe never gates lanes 0/1, however low the machine --------------------
 for k in 0 1; do
@@ -112,7 +122,7 @@ OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=0 \
 # with the lane-0 project name and ports, exactly what the registry exists to prevent.
 EXH="$ROOT/exhausted"
 mkdir -p "$EXH/lanes"
-i=0; while [ "$i" -lt 350 ]; do : > "$EXH/lanes/$i"; i=$((i + 1)); done
+i=0; while [ "$i" -lt 350 ]; do printf 'other-lane %s\n' "$ROOT/not-our-worktree-$i" > "$EXH/lanes/$i"; i=$((i + 1)); done
 OUT=$(cd "$ROOT/wt2" && ARC_METRICS_QUEUE_DIR="$EXH" \
   bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? idx=\${HARNESS_LANE_INDEX:-unset}\"")
 case "$OUT" in
@@ -120,6 +130,15 @@ case "$OUT" in
   *"idx=unset") ok "exhausted index space fails loud with no index exported" ;;
   *) bad "exhausted index space: $OUT" ;;
 esac
+
+# --- 9b. a zero-byte CLAIM is a corpse the protocol cannot produce — reclaim it -------
+# Under `ln` publication a claim is never observable without its owner, so an empty entry is
+# a pre-protocol crash or a stray touch. Skipping past it would burn that index forever.
+CORPSE="$ROOT/corpse"; mkdir -p "$CORPSE/lanes"; : > "$CORPSE/lanes/0"
+KC=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$CORPSE" HARNESS_LANE_INDEX_FORCE=0 \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+{ [ "$KC" = "0" ] && [ -s "$CORPSE/lanes/0" ]; } && ok "a zero-byte claim is reclaimed, not skipped" \
+  || bad "corpse claim: k=$KC, entry now: [$(cat "$CORPSE/lanes/0" 2>/dev/null)]"
 
 # --- 10. source witness: no coordination cause family anywhere in the script ---------
 grep -q 'lane_stack_allowed' "$INIT" && ok "lane_stack_allowed is defined by the script" \
@@ -165,6 +184,25 @@ RM_RC=$?
 [ ! -f "$LANES/$K3" ] && ok "teardown released the lane index" || bad "lane index $K3 leaked after teardown"
 { [ -f "$LANES/$K1" ] && [ -f "$LANES/$K2" ]; } && ok "teardown left the surviving lanes' claims alone" \
   || bad "teardown removed a surviving lane's entry"
+
+# --- 12. the DIRECT hook_safe_worktree_remove call releases too (loop GC's path) -----
+# loop_gc_worktrees calls the library function, never the wrapper script. A release wired
+# only to the wrapper would let every GC-reaped lane leak its index permanently.
+git -C "$ROOT/repo" worktree add -q "$ROOT/wt4" -b lane-d || { echo "FATAL: worktree d"; exit 1; }
+K4=$(cd "$ROOT/wt4" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_INDEX")
+[ -f "$LANES/$K4" ] && ok "fourth lane claims an index" || bad "fourth lane did not claim"
+(
+  cd "$ROOT/wt4" || exit 1
+  BR=$(git -C "$ROOT/wt4" symbolic-ref --quiet --short HEAD)
+  OID=$(git -C "$ROOT/wt4" rev-parse HEAD)
+  cd "$ROOT/repo" || exit 1
+  source "$SCRIPT_DIR/lib.sh"
+  hook_safe_worktree_remove "$ROOT/repo" "$ROOT/wt4" "$BR" "$OID"
+) >/dev/null 2>&1
+DIRECT_RC=$?
+[ "$DIRECT_RC" -eq 0 ] && ok "direct hook_safe_worktree_remove succeeded" || bad "direct removal rc=$DIRECT_RC"
+[ ! -f "$LANES/$K4" ] && ok "the direct removal path released the lane index too" \
+  || bad "lane index $K4 leaked through the direct (loop GC) removal path"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

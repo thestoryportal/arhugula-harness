@@ -30,19 +30,19 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    single clean invocations), and shell exports do NOT survive across Bash tool calls, so
    the two `HARNESS_*` ids must be restated inline on every later command that reads them:
    ```bash
-   uv run python tools/reservations.py mint-lane-id     # ONLY if .harness/.lane-id is absent (below)
+   source tools/hooks/lane-init.sh                      # exports HARNESS_LANE_ID + HARNESS_LANE_INDEX
    uv run python tools/reservations.py selectable --arc-id <arc-id>
    ```
-   **Lane id is minted ONCE per worktree and persisted** (pre-U-HE-31 lane-init): if
-   `.harness/.lane-id` exists (gitignored, worktree-local), its content IS this lane's id —
-   NEVER overwrite it; re-read it (rather than trusting memory) before every `reserve`.
-   Only when absent, run `mint-lane-id`, Write the printed id there, then RE-READ the file
-   and adopt whatever it now contains — if a concurrent session in the same worktree won
-   the write race, its value is the lane id (one worktree IS one lane per the two-lane
-   discipline, so this is a crash-overlap edge, not a normal state; atomic exclusive-create
-   minting is U-HE-31 lane-init's). A fresh mint per session would generate a new random
-   suffix and make the same-lane resume below misclassify this lane's own reservation as
-   another's.
+   **Lane id is minted ONCE per worktree and persisted, and `tools/hooks/lane-init.sh` is
+   its ONE writer** (U-HE-31; C-HE-11 §1). Source it at lane start and read
+   `$HARNESS_LANE_ID` — do NOT mint, and do NOT `Write` `.harness/.lane-id` yourself: a
+   second writer is a second authority, and the non-atomic path is exactly the identity
+   race lane-init's temp-then-`ln` publication removes (it also allocates
+   `HARNESS_LANE_INDEX`, which the per-lane Docker project and ports depend on). Where the
+   env var is not in scope (a later Bash tool call — shell exports do not survive across
+   them), re-read `.harness/.lane-id` rather than trusting memory; its content IS this
+   lane's id, and a fresh mint per session would generate a new random suffix and make the
+   same-lane resume below misclassify this lane's own reservation as another's.
    - `selectable` exit 0 (free) → reserve it, then export for this shell:
      ```bash
      uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>
@@ -69,13 +69,14 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`.
    *Gap CLOSED at U-HE-25 (the reviewed permission-guard unit): the guard now
    auto-allows (loop mode) the reservations.py carrier verbs
-   `selectable|show|reserve|update|mint-lane-id` exact-shape, `transition` ONLY in the
+   `selectable|show|reserve|update|mint-lane-id` exact-shape, the sourced
+   `source tools/hooks/lane-init.sh` (U-HE-31, exact shape, no arguments), `transition` ONLY in the
    two-token `--to open` form (token-parsed — `=`-forms/abbreviations reject; terminal
    transitions and `gc` still surface to the operator), the leading
    `HARNESS_ARC_ID=`/`HARNESS_LANE_ID=` bareword prefix forms, and `git merge-tree` —
    so headless arcs CAN reserve at open. The degradation clause below survives as the
    generic fallback for any OTHER refusal (a non-loop venue, a future guard change):
-   if ANY arc-open command above (`mint-lane-id`, `selectable`, `reserve`) is refused
+   if ANY arc-open command above (`source tools/hooks/lane-init.sh`, `selectable`, `reserve`) is refused
    by the permission layer, proceed with the arc UNRESERVED and say so in the PR body;
    append safety still holds (the U-HE-19 drain bootstrap mints the reservation at
    closure and the C-HE-03 §6 holder gate fences the ledger). The same rule downstream:
