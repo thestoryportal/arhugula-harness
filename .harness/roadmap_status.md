@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3feb6a2bbf4b` |
+| `workspace_state_hash` | `360c1ae9bcd2` |
 | `last_refreshed` | 2026-08-23T00:00:00Z |
-| `git_head` | `309b4cc4` —  |
+| `git_head` | `e3f77c19` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1430).** The next implementable unit is `U-HE-31` (S4d — `tools/hooks/lane-init.sh`: mints `HARNESS_LANE_ID` / `HARNESS_LANE_INDEX` by exclusive create of `QUEUE_DIR/lanes/<k>`, sets `gc.auto 0` repo-wide once idempotently, probes RAM headroom before a lane-`k >= 2` stack below the 32 GB floor, and parameterizes the `compose.yaml` ports + `-p` project name per C-HE-11 §1-§5) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. U-HE-01..30 have landed; 15 units remain (U-HE-31..45). U-HE-30 landed HIL gate coalescing by `cause_signature` with windowed pull-based delivery (C-HE-10 §1-§4) after 5 out-of-family review rounds and 12/12 mutation probes; it carries one open obligation — the Class 1 fork filed at `.harness/class_1_fork_c_he_10_delivery_coverage_rule_swallows_adjacent_generation.md` (#1431) shows C-HE-10 §2 delivery-coverage rule permanently swallows an adjacent same-cause generation, so the implementation uses per-member coverage and the spec amendment (C-HE-10 §2 + C-HE-09 §5 row shape, version bump, change-note, clearance marker) is owed on ratification of Reading B.
+**Current next action (post-#1434).** The next implementable unit is `U-HE-32` (S4d — `hook_git_retry` in `tools/hooks/lib.sh`: bounded retry with full jitter `{base 100 ms, factor 2, cap 5 s, max 8}` on local `index.lock` / `.lock: File exists` contention, exhaustion failing the git op and emitting a `NOTIFY` under a `git-ref-lock:` cause that never routes to the merge-door budget, per C-HE-11 §3) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. U-HE-01..31 have landed; 14 units remain (U-HE-32..45). U-HE-31 landed lane initialisation (C-HE-11 §1/§2/§4/§5): `tools/hooks/lane-init.sh` exports a per-worktree `HARNESS_LANE_ID` (minted once, published temp-then-`ln`, the marker authoritative over the environment) and `HARNESS_LANE_INDEX` (exclusive-create claim, one per worktree, post-verified against a concurrent init), sets `gc.auto 0` once, and gates the R-420 stack on machine-class plus available-memory headroom; `tools/lane_ports.py` is the sole authority for the per-lane Compose project and the `30000 + 100k + {0..3}` port block, with lane 0 unchanged; teardown brings a lane's stack down with its volumes before recycling its index, fencing an index it cannot verify. Nineteen out-of-family rounds plus three merge-gate lenses; 117 hermetic shell assertions and 308 permission-guard assertions. Two review-driven fixes were REVERTED as worse than the leak they addressed (a stranded-claim reclamation, and a legacy-marker migration that would have orphaned reservations). It carries three registered obligations: **B-201** (a failed `gc.auto 0` write warns rather than refusing the lane — its close-out condition is U-HE-32's bounded retry, making the next unit the one that settles it), **B-202** (one missing primitive with four symptoms — a claim↔cleanup lock, available memory inside the Docker VM, the stranded claim after a reaped worktree, and at-most-one claim under a race whose participants cannot see each other), and **B-200** (per-lane telemetry endpoints — the stack is isolated, its consumers still dial lane 0).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1434 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1430 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1431 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1428 | 2026-08-23 | U-HE-29 session audit landed (doc-only); makes the roadmap_status pointer resolve |
 | 1426 | 2026-08-23 | U-HE-29 shared loop_status venue landed; merge-gate 3-lens all-approve (first gate run on this PR); the cutover migration was CUT at b1a099294 (-1483 lines) after its founding measurement was falsified |
-| PR #1424 | 2026-08-22 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
