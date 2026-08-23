@@ -138,7 +138,7 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # artifact names U-HE-29 introduced (merge-gate spec lens, #1426). A witness that cannot
     # see an idiom reports "nothing unlisted" for exactly the same reason it would report a
     # clean sheet -- which is the failure this page's own rule exists to prevent.
-    (re.compile(r'\$\{\w+\}(\.[A-Za-z0-9_\-]+)'), "shellsuffix"),
+    (re.compile(r"\$\{\w+\}(\.[A-Za-z0-9_\-]+)"), "shellsuffix"),
 ]
 #: Python-only idioms; a shell module spells its paths textually or via the `shell` form, and
 #: `case` patterns like `"refs/heads/"*)` would otherwise read as joins.
