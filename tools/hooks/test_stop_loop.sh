@@ -127,9 +127,9 @@ printf '| t | DEFERRED-HIL | R-777 — unreadable |\n' > "$REPO/.harness/loop_st
 chmod 000 "$REPO/.harness/loop_status.md"
 OUT=$(run_on)
 chmod 644 "$REPO/.harness/loop_status.md"
-echo "$OUT" | jq -e '.reason | test("INCOMPLETE")' >/dev/null 2>&1 \
-  && ok "a failed drain warns that the skip-set is incomplete" \
-  || bad "a failed drain left the skip-set silently incomplete: $OUT"
+[ -z "$OUT" ] && ok "a failed drain STANDS DOWN (no continuation) rather than proceeding on an unknowable skip-set" \
+  || bad "a failed drain continued the loop anyway: $OUT"
+[ -f "$REPO/.harness/.loop-halt" ] && ok "the halt marker is raised so the outer runner sees the gate" || bad "no halt marker after a failed drain"
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
 
 echo "----"

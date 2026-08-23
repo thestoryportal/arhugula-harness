@@ -119,10 +119,26 @@ while [ "$i" -lt "$MAX" ]; do
   _SKIPWARN=""
   case "$_MIGRC" in
     0) ;;
-    2) _SKIPWARN=" [WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — do NOT treat absence from it as permission to attempt an item]" ;;
-    *) _SKIPWARN=" [WARNING: a legacy loop_status ledger could NOT be drained (rc ${_MIGRC}), so this list is INCOMPLETE by an unknown amount — do NOT treat absence from it as permission to attempt an item; surface this to the operator]" ;;
+    2|3)
+      # A live sibling holds a claim. Self-healing: it completes on its own, and the rows it
+      # holds were already open before this iteration. Warn and continue.
+      _SKIPWARN=" [WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — do NOT treat absence from it as permission to attempt an item]"
+      echo "[loop] migration rc=2: a sibling holds a claim; skip-set may be incomplete" >&2
+      ;;
+    *)
+      # A GENUINE failure: a legacy ledger could not be read at all, so the skip-set is
+      # incomplete by an UNKNOWN amount. A warning in the prompt is not enforcement (codex
+      # r20 P2) — the child is simultaneously told to pick an item ABSENT from that list, so
+      # a declined item can still be retried. An unreadable ledger is exactly the
+      # "operator input required" condition `.loop-halt` exists for, so stand the run down
+      # rather than proceed on an unknowable set. This is the SAFE direction: a stopped run
+      # is visible and recoverable; a silently re-attempted gate is neither.
+      loop_log STOP "headless: legacy loop_status ledger could not be drained (rc ${_MIGRC}) — skip-set unknowable; standing down for operator review"
+      : > "$(loop_halt_path)" 2>/dev/null
+      echo "[loop] HALT: a legacy loop_status ledger could not be drained (rc ${_MIGRC}); the skip-set is unknowable — standing down for operator review." >&2
+      break
+      ;;
   esac
-  [ -n "$_SKIPWARN" ] && echo "[loop] migration rc=${_MIGRC}: skip-set may be incomplete" >&2
   # Compute the run-scoped skip-set HERE (the fresh child cannot — loop_skip_set is a
   # chained/sourced command the guard denies) and append it to the prompt so the child
   # advances past already-deferred items instead of re-attempting the static next-action.

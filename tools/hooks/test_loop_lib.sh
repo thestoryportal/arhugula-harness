@@ -1063,6 +1063,41 @@ else
   ok "newline-named worktree not creatable here — multi-orphan newline case skipped"
 fi
 
+# 58) codex r20 P1 — a SYMLINKED `.harness` must never be written through. This pass runs at
+#     every SessionStart over EVERY enumerated worktree, so a symlink would redirect renames,
+#     creates and removes into whatever it points at — outside the worktree, maybe outside
+#     the repo.
+SYM="$REPO/symrepo"; rm -rf "$SYM"; mkdir -p "$SYM" "$REPO/sym-target"
+( cd "$SYM" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b symwt wt1 ) >/dev/null 2>&1
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-998 — outside the worktree |\n' \
+  > "$REPO/sym-target/loop_status.md"
+ln -s "$REPO/sym-target" "$SYM/wt1/.harness"
+SYMV="$SYM/shared/loop_status.md"
+( cd "$SYM" && CLAUDE_PROJECT_DIR="$SYM" HARNESS_LOOP_STATUS_PATH="$SYMV" loop_status_migrate ) >/dev/null 2>&1
+[ -f "$REPO/sym-target/loop_status.md" ] \
+  && ok "a symlinked .harness is not written through (the target is untouched)" \
+  || bad "the migration mutated a symlink target outside the worktree"
+[ -z "$(find "$REPO/sym-target" -name '*.migrat*' 2>/dev/null)" ] \
+  && ok "no claim/archive is created in the symlink target" || bad "claim leaked into the symlink target"
+
+# 59) codex r20 P3 — a CLEAN migration must emit no shell error. `grep -c` prints a count AND
+#     exits 1 on zero matches, so a `|| echo 0` fallback appended a second line and the
+#     numeric test errored "integer expected" on every zero-pending pass.
+MIGG="$REPO/migg"; rm -rf "$MIGG"; mkdir -p "$MIGG"
+( cd "$MIGG" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b mgwt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIGG/wt1/.harness"
+printf '| ts | kind | detail |\n|---|---|---|\n| 2026-08-01T00:00:00Z | ACTIVATE | run |\n' \
+  > "$MIGG/wt1/.harness/loop_status.md"
+MIGGV="$MIGG/shared/loop_status.md"
+MIGERR=$( ( cd "$MIGG" && CLAUDE_PROJECT_DIR="$MIGG" HARNESS_LOOP_STATUS_PATH="$MIGGV" loop_status_migrate ) 2>&1 >/dev/null )
+printf '%s' "$MIGERR" | grep -q 'integer expression\|integer expected' \
+  && bad "a clean (zero-pending) migration emitted a shell integer error: $MIGERR" \
+  || ok "a zero-pending migration emits no shell error"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

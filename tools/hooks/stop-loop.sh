@@ -101,8 +101,23 @@ SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
 case "$_MIGRC" in
   0) SKIPWARN="" ;;
-  2) SKIPWARN=" WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — absence from it is NOT permission to attempt an item." ;;
-  *) SKIPWARN=" WARNING: a legacy loop_status ledger could NOT be drained (rc ${_MIGRC}); this list is INCOMPLETE by an unknown amount — absence from it is NOT permission to attempt an item, and this should be surfaced to the operator." ;;
+  2|3)
+    # A live sibling holds a claim. Self-healing, and the rows it holds were already open —
+    # warn and continue.
+    SKIPWARN=" WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — absence from it is NOT permission to attempt an item."
+    ;;
+  *)
+    # A GENUINE failure: the skip-set is incomplete by an UNKNOWN amount. A warning is not
+    # enforcement (codex r20 P2) — the same reason text tells the next turn to pick an item
+    # ABSENT from the list, so a declined item can still be retried. Stand down instead and
+    # let the operator look: a stopped loop is visible and recoverable, a silently
+    # re-attempted gate is neither. The halt marker is raised so the OUTER headless runner
+    # sees the gate too, exactly as a child-raised halt does.
+    loop_log STOP "legacy loop_status ledger could not be drained (rc ${_MIGRC}) — skip-set unknowable; standing down for operator review"
+    [ -n "$HALT" ] && : > "$HALT" 2>/dev/null
+    rm -f "$ITERF" 2>/dev/null
+    exit 0
+    ;;
 esac
 
 REASON="[stop-loop] autonomous loop continuing (turn ${ITER}/${MAX}). Dashboard next-action: ${NEXT}.

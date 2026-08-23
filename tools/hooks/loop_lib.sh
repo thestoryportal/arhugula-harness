@@ -311,8 +311,13 @@ loop_status_migrate() {
   fi
   rm -f "$wt_tmp"
   if [ "$wt_rc" -ne 0 ] || [ "${#wt_list[@]}" -eq 0 ]; then
+    # Exit 3: could not INSPECT. Deliberately distinct from 1 ("a legacy ledger exists and
+    # could not be drained"), because the two demand opposite responses. A caller that stands
+    # the loop down on an unreadable ledger — the right call, since the skip-set is then
+    # unknowable — must NOT also stand down merely because this is not a git checkout, which
+    # is the ordinary state of a scratch dir and says nothing about any ledger.
     echo "loop_status_migrate: could not enumerate worktrees (rc=$wt_rc) — nothing inspected" >&2
-    return 1
+    return 3
   fi
   # The shared venue's resolutions are read ONCE for the whole migration (codex r15 P2).
   # Rebuilding the map per worktree made the pass O(worktrees x ledger) -- 30+ rescans of a
@@ -332,6 +337,16 @@ loop_status_migrate() {
   # silently skipped, and the pass would still report success.
   for wt in "${wt_list[@]}"; do
     [ -n "$wt" ] || continue
+    # NEVER mutate through a symlinked `.harness` (codex r20 P1). This pass runs
+    # automatically at every SessionStart and renames/creates/removes files under EVERY
+    # enumerated worktree, so a `.harness` symlink would redirect all of that into whatever
+    # it points at -- outside the worktree, possibly outside the repo. A worktree we cannot
+    # confirm is a plain directory is skipped loudly rather than written through.
+    if [ -L "$wt/.harness" ]; then
+      echo "loop_status_migrate: $wt/.harness is a symlink — refusing to migrate through it" >&2
+      _incomplete=1
+      continue
+    fi
     legacy="$wt/.harness/loop_status.md"
     # RECOVER an orphaned claim first (codex r6 P2). A crash -- or the import failure below --
     # between the claim rename and the final retire leaves a `.migrating-*` file that later
@@ -457,7 +472,11 @@ loop_status_migrate() {
       echo "loop_status_migrate: could not READ $legacy (rc=$rc) — not imported, not retired" >&2
       return 1
     fi
-    rows=$(printf '%s' "$open_rows" | grep -c . 2>/dev/null || echo 0)
+    # `grep -c` ALWAYS prints a count and exits 1 on zero matches, so a `|| echo 0` fallback
+    # appends a SECOND line and `rows` becomes "0\n0" -- the numeric test below then errors
+    # with "integer expected" on every clean migration (codex r20 P3). `|| true` keeps the
+    # count and swallows only the status.
+    rows=$(printf '%s' "$open_rows" | grep -c . || true)
     if [ "$rows" -gt 0 ]; then
       while IFS=$'\t' read -r src_ts lane detail; do
         [ -n "$detail" ] || continue

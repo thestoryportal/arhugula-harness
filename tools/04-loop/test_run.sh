@@ -151,9 +151,19 @@ printf '| t | DEFERRED-HIL | R-777 — unreadable |\n' > "$REPO/.harness/loop_st
 chmod 000 "$REPO/.harness/loop_status.md"
 CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 1 >/dev/null 2>&1
 chmod 644 "$REPO/.harness/loop_status.md"
-grep -q 'INCOMPLETE' "$REPO/.harness/child_prompt.log" 2>/dev/null \
-  && ok "a failed drain warns the child that the skip-set is incomplete" \
-  || bad "a failed drain left the child's skip-set silently incomplete"
+# A GENUINE drain failure now STANDS THE RUN DOWN rather than launching a child against an
+# unknowable skip-set (codex r20 P2: a warning is not enforcement — the same prompt tells the
+# child to pick an item ABSENT from that list). A stopped run is visible and recoverable; a
+# silently re-attempted gate is neither.
+[ ! -s "$REPO/.harness/child_prompt.log" ] \
+  && ok "a failed drain stands the run down instead of launching on an unknowable skip-set" \
+  || bad "a child was launched despite an undrained legacy ledger: $(head -c 120 "$REPO/.harness/child_prompt.log")"
+# The runner CONSUMES the halt marker on exit (loop_deactivate clears it), so the durable
+# evidence is the ledger row — which is what an operator actually reads afterwards.
+grep -q 'skip-set unknowable' "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null \
+  && ok "the stand-down reason is recorded durably in the ledger" \
+  || bad "no STOP row explaining the stand-down: $(tail -2 "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null)"
+rm -f "$REPO/.harness/.loop-halt"
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/child_prompt.log"
 
 echo "----"
