@@ -274,13 +274,15 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
     unset HARNESS_LANE_ID
     unset _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
   fi
+  _li_published=""
   if [ -z "$_li_have" ]; then
     # TAKE the requested index — a preset that claims nothing lets two worktrees name the
     # same free index and both proceed onto one Compose project. Published as a complete
     # temp file linked into place, so the claim is never observable without its owner.
     if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
-       && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null; then
-      ln "$_li_tmp" "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
+       && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
+       && ln "$_li_tmp" "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null; then
+      _li_published=1     # WE created it — only then may the withdrawal below remove it
     fi
     rm -f "${_li_tmp:-}" 2>/dev/null; unset _li_tmp
   fi
@@ -307,8 +309,15 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$HARNESS_LANE_INDEX" ]; then
-      rm -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
-      echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $HARNESS_LANE_INDEX" >&2
+      # Withdraw ONLY a claim this source published. Adopting a peer's claim and then deleting
+      # it on our way out would strip a lane that has already returned success — it would run
+      # unclaimed while another worktree is free to take its index, ports and volumes.
+      if [ -n "$_li_published" ]; then
+        rm -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
+        echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $HARNESS_LANE_INDEX" >&2
+      else
+        echo "lane-init: this worktree holds lane index $(basename "$_li_f"); the claim on $HARNESS_LANE_INDEX was published by another source and is left alone" >&2
+      fi
     unset HARNESS_LANE_ID
       unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
       return 1 2>/dev/null || exit 1
@@ -416,17 +425,33 @@ _lane_clear_orphaned_stack() {
   [ -n "$k" ] || return 0
   marker="$_LI_ORPHAN_DIR/.orphaned-$k"
   [ -f "$marker" ] || return 0
+  # The check and the DESTRUCTIVE `down --volumes` must be one critical section. Unlocked,
+  # two sources both see the marker; the first cleans it, clears it and brings its stack up,
+  # and the second — still acting on its stale observation — tears that new stack and its
+  # volumes down. Same exclusive primitive the corpse repairs use, same rules: no unlocked
+  # fallback, and RE-CHECK inside the lock, because the holder may have just cleared it.
+  if ! _lane_repair_lock "$marker"; then
+    echo "lane-init: another init holds the cleanup lock for lane $k — keeping the stack absent this round rather than racing its teardown" >&2
+    return 1
+  fi
+  if [ ! -f "$marker" ]; then
+    _lane_repair_unlock "$marker"      # the holder cleaned it while we waited
+    return 0
+  fi
   if _hook_lane_stack_down "$k"; then
     # The removal is checked. A marker that survives a successful cleanup is worse than one
     # that was never written: the NEXT source of lane-init sees it and runs `down --volumes`
     # against THIS lane's live stack. Refusing keeps the stack absent instead.
     if ! rm -f "$marker" 2>/dev/null || [ -e "$marker" ]; then
       echo "lane-init: cleaned lane $k but could NOT remove its orphan marker $marker — keeping the stack absent, since a later init would tear down a stack started now" >&2
+      _lane_repair_unlock "$marker"
       return 1
     fi
+    _lane_repair_unlock "$marker"
     return 0
   fi
   echo "lane-init: lane $k inherits an UNCLEANED stack from a previously reaped lane (marker $marker) — its stack stays absent until Docker can remove it" >&2
+  _lane_repair_unlock "$marker"
   return 1
 }
 _LI_ORPHAN_DIR="$_LI_Q/lanes"

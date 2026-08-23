@@ -468,6 +468,22 @@ for c in 'uv run python tools/reservations.py transition --arc-id x --to merged'
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "reservations hardening: '$c' → not allow" || bad "reservations over-matched: $c"
 done
+# (a''') U-HE-31: the reaping recipe's mandatory pre-step. two-lane/SKILL.md now requires the
+# lane's stack to come down BEFORE safe-worktree-remove frees its index; if that command is
+# ask-then-deny in loop mode, the carrier stalls one step short of the allowlisted reaper.
+for c in 'just r420-self-hosted-stack-down' \
+         'just r420-self-hosted-stack-up' \
+         'just r420-self-hosted-stack-status'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "stack recipe → allow: '$c'" || bad "stack recipe not allowed: $c → $OUT"
+done
+for c in 'just r420-self-hosted-readiness /etc/passwd' \
+         'just r420-self-hosted-stack-down; rm -rf /' \
+         'just r420-self-hosted-stack-nuke'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "stack-recipe hardening: '$c' → not allow" || bad "stack recipe over-matched: $c"
+done
+
 # (a'') U-HE-31: lane open SOURCES lane-init. Without an allowance the two-lane recipe's
 # mandatory first step becomes ask → headless denial, and the lane runs with no id/index.
 for c in 'source tools/hooks/lane-init.sh' \

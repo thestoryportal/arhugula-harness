@@ -821,7 +821,13 @@ hook_release_lane_index() {
         continue
       fi
       case "$_rc" in
-        0) rm -f "$f" 2>/dev/null ;;                       # verified clean
+        0) # Verified clean. A release that cannot REMOVE the claim has not released
+           # anything: the index stays consumed after its worktree is gone, with no marker
+           # and no retry path, so it is burned permanently. Say so rather than returning
+           # success on a stale claim.
+           if ! rm -f "$f" 2>/dev/null || [ -e "$f" ]; then
+             echo "hook_release_lane_index: lane $(basename "$f") cleaned, but its claim could NOT be removed — the index stays consumed until $f is deleted by hand" >&2
+           fi ;;
         *) # NOT verified clean — whether the cleanup failed outright or could not be
            # attempted. Either way the index must not be handed on unfenced: a claim can be
            # inherited by a new worktree created at the SAME path (reuse is by path), which
