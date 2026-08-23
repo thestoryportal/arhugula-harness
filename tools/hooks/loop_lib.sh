@@ -499,7 +499,11 @@ loop_hil_groups() {
       # together than the window postpone delivery forever, and sessions further apart
       # mint a new generation each time and re-deliver the same gate. A RESOLVED-HIL row
       # clears the state, so a genuinely NEW deferral of the same item does re-anchor.
-      if (state[tok] != "PENDING") when[tok] = e
+      # ...and a CHANGED cause is a new gate, so it re-anchors too (codex r2 P2): the item
+      # key is last-write-wins for the signature, so without this an item deferred first
+      # under cause A and later under cause B would be grouped as B while still carrying
+      # A first arrival -- B could be instantly eligible instead of getting its own window.
+      if (state[tok] != "PENDING" || sig[tok] != cause) when[tok] = e
       # Detail is free text and the writer preserves TABS, but the inter-pass stream below
       # is tab-delimited: an embedded tab would split into extra fields and the renderer,
       # which keeps only $5, would truncate the operator-facing gate detail (codex r1 P3).

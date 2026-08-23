@@ -719,6 +719,22 @@ loop_now() { echo "2026-08-18T06:11:00Z"; }; loop_log_structured DEFERRED-HIL L1
 [ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
   && ok "a NEW deferral after RESOLVED re-anchors the window" || bad "re-deferral did not re-anchor"
 
+# A CHANGED cause is a new gate and re-anchors the window (codex r2 P2). Without this the
+# item keeps cause A's first arrival while grouping under cause B, so B can be instantly
+# eligible instead of receiving its own coalescing window.
+_coalesce_reset
+loop_now() { echo "2026-08-18T09:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'cause:a:one' 'B-90 — first cause'
+loop_now() { echo "2026-08-18T09:09:00Z"; }; loop_log_structured DEFERRED-HIL L1 'cause:b:two' 'B-90 — different cause now'
+G5=$(loop_hil_groups)
+[[ "$G5" == *"cause:b:two"* ]] && ok "a re-deferral under a new cause groups under the NEW signature" || bad "cause not updated: $G5"
+loop_now() { echo "2026-08-18T09:10:00Z"; }
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "the new cause gets its OWN window (not the old cause's anchor)" \
+  || bad "changed cause inherited the previous anchor and delivered early"
+loop_now() { echo "2026-08-18T09:20:00Z"; }
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-90"* ]] \
+  && ok "the new cause delivers once ITS window closes" || bad "new cause never delivered"
+
 # Detail is free text and the writer preserves TABS, while the inter-pass stream is
 # tab-delimited: an unneutralised tab splits into extra fields and the renderer, which
 # keeps only $5, truncates the operator-facing gate detail (codex r1 P3).

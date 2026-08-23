@@ -40,15 +40,23 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   command -v loop_hil_ttl_resurface >/dev/null 2>&1 && loop_hil_ttl_resurface 2>/dev/null
   # C-HE-10 §2 (U-HE-30): delivery is PULL-BASED and happens HERE, not in the lanes --
   # one batched prompt per cause group whose window has closed, emitted exactly once per
-  # generation (the COALESCE-DELIVERED row + an exclusive-create claim make a second
-  # SessionStart path a no-op). It REPLACES the bounded summary whenever a group is due:
-  # the summary renders the same items truncated to 3, which would dilute the very batch
-  # the operator is meant to act on. When nothing is due the summary is the fallback, so
-  # deferrals still inside their window are never invisible.
+  # generation (the COALESCE-DELIVERED row makes a second SessionStart path a no-op).
+  #
+  # The batch renders BESIDE the pending summary, never instead of it -- the same
+  # segments-are-independent rule C-HE-09 §5 already applies to NOTIFY, and here it is
+  # load-bearing rather than cosmetic (codex r2 P1). Exactly-once delivery across a crash
+  # is unachievable: the COALESCE-DELIVERED row is necessarily durable before this
+  # process publishes its output, so a crash in between would mark a gate delivered that
+  # the operator never saw. Keeping the summary always-on removes the consequence -- a
+  # swallowed batch still surfaces as a pending item, every session, until it is
+  # RESOLVED. The two lines say different things and both are wanted: the summary is the
+  # standing register of what is still open, the batch is the once-per-generation notice
+  # that these N gates share one cause and their window has closed.
   _d=""
   command -v loop_hil_deliver >/dev/null 2>&1 && _d=$(loop_hil_deliver 2>/dev/null | paste -sd' ' -)
-  if [ -n "$_d" ]; then _h="$_d"; else _h=$(loop_pending_hil_summary 2>/dev/null); fi
-  [ -n "$_h" ] && _HIL=" $_h"
+  _h=$(loop_pending_hil_summary 2>/dev/null)
+  [ -n "$_d" ] && _HIL="${_HIL} $_d"
+  [ -n "$_h" ] && _HIL="${_HIL} $_h"
   # C-HE-09 §5 (U-HE-29): NOTIFY rows render BESIDE the pending-HIL summary, never merged
   # into it. The distinction is load-bearing for the operator: the HIL line says "the loop
   # is gated on you"; the notify line says "here is something you may want to know". Its

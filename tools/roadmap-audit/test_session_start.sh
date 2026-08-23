@@ -127,13 +127,20 @@ printf '%s' "$OUT" | grep -q "2 item(s) need you" \
   || bad "no batched delivery: $OUT"
 printf '%s' "$OUT" | grep -q "B-81" && printf '%s' "$OUT" | grep -q "B-82" \
   && ok "both lanes' gates ride the one batched prompt" || bad "batch lost a lane: $OUT"
+#     The batch renders BESIDE the standing pending summary, never instead of it (codex
+#     r2 P1): the COALESCE-DELIVERED row is durable before this process publishes output,
+#     so a crash in between would otherwise mark a gate delivered that nobody saw. The
+#     always-on summary makes that unreachable -- the item still surfaces as pending.
 printf '%s' "$OUT" | grep -q "await your input" \
-  && bad "the bounded summary fired alongside the batch: $OUT" \
-  || ok "the batch REPLACES the bounded summary when a group is due"
+  && ok "the pending summary renders BESIDE the batch, not instead of it" \
+  || bad "the batch suppressed the standing pending register: $OUT"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "need you" \
   && bad "the same generation was delivered twice: $OUT" \
   || ok "a second SessionStart does not re-deliver the same generation"
+printf '%s' "$OUT" | grep -q "2 item(s) await your input" \
+  && ok "an undelivered-again gate still surfaces as pending after its batch" \
+  || bad "the gate vanished once its generation was delivered: $OUT"
 
 # Restore the inside-window fixture for the NOTIFY assertions below.
 cat > "$HARNESS_LOOP_STATUS_PATH" <<EOF
