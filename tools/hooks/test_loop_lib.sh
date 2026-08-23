@@ -1139,6 +1139,29 @@ printf '%s' "$EBODY" | grep -q '_staged.*-eq 0.*ln \|\[ "\$_staged" -eq 0 \]' \
   && ok "the venue is published only when the staging write SUCCEEDED" \
   || bad "ln can publish a partially-written header"
 
+# 63) codex r23 P2 — a non-regular legacy path must be REFUSED, not read as a clean absence.
+#     `-f` follows symlinks, so a symlinked ledger would be renamed and read through its
+#     outside-worktree target; a directory or dangling symlink is corrupt state, and calling
+#     it "no ledger here" would report a successful cutover over something never inspected.
+NRG="$REPO/nonregular"; rm -rf "$NRG"; mkdir -p "$NRG" "$REPO/nrg-target"
+( cd "$NRG" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b nrgwt wt1 ) >/dev/null 2>&1
+mkdir -p "$NRG/wt1/.harness"
+NRGV="$NRG/shared.md"
+# (a) a SYMLINKED legacy ledger pointing outside the worktree
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-1001 — outside |\n' > "$REPO/nrg-target/outside.md"
+ln -s "$REPO/nrg-target/outside.md" "$NRG/wt1/.harness/loop_status.md"
+( cd "$NRG" && CLAUDE_PROJECT_DIR="$NRG" HARNESS_LOOP_STATUS_PATH="$NRGV" loop_status_migrate ) >/dev/null 2>&1
+[ $? -eq 4 ] && ok "a symlinked legacy ledger is refused (permanent)" || bad "symlinked legacy ledger not refused"
+[ -f "$REPO/nrg-target/outside.md" ] && ok "the symlink target is untouched" || bad "the migration renamed the symlink's target"
+rm -f "$NRG/wt1/.harness/loop_status.md"
+# (b) a DIRECTORY where the ledger should be — corrupt, never a clean absence
+mkdir -p "$NRG/wt1/.harness/loop_status.md"
+( cd "$NRG" && CLAUDE_PROJECT_DIR="$NRG" HARNESS_LOOP_STATUS_PATH="$NRGV" loop_status_migrate ) >/dev/null 2>&1
+[ $? -eq 4 ] && ok "a directory at the ledger path is refused, not read as absent" || bad "corrupt ledger path reported a clean cutover"
+rmdir "$NRG/wt1/.harness/loop_status.md" 2>/dev/null
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

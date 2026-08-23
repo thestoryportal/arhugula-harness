@@ -446,6 +446,17 @@ loop_status_migrate() {
         echo "loop_status_migrate: could not fold orphaned claim(s) into $legacy" >&2; return 1
       fi
     fi
+    # The legacy path must be a REGULAR, non-symlink file (codex r23 P2). `-f` follows
+    # symlinks, so a symlinked legacy ledger would be renamed and read through its target --
+    # outside the worktree, the same hazard the `.harness` symlink guard above closes one
+    # level up. And a path that EXISTS but is a directory or a dangling symlink is corrupt
+    # state, not "no ledger here": treating it as a clean absence would report a successful
+    # cutover over something nobody has looked at.
+    if [ -L "$legacy" ] || { [ -e "$legacy" ] && [ ! -f "$legacy" ]; }; then
+      echo "loop_status_migrate: $legacy is not a regular file — refusing to migrate it" >&2
+      _blocked=1
+      continue
+    fi
     # ABSENCE vs INABILITY (codex r14 P2). A `.harness` we cannot read is not evidence that
     # no legacy ledger is there; skipping it silently would let a worktree carrying pending
     # gates be reported clean and then deleted with the worktree. Absent dir = nothing to do;
