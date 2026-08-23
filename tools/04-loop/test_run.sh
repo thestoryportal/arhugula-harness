@@ -16,6 +16,16 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL mktemp"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 mkdir -p "$REPO/.harness" "$REPO/tools" "$REPO/bin"
+# C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
+# no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
+
+# The loop always runs inside a git checkout, and several hook paths shell out to git. A
+# non-repo scratch dir makes those degrade in ways production never sees, so the fixture is
+# a real repo.
+( cd "$REPO" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init ) >/dev/null 2>&1
+
 # run.sh resolves the hooks libs relative to its own location, so point it at the real
 # ones by copying the loop dir + symlinking hooks into the throwaway repo layout.
 cp -R "$SCRIPT_DIR" "$REPO/tools/04-loop"
@@ -40,22 +50,22 @@ OUT=$(CLAUDE_PROJECT_DIR="$REPO" DRY_ITERS=2 bash "$RUN" --dry-run --max 5 2>&1)
 [ ! -f "$REPO/.harness/claude_calls.log" ] && ok "dry-run never calls claude" || bad "dry-run called claude ($(calls))"
 echo "$OUT" | grep -q '\[dry-run\] iter 1/5' && ok "dry-run prints planned invocation" || bad "no dry-run line: $OUT"
 [ ! -f "$REPO/.harness/.loop-active" ] && ok "loop mode OFF after dry-run" || bad "marker left active"
-grep -q '| ACTIVATE |' "$REPO/.harness/loop_status.md" && grep -q '| DEACTIVATE |' "$REPO/.harness/loop_status.md" \
+grep -q '| ACTIVATE | lane=' "$HARNESS_LOOP_STATUS_PATH" && grep -q '| DEACTIVATE | lane=' "$HARNESS_LOOP_STATUS_PATH" \
   && ok "dry-run logs activate+deactivate" || bad "missing activate/deactivate rows"
 
 # 2) Real mode: caps at --max, calls fake claude that many times, OFF after.
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log"
+rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness/claude_calls.log"
 CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 3 >/dev/null 2>&1
 [ "$(calls)" = "3" ] && ok "real mode caps at --max (3 claude calls)" || bad "calls=$(calls) (want 3)"
 [ ! -f "$REPO/.harness/.loop-active" ] && ok "loop mode OFF after real run" || bad "marker left active after real run"
 
 # 3) Halt marker mid-run stops the loop early (claude drops .loop-halt on call 2 of 10).
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log"
+rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness/claude_calls.log"
 echo 2 > "$REPO/.harness/HALT_ON"
 CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 10 >/dev/null 2>&1
 # call 1 (no halt yet) → call 2 drops halt → next loop top sees halt, stops. So 2 calls.
 [ "$(calls)" = "2" ] && ok "halt marker stops loop early (2 calls, not 10)" || bad "calls=$(calls) (want 2)"
-grep -q '| STOP | headless: halt marker' "$REPO/.harness/loop_status.md" && ok "halt logged" || bad "halt not logged"
+grep -q '| STOP | lane=[^|]* | headless: halt marker' "$HARNESS_LOOP_STATUS_PATH" && ok "halt logged" || bad "halt not logged"
 
 # 4) Bad --max rejected.
 CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --max abc >/dev/null 2>&1; [ $? -eq 2 ] && ok "non-integer --max rejected" || bad "bad --max not rejected"
@@ -65,7 +75,7 @@ CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --max abc >/dev/null 2>&1; [ $? -eq 2 ] &
 ( CLAUDE_PROJECT_DIR="$REPO" bash "$RUN" --prompt >/dev/null 2>&1 ); [ $? -eq 2 ] && ok "--prompt with no value → exit 2" || bad "--prompt no-value not rejected"
 
 # 4c) --max is passed to the child as HARNESS_LOOP_MAX (codex P2). Fake claude records env.
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/child_env.log"
+rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/child_env.log"
 cat > "$REPO/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
@@ -89,7 +99,7 @@ grep -q 'PROMPT=do alpha then beta' "$REPO/.harness/child_env.log" && ok "HARNES
 
 # 5) SIGTERM mid-run → the EXIT/signal trap clears the .loop-active marker (codex P2:
 #    an interrupted runner must not leak loop mode into the next interactive session).
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/.loop-active"
+rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness/claude_calls.log" "$REPO/.harness/HALT_ON" "$REPO/.harness/.loop-active"
 cat > "$REPO/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
@@ -109,6 +119,7 @@ sleep 1
 # process left running with auto-approval armed).
 LEFT=$(pgrep -f "$REPO/bin/claude" 2>/dev/null | wc -l | tr -d ' ')
 [ "${LEFT:-0}" = "0" ] && ok "in-flight claude child killed on signal (no orphan)" || bad "orphaned claude child after signal: $LEFT"
+
 
 echo "----"
 echo "loop_run: $PASS passed, $FAIL failed"

@@ -436,7 +436,7 @@ unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path *y
 `/context-save` step just reported binds the report to this arc.
 
 It writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed — a
-re-run overwrites it) and indexes one `EXIT-REPORT` row into `.harness/loop_status.md`.
+re-run overwrites it) and indexes one `EXIT-REPORT` row into the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`).
 Paste the emitted `yaml` block into this turn's final message: it is the arc's
 machine-readable closure record, and every field is collected or explicitly null — a
 missing refresh reads `refresh_commit: null` and a non-green CI reads its conclusion

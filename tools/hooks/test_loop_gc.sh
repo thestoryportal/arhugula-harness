@@ -17,8 +17,17 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 # Canonicalize the temp base up-front so macOS /var → /private/var symlink resolution
 # can't make `rev-parse --show-toplevel` disagree with `worktree list` paths.
 BASE="$(cd "$(mktemp -d)" && pwd -P)"
+
+# C-HE-09 §2 (U-HE-29): the ledger is a SHARED venue resolved from the ENVIRONMENT, not from
+# the repo under test. loop_gc_worktrees logs GC rows, so without this pin a "hermetic" run
+# appends them to the operator's real ~/.gstack ledger — durable user state mutated by a test
+# (codex r7 P3; the same class already leaked four rows during this arc).
+export HARNESS_LOOP_STATUS_PATH="${TMPDIR:-/tmp}/loop-gc-test-$$-loop_status.md"
+
 { [ -n "$BASE" ] && [ -d "$BASE" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
-trap 'rm -rf "$BASE"' EXIT
+# One EXIT trap only — bash REPLACES the handler rather than chaining, so the ledger pin's
+# cleanup has to live here rather than in a second trap.
+trap 'rm -rf "$BASE"; rm -f "$HARNESS_LOOP_STATUS_PATH"' EXIT
 
 # shellcheck source=lib.sh
 . "$SCRIPT_DIR/lib.sh"

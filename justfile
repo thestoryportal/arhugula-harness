@@ -243,7 +243,7 @@ arc-metrics *ARGS:
 # the merge SHA, post-merge main-CI conclusion, terminating-refresh commit and the
 # just-written checkpoint all exist. Writes the gitignored
 # .harness/.checkpoints/arc-exit-report-pr<NNN>.md (PR-keyed, overwritten on re-run) and
-# indexes one EXIT-REPORT row into .harness/loop_status.md.
+# indexes one EXIT-REPORT row into the shared loop_status.md (C-HE-09 §2 venue).
 #   just arc-exit-report --pr 1202 --merge-sha 995517e5
 arc-exit-report *ARGS:
     uv run python tools/arc_exit_report.py "$@"
@@ -736,7 +736,7 @@ coderabbit-review *ARGS: _require-coderabbit
 # `claude -p` in a BOUNDED loop until a genuine gate (halt marker) or the iteration cap.
 # Approvals flow through the U-HK-12 permission guard (no --dangerously-skip-permissions).
 # `just loop` runs for real; `just loop --dry-run` exercises the loop without calling claude;
-# `just loop --max 10` caps iterations. Review .harness/loop_status.md after a run.
+# `just loop --max 10` caps iterations. Review the shared loop_status.md after a run.
 # Custom multi-word prompt: the env var route still works and predates the "$@" fix:
 #   HARNESS_LOOP_PROMPT="do X then Y" just loop
 loop *ARGS:

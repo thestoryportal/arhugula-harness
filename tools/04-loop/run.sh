@@ -5,7 +5,7 @@
 # guard auto-approves safe tools + hard-stops dangerous ones, and the U-HK-14
 # Stop-continue keeps each session going) and re-invokes `claude -p` in a BOUNDED bash
 # loop until a genuine gate (halt marker) or the iteration cap. Every iteration is
-# recorded to .harness/loop_status.md; the run prints the ledger tail on exit.
+# recorded to the shared loop_status.md (C-HE-09 §2); the run prints the ledger tail on exit.
 #
 # Safety:
 #   - bounded by --max (default HARNESS_LOOP_MAX or 25) — never an unbounded run;
@@ -98,6 +98,13 @@ while [ "$i" -lt "$MAX" ]; do
     [ "$i" -ge "${DRY_ITERS:-1}" ] && break
     continue
   fi
+  # The skip-set reads the SHARED venue (C-HE-09 §2), not a per-worktree ledger. No drain of
+  # pre-U-HE-29 ledgers happens here, and that is DELIBERATE: measured on this workspace,
+  # those files carry nothing still open under the semantics their rows were WRITTEN with
+  # (the ACTIVATE reset the new rule strikes was in force when they were recorded), so there
+  # is nothing for a drain to carry across. B-198 records the measurement in full, including
+  # the conditions under which a drain WOULD be warranted — re-run it there before assuming
+  # this is a gap.
   # Compute the run-scoped skip-set HERE (the fresh child cannot — loop_skip_set is a
   # chained/sourced command the guard denies) and append it to the prompt so the child
   # advances past already-deferred items instead of re-attempting the static next-action.

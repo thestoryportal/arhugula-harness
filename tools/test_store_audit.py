@@ -132,11 +132,18 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # shell: `$(dirname "$p")/.loop-status.lock"`, `$d/<name>"`, `${VAR:-default}/<name>` -- one
     # segment after a `)`, `}` or `$var` root, ended by a quote, slash, space or `;`
     (re.compile(r'(?:\)|\}|\$\w+)/([A-Za-z0-9_.\-]+)(?=["\'/\s;)]|$)', re.M), "shell"),
+    # shell: a name derived by APPENDING a suffix to a path variable -- `"${legacy}.migrating-…"`,
+    # `"${p}.XXXXXXXX"`. The `shell` pattern above requires a `/` before the segment, so this
+    # idiom was invisible to it and the witness passed VACUOUSLY over the three on-disk
+    # artifact names U-HE-29 introduced (merge-gate spec lens, #1426). A witness that cannot
+    # see an idiom reports "nothing unlisted" for exactly the same reason it would report a
+    # clean sheet -- which is the failure this page's own rule exists to prevent.
+    (re.compile(r"\$\{\w+\}(\.[A-Za-z0-9_\-]+)"), "shellsuffix"),
 ]
 #: Python-only idioms; a shell module spells its paths textually or via the `shell` form, and
 #: `case` patterns like `"refs/heads/"*)` would otherwise read as joins.
 _PY_ONLY = frozenset({"join", "glob", "suffix", "tmp"})
-_SH_ONLY = frozenset({"shell"})
+_SH_ONLY = frozenset({"shell", "shellsuffix"})
 _HAS_WORD = re.compile(r"[A-Za-z0-9]")
 _QUOTED = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 
@@ -157,6 +164,10 @@ def _token(kind: str, match: re.Match[str]) -> str | None:
         return f".harness/{raw}"
     if kind == "suffix":
         return f"*{raw}"
+    if kind == "shellsuffix":
+        # `${legacy}.migrating-` -> `*.migrating-*`: the variable is the path, the captured
+        # text is the appended name, and anything after it is per-invocation.
+        return f"*{raw}*"
     if kind == "tmp" or raw.endswith(".tmp"):
         return ".tmp"
     if kind == "join":
@@ -322,6 +333,11 @@ def test_extractor_sees_module_idioms() -> None:
         assert expected in py, (expected, sorted(py))
     sh = store_literals(REPO / "tools" / "hooks" / "loop_lib.sh")
     assert ".loop-status.lock" in sh, sorted(sh)  # the `$(dirname "$p")/...` construction
+    # The `${var}.<suffix>` idiom (U-HE-29's cutover artifacts). Without the `shellsuffix`
+    # pattern these are INVISIBLE to the extractor and the listed-ness check above passes
+    # VACUOUSLY over them — reporting "nothing unlisted" for the same reason it would report
+    # a clean sheet. Asserting the extractor SEES them is what makes that check non-vacuous.
+    assert "*.XXXXXXXX*" in sh, sorted(sh)  # the mktemp venue-header stager
 
 
 def test_listed_is_segment_bound_not_substring() -> None:

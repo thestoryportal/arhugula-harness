@@ -23,14 +23,18 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL mktemp"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 mkdir -p "$REPO/.harness"
-LEDGER="$REPO/.harness/loop_status.md"
+# C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
+# no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
+
+LEDGER="$HARNESS_LOOP_STATUS_PATH"
 
 # 1) defer.sh writes a DEFERRED-HIL row with the item-id leading — even when the reason
 #    mentions "credentials" (the wrapper only logs; it must not be self-censored).
 CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-410 "needs container runtime — built: design half" >/dev/null 2>&1
 CLAUDE_PROJECT_DIR="$REPO" bash "$DEFER" R-300 "needs OpenAI credentials" >/dev/null 2>&1
-grep -qE '\| DEFERRED-HIL \| R-410 — needs container' "$LEDGER" && ok "defer.sh writes R-410 row" || bad "R-410 row missing"
-grep -qE '\| DEFERRED-HIL \| R-300 — needs OpenAI credentials' "$LEDGER" && ok "defer.sh writes a 'credentials' reason verbatim" || bad "R-300 credentials row missing"
+grep -qE '\| DEFERRED-HIL \| lane=[^|]* \| R-410 — needs container' "$LEDGER" && ok "defer.sh writes R-410 row" || bad "R-410 row missing"
+grep -qE '\| DEFERRED-HIL \| lane=[^|]* \| R-300 — needs OpenAI credentials' "$LEDGER" && ok "defer.sh writes a 'credentials' reason verbatim" || bad "R-300 credentials row missing"
 
 # 2) the skip-set reads back both item-ids (functions were actually defined → libs sourced).
 SKIP=$(cd "$REPO" && . "$SCRIPT_DIR/../hooks/lib.sh" && . "$SCRIPT_DIR/../hooks/loop_lib.sh" && CLAUDE_PROJECT_DIR="$REPO" loop_skip_set)
@@ -49,7 +53,7 @@ grep -q "R-555" "$LEDGER" && bad "reason-less R-555 row was written" || ok "no r
 # 4) halt.sh raises the halt marker + logs a STOP row.
 CLAUDE_PROJECT_DIR="$REPO" bash "$HALT" "forward menu exhausted — 2 awaiting input" >/dev/null 2>&1
 [ -f "$REPO/.harness/.loop-halt" ] && ok "halt.sh raises .loop-halt" || bad ".loop-halt not raised"
-grep -q '| STOP | forward menu exhausted' "$LEDGER" && ok "halt.sh logs STOP reason" || bad "STOP not logged"
+grep -q '| STOP | lane=[^|]* | forward menu exhausted' "$LEDGER" && ok "halt.sh logs STOP reason" || bad "STOP not logged"
 
 echo "----"
 echo "loop_wrappers: $PASS passed, $FAIL failed"

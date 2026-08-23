@@ -16,6 +16,10 @@ REPO="$(mktemp -d)"
 trap 'rm -rf "$REPO"' EXIT
 git -C "$REPO" init -q -b main; git -C "$REPO" config user.email t@t.t; git -C "$REPO" config user.name t
 mkdir -p "$REPO/.harness"
+# C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
+# no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
+
 : > "$REPO/Project_Roadmap_v1.md"
 echo seed > "$REPO/.harness/seed"
 git -C "$REPO" add -A; git -C "$REPO" commit -qm "base commit"
@@ -92,7 +96,7 @@ printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "mis-titled substantive commi
 #    rows, EVERY emit branch appends the operator-facing summary (so the last unattended
 #    run's deferrals are "clearly presented when the operator engages next"). Absent when
 #    there is no ledger. Branch-agnostic: the suffix rides whatever audit verdict fires.
-cat > "$REPO/.harness/loop_status.md" <<'EOF'
+cat > "$HARNESS_LOOP_STATUS_PATH" <<'EOF'
 | ts | kind | detail |
 |---|---|---|
 | t1 | ACTIVATE | run |
@@ -101,9 +105,38 @@ EOF
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && printf '%s' "$OUT" | grep -q "R-410" \
   && ok "pending-HIL summary appended to SessionStart ($OUT)" || bad "no pending-HIL suffix: $OUT"
-rm -f "$REPO/.harness/loop_status.md"
+
+# 5b) C-HE-09 §5 (U-HE-29, codex r1 P3): a recent NOTIFY row surfaces as its OWN segment
+#     BESIDE the HIL summary — never merged into it, and never counted as an item awaiting
+#     input. Without this the production `loop_notify_summary` wiring in session-start.sh
+#     could be deleted outright and this suite would stay green.
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '| %s | NOTIFY | lane=L7;cause=g:f:c | B-2 reservation aged past its TTL |\n' "$NOW" \
+  >> "$HARNESS_LOOP_STATUS_PATH"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "notify:" && printf '%s' "$OUT" | grep -q "B-2 reservation aged" \
+  && ok "NOTIFY segment surfaces at SessionStart" || bad "no NOTIFY segment: $OUT"
+printf '%s' "$OUT" | grep -q '\[L7\]' && ok "NOTIFY carries its emitting lane" || bad "NOTIFY lane not rendered: $OUT"
+printf '%s' "$OUT" | grep -q "1 item(s) await your input" \
+  && ok "NOTIFY is rendered BESIDE, not merged into, the HIL count" || bad "NOTIFY changed the HIL count: $OUT"
+
+# 5c) A NOTIFY row with NO pending HIL row still surfaces (the segments are independent).
+cat > "$HARNESS_LOOP_STATUS_PATH" <<EOF
+| ts | kind | lane;cause | detail |
+|---|---|---|---|
+| $NOW | NOTIFY | lane=L7;cause=g:f:c | B-3 standalone notice |
+EOF
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "B-3 standalone notice" && ok "NOTIFY surfaces with no pending HIL rows" || bad "NOTIFY suppressed without HIL rows: $OUT"
+printf '%s' "$OUT" | grep -q "await your input" && bad "a NOTIFY was counted as awaiting input: $OUT" || ok "NOTIFY never reports as awaiting input"
+
+rm -f "$HARNESS_LOOP_STATUS_PATH"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
+printf '%s' "$OUT" | grep -q "notify:" && bad "NOTIFY segment present with no ledger: $OUT" || ok "no NOTIFY segment when no ledger"
+
+rm -f "$REPO/.harness/loop_status.md"
+rm -f "$HARNESS_LOOP_STATUS_PATH"
 
 # 6) Reservation reconcile-log surfacing (U-HE-18, gate r1 witness P2): the log-READER
 #    block is UNGATED by the U-HE-29 activation gate, so its behavior needs witnesses now.

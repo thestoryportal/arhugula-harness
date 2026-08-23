@@ -2535,3 +2535,77 @@ def test_rate_limited_wait_is_deadline_bounded():
 
     with pytest.raises(md.BudgetExhausted, match="rate-limit deadline"):
         md.wait_for_door(always_limited, clock=clock, sleep=sleep, rng=lambda: 1.0)
+
+
+def test_notify_reports_a_lost_row_without_the_stale_pending_wording(monkeypatch, capsys):
+    """U-HE-29 landed the ledger writer, so a write failure is no longer "pending" anything.
+
+    merge-gate spec-conformance lens on the U-HE-29 PR: `_notify` still told the reader the
+    ledger writer was "pending U-HE-29" while catching the error — reassuring wording for a
+    condition that no longer obtains, over a C-HE-20 §1 MUST-durable escalation. The catch is
+    kept (a raise would let a ledger write mask a DoorBlocked and abort an otherwise-fine
+    landing), but the line must name the loss.
+    """
+
+    def boom(*_a, **_k):
+        raise md.rs.LoopStatusWriteError("venue unwritable")
+
+    monkeypatch.setattr(md.rs, "emit_loop_row", boom)
+    md._notify("DEFERRED-HIL", "L1", "merge-door-lease-acquire:transient-retry:x", "B-1 — d")
+    err = capsys.readouterr().err
+    assert "ROW LOST" in err, "a lost durable escalation must say so"
+    assert "pending U-HE-29" not in err, "the stale pending-writer wording must be gone"
+    assert "B-1 — d" in err and "venue unwritable" in err, "detail + cause must survive"
+
+
+def test_notify_does_not_raise_so_a_ledger_write_cannot_abort_a_landing(monkeypatch):
+    """The tolerance itself is load-bearing and must not regress into a raise."""
+
+    def boom(*_a, **_k):
+        raise md.rs.LoopStatusWriteError("venue unwritable")
+
+    monkeypatch.setattr(md.rs, "emit_loop_row", boom)
+    md._notify("NOTIFY", "L1", "g:f:c", "informational")  # must not raise
+
+
+def test_notify_retries_a_deferred_hil_and_succeeds_after_a_transient_failure(monkeypatch):
+    """The RETRY is the whole point of the C-HE-20 §1 durability fix — witness it by COUNT.
+
+    merge-gate witness lens on the U-HE-29 re-gate: the first two `_notify` tests stubbed
+    `emit_loop_row` to always raise and asserted only on the final wording, so deleting the
+    retry loop outright left both green. A transient failure is the overwhelmingly common
+    case on a venue every lane shares; if it is not retried, the contract's MUST-durable row
+    is lost for a reason that would have cleared on its own.
+    """
+    calls: list[str] = []
+
+    def flaky(kind, *_a, **_k):
+        calls.append(kind)
+        if len(calls) < 3:
+            raise md.rs.LoopStatusWriteError("transient")
+
+    monkeypatch.setattr(md.rs, "emit_loop_row", flaky)
+    monkeypatch.setattr(md.time, "sleep", lambda _s: None)  # no real backoff in tests
+    md._notify("DEFERRED-HIL", "L1", "g:f:c", "B-1 — d")
+    assert len(calls) == 3, f"a DEFERRED-HIL must be retried to 3 attempts, saw {len(calls)}"
+
+
+def test_notify_retries_only_the_must_durable_kind(monkeypatch, capsys):
+    """NOTIFY is informational under C-HE-20 §1, so it is NOT worth three attempts — and the
+    attempt count is what distinguishes the two paths. Pins both arms by count."""
+    calls: list[str] = []
+
+    def boom(kind, *_a, **_k):
+        calls.append(kind)
+        raise md.rs.LoopStatusWriteError("venue unwritable")
+
+    monkeypatch.setattr(md.rs, "emit_loop_row", boom)
+    monkeypatch.setattr(md.time, "sleep", lambda _s: None)
+
+    md._notify("NOTIFY", "L1", "g:f:c", "informational")
+    assert len(calls) == 1, f"NOTIFY must not be retried, saw {len(calls)} attempt(s)"
+
+    calls.clear()
+    md._notify("DEFERRED-HIL", "L1", "g:f:c", "B-2 — blocking")
+    assert len(calls) == 3, f"DEFERRED-HIL must be retried, saw {len(calls)} attempt(s)"
+    assert "after 3 attempt(s)" in capsys.readouterr().err

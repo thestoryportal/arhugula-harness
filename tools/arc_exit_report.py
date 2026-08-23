@@ -14,7 +14,7 @@ Output: `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` — PR-keyed and DATE
 closeout resumed on a later date overwrites the same file instead of orphaning a stale
 sibling. The directory is gitignored (`.gitignore:106`): this is a local operator artifact
 with zero CI/ledger surface. One `EXIT-REPORT` row is also appended to
-`.harness/loop_status.md` as the index, through `loop_lib.sh`'s own `loop_log` (a bash
+the shared loop ledger as the index, through `loop_lib.sh`'s own `loop_log` (a bash
 shim — NOT a second copy of the row format).
 
 Both land under the MAIN checkout, not the (disposable) arc worktree a Codex-flow run is
@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -94,7 +95,14 @@ YAML_FIELDS = (
 )
 
 REPORT_DIR = ".harness/.checkpoints"
-LEDGER_REL = ".harness/loop_status.md"
+# The ledger is the SHARED venue (C-HE-09 §2) resolved by `loop_status_path` in
+# tools/hooks/loop_lib.sh -- NOT a per-worktree copy under a checkout's .harness/. It is resolved
+# by ASKING that function (see `ledger_path`) rather than re-deriving the path here: a
+# second derivation would be a second authority, free to drift the moment the venue moves
+# again, and this module both READS pending rows from the ledger and APPENDS its own
+# EXIT-REPORT index row to it -- a split would make the growth check watch a file the
+# writer never touches and fail every arc closed (exit 3).
+LEDGER_NAME = "loop_status.md"
 # CLAUDE.md §12.2.1 terminating-refresh discriminators (BOTH required).
 REFRESH_PREFIX = "ops: roadmap status refresh "
 REFRESH_ONLY_FILE = ".harness/roadmap_status.md"
@@ -121,6 +129,35 @@ def run(cmd: list[str], cwd: Path, timeout: int = 20) -> tuple[int, str]:
         return 124, ""
     except OSError:
         return 126, ""
+
+
+def ledger_path(code_root: Path) -> Path | None:
+    """The shared loop ledger's absolute path, or None when it cannot be resolved.
+
+    Asks `loop_lib.sh`'s `loop_status_path` (the single authority, C-HE-09 §2) in the
+    caller's own environment, so a `HARNESS_LOOP_STATUS_PATH` override or a relocated
+    `ARC_METRICS_QUEUE_DIR` is honoured identically here and in every hook. Returns None
+    -- never a guessed fallback -- when the helper is absent or answers empty: callers
+    must degrade to UNKNOWN rather than read or grow the wrong file.
+    """
+    lib = code_root / "tools" / "hooks" / "lib.sh"
+    loop_lib = code_root / "tools" / "hooks" / "loop_lib.sh"
+    if not (lib.is_file() and loop_lib.is_file()):
+        return None
+    # Constant bash source; both paths travel as argv values (never interpolated) so a
+    # metacharacter-bearing repo path cannot execute as code.
+    rc, out = run(
+        [
+            "bash",
+            "-c",
+            '. "$1"; . "$2"; loop_status_path',
+            "arc_exit_report",
+            str(lib),
+            str(loop_lib),
+        ],
+        code_root,
+    )
+    return Path(out) if rc == 0 and out else None
 
 
 # --- collect ---------------------------------------------------------------------------
@@ -238,26 +275,23 @@ def resolve_repo_root(start: Path, redirect: bool = True) -> tuple[Roots | None,
         f"were written to the MAIN checkout ({main_root}) so they survive worktree "
         "disposition and a rerun overwrites the same PR-keyed file."
     )
-    # The READ root stays on the worktree — that is where this arc's own loop_defer rows
-    # landed. Only the two honest exceptions move it (see the docstring).
+    # The READ root stays on the worktree, but since U-HE-29 it no longer selects WHICH
+    # ledger is read: there is exactly one, the shared venue (C-HE-09 §2), and every lane
+    # appends to it. What read_root still carries is the invoking worktree identity for
+    # the helper invocation below.
+    #
+    # The pre-U-HE-29 worktree-ledger-vs-main-ledger discrimination is deliberately gone.
+    # It existed because each worktree kept its OWN ledger copy, so "which
+    # file holds this arc's deferrals" was a real question with a wrong answer (borrowing
+    # main's ledger serialized a PARALLEL session's rows as this arc's todo_for_human,
+    # codex round-10). One shared venue dissolves the question — and re-stating either
+    # note here would now be a FALSE claim about how the rows were sourced.
     read_root = toplevel
-    wt_ledger = (toplevel / LEDGER_REL).is_file()
-    main_ledger = (main_root / LEDGER_REL).is_file()
-    if not wt_ledger and main_ledger:
-        # A ledger-less worktree is the NORMAL no-deferral case. Borrowing main's ledger
-        # here would serialize a PARALLEL session's pending rows as THIS arc's
-        # todo_for_human (codex round-10) — the honest answer is the arc's own truth:
-        # it deferred nothing. read_root stays on the worktree; the read yields [].
-        notes.append(
-            f"the invoking worktree has no {LEDGER_REL} — this arc recorded no deferrals; "
-            "the main checkout's SEPARATE ledger (a parallel session's) was NOT borrowed."
-        )
-    elif wt_ledger and main_ledger:
-        notes.append(
-            f"pending-HIL rows were read from the INVOKING worktree's {LEDGER_REL} (where "
-            "this arc's deferrals landed); the main checkout keeps a SEPARATE ledger whose "
-            "rows were NOT merged into this report."
-        )
+    notes.append(
+        "pending-HIL rows were read from the SHARED loop ledger (C-HE-09 §2) — one venue "
+        "for every lane; rows from concurrent lanes are keyed by their own lane id and "
+        "are reduced together by design, not merged in by this report."
+    )
     return Roots(main_root, read_root), notes
 
 
@@ -535,10 +569,12 @@ def _todos(
     ledger parse has exactly one implementation (`_loop_pending_hil_rows`), shared with
     the bounded `loop_pending_hil_summary` the SessionStart hook surfaces.
 
-    The two roots are deliberately independent. `ledger_root` becomes `CLAUDE_PROJECT_DIR`,
-    which is what `hook_project_dir` keys the ledger LOCATION off — for a linked-worktree
-    closeout that is the worktree, where this arc's `loop_defer` rows landed. The helper
-    CODE is sourced from `code_root` (the main checkout) instead, because a linked worktree
+    The two roots are deliberately independent. `ledger_root` becomes `CLAUDE_PROJECT_DIR`
+    for the helper invocation — since U-HE-29 that no longer selects the ledger (the venue
+    is shared and worktree-independent, C-HE-09 §2), but it still scopes the per-lane
+    control markers the helper may consult, so the invoking worktree remains the honest
+    value to pass. The helper CODE is sourced from `code_root` (the main checkout),
+    because a linked worktree
     is checked out at whatever revision its arc used: witnessed live against a real
     worktree whose `loop_lib.sh` predates `loop_pending_hil_list`, sourcing the worktree's
     copy exited 127 and degraded the whole field to UNKNOWN. The ledger FORMAT is stable
@@ -562,7 +598,8 @@ def _todos(
     # seconds the CI/refresh queries took). The helper would return rc 0 + empty for a
     # missing file — an authoritative [] under a note claiming the rows "were read",
     # which is the one false claim this design could otherwise make. UNKNOWN instead.
-    if ledger_was_present and not (ledger_root / LEDGER_REL).is_file():
+    ledger = ledger_path(code_root)
+    if ledger_was_present and not (ledger is not None and ledger.is_file()):
         notes.append(
             "the pending-HIL ledger vanished between root resolution and this read "
             "(concurrent worktree disposition?) — todo_for_human is UNKNOWN (null)."
@@ -586,7 +623,99 @@ def _todos(
     if rc != 0:
         notes.append(f"`loop_pending_hil_list` exited {rc} — todo_for_human is UNKNOWN (null).")
         return None
-    return [line.strip() for line in out.splitlines() if line.strip()]
+    rows = [line.strip() for line in out.splitlines() if line.strip()]
+    return _scope_to_lane(rows, ledger_root, notes)
+
+
+def _lane_id(ledger_root: Path) -> str:
+    """This arc's lane id, or '' when the invoking worktree has none.
+
+    `HARNESS_LANE_ID` first, then the worktree-local `.harness/.lane-id` (the pre-U-HE-31
+    persisted lane identity) — the same order `loop_lib.sh`'s `_loop_lane_id` uses when it
+    WRITES the lane into a row. Both are per-lane; the ledger is not.
+    """
+    # SAME precedence as the writer's `_loop_lane_id` (codex r7 P2): env first, then the
+    # persisted marker. The writer is the authority — it decides the lane a row is RECORDED
+    # under — so a reader resolving the two sources in the opposite order would, whenever
+    # both exist and differ, classify this arc's own freshly-written rows as foreign and omit
+    # them from its own closure record.
+    env = os.environ.get("HARNESS_LANE_ID", "").strip()
+    if env:
+        return _sanitize_lane(env)
+    marker = ledger_root / ".harness" / ".lane-id"
+    try:
+        val = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        val = ""
+    return _sanitize_lane(val)
+
+
+#: Separators `_loop_structured_col` strips before writing a lane into the ledger column.
+#: They cannot survive: `|` splits the row, whitespace breaks the item-token split, `;`
+#: terminates the lane, and newlines split the row across physical lines.
+_LANE_STRIP = str.maketrans("", "", " \t\n\r|;[]")
+
+
+def _sanitize_lane(lane: str) -> str:
+    """Render a lane id the way the LEDGER stores it (codex r6 P2).
+
+    The writer strips separators out of the lane before recording it, so comparing a raw
+    `.harness/.lane-id` against a row's rendered lane would classify this arc's own rows as
+    foreign the moment the id contained one of those characters — the exact
+    misclassification the lane rule must not make. Both sides are sanitized identically.
+    (This encoding is lossy by construction: two ids differing only in stripped characters
+    render the same. That residual is registered rather than papered over here.)
+    """
+    return lane.translate(_LANE_STRIP)
+
+
+def _scope_to_lane(rows: list[str], ledger_root: Path, notes: list[str]) -> list[str]:
+    """Annotate the shared venue's pending rows with the lane split. Never DROP one.
+
+    The ledger is shared since U-HE-29, so `loop_pending_hil_list` returns every lane's open
+    gates, each rendered `[lane] detail` (C-HE-09 §3). U-WT-03's per-arc wording invites
+    filtering to this lane, and this function filtered twice before landing here — both times
+    it hid a row that was genuinely this arc's:
+
+      1. excluding every lane != mine dropped this arc's own UNATTRIBUTED rows (the canonical
+         `tools/04-loop/defer.sh` writes no lane, and migrated legacy rows carry `-`);
+      2. excluding only the demonstrably-FOREIGN lanes still hid rows, because the reducer
+         collapses by ITEM TOKEN: when two lanes defer the same item, only the LAST
+         deferrer's row survives the reduction. `[L2] B-1` is then the only rendering of an
+         item L1 also has open and nobody resolved — so L1's closeout would drop it as
+         foreign and report a false empty list.
+
+    (2) is the decisive one: the rendered lane is not evidence of sole ownership, so no
+    exclusion built on it can be sound. Making it sound needs the SET of deferring lanes per
+    item, which C-HE-09 §3 does not render (`[<lane_id>]`, singular) — a design question
+    registered rather than answered by quietly changing the rendered form.
+
+    So: keep every row, each already naming a lane, and state the split in the notes. The
+    cost is naming a sibling's obligation in this PR's record; the alternative cost is hiding
+    this arc's own open gate inside the record that closes it, right before the worktree is
+    disposed. §4 settles that asymmetry for the skip-set and it settles this one too.
+    """
+    if not rows:
+        return rows
+    lane = _lane_id(ledger_root)
+    if not lane:
+        notes.append(
+            "the ledger is SHARED (C-HE-09 §2) and this arc's lane id could not be resolved "
+            "(.harness/.lane-id absent and HARNESS_LANE_ID unset) — todo_for_human lists "
+            "every open row across lanes; each row names the lane that deferred it."
+        )
+        return rows
+    mine = sum(1 for r in rows if r.startswith(f"[{lane}] "))
+    others = len(rows) - mine
+    if others:
+        notes.append(
+            f"the ledger is SHARED (C-HE-09 §2): of {len(rows)} open row(s), {mine} render "
+            f"under this arc's lane ({lane}) and {others} under another lane or the "
+            "unattributed `-`. ALL are listed. Rows are NOT filtered by lane: the reducer "
+            "collapses by item, so a row rendering under another lane may still be an item "
+            "this lane has open (see B-196), and an unattributed row may be this arc's own."
+        )
+    return rows
 
 
 def identity_error(pr: int, merge_state: str | None, pr_oid: str, resolved_sha: str) -> str | None:
@@ -641,7 +770,8 @@ def collect(
     # Snapshot NOW, before the (seconds-long) gh/git queries: if the ledger exists here
     # but is gone by the _todos read, that is the vanish window (merge-gate lens-1) and
     # the field must degrade to UNKNOWN rather than an authoritative [].
-    ledger_was_present = ((read_root or repo_root) / LEDGER_REL).is_file()
+    _pre_ledger = ledger_path(repo_root)
+    ledger_was_present = _pre_ledger is not None and _pre_ledger.is_file()
     pr_view = _as_dict(
         _gh_json(
             ["pr", "view", str(pr), "--json", "state,mergeCommit"], repo_root, notes, "merge_state"
@@ -786,7 +916,9 @@ def report_path(repo_root: Path, pr: int) -> Path:
     return repo_root / REPORT_DIR / f"arc-exit-report-pr{pr}.md"
 
 
-def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> bool:
+def append_ledger_row(
+    repo_root: Path, data: dict[str, Any], rel_path: str, lane_root: Path | None = None
+) -> bool:
     """Append the `EXIT-REPORT` index row through `loop_lib.sh`'s own `loop_log`.
 
     A bash shim, deliberately: the row's timestamp + pipe-escaping + table format have
@@ -809,7 +941,12 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
     loop_lib = repo_root / "tools" / "hooks" / "loop_lib.sh"
     if not (lib.is_file() and loop_lib.is_file()):
         return False
-    ledger = repo_root / LEDGER_REL
+    ledger = ledger_path(repo_root)
+    if ledger is None:
+        # The writer below would still append SOMEWHERE, but with no resolved path the
+        # growth check cannot witness it -- and an unwitnessed index row is exactly the
+        # false-pass this function fails closed against. Report failure.
+        return False
     # Pre/post growth check (codex round-1 P3): a substring match alone can false-pass on
     # an idempotent rerun by matching the PREVIOUS invocation's identical row while
     # loop_log's failure-invisible append silently did nothing (unwritable ledger, full
@@ -825,7 +962,13 @@ def append_ledger_row(repo_root: Path, data: dict[str, Any], rel_path: str) -> b
             "-c",
             'CLAUDE_PROJECT_DIR="$1"; . "$2"; . "$3"; loop_log EXIT-REPORT "$4"',
             "arc_exit_report",  # $0
-            str(repo_root),
+            # CLAUDE_PROJECT_DIR is what `_loop_lane_id` reads the persisted `.lane-id` from,
+            # so it must name the INVOKING arc worktree, not the redirected main checkout
+            # (codex r14 P3). Passing the write root recorded this row under main's lane — or
+            # `-` — on every normal linked-worktree closeout, attributing the arc's own exit
+            # report to a lane that did not run it. The venue itself is unaffected either way
+            # (it is worktree-independent since U-HE-29); only the attribution was wrong.
+            str(lane_root or repo_root),
             str(lib),
             str(loop_lib),
             detail,
@@ -916,14 +1059,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     rel = str(out.relative_to(root))
-    if not append_ledger_row(root, data, rel):
+    if not append_ledger_row(root, data, rel, lane_root=roots.read):
         # Fail CLOSED (codex round-9): both skill carriers treat exit 0 + the report path
         # as closure, so a warn-and-return-0 here would let an arc claim closure without
         # its required EXIT-REPORT index row. The report file itself IS written (it is
         # the deliverable; the message says so) — exit 3 distinguishes index-append
         # failure from unusable-inputs (2) so the runner repairs the ledger and re-runs.
         print(
-            f"ERROR: EXIT-REPORT index row could not be appended to {LEDGER_REL} "
+            f"ERROR: EXIT-REPORT index row could not be appended to the shared {LEDGER_NAME} "
             f"(report itself written at {rel}) — failing closed; repair the ledger and re-run.",
             file=sys.stderr,
         )

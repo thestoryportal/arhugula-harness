@@ -15,7 +15,7 @@ hard-stop deny-list enforced even in loop mode. 18/18 hook test suites green.
 
 | Unit | What | Test | Wiring |
 |---|---|---|---|
-| **U-HK-11** | loop-mode flag + `.harness/loop_status.md` ledger + `/loop-start`·`/loop-stop` skills (`loop_lib.sh`) | 14/14 | skills |
+| **U-HK-11** | loop-mode flag + the `loop_status.md` ledger (venue moved to the shared one at U-HE-29) + `/loop-start`·`/loop-stop` skills (`loop_lib.sh`) | 14/14 | skills |
 | **U-HK-12** | guardrailed auto-approve (`PreToolUse`/`PermissionRequest`, tri-state: deny-list → allowlist → ask) | 19/19 | settings.json |
 | **U-HK-13** | Codex+Advisor decision resolver (`/resolve` skill + `resolve_lib.sh`) | 6/6 | skill |
 | **U-HK-14** | in-session Stop-continue loop (iteration cap + halt marker) | 11/11 | settings.json |
@@ -60,9 +60,11 @@ autonomy infrastructure is operator-gated by design, not agent-self-serve.
 
 ## Operating it
 
-`/loop-start` (or `just loop`) turns loop mode on; `/loop-stop` turns it off. Review
-`.harness/loop_status.md` after any run — `DEFERRED-HIL` / `DENY` / `RESOLVE-SPLIT` rows
-are the things that wanted a human. The fully-autonomous loop remains an explicit,
+`/loop-start` (or `just loop`) turns loop mode on; `/loop-stop` turns it off. Review the
+shared `loop_status.md` after any run — resolve its path with `loop_status_path` (default
+`~/.gstack/projects/arhugula-v2/loop_status.md`; since U-HE-29 it is ONE file for every
+lane, outside every worktree, never a per-worktree copy) — `DEFERRED-HIL` / `NOTIFY` /
+`DENY` / `RESOLVE-SPLIT` rows are the things that wanted a human. The fully-autonomous loop remains an explicit,
 reviewable, bounded opt-in.
 
 ## Gate handling (corrected 2026-06-03)

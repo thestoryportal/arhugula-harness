@@ -5480,6 +5480,302 @@ loop_notify_summary() {
 - [ ] **Step 4: GREEN** (`bash tools/hooks/test_loop_lib.sh` + `test_permission_guard.sh` + `test_stop_gate.sh` etc. — every hook test that reads the ledger must set `HARNESS_LOOP_STATUS_PATH`; sweep with `rg 'loop_status_path|loop_status.md' tools/hooks/test_*.sh`). Probes: ACTIVATE reset (`--lines` cannot re-add a line — witness is the §4 test; record) and row shape (`--lines` = the `if ($4 ~ /^[ \t]*lane=/)` branch → structured rows mis-parse → RED) → PINNED. Register `Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True)`.
 - [ ] **Step 5: Commit** — `git add tools/hooks/loop_lib.sh tools/hooks/test_loop_lib.sh tools/hooks/session-start.sh .claude/skills/loop-start/SKILL.md .claude/skills/loop-stop/SKILL.md .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md tools/lanes_verify.py && git commit -m "feat(he-lanes): U-HE-29 shared loop_status venue, structured column, NOTIFY kind, ACTIVATE scoping, pointer sweep (C-HE-09)"`.
 
+**As-built rev note (2026-08-22, U-HE-29 landing).** Every C-HE-09 / C-HE-20 contract this unit
+cites is unchanged; the corrections below are execution-time findings against the unit's own
+sketch, recorded per the as-built discipline.
+
+(i) **`tools/roadmap-audit/session-start.sh`, not `tools/hooks/session-start.sh`.** The unit's Files
+list named a hook path that does not exist at HEAD. The SessionStart carrier is
+`tools/roadmap-audit/session-start.sh` (it already sources `loop_lib.sh` at `:22-24` and renders
+`loop_pending_hil_summary` at `:37-43`); `loop_notify_summary` is rendered there, as its own
+segment appended after the HIL segment, so an empty HIL summary still surfaces notices and a
+populated one is never diluted (C-HE-09 §5 "beside, never merged into").
+
+(ii) **`tools/arc_exit_report.py` is a SECOND live carrier of the venue — absorbed, mandatory.**
+Not in the unit's Files list. It held its own `LEDGER_REL = ".harness/loop_status.md"`
+derivation and used it at 8 sites, including `append_ledger_row`'s pre/post growth check. Moving
+the venue without it is a LANDING-ORDER DEFECT, not a cosmetic miss: `loop_log` would append to
+the shared venue while the growth check watched the old per-worktree path, so the check would
+see no growth, `append_ledger_row` would return False, and `main()` would fail closed with
+exit 3 on EVERY arc closed through ship-pr. Absorbed by replacing the constant with a
+`ledger_path(code_root)` resolver that ASKS `loop_status_path` (one authority, honouring
+`HARNESS_LOOP_STATUS_PATH` / `ARC_METRICS_QUEUE_DIR` identically to every hook) and returns
+None -- never a guessed fallback -- when it cannot resolve.
+
+(iii) **The R-7 worktree-vs-main ledger discrimination is DELETED, not ported.** `_resolve_roots`
+carried a wt_ledger/main_ledger branch whose two notes claimed rows came from the invoking
+worktree's private ledger and that the main checkout's "SEPARATE ledger" was not borrowed. Under
+one shared venue both claims are FALSE, so re-stating either would be a fabricated provenance
+note. Replaced with a single honest note naming the shared venue. Its tests were re-cut the same
+way: `test_r7_worktree_rows_win_over_the_main_checkouts` /
+`..._without_a_ledger_is_an_honest_empty_never_borrowed` became
+`test_u_he_29_worktree_read_reaches_the_shared_venue_with_lane_attribution` /
+`..._no_shared_ledger_is_an_honest_empty`. The old exclusion was a workaround for the venue
+split, not a goal — two lanes gated on the same operator are both real obligations, and the
+`[lane_id]` render (§3) is what makes the shared list actionable.
+
+(iv) **`_loop_epoch` does not exist; the epoch helper became a shared AWK prelude.** The sketch's
+`loop_notify_summary` called a `_loop_epoch` shell helper that is nowhere at HEAD — the epoch
+logic lived inline in `_loop_hil_ttl_resurface_unlocked`'s awk. Rather than add a shell helper
+that forks per row, the Hinnant days-from-civil pair was lifted into `_LOOP_AWK_EPOCH` beside
+`_LOOP_AWK_ROW` and both reducers now share it. Same rule as the row parser: one parse, one
+authority.
+
+(v) **`_loop_structured_col` + `_loop_escape_detail` extracted.** `loop_resolve` verifies its own
+write by grepping for the exact row it just appended, so it must reproduce the structured
+column and the pipe-escaping byte-for-byte. Building that string twice (once in the writer, once
+in the checker) is a drift surface that would silently break the resolve verification the
+moment either spelling changed; both now call the same two helpers.
+
+(vi) **The ACTIVATE-reset strike reaches `_loop_hil_ttl_resurface_unlocked` too.** §4 strikes the
+reset "for HIL rows"; the TTL re-surfacer reduces HIL rows, so its own
+`k == "ACTIVATE" { delete state; delete at }` was struck as well. Left in place, a sibling lane's
+ACTIVATE would silence another lane's aged deferral — precisely the notification the C-HE-20 TTL
+exists to deliver.
+
+(vii) **Six shell suites + two pytest suites pin `HARNESS_LOOP_STATUS_PATH`.** Beyond
+`test_loop_lib.sh`, the venue move stranded `test_stop_loop.sh`, `test_resolve_lib.sh`,
+`test_permission_guard.sh`, `tools/04-loop/test_run.sh`, `tools/04-loop/test_loop_wrappers.sh`,
+`tools/roadmap-audit/test_session_start.sh`, `tools/test_review_wrapper.py` and
+`tools/test_arc_exit_report.py`. In `test_arc_exit_report.py` the pin is an autouse fixture that
+sets the env var DIRECTLY rather than through `monkeypatch.setenv`: several tests there call
+`monkeypatch.undo()` mid-test to drop their `run` stub, and `monkeypatch` is one function-scoped
+instance shared with the fixture — an `undo()` would have silently unpinned the venue mid-test
+and pointed the next real subprocess at the OPERATOR's live ledger.
+
+(viii) **Two more skip-set scoping assertions inverted.** Besides `test_loop_lib.sh` tests 10 and
+17d, `test_stop_loop.sh` test 7 asserted that a DEFERRED-HIL row preceding an ACTIVATE is
+excluded from the injected skip-set. Inverted per §4 and strengthened: the still-open pre-ACTIVATE
+row must now be INCLUDED, and a companion RESOLVED-HIL row proves resolution remains the only exit.
+
+(ix) **`Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", ...)` already existed** (landed at
+U-HE-09); the manifest keys rows by artifact, so it was not duplicated. A second row registers the
+newly-load-bearing carrier from (ii): `Row("C-HE-09", "pytest:tools/test_arc_exit_report.py",
+"phase0", "local + CI", False)`.
+
+(x) **The U-HE-18 SessionStart activation gate self-activated.** `tools/roadmap-audit/session-start.sh:124-125` gates
+its detached `reconcile-all` spawn on `grep -q 'loop_log_structured()' tools/hooks/loop_lib.sh`.
+That writer now exists, so the pass runs and its C-HE-20 escalation rows reach the shared ledger
+instead of only the store-local `.reconcile.log` (the pre-U-HE-29 registered residual). The gate
+is RETAINED rather than removed — it is a live precondition, not a countdown: a checkout whose
+`loop_lib.sh` predates U-HE-29 (a bisect, an old worktree) would otherwise run an unattended pass
+that can only fail closed into the log.
+
+(xi) **Out-of-family review, rounds 1-3 (11 findings absorbed).** Recorded because three are
+contract-shaped, not cosmetic.
+
+*r1.* (a) A first-writer TOCTOU on the now-SHARED venue: `loop_status_ensure` tested `-f`
+then truncated with `cat >`, so a losing lane could erase rows the winner had appended.
+(b) A RELATIVE `HARNESS_LOOP_STATUS_PATH` / `ARC_METRICS_QUEUE_DIR` silently defeated §2 --
+each lane resolved the same string against its own CWD while every string comparison still
+reported the venue identical; now rejected, since absolutizing against CWD cannot help when
+the CWD is what differs. (c) The SessionStart NOTIFY wiring had no witness. (d) Two ship-pr
+instructions still said worktree disposition deletes the ledger.
+
+*r2.* (e) `set -o noclobber` did NOT close (a): O_EXCL publishes the file at open() time, so
+a second lane's `-f` test passes and it appends while the winner is still writing the header
+through a non-append fd whose absolute-offset writes land on top. Replaced with a publication
+protocol -- stage the header to a temp file, publish with `ln` (atomic, EEXIST) -- so the
+venue never exists partially written. (f) **The cutover would have STRANDED every still-open
+deferral in the pre-U-HE-29 per-worktree ledgers.** Grounded, not hypothetical: the root
+checkout's legacy ledger alone appeared to carry 2 open obligations invisible to the new
+reducer — a measurement later shown to be WRONG; see (xvii). (g) `_loop_structured_col` stripped spaces/tabs/pipes but not newlines,
+so a newline-bearing lane id split one row across two lines and the reducer could drop the
+gate.
+
+*r3.* (h) The migration from (f) was **dead code** -- no production path called it, so
+production would still have switched venues with those rows unread. Wired into SessionStart
+behind a sentinel, witnessed by a test that drives it through the hook rather than calling
+the helper directly. (i) The migration concatenated whole legacy ledgers in worktree-
+enumeration order, but reducers use PHYSICAL last-write-wins and ignore timestamps -- an
+older `RESOLVED-HIL` from a later-enumerated worktree could follow and clear a newer open
+gate. Narrowed to import only each file's still-OPEN rows, each reduced in its own correct
+order: the import is then purely `DEFERRED-HIL`, which can only ADD to the skip-set, the safe
+direction by §4's own rule. (j) **`todo_for_human` had quietly changed meaning.** The shared
+venue made `loop_pending_hil_list` return every lane's gates, so PR A's closure record would
+carry a sibling lane's obligations -- and the re-cut test in (iii) *blessed* it. U-WT-03's
+per-arc contract is restored by scoping rows to the invoking worktree's `.harness/.lane-id`
+(falling back to `HARNESS_LANE_ID`), with the excluded count STATED in the notes; with no
+resolvable lane id every row is kept and the report says it is unfiltered. (k) `loop_resolve`
+verified its write by grepping the WHOLE file, which proves a matching row exists, not that
+this call wrote one -- on a shared, never-truncated, cross-run venue an identical historical
+row is plausible, and a false "resolved" is the one answer that function must never give. It
+now searches only the bytes appended since its own write began.
+
+(xii) **A probe non-kill was reported, not tuned away.** The 12-lane create race added for
+r1(a) was mutation-probed with the fix removed and stayed GREEN -- forked subshells almost
+never interleave inside the microseconds between the `-f` test and the redirect. Rather than
+tune the race until it flaked red (pinning luck, not the mechanism), the fix is pinned
+structurally, exactly as tests 15c/15d in the same file already pin `loop_resolve`'s own-write
+check and for the same stated reason. The race test remains an end-to-end sanity check and is
+labelled as one.
+
+(xiii) **Test pollution found in the operator's live shared venue.** Because the venue is
+resolved from the environment rather than the repo, suites that had not yet pinned
+`HARNESS_LOOP_STATUS_PATH` wrote four rows (`B-777`, `B-779`, `R-300`, `R-410`) into the real
+`~/.gstack/projects/arhugula-v2/loop_status.md` during this arc. Cleared through the ledger's
+own append-only mechanism (`RESOLVED-HIL` rows naming them as test artifacts) rather than by
+editing the file. This is why the pins in (vii) are load-bearing rather than tidiness.
+
+(xiv) **Rounds 4-6: the absorption rounds became the defect source, and the arc converged by
+narrowing, not by adding.** r4's six findings, r5's five and r6's five were almost entirely
+about machinery r1-r3 had *introduced* -- the migration and the lane rule. Two shape
+corrections, not more patches, did the work:
+
+*The lane rule settled on its third shape.* r3 filtered `todo_for_human` to the invoking
+lane; r4 showed that drops this arc's OWN rows (the canonical `defer.sh` sets no lane, and
+migrated rows carry `-`), so it was reverted to keep everything; r5 showed keeping everything
+puts a sibling's obligations in this PR's closure record. The settled rule keys on what is
+KNOWN: exclude a row whose lane is demonstrably some OTHER lane's, keep mine and keep the
+unattributed, count every exclusion. Neither extreme was right, and the middle is not a
+compromise -- it is the only rule that never hides a row that might be this arc's.
+
+*The migration hardened along one axis: claim, then read.* r5 moved the atomic rename BEFORE
+the reduce (a concurrent pre-U-HE-29 writer's row was being carried into the archive
+unimported and never seen again, since later passes look only at the original filename), and
+r6 added recovery of orphaned `.migrating-*` claims so a crash between claim and retire
+cannot hide a ledger permanently. r6 also narrowed the retry dedupe from the ITEM to the ROW:
+keyed on the item it suppressed every future legacy deferral for that item forever, breaking
+the last-write-wins rule that a later deferral reopens a gate; keyed on the row, a re-seen
+identical row is a retry and a genuinely new deferral still lands.
+
+Also absorbed across these rounds: `mktemp` for the staging file (`$$` is shared across a
+bash's subshells and `$RANDOM` is 15 bits, so a guessable staging name reopened the
+partial-publication race the `ln` protocol exists to close); `_loop_lane_id` resolving the
+persisted `.harness/.lane-id` when `HARNESS_LANE_ID` is unset (the canonical `defer.sh` and
+the ordinary hooks never export it, so rows lost their §3 attribution in a worktree that had
+carried a lane id all along); a `mig=ERR(...)` SessionStart segment so a failed cutover
+surfaces instead of rendering as success; and gitignore entries for the `.migrated-*` /
+`.migrating-*` residue, which `hook_worktree_local_state` would otherwise treat as precious
+untracked state and refuse to dispose the worktree forever.
+
+(xv) **One residual REGISTERED, not fixed: B-194.** The lane encoding is a destructive strip,
+not a reversible encoding, so two ids differing only in stripped characters render the same.
+The *misclassification* half is fixed here (`arc_exit_report._sanitize_lane` applies the
+identical strip before comparing, so a separator-bearing lane no longer reads its own rows as
+foreign); the *collision* half is inherent to a lossy mapping and needs a decision between
+rejecting unsafe ids at mint time and adopting one reversible encoding across all three
+carriers. It is not exploitable at HEAD -- minted ids contain none of the stripped
+characters. Registered at `.harness/forward-register.yaml` B-194 with both options and the
+one-commit-across-three-carriers constraint recorded, per the register-and-hold discipline
+at the round cap.
+
+(xvi) **Rounds 7-8, and where the arc stopped.** r7 replaced the dedupe heuristic outright:
+imported rows are necessarily appended LAST into a log the reducers read by PHYSICAL order,
+so no text-similarity key can be right. The import now compares the legacy row's own
+timestamp against the shared venue's last resolution of that item — skip only what the venue
+already answered AT OR AFTER the row was written. That single rule subsumes both earlier keys
+and is witnessed in all three directions (stale skipped, newer imported, never-answered
+imported regardless of age). r7 also fixed orphan-fold ordering, matched the lane precedence
+across writer and reader (they disagreed, so an arc could classify its own rows foreign), and
+stripped `[`/`]` from lane ids because the rendered `[lane] detail` form is parsed back by
+brackets. Its P3 caught a second suite (`test_loop_gc.sh`) mutating the operator's live
+ledger — the same class as (xiii), found in a place the first sweep missed.
+
+r8 returned four findings, and their SHAPE is what closed the arc rather than fatigue. Two
+were cheap and clearly right and were taken: multi-orphan chronological folding (folding one
+at a time reversed the order whenever more than one claim existed), and a masked `awk`
+failure inside a pipeline that made an unreadable ledger read as empty in any caller without
+`pipefail` — which the migration would then retire as fully imported. The other two are
+**registered as B-195**, with reasons rather than deferral: (a) the staleness check and the
+import append are not atomic, but the consequence is C-HE-09 §4's SAFE direction — the item
+stays in the skip-set and resurfaces for the operator, no data loss and no wrongly-retried
+gate; (b) a pre-U-HE-29 writer holding an fd on the legacy inode keeps appending after the
+claim rename, which is **not fixable from this side** — that process takes none of our locks
+and holds the inode regardless of its name. Both windows are self-closing: they exist only
+while a pre-U-HE-29 checkout is still running.
+
+Eight rounds, ~30 findings absorbed. The honest summary is that r1-r3 hardened the UNIT and
+r4-r8 hardened the machinery r1-r3 had introduced — the cutover migration in particular. Each
+round's fix was the previous round's defect surface, and the arc converged only when two
+shapes were NARROWED (the lane rule to "exclude the demonstrably foreign"; the import rule to
+"compare timestamps") rather than patched again.
+
+(xvii) **CORRECTION — the migration's founding measurement was wrong, and codex r14 caught
+it.** Rounds 2-13 justified the cutover migration with "the root checkout's legacy ledger
+carries 2 genuinely open obligations (B-124, B-137) that the venue move would strand." That
+number is an ARTIFACT. It came from reducing an OLD-semantics file with the NEW rule: C-HE-09
+§4 strikes the `ACTIVATE` reset, but every legacy row was WRITTEN under the old rule, in which
+`ACTIVATE` cleared prior-run state. Measured both ways on the real file (3204 lines, 18
+`ACTIVATE` rows): the new rule reports `B-124 B-137` pending; the old rule — the one those
+rows were actually written under — reports **nothing** pending.
+
+So the migration was not rescuing two stranded gates. It was about to RESURRECT two rows that
+their own run had already closed, import them into the shared venue, and put them in the
+global skip-set until a human explicitly resolved each one — making the loop refuse items
+nobody was ever blocked on. `_loop_pending_rows_with_ts` now reduces legacy files under
+LEGACY semantics, and a witness pins both halves (a pre-ACTIVATE row is not resurrected; a
+post-ACTIVATE row still migrates) alongside one confirming the SHARED venue keeps §4's
+no-reset rule unchanged.
+
+The migration is still correct to exist — a genuinely pending legacy row would otherwise be
+stranded, and the C-HE-09 §2 venue move is what creates that possibility. But on THIS
+workspace it imports nothing, and the earlier claims are corrected in place rather than left
+standing: in this note above, and in `loop_status_migrate`'s own header comment, which had
+frozen the wrong number into the code as its rationale. Two lessons worth keeping: a
+semantics change makes every historical file a DIFFERENT format, and a measurement taken with
+the new rule is not evidence about data written under the old one.
+
+(xviii) **Rounds 15-17, and the terminal.** r15 caught two defects introduced by r14's own
+fixes: the NUL-safe worktree list was printed BACK through newlines to feed a `read` loop
+(re-creating the split `-z` had just removed), and `_loop_resolved_map` sat inside the
+per-worktree loop, making the pass O(worktrees x ledger) inside SessionStart's 8 s bounded
+slice. It also exposed that the test meant to pin the single-scan property counted textual
+CALL SITES — green while the map was rebuilt per worktree. Replaced with a behavioural
+witness that stubs the builder, migrates three worktrees, and asserts exactly one read.
+
+r16 added claim owner-liveness (two concurrent migrations were each treating the other's
+in-flight claim as an orphan), removed the guessable staging fallback that survived a failed
+`mktemp`, and sorted orphans by basename. Its liveness check needed a second pass of its own:
+`kill -0` fails with EPERM for another user's process, which means the process EXISTS —
+reading that as dead would let a migration steal a live claim — so `_loop_pid_alive` falls
+back to `ps -p`.
+
+**r17 returned four findings and ZERO new ones.** Every one maps to a class already
+registered with a reasoned disposition: the lane-scoping objection is B-196 (registered after
+three flips precisely so it stops being re-litigated per round), the check-then-append
+atomicity is B-195(a) (whose consequence is §4's SAFE direction), the open-fd-survives-rename
+hole is B-195(b) (not fixable from this side), and the lossy lane encoding is B-194
+(misclassification half fixed; collision half needs a mint-time or encoding decision). That
+is the terminal condition — not reviewer silence, which proves nothing, but a round in which
+the reviewer produced no information the register did not already hold.
+
+Seventeen rounds. The shape of the arc is worth stating plainly: r1-r3 hardened the UNIT;
+r4-r16 almost entirely hardened the cutover MIGRATION that r2 introduced to protect the venue
+move; and r14 then showed that migration's founding measurement had been wrong all along
+(xvii). The unit's own contracts — venue, structured column, ACTIVATE scoping, NOTIFY — were
+settled by r3 and never regressed.
+
+(xix) **THE CUTOVER MIGRATION WAS CUT BEFORE MERGE — read this before items (ii)–(xviii).**
+Much of this note documents the hardening of a `loop_status_migrate` that **is not in the
+landed unit**. It was removed wholesale at the operator''s decision, and the reasoning is the
+most useful thing this arc produced.
+
+*What happened.* r2 raised that the venue move would strand still-open deferrals. That was
+grounded, measured (`B-124 B-137` apparently open), and a migration was built. At r14 the
+measurement was shown to be an ARTIFACT (xvii): reducing an old-semantics file with the new
+no-ACTIVATE-reset rule is not evidence about what it holds, and under the rule those rows were
+written with, the legacy ledgers hold NOTHING. The live dry-run agreed: 0 files to import.
+
+*What it cost.* ~318 lines of concurrency-sensitive machinery — atomic claim-by-rename, orphan
+recovery, pid liveness, NUL enumeration, timestamp staleness, a five-value exit taxonomy — plus
+44 tests, to migrate nothing on this workspace. It generated roughly 20 of the arc''s 23 review
+rounds, because a large concurrency surface produces findings indefinitely and each fix seeded
+the next round''s defect.
+
+*The correction that should have happened at r14, and did not.* When a measurement that
+justified building something is falsified, the next move is to re-scope, not to keep hardening.
+Rounds 15–23 hardened machinery whose premise had already been withdrawn. The unit''s own
+contracts (C-HE-09 §1–§6, C-HE-20 §1) were settled at r3 and never regressed through any of it.
+
+*What landed instead.* The venue, the structured column, the ACTIVATE-scoping strike, `NOTIFY`,
+the `[lane_id]` render and the pointer sweep — the actual unit. `B-195` and `B-197` are CLOSED
+with the migration (every race they recorded was a property of it), and **B-198** records the
+measurement plus the conditions under which a drain would have to be built for real, so a later
+session neither re-derives it nor rebuilds the machinery on the same false premise.
+
+
+
 ---
 
 ### U-HE-30: Gate coalescing by `cause_signature`, 10 min window, pull-based delivery

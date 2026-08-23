@@ -225,8 +225,16 @@ MANIFEST: list[Row] = [
         "loop, live",
         False,
     ),
-    # C-HE-09/10 (U-HE-09)
+    # C-HE-09/10 (U-HE-09; extended by U-HE-29 with the shared venue, the structured
+    # column, the ACTIVATE-scoping strike and the NOTIFY kind)
     Row("C-HE-09/10", "shell:tools/hooks/test_loop_lib.sh", "phase0", "local + CI", True),
+    # C-HE-09 §2 (U-HE-29): the venue's SECOND live carrier. arc_exit_report.py both reads
+    # pending rows from the ledger and appends its own EXIT-REPORT index row, so it must
+    # resolve the path through loop_lib.sh's loop_status_path rather than deriving one of
+    # its own -- a second derivation would point the append's growth check at a file the
+    # writer never touches and fail every arc closed (exit 3). Registered separately from
+    # the shell row above because it is a different artifact (rows are keyed by artifact).
+    Row("C-HE-09", "pytest:tools/test_arc_exit_report.py", "phase0", "local + CI", False),
     # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)
     Row("C-HE-15/16/18", "pytest:tools/test_review_wrapper.py", "phase0", "local + CI", True),
     Row(

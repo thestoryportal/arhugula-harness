@@ -14,7 +14,7 @@ Witness: `tools/test_store_audit.py` (phase0; `just lanes-verify` row `C-HE-30`)
 | Merge-door lease (`merge-door/LEASE`) | `QUEUE_DIR`-adjacent | who is landing now; `merge_attempted_at`; `state ∈ {held, blocked}` |
 | `.harness/arc-metrics.jsonl` (per-worktree until committed; `LEDGER`, `ARC_METRICS_LEDGER` override) | `REPO` | arc rows (`record_kind=arc`, one per `arc_id`), per-round outcomes, phases (folded at drain); `arc_type_open/close/declared_at` (C-HE-25) |
 | `.harness/merge-gate-log.md` + structured sibling `.harness/merge-gate-log.jsonl` | `REPO` | gate verdicts and every finding-class row — ONE fact per emission, one producer step (C-HE-30 row 5: human + machine views; the sibling is derived from the same producer step, not a second authority). As built (U-HE-13): the JSONL rows are written FIRST under one `flock` and the md gate-summary line in the same step; every C-HE-24 record lands in the JSONL (review-wrapper / finding rows have no md line at all — the md is the gate-summary view only); when the md write fails the line is re-emitted FROM the JSONL at the next gate run (`reconcile_orphans`, C-HE-23 §2), so the JSONL is the recovery source of the one fact — which is the mechanism the spec row names, not a second authority model |
-| `loop_status.md` (HIL/NOTIFY rows at the shared venue `QUEUE_DIR/../loop_status.md`; today `.harness/loop_status.md` under `hook_project_dir()` — control markers per-lane under the same dir) | shared / per-lane | operator-attention state; run-scoped skip-set |
+| `loop_status.md` (HIL/NOTIFY rows at the shared venue `QUEUE_DIR/../loop_status.md`, LIVE since U-HE-29 — control markers stay per-lane under `hook_project_dir()`) | shared / per-lane | operator-attention state; run-scoped skip-set |
 | Finding emission (`codex_context_guard.Finding` projection of the C-HE-24 record) | CI/stdout | derived from the 8-field record — never authored independently |
 | Committed history on `MERGED_REF` | git | the only proof that a row is durable |
 
@@ -52,12 +52,15 @@ Locks and stagers that carry no durable fact — never read for state, never an 
 | Gate emission lock | `.harness/merge-gate-log.jsonl.emit.lock` (`flock`; emissions + reconcile serialized) | one emission |
 | Lens scratch (binding input) | `.harness/tmp/` (`LENS_SCRATCH`; a lens's fenced JSON must RESOLVE under it) | one gate round |
 | Atomic-write stagers | `.<name>.<pid>.tmp` next to the target (`LEDGER`, queue entries; `arc_metrics.py` only — `loop_status.md` is appended in place under the mutex below) | one `os.replace` |
+| Venue header stager | `<venue>.XXXXXXXX<rand>` (`mktemp`, exclusive; the C-HE-09 §2 header is written here and PUBLISHED by `ln`, so the venue never exists partially written) | one `ln` |
 | Recovery aside (queue claim) | `QUEUE_DIR/<arc>.taken.recover.<pid>` (`*.taken.recover.*`; move-aside re-judge in `_recover_dead_claims`, U-HE-15 r3 — orphans from a dead recoverer are swept and restored on the next recovery pass) | one recovery step |
 | Claim-break aside (completion claim) | `QUEUE_DIR/merge-door/.completed.<token>.broken.<pid>.<hex>` (adjudicate-after-rename CAS in `complete_dead_marker`, U-HE-22 r7 — the moved bytes are the adjudicated evidence; a live claimant's claim is restored via `os.link`, then the aside is unlinked) | one claim-break step |
 | Status-ledger mutex | `.harness/.loop-status.lock` (fd 8; lib.sh worktree-mutex pattern) | one append |
 | Test hold-seam rendezvous (U-HE-20) | `<ARC_METRICS_TEST_HOLD_DIR>/<step>.reached` touched at the named step, `<step>.go` polled ≤30 s (`_hold_after`, sibling of `_kill_after`; inert unless `ARC_METRICS_TEST_HOLD_AFTER` is set — test-only, never in production env) | one interleaving hold |
 
 ## Referenced pre-existing workspace stores (not created or extended by this spec)
+
+`tools/hooks/loop_lib.sh` *reads* `.harness/.lane-id` — the pre-U-HE-31 persisted lane identity, whose authority is the lane-init mint (`tools/reservations.py mint-lane-id`), not this module. `_loop_lane_id` consults it only when `HARNESS_LANE_ID` is unset, so a row's recorded lane has ONE authority (the environment when set, the persisted marker otherwise) and `tools/arc_exit_report.py` resolves it in the SAME order when reading rows back — a reader using the opposite precedence would be a second authority for "which lane is this", and would make an arc classify its own rows as another lane's.
 
 `tools/hooks/loop_lib.sh` *reads* `.harness/forward-register.yaml` and `.harness/post-phase-8-forward-register.md` to scope the `R-` / `B-` filter — their authorities are `tools/forward_register.py` / the post-Phase-8 register protocol (CLAUDE.md §12), unchanged here. Listed so the witness names every `.harness` literal the module spells.
 

@@ -945,16 +945,43 @@ def default_ground() -> Ground:
 
 
 def _notify(kind: str, lane_id: str, cause: str, detail: str) -> None:
-    """Loop-ledger row, TOLERANT of the not-yet-landed writer (as-built: the plan's §3
-    order ships `loop_log_structured` at U-HE-29 while the roadmap executes U-HE-23 first
-    — the registered §0-vs-§1 ordering contradiction). A missing ledger writer must never
-    mask a DoorBlocked or crash the driver mid-landing: pre-U-HE-29 the signal degrades to
-    a LOUD stderr line (in-band, never silent); the durable row arrives with U-HE-29."""
-    try:
-        rs.emit_loop_row(kind, lane_id, cause, detail)
-    except rs.LoopStatusWriteError as exc:
+    """Loop-ledger row, tolerant of a WRITE FAILURE but no longer of a missing writer.
+
+    The original tolerance existed because `loop_log_structured` had not landed yet (the
+    plan's §3 order ships it at U-HE-29 while the roadmap executed U-HE-23 first). **U-HE-29
+    has landed**, so a failure here is no longer "the writer is pending" — it is a genuine
+    durability failure against the shared venue, and the message must say so rather than
+    reassure the reader with a condition that no longer obtains.
+
+    A blocking escalation is RETRIED before it is given up on (codex r18 P2). C-HE-20 §1
+    makes the durable row a MUST, and the overwhelmingly common write failure is transient (a
+    momentary lock or FS hiccup on a venue every lane now shares), so retrying converts most
+    of them into the durable row the contract requires instead of an ephemeral line.
+
+    The catch is still KEPT after the retries, and NOT because tolerance is comfortable: this
+    module has no `finally:` that releases the lease around these call sites, so an exception
+    escaping `_notify` can leave the GLOBAL merge-door lease held — wedging every lane, which
+    is a categorically worse outcome than one loud lost row. Propagation would trade a
+    recoverable reporting failure for an unrecoverable coordination failure. The residual
+    (a PERSISTENT write failure leaves only the stderr line) is registered at B-199, which
+    records the ordering this needs: make the call sites release-safe FIRST, then propagate."""
+    attempts = 3 if kind == "DEFERRED-HIL" else 1
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            rs.emit_loop_row(kind, lane_id, cause, detail)
+            return
+        except rs.LoopStatusWriteError as exc:
+            last = exc
+            if i + 1 < attempts:
+                time.sleep(0.2 * (i + 1))
+    if last is not None:
+        exc = last
         print(
-            f"merge-door {kind} (ledger writer pending U-HE-29): {cause} — {detail} [{exc}]",
+            f"merge-door {kind} ROW LOST after {attempts} attempt(s) — the durable HITL row "
+            f"could NOT be written to the shared loop ledger (C-HE-20 §1 requires it): "
+            f"{cause} — {detail} [{exc}]. This escalation exists only in this line; record "
+            "it before ending the session.",
             file=sys.stderr,
         )
 

@@ -16,6 +16,10 @@ bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL mktemp"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 mkdir -p "$REPO/.harness"
+# C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
+# no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
+
 
 # Helpers: build a payload + run the hook with loop mode forced via env.
 pl() { # $1=tool $2=command $3=file_path $4=event
@@ -50,7 +54,7 @@ OUT=$(run_on "$(pl mcp__harness-7a-scaffold__route_llm_call '' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "deny paid MCP route_llm_call" || bad "paid MCP not denied: $OUT"
 
 # 3) DENY is logged to the ledger.
-grep -q '| DENY |' "$REPO/.harness/loop_status.md" && ok "deny logged to ledger" || bad "deny not logged"
+grep -q '| DENY |' "$HARNESS_LOOP_STATUS_PATH" && ok "deny logged to ledger" || bad "deny not logged"
 
 # 4) ALLOWLIST.
 OUT=$(run_on "$(pl Bash 'git status' '')")

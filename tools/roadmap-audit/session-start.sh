@@ -40,6 +40,15 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   command -v loop_hil_ttl_resurface >/dev/null 2>&1 && loop_hil_ttl_resurface 2>/dev/null
   _h=$(loop_pending_hil_summary 2>/dev/null)
   [ -n "$_h" ] && _HIL=" $_h"
+  # C-HE-09 §5 (U-HE-29): NOTIFY rows render BESIDE the pending-HIL summary, never merged
+  # into it. The distinction is load-bearing for the operator: the HIL line says "the loop
+  # is gated on you"; the notify line says "here is something you may want to know". Its
+  # own segment, appended after -- so an empty HIL summary still surfaces notices, and a
+  # populated one is never diluted by them.
+  if command -v loop_notify_summary >/dev/null 2>&1; then
+    _n=$(loop_notify_summary 2>/dev/null)
+    [ -n "$_n" ] && _HIL="${_HIL} $_n"
+  fi
 fi
 
 # C-HE-03 §5 (U-HE-18): one ground-truth reconcile pass over every non-terminal arc
@@ -48,9 +57,10 @@ fi
 # failures (codex U-HE-18 r1 P1), so an inline gh-backed pass could starve the audit emit
 # below; the spawn costs milliseconds and never consumes the parent's budget. Durable
 # outcomes surface through the loop ledger (DEFERRED-HIL / NOTIFY rows read by
-# loop_pending_hil_summary at the NEXT engagement, C-HE-20 §1); until U-HE-29 lands
-# loop_log_structured, the pass records to the store-local .reconcile.log only (in-band
-# ERROR values, CLI exit 2 -- registered residual, plan U-HE-18 rev note). The dir
+# loop_pending_hil_summary at the NEXT engagement, C-HE-20 §1). U-HE-29 landed
+# loop_log_structured, so the activation gate below is now SATISFIED and the pass runs:
+# its escalation rows reach the shared ledger rather than only the store-local
+# .reconcile.log (the pre-U-HE-29 registered residual, plan U-HE-18 rev note). The dir
 # pre-probe mirrors arc_metrics.py's QUEUE_DIR default so sessions without a reservation
 # store skip the interpreter spawn entirely; if the defaults ever drift the only cost is
 # a skipped best-effort pass (the merge lane re-runs it).
@@ -58,10 +68,11 @@ _QROOT="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-
 _RROOT="${_QROOT}/reservations"
 _RESV=""
 # Activation gate (codex r5 P2): the pass's C-HE-20 escalation rows need loop_lib.sh's
-# `loop_log_structured` (U-HE-29). Until that writer exists at HEAD, an unattended aged-
-# reservation pass could only fail closed into the log -- so the spawn stays dormant and
-# SELF-ACTIVATES the moment U-HE-29 lands. Synchronous callers (CLI, U-HE-22 merge lane)
-# are unaffected: their exit codes surface directly.
+# `loop_log_structured` (U-HE-29), which HAS landed -- the gate is retained as a live
+# precondition, not a countdown: a checkout whose loop_lib.sh predates U-HE-29 (bisect,
+# an old worktree) would otherwise run an unattended pass that can only fail closed into
+# the log. Synchronous callers (CLI, U-HE-22 merge lane) are unaffected: their exit codes
+# surface directly.
 if [ -e "$_RROOT" ] || [ -L "$_RROOT" ]; then if [ ! -d "$_RROOT" ] || [ -L "$_RROOT" ]; then
   # The store root exists but is not a plain directory: corruption of authoritative
   # state, never an absent-store clean skip (codex r10 P2) -- fail open here would hide

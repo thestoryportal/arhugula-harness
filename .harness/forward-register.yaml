@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 193
+  total: 199
   open: 1
   design_substrate_gated: 3
-  registered_finding: 44
+  registered_finding: 48
   operator_gated: 0
   held: 2
-  closed: 143
-  identity_digest: ec511db7b4c1b853
+  closed: 145
+  identity_digest: acf0b190b4e1d0fa
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10081,3 +10081,214 @@ items:
   council: 'NO — single-mechanism recovery design; the merge-gate concurrency lens on
     the U-HE-28 PR is the scheduled decorrelated check.'
   heading: '### B-193 · C-HE-06 §4(viii) converging recovery for a BEHIND refresh + the mid-landing-correction intent chain *(surfaced by out-of-family Codex r18/r19 against U-HE-28, 2026-08-22; register-and-held after an absorb-revert cycle)*'
+- id: B-194
+  title: >-
+    C-HE-09 §3 lane-id encoding is lossy — reject unsafe ids or adopt one reversible
+    canonical encoding across writer, reducer and arc-exit report
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-29 r6) and register-and-held at the
+    round cap. `_loop_structured_col` strips ` `, tab, newline, CR, `|` and `;` from the
+    lane before writing it, because each of those characters corrupts the row or the
+    parse (`|` splits the row, whitespace breaks the item-token split, `;` terminates the
+    lane, newlines split the row across physical lines). The strip is DESTRUCTIVE rather
+    than an encoding: two distinct legal ids differing only in stripped characters
+    (`lane;evil` and `laneevil`) render identically in the ledger, so one lane can read as
+    another. The MISCLASSIFICATION half was fixed in the landing PR — `arc_exit_report`
+    now sanitizes its own `.lane-id` identically before comparing, so a lane bearing those
+    characters no longer has its own obligations classified as foreign — but the collision
+    itself is inherent to any lossy mapping and remains. Not exploitable at HEAD: lane ids
+    are minted from a host+repo+random-suffix template that produces none of the stripped
+    characters, so a colliding pair requires a hand-set HARNESS_LANE_ID or a worktree name
+    carrying a separator.'
+  close_out: '(1) Decide the shape: REJECT ids containing the unsafe set at mint time (in
+    `reservations.py mint-lane-id`, which is where identity is created) and fail closed at
+    the writer, OR adopt one reversible encoding (percent-escape the unsafe set) applied
+    identically in `_loop_structured_col`, `rowparse` and `arc_exit_report._sanitize_lane`;
+    (2) whichever is chosen, the three carriers must move in one commit — a writer and a
+    reader disagreeing about the encoding is the same misclassification defect in a new
+    place; (3) add a witness pinning that two ids differing only in unsafe characters
+    cannot render the same lane.'
+  council: 'NO — a single-mechanism encoding decision with two well-understood options;
+    the out-of-family reviewer is the scheduled decorrelated check.'
+  heading: '### B-194 · C-HE-09 §3 lossy lane-id encoding (collision half) *(surfaced by out-of-family Codex r6 against U-HE-29, 2026-08-22; misclassification half fixed in the landing PR, collision half register-and-held)*'
+- id: B-195
+  title: >-
+    U-HE-29 cutover-window concurrency against a still-running pre-U-HE-29 writer —
+    check-then-append staleness race and the open-fd-survives-rename hole
+  pr: '#1426'
+  status: closed
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-29 r8) and register-and-held at the round
+    cap. Two residual classes in `loop_status_migrate`, both scoped to the cutover window in
+    which a checkout still running PRE-U-HE-29 code is actively writing. (a) STALENESS RACE:
+    the timestamp check (`_loop_last_resolved_ts`) and the import append are not atomic, so a
+    RESOLVED-HIL landing between them lets an imported legacy DEFERRED-HIL become physically
+    last and reopen a just-answered gate. Its consequence is the SAFE direction under C-HE-09
+    §4 (over-skipping is safe; under-skipping re-loops): the item stays in the skip-set, the
+    loop does not retry a gated item, and the operator sees it at the next SessionStart and
+    can re-resolve — no data loss and no wrongly-retried gate, which is why it is held rather
+    than fixed under time pressure. (b) OPEN-FD SURVIVES RENAME: a pre-U-HE-29 process holding
+    an fd on the legacy inode keeps appending after the claim rename, so a deferral written
+    after the reduce reaches EOF lands only in the `.migrated-*` archive and no later pass
+    looks there. This one is NOT fixable from this side — the old writer takes no lock of ours
+    and holds the inode regardless of its name. RE-FOUND at r9 with a third instance of the
+    same root cause: the orphan fold reads the live legacy file with `cat` and replaces it
+    with `mv`, so a row appended between the EOF and the rename is on an inode the
+    replacement unlinks. All three instances share one precondition (a live pre-U-HE-29
+    writer) and one mitigation shape (claim/lock cooperation the old code cannot give), so
+    they close together or not at all. EXTENDED (codex r21): the hoisted resolved-item map is
+    a further instance of (a)''s non-atomicity — it is snapshotted ONCE per migration while the
+    shared venue stays writable, so a RESOLVED-HIL appended after the snapshot is missed and
+    the older legacy DEFERRED-HIL lands last, reopening an answered gate. Same root, same
+    close-out (hold the lock across the decision AND the write). The single-scan hoist itself
+    is REQUIRED by the 8 s SessionStart budget and is not the defect.'
+  close_out: 'CLOSED 2026-08-22 WITHOUT BUILDING: the cutover migration these races all live in was CUT from the U-HE-29 PR entirely. Every instance recorded here is a property of `loop_status_migrate`, which no longer exists -- there is no code left to race. See B-198 for the measurement that justified the cut and the conditions under which a drain would have to be built, and re-registered, for real. ORIGINAL close-out, retained: (1) For (a): hold the existing `.loop-status.lock` (the fd-8 flock
+    `loop_hil_ttl_resurface` already uses) across the staleness check AND the conditional
+    append, so the decision and the write are one critical section; confirm the added
+    contention is acceptable given the lock is otherwise taken only by the TTL pass. (2) For
+    (b): have later passes ALSO scan `.migrated-*` archives for rows appended after their
+    recorded archive timestamp, re-importing under the same staleness rule — the only
+    mitigation available without cooperation from the old writer. (3) Both close naturally
+    once no pre-U-HE-29 checkout remains; re-assess whether either is still worth building
+    then, since the window is self-closing.'
+  council: 'NO — bounded concurrency hardening on one mechanism with a self-closing window;
+    the out-of-family reviewer is the scheduled decorrelated check.'
+  heading: '### B-195 · U-HE-29 cutover-window concurrency vs a live pre-U-HE-29 writer *(surfaced by out-of-family Codex r8 against U-HE-29, 2026-08-22; register-and-held — (a) fails in the C-HE-09 §4 safe direction, (b) is not fixable from this side)*'
+- id: B-196
+  title: >-
+    Per-arc scoping of `todo_for_human` needs the SET of deferring lanes per item —
+    C-HE-09 §3 renders only one
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-29 r3/r5/r11) and register-and-held after
+    THREE flips on the same rule, per the reviewer-oscillation discipline. U-WT-03 says
+    `todo_for_human` is what THIS arc leaves for a human, but the ledger is shared since
+    U-HE-29 and `loop_pending_hil_list` returns every lane''s open gates. Filtering to this
+    lane was tried twice and hid a real row both times: (1) excluding every lane != mine
+    dropped this arc''s own UNATTRIBUTED rows, since the canonical `tools/04-loop/defer.sh`
+    writes no lane and migrated legacy rows carry `-`; (2) excluding only demonstrably-FOREIGN
+    lanes still hid rows, because the reducer collapses by ITEM TOKEN — when two lanes defer
+    the same item only the LAST deferrer''s row survives, so `[L2] B-1` can be the sole
+    rendering of an item L1 also has open and nobody resolved, and L1''s closeout would drop
+    it as foreign. (2) is decisive: the rendered lane is not evidence of sole ownership, so no
+    exclusion built on it is sound. AT HEAD the function annotates and never drops — the safe
+    direction (over-reporting a sibling''s row beats hiding this arc''s own gate in the record
+    that closes it, immediately before worktree disposition).'
+  close_out: '(1) Decide whether C-HE-09 §3''s rendered form should carry the SET of deferring
+    lanes (`[L1,L2] item — detail`) rather than one — a spec change, so it routes through
+    design-phase back-flow, NOT an execution-time edit; (2) if the rendered form stays
+    singular, decide whether `arc_exit_report` should make a SECOND query for per-item lane
+    membership instead of reading the rendering, and whether that second read is worth a
+    second parse of the ledger (the workspace''s one-parse-one-authority rule argues against
+    it); (3) whichever way, keep the current annotate-never-drop behaviour until the chosen
+    mechanism can prove sole ownership — the failure this row exists to prevent is a false
+    empty todo list at arc close.'
+  council: 'NO — a scoping/rendering decision on one field with two enumerated options; the
+    out-of-family reviewer is the scheduled decorrelated check. Note the spec-change branch
+    routes to back-flow if chosen.'
+  heading: '### B-196 · per-arc `todo_for_human` scoping needs a per-item lane SET *(surfaced by out-of-family Codex r3/r5/r11 against U-HE-29, 2026-08-22; register-and-held after three flips — HEAD annotates and never drops)*'
+- id: B-197
+  title: >-
+    Worktree GC can reap a worktree mid-drain because `.migrating-*` claims are inside the
+    `.harness/` ignore class — plus `append_ledger_row`'s growth check under a shared venue
+  pr: '#1426'
+  status: closed
+  summary: 'SURFACED BY THE merge-gate CONCURRENCY LENS on the U-HE-29 PR (#1426) and
+    register-and-held with a SEVERITY CORRECTION the lens did not make. (a) MECHANISM
+    CONFIRMED: `loop_status_migrate` claims a legacy ledger by renaming it to
+    `.harness/loop_status.md.migrating-*`, and `_HOOK_REGEN_IGNORED` (tools/hooks/lib.sh:479)
+    matches `\.harness/`, so `hook_worktree_local_state` reports the worktree CLEAN. A
+    concurrent `loop_gc_worktrees reap` — which takes a removal mutex `loop_status_migrate`
+    never acquires — can therefore delete the worktree mid-drain; the restore-on-failure
+    `mv` then no-ops on the vanished path and the row reaches neither the shared venue nor
+    disk. (b) SEVERITY CORRECTED, and this is why it is held rather than fixed at merge time:
+    `origin/main` ALREADY gitignores `.harness/loop_status.md` (`.gitignore:149`), so the GC
+    already reaps worktrees holding open DEFERRED-HIL rows. The raced outcome therefore
+    EQUALS the pre-U-HE-29 baseline, while every un-raced drain is strictly better (rows
+    become durable in the shared venue). This PR narrows the exposure and adds one
+    interrupted-drain window; it does not create the loss. (c) Second, lower finding:
+    `arc_exit_report.append_ledger_row` verifies its write by substring-in-tail rather than
+    scoping to bytes appended since its OWN write (the hardening `loop_resolve` already
+    received), so under the shared venue a concurrent duplicate EXIT-REPORT row for the same
+    PR from another lane could make it report success when its own append failed. (d) THIRD
+    instance, merge-gate re-gate P3: the orphan-FOLD step runs BEFORE the claim-first rename
+    and has no serialization of its own, so two migrators observing the same dead-owner
+    orphan can each fold+republish+re-claim it, producing a duplicate DEFERRED-HIL row and
+    two archives for one orphan. Safe-direction under C-HE-09 §4 (an extra DEFERRED-HIL,
+    never a false RESOLVED-HIL), so log-noise rather than a correctness break -- but it shows
+    the claim-first guarantee does not span the whole function. (e) FOURTH instance (codex
+    r19 P2): `loop_resolve`''s pre-write byte offset narrows the search but cannot EXCLUDE a
+    concurrent append -- if this process''s write fails while another appends a byte-identical
+    lane/cause/item/note row in the same window, the grep succeeds and a false "resolved" is
+    reported. Same root as (c) and the same fix shape: a per-call nonce in the row, since no
+    offset alone can distinguish two identical writers.'
+  close_out: 'CLOSED 2026-08-22 WITHOUT BUILDING: the cutover migration these races all live in was CUT from the U-HE-29 PR entirely. Every instance recorded here is a property of `loop_status_migrate`, which no longer exists -- there is no code left to race. See B-198 for the measurement that justified the cut and the conditions under which a drain would have to be built, and re-registered, for real. ORIGINAL close-out, retained: (1) The coherent fix for (a) is a DECOMPOSITION of the ignore class, not a
+    reversal of either prior decision — `.migrated-*` is a permanent archive and must STAY
+    ignored (codex r5 P2: untracked residue wedges the worktree GC forever), while
+    `.migrating-*` is a TRANSIENT in-flight claim and should block reap while its owner is
+    alive. `_loop_pid_alive` already exists for exactly that liveness test. This edits shared
+    GC machinery (`_HOOK_REGEN_IGNORED` / `hook_worktree_local_state`) with its own suites
+    (`test_lib.sh`, `test_loop_gc.sh`), which is why it is not improvised at merge time.
+    (2) For (c), scope the growth check to a pre-write byte offset AND include a per-call
+    nonce in the row, since byte-offset scoping alone cannot distinguish a byte-identical
+    concurrent row. (3) Re-assess (a) once no pre-U-HE-29 checkout remains — the migration
+    itself becomes dead code then, and the window closes with it.'
+  council: 'NO — one mechanism, one enumerated decomposition; the merge-gate concurrency lens
+    and the out-of-family reviewer are the scheduled decorrelated checks.'
+  heading: '### B-197 · worktree GC can reap mid-drain (`.migrating-*` inside the `.harness/` ignore class) *(surfaced by the merge-gate concurrency lens on #1426, 2026-08-22; register-and-held — the raced outcome EQUALS the pre-U-HE-29 baseline, so this PR narrows exposure rather than creating loss)*'
+- id: B-198
+  title: >-
+    Pre-U-HE-29 per-worktree loop_status ledgers are NOT drained by the venue move — measured
+    as carrying nothing, so no migration was built
+  status: registered_finding
+  summary: 'U-HE-29 moved the HIL ledger to a shared venue (C-HE-09 §2). A cutover migration
+    was built during that PR and then CUT before merge, on measurement. THE MEASUREMENT, so a
+    later session does not have to re-derive it: reducing a legacy per-worktree ledger with
+    the NEW no-ACTIVATE-reset rule (C-HE-09 §4) is NOT evidence about what it holds — those
+    rows were WRITTEN under the old rule, in which `ACTIVATE` cleared prior-run state. On this
+    workspace the root checkout''s legacy ledger (3204 lines, 18 ACTIVATE rows) reduces to
+    `B-124 B-137` under the new rule and to NOTHING under the rule its rows were written with;
+    the three other worktree ledgers carry 1 row each, same story. The live `--dry-run`
+    confirmed 0 files to import. So the venue move strands nothing here, and ~318 lines of
+    concurrency-sensitive machinery (atomic claim-by-rename, orphan recovery, pid liveness,
+    NUL enumeration, timestamp staleness, a five-value exit taxonomy) existed to migrate
+    nothing — while generating roughly 20 of that PR''s 23 review rounds. B-195 and B-197 were
+    closed with it: every race they recorded was a property of the migration.'
+  close_out: '(1) BEFORE building any drain, re-run the measurement above on the actual
+    checkouts: reduce each `<worktree>/.harness/loop_status.md` under LEGACY semantics (honour
+    the ACTIVATE reset) and count what is genuinely still open. If the answer is zero, there
+    is nothing to build — say so and stop. (2) Only if a checkout genuinely holds an open row
+    is a drain warranted, and then it should be scoped to THAT case rather than to a general
+    cross-worktree cutover: the general form is what carried the concurrency surface. (3) The
+    old files are untouched on disk and remain readable, so nothing is lost by not draining;
+    a human can read them directly. (4) If a drain is ever built, B-195/B-197 record the
+    failure modes it will have to answer — read them first rather than rediscovering them.'
+  council: 'NO — the decision is already made and measured; this row exists to stop a future
+    session re-deriving it or rebuilding the machinery on the same false premise.'
+  heading: '### B-198 · pre-U-HE-29 legacy ledgers carry nothing under their own semantics — no drain built *(measured during the U-HE-29 PR, 2026-08-22; the migration built there was CUT on this measurement, and B-195/B-197 closed with it)*'
+- id: B-199
+  title: >-
+    `merge_door._notify` cannot make a DEFERRED-HIL row durable when every write attempt
+    fails — C-HE-20 §1 requires one, and raising would wedge the global lease
+  status: registered_finding
+  summary: 'SURFACED REPEATEDLY BY OUT-OF-FAMILY CODEX across the U-HE-29 PR (r18, r19, r21,
+    r23 and the pre-merge round) and register-and-held with the reasoning, because it kept
+    being re-litigated without one. C-HE-20 §1 makes a blocking escalation MUST-durable in the
+    HITL queue and forbids a NEW escalation store. `_notify` retries a DEFERRED-HIL write 3x
+    (which converts the common transient failure into the durable row the contract wants) and,
+    if every attempt fails, prints a loud ROW LOST line naming the contract and returns. It
+    does NOT raise, and that is a deliberate trade rather than an oversight: this module has
+    NO `finally:` releasing the lease around the 8 DEFERRED-HIL call sites, so an exception
+    escaping `_notify` can leave the GLOBAL merge-door lease held — wedging EVERY lane, an
+    unrecoverable coordination failure, in exchange for a recoverable reporting one. The
+    residual is therefore real and precisely bounded: a PERSISTENT write failure leaves the
+    escalation only in that stderr line, invisible at the next SessionStart.'
+  close_out: '(1) Make the call sites release-safe FIRST — wrap the lease-holding region in a
+    `try/finally` (or an equivalent guard) so an exception cannot strand the global lease;
+    only then is propagation affordable. (2) With that in place, propagate on the MUST-durable
+    kind (`DEFERRED-HIL`) while keeping the tolerant path for the informational `NOTIFY`,
+    which C-HE-20 §1 itself distinguishes. (3) Do NOT add a second escalation store as a
+    fallback — §1 forbids it, and the sidecar/lease state is not a HITL queue. (4) Witness the
+    release-safety directly (force a raise mid-landing, assert the lease is released) rather
+    than inferring it from the absence of a wedge in tests that never raise.'
+  council: 'NO — one mechanism with an enumerated ordering constraint (release-safety before
+    propagation); the out-of-family reviewer is the scheduled decorrelated check.'
+  heading: '### B-199 · `merge_door._notify` cannot durably record a DEFERRED-HIL when every write fails *(surfaced repeatedly by out-of-family Codex across the U-HE-29 PR, 2026-08-22; register-and-held — raising would wedge the global merge-door lease, so release-safety has to come first)*'
