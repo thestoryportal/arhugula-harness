@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 196
+  total: 197
   open: 1
   design_substrate_gated: 3
-  registered_finding: 47
+  registered_finding: 48
   operator_gated: 0
   held: 2
   closed: 143
-  identity_digest: 8e26f2ff146dc0b6
+  identity_digest: b9f966d16e87714f
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10179,3 +10179,40 @@ items:
     out-of-family reviewer is the scheduled decorrelated check. Note the spec-change branch
     routes to back-flow if chosen.'
   heading: '### B-196 · per-arc `todo_for_human` scoping needs a per-item lane SET *(surfaced by out-of-family Codex r3/r5/r11 against U-HE-29, 2026-08-22; register-and-held after three flips — HEAD annotates and never drops)*'
+- id: B-197
+  title: >-
+    Worktree GC can reap a worktree mid-drain because `.migrating-*` claims are inside the
+    `.harness/` ignore class — plus `append_ledger_row`'s growth check under a shared venue
+  status: registered_finding
+  summary: 'SURFACED BY THE merge-gate CONCURRENCY LENS on the U-HE-29 PR (#1426) and
+    register-and-held with a SEVERITY CORRECTION the lens did not make. (a) MECHANISM
+    CONFIRMED: `loop_status_migrate` claims a legacy ledger by renaming it to
+    `.harness/loop_status.md.migrating-*`, and `_HOOK_REGEN_IGNORED` (tools/hooks/lib.sh:479)
+    matches `\.harness/`, so `hook_worktree_local_state` reports the worktree CLEAN. A
+    concurrent `loop_gc_worktrees reap` — which takes a removal mutex `loop_status_migrate`
+    never acquires — can therefore delete the worktree mid-drain; the restore-on-failure
+    `mv` then no-ops on the vanished path and the row reaches neither the shared venue nor
+    disk. (b) SEVERITY CORRECTED, and this is why it is held rather than fixed at merge time:
+    `origin/main` ALREADY gitignores `.harness/loop_status.md` (`.gitignore:149`), so the GC
+    already reaps worktrees holding open DEFERRED-HIL rows. The raced outcome therefore
+    EQUALS the pre-U-HE-29 baseline, while every un-raced drain is strictly better (rows
+    become durable in the shared venue). This PR narrows the exposure and adds one
+    interrupted-drain window; it does not create the loss. (c) Second, lower finding:
+    `arc_exit_report.append_ledger_row` verifies its write by substring-in-tail rather than
+    scoping to bytes appended since its OWN write (the hardening `loop_resolve` already
+    received), so under the shared venue a concurrent duplicate EXIT-REPORT row for the same
+    PR from another lane could make it report success when its own append failed.'
+  close_out: '(1) The coherent fix for (a) is a DECOMPOSITION of the ignore class, not a
+    reversal of either prior decision — `.migrated-*` is a permanent archive and must STAY
+    ignored (codex r5 P2: untracked residue wedges the worktree GC forever), while
+    `.migrating-*` is a TRANSIENT in-flight claim and should block reap while its owner is
+    alive. `_loop_pid_alive` already exists for exactly that liveness test. This edits shared
+    GC machinery (`_HOOK_REGEN_IGNORED` / `hook_worktree_local_state`) with its own suites
+    (`test_lib.sh`, `test_loop_gc.sh`), which is why it is not improvised at merge time.
+    (2) For (c), scope the growth check to a pre-write byte offset AND include a per-call
+    nonce in the row, since byte-offset scoping alone cannot distinguish a byte-identical
+    concurrent row. (3) Re-assess (a) once no pre-U-HE-29 checkout remains — the migration
+    itself becomes dead code then, and the window closes with it.'
+  council: 'NO — one mechanism, one enumerated decomposition; the merge-gate concurrency lens
+    and the out-of-family reviewer are the scheduled decorrelated checks.'
+  heading: '### B-197 · worktree GC can reap mid-drain (`.migrating-*` inside the `.harness/` ignore class) *(surfaced by the merge-gate concurrency lens on #1426, 2026-08-22; register-and-held — the raced outcome EQUALS the pre-U-HE-29 baseline, so this PR narrows exposure rather than creating loss)*'
