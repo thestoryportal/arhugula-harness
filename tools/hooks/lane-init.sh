@@ -213,15 +213,15 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   case "$HARNESS_LANE_INDEX" in
     ''|*[!0-9]*)
       echo "lane-init: HARNESS_LANE_INDEX must be an integer 0..349, got '$HARNESS_LANE_INDEX'" >&2
-      unset _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
     0) ;;
     0*)
       echo "lane-init: HARNESS_LANE_INDEX must be canonical (no leading zeros), got '$HARNESS_LANE_INDEX'" >&2
-      unset _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
   esac
   if [ "$HARNESS_LANE_INDEX" -ge 350 ]; then
     echo "lane-init: HARNESS_LANE_INDEX must be < 350 (no port block exists above it), got '$HARNESS_LANE_INDEX'" >&2
-    unset _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
+    unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
   fi
 fi
 
@@ -417,7 +417,13 @@ _lane_clear_orphaned_stack() {
   marker="$_LI_ORPHAN_DIR/.orphaned-$k"
   [ -f "$marker" ] || return 0
   if _hook_lane_stack_down "$k"; then
-    rm -f "$marker" 2>/dev/null
+    # The removal is checked. A marker that survives a successful cleanup is worse than one
+    # that was never written: the NEXT source of lane-init sees it and runs `down --volumes`
+    # against THIS lane's live stack. Refusing keeps the stack absent instead.
+    if ! rm -f "$marker" 2>/dev/null || [ -e "$marker" ]; then
+      echo "lane-init: cleaned lane $k but could NOT remove its orphan marker $marker — keeping the stack absent, since a later init would tear down a stack started now" >&2
+      return 1
+    fi
     return 0
   fi
   echo "lane-init: lane $k inherits an UNCLEANED stack from a previously reaped lane (marker $marker) — its stack stays absent until Docker can remove it" >&2

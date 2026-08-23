@@ -232,8 +232,11 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="relative/queue" \
 # while mapping to the same Compose project — two claims, one stack.
 for bad_k in 350 999 ../escape abc " " 00 08 007; do
   OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$bad_k" \
-    bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$?\"")
-  [ "$OUT" = "rc=1" ] && ok "HARNESS_LANE_INDEX='$bad_k' refused" || bad "index '$bad_k' accepted: $OUT"
+    bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset}\"")
+  # rc AND the identity: validation runs after the id is exported, so a refusal that leaves
+  # it set hands this lane's identity to the next worktree the shell enters.
+  [ "$OUT" = "rc=1 id=unset" ] && ok "HARNESS_LANE_INDEX='$bad_k' refused, identity cleared" \
+    || bad "index '$bad_k': $OUT"
 done
 [ ! -e "$LANES/../escape" ] && ok "no claim was published outside the registry" || bad "claim escaped QUEUE_DIR/lanes"
 
@@ -548,6 +551,34 @@ case "$OUT" in
   "rc=1 id=unset") ok "a failed allocation leaves no exported identity" ;;
   *) bad "failed init kept its identity exported: $OUT" ;;
 esac
+
+# --- 31. a cleaned orphan whose marker cannot be removed keeps the stack absent -------
+# Worse than never writing the marker: it survives a SUCCESSFUL cleanup, and the next source
+# of lane-init reads it and runs `down --volumes` against the stack started in between.
+STICKQ="$ROOT/sticky-q"; mkdir -p "$STICKQ/lanes"
+printf 'stale\n' > "$STICKQ/lanes/.orphaned-3"
+# The claim is pre-created for THIS worktree: with the directory read-only below, an
+# unclaimed index could not be published either, and the refusal would then come from the
+# claim rather than the marker — the same ABSENT for a different reason.
+STICK_ID=$(cd "$ROOT/wt" && printf '%s' "$(cat "$ROOT/wt/.harness/.lane-id")")
+printf '%s %s\n' "$STICK_ID" "$(cd "$ROOT/wt" && pwd -P)" > "$STICKQ/lanes/3"
+chmod 500 "$STICKQ/lanes"                      # cleanup can read it; the unlink cannot land
+OUT=$(
+  PATH="$STUB:$PATH"; export PATH
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$STICKQ" \
+    HARNESS_LANE_INDEX=3 HARNESS_RAM_FLOOR_GB=0 \
+    bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT"
+)
+[ "$OUT" = "ABSENT" ] && ok "an unremovable orphan marker keeps the stack absent" \
+  || bad "started a stack a later init would tear down: '$OUT'"
+STICK_RC=$(
+  PATH="$STUB:$PATH"; export PATH
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$STICKQ" \
+    HARNESS_LANE_INDEX=3 bash -c "source '$INIT' >/dev/null 2>&1; echo \$?"
+)
+[ "$STICK_RC" = "0" ] && ok "that ABSENT came from the marker, not a refused init" \
+  || bad "the init itself failed (rc=$STICK_RC) — the ABSENT above proves nothing"
+chmod 700 "$STICKQ/lanes"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
