@@ -953,19 +953,34 @@ def _notify(kind: str, lane_id: str, cause: str, detail: str) -> None:
     durability failure against the shared venue, and the message must say so rather than
     reassure the reader with a condition that no longer obtains.
 
-    The catch itself is KEPT, and deliberately: C-HE-20 §1 requires the escalation to reach
-    the durable HITL queue and forbids a NEW escalation store, but nothing makes crashing the
-    driver mid-landing the better failure — a raise here would let a ledger write mask a
-    DoorBlocked and abort a landing that is otherwise fine. So the row is reported LOST, in
-    band and unmistakably, rather than silently downgraded. The operator-visible consequence
-    is named in the line itself so it cannot read as routine noise."""
-    try:
-        rs.emit_loop_row(kind, lane_id, cause, detail)
-    except rs.LoopStatusWriteError as exc:
+    A blocking escalation is RETRIED before it is given up on (codex r18 P2). C-HE-20 §1
+    makes the durable row a MUST, and the overwhelmingly common write failure is transient (a
+    momentary lock or FS hiccup on a venue every lane now shares), so retrying converts most
+    of them into the durable row the contract requires instead of an ephemeral line.
+
+    The catch is still KEPT after the retries, and NOT because tolerance is comfortable: this
+    module has no `finally:` that releases the lease around these call sites, so an exception
+    escaping `_notify` can leave the GLOBAL merge-door lease held — wedging every lane, which
+    is a categorically worse outcome than one loud lost row. Propagation would trade a
+    recoverable reporting failure for an unrecoverable coordination failure. The residual
+    (a PERSISTENT write failure leaves only the stderr line) is registered, not hidden."""
+    attempts = 3 if kind == "DEFERRED-HIL" else 1
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            rs.emit_loop_row(kind, lane_id, cause, detail)
+            return
+        except rs.LoopStatusWriteError as exc:
+            last = exc
+            if i + 1 < attempts:
+                time.sleep(0.2 * (i + 1))
+    if last is not None:
+        exc = last
         print(
-            f"merge-door {kind} ROW LOST — the durable HITL row could NOT be written to the "
-            f"shared loop ledger (C-HE-20 §1 requires it): {cause} — {detail} [{exc}]. "
-            "This escalation exists only in this line; record it before ending the session.",
+            f"merge-door {kind} ROW LOST after {attempts} attempt(s) — the durable HITL row "
+            f"could NOT be written to the shared loop ledger (C-HE-20 §1 requires it): "
+            f"{cause} — {detail} [{exc}]. This escalation exists only in this line; record "
+            "it before ending the session.",
             file=sys.stderr,
         )
 

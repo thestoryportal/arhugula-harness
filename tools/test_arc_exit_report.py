@@ -1205,6 +1205,43 @@ def test_u_he_29_closeout_drains_a_pre_cutover_legacy_ledger(
     assert not (wt / ".harness" / "loop_status.md").exists(), "the legacy ledger is retired"
 
 
+def test_u_he_29_closeout_drains_an_orphan_only_recovery_state(
+    worktree_pair, gstack, monkeypatch, shared_ledger
+):
+    """codex r18 P1: a migration that failed between claiming and retiring leaves NO
+    `loop_status.md` — only a `.migrating-*` claim, which the migration knows how to recover.
+
+    Gating the closeout drain on the ORIGINAL filename alone skipped the drain in exactly
+    that recovery case, reported an empty todo list, and let the following worktree
+    disposition delete the stranded rows permanently."""
+    main, wt = worktree_pair
+    subprocess.run(["git", "init", "-q", "."], cwd=wt, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
+         "--allow-empty", "-m", "init"],
+        cwd=wt, check=True,
+    )
+    (wt / ".harness").mkdir(exist_ok=True)
+    # Orphan ONLY — no loop_status.md at all. Dead owner pid so it is recoverable.
+    (wt / ".harness" / "loop_status.md.migrating-2026-08-04T00:00:00Z-999999-1").write_text(
+        "| 2026-08-04T00:01:00Z | DEFERRED-HIL | R-730 — stranded in an orphaned claim |\n",
+        encoding="utf-8",
+    )
+    assert not (wt / ".harness" / "loop_status.md").exists()
+    sc = scenario(common_dir=(0, str(main / ".git")))
+    monkeypatch.chdir(wt)
+    monkeypatch.setattr(aer, "GSTACK_PROJECTS", gstack)
+    monkeypatch.setattr(aer, "run", make_run(sc, wt, real_bash=True))
+    assert aer.main(["--pr", "1202", "--merge-sha", MERGE]) == 0
+
+    body = aer.report_path(main, 1202).read_text(encoding="utf-8")
+    todos = yaml.safe_load(yaml_block(body))["todo_for_human"]
+    assert todos is not None, "an orphan-only state must not read as UNKNOWN"
+    assert any("R-730" in t for t in todos), (
+        "a row stranded in an orphaned claim must still reach this arc's closure record"
+    )
+
+
 def test_u_he_29_closeout_fails_closed_when_the_legacy_drain_fails(
     repo, monkeypatch, tmp_path, shared_ledger
 ):

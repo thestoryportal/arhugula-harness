@@ -619,7 +619,16 @@ def _todos(
     # worktree's legacy rows are not this arc's closure concern, and demanding a successful
     # migration in a context where none is needed (a fixture, a repo whose worktree
     # enumeration fails) would degrade every honest empty report to UNKNOWN.
-    if (ledger_root / ".harness" / "loop_status.md").is_file():
+    # The gate must also fire on the ORPHAN-ONLY state (codex r18 P1). A previous migration
+    # that failed between claiming and retiring leaves NO `loop_status.md` — only a
+    # `.migrating-*` claim, which `loop_status_migrate` explicitly knows how to recover.
+    # Gating on the original filename alone skipped the drain in exactly that recovery case,
+    # reported `todo_for_human` as empty, and let the following worktree disposition delete
+    # the stranded rows permanently — the same P1 the r10 gate exists to prevent, through a
+    # door the r10 gate left open.
+    _hd = ledger_root / ".harness"
+    _legacy = (_hd / "loop_status.md").is_file() or any(_hd.glob("loop_status.md.migrating-*"))
+    if _legacy:
         mrc, _mout = run(
             [
                 "bash",
