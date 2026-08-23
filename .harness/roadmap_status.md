@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `360c1ae9bcd2` |
+| `workspace_state_hash` | `de4efac4b24e` |
 | `last_refreshed` | 2026-08-23T00:00:00Z |
-| `git_head` | `e3f77c19` —  |
+| `git_head` | `d0198201` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1436 | 2026-08-23 | U-HE-31 lane-init landed (#1434 + refresh #1435); this row carries the merge door's own gate finding |
 | PR #1434 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1430 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1431 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1428 | 2026-08-23 | U-HE-29 session audit landed (doc-only); makes the roadmap_status pointer resolve |
-| 1426 | 2026-08-23 | U-HE-29 shared loop_status venue landed; merge-gate 3-lens all-approve (first gate run on this PR); the cutover migration was CUT at b1a099294 (-1483 lines) after its founding measurement was falsified |
 
 ---
 
