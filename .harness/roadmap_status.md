@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8fc5a3c20071` |
-| `last_refreshed` | 2026-08-22T00:00:00Z |
-| `git_head` | `078cf49c` —  |
+| `workspace_state_hash` | `72fe8b66144b` |
+| `last_refreshed` | 2026-08-23T00:00:00Z |
+| `git_head` | `dea01000` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 119 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1424).** The merge-door integration is COMPLETE and self-hosted (U-HE-28 landed at PR #1424 — this very refresh was created and merged by the door's §4(viii) continuation; `just merge-door-unblock`/`merge-door-status` live; B-192 pointer-posture and B-193 BEHIND-refresh recovery register-and-held with recorded arbiter endorsements). The next implementable unit is `U-HE-29` — `loop_status.md` shared venue, structured column, NOTIFY/COALESCE-DELIVERED kinds, ACTIVATE scoping, rendered `[lane_id]`, pointer sweep (C-HE-09 §1–§6, C-HE-20 §1) — then U-HE-30 per the S4d order.
+**Current next action (post-#1426).** The next implementable unit is `U-HE-30` (S5 — gate coalescing by `cause_signature`, 10-minute window, pull-based delivery) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. U-HE-01..29 have landed; 16 units remain (U-HE-30..45). A session audit of the U-HE-29 arc is at `.harness/session-audit-2026-08-22-u-he-29.md` — the loop has no abandonment mechanism, and a round-gate at `review_wrapper_common.py:round_n_for` is the proposed fix (operator deferred it 2026-08-23).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1426 | 2026-08-23 | U-HE-29 shared loop_status venue landed; merge-gate 3-lens all-approve (first gate run on this PR); the cutover migration was CUT at b1a099294 (-1483 lines) after its founding measurement was falsified |
 | PR #1424 | 2026-08-22 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1422 | 2026-08-22 | U-HE-27 Step-5 operator gate EXECUTED + as-built live-apply corrections (squash 69ad55f8): fence LIVE on main (strict:true, 12 contexts, enforce_admins) — apply-confirm digest-bound, §4 tiebreaker PASS (scratch #1420/#1421 clean-ffwd, fence re-verified), verify PASS; two live-witnessed fixes (contexts-target accepts GitHub Actions auto-binding null/-1/15368 + flags foreign apps — r6 comparison empirically falsified; _watch_checks not-yet-started retry + registration-complete validation, live witness #1419); codex fix-rounds r1-r2 (4 absorbed, 1 refuted-by-measurement); LEAN witness lens BLOCK→APPROVE r2 (full-consumption assertion, probe independently reproduced); B-190 bound IN FORCE; evidence log complete |
 | PR #1418 | 2026-08-21 | S4c U-HE-27 main branch-protection recipes (squash fe4ea8dc): C-HE-08 §2-§5 — tools/main_protection.py show/apply(digest-bound dry-run+confirm, lockfile-serialized, CAS rollback)/rollback/tiebreaker(fence-liveness + exercised reconciled merges)/verify + 6 just recipes + C-HE-08 phase0/operator-gated manifest rows; 10 codex rounds (34 absorbed; r10 cap terminal B-191 register-and-held); merge-gate r1 witness BLOCK (optional-controls differential gap) fixed + mutation-probed live, r2 3x APPROVE; B-190 close-out step 2 recorded PENDING-APPLY in evidence log; as-built plan rev note (i)-(vii) + clearance marker; u-he-27 reservation full open-time lifecycle with attested merge tuple |
 | PR #1417 | 2026-08-21 | S4c U-HE-26 push-to-main client-side emit_deny predicates (squash afc15753): C-HE-08 §1 parser-based deny in the audited deny block reading the prefix-STRIPPED command (U-HE-25 rev (v) witness discharged); 10 codex rounds (r7 --repo claim refuted by measurement; r9/r10 register-and-hold: B-189 range-collapse, B-190 adversarial-config classes bounded by §2 fence per R-20); 292 guard rows green incl. hermetic-identity CI fix; combined C-HE-07/08 manifest row + shell-annotation probe targets in lanes_verify; 3-lens gate 3x APPROVE r1; as-built rev note (i)-(xiii) + clearance marker; u-he-26 reservation full open-time lifecycle with attested merge tuple |
-| PR #1416 | 2026-08-21 | S4c U-HE-25 safe-merge wrapper + guard deny-raw/allow-wrapper (squash b6f55ba0): C-HE-07 §1-§3 byte-verbatim (matcher, deny, test inversion, --admin invariant) + registered U-HE-21 exact-shape allowlist additions (reservations carrier verbs; transition --to open ONLY via token-parse; HARNESS_* bareword prefix strip; git merge-tree); safe-merge.sh pre-lease availability guard (exit 69 until U-HE-28 lands --emit-refresh-pr-json) after 3-lens gate r1 3x BLOCK traced the door-wedge; guard suite 203->229; codex r1-r5 (2 classes register-and-held: U-HE-28 owner + B-188 filed); gate r3 delta re-gate 3x APPROVE; as-built plan rev note + clearance marker; u-he-25 reservation full open-time lifecycle with attested merge tuple |
 
 ---
 
