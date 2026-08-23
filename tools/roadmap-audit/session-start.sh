@@ -38,7 +38,16 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   # C-HE-20 (U-HE-09): re-surface deferrals older than the 24 h TTL as NOTIFY rows first --
   # a notification threshold only; it never resolves, reclaims, or transitions anything.
   command -v loop_hil_ttl_resurface >/dev/null 2>&1 && loop_hil_ttl_resurface 2>/dev/null
-  _h=$(loop_pending_hil_summary 2>/dev/null)
+  # C-HE-10 §2 (U-HE-30): delivery is PULL-BASED and happens HERE, not in the lanes --
+  # one batched prompt per cause group whose window has closed, emitted exactly once per
+  # generation (the COALESCE-DELIVERED row + an exclusive-create claim make a second
+  # SessionStart path a no-op). It REPLACES the bounded summary whenever a group is due:
+  # the summary renders the same items truncated to 3, which would dilute the very batch
+  # the operator is meant to act on. When nothing is due the summary is the fallback, so
+  # deferrals still inside their window are never invisible.
+  _d=""
+  command -v loop_hil_deliver >/dev/null 2>&1 && _d=$(loop_hil_deliver 2>/dev/null | paste -sd' ' -)
+  if [ -n "$_d" ]; then _h="$_d"; else _h=$(loop_pending_hil_summary 2>/dev/null); fi
   [ -n "$_h" ] && _HIL=" $_h"
   # C-HE-09 §5 (U-HE-29): NOTIFY rows render BESIDE the pending-HIL summary, never merged
   # into it. The distinction is load-bearing for the operator: the HIL line says "the loop

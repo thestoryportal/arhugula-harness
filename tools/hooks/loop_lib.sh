@@ -426,6 +426,131 @@ loop_pending_hil_summary() {
   printf '[loop] ⏸ %s item(s) await your input from the last loop run: %s. See %s' "$n" "$cap" "$(loop_status_path)"
 }
 
+# ── C-HE-10: gate coalescing by cause_signature ───────────────────────────────
+# The window, clamped ONCE here so the grouper and the deliverer can never disagree
+# about which window they are applying (a deliverer using a wider window than the
+# grouper used would emit a group the grouper had already split, double-prompting).
+# Default 600 s, band 300..900 (C-HE-10 §3). A NON-NUMERIC override falls back to the
+# default rather than reaching `[ -lt ]`: the arithmetic test would fail with a shell
+# error and leave the garbage value in place, which awk then reads as `w+0 == 0` --
+# i.e. a bad env var would silently disable coalescing entirely and prompt on every
+# single deferral, the exact failure this contract exists to remove.
+_loop_coalesce_window() {
+  local w="${HARNESS_HIL_COALESCE_WINDOW_S:-600}"
+  case "$w" in
+    ''|*[!0-9]*) w=600 ;;
+  esac
+  [ "$w" -lt 300 ] && w=300
+  [ "$w" -gt 900 ] && w=900
+  printf '%s' "$w"
+}
+
+# One ISO-8601 timestamp -> epoch seconds, through the SAME awk implementation every
+# reducer uses (_LOOP_AWK_EPOCH). Deliberately NOT a `date -u -j -f ... / date -u -d`
+# pair: that would be a second epoch authority free to drift from the reducers on the
+# leap-day / pre-1970 edges, and it forks a process per call. Echoes -1 when unparseable.
+_loop_epoch_of() {
+  awk -v ts="$1" "$_LOOP_AWK_EPOCH"'BEGIN { print epoch(ts) }' </dev/null
+}
+
+# C-HE-10 §1-§2: still-PENDING deferrals grouped by `cause_signature`, additive group-by
+# (nothing wins, everything is kept). A group is (signature, first_seen) plus every later
+# same-signature row arriving within `_loop_coalesce_window` seconds of that first row;
+# the next same-signature row outside the window opens a NEW group, so a signature that
+# recurs for weeks never collapses into one ever-growing prompt.
+#
+# Emits one TAB-separated line per group: `<sig>\t<n>\t<first_seen_epoch>\t<items>`,
+# items rendered `[<lane>] <detail>` joined by `; ` -- the same `[lane] detail` shape
+# _loop_pending_hil_rows uses, so an operator reads one form everywhere (C-HE-09 §3).
+#
+# Legacy 3-column rows (and structured rows whose cause is `-`) carry no signature, so
+# they reduce as their OWN singleton group (C-HE-10 §1) -- keyed `-:<item>`. Collapsing
+# them under a shared `-` would batch unrelated gates into one prompt, which is the
+# opposite of grouping by cause.
+loop_hil_groups() {
+  local p; p=$(loop_status_path); [ -f "$p" ] || return 0
+  local w; w=$(_loop_coalesce_window)
+  # Pass 1 (awk): last-write-wins per item across ALL lanes -- the same rule as
+  # loop_skip_set, through the same shared row parser, so an item cannot be pending for
+  # the grouper and resolved for the skip-set. Emits `epoch \t item \t sig \t lane \t detail`.
+  # Pass 2 (sort): by arrival EPOCH, never by item id -- the window anchor is the first
+  # ARRIVAL, and a lexically-earlier item deferred later must not re-anchor the group.
+  # Item id is the tie-break so a same-second collision still renders deterministically
+  # (C-HE-10 §2 tolerates the order; determinism is for the tests and the operator).
+  # Pass 3 (awk): sequential window grouping over the now-ordered stream.
+  awk -F'|' "$_LOOP_AWK_EPOCH$_LOOP_AWK_ROW"'
+    { rowparse() }
+    k == "RESOLVED-HIL" { state[tok] = "RESOLVED"; next }
+    k == "DEFERRED-HIL" {
+      cause = $4
+      if (cause ~ /^[ \t]*lane=/) { sub(/^[^;]*;cause=/, "", cause); gsub(/[ \t]/, "", cause) }
+      else cause = "-"
+      if (cause == "-" || cause == "") cause = "-:" tok
+      e = epoch($2)
+      # An UNPARSEABLE timestamp must not drop the row: a dropped row is a lost operator
+      # gate, the one failure this ledger may never have. It cannot be windowed either
+      # (its arrival is unknown), so it anchors at epoch 0 and is therefore always past
+      # its window -- delivered on the next pass, once, as its own signature group.
+      if (e < 0) e = 0
+      state[tok] = "PENDING"; sig[tok] = cause; when[tok] = e; lanes[tok] = lane; det[tok] = d
+    }
+    END { for (t in state) if (state[t] == "PENDING") printf "%d\t%s\t%s\t%s\t%s\n", when[t], t, sig[t], lanes[t], det[t] }
+  ' "$p" 2>/dev/null \
+  | sort -t$'\t' -k1,1n -k2,2 \
+  | awk -F'\t' -v w="$w" '
+    { s = $3; e = $1 + 0
+      if (!(s in gstart) || e - gstart[s] > w) { gid++; gstart[s] = e; gsig[gid] = s; gfirst[gid] = e; gn[gid] = 0; gitems[gid] = ""; cur[s] = gid }
+      g = cur[s]; gn[g]++
+      gitems[g] = gitems[g] (gitems[g] == "" ? "" : "; ") "[" $4 "] " $5 }
+    END { for (g = 1; g <= gid; g++) printf "%s\t%d\t%d\t%s\n", gsig[g], gn[g], gfirst[g], gitems[g] }
+  ' | sed 's/\\|/|/g'
+}
+
+# C-HE-10 §2: PULL-BASED delivery. Lanes only ever APPEND DEFERRED-HIL rows and never
+# prompt; this is the single place a group becomes a prompt, and only once
+# `first_seen + window` has elapsed. Called from the SessionStart / merge-lane path.
+#
+# A generation is (cause_signature, first_seen) -- NOT (sig, first_seen, n). Keying on
+# the member count would mint a SECOND generation for the same window if one more lane
+# deferred into it at the boundary second, re-prompting items already delivered; the
+# spec is explicit that rows covered by a delivery at/after their first_seen are
+# delivered (C-HE-10 §2). Keying on the exact generation (rather than "any delivery at
+# or after first_seen") is what keeps a LATER same-signature generation deliverable.
+#
+# Delivery is guarded TWICE, for two different failures:
+#   1. the ledger's own COALESCE-DELIVERED rows are the DURABLE authority (C-HE-10 §2
+#      names them) -- they survive a wiped or relocated queue dir, so a scratch-dir
+#      cleanup can never resurrect a prompt the operator already received;
+#   2. an exclusive-create claim file under QUEUE_DIR/hil-deliveries closes the
+#      concurrent window the ledger check cannot: two SessionStart paths both read "not
+#      delivered" before either appends. O_EXCL makes exactly one of them the deliverer.
+loop_hil_deliver() {
+  local p; p=$(loop_status_path); [ -f "$p" ] || return 0
+  local w; w=$(_loop_coalesce_window)
+  local now; now=$(_loop_epoch_of "$(loop_now)")
+  if [ -z "$now" ] || [ "$now" -lt 0 ]; then
+    echo "loop_hil_deliver: unparseable current timestamp; nothing delivered" >&2
+    return 1
+  fi
+  local claims="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}/hil-deliveries"
+  mkdir -p "$claims" 2>/dev/null
+  # The durable delivered-set: every generation id already announced by a
+  # COALESCE-DELIVERED row. The leading detail token rowparse() extracts IS the generation id
+  # (loop_log_structured writes it as the whole detail), so this shares the one row
+  # parser rather than re-deriving the column layout.
+  local delivered
+  delivered=$(awk -F'|' "$_LOOP_AWK_ROW"'{ rowparse() } k == "COALESCE-DELIVERED" { print tok }' "$p" 2>/dev/null)
+  local lane; lane=$(_loop_lane_id)
+  loop_hil_groups | while IFS=$'\t' read -r sig n first items; do
+    [ $(( now - first )) -ge "$w" ] || continue
+    local gen; gen="gen-${first}-$(printf '%s' "$sig" | tr -c 'A-Za-z0-9_.-' '_')"
+    printf '%s\n' "$delivered" | grep -qxF "$gen" && continue
+    ( set -o noclobber; printf '%s\n' "$(loop_now) ${lane}" > "$claims/$gen" ) 2>/dev/null || continue
+    printf '[loop] ⏸ %s item(s) need you (%s): %s\n' "$n" "$sig" "$items"
+    loop_log_structured COALESCE-DELIVERED "$lane" "$sig" "$gen"
+  done
+}
+
 # NOTIFY rows (C-HE-09 §5): append-only informational signals -- an aged reservation, a
 # blocked lease tier, a RAM shortfall, a demoted reviewer. Rendered at SessionStart
 # BESIDE the DEFERRED-HIL summary, never merged into it, and never in the skip-set: a
