@@ -125,7 +125,11 @@ safer default was taken.*
 EOF
     ) 2>/dev/null
     local _staged=$?
-    ln "$_tmp" "$p" 2>/dev/null || true   # lost the publish race: the winner's header stands
+    # Publish ONLY a COMPLETE staging file (codex r22 P2). Linking first and checking after
+    # could publish a half-written header — and once the venue exists, later calls append to
+    # it, concatenating the first durable row onto an incomplete line where the reducers
+    # cannot see it. The whole point of staging is that nothing partial becomes visible.
+    [ "$_staged" -eq 0 ] && { ln "$_tmp" "$p" 2>/dev/null || true; }  # lost race: winner's header stands
     rm -f "$_tmp" 2>/dev/null
     # HONOUR both outcomes (codex r21 P2). A partial staging write must not be published,
     # and if the link failed with NOBODY winning, returning `$p` anyway would let the next
@@ -339,7 +343,7 @@ loop_status_migrate() {
     echo "loop_status_migrate: could not read the shared venue's resolutions — nothing imported" >&2
     return 1
   fi
-  local imported=0 wt legacy rows _incomplete=0
+  local imported=0 wt legacy rows _incomplete=0 _blocked=0
   # Iterate the ARRAY (codex r15 P2). Printing it back through newlines to feed a `read` loop
   # re-introduced exactly the defect the NUL-safe enumeration removed: a worktree path
   # containing a newline would split into nonexistent paths, its legacy ledger would be
@@ -352,8 +356,11 @@ loop_status_migrate() {
     # it points at -- outside the worktree, possibly outside the repo. A worktree we cannot
     # confirm is a plain directory is skipped loudly rather than written through.
     if [ -L "$wt/.harness" ]; then
+      # PERMANENT, not transient (codex r22 P2). A live sibling's claim clears itself; a
+      # symlinked .harness never will, so reporting it as the self-healing rc 2 would let the
+      # loop proceed on a permanently incomplete skip-set forever.
       echo "loop_status_migrate: $wt/.harness is a symlink — refusing to migrate through it" >&2
-      _incomplete=1
+      _blocked=1
       continue
     fi
     legacy="$wt/.harness/loop_status.md"
@@ -444,8 +451,11 @@ loop_status_migrate() {
     # gates be reported clean and then deleted with the worktree. Absent dir = nothing to do;
     # present-but-unreadable = fail closed.
     if [ ! -f "$legacy" ]; then
-      if [ -d "$wt/.harness" ] && [ ! -r "$wt/.harness" ]; then
-        echo "loop_status_migrate: $wt/.harness is not readable — cutover state UNKNOWN" >&2
+      # SEARCH permission too, not just read (codex r22 P2). A directory with r but no x
+      # makes `[ -f "$legacy" ]` false while `[ -r ]` stays true, so a possibly-present
+      # legacy ledger would be skipped silently and the pass would claim a clean cutover.
+      if [ -d "$wt/.harness" ] && { [ ! -r "$wt/.harness" ] || [ ! -x "$wt/.harness" ]; }; then
+        echo "loop_status_migrate: $wt/.harness is not readable/searchable — cutover state UNKNOWN" >&2
         return 1
       fi
       continue
@@ -536,6 +546,10 @@ loop_status_migrate() {
   # claim we correctly refused to steal. Distinct from 0 (complete) and from 1 (failed), so
   # a caller can react correctly to each -- SessionStart treats it as routine concurrency,
   # while the arc-exit report must NOT publish a todo list from a venue still being filled.
+  # 4 == PERMANENTLY incomplete (a structural refusal like a symlinked .harness). Distinct
+  # from 2 (transient: a live sibling that clears itself) because only one of them is worth
+  # continuing on.
+  [ "$_blocked" = 1 ] && return 4
   [ "$_incomplete" = 1 ] && return 2
   return 0
 }

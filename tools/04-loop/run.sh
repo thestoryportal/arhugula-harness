@@ -126,6 +126,9 @@ while [ "$i" -lt "$MAX" ]; do
       echo "[loop] migration rc=2: a sibling holds a claim; skip-set may be incomplete" >&2
       ;;
     *)
+      # rc 1 (a ledger could not be drained), 3 (nothing could be inspected) and 4 (a
+      # PERMANENT structural refusal, e.g. a symlinked .harness) all mean the skip-set is
+      # unknowable or unfixable-by-waiting. Only rc 2 self-heals.
       # A GENUINE failure: a legacy ledger could not be read at all, so the skip-set is
       # incomplete by an UNKNOWN amount. A warning in the prompt is not enforcement (codex
       # r20 P2) — the child is simultaneously told to pick an item ABSENT from that list, so

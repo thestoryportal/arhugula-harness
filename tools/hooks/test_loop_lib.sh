@@ -1109,6 +1109,36 @@ printf '%s' "$MIGERR" | grep -q 'integer expression\|integer expected' \
   && bad "a clean (zero-pending) migration emitted a shell integer error: $MIGERR" \
   || ok "a zero-pending migration emits no shell error"
 
+# 60) codex r22 P2 — a symlinked .harness is PERMANENTLY incomplete (rc 4), not the
+#     self-healing live-sibling case (rc 2). Reporting it as 2 would let the loop proceed on
+#     a skip-set that can never become complete.
+( cd "$SYM" && CLAUDE_PROJECT_DIR="$SYM" HARNESS_LOOP_STATUS_PATH="$SYMV" loop_status_migrate ) >/dev/null 2>&1
+[ $? -eq 4 ] && ok "a symlinked .harness reports PERMANENTLY incomplete (rc 4)" || bad "symlink refusal not distinguished from a transient sibling"
+
+# 61) codex r22 P2 — a .harness that is readable but NOT searchable must fail closed. With r
+#     and no x, `[ -f "$legacy" ]` is false while `[ -r ]` is true, so a possibly-present
+#     legacy ledger would be skipped and the pass would claim a clean cutover.
+NOX="$REPO/noxrepo"; rm -rf "$NOX"; mkdir -p "$NOX"
+( cd "$NOX" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b noxwt wt1 ) >/dev/null 2>&1
+mkdir -p "$NOX/wt1/.harness"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-999 — behind an unsearchable dir |\n' \
+  > "$NOX/wt1/.harness/loop_status.md"
+chmod 600 "$NOX/wt1/.harness"   # readable, NOT searchable
+( cd "$NOX" && CLAUDE_PROJECT_DIR="$NOX" HARNESS_LOOP_STATUS_PATH="$NOX/shared.md" loop_status_migrate ) >/dev/null 2>&1
+RC=$?
+chmod 700 "$NOX/wt1/.harness"
+[ "$RC" -eq 1 ] && ok "an unsearchable .harness fails closed instead of claiming a clean cutover" || bad "unsearchable .harness reported rc=$RC (expected 1)"
+
+# 62) codex r22 P2 — a PARTIAL header must never be published. Staging exists precisely so
+#     nothing incomplete becomes visible; once the venue exists, later calls append to it and
+#     a durable row can be concatenated onto a broken line where the reducers cannot see it.
+EBODY=$(declare -f loop_status_ensure)
+printf '%s' "$EBODY" | grep -q '_staged.*-eq 0.*ln \|\[ "\$_staged" -eq 0 \]' \
+  && ok "the venue is published only when the staging write SUCCEEDED" \
+  || bad "ln can publish a partially-written header"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -107,6 +107,9 @@ case "$_MIGRC" in
     SKIPWARN=" WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — absence from it is NOT permission to attempt an item."
     ;;
   *)
+    # rc 1 (a ledger could not be drained), 3 (nothing could be inspected) and 4 (a
+    # PERMANENT structural refusal, e.g. a symlinked .harness) all mean the skip-set is
+    # unknowable or unfixable-by-waiting. Only rc 2 self-heals.
     # A GENUINE failure: the skip-set is incomplete by an UNKNOWN amount. A warning is not
     # enforcement (codex r20 P2) — the same reason text tells the next turn to pick an item
     # ABSENT from the list, so a declined item can still be retried. Stand down instead and
