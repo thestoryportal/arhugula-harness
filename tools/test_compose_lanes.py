@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -151,10 +152,24 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
     a, b = 348, 349
     env = {**os.environ, "HARNESS_RAM_FLOOR_GB": "0"}  # the RAM guard is not under test here
 
+    # Both recipe invocations run from REPO, and lane-init allows a worktree ONE claim — so
+    # a shared registry would (correctly) refuse the second lane and the witness would fail
+    # before starting its second stack. Each invocation therefore resolves its lane against
+    # its own scratch registry; the real-registry claims taken above are the separate thing:
+    # a reservation so no concurrent lane can take 348/349 while this runs.
+    scratch = Path(tempfile.mkdtemp(prefix="compose-lanes-"))
+
+    def _lane_env(k: int) -> dict[str, str]:
+        return {
+            **env,
+            "HARNESS_LANE_INDEX": str(k),
+            "ARC_METRICS_QUEUE_DIR": str(scratch / f"lane-{k}"),
+        }
+
     def up(k: int) -> None:
         subprocess.run(
             ["just", "r420-self-hosted-stack-up"],
-            env={**env, "HARNESS_LANE_INDEX": str(k)},
+            env=_lane_env(k),
             check=True,
             capture_output=True,
             text=True,
@@ -165,7 +180,7 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
     def down(k: int) -> int:
         return subprocess.run(
             ["just", "r420-self-hosted-stack-down"],
-            env={**env, "HARNESS_LANE_INDEX": str(k)},
+            env=_lane_env(k),
             capture_output=True,
             text=True,
             timeout=300,
@@ -291,6 +306,7 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
                 failed.append(k)
         for c in claimed:
             c.unlink(missing_ok=True)
+        shutil.rmtree(scratch, ignore_errors=True)
         if failed and sys.exc_info()[0] is None:
             raise AssertionError(
                 f"stack-down failed for lane(s) {failed}; containers may still be running"

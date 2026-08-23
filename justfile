@@ -545,7 +545,7 @@ q4-packaging-check:
 # Start the local R-420 SELF_HOSTED_SERVER telemetry backend:
 # OTel Collector Contrib + Tempo + Grafana. Requires Docker Desktop/daemon.
 r420-self-hosted-stack-up:
-    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; lane_stack_allowed || { echo "self-hosted stack skipped: lane_stack_allowed refused — RAM headroom, or an uncleaned stack inherited from a reaped lane (C-HE-11 5); see stderr"; exit 0; }; _e="$(uv run python tools/lane_ports.py --shell)" || exit 1; eval "$_e"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml up -d'
+    @bash -c 'source tools/hooks/lane-init.sh >/dev/null || exit 1; lane_stack_allowed; _rc=$?; [ "$_rc" -eq 0 ] || { [ "$_rc" -eq 3 ] && { echo "self-hosted stack NOT started: an uncleaned stack inherited from a reaped lane could not be removed (C-HE-11 5) — see stderr"; exit 1; }; echo "self-hosted stack skipped: RAM headroom below the bar for this lane (C-HE-11 5) — see stderr"; exit 0; }; _e="$(uv run python tools/lane_ports.py --shell)" || exit 1; eval "$_e"; docker compose -p "$R420_PROJECT" -f deploy/self-hosted-local/compose.yaml up -d'
 
 # Stop and remove this lane's R-420 backend containers/network.
 r420-self-hosted-stack-down:

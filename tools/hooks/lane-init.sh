@@ -92,11 +92,12 @@ _lane_init_id() {
       return 0
     fi
   fi
-  if [ -n "${HARNESS_LANE_ID:-}" ] && ! _lane_id_bound_elsewhere "$HARNESS_LANE_ID"; then
-    # Through the SAME sanitiser as every other source. An exported value is operator- or
-    # agent-supplied text; whitespace in it makes the space-delimited claim record unparsable,
-    # after which no scan matches this worktree and teardown releases nothing.
+  if [ -n "${HARNESS_LANE_ID:-}" ]; then
+    # Sanitise FIRST, then test. An exported value is operator- or agent-supplied text, and
+    # the sanitiser is what will actually be persisted — checking the raw form lets `bad id`
+    # slip past a lane already holding `badid`, which is the same identity after stripping.
     id=$(printf '%s' "$HARNESS_LANE_ID" | tr -d ' \t\n\r|;[]')
+    _lane_id_bound_elsewhere "$id" && id=""
   fi
   [ -n "$id" ] || id=$( (cd "$_LI_ROOT" && uv run --quiet python tools/reservations.py mint-lane-id \
           --worktree "$_LI_WT") 2>/dev/null | tr -d ' \t\n\r|;[]' )
@@ -217,7 +218,20 @@ _li_have=""
 for _li_f in "$_LI_Q"/lanes/*; do
   [ -f "$_li_f" ] || continue
   IFS=' ' read -r _li_id _li_path < "$_li_f"
-  [ "${_li_path:-}" = "$_LI_WT" ] && { _li_have="$(basename "$_li_f")"; break; }
+  if [ "${_li_path:-}" = "$_LI_WT" ]; then
+    _li_have="$(basename "$_li_f")"
+    # A claim recorded under a DIFFERENT lane id at this path belongs to a previous occupant
+    # (a worktree reaped whose teardown could not fence the index, then recreated at the same
+    # path). Reuse is by path, so it is adopted — but its stack is unaccounted for, and the
+    # missing fence is written now rather than letting this lane adopt those containers.
+    if [ -n "${_li_id:-}" ] && [ "${_li_id:-}" != "$HARNESS_LANE_ID" ]; then
+      printf '%s inherited-claim %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_li_id:-}" \
+        > "$_LI_Q/lanes/.orphaned-$_li_have" 2>/dev/null
+      printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_f" 2>/dev/null
+      echo "lane-init: adopted lane index $_li_have from a previous occupant of this path (${_li_id:-unknown}) — its stack is fenced until cleanup succeeds" >&2
+    fi
+    break
+  fi
 done
 unset _li_f _li_id _li_path
 
@@ -250,6 +264,21 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
     return 1 2>/dev/null || exit 1
   fi
   unset _li_id _li_path _li_ok
+  # POST-VERIFY: the scan above and the create below are not one atomic step, so two
+  # concurrent sources in THIS worktree asking for different indices can both pass the scan
+  # and both link a claim. Re-scanning afterwards catches that; the newer claim (ours) is
+  # withdrawn and the peer's stands, so the lane converges on one index instead of two.
+  for _li_f in "$_LI_Q"/lanes/*; do
+    [ -f "$_li_f" ] || continue
+    IFS=' ' read -r _li_id _li_path < "$_li_f"
+    if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$HARNESS_LANE_INDEX" ]; then
+      rm -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
+      echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $HARNESS_LANE_INDEX" >&2
+      unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
+      return 1 2>/dev/null || exit 1
+    fi
+  done
+  unset _li_f _li_id _li_path
 elif [ -n "$_li_have" ]; then
   export HARNESS_LANE_INDEX="$_li_have"
 else
@@ -387,8 +416,12 @@ lane_stack_allowed() {
   local mem_gb avail_gb k="${HARNESS_LANE_INDEX:-0}"
   # An index still carrying a dead lane's stack is refused at ANY k, including 0 and 1:
   # `up` would adopt those containers rather than fail, which is the silent outcome.
+  # 3, not 1: an uncleaned inherited stack is a FAULT, while the RAM skip below is a
+  # designed degradation the contract asks for (the lane builds, stack=absent). Collapsing
+  # them lets the recipe exit 0 on a fault and downstream automation proceed as if the stack
+  # were merely skipped.
   if ! _lane_clear_orphaned_stack; then
-    return 1
+    return 3
   fi
   [ "$k" -ge 2 ] || return 0
   if [ "$(uname)" = "Darwin" ]; then
@@ -397,7 +430,16 @@ lane_stack_allowed() {
     mem_gb=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1048576 ))
   fi
   [ "$mem_gb" -ge "$floor_gb" ] && return 0          # at or above the floor: no probe owed
-  avail_gb="$(_lane_available_gb)"
+  # The contract names "available memory / Docker-VM headroom", and on macOS those are
+  # different numbers: the containers live inside Docker Desktop's VM, whose ceiling is set
+  # independently of host RAM. When a daemon answers, ITS total is the figure that decides
+  # whether three containers fit; host availability is the fallback when it cannot.
+  avail_gb=""
+  if command -v docker >/dev/null 2>&1 && hook_bounded 10 docker info >/dev/null 2>&1; then
+    avail_gb=$(hook_bounded 10 docker info --format '{{.MemTotal}}' 2>/dev/null \
+      | awk '/^[0-9]+$/ { printf "%d", $1 / 1073741824 }')
+  fi
+  [ -n "$avail_gb" ] || avail_gb="$(_lane_available_gb)"
   if [ -n "$avail_gb" ] && [ "$avail_gb" -ge "$need_gb" ]; then
     return 0
   fi

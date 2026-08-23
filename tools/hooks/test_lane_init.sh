@@ -96,6 +96,10 @@ RAMQ="$ROOT/ram-q"
 OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$RAMQ" HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
   bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
 [ "$OUT" = "ABSENT" ] && ok "RAM shortfall at lane>=2 skips the stack" || bad "ram probe said '$OUT'"
+SRC_RC=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$RAMQ" HARNESS_LANE_INDEX=2 \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo \$?")
+[ "$SRC_RC" = "0" ] && ok "that ABSENT came from the probe, not a failed init" \
+  || bad "the init itself failed (rc=$SRC_RC) — the ABSENT above proves nothing"
 grep -q '| NOTIFY | .*ram_floor' "$HARNESS_LOOP_STATUS_PATH" \
   && ok "RAM shortfall emits a NOTIFY row naming the constraint" \
   || bad "no NOTIFY ram_floor row in $HARNESS_LOOP_STATUS_PATH"
@@ -422,7 +426,11 @@ OUT=$(
 # --- 24. while the obligation stands, the lane's stack stays ABSENT -------------------
 # Refused at ANY index, 0 and 1 included: `up` would ADOPT the dead lane's containers
 # rather than fail, so this is not a resource question the RAM floor covers.
-printf 'stale\n' > "$REL/lanes/.orphaned-9"
+# Its OWN registry: case 23 left this worktree holding index 8 in $REL, and the one-claim
+# rule would refuse index 9 there — the source would fail and this case would read ABSENT
+# for the wrong reason.
+ORPH2="$ROOT/orphan-q2"; mkdir -p "$ORPH2/lanes"
+printf 'stale\n' > "$ORPH2/lanes/.orphaned-9"
 cat > "$STUB/docker" <<STUBEOF
 #!/usr/bin/env bash
 [ "\$1" = "info" ] && exit 1
@@ -431,12 +439,26 @@ STUBEOF
 chmod +x "$STUB/docker"
 OUT=$(
   PATH="$STUB:$PATH"; export PATH
-  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$ORPH2" \
     HARNESS_LANE_INDEX=9 HARNESS_RAM_FLOOR_GB=0 \
     bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT"
 )
 [ "$OUT" = "ABSENT" ] && ok "an unhonoured obligation keeps the stack absent, even at a low index" \
   || bad "lane 9 started a stack over an uncleaned project: '$OUT'"
+# ...and it is a FAULT (3), not the designed RAM skip (1): the recipe exits non-zero on 3,
+# so downstream automation cannot read "no stack" as "stack skipped as designed".
+RC=$(
+  PATH="$STUB:$PATH"; export PATH
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$ORPH2" \
+    HARNESS_LANE_INDEX=9 HARNESS_RAM_FLOOR_GB=0 \
+    bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed; echo \$?"
+)
+[ "$RC" = "3" ] && ok "an uncleaned inherited stack reports a fault code, not the RAM skip" \
+  || bad "orphan refusal returned '$RC', want 3"
+RC=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$ROOT/ramrc-q" HARNESS_LANE_INDEX=2 \
+  HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
+  bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed; echo \$?")
+[ "$RC" = "1" ] && ok "the designed RAM skip keeps its own code" || bad "RAM skip returned '$RC', want 1"
 
 # --- 25. a preset index is refused unless a claim positively NAMES this worktree ------
 # Absence-of-objection is not ownership: an empty or malformed claim, or one that could not
