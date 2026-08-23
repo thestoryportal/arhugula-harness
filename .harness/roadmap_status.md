@@ -8,11 +8,11 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `754ca24a5692` |
+| `workspace_state_hash` | `220eca08b920` |
 | `last_refreshed` | 2026-08-23T00:00:00Z |
-| `git_head` | `1b0fd031` —  |
+| `git_head` | `5891168f` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
-| `open_fork_doc_count` | 119 |
+| `open_fork_doc_count` | 120 |
 
 **Hash recipe.** `sha256(git_head[:8] + "|" + sorted_open_pr_csv + "|" + open_fork_doc_count + "|" + latest_retirement_batch_path)[:12]`. See `Project_Roadmap_v1.md` §7.1.
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1428).** The next implementable unit is `U-HE-30` (S5 — gate coalescing by `cause_signature`, 10-minute window, pull-based delivery) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. U-HE-01..29 have landed; 16 units remain (U-HE-30..45). The U-HE-29 arc audit at `.harness/session-audit-2026-08-22-u-he-29.md` records why that arc cost 12.1h: the loop has convergence mechanisms but no abandonment mechanism, so 62% of its model calls fell after the premise had been falsified. A round-gate at `review_wrapper_common.py:round_n_for` is the proposed fix; the operator deferred it on 2026-08-23 in favour of landing #1426 first.
+**Current next action (post-#1431).** The next implementable unit is `U-HE-30` (S4d — gate coalescing by `cause_signature`, 10-minute window, pull-based delivery) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. Its implementation is built, green and reviewed at PR #1430 (19/19 CI, 5 out-of-family codex rounds, 12/12 mutation probes) and lands next; this PR filed the Class 1 back-flow that #1430 depends on — C-HE-10 §2's "at/after their `first_seen`" delivery-coverage rule permanently swallows an adjacent same-cause generation, so the landed implementation uses per-member coverage and the spec amendment is owed on ratification of Reading B. After #1430 lands, the next implementable unit is `U-HE-31` (lane-init: `HARNESS_LANE_ID`/`HARNESS_LANE_INDEX`, `gc.auto 0`, RAM probe, compose port allocation).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,6 +43,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
+| #1430 | `feat/u-he-30-hil-coalescing` | — | — |
 
 ---
 
@@ -50,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1431 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1428 | 2026-08-23 | U-HE-29 session audit landed (doc-only); makes the roadmap_status pointer resolve |
 | 1426 | 2026-08-23 | U-HE-29 shared loop_status venue landed; merge-gate 3-lens all-approve (first gate run on this PR); the cutover migration was CUT at b1a099294 (-1483 lines) after its founding measurement was falsified |
 | PR #1424 | 2026-08-22 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1422 | 2026-08-22 | U-HE-27 Step-5 operator gate EXECUTED + as-built live-apply corrections (squash 69ad55f8): fence LIVE on main (strict:true, 12 contexts, enforce_admins) — apply-confirm digest-bound, §4 tiebreaker PASS (scratch #1420/#1421 clean-ffwd, fence re-verified), verify PASS; two live-witnessed fixes (contexts-target accepts GitHub Actions auto-binding null/-1/15368 + flags foreign apps — r6 comparison empirically falsified; _watch_checks not-yet-started retry + registration-complete validation, live witness #1419); codex fix-rounds r1-r2 (4 absorbed, 1 refuted-by-measurement); LEAN witness lens BLOCK→APPROVE r2 (full-consumption assertion, probe independently reproduced); B-190 bound IN FORCE; evidence log complete |
-| PR #1418 | 2026-08-21 | S4c U-HE-27 main branch-protection recipes (squash fe4ea8dc): C-HE-08 §2-§5 — tools/main_protection.py show/apply(digest-bound dry-run+confirm, lockfile-serialized, CAS rollback)/rollback/tiebreaker(fence-liveness + exercised reconciled merges)/verify + 6 just recipes + C-HE-08 phase0/operator-gated manifest rows; 10 codex rounds (34 absorbed; r10 cap terminal B-191 register-and-held); merge-gate r1 witness BLOCK (optional-controls differential gap) fixed + mutation-probed live, r2 3x APPROVE; B-190 close-out step 2 recorded PENDING-APPLY in evidence log; as-built plan rev note (i)-(vii) + clearance marker; u-he-27 reservation full open-time lifecycle with attested merge tuple |
 
 ---
 
