@@ -536,5 +536,18 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$FENCEQ2" \
 [ "$OUT" = "rc=1" ] && ok "an unfenceable inherited claim is refused, not adopted" \
   || bad "adopted an unfenceable inherited stack: $OUT"
 
+# --- 30. a failed init leaves no identity behind for the next worktree ----------------
+# The id is exported before the index is allocated. If allocation then fails, an id left in
+# the shell would be inherited by the next worktree that shell enters — and since the failed
+# lane holds no claim, nothing binds it elsewhere and both would persist one identity.
+EXH2="$ROOT/exhausted2"; mkdir -p "$EXH2/lanes"
+i=0; while [ "$i" -lt 350 ]; do printf 'other %s\n' "$ROOT/not-ours-$i" > "$EXH2/lanes/$i"; i=$((i + 1)); done
+OUT=$(cd "$ROOT/wt5" && ARC_METRICS_QUEUE_DIR="$EXH2" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset}\"")
+case "$OUT" in
+  "rc=1 id=unset") ok "a failed allocation leaves no exported identity" ;;
+  *) bad "failed init kept its identity exported: $OUT" ;;
+esac
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

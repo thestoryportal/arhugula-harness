@@ -800,6 +800,16 @@ hook_release_lane_index() {
       # that was ATTEMPTED and failed leaves containers holding this project's ports and
       # volumes, so recycling the index would hand them to the next lane; the claim is kept
       # instead — a visible, retryable state rather than a silent cross-lane adoption.
+      # Ownership is checked BEFORE the destructive cleanup as well as after. `down --volumes`
+      # can run for minutes, and a worktree recreated at this path may have already rebound
+      # the claim and started its own stack — the post-check protects its CLAIM but cannot
+      # un-destroy its containers. Re-reading first shrinks that window to the gap between
+      # this read and the compose call; the remainder is a registered residual (B-202).
+      IFS=' ' read -r _now_id _now_path < "$f" 2>/dev/null
+      if [ "${_now_path:-}" != "$wt" ] || [ "${_now_id:-}" != "${id:-}" ]; then
+        echo "hook_release_lane_index: claim $(basename "$f") was rebound before cleanup — leaving the new owner's stack and record alone" >&2
+        continue
+      fi
       _hook_lane_stack_down "$(basename "$f")" >/dev/null 2>&1
       _rc=$?
       # Docker cleanup can take minutes. RE-READ the claim before removing it: a worktree

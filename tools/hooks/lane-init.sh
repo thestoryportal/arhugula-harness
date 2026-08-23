@@ -193,6 +193,10 @@ if ! _LI_ID="$(_lane_init_id)"; then
 fi
 export HARNESS_LANE_ID="$_LI_ID"
 unset _LI_ID
+# Every failure PAST this point unsets the export again. An id left in a failed shell would
+# be inherited by the next worktree that shell enters, and because the failed lane holds no
+# claim, nothing binds it elsewhere — the bind check would accept it and two worktrees would
+# persist one reservation identity.
 
 # ── lane index ───────────────────────────────────────────────────────────────────────
 # ── lane index ───────────────────────────────────────────────────────────────────────
@@ -240,10 +244,23 @@ for _li_f in "$_LI_Q"/lanes/*; do
       if ! printf '%s inherited-claim %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_li_id:-}" \
            > "$_LI_Q/lanes/.orphaned-$_li_have" 2>/dev/null; then
         echo "lane-init: cannot fence inherited lane index $_li_have (marker unwritable) — refusing to adopt a stack this lane cannot account for" >&2
+        unset HARNESS_LANE_ID
         unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
         return 1 2>/dev/null || exit 1
       fi
-      printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_f" 2>/dev/null
+      # ATOMIC rebind, and checked. Truncating the authoritative claim in place opens a
+      # window in which a concurrent initializer reads an empty claim (and allocates a
+      # second index for this same worktree), and an unchecked write can leave it that way.
+      if ! { _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
+             && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
+             && mv -f "$_li_tmp" "$_li_f" 2>/dev/null; }; then
+        rm -f "${_li_tmp:-}" 2>/dev/null
+        echo "lane-init: could not rebind inherited lane index $_li_have to this lane — refusing rather than running on a claim that names someone else" >&2
+        unset HARNESS_LANE_ID
+        unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_tmp
+        return 1 2>/dev/null || exit 1
+      fi
+      unset _li_tmp
       echo "lane-init: adopted lane index $_li_have from a previous occupant of this path (${_li_id:-unknown}) — its stack is fenced until cleanup succeeds" >&2
     fi
     break
@@ -254,6 +271,7 @@ unset _li_f _li_id _li_path
 if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   if [ -n "$_li_have" ] && [ "$_li_have" != "$HARNESS_LANE_INDEX" ]; then
     echo "lane-init: this worktree already holds lane index $_li_have — refusing to also take $HARNESS_LANE_INDEX" >&2
+    unset HARNESS_LANE_ID
     unset _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
   fi
   if [ -z "$_li_have" ]; then
@@ -276,6 +294,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   fi
   if [ -z "$_li_ok" ]; then
     echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX could not be claimed for this worktree (claim: [$(cat "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null)]) — refusing to run on a project this lane does not own" >&2
+    unset HARNESS_LANE_ID
     unset _LI_ROOT _LI_Q _LI_WT _li_have _li_id _li_path _li_ok
     return 1 2>/dev/null || exit 1
   fi
@@ -290,6 +309,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
     if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$HARNESS_LANE_INDEX" ]; then
       rm -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
       echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $HARNESS_LANE_INDEX" >&2
+    unset HARNESS_LANE_ID
       unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
       return 1 2>/dev/null || exit 1
     fi
@@ -346,6 +366,7 @@ else
           [ "${_li_path:-}" = "$_LI_WT" ] && break
         else
           echo "lane-init: a stale repair lock blocks $_LI_Q/lanes/$_li_k.repair — remove it and re-open the lane" >&2
+    unset HARNESS_LANE_ID
           unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
           return 1 2>/dev/null || exit 1
         fi
@@ -358,6 +379,7 @@ else
       # Never fall through with an unset index: every consumer defaults to lane 0, so a
       # silent miss puts this lane on lane 0's project name, ports and volumes.
       echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
+    unset HARNESS_LANE_ID
       unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
       return 1 2>/dev/null || exit 1
     fi
@@ -372,6 +394,7 @@ else
     if [ "${_li_path:-}" = "$_LI_WT" ] && [ "$(basename "$_li_f")" != "$_li_k" ]; then
       rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null
       echo "lane-init: raced a concurrent init of this worktree, which holds lane index $(basename "$_li_f") — withdrew the duplicate claim on $_li_k" >&2
+    unset HARNESS_LANE_ID
       unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_f _li_id _li_path _li_tmp _li_retried
       return 1 2>/dev/null || exit 1
     fi

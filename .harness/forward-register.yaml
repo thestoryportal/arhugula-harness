@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 201
+  total: 202
   open: 1
   design_substrate_gated: 3
-  registered_finding: 50
+  registered_finding: 51
   operator_gated: 0
   held: 2
   closed: 145
-  identity_digest: 0172f78335e57523
+  identity_digest: e7ca95927c86b0da
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10335,3 +10335,27 @@ items:
   council: 'NO — a single bounded disposition with a named sibling mitigation already
     scheduled; no cross-axis tension.'
   heading: '### B-201 · C-HE-11 §2 `gc.auto 0` — warn-and-continue vs refuse-to-open when the shared git config cannot be written *(raised three times by out-of-family Codex against U-HE-31, 2026-08-23; register-and-held on the documented reading)*'
+- id: B-202
+  title: >-
+    C-HE-11 §1/§5 lane-teardown and headroom residuals needing a primitive outside this unit
+    — a claim-to-cleanup lock, and available memory INSIDE the Docker VM
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX across U-HE-31 rounds 9-11 and registered at the
+    11-round cap, after every cheap fix around them had landed. (1) hook_release_lane_index
+    re-reads the claim owner immediately before AND after `docker compose down --volumes`, so
+    a rebind by a worktree recreated at that path is detected and its claim preserved — but
+    the re-reads cannot un-destroy containers if the rebind lands in the gap between the
+    pre-check and the compose call. Closing it needs a lock shared by the release path and
+    lane-init''s claim path, a primitive neither has. (2) §5 asks for "available memory /
+    Docker-VM headroom"; lane-init checks the VM MemTotal ceiling AND host availability
+    against the stack''s need, but no Docker API exposes the VM''s FREE memory, so a VM sized
+    adequately and already consumed passes both. Measuring it means a probe container.'
+  close_out: '(1) Give the registry a per-index lock (the mkdir primitive lane-init already
+    uses for corpse repair) and take it in BOTH the release path and lane-init''s claim path;
+    (2) for headroom, decide between an opt-in probe container and treating the VM ceiling as
+    §5''s practical reading, recorded against the contract; (3) the 3-4-lane pilots (C-HE-13
+    §3) are the measurement that says whether either earns the mechanism — neither has been
+    observed, both are reasoned.'
+  council: 'NO — two bounded mechanism questions inside one unit''s surface; the pilots
+    supply the evidence that would settle them.'
+  heading: '### B-202 · C-HE-11 §1/§5 lane-teardown and headroom residuals that need a primitive this unit does not have — a claim↔cleanup lock, and available-memory INSIDE the Docker VM *(surfaced by out-of-family Codex across U-HE-31 rounds 9–11, 2026-08-23; registered at the 11-round cap)*'
