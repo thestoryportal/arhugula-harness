@@ -204,5 +204,68 @@ DIRECT_RC=$?
 [ ! -f "$LANES/$K4" ] && ok "the direct removal path released the lane index too" \
   || bad "lane index $K4 leaked through the direct (loop GC) removal path"
 
+# --- 13. a RELATIVE queue dir is refused (it would give every lane its own lanes/0) ---
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="relative/queue" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? idx=\${HARNESS_LANE_INDEX:-unset}\"")
+[ "$OUT" = "rc=1 idx=unset" ] && ok "a relative ARC_METRICS_QUEUE_DIR is refused" \
+  || bad "relative queue dir accepted: $OUT"
+
+# --- 14. index knobs are range-checked BEFORE becoming a filename --------------------
+for bad_k in 350 999 ../escape abc " "; do
+  OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$bad_k" \
+    bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$?\"")
+  [ "$OUT" = "rc=1" ] && ok "HARNESS_LANE_INDEX='$bad_k' refused" || bad "index '$bad_k' accepted: $OUT"
+  OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX_FORCE="$bad_k" \
+    bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$?\"")
+  [ "$OUT" = "rc=1" ] && ok "HARNESS_LANE_INDEX_FORCE='$bad_k' refused" || bad "force '$bad_k' accepted: $OUT"
+done
+[ ! -e "$LANES/../escape" ] && ok "no claim was published outside the registry" || bad "claim escaped QUEUE_DIR/lanes"
+
+# --- 15. a worktree path with a SPACE round-trips through the claim record ------------
+# The record is space-delimited, so an unsanitised id (or a naive read) would misparse the
+# path: the same worktree would claim extra indices and teardown would match none of them.
+git -C "$ROOT/repo" worktree add -q "$ROOT/with space" -b lane-space || { echo "FATAL: spaced worktree"; exit 1; }
+KS=$(cd "$ROOT/with space" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_INDEX")
+IDS=$(cd "$ROOT/with space" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_ID")
+case "$IDS" in *" "*) bad "lane id carries a space: '$IDS'" ;; *) ok "lane id is space-free" ;; esac
+KS2=$(cd "$ROOT/with space" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$HARNESS_LANE_INDEX")
+[ "$KS2" = "$KS" ] && ok "a spaced worktree path reuses its own claim" \
+  || bad "spaced path claimed twice: '$KS' then '$KS2'"
+
+# --- 16. an unwritable ledger makes the shortfall SAY so, never claim a phantom NOTIFY -
+: > "$ROOT/not-a-dir"   # a REGULAR FILE as the venue's parent: mkdir -p cannot create under it,
+                       # so the ledger genuinely cannot be published (a merely-absent
+                       # directory does not test this — loop_status_ensure creates it).
+ERR=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
+  HARNESS_LOOP_STATUS_PATH="$ROOT/not-a-dir/loop_status.md" \
+  bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed" 2>&1 >/dev/null)
+case "$ERR" in
+  *"could NOT be written"*) ok "an unwritable ledger is reported, not silently claimed" ;;
+  *) bad "no durable-record warning on a failed NOTIFY write: [$ERR]" ;;
+esac
+
+# --- 17. releasing an index brings that lane's Compose stack down FIRST ---------------
+# `docker compose up -d` ADOPTS an existing project rather than refusing it, so recycling
+# an index whose containers still run would hand the next lane a dead lane's state. A stub
+# docker on PATH records the invocation; the real daemon is neither needed nor touched.
+STUB="$ROOT/stub-bin"; mkdir -p "$STUB"
+cat > "$STUB/docker" <<STUBEOF
+#!/usr/bin/env bash
+echo "\$@" >> "$ROOT/docker-calls.log"
+exit 0
+STUBEOF
+chmod +x "$STUB/docker"
+REL="$ROOT/release-q"; mkdir -p "$REL/lanes"
+printf '%s %s\n' "some-lane" "$ROOT/reaped-wt" > "$REL/lanes/5"
+(
+  PATH="$STUB:$PATH"; export PATH
+  CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+    bash -c "source '$SCRIPT_DIR/lib.sh'; hook_release_lane_index '$ROOT/reaped-wt'"
+) >/dev/null 2>&1
+[ ! -f "$REL/lanes/5" ] && ok "the released index is freed" || bad "index 5 not released"
+grep -q 'compose -p arhugula-r420-self-hosted-local-lane5 .* down' "$ROOT/docker-calls.log" 2>/dev/null \
+  && ok "release took lane 5's Compose project down before recycling the index" \
+  || bad "no compose down for the released lane: [$(cat "$ROOT/docker-calls.log" 2>/dev/null | tr '\n' '/')]"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

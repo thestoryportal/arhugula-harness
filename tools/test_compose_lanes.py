@@ -134,6 +134,10 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
     # That makes collision implausible, not impossible — so the projects are also checked to
     # be ABSENT first, and only the stacks this test actually started are torn down. A
     # pre-existing stack under either name fails the test loudly instead of being adopted.
+    # RESIDUAL, named rather than argued away: the absence check is not atomic with `up`, so
+    # a real lane starting at 348/349 in that window would still be adopted. Closing it would
+    # mean taking registry claims in the operator's live queue from a test process — a worse
+    # trade for a window that requires 348 concurrent lanes to have been allocated first.
     a, b = 348, 349
     env = {**os.environ, "HARNESS_RAM_FLOOR_GB": "0"}  # the RAM guard is not under test here
 

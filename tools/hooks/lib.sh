@@ -780,11 +780,12 @@ _hook_worktree_matches_expected_identity() {
 # down from a removal hook would make teardown depend on a daemon that is usually absent,
 # so the stack-down is a documented step of the reaping recipe instead
 # (.claude/skills/two-lane/SKILL.md), and the failure it guards against is loud, not silent.
-# RESIDUAL, stated rather than hidden: automated reapers (loop_gc_worktrees,
-# codex_worktree_gc.py) do not run that manual step, so a GC-reaped lane whose stack was
-# left up frees its index while its containers still hold the ports. The next lane handed
-# that index fails its `up` on a port bind — visibly, at the moment of use, naming the
-# conflict. Making teardown itself stop containers is the follow-on, not this unit.
+# The "it would fail loudly" argument for leaving containers alone is FALSE: `docker compose
+# up -d` under an existing project ADOPTS its containers rather than refusing, so a lane
+# handed a recycled index would silently inherit a dead lane's containers, volumes and
+# state. So the release takes the stack down first — but only in the one condition where
+# containers can actually exist (a reachable daemon), and always bounded, so a teardown on
+# a machine with no Docker, or with the daemon down, costs nothing and cannot hang.
 # Usage: hook_release_lane_index /physical/path/to/worktree
 hook_release_lane_index() {
   local wt="${1:-}" q f id path
@@ -794,8 +795,30 @@ hook_release_lane_index() {
   for f in "$q"/*; do
     [ -f "$f" ] || continue
     IFS=' ' read -r id path < "$f"
-    [ "${path:-}" = "$wt" ] && rm -f "$f" 2>/dev/null
+    if [ "${path:-}" = "$wt" ]; then
+      _hook_lane_stack_down "$(basename "$f")"
+      rm -f "$f" 2>/dev/null
+    fi
   done
+  return 0
+}
+
+# Bring lane <k>'s Compose stack down before its index is recycled. Best-effort by design:
+# every early return is a condition under which no container of that project can be running,
+# so skipping costs nothing. The project NAME is resolved by tools/lane_ports.py — the one
+# authority for it — never re-spelled here, because a second spelling would silently stop
+# targeting the real project the day the formula changes.
+_hook_lane_stack_down() {
+  local k="${1:-}" root project compose
+  case "$k" in ''|*[!0-9]*) return 0 ;; esac
+  command -v docker >/dev/null 2>&1 || return 0
+  root=$(hook_project_dir); [ -n "$root" ] || return 0
+  compose="$root/deploy/self-hosted-local/compose.yaml"
+  [ -f "$compose" ] && [ -f "$root/tools/lane_ports.py" ] || return 0
+  hook_bounded 15 docker info >/dev/null 2>&1 || return 0     # daemon unreachable → nothing runs
+  project=$(HARNESS_LANE_INDEX="$k" python3 "$root/tools/lane_ports.py" --project 2>/dev/null)
+  [ -n "$project" ] || return 0
+  hook_bounded 180 docker compose -p "$project" -f "$compose" down >/dev/null 2>&1 || true
   return 0
 }
 

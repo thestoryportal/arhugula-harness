@@ -29,6 +29,17 @@ _LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 _LI_Q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
 _LI_WT="$(pwd -P)"   # physical path: the registry is compared against it at teardown
+# The registry only means anything if every lane resolves it to the SAME directory. A
+# relative override resolves against each lane's own CWD, so every lane would create its
+# own `lanes/0` and then share one Docker project and port block while the registry looked
+# perfectly consistent. Rejected as the misconfiguration it is (loop_status_path does the
+# same for the same reason) rather than silently producing per-worktree registries.
+case "$_LI_Q" in
+  /*) ;;
+  *) echo "lane-init: ARC_METRICS_QUEUE_DIR must be an absolute path, got '$_LI_Q'" >&2
+     unset _LI_ROOT _LI_Q _LI_WT
+     return 1 2>/dev/null || exit 1 ;;
+esac
 
 # ── lane id ──────────────────────────────────────────────────────────────────────────
 _lane_init_id() {
@@ -42,14 +53,25 @@ _lane_init_id() {
           --worktree "$_LI_WT") 2>/dev/null | tr -d ' \t\n\r|;[]' )
   # Fallback keeps the SAME shape as reservations.mint_lane_id (host-worktree-8hex) so a
   # lane minted without uv is indistinguishable downstream from one minted with it.
-  [ -n "$id" ] || id="$(hostname -s 2>/dev/null || echo host)-$(basename "$_LI_WT")-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  # The fallback runs through the SAME sanitiser as the uv-minted id: the claim record is
+  # space-delimited and a worktree basename with a space would make every later read
+  # misparse the path — the same worktree would claim extra indices and teardown would
+  # match none of them.
+  [ -n "$id" ] || id="$(printf '%s-%s-%s' "$(hostname -s 2>/dev/null || echo host)" \
+    "$(basename "$_LI_WT")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')" | tr -d ' \t\n\r|;[]')"
   mkdir -p "$(dirname "$f")" 2>/dev/null
   # A ZERO-BYTE marker is a corpse, not a claim: only the pre-publication-protocol code
   # (or a stray `touch`) could produce one, and leaving it in place is unrecoverable —
   # `[ -s ]` never adopts it and an exclusive create can never replace it, so every later
-  # session re-mints and none persists. Unlink it before publishing. Two shells both
-  # repairing is harmless: publication is atomic and both re-read the winner's id.
-  { [ -e "$f" ] && [ ! -s "$f" ]; } && rm -f "$f" 2>/dev/null
+  # session re-mints and none persists.
+  #
+  # Repair publishes by RENAME, never unlink-then-link. Unlinking first is check-then-act:
+  # a second repairer that has already published a complete marker can have it deleted by a
+  # first repairer still acting on its stale "it is empty" observation, and the two shells
+  # then hold different ids. `mv` replaces atomically — concurrent repairers simply order,
+  # the last one wins, and BOTH re-read the published file below and converge on one id.
+  local corpse_repair=""
+  { [ -e "$f" ] && [ ! -s "$f" ]; } && corpse_repair=1
   # PUBLICATION PROTOCOL, the same one loop_status_ensure uses and for the same reason. A
   # bare `set -o noclobber; > "$f"` publishes the NAME at open() and the payload after: a
   # concurrent loser can see a file that is still empty, keep its own id, and the two shells
@@ -60,7 +82,11 @@ _lane_init_id() {
   local tmp
   if tmp=$(mktemp "$f.XXXXXXXX" 2>/dev/null) && [ -n "$tmp" ]; then
     if printf '%s\n' "$id" > "$tmp" 2>/dev/null; then
-      ln "$tmp" "$f" 2>/dev/null || true
+      if [ -n "$corpse_repair" ]; then
+        mv -f "$tmp" "$f" 2>/dev/null || true      # atomic replace of the corpse
+      else
+        ln "$tmp" "$f" 2>/dev/null || true         # never clobbers a live marker
+      fi
     fi
     rm -f "$tmp" 2>/dev/null
   fi
@@ -87,6 +113,24 @@ export HARNESS_LANE_ID="$_LI_ID"
 unset _LI_ID
 
 # ── lane index ───────────────────────────────────────────────────────────────────────
+# Both index knobs become a FILENAME under QUEUE_DIR/lanes, and the index is also the input
+# to the port formula. An unvalidated value is either out of contract (350+ has no port
+# block) or a path escape (`../…` would publish the claim outside the registry), so both are
+# range-checked here rather than at the point of damage.
+for _li_var in HARNESS_LANE_INDEX HARNESS_LANE_INDEX_FORCE; do
+  eval "_li_val=\${$_li_var:-}"
+  [ -z "$_li_val" ] && continue
+  case "$_li_val" in
+    ''|*[!0-9]*) echo "lane-init: $_li_var must be an integer 0..349, got '$_li_val'" >&2
+                 unset _li_var _li_val; return 1 2>/dev/null || exit 1 ;;
+  esac
+  if [ "$_li_val" -ge 350 ]; then
+    echo "lane-init: $_li_var must be < 350 (no port block exists above it), got '$_li_val'" >&2
+    unset _li_var _li_val; return 1 2>/dev/null || exit 1
+  fi
+done
+unset _li_var _li_val
+
 # A preset HARNESS_LANE_INDEX is honoured verbatim and claims nothing: the caller
 # (a compose recipe, a test) is asserting an index it already owns.
 if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
@@ -125,7 +169,18 @@ if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
       IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
       [ "${_li_path:-}" = "$_LI_WT" ] && break
       if [ -e "$_LI_Q/lanes/$_li_k" ] && [ ! -s "$_LI_Q/lanes/$_li_k" ] && [ -z "${_li_retried:-}" ]; then
-        _li_retried=1; rm -f "$_LI_Q/lanes/$_li_k" 2>/dev/null; continue
+        # Repair by atomic RENAME, then VERIFY ownership — the same discipline as the marker.
+        # Unlink-then-create would let a slow repairer delete a claim another lane had
+        # already published, and both would then believe they hold this index. After the
+        # rename the file is re-read: it is ours only if it says so, otherwise advance.
+        _li_retried=1
+        if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
+           && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
+           && mv -f "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
+          IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
+          [ "${_li_path:-}" = "$_LI_WT" ] && break
+        fi
+        rm -f "${_li_tmp:-}" 2>/dev/null
       fi
       _li_retried=""
       _li_k=$((_li_k + 1))
@@ -189,8 +244,12 @@ lane_stack_allowed() {
   if [ -n "$avail_gb" ] && [ "$avail_gb" -ge "$need_gb" ]; then
     return 0
   fi
-  loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" "lane-env:transient-retry:ram_floor" \
-    "lane $k: ${mem_gb}GB machine < floor ${floor_gb}GB and ${avail_gb:-unknown}GB available < ${need_gb}GB needed; self-hosted stack skipped (stack=absent)"
+  # The skip stands whatever the ledger does — but SAYING a NOTIFY was emitted when the
+  # write failed is a lie the operator acts on (they would look for a row that is not there).
+  if ! loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" "lane-env:transient-retry:ram_floor" \
+      "lane $k: ${mem_gb}GB machine < floor ${floor_gb}GB and ${avail_gb:-unknown}GB available < ${need_gb}GB needed; self-hosted stack skipped (stack=absent)"; then
+    echo "lane-init: RAM shortfall at lane $k, and the NOTIFY row could NOT be written — this skip leaves no durable record" >&2
+  fi
   return 1
 }
 
