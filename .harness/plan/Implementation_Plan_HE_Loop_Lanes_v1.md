@@ -5876,6 +5876,43 @@ _loop_epoch() { date -u -j -f %Y-%m-%dT%H:%M:%SZ "$1" +%s 2>/dev/null || date -u
 
 ---
 
+*As built (PR #1430).* The unit landed with its scope intact — `loop_hil_groups` +
+`loop_hil_deliver`, the `cause_signature` second reduction key, the window, the
+`COALESCE-DELIVERED` row, the SessionStart wiring — but **five departures from the code
+drafted above**, each mutation-probed and each a real defect in the draft:
+
+(i) **The generation id is `(sig, first_seen)`, not `(sig, first_seen, n)`.** The draft's own
+prose says the former while its code appends `-${n}`; with the member count in the key, one
+more lane deferring into an already-delivered window at the boundary second mints a second
+generation for the same window.
+
+(ii) **Epoch conversion reuses `_LOOP_AWK_EPOCH`** (the pure-awk days-from-civil helper every
+other reducer already shares) rather than the drafted `_loop_epoch` `date`-fork pair — one
+authority, no per-row fork, identical on macOS and Linux.
+
+(iii) **The `QUEUE_DIR/hil-deliveries/<gen-id>` exclusive-create claim is GONE.** Delivery
+serialises on the same `.loop-status.lock` flock `loop_hil_ttl_resurface` takes. The claim had
+two defects the lock does not: it was persisted *before* the prompt and the row (a crash
+between them left a claim no later deliverer could pass — the very residual
+`.harness/spec/store-audit-he-loop-lanes.md` had registered against this unit), and being a
+FILENAME it forced a lossy sanitisation of `cause_signature` under which `gate_a:fail:b` and
+`gate:a_fail:b` collapsed together.
+
+(iv) **Delivery coverage is per-MEMBER.** Each `COALESCE-DELIVERED` row records
+`<gen-id> <item>@<arrival> …`. This deviates from C-HE-10 §2's literal "at/after their
+`first_seen`" rule, which permanently swallows an adjacent same-cause generation — **filed as a
+Class 1 fork** at `.harness/class_1_fork_c_he_10_delivery_coverage_rule_swallows_adjacent_generation.md`;
+the spec amendment is owed there, not here.
+
+(v) **`first_seen` is the FIRST arrival** (re-anchored by a RESOLVED-HIL or a changed cause).
+The session-start reconcile pass re-emits the same unresolved deferral every session, so a
+latest-wins anchor postponed delivery forever for frequent sessions.
+
+*Also owed and landed by this unit, outside its stated Files list:* `tools/roadmap-audit/test_*.sh`
+is now globbed by `tools/codex-parity-check.sh`. `test_session_start.sh` existed but no gate ran
+it, so this unit's SessionStart wiring broke one of its assertions with every gate still green.
+
+
 ### U-HE-31: `tools/hooks/lane-init.sh` — `HARNESS_LANE_ID`, `HARNESS_LANE_INDEX`, `gc.auto 0` once, RAM probe; compose port variables; `-p` recipes
 
 **Scope.** Lane initialisation script sourced by `two-lane` / `roadmap-continue` at worktree start: mints `HARNESS_LANE_ID`, allocates `HARNESS_LANE_INDEX` by exclusive create of `QUEUE_DIR/lanes/<k>` (released at teardown by `safe-worktree-remove.sh`), sets `gc.auto 0` repo-wide once idempotently, probes RAM headroom before a lane-`k ≥ 2` stack on a machine below the floor (default 32 GB) → `NOTIFY` + `stack=absent`; `compose.yaml` ports become `${R420_PORT_GRAFANA:-3000}` etc.; the three `r420-self-hosted-stack-*` recipes take `-p arhugula-r420-self-hosted-local-lane<k>` and the port block `30000 + 100·k + {0,1,2,3}` for `k ≥ 1`, `k < 350`.
