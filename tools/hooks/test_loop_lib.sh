@@ -795,7 +795,12 @@ chmod 644 "$UNREAD2"
 
 # 47) codex r11 P2 — `git worktree list`'s OWN status must be captured, not the pipeline's.
 MBODY2=$(declare -f loop_status_migrate)
-printf '%s' "$MBODY2" | grep -q 'wt_raw=$(git' && ok "git's status is captured before the awk filter" || bad "git status still masked by the pipeline"
+printf '%s' "$MBODY2" | grep -q 'wt_rc=$?' \
+  && ok "git's own exit status is captured, not a pipeline's" || bad "git status masked by a pipeline"
+printf '%s' "$MBODY2" | grep -q 'worktree list --porcelain -z' \
+  && ok "worktrees are enumerated NUL-delimited (quoted paths parse)" || bad "line-oriented porcelain still in use"
+printf '%s' "$MBODY2" | grep -q 'read -r -d' \
+  && ok "NUL records are read without command substitution (which drops NULs)" || bad "NUL output read through a NUL-dropping path"
 
 # 48) codex r12 P2 — an UNREADABLE shared venue must not read as "nothing was ever
 #     resolved". That would let every imported row reopen an answered gate, and the claim

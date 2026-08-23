@@ -273,10 +273,27 @@ loop_status_migrate() {
   # fresh bash without it -- a git that emitted a PARTIAL list and then failed looked like a
   # complete success, and the migration would drain that subset and report the cutover done
   # while other legacy ledgers stayed untouched.
-  local wt_raw wt_rc wt_list
-  wt_raw=$(git -C "$root" worktree list --porcelain 2>/dev/null); wt_rc=$?
-  wt_list=$(printf '%s\n' "$wt_raw" | awk '/^worktree /{print substr($0,10)}')
-  if [ "$wt_rc" -ne 0 ] || [ -z "$wt_list" ]; then
+  # NUL-delimited porcelain (codex r14 P2). The line-oriented form QUOTES any path containing
+  # a tab, newline, quote, backslash or non-ASCII byte (`worktree "a\tb"`), and taking the
+  # substring verbatim yielded an escaped pathname that matches nothing on disk -- so that
+  # worktree's legacy ledger was silently skipped while the pass reported success. `-z` emits
+  # the raw bytes with no quoting at all. Records are NUL-separated; `worktree <path>` is
+  # always the first field of each record.
+  # Read through a TEMP FILE, not command substitution: bash silently DROPS NUL bytes in
+  # `$(...)`, which would collapse every record onto one line and make the whole enumeration
+  # garbage. The file also lets git's own exit status be captured (a process substitution
+  # would hide it, the r11 defect).
+  local wt_rc wt_tmp rec
+  local wt_list=()
+  wt_tmp=$(mktemp) || { echo "loop_status_migrate: mktemp failed" >&2; return 1; }
+  git -C "$root" worktree list --porcelain -z > "$wt_tmp" 2>/dev/null; wt_rc=$?
+  if [ "$wt_rc" -eq 0 ]; then
+    while IFS= read -r -d '' rec; do
+      case "$rec" in "worktree "*) wt_list+=("${rec#worktree }") ;; esac
+    done < "$wt_tmp"
+  fi
+  rm -f "$wt_tmp"
+  if [ "$wt_rc" -ne 0 ] || [ "${#wt_list[@]}" -eq 0 ]; then
     echo "loop_status_migrate: could not enumerate worktrees (rc=$wt_rc) — nothing inspected" >&2
     return 1
   fi
@@ -431,7 +448,7 @@ loop_status_migrate() {
       || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
     echo "imported $rows still-open row(s): $legacy"
     imported=$((imported + 1))
-  done < <(printf '%s\n' "$wt_list")
+  done < <(printf '%s\n' "${wt_list[@]}")
   echo "loop_status_migrate: $imported file(s) imported into $shared"
   return 0
 }
