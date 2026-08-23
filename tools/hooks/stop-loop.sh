@@ -101,7 +101,7 @@ SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
 case "$_MIGRC" in
   0) SKIPWARN="" ;;
-  2|3)
+  2)
     # A live sibling holds a claim. Self-healing, and the rows it holds were already open —
     # warn and continue.
     SKIPWARN=" WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — absence from it is NOT permission to attempt an item."

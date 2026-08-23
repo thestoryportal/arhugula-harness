@@ -18,6 +18,13 @@ mkdir -p "$REPO/.harness"
 # no longer reachable as "$REPO/.harness/loop_status.md". Pin it hermetically for this run.
 export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
 
+# The loop always runs inside a git checkout, and `loop_status_migrate` enumerates worktrees
+# through git. A non-repo scratch dir makes it report "could not inspect" (rc 3), which the
+# callers correctly treat as dangerous — so the fixture has to BE a repo or every test would
+# stand the loop down for a reason that never occurs in production.
+( cd "$REPO" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init ) >/dev/null 2>&1
+
 # Minimal dashboard with a Next action section carrying an R-id.
 cat > "$REPO/.harness/roadmap_status.md" <<'EOF'
 ## Next action
@@ -129,6 +136,15 @@ OUT=$(run_on)
 chmod 644 "$REPO/.harness/loop_status.md"
 [ -z "$OUT" ] && ok "a failed drain STANDS DOWN (no continuation) rather than proceeding on an unknowable skip-set" \
   || bad "a failed drain continued the loop anyway: $OUT"
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/.loop-halt" "$REPO/.harness/.loop-iter"
+# rc 3 ("could not inspect any worktree") is ALSO dangerous, not self-healing (codex r21 P2):
+# nothing was examined, so an un-drained ledger may exist and be invisible. Grouping it with
+# rc 2 let the loop continue on an unknowable set. Simulated by moving .git out of reach.
+mv "$REPO/.git" "$REPO/.git-hidden" 2>/dev/null
+OUT=$(run_on)
+mv "$REPO/.git-hidden" "$REPO/.git" 2>/dev/null
+[ -z "$OUT" ] && ok "an uninspectable worktree set also stands down (rc 3 is not self-healing)" \
+  || bad "rc 3 continued the loop on an uninspected set: $OUT"
 [ -f "$REPO/.harness/.loop-halt" ] && ok "the halt marker is raised so the outer runner sees the gate" || bad "no halt marker after a failed drain"
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
 

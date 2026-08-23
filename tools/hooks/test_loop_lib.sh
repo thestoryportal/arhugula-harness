@@ -903,15 +903,15 @@ SKC=$(HARNESS_LOOP_STATUS_PATH="$MIGCV" loop_skip_set)
 
 # 50) codex r12 P2 — the claim name is unique per ATTEMPT, so two migrations in the same
 #     second cannot overwrite each other's claim and discard the loser's rows unread.
-printf '%s' "$(declare -f loop_status_migrate)" | grep -q 'migrating-$(loop_now)-\$\$-' \
-  && ok "the claim name carries a per-attempt suffix" || bad "claim name is only second-resolution"
+printf '%s' "$(declare -f loop_status_migrate)" | grep -qE 'migrating-\$\(loop_now\)-\$\{BASHPID:-\$\$\}-' \
+  && ok "the claim name carries a per-attempt suffix" || bad "claim name lacks a per-PROCESS suffix (BASHPID; $$ is shared across subshells)"
 
 # 51) codex r13 P2 — the ARCHIVE name is unique per attempt too. Two migrators retiring
 #     successive recreations of one legacy ledger inside a single second would otherwise
 #     `mv` to the same `.migrated-<ts>` path and the later would overwrite the first,
 #     destroying the retained history the archive exists to keep.
-printf '%s' "$(declare -f loop_status_migrate)" | grep -q 'migrated-$(loop_now)-\$\$-' \
-  && ok "the archive name carries a per-attempt suffix" || bad "archive name is only second-resolution"
+printf '%s' "$(declare -f loop_status_migrate)" | grep -qE 'migrated-\$\(loop_now\)-\$\{BASHPID:-\$\$\}-' \
+  && ok "the archive name carries a per-attempt suffix" || bad "archive name lacks a per-PROCESS suffix (BASHPID; $$ is shared across subshells)"
 # two retirements in the same stubbed second must leave TWO archives, not one
 MIGA="$REPO/miga"; rm -rf "$MIGA"; mkdir -p "$MIGA"
 ( cd "$MIGA" && git init -q . \
@@ -1034,6 +1034,17 @@ done
 wait
 [ "$(HARNESS_LOOP_STATUS_PATH="$MIGFV" loop_skip_set)" = "B-995" ] \
   && ok "8 racing migrators keep the row (no claim overwritten)" || bad "raced migration lost/garbled the row: [$(HARNESS_LOOP_STATUS_PATH="$MIGFV" loop_skip_set)]"
+# The skip-set alone cannot see DUPLICATE imports (the reducer collapses them), so count the
+# imported ROWS and the archives instead: exactly one racer may import, exactly one archive
+# may result. NOTE, honestly: this end-to-end check did NOT reproduce the `$$`-collision
+# codex r21 found (background subshells SHARE the parent's `$$`, so each racer read the
+# others' live claims as self-owned) — probing that revert left these counts green, the same
+# non-reproducibility the venue-creation race hits at test 26. The DETERMINISTIC witness for
+# owner identity is the claim-name pin at test 50; these counts are the end-to-end companion.
+IMPN=$(grep -c 'cause=legacy-import:cutover:u-he-29' "$MIGFV" 2>/dev/null || true)
+[ "$IMPN" = "1" ] && ok "exactly ONE racer imports the row (no duplicate imports)" || bad "the row was imported $IMPN time(s) — racers stole each other's claims"
+ARCN=$(find "$MIGF/wt1/.harness" -name '*.migrated-*' 2>/dev/null | wc -l | tr -d ' ')
+[ "$ARCN" = "1" ] && ok "exactly ONE archive results from the race" || bad "$ARCN archives — more than one racer retired the same ledger"
 [ -z "$(find "$MIGF/wt1/.harness" -name '*.migrating-*' 2>/dev/null)" ] \
   && ok "no claim is orphaned by the race" || bad "a claim leaked: $(find "$MIGF/wt1/.harness" -name '*.migrating-*')"
 

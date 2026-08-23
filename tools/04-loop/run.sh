@@ -119,7 +119,7 @@ while [ "$i" -lt "$MAX" ]; do
   _SKIPWARN=""
   case "$_MIGRC" in
     0) ;;
-    2|3)
+    2)
       # A live sibling holds a claim. Self-healing: it completes on its own, and the rows it
       # holds were already open before this iteration. Warn and continue.
       _SKIPWARN=" [WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — do NOT treat absence from it as permission to attempt an item]"

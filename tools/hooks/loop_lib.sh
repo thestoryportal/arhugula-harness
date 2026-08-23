@@ -124,8 +124,17 @@ safer default was taken.*
 |---|---|---|---|
 EOF
     ) 2>/dev/null
+    local _staged=$?
     ln "$_tmp" "$p" 2>/dev/null || true   # lost the publish race: the winner's header stands
     rm -f "$_tmp" 2>/dev/null
+    # HONOUR both outcomes (codex r21 P2). A partial staging write must not be published,
+    # and if the link failed with NOBODY winning, returning `$p` anyway would let the next
+    # append create a HEADERLESS ledger and report success. The venue is only usable if it
+    # now exists -- whether this process created it or lost the race to one that did.
+    if [ "$_staged" -ne 0 ] || [ ! -f "$p" ]; then
+      echo "loop_status_ensure: could not publish a complete ledger header at $p" >&2
+      return 0
+    fi
   fi
   printf '%s' "$p"
 }
@@ -395,7 +404,7 @@ loop_status_migrate() {
     for orphan in "$wt/.harness"/loop_status.md.migrating-*; do
       [ -f "$orphan" ] || continue
       _opid=$(printf '%s' "${orphan##*/}" | sed -n 's/.*-\([0-9][0-9]*\)-[0-9][0-9]*$/\1/p')
-      if [ -n "$_opid" ] && [ "$_opid" != "$$" ] && _loop_pid_alive "$_opid"; then
+      if [ -n "$_opid" ] && [ "$_opid" != "${BASHPID:-$$}" ] && _loop_pid_alive "$_opid"; then
         # Another migration is importing it RIGHT NOW. Correct to skip -- but the caller
         # must be able to tell "nothing to drain" from "someone else is mid-drain", because
         # the shared venue is INCOMPLETE until that sibling finishes (codex re-gate P2).
@@ -406,7 +415,7 @@ loop_status_migrate() {
       orphans+=("$orphan")
     done
     if [ "${#orphans[@]}" -gt 0 ]; then
-      local _merged="${legacy}.merge-$$"
+      local _merged="${legacy}.merge-${BASHPID:-$$}"
       # Sort by BASENAME (codex r16 P3). The full paths carry the worktree prefix, and
       # printing those through a newline-delimited sort would split any path containing a
       # newline into nonexistent filenames -- permanently breaking orphan recovery for that
@@ -458,7 +467,13 @@ loop_status_migrate() {
     # them -- would have the second `mv` OVERWRITE the first migrator's claim and discard its
     # rows unread. The pid+random suffix makes the destination this attempt's alone, and the
     # sort that orders orphans still keys on the timestamp prefix.
-    local claim="${legacy}.migrating-$(loop_now)-$$-${RANDOM}"
+    # `$BASHPID`, NOT `$$` (codex r21 P2). `$$` is the PARENT's pid and is identical in every
+    # background subshell, so two migrators forked from one shell would write the same owner
+    # into their claim names and each would read the other's live claim as SELF-owned --
+    # stealing, folding and removing a claim another process was mid-drain on. `$BASHPID` is
+    # the actual process. (Fallback to `$$` keeps a non-bash shell working; there the
+    # subshell case does not arise the same way.)
+    local claim="${legacy}.migrating-$(loop_now)-${BASHPID:-$$}-${RANDOM}"
     mv "$legacy" "$claim" 2>/dev/null || { echo "loop_status_migrate: could not claim $legacy" >&2; return 1; }
     # HONOUR the reducer's exit status (codex r4 P2). An unreadable ledger returns rc!=0 with
     # empty output; treating that as "nothing pending" would retire the file and report a
@@ -511,7 +526,7 @@ loop_status_migrate() {
     # processing successive recreations of one legacy ledger inside a single second would
     # otherwise `mv` to the same `.migrated-<ts>` path, and the later one would OVERWRITE the
     # first archive -- destroying the very history the archive is kept for.
-    mv "$claim" "${legacy}.migrated-$(loop_now)-$$-${RANDOM}" 2>/dev/null \
+    mv "$claim" "${legacy}.migrated-$(loop_now)-${BASHPID:-$$}-${RANDOM}" 2>/dev/null \
       || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
     echo "imported $rows still-open row(s): $legacy"
     imported=$((imported + 1))

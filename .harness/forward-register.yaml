@@ -10134,7 +10134,12 @@ items:
     with `mv`, so a row appended between the EOF and the rename is on an inode the
     replacement unlinks. All three instances share one precondition (a live pre-U-HE-29
     writer) and one mitigation shape (claim/lock cooperation the old code cannot give), so
-    they close together or not at all.'
+    they close together or not at all. EXTENDED (codex r21): the hoisted resolved-item map is
+    a further instance of (a)''s non-atomicity — it is snapshotted ONCE per migration while the
+    shared venue stays writable, so a RESOLVED-HIL appended after the snapshot is missed and
+    the older legacy DEFERRED-HIL lands last, reopening an answered gate. Same root, same
+    close-out (hold the lock across the decision AND the write). The single-scan hoist itself
+    is REQUIRED by the 8 s SessionStart budget and is not the defect.'
   close_out: '(1) For (a): hold the existing `.loop-status.lock` (the fd-8 flock
     `loop_hil_ttl_resurface` already uses) across the staleness check AND the conditional
     append, so the decision and the write are one critical section; confirm the added
