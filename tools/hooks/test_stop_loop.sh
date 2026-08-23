@@ -110,43 +110,6 @@ echo "$OUT" | jq -e '.reason | test("tools/04-loop/defer.sh")'      >/dev/null 2
 echo "$OUT" | jq -e '.reason | test("tools/04-loop/halt.sh")'       >/dev/null 2>&1 && ok "instructs the allowlisted halt.sh wrapper for stand-down" || bad "missing halt.sh wrapper guidance"
 echo "$OUT" | jq -e '.reason | test("exhausted")'                >/dev/null 2>&1 && ok "exhaustion is the ONLY stand-down condition" || bad "missing exhaustion condition"
 
-# 8) merge-gate concurrency lens (#1426) — the skip-set must NOT be blind to an un-drained
-#    pre-U-HE-29 legacy ledger. `loop_skip_set` reads the SHARED venue, so a worktree whose
-#    legacy per-worktree ledger has not been drained contributes nothing to it — and before
-#    the venue move that same file WAS what the skip-set read. Leaving it unwired is a
-#    REGRESSION: the loop would re-attempt an item the operator already declined.
-rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt" "$HARNESS_LOOP_STATUS_PATH"
-( cd "$REPO" && git init -q . && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init ) >/dev/null 2>&1
-cat > "$REPO/.harness/loop_status.md" <<'EOF'
-| ts | kind | detail |
-|---|---|---|
-| 2026-08-01T00:00:00Z | DEFERRED-HIL | R-999 — declined by the operator, never drained |
-EOF
-OUT=$(run_on)
-echo "$OUT" | jq -e '.reason | test("R-999")' >/dev/null 2>&1 \
-  && ok "the Stop hook drains a legacy ledger before computing the skip-set" \
-  || bad "un-drained legacy deferral omitted from the skip-set (the loop would re-attempt it): $OUT"
-# ... and a FAILED drain must SAY the list is incomplete (codex r19 P1). Blocking the turn
-# would wedge the loop on a broken legacy file; reading "not in the list" as "safe to
-# attempt" is the unsafe direction. The reason carries the warning instead.
-rm -f "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
-printf '| t | DEFERRED-HIL | R-777 — unreadable |\n' > "$REPO/.harness/loop_status.md"
-chmod 000 "$REPO/.harness/loop_status.md"
-OUT=$(run_on)
-chmod 644 "$REPO/.harness/loop_status.md"
-[ -z "$OUT" ] && ok "a failed drain STANDS DOWN (no continuation) rather than proceeding on an unknowable skip-set" \
-  || bad "a failed drain continued the loop anyway: $OUT"
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness/.loop-halt" "$REPO/.harness/.loop-iter"
-# rc 3 ("could not inspect any worktree") is ALSO dangerous, not self-healing (codex r21 P2):
-# nothing was examined, so an un-drained ledger may exist and be invisible. Grouping it with
-# rc 2 let the loop continue on an unknowable set. Simulated by moving .git out of reach.
-mv "$REPO/.git" "$REPO/.git-hidden" 2>/dev/null
-OUT=$(run_on)
-mv "$REPO/.git-hidden" "$REPO/.git" 2>/dev/null
-[ -z "$OUT" ] && ok "an uninspectable worktree set also stands down (rc 3 is not self-healing)" \
-  || bad "rc 3 continued the loop on an uninspected set: $OUT"
-[ -f "$REPO/.harness/.loop-halt" ] && ok "the halt marker is raised so the outer runner sees the gate" || bad "no halt marker after a failed drain"
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
 
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"

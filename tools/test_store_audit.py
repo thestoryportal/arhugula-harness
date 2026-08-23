@@ -337,8 +337,7 @@ def test_extractor_sees_module_idioms() -> None:
     # pattern these are INVISIBLE to the extractor and the listed-ness check above passes
     # VACUOUSLY over them — reporting "nothing unlisted" for the same reason it would report
     # a clean sheet. Asserting the extractor SEES them is what makes that check non-vacuous.
-    for expected in ("*.migrating-*", "*.migrated-*", "*.merge-*"):
-        assert expected in sh, (expected, sorted(sh))
+    assert "*.XXXXXXXX*" in sh, sorted(sh)  # the mktemp venue-header stager
 
 
 def test_listed_is_segment_bound_not_substring() -> None:

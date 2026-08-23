@@ -84,47 +84,11 @@ fi
 ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
 NEXT=$(hook_roadmap_next "$PROJECT_DIR/.harness/roadmap_status.md")
 NEXT=${NEXT:-"(derive per CLAUDE.md §4 from the dashboard)"}
-# Same reason as tools/04-loop/run.sh (merge-gate concurrency lens, #1426): the skip-set
-# reads the SHARED venue, so an un-drained pre-U-HE-29 ledger contributes nothing to it. A
-# session whose own SessionStart migration was incomplete (rc 2 — a live sibling held the
-# claim) would otherwise stay blind to that worktree's legacy rows for its ENTIRE lifetime,
-# because nothing retries within the session. Draining here makes every Stop-turn re-try it.
-# Capture the drain's status (codex r19 P1). A FAILED drain (rc 1) leaves the skip-set
-# incomplete by an unknown amount, and the next autonomous turn reads "not in the list" as
-# "safe to attempt" — the unsafe direction. Blocking the turn outright would wedge the loop
-# on a broken legacy file, so the incompleteness is stated IN the continuation reason.
-_MIGRC=0
-if command -v loop_status_migrate >/dev/null 2>&1; then
-  loop_status_migrate >/dev/null 2>&1; _MIGRC=$?
-fi
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
-case "$_MIGRC" in
-  0) SKIPWARN="" ;;
-  2)
-    # A live sibling holds a claim. Self-healing, and the rows it holds were already open —
-    # warn and continue.
-    SKIPWARN=" WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — absence from it is NOT permission to attempt an item."
-    ;;
-  *)
-    # rc 1 (a ledger could not be drained), 3 (nothing could be inspected) and 4 (a
-    # PERMANENT structural refusal, e.g. a symlinked .harness) all mean the skip-set is
-    # unknowable or unfixable-by-waiting. Only rc 2 self-heals.
-    # A GENUINE failure: the skip-set is incomplete by an UNKNOWN amount. A warning is not
-    # enforcement (codex r20 P2) — the same reason text tells the next turn to pick an item
-    # ABSENT from the list, so a declined item can still be retried. Stand down instead and
-    # let the operator look: a stopped loop is visible and recoverable, a silently
-    # re-attempted gate is neither. The halt marker is raised so the OUTER headless runner
-    # sees the gate too, exactly as a child-raised halt does.
-    loop_log STOP "legacy loop_status ledger could not be drained (rc ${_MIGRC}) — skip-set unknowable; standing down for operator review"
-    [ -n "$HALT" ] && : > "$HALT" 2>/dev/null
-    rm -f "$ITERF" 2>/dev/null
-    exit 0
-    ;;
-esac
 
 REASON="[stop-loop] autonomous loop continuing (turn ${ITER}/${MAX}). Dashboard next-action: ${NEXT}.
-ALREADY DEFERRED this run — do NOT re-attempt these (build elsewhere): ${SKIP}.${SKIPWARN}
+ALREADY DEFERRED this run — do NOT re-attempt these (build elsewhere): ${SKIP}.
 Pick the highest-priority forward item per CLAUDE.md §12.4.1 that is NOT in the deferred set, and drive it: ground empirically → build the slice that does NOT need any gated input → tests → PR → CI-green → merge → fixed-point refresh (CLAUDE.md §12). Use /resolve for reversible in-repo forks.
 If the item is GATED (needs a paid call / secret / vendor selection / missing credential / infra you cannot provide): do NOT force it and do NOT raise .loop-halt. Build whatever slice is possible WITHOUT the gated input, then record the deferral with the allowlisted wrapper — \`tools/04-loop/defer.sh <ITEM-ID> 'what operator input is needed (plain text, no shell metacharacters) — built without it: slice or none'\` — and ADVANCE to the next forward item. (Run it as a single command; do NOT chain it or source the libs yourself — the wrapper does that and is the only guard-allowed path.) The hard-stop deny-list still blocks the dangerous TOOL; this is the item-level disposition.
 ONLY when EVERY forward item per §12.4.1 is already in the deferred set (no buildable slice remains anywhere) do you stand the run down with \`tools/04-loop/halt.sh 'forward menu exhausted — N items awaiting operator input'\`. Then the run ends for operator review."

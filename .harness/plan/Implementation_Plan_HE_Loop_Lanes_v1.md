@@ -5746,6 +5746,35 @@ move; and r14 then showed that migration's founding measurement had been wrong a
 (xvii). The unit's own contracts — venue, structured column, ACTIVATE scoping, NOTIFY — were
 settled by r3 and never regressed.
 
+(xix) **THE CUTOVER MIGRATION WAS CUT BEFORE MERGE — read this before items (ii)–(xviii).**
+Much of this note documents the hardening of a `loop_status_migrate` that **is not in the
+landed unit**. It was removed wholesale at the operator''s decision, and the reasoning is the
+most useful thing this arc produced.
+
+*What happened.* r2 raised that the venue move would strand still-open deferrals. That was
+grounded, measured (`B-124 B-137` apparently open), and a migration was built. At r14 the
+measurement was shown to be an ARTIFACT (xvii): reducing an old-semantics file with the new
+no-ACTIVATE-reset rule is not evidence about what it holds, and under the rule those rows were
+written with, the legacy ledgers hold NOTHING. The live dry-run agreed: 0 files to import.
+
+*What it cost.* ~318 lines of concurrency-sensitive machinery — atomic claim-by-rename, orphan
+recovery, pid liveness, NUL enumeration, timestamp staleness, a five-value exit taxonomy — plus
+44 tests, to migrate nothing on this workspace. It generated roughly 20 of the arc''s 23 review
+rounds, because a large concurrency surface produces findings indefinitely and each fix seeded
+the next round''s defect.
+
+*The correction that should have happened at r14, and did not.* When a measurement that
+justified building something is falsified, the next move is to re-scope, not to keep hardening.
+Rounds 15–23 hardened machinery whose premise had already been withdrawn. The unit''s own
+contracts (C-HE-09 §1–§6, C-HE-20 §1) were settled at r3 and never regressed through any of it.
+
+*What landed instead.* The venue, the structured column, the ACTIVATE-scoping strike, `NOTIFY`,
+the `[lane_id]` render and the pointer sweep — the actual unit. `B-195` and `B-197` are CLOSED
+with the migration (every race they recorded was a property of it), and **B-198** records the
+measurement plus the conditions under which a drain would have to be built for real, so a later
+session neither re-derives it nor rebuilds the machinery on the same false premise.
+
+
 
 ---
 

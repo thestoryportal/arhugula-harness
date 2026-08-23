@@ -147,13 +147,6 @@ tools/dashboard/public/
 .harness/.loop-status.lock
 .harness/.next-action-draft*
 .harness/loop_status.md
-# U-HE-29 cutover residue: the migration claims a legacy ledger by rename before importing
-# it. Without these the archive/claim files are UNTRACKED residue, and
-# hook_worktree_local_state treats untracked entries as precious — which makes the worktree
-# GC refuse to dispose the worktree forever (codex r5 P2).
-.harness/loop_status.md.migrated-*
-.harness/loop_status.md.migrating-*
-.harness/loop_status.md.merge-*
 .harness/.loop-iter
 .harness/.loop-halt
 .harness/codex_loop_state.json

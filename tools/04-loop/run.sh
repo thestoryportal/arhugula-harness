@@ -106,47 +106,11 @@ while [ "$i" -lt "$MAX" ]; do
   # re-attempt an item the operator already declined, which is the exact under-skip C-HE-09's
   # ledger exists to prevent. Before this venue move `loop_skip_set` read that same
   # per-worktree file directly, so leaving this unwired would be a REGRESSION, not a gap.
-  # NOT best-effort-and-silent (codex r19 P1): a FAILED drain (rc 1) means we could not read
-  # a legacy ledger at all, so the skip-set below is incomplete by an UNKNOWN amount — and
-  # "not in the list" is exactly what the child reads as "safe to attempt". Halting the whole
-  # run on a broken legacy file would be worse (it wedges every forward item), so the
-  # incompleteness is carried INTO the prompt instead: the child is told not to treat absence
-  # from the list as permission. rc 2 (a live sibling holds a claim) is the milder form.
-  _MIGRC=0
-  if command -v loop_status_migrate >/dev/null 2>&1; then
-    loop_status_migrate >/dev/null 2>&1; _MIGRC=$?
-  fi
-  _SKIPWARN=""
-  case "$_MIGRC" in
-    0) ;;
-    2)
-      # A live sibling holds a claim. Self-healing: it completes on its own, and the rows it
-      # holds were already open before this iteration. Warn and continue.
-      _SKIPWARN=" [WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — do NOT treat absence from it as permission to attempt an item]"
-      echo "[loop] migration rc=2: a sibling holds a claim; skip-set may be incomplete" >&2
-      ;;
-    *)
-      # rc 1 (a ledger could not be drained), 3 (nothing could be inspected) and 4 (a
-      # PERMANENT structural refusal, e.g. a symlinked .harness) all mean the skip-set is
-      # unknowable or unfixable-by-waiting. Only rc 2 self-heals.
-      # A GENUINE failure: a legacy ledger could not be read at all, so the skip-set is
-      # incomplete by an UNKNOWN amount. A warning in the prompt is not enforcement (codex
-      # r20 P2) — the child is simultaneously told to pick an item ABSENT from that list, so
-      # a declined item can still be retried. An unreadable ledger is exactly the
-      # "operator input required" condition `.loop-halt` exists for, so stand the run down
-      # rather than proceed on an unknowable set. This is the SAFE direction: a stopped run
-      # is visible and recoverable; a silently re-attempted gate is neither.
-      loop_log STOP "headless: legacy loop_status ledger could not be drained (rc ${_MIGRC}) — skip-set unknowable; standing down for operator review"
-      : > "$(loop_halt_path)" 2>/dev/null
-      echo "[loop] HALT: a legacy loop_status ledger could not be drained (rc ${_MIGRC}); the skip-set is unknowable — standing down for operator review." >&2
-      break
-      ;;
-  esac
   # Compute the run-scoped skip-set HERE (the fresh child cannot — loop_skip_set is a
   # chained/sourced command the guard denies) and append it to the prompt so the child
   # advances past already-deferred items instead of re-attempting the static next-action.
   SKIP=$(loop_skip_set); SKIP=${SKIP:-none}
-  ITER_PROMPT="${PROMPT} [already deferred this run — do NOT re-attempt: ${SKIP}]${_SKIPWARN}"
+  ITER_PROMPT="${PROMPT} [already deferred this run — do NOT re-attempt: ${SKIP}]"
   echo "[loop] iteration ${i}/${MAX} → claude -p (deferred so far: ${SKIP})"
   # Loop mode on for the child so the in-session hooks fire; bounded per turn. NOTE: no
   # --allowedTools — every tool flows through the U-HK-12 permission guard (allow safe /

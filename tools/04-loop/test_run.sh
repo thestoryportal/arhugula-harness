@@ -122,56 +122,6 @@ sleep 1
 LEFT=$(pgrep -f "$REPO/bin/claude" 2>/dev/null | wc -l | tr -d ' ')
 [ "${LEFT:-0}" = "0" ] && ok "in-flight claude child killed on signal (no orphan)" || bad "orphaned claude child after signal: $LEFT"
 
-# merge-gate concurrency lens (#1426) — the runner must DRAIN a pre-U-HE-29 legacy ledger
-# before computing the skip-set it bakes into the child's prompt. The child's own SessionStart
-# migration runs too late: the prompt is already built. On iteration 1 this is deterministic,
-# and before the venue move `loop_skip_set` read that legacy file directly — so leaving it
-# unwired is a REGRESSION in the unsafe (under-skip) direction.
-rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness/claude_calls.log" "$REPO/.harness/child_prompt.log"
-rm -f "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/HALT_ON" \
-      "$REPO/.harness/.loop-halt" "$REPO/.harness/.loop-iter" "$REPO/.harness/child_env.log"
-# The migration enumerates through `git worktree list`, so the throwaway repo has to BE one.
-( cd "$REPO" && git init -q . \
-  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init ) >/dev/null 2>&1
-cat > "$REPO/.harness/loop_status.md" <<'EOF'
-| ts | kind | detail |
-|---|---|---|
-| 2026-08-01T00:00:00Z | DEFERRED-HIL | R-888 — declined by the operator, never drained |
-EOF
-# A later test in this file replaces $REPO/bin/claude, so this block installs its OWN stub
-# rather than relying on the one defined at setup.
-cat > "$REPO/bin/claude" <<'EOF'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$CLAUDE_PROJECT_DIR/.harness/child_prompt.log"
-EOF
-chmod +x "$REPO/bin/claude"
-CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 1 >/dev/null 2>&1
-if grep -q 'R-888' "$REPO/.harness/child_prompt.log" 2>/dev/null; then
-  ok "the runner drains a legacy ledger before baking the skip-set into the prompt"
-else
-  bad "un-drained legacy deferral omitted from the child's skip-set: prompt=[$(head -c 160 "$REPO/.harness/child_prompt.log" 2>/dev/null)]"
-fi
-# ... and a FAILED drain must SAY so in the prompt (codex r19 P1): the child reads "not in
-# the list" as "safe to attempt", so an unknowably-incomplete list must never look complete.
-rm -f "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/child_prompt.log"
-printf '| t | DEFERRED-HIL | R-777 — unreadable |\n' > "$REPO/.harness/loop_status.md"
-chmod 000 "$REPO/.harness/loop_status.md"
-CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 1 >/dev/null 2>&1
-chmod 644 "$REPO/.harness/loop_status.md"
-# A GENUINE drain failure now STANDS THE RUN DOWN rather than launching a child against an
-# unknowable skip-set (codex r20 P2: a warning is not enforcement — the same prompt tells the
-# child to pick an item ABSENT from that list). A stopped run is visible and recoverable; a
-# silently re-attempted gate is neither.
-[ ! -s "$REPO/.harness/child_prompt.log" ] \
-  && ok "a failed drain stands the run down instead of launching on an unknowable skip-set" \
-  || bad "a child was launched despite an undrained legacy ledger: $(head -c 120 "$REPO/.harness/child_prompt.log")"
-# The runner CONSUMES the halt marker on exit (loop_deactivate clears it), so the durable
-# evidence is the ledger row — which is what an operator actually reads afterwards.
-grep -q 'skip-set unknowable' "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null \
-  && ok "the stand-down reason is recorded durably in the ledger" \
-  || bad "no STOP row explaining the stand-down: $(tail -2 "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null)"
-rm -f "$REPO/.harness/.loop-halt"
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/child_prompt.log"
 
 echo "----"
 echo "loop_run: $PASS passed, $FAIL failed"

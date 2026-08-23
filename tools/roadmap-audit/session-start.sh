@@ -35,40 +35,6 @@ ROADMAP="Project_Roadmap_v1.md"
 # engages next", regardless of which audit branch (match / lag-expected / drift) fires.
 _HIL=""
 if command -v loop_pending_hil_summary >/dev/null 2>&1; then
-  # C-HE-09 §2 CUTOVER (U-HE-29, codex r3 P2): drain any pre-U-HE-29 per-worktree ledger into
-  # the shared venue. Without a production caller the migration would be dead code and
-  # production would switch to the shared venue with every still-open deferral in those files
-  # unread — the loop would then re-attempt items an operator is still blocked on, which is
-  # the whole failure the ledger prevents.
-  # Deliberately NOT sentinel-guarded (codex r4 P2). A one-shot marker made the cutover
-  # unrepeatable, which is the wrong failure mode three ways: a migration that FAILED (an
-  # unreadable ledger, a git error) would still be recorded done; a checkout still running
-  # pre-U-HE-29 code could recreate its legacy ledger after the drain and never be drained
-  # again; and a worktree added later would never be inspected at all. The pass is idempotent
-  # instead -- each imported file is renamed, so a run with nothing to import is a
-  # `git worktree list` plus a handful of `[ -f ]` tests, and it self-heals every session.
-  # Failure is non-fatal here and simply retries next session; the import only ever ADDS
-  # still-open rows, so a retry cannot corrupt the skip-set.
-  # Its failure must SURFACE (codex r6 P2). Discarding the status rendered the ledger as
-  # though the cutover had succeeded, so an unreadable / unclaimable / partially imported
-  # legacy ledger would leave gates invisible with nothing at all shown to the operator --
-  # a silent hole exactly where the loop's durable obligations live. Same `*=ERR(...)` shape
-  # the reservation reader below uses.
-  _MIG=""
-  if command -v loop_status_migrate >/dev/null 2>&1; then
-    _migerr=$(loop_status_migrate 2>&1 >/dev/null); _migrc=$?
-    # rc 2 == a live sibling holds a claim we correctly refused to steal. That is routine
-    # concurrency on a shared venue, not a failure, and must not cry ERR at every session.
-    if [ "$_migrc" -eq 2 ]; then
-      # NOT an error, but NOT nothing either (codex r19 P2): rc 2 means the venue is
-      # incomplete right now, and if the live claim holds the only pending gate the operator
-      # would otherwise see neither the gate nor any hint that one might exist. A distinct
-      # PENDING marker says "come back", without the false alarm of ERR.
-      _MIG=" mig=PENDING(a concurrent migration still holds a legacy ledger; the pending list may be incomplete)"
-    elif [ "$_migrc" -ne 0 ]; then
-      _MIG=" mig=ERR(legacy loop_status cutover incomplete: $(printf '%s' "$_migerr" | tr '\n' ';' | cut -c1-160))"
-    fi
-  fi
   # C-HE-20 (U-HE-09): re-surface deferrals older than the 24 h TTL as NOTIFY rows first --
   # a notification threshold only; it never resolves, reclaims, or transitions anything.
   command -v loop_hil_ttl_resurface >/dev/null 2>&1 && loop_hil_ttl_resurface 2>/dev/null
@@ -141,7 +107,7 @@ fi
 # Single-line additionalContext for the SessionStart event (wraps the lib helper). The
 # pending-HIL summary is appended so an operator opening a fresh session always sees what
 # the last unattended loop run deferred for them.
-emit() { hook_emit "SessionStart" "$1${_HIL}${_MIG:-}${_RESV}"; }
+emit() { hook_emit "SessionStart" "$1${_HIL}${_RESV}"; }
 
 [ -f "$ROADMAP_STATUS" ] || emit "[ROADMAP] absent — see Project_Roadmap_v1.md §7"
 [ -f "$ROADMAP" ] || emit "[ROADMAP] roadmap_status.md exists but roadmap absent"

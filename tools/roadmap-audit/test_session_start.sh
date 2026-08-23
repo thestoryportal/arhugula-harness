@@ -135,72 +135,10 @@ OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
 printf '%s' "$OUT" | grep -q "notify:" && bad "NOTIFY segment present with no ledger: $OUT" || ok "no NOTIFY segment when no ledger"
 
-# 5d) C-HE-09 §2 cutover (U-HE-29, codex r3 P2): the migration must be reachable from a
-#     PRODUCTION path, not just its own unit test. A legacy per-worktree ledger holding an
-#     open gate must be drained into the shared venue by simply starting a session, and the
-#     sentinel must stop it from running again.
-rm -f "$HARNESS_LOOP_STATUS_PATH"
-mkdir -p "$REPO/.harness"
-cat > "$REPO/.harness/loop_status.md" <<'EOF'
-| ts | kind | detail |
-|---|---|---|
-| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-124 — open in the pre-U-HE-29 venue |
-EOF
-OUT=$(run)
-printf '%s' "$OUT" | grep -q "B-124" && ok "SessionStart drains the legacy venue (migration is reachable)" || bad "legacy gate not migrated: $OUT"
-[ -f "$REPO/.harness/loop_status.md" ] && bad "legacy ledger still collecting writes" || ok "legacy ledger retired by the session-start cutover"
-# 5e) The cutover is NOT one-shot (codex r4 P2): a legacy ledger that reappears — a checkout
-#     still running pre-U-HE-29 code recreating it, or a worktree added later — must still be
-#     drained. A sentinel-guarded cutover would strand it forever.
-cat > "$REPO/.harness/loop_status.md" <<'EOF'
-| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-500 — a legacy ledger that reappeared after the drain |
-EOF
-OUT=$(run)
-printf '%s' "$OUT" | grep -q "B-500" && ok "a reappearing legacy ledger is drained on a later session" || bad "cutover is one-shot; the reappeared gate is stranded: $OUT"
-# ... and a pass with nothing left to import neither re-imports nor loses anything.
-OUT=$(run)
-[ "$(printf '%s' "$OUT" | grep -c 'B-500')" = "1" ] && ok "an idempotent pass does not duplicate the imported row" || bad "row duplicated by a second pass: $OUT"
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrated-*
-rm -f "$HARNESS_LOOP_STATUS_PATH"
-
-# 5f) codex r6 P2 — a FAILED cutover must surface, not be swallowed. Discarding the status
-#     rendered the ledger as though the migration had succeeded, so an unreadable legacy
-#     ledger left gates invisible with nothing shown to the operator.
-mkdir -p "$REPO/.harness"
-printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-777 — unreadable |\n' > "$REPO/.harness/loop_status.md"
-chmod 000 "$REPO/.harness/loop_status.md"
-OUT=$(run)
-chmod 644 "$REPO/.harness/loop_status.md"
-printf '%s' "$OUT" | grep -q 'mig=ERR' && ok "a failed cutover surfaces as mig=ERR at SessionStart" || bad "failed cutover swallowed: $OUT"
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat*
 rm -f "$HARNESS_LOOP_STATUS_PATH"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "clean cutover reported an error: $OUT" || ok "a clean pass emits no mig= segment"
-
-# 5g) merge-gate witness lens (#1426) — rc==2 ("a live sibling holds the claim; the venue is
-#     not complete yet") is ROUTINE concurrency on a shared venue, not a failure. Without the
-#     carve-out every concurrent drain would cry mig=ERR at every session start; with it, a
-#     REAL failure must still surface. Both arms pinned.
-rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness"/loop_status.md.migrat*
-mkdir -p "$REPO/.harness"
-# A claim owned by a LIVE pid we do not own -> the pass skips it and returns 2.
-sleep 30 & SIBPID=$!
-printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-991 — held by a live sibling |\n' \
-  > "$REPO/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z-${SIBPID}-1"
-OUT=$(run)
-printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "a live-sibling drain (rc 2) was reported as an ERROR: $OUT" || ok "rc=2 (live sibling) is not mig=ERR"
-# ... but it must not be SILENT either (codex r19 P2): if the live claim holds the only
-# pending gate, silence shows the operator neither the gate nor any hint one may exist.
-printf '%s' "$OUT" | grep -q 'mig=PENDING' && ok "rc=2 surfaces as a distinct PENDING notice" || bad "an incomplete venue was rendered as complete: $OUT"
-kill "$SIBPID" 2>/dev/null; wait "$SIBPID" 2>/dev/null
-rm -f "$REPO/.harness"/loop_status.md.migrat*
-# ... while a genuinely unreadable ledger (rc 1) still surfaces.
-printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-992 — unreadable |\n' > "$REPO/.harness/loop_status.md"
-chmod 000 "$REPO/.harness/loop_status.md"
-OUT=$(run)
-chmod 644 "$REPO/.harness/loop_status.md"
-printf '%s' "$OUT" | grep -q 'mig=ERR' && ok "a real drain failure still surfaces as mig=ERR" || bad "real failure suppressed by the rc=2 carve-out: $OUT"
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$HARNESS_LOOP_STATUS_PATH"
 
 # 6) Reservation reconcile-log surfacing (U-HE-18, gate r1 witness P2): the log-READER
 #    block is UNGATED by the U-HE-29 activation gate, so its behavior needs witnesses now.
