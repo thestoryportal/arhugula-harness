@@ -219,7 +219,10 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
       echo "lane-init: HARNESS_LANE_INDEX must be canonical (no leading zeros), got '$HARNESS_LANE_INDEX'" >&2
       unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
   esac
-  if [ "$HARNESS_LANE_INDEX" -ge 350 ]; then
+  # Bound the LENGTH before the comparison: a digit string too large for the shell's integer
+  # type makes `test -ge` exit 2, which `if` reads as false — and a 30-digit index would then
+  # be published as a claim filename. Every valid index is at most three digits.
+  if [ "${#HARNESS_LANE_INDEX}" -gt 3 ] || [ "$HARNESS_LANE_INDEX" -ge 350 ]; then
     echo "lane-init: HARNESS_LANE_INDEX must be < 350 (no port block exists above it), got '$HARNESS_LANE_INDEX'" >&2
     unset HARNESS_LANE_ID _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
   fi
@@ -231,6 +234,19 @@ _li_have=""
 for _li_f in "$_LI_Q"/lanes/*; do
   [ -f "$_li_f" ] || continue
   IFS=' ' read -r _li_id _li_path < "$_li_f"
+  # A claim naming a worktree that no longer EXISTS is stranded: the release runs only after
+  # the tree has already been deleted, so a crash in between (or during the Docker cleanup)
+  # leaves the claim with nothing to retry it, and that index is consumed forever.
+  # Reclaimable — but its stack is unaccounted for, so it is fenced exactly like an inherited
+  # claim before the index is freed.
+  if [ -n "${_li_path:-}" ] && [ "${_li_path:-}" != "$_LI_WT" ] && [ ! -d "${_li_path:-}" ]; then
+    if printf '%s stranded-claim %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_li_id:-}" \
+         > "$_LI_Q/lanes/.orphaned-$(basename "$_li_f")" 2>/dev/null; then
+      rm -f "$_li_f" 2>/dev/null
+      echo "lane-init: freed lane index $(basename "$_li_f") — its worktree ${_li_path} is gone (a teardown died before the release); its stack is fenced" >&2
+    fi
+    continue
+  fi
   if [ "${_li_path:-}" = "$_LI_WT" ]; then
     _li_have="$(basename "$_li_f")"
     # A claim recorded under a DIFFERENT lane id at this path belongs to a previous occupant

@@ -222,6 +222,20 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         / "lanes"
     )
     lanes_dir.mkdir(parents=True, exist_ok=True)
+    # Honour the production registry's FENCES as well as its claims. A `.orphaned-<k>` marker
+    # says that index was released without a verified-clean teardown, so containers or
+    # volumes may survive under its project name — and `ps` cannot see a volume-only remnant.
+    # The recipes below resolve their lane against a scratch registry and so never consult
+    # these markers; adopting a fenced index here would delete exactly the state the
+    # production registry has flagged as unaccounted for.
+    for k in (a, b):
+        fence = lanes_dir / f".orphaned-{k}"
+        if fence.exists():
+            raise AssertionError(
+                f"lane index {k} is fenced ({fence}: {fence.read_text().strip()}) — refusing "
+                f"to start or tear down a project whose prior stack is unaccounted for"
+            )
+
     claimed: list[Path] = []
     for k in (a, b):
         claim = lanes_dir / str(k)

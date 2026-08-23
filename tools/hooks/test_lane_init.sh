@@ -139,7 +139,10 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ-above" HARNESS_LANE_INDEX=
 # with the lane-0 project name and ports, exactly what the registry exists to prevent.
 EXH="$ROOT/exhausted"
 mkdir -p "$EXH/lanes"
-i=0; while [ "$i" -lt 350 ]; do printf 'other-lane %s\n' "$ROOT/not-our-worktree-$i" > "$EXH/lanes/$i"; i=$((i + 1)); done
+# The held paths must EXIST: a claim naming a vanished worktree is a stranded claim the
+# allocator reclaims (a teardown that died before its release), not a taken index.
+mkdir -p "$ROOT/held"
+i=0; while [ "$i" -lt 350 ]; do mkdir -p "$ROOT/held/$i"; printf 'other-lane %s\n' "$ROOT/held/$i" > "$EXH/lanes/$i"; i=$((i + 1)); done
 OUT=$(cd "$ROOT/wt2" && ARC_METRICS_QUEUE_DIR="$EXH" \
   bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? idx=\${HARNESS_LANE_INDEX:-unset}\"")
 case "$OUT" in
@@ -583,7 +586,8 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$FENCEQ2" \
 # the shell would be inherited by the next worktree that shell enters — and since the failed
 # lane holds no claim, nothing binds it elsewhere and both would persist one identity.
 EXH2="$ROOT/exhausted2"; mkdir -p "$EXH2/lanes"
-i=0; while [ "$i" -lt 350 ]; do printf 'other %s\n' "$ROOT/not-ours-$i" > "$EXH2/lanes/$i"; i=$((i + 1)); done
+mkdir -p "$ROOT/held2"
+i=0; while [ "$i" -lt 350 ]; do mkdir -p "$ROOT/held2/$i"; printf 'other %s\n' "$ROOT/held2/$i" > "$EXH2/lanes/$i"; i=$((i + 1)); done
 OUT=$(cd "$ROOT/wt5" && ARC_METRICS_QUEUE_DIR="$EXH2" \
   bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset}\"")
 case "$OUT" in
@@ -618,6 +622,68 @@ STICK_RC=$(
 [ "$STICK_RC" = "0" ] && ok "that ABSENT came from the marker, not a refused init" \
   || bad "the init itself failed (rc=$STICK_RC) — the ABSENT above proves nothing"
 chmod 700 "$STICKQ/lanes"
+
+# --- 32. a claim whose worktree is gone is reclaimed, fenced, not stranded -------------
+# The release runs only after the tree is already deleted, so a teardown killed in between
+# leaves a claim nothing will ever retry — that index would be consumed for good.
+STRANDQ="$ROOT/strand-q"; mkdir -p "$STRANDQ/lanes"
+printf '%s %s\n' "dead-lane" "$ROOT/worktree-that-no-longer-exists" > "$STRANDQ/lanes/0"
+KS_STRAND=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$STRANDQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+[ "$KS_STRAND" = "0" ] && ok "a stranded claim's index is reclaimed by the next lane" \
+  || bad "stranded index not reclaimed: k='$KS_STRAND'"
+[ -f "$STRANDQ/lanes/.orphaned-0" ] && ok "the reclaimed index is fenced — its stack is unaccounted for" \
+  || bad "stranded index reclaimed with no fence"
+grep -qF -- "$ROOT/wt" "$STRANDQ/lanes/0" && ok "the reclaimed claim names the new holder" \
+  || bad "claim after reclaim: [$(cat "$STRANDQ/lanes/0" 2>/dev/null)]"
+
+# --- 33. an index whose holder still EXISTS is never reclaimed ------------------------
+LIVEQ="$ROOT/live-q"; mkdir -p "$LIVEQ/lanes"
+printf '%s %s\n' "live-lane" "$(cd "$ROOT/wt2" && pwd -P)" > "$LIVEQ/lanes/0"
+KS_LIVE=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$LIVEQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+{ [ "$KS_LIVE" != "0" ] && grep -qF -- "live-lane" "$LIVEQ/lanes/0"; } \
+  && ok "a live peer's claim is left alone and the new lane takes the next index" \
+  || bad "took a live lane's index: k='$KS_LIVE', claim=[$(cat "$LIVEQ/lanes/0" 2>/dev/null)]"
+
+# --- 34. an oversized digit string cannot become a claim filename ---------------------
+# `test -ge` exits 2 on an integer too large for the shell, which `if` reads as false.
+OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=999999999999999999999999999999 \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=1" ] && ok "an oversized index is refused, not published" || bad "oversized index accepted: $OUT"
+[ ! -e "$LANES/999999999999999999999999999999" ] && ok "no oversized claim filename exists" \
+  || bad "an out-of-contract claim filename was published"
+
+# --- 35. gc.auto is written ONCE, counted as WRITES rather than stored values ---------
+# The stored-value count cannot see this regress: replacing the guarded write with an
+# unconditional one still leaves exactly one value in the config. Only counting invocations
+# distinguishes "set once, idempotent" (the §2 word) from "set on every source".
+GITSTUB="$ROOT/git-stub"; mkdir -p "$GITSTUB"
+cat > "$GITSTUB/git" <<'GITEOF'
+#!/usr/bin/env bash
+# Records every `config gc.auto 0` WRITE, and answers the guard's read from a state file so
+# the second source sees the value the first one set.
+if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "gc.auto" ]; then
+  [ -f "$GC_STATE" ] && cat "$GC_STATE"
+  exit 0
+fi
+if [ "$1" = "config" ] && [ "$2" = "gc.auto" ] && [ "$3" = "0" ]; then
+  echo "write" >> "$GC_WRITES"; echo 0 > "$GC_STATE"; exit 0
+fi
+exec /usr/bin/git "$@"
+GITEOF
+chmod +x "$GITSTUB/git"
+export GC_STATE="$ROOT/gc-state" GC_WRITES="$ROOT/gc-writes"
+rm -f "$GC_STATE" "$GC_WRITES"
+GCQ="$ROOT/gc-q"
+for _ in 1 2 3; do
+  ( PATH="$GITSTUB:$PATH"; export PATH
+    cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$GCQ" bash -c "source '$INIT'" ) >/dev/null 2>&1
+done
+GC_N=$(wc -l < "$GC_WRITES" 2>/dev/null | tr -d ' ')
+[ "${GC_N:-0}" = "1" ] && ok "gc.auto is WRITTEN once across three sources (not once per source)" \
+  || bad "gc.auto write count across three sources = ${GC_N:-0}, want 1"
+unset GC_STATE GC_WRITES
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
