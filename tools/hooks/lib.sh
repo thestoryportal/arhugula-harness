@@ -822,7 +822,16 @@ _hook_lane_stack_down() {
   root=$(hook_project_dir); [ -n "$root" ] || return 0
   compose="$root/deploy/self-hosted-local/compose.yaml"
   [ -f "$compose" ] && [ -f "$root/tools/lane_ports.py" ] || return 0
-  hook_bounded 15 docker info >/dev/null 2>&1 || return 0     # daemon unreachable → nothing runs
+  # A daemon that answers "unreachable" quickly is proof no container of this project is
+  # running, and skipping is free. A probe that TIMES OUT proves nothing — the daemon may be
+  # alive and slow, still holding this lane's containers — so it is a cleanup FAILURE, which
+  # keeps the claim rather than recycling an index under live containers.
+  hook_bounded 15 docker info >/dev/null 2>&1
+  case $? in
+    0) ;;                       # daemon up: proceed to bring the project down
+    124|137|143) return 1 ;;    # timed out / killed: unknown state, treat as failure
+    *) return 0 ;;              # answered non-zero: no daemon, nothing to clean up
+  esac
   project=$(HARNESS_LANE_INDEX="$k" python3 "$root/tools/lane_ports.py" --project 2>/dev/null)
   [ -n "$project" ] || return 0
   # --volumes as well as the containers: grafana-data / tempo-data are declared named

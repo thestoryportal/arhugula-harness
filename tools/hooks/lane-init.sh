@@ -61,14 +61,41 @@ case "$_LI_Q" in
 esac
 
 # ── lane id ──────────────────────────────────────────────────────────────────────────
+# 0 iff some OTHER worktree's registry claim already carries this lane id — i.e. the value
+# in the environment belongs to a different lane. One shell that sources in lane A, cd's to
+# lane B and sources again would otherwise hand B the identity of A, and B would never get
+# a marker of its own: two worktrees, one reservation identity.
+_lane_id_bound_elsewhere() {
+  local want="$1" f id path
+  [ -d "$_LI_Q/lanes" ] || return 1
+  for f in "$_LI_Q"/lanes/*; do
+    [ -f "$f" ] || continue
+    IFS=' ' read -r id path < "$f"
+    { [ "${id:-}" = "$want" ] && [ "${path:-}" != "$_LI_WT" ]; } && return 0
+  done
+  return 1
+}
+
 _lane_init_id() {
-  local f="$_LI_WT/.harness/.lane-id" id
-  [ -n "${HARNESS_LANE_ID:-}" ] && { printf '%s' "$HARNESS_LANE_ID"; return 0; }
+  # id="" not a bare declaration: callers run under `set -u`, where reading an unset local
+  # aborts the whole source.
+  local f="$_LI_WT/.harness/.lane-id" id=""
+  # THE MARKER IS THE AUTHORITY, ahead of the environment: it is per-worktree and durable,
+  # while an exported id is per-shell and follows a `cd`. When both exist and disagree, the
+  # marker wins and the stale export is corrected.
   if [ -s "$f" ]; then
     IFS= read -r id < "$f"
-    [ -n "$id" ] && { printf '%s' "$id"; return 0; }
+    if [ -n "$id" ]; then
+      { [ -n "${HARNESS_LANE_ID:-}" ] && [ "$HARNESS_LANE_ID" != "$id" ]; } \
+        && echo "lane-init: HARNESS_LANE_ID=$HARNESS_LANE_ID does not belong to this worktree — using the persisted $id" >&2
+      printf '%s' "$id"
+      return 0
+    fi
   fi
-  id=$( (cd "$_LI_ROOT" && uv run --quiet python tools/reservations.py mint-lane-id \
+  if [ -n "${HARNESS_LANE_ID:-}" ] && ! _lane_id_bound_elsewhere "$HARNESS_LANE_ID"; then
+    id="$HARNESS_LANE_ID"      # an unbound export seeds this worktree's marker, published below
+  fi
+  [ -n "$id" ] || id=$( (cd "$_LI_ROOT" && uv run --quiet python tools/reservations.py mint-lane-id \
           --worktree "$_LI_WT") 2>/dev/null | tr -d ' \t\n\r|;[]' )
   # Fallback keeps the SAME shape as reservations.mint_lane_id (host-worktree-8hex) so a
   # lane minted without uv is indistinguishable downstream from one minted with it.
@@ -164,8 +191,21 @@ for _li_var in HARNESS_LANE_INDEX HARNESS_LANE_INDEX_FORCE; do
 done
 unset _li_var _li_val
 
-# A preset HARNESS_LANE_INDEX is honoured verbatim and claims nothing: the caller
-# (a compose recipe, a test) is asserting an index it already owns.
+# A preset HARNESS_LANE_INDEX claims nothing — the caller is asserting an index it already
+# owns — but the assertion is CHECKED. An export follows a shell across a `cd`, so without
+# this a shell moving from lane A to lane B would run B on A's Compose project, ports and
+# volumes while both believed they were isolated. An index claimed by a different worktree
+# is refused; an unclaimed one is accepted (that is the recipe/test case).
+if [ -n "${HARNESS_LANE_INDEX:-}" ] && [ -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" ]; then
+  IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$HARNESS_LANE_INDEX"
+  if [ -n "${_li_path:-}" ] && [ "${_li_path:-}" != "$_LI_WT" ]; then
+    echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX is claimed by $_li_path, not this worktree — refusing to share its project and ports" >&2
+    unset _LI_ROOT _LI_Q _LI_WT _li_id _li_path
+    return 1 2>/dev/null || exit 1
+  fi
+  unset _li_id _li_path
+fi
+
 if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
   mkdir -p "$_LI_Q/lanes" 2>/dev/null
   _li_k=""

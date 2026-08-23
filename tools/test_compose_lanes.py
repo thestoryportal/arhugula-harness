@@ -185,14 +185,43 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         ).stdout
         return [json.loads(line) for line in out.splitlines() if line.strip()]
 
-    for k in (a, b):
-        assert not ps(k), (
-            f"a stack already exists under {lane_ports.project(k)} — refusing to adopt or "
-            f"tear down a project this test did not create"
+    # CLAIM the two indices in the real registry, exactly as a lane does. The absence check
+    # below is not atomic with `up` on its own — a concurrent lane could take 348 in the
+    # window and then have its stack adopted and torn down here. Holding the claim closes
+    # that window at the same primitive lane-init uses (exclusive create), and the claims
+    # are released in the finally.
+    lanes_dir = (
+        Path(
+            os.environ.get(
+                "ARC_METRICS_QUEUE_DIR",
+                str(Path.home() / ".gstack/projects/arhugula-v2/arc-metrics-queue"),
+            )
         )
+        / "lanes"
+    )
+    lanes_dir.mkdir(parents=True, exist_ok=True)
+    claimed: list[Path] = []
+    for k in (a, b):
+        claim = lanes_dir / str(k)
+        try:
+            with open(claim, "x", encoding="utf-8") as fh:
+                fh.write(f"test-compose-lanes {REPO}\n")
+        except FileExistsError:
+            for c in claimed:
+                c.unlink(missing_ok=True)
+            raise AssertionError(
+                f"lane index {k} is already claimed ({claim.read_text().strip()}) — refusing "
+                f"to run against a live lane's project"
+            ) from None
+        claimed.append(claim)
 
     started: list[int] = []
     try:
+        for k in (a, b):
+            assert not ps(k), (
+                f"a stack already exists under {lane_ports.project(k)} — refusing to adopt "
+                f"or tear down a project this test did not create"
+            )
         up(a)
         started.append(a)
         up(b)
@@ -219,6 +248,29 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         # green — the next run of this same case then trips its own absence check, or a real
         # lane inherits them. Reported unless a real failure is already propagating.
         failed = [k for k in started if down(k) != 0]
+        # The recipe's `down` deliberately keeps named volumes (an operator stopping their
+        # own stack must not lose their dashboards). This test CREATED those volumes and
+        # asserts on them, so it removes its own: leaving lane348/lane349 volumes behind
+        # would feed stale traces to the next run, or to a real lane on those indices.
+        for k in started:
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "-p",
+                    lane_ports.project(k),
+                    "-f",
+                    str(COMPOSE),
+                    "down",
+                    "--volumes",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                cwd=REPO,
+            )
+        for c in claimed:
+            c.unlink(missing_ok=True)
         if failed and sys.exc_info()[0] is None:
             raise AssertionError(
                 f"stack-down failed for lane(s) {failed}; containers may still be running"

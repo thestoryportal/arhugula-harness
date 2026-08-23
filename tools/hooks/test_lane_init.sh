@@ -106,14 +106,17 @@ OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_L
   || bad "idle small machine refused: '$OUT'"
 
 # --- 7. RAM probe never gates lanes 0/1, however low the machine --------------------
+# A SEPARATE registry: indices 0/1 are claimed by wt/wt2 above, and presetting an index
+# another worktree owns is now (correctly) refused — a different assertion from this one.
+PROBEQ="$ROOT/probe-q"
 for k in 0 1; do
-  OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$k" HARNESS_RAM_FLOOR_GB=99999 \
+  OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ" HARNESS_LANE_INDEX="$k" HARNESS_RAM_FLOOR_GB=99999 \
     bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
   [ "$OUT" = "ALLOWED" ] && ok "lane $k is never gated by the RAM floor" || bad "lane $k said '$OUT'"
 done
 
 # --- 8. a lane above the floor is allowed -------------------------------------------
-OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=0 \
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ" HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=0 \
   bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
 [ "$OUT" = "ALLOWED" ] && ok "lane 2 above the floor brings the stack up" || bad "floor 0 said '$OUT'"
 
@@ -325,6 +328,31 @@ case "$ERR" in
   *"could NOT set gc.auto=0"*) ok "a failed gc.auto write is reported" ;;
   *) bad "gc.auto failure was silent: [$ERR]" ;;
 esac
+
+# --- 21. an id/index carried across worktrees by one shell is caught, not inherited ----
+# `source` in lane A, `cd` to lane B, `source` again: the exports survive the cd. Without
+# these checks B would run under A's reservation identity and A's Compose project.
+OUT=$(cd "$ROOT/wt2" && HARNESS_LANE_INDEX="$K1" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=1" ] && ok "a preset index owned by another worktree is refused" \
+  || bad "index $K1 (owned by wt) accepted inside wt2: $OUT"
+OUT=$(cd "$ROOT/wt2" && HARNESS_LANE_INDEX="$K2" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=0" ] && ok "a preset index this worktree owns is accepted" \
+  || bad "wt2 refused its own index $K2: $OUT"
+# a stale exported id loses to the worktree's own persisted marker
+ID_STALE=$(cd "$ROOT/wt2" && HARNESS_LANE_ID="$ID1" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_ID\"")
+{ [ "$ID_STALE" != "$ID1" ] && [ -n "$ID_STALE" ]; } \
+  && ok "a stale exported lane id loses to the worktree's persisted marker" \
+  || bad "wt2 adopted wt's id: '$ID_STALE'"
+# an id bound to another worktree's CLAIM never seeds a fresh worktree's marker
+git -C "$ROOT/repo" worktree add -q "$ROOT/wt6" -b lane-f || { echo "FATAL: worktree f"; exit 1; }
+ID_SEED=$(cd "$ROOT/wt6" && HARNESS_LANE_ID="$ID1" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_ID\"")
+{ [ "$ID_SEED" != "$ID1" ] && [ -n "$ID_SEED" ]; } \
+  && ok "an id already bound to another lane's claim is not adopted by a fresh worktree" \
+  || bad "wt6 inherited wt's identity: '$ID_SEED'"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
