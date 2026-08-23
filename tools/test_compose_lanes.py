@@ -203,10 +203,16 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
     claimed: list[Path] = []
     for k in (a, b):
         claim = lanes_dir / str(k)
+        # Published exactly as lane-init publishes one: a complete temp file linked into
+        # place. `open(..., "x")` then write makes the claim visible EMPTY in between, and a
+        # concurrent initializer reading it there treats it as an unowned corpse to repair.
+        tmp = lanes_dir / f".claim.test-{k}"
+        tmp.write_text(f"test-compose-lanes {REPO}\n", encoding="utf-8")
         try:
-            with open(claim, "x", encoding="utf-8") as fh:
-                fh.write(f"test-compose-lanes {REPO}\n")
+            os.link(tmp, claim)
+            tmp.unlink(missing_ok=True)
         except FileExistsError:
+            tmp.unlink(missing_ok=True)
             for c in claimed:
                 c.unlink(missing_ok=True)
             raise AssertionError(

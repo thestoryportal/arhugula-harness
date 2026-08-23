@@ -219,7 +219,9 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="relative/queue" \
   || bad "relative queue dir accepted: $OUT"
 
 # --- 14. index knobs are range-checked BEFORE becoming a filename --------------------
-for bad_k in 350 999 ../escape abc " "; do
+# `00` and `08` parse as integers but are DIFFERENT registry filenames from `0` and `8`
+# while mapping to the same Compose project — two claims, one stack.
+for bad_k in 350 999 ../escape abc " " 00 08 007; do
   OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$bad_k" \
     bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$?\"")
   [ "$OUT" = "rc=1" ] && ok "HARNESS_LANE_INDEX='$bad_k' refused" || bad "index '$bad_k' accepted: $OUT"
@@ -312,17 +314,32 @@ exit 1
 STUBEOF
 chmod +x "$STUB/docker"
 printf '%s %s\n' "some-lane" "$ROOT/reaped-wt-c" > "$REL/lanes/7"
+(
+  PATH="$STUB:$PATH"; export PATH
+  CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+    bash -c "source '$SCRIPT_DIR/lib.sh'; hook_release_lane_index '$ROOT/reaped-wt-c'"
+) >/dev/null 2>&1
+# A failed cleanup FENCES the index rather than holding the claim: the claim is inheritable
+# by a new worktree at the same path (reuse is by path), the marker is not.
+[ -f "$REL/lanes/.orphaned-7" ] && ok "a failed cleanup fences the index with an orphan marker" \
+  || bad "no orphan marker after a failed cleanup"
+[ ! -f "$REL/lanes/7" ] && ok "the fenced index is released for reuse" || bad "index 7 kept despite the fence"
+
+# ...but if the FENCE itself cannot be written, the claim stays — never remove both.
+printf '%s %s\n' "some-lane" "$ROOT/reaped-wt-e" > "$REL/lanes/10"
+mkdir -p "$REL/lanes/.orphaned-10"        # a directory: the marker file write cannot land
 ERR=$(
   PATH="$STUB:$PATH"; export PATH
   CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
-    bash -c "source '$SCRIPT_DIR/lib.sh'; hook_release_lane_index '$ROOT/reaped-wt-c'" 2>&1 >/dev/null
+    bash -c "source '$SCRIPT_DIR/lib.sh'; hook_release_lane_index '$ROOT/reaped-wt-e'" 2>&1 >/dev/null
 )
-[ -f "$REL/lanes/7" ] && ok "a failed stack cleanup keeps the index claimed" \
-  || bad "index freed despite a failed cleanup"
+[ -f "$REL/lanes/10" ] && ok "an unwritable fence keeps the claim (never both fences gone)" \
+  || bad "index 10 freed with neither claim nor marker"
 case "$ERR" in
-  *"cleanup FAILED"*) ok "the failed cleanup is reported, not swallowed" ;;
-  *) bad "no diagnostic for a failed cleanup: [$ERR]" ;;
+  *"could not be written"*) ok "the unwritable fence is reported, not swallowed" ;;
+  *) bad "no diagnostic for an unwritable fence: [$ERR]" ;;
 esac
+rmdir "$REL/lanes/.orphaned-10"; rm -f "$REL/lanes/10"
 
 # --- 20. a failed gc.auto write is reported (C-HE-11 §2 must not fail silently) -------
 # Outside any git repository `git config` cannot write, which is the deterministic stand-in
@@ -418,6 +435,19 @@ OUT=$(
 )
 [ "$OUT" = "ABSENT" ] && ok "an unhonoured obligation keeps the stack absent, even at a low index" \
   || bad "lane 9 started a stack over an uncleaned project: '$OUT'"
+
+# --- 25. a preset index is refused unless a claim positively NAMES this worktree ------
+# Absence-of-objection is not ownership: an empty or malformed claim, or one that could not
+# be published at all, would otherwise let two callers run the same unowned project.
+BADQ="$ROOT/badclaim-q"; mkdir -p "$BADQ/lanes"
+: > "$BADQ/lanes/3"                                  # empty claim: owned by nobody
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$BADQ" HARNESS_LANE_INDEX=3 \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=1" ] && ok "a preset index with an empty claim is refused" || bad "empty claim accepted: $OUT"
+printf 'just-an-id-no-path\n' > "$BADQ/lanes/4"      # malformed: no path field
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$BADQ" HARNESS_LANE_INDEX=4 \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=1" ] && ok "a preset index with a malformed claim is refused" || bad "malformed claim accepted: $OUT"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -800,16 +800,21 @@ hook_release_lane_index() {
       # that was ATTEMPTED and failed leaves containers holding this project's ports and
       # volumes, so recycling the index would hand them to the next lane; the claim is kept
       # instead — a visible, retryable state rather than a silent cross-lane adoption.
-      case "$(_hook_lane_stack_down "$(basename "$f")" >/dev/null 2>&1; echo $?)" in
+      _hook_lane_stack_down "$(basename "$f")" >/dev/null 2>&1
+      case $? in
         0) rm -f "$f" 2>/dev/null ;;                       # verified clean
-        2) # Could not VERIFY (no reachable daemon). Freeing the index silently would let
-           # the next lane adopt any surviving containers; keeping it forever leaks an index
-           # on every reap of a machine whose daemon is simply not running — the normal case.
-           # So the index is freed AND the obligation is recorded: lane-init clears it just
-           # before that index is used again, when a daemon is far more likely to be up.
-           printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) reaped $wt" > "$q/.orphaned-$(basename "$f")" 2>/dev/null
-           rm -f "$f" 2>/dev/null ;;
-        *) echo "hook_release_lane_index: lane $(basename "$f") stack cleanup FAILED — index kept claimed so it is not recycled under live containers" >&2 ;;
+        *) # NOT verified clean — whether the cleanup failed outright or could not be
+           # attempted. Either way the index must not be handed on unfenced: a claim can be
+           # inherited by a new worktree created at the SAME path (reuse is by path), which
+           # would adopt the surviving containers along with the index. So the obligation is
+           # recorded first, and the claim is released ONLY if that record actually landed —
+           # an unwritable marker leaves the claim in place rather than removing both fences.
+           if printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) reaped $wt" \
+                > "$q/.orphaned-$(basename "$f")" 2>/dev/null; then
+             rm -f "$f" 2>/dev/null
+           else
+             echo "hook_release_lane_index: lane $(basename "$f") stack is unverified AND its orphan marker could not be written — index kept claimed" >&2
+           fi ;;
       esac
     fi
   done

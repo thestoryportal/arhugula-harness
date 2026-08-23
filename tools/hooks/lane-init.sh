@@ -192,6 +192,12 @@ for _li_var in HARNESS_LANE_INDEX HARNESS_LANE_INDEX_FORCE; do
   case "$_li_val" in
     ''|*[!0-9]*) echo "lane-init: $_li_var must be an integer 0..349, got '$_li_val'" >&2
                  unset _li_var _li_val; return 1 2>/dev/null || exit 1 ;;
+    0) ;;
+    0*) # `00` and `08` are distinct registry FILENAMES but the same integer to the port
+        # formula, so two lanes could hold `lanes/0` and `lanes/00` and share one Compose
+        # project. Only the canonical spelling is a valid index.
+        echo "lane-init: $_li_var must be canonical (no leading zeros), got '$_li_val'" >&2
+        unset _li_var _li_val; return 1 2>/dev/null || exit 1 ;;
   esac
   if [ "$_li_val" -ge 350 ]; then
     echo "lane-init: $_li_var must be < 350 (no port block exists above it), got '$_li_val'" >&2
@@ -217,15 +223,21 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
     fi
     rm -f "${_li_tmp:-}" 2>/dev/null; unset _li_tmp
   fi
+  # POSITIVE verification, not absence-of-objection. Accepting the index because the claim
+  # is missing (mkdir/mktemp/link failed) or because an existing claim is empty/malformed
+  # would run this lane on a project no one is recorded as owning — exactly the state a
+  # concurrent caller could also walk into.
+  _li_ok=""
   if [ -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" ]; then
     IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$HARNESS_LANE_INDEX"
-    if [ -n "${_li_path:-}" ] && [ "${_li_path:-}" != "$_LI_WT" ]; then
-      echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX is claimed by $_li_path, not this worktree — refusing to share its project and ports" >&2
-      unset _LI_ROOT _LI_Q _LI_WT _li_id _li_path
-      return 1 2>/dev/null || exit 1
-    fi
-    unset _li_id _li_path
+    [ "${_li_path:-}" = "$_LI_WT" ] && _li_ok=1
   fi
+  if [ -z "$_li_ok" ]; then
+    echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX could not be claimed for this worktree (claim: [$(cat "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null)]) — refusing to run on a project this lane does not own" >&2
+    unset _LI_ROOT _LI_Q _LI_WT _li_id _li_path _li_ok
+    return 1 2>/dev/null || exit 1
+  fi
+  unset _li_id _li_path _li_ok
 fi
 
 if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
