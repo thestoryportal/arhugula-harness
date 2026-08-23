@@ -36,7 +36,6 @@ RUN="$REPO/tools/04-loop/run.sh"
 cat > "$REPO/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
-printf '%s\n' "$*" >> "$CLAUDE_PROJECT_DIR/.harness/child_prompt.log"
 N=$(wc -l < "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log" | tr -d ' ')
 if [ -f "$CLAUDE_PROJECT_DIR/.harness/HALT_ON" ] && [ "$N" -ge "$(cat "$CLAUDE_PROJECT_DIR/.harness/HALT_ON")" ]; then
   : > "$CLAUDE_PROJECT_DIR/.harness/.loop-halt"

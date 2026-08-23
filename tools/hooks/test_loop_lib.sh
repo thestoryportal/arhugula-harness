@@ -417,7 +417,12 @@ done
 #      the creating redirect must run under noclobber (O_EXCL), never as a bare truncating
 #      `>`. Tuning the race until it flakes red would be pinning luck, not the mechanism.
 ENSURE_BODY=$(declare -f loop_status_ensure)
-printf '%s' "$ENSURE_BODY" | grep -qE 'ln "\$_tmp" "\$p"|ln .*_tmp' \
+# LITERAL only (merge-gate witness lens, pre-merge round). A looser `ln .*_tmp` alternative
+# also matches `ln -f "$_tmp" "$p"` — and `-f` unlinks an existing target, which defeats the
+# EEXIST/O_EXCL guarantee this whole protocol rests on: a losing lane would replace the
+# winner's already-published venue, including rows already appended to it. The regression
+# that matters most here is precisely the one the loose form let through.
+printf '%s' "$ENSURE_BODY" | grep -qF 'ln "$_tmp" "$p"' \
   && ok "loop_status_ensure publishes a COMPLETE header atomically via ln" \
   || bad "loop_status_ensure does not publish atomically (partial-header window)"
 printf '%s' "$ENSURE_BODY" | grep -qE 'cat > "\$p"' \
@@ -500,7 +505,7 @@ printf '%s' "$(declare -f loop_status_ensure)" | grep -q 'mktemp' \
   && ok "the staging file is created exclusively (mktemp)" || bad "staging name is guessable"
 # BEHAVIOURAL (codex r16 P3): when mktemp cannot supply an exclusive name the venue must NOT
 # be created through a guessable fallback — that fallback was the very race this removes.
-printf '%s' "$(declare -f loop_status_ensure)" | grep -q '\$\$-\${RANDOM}' \
+printf '%s' "$(declare -f loop_status_ensure)" | grep -qE '\$\$[-._].*RANDOM|RANDOM.*\$\$' \
   && bad "loop_status_ensure still falls back to a guessable staging name" \
   || ok "no guessable staging fallback remains"
 MKFAIL="$REPO/mkfail"; rm -rf "$MKFAIL"; mkdir -p "$MKFAIL/bin"

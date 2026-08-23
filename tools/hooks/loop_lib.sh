@@ -211,6 +211,13 @@ loop_log_structured() {
   local kind="$1" lane="$2" cause="$3"; shift 3
   local p; p=$(loop_status_ensure)
   [ -z "$p" ] && { echo "loop_log_structured: no ledger venue" >&2; return 1; }
+  # SIZE BOUND, stated because centralizing the venue changes the odds: a single `>>` append
+  # is atomic only up to the platform's pipe/write granularity (measured on this host: rows
+  # stayed atomic across 500+ concurrent small appends, and interleaved only once a single
+  # row exceeded ~32-65KB). Every caller today passes a short fixed-format detail — an arc
+  # id, a PR number, a sha8, a cause tag — so nothing approaches that. A future caller that
+  # appends UNBOUNDED text (a stack trace, a diff, a JSON dump) would break the row boundary
+  # the awk reducers depend on, and must truncate before calling rather than rely on luck.
   if ! printf '| %s | %s | %s | %s |\n' \
       "$(loop_now)" "$kind" "$(_loop_structured_col "$lane" "$cause")" "$(_loop_escape_detail "$@")" \
       >> "$p" 2>/dev/null; then

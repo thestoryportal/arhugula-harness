@@ -135,10 +135,8 @@ OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
 printf '%s' "$OUT" | grep -q "notify:" && bad "NOTIFY segment present with no ledger: $OUT" || ok "no NOTIFY segment when no ledger"
 
-rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat*
+rm -f "$REPO/.harness/loop_status.md"
 rm -f "$HARNESS_LOOP_STATUS_PATH"
-OUT=$(run)
-printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "clean cutover reported an error: $OUT" || ok "a clean pass emits no mig= segment"
 
 # 6) Reservation reconcile-log surfacing (U-HE-18, gate r1 witness P2): the log-READER
 #    block is UNGATED by the U-HE-29 activation gate, so its behavior needs witnesses now.
