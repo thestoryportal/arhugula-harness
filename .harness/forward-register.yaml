@@ -10201,7 +10201,13 @@ items:
     `arc_exit_report.append_ledger_row` verifies its write by substring-in-tail rather than
     scoping to bytes appended since its OWN write (the hardening `loop_resolve` already
     received), so under the shared venue a concurrent duplicate EXIT-REPORT row for the same
-    PR from another lane could make it report success when its own append failed.'
+    PR from another lane could make it report success when its own append failed. (d) THIRD
+    instance, merge-gate re-gate P3: the orphan-FOLD step runs BEFORE the claim-first rename
+    and has no serialization of its own, so two migrators observing the same dead-owner
+    orphan can each fold+republish+re-claim it, producing a duplicate DEFERRED-HIL row and
+    two archives for one orphan. Safe-direction under C-HE-09 §4 (an extra DEFERRED-HIL,
+    never a false RESOLVED-HIL), so log-noise rather than a correctness break -- but it shows
+    the claim-first guarantee does not span the whole function.'
   close_out: '(1) The coherent fix for (a) is a DECOMPOSITION of the ignore class, not a
     reversal of either prior decision — `.migrated-*` is a permanent archive and must STAY
     ignored (codex r5 P2: untracked residue wedges the worktree GC forever), while

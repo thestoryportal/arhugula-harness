@@ -325,7 +325,7 @@ loop_status_migrate() {
     echo "loop_status_migrate: could not read the shared venue's resolutions — nothing imported" >&2
     return 1
   fi
-  local imported=0 wt legacy rows
+  local imported=0 wt legacy rows _incomplete=0
   # Iterate the ARRAY (codex r15 P2). Printing it back through newlines to feed a `read` loop
   # re-introduced exactly the defect the NUL-safe enumeration removed: a worktree path
   # containing a newline would split into nonexistent paths, its legacy ledger would be
@@ -381,7 +381,12 @@ loop_status_migrate() {
       [ -f "$orphan" ] || continue
       _opid=$(printf '%s' "${orphan##*/}" | sed -n 's/.*-\([0-9][0-9]*\)-[0-9][0-9]*$/\1/p')
       if [ -n "$_opid" ] && [ "$_opid" != "$$" ] && _loop_pid_alive "$_opid"; then
-        continue   # another migration is importing it right now
+        # Another migration is importing it RIGHT NOW. Correct to skip -- but the caller
+        # must be able to tell "nothing to drain" from "someone else is mid-drain", because
+        # the shared venue is INCOMPLETE until that sibling finishes (codex re-gate P2).
+        # A closure record written now would permanently freeze a short todo list.
+        _incomplete=1
+        continue
       fi
       orphans+=("$orphan")
     done
@@ -493,6 +498,11 @@ loop_status_migrate() {
     imported=$((imported + 1))
   done
   echo "loop_status_migrate: $imported file(s) imported into $shared"
+  # Exit 2 == "did what I could, but the venue is not yet complete": a live sibling holds a
+  # claim we correctly refused to steal. Distinct from 0 (complete) and from 1 (failed), so
+  # a caller can react correctly to each -- SessionStart treats it as routine concurrency,
+  # while the arc-exit report must NOT publish a todo list from a venue still being filled.
+  [ "$_incomplete" = 1 ] && return 2
   return 0
 }
 

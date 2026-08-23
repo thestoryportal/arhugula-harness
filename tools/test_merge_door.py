@@ -2566,3 +2566,46 @@ def test_notify_does_not_raise_so_a_ledger_write_cannot_abort_a_landing(monkeypa
 
     monkeypatch.setattr(md.rs, "emit_loop_row", boom)
     md._notify("NOTIFY", "L1", "g:f:c", "informational")  # must not raise
+
+
+def test_notify_retries_a_deferred_hil_and_succeeds_after_a_transient_failure(monkeypatch):
+    """The RETRY is the whole point of the C-HE-20 §1 durability fix — witness it by COUNT.
+
+    merge-gate witness lens on the U-HE-29 re-gate: the first two `_notify` tests stubbed
+    `emit_loop_row` to always raise and asserted only on the final wording, so deleting the
+    retry loop outright left both green. A transient failure is the overwhelmingly common
+    case on a venue every lane shares; if it is not retried, the contract's MUST-durable row
+    is lost for a reason that would have cleared on its own.
+    """
+    calls: list[str] = []
+
+    def flaky(kind, *_a, **_k):
+        calls.append(kind)
+        if len(calls) < 3:
+            raise md.rs.LoopStatusWriteError("transient")
+
+    monkeypatch.setattr(md.rs, "emit_loop_row", flaky)
+    monkeypatch.setattr(md.time, "sleep", lambda _s: None)  # no real backoff in tests
+    md._notify("DEFERRED-HIL", "L1", "g:f:c", "B-1 — d")
+    assert len(calls) == 3, f"a DEFERRED-HIL must be retried to 3 attempts, saw {len(calls)}"
+
+
+def test_notify_retries_only_the_must_durable_kind(monkeypatch, capsys):
+    """NOTIFY is informational under C-HE-20 §1, so it is NOT worth three attempts — and the
+    attempt count is what distinguishes the two paths. Pins both arms by count."""
+    calls: list[str] = []
+
+    def boom(kind, *_a, **_k):
+        calls.append(kind)
+        raise md.rs.LoopStatusWriteError("venue unwritable")
+
+    monkeypatch.setattr(md.rs, "emit_loop_row", boom)
+    monkeypatch.setattr(md.time, "sleep", lambda _s: None)
+
+    md._notify("NOTIFY", "L1", "g:f:c", "informational")
+    assert len(calls) == 1, f"NOTIFY must not be retried, saw {len(calls)} attempt(s)"
+
+    calls.clear()
+    md._notify("DEFERRED-HIL", "L1", "g:f:c", "B-2 — blocking")
+    assert len(calls) == 3, f"DEFERRED-HIL must be retried, saw {len(calls)} attempt(s)"
+    assert "after 3 attempt(s)" in capsys.readouterr().err

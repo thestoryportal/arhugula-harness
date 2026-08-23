@@ -641,6 +641,21 @@ def _todos(
             ],
             code_root,
         )
+        if mrc == 2:
+            # A LIVE sibling migration holds the claim on this worktree's legacy ledger and
+            # is still importing its rows (codex re-gate P2). Refusing to steal that claim is
+            # correct — but the shared venue is INCOMPLETE until the sibling finishes, and
+            # this report is a PR-keyed artifact written once. Publishing a list read now
+            # would permanently freeze a short one into the arc's closure record, which is
+            # worse than saying we could not know: UNKNOWN is recoverable, a confidently
+            # wrong closure record is not.
+            notes.append(
+                "a concurrent migration is still draining this worktree's pre-U-HE-29 "
+                "legacy ledger into the shared venue, so the venue is incomplete right now "
+                "and todo_for_human is UNKNOWN (null). Re-run this report once that pass "
+                "has finished — the rows are not lost, only not yet visible."
+            )
+            return None
         if mrc != 0:
             notes.append(
                 "this worktree still holds a pre-U-HE-29 legacy ledger and it could not be "

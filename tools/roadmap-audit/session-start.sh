@@ -56,8 +56,12 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   # the reservation reader below uses.
   _MIG=""
   if command -v loop_status_migrate >/dev/null 2>&1; then
-    _migerr=$(loop_status_migrate 2>&1 >/dev/null) || \
+    _migerr=$(loop_status_migrate 2>&1 >/dev/null); _migrc=$?
+    # rc 2 == a live sibling holds a claim we correctly refused to steal. That is routine
+    # concurrency on a shared venue, not a failure, and must not cry ERR at every session.
+    if [ "$_migrc" -ne 0 ] && [ "$_migrc" -ne 2 ]; then
       _MIG=" mig=ERR(legacy loop_status cutover incomplete: $(printf '%s' "$_migerr" | tr '\n' ';' | cut -c1-160))"
+    fi
   fi
   # C-HE-20 (U-HE-09): re-surface deferrals older than the 24 h TTL as NOTIFY rows first --
   # a notification threshold only; it never resolves, reclaims, or transitions anything.

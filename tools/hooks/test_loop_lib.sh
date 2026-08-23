@@ -715,10 +715,30 @@ loop_log_structured DEFERRED-HIL 'la]ne[x' 'g:f:c' "B-17 — bracket lane"
 # 41) codex r7 P2 — the writer and the arc-exit reader must resolve the lane in the SAME
 #     order (env, then persisted marker). Opposite orders would make an arc classify its own
 #     freshly-written rows as foreign whenever both sources exist and differ.
-WBODY=$(declare -f _loop_lane_id)
-printf '%s' "$WBODY" | grep -q 'HARNESS_LANE_ID' && ok "the writer consults HARNESS_LANE_ID" || bad "writer lane source changed"
-PYSRC=$(cd "$SCRIPT_DIR/../.." && sed -n '/^def _lane_id/,/^def _sanitize_lane/p' tools/arc_exit_report.py)
-printf '%s' "$PYSRC" | grep -q 'env = os.environ.get' && ok "the reader consults HARNESS_LANE_ID FIRST, matching the writer" || bad "reader lane precedence diverged from the writer"
+# BEHAVIOURAL cross-check, not a substring pin (merge-gate witness lens on the re-gate): the
+# old form grepped both bodies for a token, which cannot see PRECEDENCE — reversing the
+# env/marker order on either side would have stayed green. Feed the SAME two inputs to the
+# bash writer and the python reader and require the SAME answer; that is the property whose
+# violation makes an arc classify its own rows as foreign.
+LANEDIR="$REPO/lane-xcheck"; rm -rf "$LANEDIR"; mkdir -p "$LANEDIR/.harness"
+printf 'L-marker
+' > "$LANEDIR/.harness/.lane-id"
+W_BOTH=$(CLAUDE_PROJECT_DIR="$LANEDIR" HARNESS_LANE_ID=L-env bash -c '. "$1"; . "$2"; _loop_lane_id' _ "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh")
+R_BOTH=$(cd "$SCRIPT_DIR/../.." && HARNESS_LANE_ID=L-env uv run python -c "
+import sys; sys.path.insert(0, 'tools')
+import arc_exit_report as aer
+from pathlib import Path
+print(aer._lane_id(Path('$LANEDIR')))
+" 2>/dev/null)
+[ -n "$W_BOTH" ] && [ "$W_BOTH" = "$R_BOTH" ] && ok "writer and reader agree with BOTH sources set ($W_BOTH)" || bad "lane precedence diverged with both set: writer=[$W_BOTH] reader=[$R_BOTH]"
+W_MARK=$(CLAUDE_PROJECT_DIR="$LANEDIR" env -u HARNESS_LANE_ID bash -c '. "$1"; . "$2"; _loop_lane_id' _ "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh")
+R_MARK=$(cd "$SCRIPT_DIR/../.." && env -u HARNESS_LANE_ID uv run python -c "
+import sys; sys.path.insert(0, 'tools')
+import arc_exit_report as aer
+from pathlib import Path
+print(aer._lane_id(Path('$LANEDIR')))
+" 2>/dev/null)
+[ "$W_MARK" = "$R_MARK" ] && [ "$W_MARK" = "L-marker" ] && ok "writer and reader agree on the marker-only case ($W_MARK)" || bad "marker-only case diverged: writer=[$W_MARK] reader=[$R_MARK]"
 
 # 42) codex r8 P2 — MULTIPLE orphaned claims must fold in CHRONOLOGICAL order. Folding them
 #     one at a time (each prepended) reversed the order, letting an older RESOLVED-HIL follow
@@ -971,6 +991,30 @@ mv "$LIVE_CLAIM" "$DEAD_CLAIM"
 #     newline cannot split the fold list into nonexistent filenames.
 printf '%s' "$(declare -f loop_status_migrate)" | grep -q '{orphan##\*/}' \
   && ok "orphans sort by basename, never by full path" || bad "orphan sort still round-trips full paths through newlines"
+
+# 55) codex re-gate P2 — "nothing to drain" and "a sibling is mid-drain" must be
+#     DISTINGUISHABLE. The shared venue is INCOMPLETE while another migrator holds a claim,
+#     and a closure record published from it would freeze a short todo list forever.
+MIGE="$REPO/mige"; rm -rf "$MIGE"; mkdir -p "$MIGE"
+( cd "$MIGE" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b mewt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIGE/wt1/.harness"
+MIGEV="$MIGE/shared/loop_status.md"
+# clean pass over a worktree with nothing to drain -> 0
+( cd "$MIGE" && CLAUDE_PROJECT_DIR="$MIGE" HARNESS_LOOP_STATUS_PATH="$MIGEV" loop_status_migrate ) >/dev/null 2>&1
+[ $? -eq 0 ] && ok "a complete pass exits 0" || bad "clean pass did not exit 0"
+# a claim held by a LIVE sibling -> 2 (incomplete), not 0 and not 1
+sleep 30 & SIBPID=$!
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-970 — sibling is importing this |\n' \
+  > "$MIGE/wt1/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z-${SIBPID}-1"
+( cd "$MIGE" && CLAUDE_PROJECT_DIR="$MIGE" HARNESS_LOOP_STATUS_PATH="$MIGEV" loop_status_migrate ) >/dev/null 2>&1
+[ $? -eq 2 ] && ok "a live sibling's claim makes the pass report INCOMPLETE (exit 2)" || bad "incomplete drain not distinguishable from a clean pass"
+kill "$SIBPID" 2>/dev/null; wait "$SIBPID" 2>/dev/null
+# once the sibling is gone the claim is recoverable and the pass completes -> 0
+( cd "$MIGE" && CLAUDE_PROJECT_DIR="$MIGE" HARNESS_LOOP_STATUS_PATH="$MIGEV" loop_status_migrate ) >/dev/null 2>&1
+[ $? -eq 0 ] && ok "the pass completes once the sibling is gone" || bad "pass still incomplete after the sibling exited"
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIGEV" loop_skip_set)" = "B-970" ] && ok "the sibling's row is drained by the later pass" || bad "row lost: [$(HARNESS_LOOP_STATUS_PATH="$MIGEV" loop_skip_set)]"
 
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
