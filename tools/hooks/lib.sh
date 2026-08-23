@@ -800,40 +800,49 @@ hook_release_lane_index() {
       # that was ATTEMPTED and failed leaves containers holding this project's ports and
       # volumes, so recycling the index would hand them to the next lane; the claim is kept
       # instead — a visible, retryable state rather than a silent cross-lane adoption.
-      if _hook_lane_stack_down "$(basename "$f")"; then
-        rm -f "$f" 2>/dev/null
-      else
-        echo "hook_release_lane_index: lane $(basename "$f") stack cleanup FAILED — index kept claimed so it is not recycled under live containers" >&2
-      fi
+      case "$(_hook_lane_stack_down "$(basename "$f")" >/dev/null 2>&1; echo $?)" in
+        0) rm -f "$f" 2>/dev/null ;;                       # verified clean
+        2) # Could not VERIFY (no reachable daemon). Freeing the index silently would let
+           # the next lane adopt any surviving containers; keeping it forever leaks an index
+           # on every reap of a machine whose daemon is simply not running — the normal case.
+           # So the index is freed AND the obligation is recorded: lane-init clears it just
+           # before that index is used again, when a daemon is far more likely to be up.
+           printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ) reaped $wt" > "$q/.orphaned-$(basename "$f")" 2>/dev/null
+           rm -f "$f" 2>/dev/null ;;
+        *) echo "hook_release_lane_index: lane $(basename "$f") stack cleanup FAILED — index kept claimed so it is not recycled under live containers" >&2 ;;
+      esac
     fi
   done
   return 0
 }
 
-# Bring lane <k>'s Compose stack down before its index is recycled. Best-effort by design:
-# every early return is a condition under which no container of that project can be running,
-# so skipping costs nothing. The project NAME is resolved by tools/lane_ports.py — the one
-# authority for it — never re-spelled here, because a second spelling would silently stop
-# targeting the real project the day the formula changes.
+# Bring lane <k>'s Compose stack down before its index is recycled.
+#   0 = verified clean (nothing could exist, or `down --volumes` succeeded)
+#   1 = attempted and FAILED — containers may survive; the caller must keep the claim
+#   2 = could not VERIFY (no reachable daemon) — the caller records a deferred obligation
+# Only the total absence of a docker binary counts as "nothing can exist". A daemon that
+# answers non-zero is NOT proof: a stopped daemon still retains this project's containers
+# and named volumes, which a later `up` would adopt. The project NAME is resolved by
+# tools/lane_ports.py — the one authority for it — never re-spelled here, because a second
+# spelling would silently stop targeting the real project the day the formula changes.
 _hook_lane_stack_down() {
   local k="${1:-}" root project compose
   case "$k" in ''|*[!0-9]*) return 0 ;; esac
-  command -v docker >/dev/null 2>&1 || return 0
-  root=$(hook_project_dir); [ -n "$root" ] || return 0
+  command -v docker >/dev/null 2>&1 || return 0     # no docker at all: nothing can exist
+  root=$(hook_project_dir); [ -n "$root" ] || return 2
   compose="$root/deploy/self-hosted-local/compose.yaml"
-  [ -f "$compose" ] && [ -f "$root/tools/lane_ports.py" ] || return 0
+  { [ -f "$compose" ] && [ -f "$root/tools/lane_ports.py" ]; } || return 2
   # A daemon that answers "unreachable" quickly is proof no container of this project is
   # running, and skipping is free. A probe that TIMES OUT proves nothing — the daemon may be
   # alive and slow, still holding this lane's containers — so it is a cleanup FAILURE, which
   # keeps the claim rather than recycling an index under live containers.
   hook_bounded 15 docker info >/dev/null 2>&1
   case $? in
-    0) ;;                       # daemon up: proceed to bring the project down
-    124|137|143) return 1 ;;    # timed out / killed: unknown state, treat as failure
-    *) return 0 ;;              # answered non-zero: no daemon, nothing to clean up
+    0) ;;         # daemon up: proceed to bring the project down
+    *) return 2 ;;  # unreachable / slow / permission-denied: unverifiable, not proof of clean
   esac
   project=$(HARNESS_LANE_INDEX="$k" python3 "$root/tools/lane_ports.py" --project 2>/dev/null)
-  [ -n "$project" ] || return 0
+  [ -n "$project" ] || return 2
   # --volumes as well as the containers: grafana-data / tempo-data are declared named
   # volumes, so a plain `down` leaves them under the project name and the next lane handed
   # that index inherits the previous lane's persistent dashboards and traces. The lane is

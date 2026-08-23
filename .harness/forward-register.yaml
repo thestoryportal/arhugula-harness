@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 200
+  total: 201
   open: 1
   design_substrate_gated: 3
-  registered_finding: 49
+  registered_finding: 50
   operator_gated: 0
   held: 2
   closed: 145
-  identity_digest: 586b4978970bd1f3
+  identity_digest: 0172f78335e57523
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10314,3 +10314,24 @@ items:
   council: 'NO — one consumer surface, no cross-axis tension; the contract half is settled
     and only the wiring target is open.'
   heading: '### B-200 · C-HE-11 §1 per-lane telemetry endpoints — the lane''s stack is isolated, its consumers still dial lane 0 *(surfaced by out-of-family Codex r2 against U-HE-31, 2026-08-23; registered, not blocking the unit)*'
+- id: B-201
+  title: >-
+    C-HE-11 §2 gc.auto 0 — warn-and-continue vs refuse-to-open when the shared git config
+    cannot be written
+  status: registered_finding
+  summary: 'RAISED THREE TIMES by out-of-family Codex (U-HE-31 rounds 4/5/6) against a
+    DOCUMENTED design choice, and register-and-held per the oscillation discipline. §2 makes
+    gc.auto 0 a MUST; lane-init attempts it and, on a locked/unwritable shared config, warns
+    loudly on stderr and still opens the lane. Two things separate it from the MUSTs in the
+    same file that DO fail closed (unpersistable identity, unallocatable index): its failure
+    mode is bounded and named — ref/index lock contention, which C-HE-11 §3''s bounded retry
+    (hook_git_retry, U-HE-32, the NEXT unit) exists to absorb — and failing closed would make
+    every lane un-openable over a hygiene knob. Nothing is silently absorbed: the failure is
+    loud, named and pre-action.'
+  close_out: '(1) At U-HE-32''s landing confirm hook_git_retry bounds the contention this
+    leaves open, recorded in its evidence log; (2) if a pilot shows a lock-contention
+    cause_signature recurring across runs (C-HE-13 §3), revisit as fail-closed — the pilots
+    are the measurement that settles it; (3) no further narrowing owed meanwhile.'
+  council: 'NO — a single bounded disposition with a named sibling mitigation already
+    scheduled; no cross-axis tension.'
+  heading: '### B-201 · C-HE-11 §2 `gc.auto 0` — warn-and-continue vs refuse-to-open when the shared git config cannot be written *(raised three times by out-of-family Codex against U-HE-31, 2026-08-23; register-and-held on the documented reading)*'

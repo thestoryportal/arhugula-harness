@@ -68,10 +68,15 @@ ENTRIES=$(ls "$LANES" | wc -l | tr -d ' ')
 [ "$ENTRIES" = "2" ] && ok "two worktrees hold exactly two registry entries" \
   || bad "registry entry count is $ENTRIES, want 2"
 
-# --- 4. a preset HARNESS_LANE_INDEX is honoured and allocates nothing ---------------
+# --- 4. a preset HARNESS_LANE_INDEX is honoured AND takes the claim ------------------
+# Honouring a free preset without claiming it would let two worktrees preset the same index
+# and both proceed onto one Compose project — the exclusive-create contract exists precisely
+# to stop that, and a preset is no less a lane than an allocated one.
 KP=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=7 bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
-{ [ "$KP" = "7" ] && [ ! -f "$LANES/7" ]; } && ok "preset index honoured, no registry write" \
-  || bad "preset index: '$KP', registry entry present: $([ -f "$LANES/7" ] && echo yes || echo no)"
+{ [ "$KP" = "7" ] && [ -f "$LANES/7" ]; } && ok "a free preset index is honoured and claimed" \
+  || bad "preset index: '$KP', claim present: $([ -f "$LANES/7" ] && echo yes || echo no)"
+grep -qF -- "$ROOT/wt" "$LANES/7" && ok "the preset claim records the presetting worktree" \
+  || bad "preset claim content: [$(cat "$LANES/7" 2>/dev/null)]"
 
 # --- 5. gc.auto 0: repo-wide, written once, idempotent ------------------------------
 ( cd "$ROOT/wt" && source "$INIT" >/dev/null 2>&1; cd "$ROOT/wt" && source "$INIT" >/dev/null 2>&1 )
@@ -353,6 +358,66 @@ ID_SEED=$(cd "$ROOT/wt6" && HARNESS_LANE_ID="$ID1" \
 { [ "$ID_SEED" != "$ID1" ] && [ -n "$ID_SEED" ]; } \
   && ok "an id already bound to another lane's claim is not adopted by a fresh worktree" \
   || bad "wt6 inherited wt's identity: '$ID_SEED'"
+
+# --- 22. an unverifiable cleanup frees the index but records the obligation -----------
+# A stopped daemon is NOT proof that nothing survives: its containers and named volumes
+# still exist under the project name, and a later `up` adopts them. Keeping the claim
+# forever would leak an index on every reap of a machine whose daemon is simply off, so the
+# index is freed and the obligation is carried to the point of next use.
+cat > "$STUB/docker" <<STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "info" ] && exit 1     # daemon unreachable: cleanup cannot be VERIFIED
+echo "\$@" >> "$ROOT/docker-calls.log"
+exit 0
+STUBEOF
+chmod +x "$STUB/docker"
+printf '%s %s\n' "some-lane" "$ROOT/reaped-wt-d" > "$REL/lanes/8"
+(
+  PATH="$STUB:$PATH"; export PATH
+  CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+    bash -c "source '$SCRIPT_DIR/lib.sh'; hook_release_lane_index '$ROOT/reaped-wt-d'"
+) >/dev/null 2>&1
+[ ! -f "$REL/lanes/8" ] && ok "an unverifiable cleanup still frees the index" || bad "index 8 kept"
+[ -f "$REL/lanes/.orphaned-8" ] && ok "the uncleaned stack is recorded as a deferred obligation" \
+  || bad "no .orphaned-8 marker written"
+
+# --- 23. the next lane on that index clears the obligation before using the stack -----
+rm -f "$ROOT/docker-calls.log"
+cat > "$STUB/docker" <<STUBEOF
+#!/usr/bin/env bash
+echo "\$@" >> "$ROOT/docker-calls.log"
+exit 0
+STUBEOF
+chmod +x "$STUB/docker"
+OUT=$(
+  PATH="$STUB:$PATH"; export PATH
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+    HARNESS_LANE_INDEX=8 HARNESS_RAM_FLOOR_GB=0 \
+    bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT"
+)
+[ "$OUT" = "ALLOWED" ] && ok "a cleared obligation lets the new lane bring its stack up" \
+  || bad "lane 8 still refused after cleanup: '$OUT'"
+[ ! -f "$REL/lanes/.orphaned-8" ] && ok "the obligation marker is removed once honoured" \
+  || bad ".orphaned-8 survived a successful cleanup"
+
+# --- 24. while the obligation stands, the lane's stack stays ABSENT -------------------
+# Refused at ANY index, 0 and 1 included: `up` would ADOPT the dead lane's containers
+# rather than fail, so this is not a resource question the RAM floor covers.
+printf 'stale\n' > "$REL/lanes/.orphaned-9"
+cat > "$STUB/docker" <<STUBEOF
+#!/usr/bin/env bash
+[ "\$1" = "info" ] && exit 1
+exit 0
+STUBEOF
+chmod +x "$STUB/docker"
+OUT=$(
+  PATH="$STUB:$PATH"; export PATH
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$REL" \
+    HARNESS_LANE_INDEX=9 HARNESS_RAM_FLOOR_GB=0 \
+    bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT"
+)
+[ "$OUT" = "ABSENT" ] && ok "an unhonoured obligation keeps the stack absent, even at a low index" \
+  || bad "lane 9 started a stack over an uncleaned project: '$OUT'"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

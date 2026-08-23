@@ -119,6 +119,15 @@ _lane_init_id() {
   local corpse_repair=""
   if [ -e "$f" ] && [ ! -s "$f" ]; then
     if _lane_repair_lock "$f"; then
+      # RECHECK under the lock. The observation that sent us here was made BEFORE the wait,
+      # and the repairer we waited for may have published in the meantime — replacing its
+      # marker now would give this worktree a second identity after the first was exported.
+      if [ -s "$f" ]; then
+        IFS= read -r id < "$f"
+        _lane_repair_unlock "$f"
+        printf '%s' "$id"
+        return 0
+      fi
       corpse_repair=1
     else
       # Another repairer holds the lock. Whatever it published is authoritative; adopt it.
@@ -196,14 +205,27 @@ unset _li_var _li_val
 # this a shell moving from lane A to lane B would run B on A's Compose project, ports and
 # volumes while both believed they were isolated. An index claimed by a different worktree
 # is refused; an unclaimed one is accepted (that is the recipe/test case).
-if [ -n "${HARNESS_LANE_INDEX:-}" ] && [ -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" ]; then
-  IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$HARNESS_LANE_INDEX"
-  if [ -n "${_li_path:-}" ] && [ "${_li_path:-}" != "$_LI_WT" ]; then
-    echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX is claimed by $_li_path, not this worktree — refusing to share its project and ports" >&2
-    unset _LI_ROOT _LI_Q _LI_WT _li_id _li_path
-    return 1 2>/dev/null || exit 1
+if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
+  mkdir -p "$_LI_Q/lanes" 2>/dev/null
+  if [ ! -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" ]; then
+    # A free preset index is TAKEN, not merely assumed: without a claim two worktrees can
+    # preset the same free index and both proceed onto one Compose project. Published the
+    # same way a regular claim is, so the record is never observable without its owner.
+    if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
+       && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null; then
+      ln "$_li_tmp" "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
+    fi
+    rm -f "${_li_tmp:-}" 2>/dev/null; unset _li_tmp
   fi
-  unset _li_id _li_path
+  if [ -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" ]; then
+    IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$HARNESS_LANE_INDEX"
+    if [ -n "${_li_path:-}" ] && [ "${_li_path:-}" != "$_LI_WT" ]; then
+      echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX is claimed by $_li_path, not this worktree — refusing to share its project and ports" >&2
+      unset _LI_ROOT _LI_Q _LI_WT _li_id _li_path
+      return 1 2>/dev/null || exit 1
+    fi
+    unset _li_id _li_path
+  fi
 fi
 
 if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
@@ -248,6 +270,14 @@ if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
         # rename the file is re-read: it is ours only if it says so, otherwise advance.
         _li_retried=1
         if _lane_repair_lock "$_LI_Q/lanes/$_li_k"; then
+          # RECHECK under the lock: the claim may have been published while we waited, and
+          # replacing it now would put two worktrees on one index.
+          if [ -s "$_LI_Q/lanes/$_li_k" ]; then
+            IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k"
+            _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
+            [ "${_li_path:-}" = "$_LI_WT" ] && break
+            _li_k=$((_li_k + 1)); _li_retried=""; continue
+          fi
           if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
              && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
              && mv -f "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
@@ -275,6 +305,28 @@ if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
   export HARNESS_LANE_INDEX="$_li_k"
   unset _li_k _li_f _li_id _li_path _li_tmp _li_retried
 fi
+
+# ── deferred stack cleanup (C-HE-11 §1) ──────────────────────────────────────────────
+# A lane reaped while the Docker daemon was unreachable cannot have its stack taken down at
+# that moment, so the release leaves `lanes/.orphaned-<k>` behind (a dotfile: invisible to
+# the `lanes/*` scans). Cleanup then happens HERE — at the one point where it matters, just
+# before a new lane uses that index, and where the daemon is far more likely to be up.
+# While the marker survives, this lane's stack stays ABSENT rather than risking `up`
+# ADOPTING the dead lane's containers and volumes.
+_lane_clear_orphaned_stack() {
+  local k="${HARNESS_LANE_INDEX:-}" marker
+  [ -n "$k" ] || return 0
+  marker="$_LI_ORPHAN_DIR/.orphaned-$k"
+  [ -f "$marker" ] || return 0
+  if _hook_lane_stack_down "$k"; then
+    rm -f "$marker" 2>/dev/null
+    return 0
+  fi
+  echo "lane-init: lane $k inherits an UNCLEANED stack from a previously reaped lane (marker $marker) — its stack stays absent until Docker can remove it" >&2
+  return 1
+}
+_LI_ORPHAN_DIR="$_LI_Q/lanes"
+_lane_clear_orphaned_stack || true
 
 # ── git gc ───────────────────────────────────────────────────────────────────────────
 # Repo-wide and idempotent: `extensions.worktreeConfig` is unset, so `git config` already
@@ -317,6 +369,11 @@ _lane_available_gb() {
 lane_stack_allowed() {
   local floor_gb="${HARNESS_RAM_FLOOR_GB:-32}" need_gb="${HARNESS_LANE_STACK_NEED_GB:-6}"
   local mem_gb avail_gb k="${HARNESS_LANE_INDEX:-0}"
+  # An index still carrying a dead lane's stack is refused at ANY k, including 0 and 1:
+  # `up` would adopt those containers rather than fail, which is the silent outcome.
+  if ! _lane_clear_orphaned_stack; then
+    return 1
+  fi
   [ "$k" -ge 2 ] || return 0
   if [ "$(uname)" = "Darwin" ]; then
     mem_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))

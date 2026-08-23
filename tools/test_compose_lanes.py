@@ -222,10 +222,13 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
                 f"a stack already exists under {lane_ports.project(k)} — refusing to adopt "
                 f"or tear down a project this test did not create"
             )
-        up(a)
+        # Recorded BEFORE the call: a partially-created stack that then fails or times out
+        # must still be torn down, and appending after `up` skips exactly that case while
+        # the claim is released anyway.
         started.append(a)
-        up(b)
+        up(a)
         started.append(b)
+        up(b)
         c1, c2 = ps(a), ps(b)
         assert len(c1) == 3 and len(c2) == 3, (c1, c2)
         assert {c["Name"] for c in c1}.isdisjoint({c["Name"] for c in c2})
@@ -253,7 +256,7 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         # asserts on them, so it removes its own: leaving lane348/lane349 volumes behind
         # would feed stale traces to the next run, or to a real lane on those indices.
         for k in started:
-            subprocess.run(
+            rc = subprocess.run(
                 [
                     "docker",
                     "compose",
@@ -268,7 +271,11 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
                 text=True,
                 timeout=300,
                 cwd=REPO,
-            )
+            ).returncode
+            # A volume left behind feeds stale dashboards and traces to the next run of this
+            # case, or to a real lane on that index — an ignored rc would pass regardless.
+            if rc != 0 and k not in failed:
+                failed.append(k)
         for c in claimed:
             c.unlink(missing_ok=True)
         if failed and sys.exc_info()[0] is None:
