@@ -760,5 +760,86 @@ OUT=$(cd "$ROOT/wt" && HARNESS_LANE_ID=carried-over HARNESS_LANE_INDEX=999 \
 [ "$OUT" = "rc=1 id=unset k=unset" ] && ok "and so does a refused index, not just a refused registry" \
   || bad "refused index kept lane state: $OUT"
 
+# --- 39. the duplicate-claim withdrawal, all three arms ------------------------------
+# This guard decides whether a duplicate claim for one worktree is withdrawn or kept, and it
+# cannot be reached by pre-seeding: a claim that already exists for this path is found by the
+# opening scan, which takes the reuse branch and never runs the post-verify. The window is
+# between that scan and the create — so the fixture opens it deterministically by stubbing
+# `mktemp`, which lane-init calls in exactly that gap, to plant a peer's claim before the
+# real one is made. Without this the guard is three untested branches: a mutation dropping
+# the published check, or the index comparison, passes every other assertion in this file.
+GUARDBIN="$ROOT/guard-bin"; mkdir -p "$GUARDBIN"
+cat > "$GUARDBIN/mktemp" <<'MKEOF'
+#!/usr/bin/env bash
+if [ -n "${PLANT_AT:-}" ] && [ ! -f "$PLANT_DIR/lanes/.planted" ]; then
+  mkdir -p "$PLANT_DIR/lanes"
+  printf '%s %s\n' "peer-source" "$PLANT_PATH" > "$PLANT_DIR/lanes/$PLANT_AT"
+  : > "$PLANT_DIR/lanes/.planted"
+fi
+exec /usr/bin/mktemp "$@"
+MKEOF
+chmod +x "$GUARDBIN/mktemp"
+WTP="$(cd "$ROOT/wt" && pwd -P)"
+
+# (a) we PUBLISHED and hold the HIGHER index -> ours is the one withdrawn.
+HIQ="$ROOT/guard-hi-q"; mkdir -p "$HIQ/lanes"
+OUT=$(
+  PATH="$GUARDBIN:$PATH"; export PATH
+  cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$HIQ" HARNESS_LANE_INDEX=5 \
+    PLANT_DIR="$HIQ" PLANT_AT=1 PLANT_PATH="$WTP" \
+    bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?"
+)
+[ "$OUT" = "rc=1" ] && ok "a raced duplicate claim refuses the lane" || bad "raced init returned $OUT"
+[ ! -f "$HIQ/lanes/5" ] && ok "the higher index we published is withdrawn" || bad "our higher claim survived"
+[ -f "$HIQ/lanes/1" ] && ok "and the lower claim stands" || bad "the withdrawal took the lower claim"
+
+# (b) we PUBLISHED but hold the LOWER index -> ours STANDS, so two racing sources cannot both
+# withdraw and leave the worktree with zero claims.
+LOQ="$ROOT/guard-lo-q"; mkdir -p "$LOQ/lanes"
+OUT=$(
+  PATH="$GUARDBIN:$PATH"; export PATH
+  cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$LOQ" HARNESS_LANE_INDEX=2 \
+    PLANT_DIR="$LOQ" PLANT_AT=9 PLANT_PATH="$WTP" \
+    bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?"
+)
+[ "$OUT" = "rc=1" ] && ok "the lower-index source also refuses the lane" || bad "lower-index init returned $OUT"
+[ -f "$LOQ/lanes/2" ] && ok "the LOWER index we published is kept — one survivor, not zero" \
+  || bad "both sides withdrew; the worktree would be left with no claim at all"
+[ -f "$LOQ/lanes/9" ] && ok "and the peer's higher claim is left for the peer to withdraw" \
+  || bad "this source deleted the peer's claim"
+
+# (c) we ADOPTED the claim at our index -> never deleted, whatever the ordering. `ln` fails
+# once so the loop takes its adopt path onto an occupant that already names this worktree.
+cat > "$GUARDBIN/ln" <<'LNEOF'
+#!/usr/bin/env bash
+if [ -n "${FAIL_LN_ONCE:-}" ] && [ ! -f "$FAIL_LN_ONCE" ]; then
+  : > "$FAIL_LN_ONCE"; exit 1
+fi
+exec /bin/ln "$@"
+LNEOF
+chmod +x "$GUARDBIN/ln"
+cat > "$GUARDBIN/mktemp" <<'MK2EOF'
+#!/usr/bin/env bash
+if [ -n "${PLANT_DIR:-}" ] && [ ! -f "$PLANT_DIR/lanes/.planted" ]; then
+  mkdir -p "$PLANT_DIR/lanes"
+  printf '%s %s\n' "peer-source" "$PLANT_PATH" > "$PLANT_DIR/lanes/0"
+  printf '%s %s\n' "peer-source" "$PLANT_PATH" > "$PLANT_DIR/lanes/9"
+  : > "$PLANT_DIR/lanes/.planted"
+fi
+exec /usr/bin/mktemp "$@"
+MK2EOF
+chmod +x "$GUARDBIN/mktemp"
+ADQ="$ROOT/guard-adopt-q"; mkdir -p "$ADQ/lanes"
+OUT=$(
+  PATH="$GUARDBIN:$PATH"; export PATH
+  cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$ADQ" \
+    PLANT_DIR="$ADQ" PLANT_PATH="$WTP" FAIL_LN_ONCE="$ROOT/ln-failed-once" \
+    bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?"
+)
+[ "$OUT" = "rc=1" ] && ok "an adopted-plus-duplicate state refuses the lane" || bad "adopt arm returned $OUT"
+[ -f "$ADQ/lanes/0" ] && ok "a claim we ADOPTED is never deleted, even holding the lower index" \
+  || bad "the withdrawal deleted a live peer's claim — the P1 this guard exists to prevent"
+[ -f "$ADQ/lanes/9" ] && ok "and the peer's other claim stands" || bad "peer claim 9 removed"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
