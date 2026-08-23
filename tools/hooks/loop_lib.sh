@@ -95,7 +95,15 @@ loop_status_ensure() {
     # write it, and one could publish it while the other was still writing -- reintroducing
     # the partial-publication race this protocol exists to remove. mktemp creates with
     # O_EXCL and never returns a name it did not just create.
-    local _tmp; _tmp=$(mktemp "${p}.XXXXXXXX" 2>/dev/null) || _tmp="${p}.$$-${RANDOM}.tmp"
+    # NO fallback to a guessable name (codex r16 P3): reverting to `$$`/`$RANDOM` would
+    # reinstate exactly the shared-inode publication race this protocol exists to remove.
+    # If mktemp cannot give us an exclusively-created staging file, we do not create the
+    # venue at all -- callers already treat an absent venue as a hard write failure.
+    local _tmp
+    if ! _tmp=$(mktemp "${p}.XXXXXXXX" 2>/dev/null) || [ -z "$_tmp" ]; then
+      echo "loop_status_ensure: cannot create an exclusive staging file for $p" >&2
+      return 0
+    fi
     (
       cat > "$_tmp" <<'EOF'
 # Loop status ledger
@@ -200,6 +208,15 @@ _loop_pending_rows_with_ts() {
   ' "$1" 2>/dev/null) || return 1
   printf '%s\n' "$out" | sed 's/\\|/|/g' | grep -v '^$' | sort
   return 0
+}
+
+# Is <pid> a live process? `kill -0` ALONE is not enough: for a process owned by another
+# user it fails with EPERM, which means the process EXISTS -- reading that as "dead" would
+# let a migration steal a claim another user's still-running migrator holds. `ps -p` answers
+# regardless of ownership, so either success counts as alive.
+_loop_pid_alive() {
+  kill -0 "$1" 2>/dev/null && return 0
+  ps -p "$1" >/dev/null 2>&1
 }
 
 # `<item> <ts>` for the LAST RESOLVED-HIL of every item in <ledger>. Computed ONCE per
@@ -353,15 +370,33 @@ loop_status_migrate() {
     # whenever more than one existed (codex r8 P2), letting an older RESOLVED-HIL follow and
     # clear a newer DEFERRED-HIL. They are concatenated in ONE pass instead, oldest first,
     # with the live file (the newest rows, if a concurrent old writer recreated it) last.
-    local orphans=() orphan
+    # A claim whose OWNER IS STILL ALIVE is not an orphan (codex r16 P2). Two concurrent
+    # SessionStart migrations would otherwise each treat the other's in-flight claim as
+    # abandoned, fold and delete it mid-import, duplicate its rows, and break the first
+    # migrator's retirement -- and a duplicate landing after a RESOLVED-HIL reopens an
+    # answered gate. The claim name carries the owning pid, so liveness is a `kill -0`.
+    # A claim from a dead pid, or one we cannot attribute, is genuinely orphaned.
+    local orphans=() orphan _opid
     for orphan in "$wt/.harness"/loop_status.md.migrating-*; do
-      [ -f "$orphan" ] && orphans+=("$orphan")
+      [ -f "$orphan" ] || continue
+      _opid=$(printf '%s' "${orphan##*/}" | sed -n 's/.*-\([0-9][0-9]*\)-[0-9][0-9]*$/\1/p')
+      if [ -n "$_opid" ] && [ "$_opid" != "$$" ] && _loop_pid_alive "$_opid"; then
+        continue   # another migration is importing it right now
+      fi
+      orphans+=("$orphan")
     done
     if [ "${#orphans[@]}" -gt 0 ]; then
       local _merged="${legacy}.merge-$$"
-      local _sorted=()
-      while IFS= read -r orphan; do [ -n "$orphan" ] && _sorted+=("$orphan"); done \
-        < <(printf '%s\n' "${orphans[@]}" | sort)
+      # Sort by BASENAME (codex r16 P3). The full paths carry the worktree prefix, and
+      # printing those through a newline-delimited sort would split any path containing a
+      # newline into nonexistent filenames -- permanently breaking orphan recovery for that
+      # worktree, the same defect the NUL-safe enumeration removed upstream. Basenames are
+      # OUR OWN construction (`loop_status.md.migrating-<ts>-<pid>-<rand>`) and can never
+      # contain a newline, so sorting them is safe; the directory is common to all of them.
+      local _dir="$wt/.harness" _base _sorted=()
+      while IFS= read -r _base; do
+        [ -n "$_base" ] && _sorted+=("$_dir/$_base")
+      done < <(for orphan in "${orphans[@]}"; do printf '%s\n' "${orphan##*/}"; done | sort)
       # The live ledger joins the list as an ARRAY element (codex r11 P3). Unquoted
       # expansion word-split any worktree path containing a space into several `cat`
       # arguments, so orphan recovery failed on every retry for such a checkout.

@@ -671,6 +671,16 @@ unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 #     and publish it half-written — the very race the ln protocol removes.
 printf '%s' "$(declare -f loop_status_ensure)" | grep -q 'mktemp' \
   && ok "the staging file is created exclusively (mktemp)" || bad "staging name is guessable"
+# BEHAVIOURAL (codex r16 P3): when mktemp cannot supply an exclusive name the venue must NOT
+# be created through a guessable fallback — that fallback was the very race this removes.
+printf '%s' "$(declare -f loop_status_ensure)" | grep -q '\$\$-\${RANDOM}' \
+  && bad "loop_status_ensure still falls back to a guessable staging name" \
+  || ok "no guessable staging fallback remains"
+MKFAIL="$REPO/mkfail"; rm -rf "$MKFAIL"; mkdir -p "$MKFAIL/bin"
+printf '#!/bin/sh\nexit 1\n' > "$MKFAIL/bin/mktemp"; chmod +x "$MKFAIL/bin/mktemp"
+MKV="$MKFAIL/venue/loop_status.md"
+( PATH="$MKFAIL/bin:$PATH" HARNESS_LOOP_STATUS_PATH="$MKV" loop_status_ensure ) >/dev/null 2>&1
+[ ! -e "$MKV" ] && ok "a failed mktemp creates no venue instead of using a guessable name" || bad "venue created via the unsafe fallback"
 
 # 39) codex r7 P2 — an orphaned claim's rows are OLDER than a recreated live ledger's, so
 #     they must be folded in FIRST. Appended last, an old RESOLVED-HIL in the orphan would
@@ -905,6 +915,35 @@ cp "$LEG" "$MIGB/wt1/.harness/loop_status.md"
 ( cd "$MIGB" && CLAUDE_PROJECT_DIR="$MIGB" HARNESS_LOOP_STATUS_PATH="$MIGBV" loop_status_migrate ) >/dev/null 2>&1
 [ "$(HARNESS_LOOP_STATUS_PATH="$MIGBV" loop_skip_set)" = "B-971" ] \
   && ok "migration imports only what was pending under the OLD rule" || bad "migration resurrected a pre-ACTIVATE row: [$(HARNESS_LOOP_STATUS_PATH="$MIGBV" loop_skip_set)]"
+
+# 53) codex r16 P2 — a claim whose OWNER IS ALIVE is not an orphan. Two concurrent
+#     migrations would otherwise fold and delete each other's in-flight claim, duplicating
+#     rows and breaking the first migrator's retirement. A real background process stands in
+#     for "another migrator, still running" — a pid we own, alive, and not this shell.
+MIGD="$REPO/migd"; rm -rf "$MIGD"; mkdir -p "$MIGD"
+( cd "$MIGD" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b mdwt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIGD/wt1/.harness"
+MIGDV="$MIGD/shared/loop_status.md"
+sleep 30 & LIVEPID=$!
+LIVE_CLAIM="$MIGD/wt1/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z-${LIVEPID}-7"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-991 — in flight elsewhere |\n' > "$LIVE_CLAIM"
+( cd "$MIGD" && CLAUDE_PROJECT_DIR="$MIGD" HARNESS_LOOP_STATUS_PATH="$MIGDV" loop_status_migrate ) >/dev/null 2>&1
+[ -f "$LIVE_CLAIM" ] && ok "a claim owned by a LIVE pid is left for its owner" || bad "a live migrator's claim was stolen"
+[ -z "$(HARNESS_LOOP_STATUS_PATH="$MIGDV" loop_skip_set)" ] && ok "the live claim's rows are not double-imported" || bad "live claim imported behind its owner's back"
+# ... while a claim from a DEAD pid is genuinely orphaned and IS recovered.
+kill "$LIVEPID" 2>/dev/null; wait "$LIVEPID" 2>/dev/null
+DEAD_CLAIM="$MIGD/wt1/.harness/loop_status.md.migrating-2026-08-03T00:00:00Z-999999-7"
+mv "$LIVE_CLAIM" "$DEAD_CLAIM"
+( cd "$MIGD" && CLAUDE_PROJECT_DIR="$MIGD" HARNESS_LOOP_STATUS_PATH="$MIGDV" loop_status_migrate ) >/dev/null 2>&1
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIGDV" loop_skip_set)" = "B-991" ] \
+  && ok "a claim from a DEAD pid is recovered and imported" || bad "dead-owner claim not recovered: [$(HARNESS_LOOP_STATUS_PATH="$MIGDV" loop_skip_set)]"
+
+# 54) codex r16 P3 — orphan claims are sorted by BASENAME, so a worktree path containing a
+#     newline cannot split the fold list into nonexistent filenames.
+printf '%s' "$(declare -f loop_status_migrate)" | grep -q '{orphan##\*/}' \
+  && ok "orphans sort by basename, never by full path" || bad "orphan sort still round-trips full paths through newlines"
 
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
