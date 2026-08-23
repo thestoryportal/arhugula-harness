@@ -95,13 +95,16 @@ _lane_init_id() {
   # cannot replace it (not a corpse by size) while every read yields an empty id. Emptiness
   # is therefore judged on the CONTENT of the first line, everywhere this file inspects it.
   _li_marker_blank() { [ ! -s "$1" ] && return 0; IFS= read -r _b < "$1"; [ -z "${_b:-}" ]; }
-  # A PERSISTED marker is sanitised on READ as well as on write. Markers written before this
-  # unit came from `mint-lane-id`, which preserved a space in the worktree basename — so a
-  # legacy `host-with space-abc` would be adopted verbatim into the space-delimited claim,
-  # where every scan misparses the recorded path: the lane re-allocates an index on each
-  # source and its stack-down stops targeting the stack it started. A marker that does not
-  # match its own sanitised form is therefore migrated, by the same locked atomic republish
-  # a corpse gets, rather than trusted because it is non-empty.
+  # A PERSISTED marker is CHECKED against the sanitiser, and a mismatch is REFUSED rather
+  # than resolved either way. Markers written before this unit came from `mint-lane-id`,
+  # which preserved a space in the worktree basename, so a legacy `host-with space-abc` is
+  # possible — and both automatic answers are wrong. Adopting it feeds the space-delimited
+  # claim a value every scan misparses (the lane re-allocates an index per source and its
+  # stack-down stops naming the stack it started). Rewriting it changes a DURABLE identity:
+  # an open reservation recorded under the old id no longer matches its holder, so the lane
+  # cannot resume or transition its own arc. Refusing is the only answer that destroys
+  # nothing, and it names both forms so the operator can retire the reservation and rewrite
+  # the marker deliberately.
   if ! _li_marker_blank "$f"; then
     IFS= read -r id < "$f"
     _li_clean=$(_li_sanitize "$id")
@@ -112,11 +115,9 @@ _lane_init_id() {
       printf '%s' "$id"
       return 0
     fi
-    if [ -n "$_li_clean" ]; then
-      echo "lane-init: migrating a persisted lane id that predates sanitisation ($id -> $_li_clean)" >&2
-      id="$_li_clean"; _li_migrate=1
-    fi
+    echo "lane-init: the persisted lane id at $f is not usable as written ('$id'; sanitises to '${_li_clean:-}') — it predates id sanitisation. Rewriting it here would orphan any reservation held under the old id, and using it as-is corrupts the claim record, so resolve it deliberately: retire that lane's reservation, then replace the marker with '${_li_clean:-a freshly minted id}'." >&2
     unset _li_clean
+    return 1
   fi
   if [ -n "${HARNESS_LANE_ID:-}" ]; then
     # Sanitise FIRST, then test. An exported value is operator- or agent-supplied text, and
@@ -151,12 +152,12 @@ _lane_init_id() {
   # then hold different ids. `mv` replaces atomically — concurrent repairers simply order,
   # the last one wins, and BOTH re-read the published file below and converge on one id.
   local corpse_repair=""
-  if [ -e "$f" ] && { _li_marker_blank "$f" || [ -n "${_li_migrate:-}" ]; }; then
+  if [ -e "$f" ] && _li_marker_blank "$f"; then
     if _lane_repair_lock "$f"; then
       # RECHECK under the lock. The observation that sent us here was made BEFORE the wait,
       # and the repairer we waited for may have published in the meantime — replacing its
       # marker now would give this worktree a second identity after the first was exported.
-      if ! _li_marker_blank "$f" && [ -z "${_li_migrate:-}" ]; then
+      if ! _li_marker_blank "$f"; then
         IFS= read -r id < "$f"
         _lane_repair_unlock "$f"
         printf '%s' "$id"
@@ -214,7 +215,7 @@ _lane_init_id() {
 }
 if ! _LI_ID="$(_lane_init_id)"; then
   unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-  unset _LI_ROOT _LI_Q _LI_WT _LI_ID _li_migrate
+  unset _LI_ROOT _LI_Q _LI_WT _LI_ID
   unset -f _lane_init_id
   return 1 2>/dev/null || exit 1
 fi
@@ -595,5 +596,5 @@ lane_stack_allowed() {
   return 1
 }
 
-unset _LI_ROOT _LI_Q _LI_WT _li_migrate
+unset _LI_ROOT _LI_Q _LI_WT
 unset -f _lane_init_id _li_sanitize

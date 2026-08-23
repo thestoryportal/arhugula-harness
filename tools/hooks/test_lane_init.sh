@@ -723,35 +723,29 @@ OUT=$(
   && ok "lane_stack_allowed clears the fence and admits the lane" \
   || bad "stack-up path did not honour the fence: '$OUT'"
 
-# --- 37. a marker written BEFORE sanitisation is migrated, not adopted verbatim --------
+# --- 37. a marker written BEFORE sanitisation is REFUSED, not silently resolved --------
 # `mint-lane-id` preserved a space in the worktree basename, so markers predating this unit
-# can hold `host-with space-abc`. Adopted as-is it goes into the space-delimited claim, where
-# every scan misparses the path: the lane re-allocates an index on each source and its
-# stack-down stops naming the stack it started. The migration path is the one a real
-# workspace takes, and it starts from an EXISTING marker — which the spaced-worktree case
-# above does not, because that one starts clean.
+# can hold `host-with space-abc`. Neither automatic answer is safe: adopting it corrupts the
+# space-delimited claim, and rewriting it changes a DURABLE identity, orphaning any
+# reservation recorded under the old id. The lane refuses and names both forms.
 MIGQ="$ROOT/migrate-q"
 git -C "$ROOT/repo" worktree add -q "$ROOT/wt10" -b lane-j || { echo "FATAL: worktree j"; exit 1; }
 mkdir -p "$ROOT/wt10/.harness"
 printf 'legacy host-with space-abc\n' > "$ROOT/wt10/.harness/.lane-id"
-ID_MIG=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" \
-  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\${HARNESS_LANE_ID:-}\"")
-case "$ID_MIG" in
-  *" "*) bad "the legacy marker's space reached the lane id: '$ID_MIG'" ;;
-  "") bad "the legacy marker produced no lane id" ;;
-  *) ok "a pre-sanitisation marker is migrated, not adopted verbatim" ;;
+OUT=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset}\"")
+[ "$OUT" = "rc=1 id=unset" ] && ok "an unsanitisable persisted id is refused, not adopted or rewritten" \
+  || bad "legacy marker was resolved automatically: $OUT"
+grep -qF -- "host-with space-abc" "$ROOT/wt10/.harness/.lane-id" \
+  && ok "and the marker is left untouched, so no reservation is orphaned" \
+  || bad "the refusal rewrote the marker anyway: [$(cat "$ROOT/wt10/.harness/.lane-id" 2>/dev/null)]"
+ERR=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" bash -c "source '$INIT'" 2>&1 >/dev/null)
+case "$ERR" in
+  *"not usable as written"*) ok "the refusal names the file and both forms" ;;
+  *) bad "unhelpful refusal message: [$ERR]" ;;
 esac
-case "$(cat "$ROOT/wt10/.harness/.lane-id" 2>/dev/null)" in
-  *" "*) bad "the marker on disk still holds the unsanitised id" ;;
-  *) ok "and the migration is PERSISTED, so the next source is already clean" ;;
-esac
-K_MIG=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" \
-  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
-K_MIG2=$(cd "$ROOT/wt10" && ARC_METRICS_QUEUE_DIR="$MIGQ" \
-  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
-{ [ -n "$K_MIG" ] && [ "$K_MIG" = "$K_MIG2" ]; } \
-  && ok "the migrated lane reuses one index instead of re-allocating each source" \
-  || bad "migrated lane churned its index: '$K_MIG' then '$K_MIG2'"
+[ ! -d "$MIGQ/lanes" ] || [ -z "$(ls -A "$MIGQ/lanes" 2>/dev/null)" ] \
+  && ok "a refused lane claims no index" || bad "the refused lane still took a claim"
 
 # --- 38. a failed source leaves NO lane identity AND no lane index behind --------------
 # The index is as dangerous as the id: a shell that carries a stale one into another
