@@ -1253,6 +1253,42 @@ def test_u_he_29_closeout_drains_an_orphan_only_recovery_state(
     )
 
 
+def test_u_he_29_closeout_is_unknown_while_a_sibling_is_still_draining(
+    repo, monkeypatch, tmp_path, shared_ledger
+):
+    """rc==2 from the migration means "the venue is not complete yet", and the report must
+    NOT publish a list read from it.
+
+    The shell side pins that `loop_status_migrate` EXITS 2 when it skips a live sibling's
+    claim, but an exit code nobody consumes is not a fix — this pins the CONSUMER: a
+    write-once, PR-keyed closure record must degrade to UNKNOWN rather than freeze a short
+    todo list while another migrator is still importing. UNKNOWN is recoverable by re-running
+    the report; a confidently-wrong closure record is not.
+    """
+    notes: list[str] = []
+    root = tmp_path / "sibling-draining-wt"
+    (root / ".harness").mkdir(parents=True)
+    # An orphan-only state, so the drain gate fires and the migration is actually invoked.
+    (root / ".harness" / "loop_status.md.migrating-2026-08-05T00:00:00Z-424242-1").write_text(
+        "| 2026-08-05T00:01:00Z | DEFERRED-HIL | R-740 — held by a live sibling |\n",
+        encoding="utf-8",
+    )
+    real_run = aer.run
+
+    def run_stub(cmd, cwd, timeout=20):
+        if len(cmd) > 2 and "loop_status_migrate" in cmd[2]:
+            return 2, ""  # a live sibling holds the claim; venue incomplete
+        return real_run(cmd, cwd, timeout)
+
+    monkeypatch.setattr(aer, "run", run_stub)
+    got = aer._todos(root, repo, notes)
+    assert got is None, "a still-draining venue must be UNKNOWN, never a confident list"
+    assert any("concurrent migration is still draining" in n for n in notes)
+    assert any("not lost, only not yet visible" in n for n in notes), (
+        "the note must say the rows survive, so UNKNOWN does not read as data loss"
+    )
+
+
 def test_u_he_29_closeout_fails_closed_when_the_legacy_drain_fails(
     repo, monkeypatch, tmp_path, shared_ledger
 ):

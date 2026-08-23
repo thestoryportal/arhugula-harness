@@ -333,6 +333,12 @@ def test_extractor_sees_module_idioms() -> None:
         assert expected in py, (expected, sorted(py))
     sh = store_literals(REPO / "tools" / "hooks" / "loop_lib.sh")
     assert ".loop-status.lock" in sh, sorted(sh)  # the `$(dirname "$p")/...` construction
+    # The `${var}.<suffix>` idiom (U-HE-29's cutover artifacts). Without the `shellsuffix`
+    # pattern these are INVISIBLE to the extractor and the listed-ness check above passes
+    # VACUOUSLY over them — reporting "nothing unlisted" for the same reason it would report
+    # a clean sheet. Asserting the extractor SEES them is what makes that check non-vacuous.
+    for expected in ("*.migrating-*", "*.migrated-*", "*.merge-*"):
+        assert expected in sh, (expected, sorted(sh))
 
 
 def test_listed_is_segment_bound_not_substring() -> None:
