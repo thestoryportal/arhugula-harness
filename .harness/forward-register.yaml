@@ -10129,7 +10129,12 @@ items:
     an fd on the legacy inode keeps appending after the claim rename, so a deferral written
     after the reduce reaches EOF lands only in the `.migrated-*` archive and no later pass
     looks there. This one is NOT fixable from this side — the old writer takes no lock of ours
-    and holds the inode regardless of its name.'
+    and holds the inode regardless of its name. RE-FOUND at r9 with a third instance of the
+    same root cause: the orphan fold reads the live legacy file with `cat` and replaces it
+    with `mv`, so a row appended between the EOF and the rename is on an inode the
+    replacement unlinks. All three instances share one precondition (a live pre-U-HE-29
+    writer) and one mitigation shape (claim/lock cooperation the old code cannot give), so
+    they close together or not at all.'
   close_out: '(1) For (a): hold the existing `.loop-status.lock` (the fd-8 flock
     `loop_hil_ttl_resurface` already uses) across the staleness check AND the conditional
     append, so the decision and the write are one critical section; confirm the added

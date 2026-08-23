@@ -228,7 +228,13 @@ _loop_last_resolved_ts() {
 # Usage: loop_status_migrate [--dry-run]   → prints one line per file considered.
 loop_status_migrate() {
   local dry=""; [ "${1:-}" = "--dry-run" ] && dry=1
-  local shared; shared=$(loop_status_ensure) || return 1
+  # Under --dry-run, RESOLVE the venue without creating it (codex r9 P2): loop_status_ensure
+  # would materialize the shared ledger, which is itself a mutation an operator inspecting
+  # the pending cutover did not ask for.
+  local shared
+  if [ -n "$dry" ]; then shared=$(loop_status_path) || return 1
+  else shared=$(loop_status_ensure) || return 1
+  fi
   [ -n "$shared" ] || { echo "loop_status_migrate: no shared venue" >&2; return 1; }
   local root; root=$(hook_project_dir); [ -n "$root" ] || return 1
   # Enumerate FIRST and check the status (codex r4 P2). Piping `git worktree list` straight
@@ -253,6 +259,20 @@ loop_status_migrate() {
     # skip-set. Restoring it to the original name hands it back to the normal path in this
     # same pass; the row-level dedupe below makes re-importing an already-imported row a
     # no-op, so recovery cannot double-count.
+    # `--dry-run` reports and mutates NOTHING (codex r9 P2). It used to fall through the
+    # orphan fold below -- which rewrites the live legacy file and deletes `.migrating-*`
+    # claims -- before reaching its own check further down, so the "read-only" mode was
+    # rewriting exactly the state an operator runs it to inspect. Report and move on.
+    if [ -n "$dry" ]; then
+      local n_orph n_live
+      n_orph=$(ls "$wt/.harness"/loop_status.md.migrating-* 2>/dev/null | wc -l | tr -d ' ')
+      n_live=0
+      [ -f "$legacy" ] && n_live=$(_loop_pending_rows_with_ts "$legacy" 2>/dev/null | grep -c . || echo 0)
+      if [ "$n_orph" != "0" ] || [ "$n_live" != "0" ]; then
+        echo "would import $n_live still-open row(s) + fold $n_orph orphaned claim(s): $legacy"
+      fi
+      continue
+    fi
     # Orphan names embed their claim timestamp, so a lexicographic sort IS chronological.
     # Folding them one at a time -- each prepended to the growing file -- reversed that order
     # whenever more than one existed (codex r8 P2), letting an older RESOLVED-HIL follow and
@@ -289,10 +309,6 @@ loop_status_migrate() {
     # `mv` is atomic: exactly one process claims the file, and a concurrent writer that
     # recreates the original path simply produces a file the NEXT pass handles normally.
     local claim="${legacy}.migrating-$(loop_now)"
-    if [ -n "$dry" ]; then
-      local n_dry; n_dry=$(HARNESS_LOOP_STATUS_PATH="$legacy" loop_pending_hil_list 2>/dev/null | grep -c . || echo 0)
-      echo "would import $n_dry still-open row(s): $legacy"; continue
-    fi
     mv "$legacy" "$claim" 2>/dev/null || { echo "loop_status_migrate: could not claim $legacy" >&2; return 1; }
     # HONOUR the reducer's exit status (codex r4 P2). An unreadable ledger returns rc!=0 with
     # empty output; treating that as "nothing pending" would retire the file and report a

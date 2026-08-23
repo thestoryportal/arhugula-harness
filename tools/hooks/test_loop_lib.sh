@@ -374,14 +374,22 @@ unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 ( HARNESS_LOOP_STATUS_PATH=/nonexistent-dir/x.md loop_log NOTIFY "detail" ) 2>/dev/null
 [ $? -eq 0 ] && ok "loop_log preserves its always-0 hook contract" || bad "loop_log broke its always-0 contract"
 
-# 25) §2 pointer sweep: no live carrier still points a reader or a writer at the
-#     per-worktree ledger path. `loop_status_migrate` is the ONE legitimate mention -- it
+# 25) §2 pointer sweep: no live carrier — code, recipe, skill, or operator INSTRUCTION —
+#     still points a reader or a writer at the per-worktree ledger path. The list covers
+#     live carriers only: historical records (fork docs, clearance markers, the next-action
+#     archive, this arc's own plan/spec prose) legitimately describe the pre-U-HE-29 venue
+#     and must NOT be rewritten — a record of what was true then is not a stale pointer.
+#     `.harness/wave2-hooks-status.md` is in the list because it is a live operator
+#     instruction ("Review ... after any run"), and following it would have missed every
+#     shared row (codex r9 P3). `loop_status_migrate` is the ONE legitimate mention -- it
 #     exists precisely to drain those files -- so lines belonging to it are excluded by
 #     their `legacy` marker; everything else must be zero.
 SWEEP=$(cd "$SCRIPT_DIR/../.." && grep -rn '\.harness/loop_status\.md' \
   tools/hooks/loop_lib.sh tools/roadmap-audit/session-start.sh tools/arc_exit_report.py \
+  tools/04-loop/run.sh justfile \
   .claude/skills/loop-start/SKILL.md .claude/skills/loop-stop/SKILL.md \
-  .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md 2>/dev/null \
+  .claude/skills/resolve/SKILL.md .claude/skills/ship-pr/SKILL.md \
+  .agents/skills/ship-pr/SKILL.md .harness/wave2-hooks-status.md 2>/dev/null \
   | grep -v 'legacy' | wc -l | tr -d ' ')
 [ "$SWEEP" = "0" ] && ok "pointer sweep: 0 literal .harness/loop_status.md hits in live carriers" || bad "stale pointers remain ($SWEEP line(s))"
 # ... and the migration's own mention is genuinely there (the exclusion above must not be
@@ -722,6 +730,31 @@ chmod 000 "$UNREAD"
 ( set +o pipefail; _loop_pending_rows_with_ts "$UNREAD" >/dev/null 2>&1 )
 [ $? -ne 0 ] && ok "an unreadable ledger propagates failure without pipefail" || bad "unreadable ledger read as empty"
 chmod 644 "$UNREAD"; rm -f "$UNREAD"
+
+# 44) codex r9 P2 — `--dry-run` must mutate NOTHING. It previously fell through the orphan
+#     fold (which rewrites the live legacy file and deletes claims) before reaching its own
+#     check, and called loop_status_ensure, which materializes the shared venue — so the
+#     read-only mode rewrote exactly the state an operator runs it to inspect.
+MIG7="$REPO/mig7"; rm -rf "$MIG7"; mkdir -p "$MIG7"
+( cd "$MIG7" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m7wt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIG7/wt1/.harness"
+MIG7V="$MIG7/shared/loop_status.md"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-801 — live row |\n' > "$MIG7/wt1/.harness/loop_status.md"
+printf '| 2026-08-02T00:00:00Z | DEFERRED-HIL | B-802 — orphan row |\n' \
+  > "$MIG7/wt1/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z"
+LIVE_BEFORE=$(cat "$MIG7/wt1/.harness/loop_status.md")
+DRY=$(cd "$MIG7" && CLAUDE_PROJECT_DIR="$MIG7" HARNESS_LOOP_STATUS_PATH="$MIG7V" loop_status_migrate --dry-run 2>&1)
+printf '%s' "$DRY" | grep -q 'would import' && ok "--dry-run reports what it would do" || bad "--dry-run silent: $DRY"
+[ ! -e "$MIG7V" ] && ok "--dry-run does not create the shared venue" || bad "--dry-run created the venue"
+[ "$(cat "$MIG7/wt1/.harness/loop_status.md")" = "$LIVE_BEFORE" ] && ok "--dry-run leaves the live legacy ledger byte-identical" || bad "--dry-run rewrote the legacy ledger"
+[ -f "$MIG7/wt1/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z" ] && ok "--dry-run leaves orphaned claims in place" || bad "--dry-run consumed an orphaned claim"
+# and the real pass still works afterwards
+( cd "$MIG7" && CLAUDE_PROJECT_DIR="$MIG7" HARNESS_LOOP_STATUS_PATH="$MIG7V" loop_status_migrate ) >/dev/null 2>&1
+SK=$(HARNESS_LOOP_STATUS_PATH="$MIG7V" loop_skip_set)
+{ printf '%s' "$SK" | grep -q 'B-801' && printf '%s' "$SK" | grep -q 'B-802'; } \
+  && ok "a real pass after a dry-run imports both the live and orphaned rows" || bad "post-dry-run pass incomplete: [$SK]"
 
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
