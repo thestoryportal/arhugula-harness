@@ -833,7 +833,11 @@ hook_release_lane_index() {
 _hook_lane_stack_down() {
   local k="${1:-}" root project compose
   case "$k" in ''|*[!0-9]*) return 0 ;; esac
-  command -v docker >/dev/null 2>&1 || return 0     # no docker at all: nothing can exist
+  # A missing docker EXECUTABLE is not proof that no docker STATE exists: hooks often run
+  # with a reduced PATH, and a client can be removed while its containers and volumes remain.
+  # Unverifiable, therefore fenced — on a machine that genuinely has no Docker the fence
+  # costs nothing, because there is no stack for the next lane to bring up either.
+  command -v docker >/dev/null 2>&1 || return 2
   root=$(hook_project_dir); [ -n "$root" ] || return 2
   compose="$root/deploy/self-hosted-local/compose.yaml"
   { [ -f "$compose" ] && [ -f "$root/tools/lane_ports.py" ]; } || return 2

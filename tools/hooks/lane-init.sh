@@ -93,7 +93,10 @@ _lane_init_id() {
     fi
   fi
   if [ -n "${HARNESS_LANE_ID:-}" ] && ! _lane_id_bound_elsewhere "$HARNESS_LANE_ID"; then
-    id="$HARNESS_LANE_ID"      # an unbound export seeds this worktree's marker, published below
+    # Through the SAME sanitiser as every other source. An exported value is operator- or
+    # agent-supplied text; whitespace in it makes the space-delimited claim record unparsable,
+    # after which no scan matches this worktree and teardown releases nothing.
+    id=$(printf '%s' "$HARNESS_LANE_ID" | tr -d ' \t\n\r|;[]')
   fi
   [ -n "$id" ] || id=$( (cd "$_LI_ROOT" && uv run --quiet python tools/reservations.py mint-lane-id \
           --worktree "$_LI_WT") 2>/dev/null | tr -d ' \t\n\r|;[]' )
@@ -182,51 +185,60 @@ export HARNESS_LANE_ID="$_LI_ID"
 unset _LI_ID
 
 # ── lane index ───────────────────────────────────────────────────────────────────────
-# Both index knobs become a FILENAME under QUEUE_DIR/lanes, and the index is also the input
-# to the port formula. An unvalidated value is either out of contract (350+ has no port
-# block) or a path escape (`../…` would publish the claim outside the registry), so both are
-# range-checked here rather than at the point of damage.
-for _li_var in HARNESS_LANE_INDEX HARNESS_LANE_INDEX_FORCE; do
-  eval "_li_val=\${$_li_var:-}"
-  [ -z "$_li_val" ] && continue
-  case "$_li_val" in
-    ''|*[!0-9]*) echo "lane-init: $_li_var must be an integer 0..349, got '$_li_val'" >&2
-                 unset _li_var _li_val; return 1 2>/dev/null || exit 1 ;;
-    0) ;;
-    0*) # `00` and `08` are distinct registry FILENAMES but the same integer to the port
-        # formula, so two lanes could hold `lanes/0` and `lanes/00` and share one Compose
-        # project. Only the canonical spelling is a valid index.
-        echo "lane-init: $_li_var must be canonical (no leading zeros), got '$_li_val'" >&2
-        unset _li_var _li_val; return 1 2>/dev/null || exit 1 ;;
-  esac
-  if [ "$_li_val" -ge 350 ]; then
-    echo "lane-init: $_li_var must be < 350 (no port block exists above it), got '$_li_val'" >&2
-    unset _li_var _li_val; return 1 2>/dev/null || exit 1
-  fi
-done
-unset _li_var _li_val
+# ── lane index ───────────────────────────────────────────────────────────────────────
+# ONE rule governs every path below: a worktree holds AT MOST ONE claim, and an index is
+# usable only when a claim positively names this worktree. HARNESS_LANE_INDEX is the single
+# knob — it asks for a specific index rather than the next free one; it is not an escape
+# from the rule, and a lane that already holds a different index is refused.
 
-# A preset HARNESS_LANE_INDEX claims nothing — the caller is asserting an index it already
-# owns — but the assertion is CHECKED. An export follows a shell across a `cd`, so without
-# this a shell moving from lane A to lane B would run B on A's Compose project, ports and
-# volumes while both believed they were isolated. An index claimed by a different worktree
-# is refused; an unclaimed one is accepted (that is the recipe/test case).
+# The index becomes a FILENAME under QUEUE_DIR/lanes and the input to the port formula, so
+# it is validated before it can be either. `00` and `08` parse as integers but are DIFFERENT
+# filenames from `0` and `8` while mapping to the same Compose project, and `../…` would
+# publish a claim outside the registry.
 if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
-  mkdir -p "$_LI_Q/lanes" 2>/dev/null
-  if [ ! -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" ]; then
-    # A free preset index is TAKEN, not merely assumed: without a claim two worktrees can
-    # preset the same free index and both proceed onto one Compose project. Published the
-    # same way a regular claim is, so the record is never observable without its owner.
+  case "$HARNESS_LANE_INDEX" in
+    ''|*[!0-9]*)
+      echo "lane-init: HARNESS_LANE_INDEX must be an integer 0..349, got '$HARNESS_LANE_INDEX'" >&2
+      unset _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+    0) ;;
+    0*)
+      echo "lane-init: HARNESS_LANE_INDEX must be canonical (no leading zeros), got '$HARNESS_LANE_INDEX'" >&2
+      unset _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+  esac
+  if [ "$HARNESS_LANE_INDEX" -ge 350 ]; then
+    echo "lane-init: HARNESS_LANE_INDEX must be < 350 (no port block exists above it), got '$HARNESS_LANE_INDEX'" >&2
+    unset _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
+  fi
+fi
+
+mkdir -p "$_LI_Q/lanes" 2>/dev/null
+# What this worktree already holds, resolved ONCE and used by both paths below.
+_li_have=""
+for _li_f in "$_LI_Q"/lanes/*; do
+  [ -f "$_li_f" ] || continue
+  IFS=' ' read -r _li_id _li_path < "$_li_f"
+  [ "${_li_path:-}" = "$_LI_WT" ] && { _li_have="$(basename "$_li_f")"; break; }
+done
+unset _li_f _li_id _li_path
+
+if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
+  if [ -n "$_li_have" ] && [ "$_li_have" != "$HARNESS_LANE_INDEX" ]; then
+    echo "lane-init: this worktree already holds lane index $_li_have — refusing to also take $HARNESS_LANE_INDEX" >&2
+    unset _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
+  fi
+  if [ -z "$_li_have" ]; then
+    # TAKE the requested index — a preset that claims nothing lets two worktrees name the
+    # same free index and both proceed onto one Compose project. Published as a complete
+    # temp file linked into place, so the claim is never observable without its owner.
     if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
        && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null; then
       ln "$_li_tmp" "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null
     fi
     rm -f "${_li_tmp:-}" 2>/dev/null; unset _li_tmp
   fi
-  # POSITIVE verification, not absence-of-objection. Accepting the index because the claim
-  # is missing (mkdir/mktemp/link failed) or because an existing claim is empty/malformed
-  # would run this lane on a project no one is recorded as owning — exactly the state a
-  # concurrent caller could also walk into.
+  # POSITIVE verification, never absence-of-objection: a missing, empty or malformed claim
+  # would put this lane on a project no one is recorded as owning — a state a concurrent
+  # caller can walk into just as easily.
   _li_ok=""
   if [ -f "$_LI_Q/lanes/$HARNESS_LANE_INDEX" ]; then
     IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$HARNESS_LANE_INDEX"
@@ -234,89 +246,81 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   fi
   if [ -z "$_li_ok" ]; then
     echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX could not be claimed for this worktree (claim: [$(cat "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null)]) — refusing to run on a project this lane does not own" >&2
-    unset _LI_ROOT _LI_Q _LI_WT _li_id _li_path _li_ok
+    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_id _li_path _li_ok
     return 1 2>/dev/null || exit 1
   fi
   unset _li_id _li_path _li_ok
-fi
-
-if [ -z "${HARNESS_LANE_INDEX:-}" ]; then
-  mkdir -p "$_LI_Q/lanes" 2>/dev/null
-  _li_k=""
-  # Reuse this worktree's existing claim, unless HARNESS_LANE_INDEX_FORCE asks for a fresh
-  # claim at or above a given index (the RAM-probe path needs a k>=2 lane on demand).
-  if [ -z "${HARNESS_LANE_INDEX_FORCE:-}" ]; then
-    for _li_f in "$_LI_Q"/lanes/*; do
-      [ -f "$_li_f" ] || continue
-      IFS=' ' read -r _li_id _li_path < "$_li_f"
-      [ "${_li_path:-}" = "$_LI_WT" ] && { _li_k="$(basename "$_li_f")"; break; }
-    done
-  fi
-  if [ -z "$_li_k" ]; then
-    _li_k="${HARNESS_LANE_INDEX_FORCE:-0}"
-    while :; do
-      # SAME publication protocol as the lane-id marker, for the same reason: a bare
-      # noclobber redirect makes the claim file visible EMPTY between open() and the
-      # payload write, and a concurrent initializer of this same worktree reading it in
-      # that window sees no owner, decides the claim is someone else's, and takes k+1 —
-      # one lane, two indices, two stacks. The payload is written to an exclusively-created
-      # temp and published with `ln`, so a claim is never observable without its owner.
-      if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
-         && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
-         && ln "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
-        rm -f "$_li_tmp" 2>/dev/null
-        break
+elif [ -n "$_li_have" ]; then
+  export HARNESS_LANE_INDEX="$_li_have"
+else
+  _li_k=0
+  while :; do
+    # SAME publication protocol as the lane-id marker, for the same reason: a bare noclobber
+    # redirect makes the claim visible EMPTY between open() and the payload write, and a
+    # concurrent initializer reading it there sees no owner and takes the next index — one
+    # lane, two indices, two stacks.
+    if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
+       && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
+       && ln "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
+      rm -f "$_li_tmp" 2>/dev/null
+      break
+    fi
+    rm -f "${_li_tmp:-}" 2>/dev/null
+    # Lost the create. Adopt it if it is ours (a concurrent init of this same lane);
+    # otherwise a ZERO-BYTE occupant is a corpse the current protocol cannot produce (a
+    # pre-protocol crash, or a stray touch), repaired ONCE under an exclusive lock.
+    IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
+    [ "${_li_path:-}" = "$_LI_WT" ] && break
+    if [ -e "$_LI_Q/lanes/$_li_k" ] && [ ! -s "$_LI_Q/lanes/$_li_k" ] && [ -z "${_li_retried:-}" ]; then
+      _li_retried=1
+      if _lane_repair_lock "$_LI_Q/lanes/$_li_k"; then
+        # RECHECK under the lock: the claim may have been published while we waited, and
+        # replacing it now would put two worktrees on one index.
+        if [ -s "$_LI_Q/lanes/$_li_k" ]; then
+          IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k"
+          _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
+          [ "${_li_path:-}" = "$_LI_WT" ] && break
+          _li_k=$((_li_k + 1)); _li_retried=""; continue
+        fi
+        if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
+           && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
+           && mv -f "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
+          IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
+          _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
+          [ "${_li_path:-}" = "$_LI_WT" ] && break
+          rm -f "${_li_tmp:-}" 2>/dev/null
+          _li_k=$((_li_k + 1)); _li_retried=""; continue
+        fi
+        _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
+      else
+        # The lock stayed held for the whole wait. Incrementing is the one thing not to do:
+        # the delayed repairer may publish THIS worktree's claim a moment later, and a
+        # concurrent init of the same lane would then hold a different index.
+        if [ -s "$_LI_Q/lanes/$_li_k" ]; then
+          IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k"
+          [ "${_li_path:-}" = "$_LI_WT" ] && break
+        else
+          echo "lane-init: a stale repair lock blocks $_LI_Q/lanes/$_li_k.repair — remove it and re-open the lane" >&2
+          unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
+          return 1 2>/dev/null || exit 1
+        fi
       fi
       rm -f "${_li_tmp:-}" 2>/dev/null
-      # The claim can lose to a CONCURRENT init of THIS SAME worktree. Incrementing past it
-      # would give one lane two indices, so the occupant is inspected: adopt it when it is
-      # ours. A ZERO-BYTE occupant is a corpse the current protocol cannot produce (a
-      # pre-protocol crash, or a stray touch) — unlink it and retry this same k ONCE, never
-      # in a loop, so a genuinely contended index still advances.
-      IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
-      [ "${_li_path:-}" = "$_LI_WT" ] && break
-      if [ -e "$_LI_Q/lanes/$_li_k" ] && [ ! -s "$_LI_Q/lanes/$_li_k" ] && [ -z "${_li_retried:-}" ]; then
-        # Repair by atomic RENAME, then VERIFY ownership — the same discipline as the marker.
-        # Unlink-then-create would let a slow repairer delete a claim another lane had
-        # already published, and both would then believe they hold this index. After the
-        # rename the file is re-read: it is ours only if it says so, otherwise advance.
-        _li_retried=1
-        if _lane_repair_lock "$_LI_Q/lanes/$_li_k"; then
-          # RECHECK under the lock: the claim may have been published while we waited, and
-          # replacing it now would put two worktrees on one index.
-          if [ -s "$_LI_Q/lanes/$_li_k" ]; then
-            IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k"
-            _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
-            [ "${_li_path:-}" = "$_LI_WT" ] && break
-            _li_k=$((_li_k + 1)); _li_retried=""; continue
-          fi
-          if _li_tmp=$(mktemp "$_LI_Q/lanes/.claim.XXXXXXXX" 2>/dev/null) && [ -n "$_li_tmp" ] \
-             && printf '%s %s\n' "$HARNESS_LANE_ID" "$_LI_WT" > "$_li_tmp" 2>/dev/null \
-             && mv -f "$_li_tmp" "$_LI_Q/lanes/$_li_k" 2>/dev/null; then
-            IFS=' ' read -r _li_id _li_path < "$_LI_Q/lanes/$_li_k" 2>/dev/null
-            _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
-            [ "${_li_path:-}" = "$_LI_WT" ] && break
-            rm -f "${_li_tmp:-}" 2>/dev/null
-            _li_k=$((_li_k + 1)); _li_retried=""; continue
-          fi
-          _lane_repair_unlock "$_LI_Q/lanes/$_li_k"
-        fi
-        rm -f "${_li_tmp:-}" 2>/dev/null
-      fi
-      _li_retried=""
-      _li_k=$((_li_k + 1))
-      if [ "$_li_k" -ge 350 ]; then
-        # Never fall through with an unset index: every consumer defaults to lane 0, so a
-        # silent miss puts this lane on lane 0's project name, ports and volumes.
-        echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
-        unset _li_k _li_f _li_id _li_path _li_tmp _li_retried
-        return 1 2>/dev/null || exit 1
-      fi
-    done
-  fi
+    fi
+    _li_retried=""
+    _li_k=$((_li_k + 1))
+    if [ "$_li_k" -ge 350 ]; then
+      # Never fall through with an unset index: every consumer defaults to lane 0, so a
+      # silent miss puts this lane on lane 0's project name, ports and volumes.
+      echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
+      unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
+      return 1 2>/dev/null || exit 1
+    fi
+  done
   export HARNESS_LANE_INDEX="$_li_k"
-  unset _li_k _li_f _li_id _li_path _li_tmp _li_retried
+  unset _li_k _li_id _li_path _li_tmp _li_retried
 fi
+unset _li_have
 
 # ── deferred stack cleanup (C-HE-11 §1) ──────────────────────────────────────────────
 # A lane reaped while the Docker daemon was unreachable cannot have its stack taken down at

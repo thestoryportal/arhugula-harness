@@ -125,11 +125,18 @@ def test_stack_recipes_pass_a_per_lane_project() -> None:
         assert '-p "$R420_PROJECT"' in body, f'{recipe} does not pass -p "$R420_PROJECT"'
 
 
-@pytest.mark.skipif(
-    shutil.which("docker") is None
-    or subprocess.run(["docker", "info"], capture_output=True).returncode != 0,
-    reason="docker-daemon-absent",
-)
+def _docker_daemon_absent() -> bool:
+    """Bounded: a wedged socket makes an unbounded `docker info` hang COLLECTION itself,
+    before pytest can apply any skip — the whole run stalls with no output."""
+    if shutil.which("docker") is None:
+        return True
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=15).returncode != 0
+    except (subprocess.TimeoutExpired, OSError):
+        return True
+
+
+@pytest.mark.skipif(_docker_daemon_absent(), reason="docker-daemon-absent")
 def test_two_lanes_disjoint_names_and_ports() -> None:
     # Never the low indices: this case brings stacks UP and tears them DOWN by project name,
     # so on a machine where a real lane 1 or 2 is live it would reap that operator's stack.

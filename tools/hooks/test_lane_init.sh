@@ -72,11 +72,13 @@ ENTRIES=$(ls "$LANES" | wc -l | tr -d ' ')
 # Honouring a free preset without claiming it would let two worktrees preset the same index
 # and both proceed onto one Compose project — the exclusive-create contract exists precisely
 # to stop that, and a preset is no less a lane than an allocated one.
-KP=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=7 bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
-{ [ "$KP" = "7" ] && [ -f "$LANES/7" ]; } && ok "a free preset index is honoured and claimed" \
-  || bad "preset index: '$KP', claim present: $([ -f "$LANES/7" ] && echo yes || echo no)"
-grep -qF -- "$ROOT/wt" "$LANES/7" && ok "the preset claim records the presetting worktree" \
-  || bad "preset claim content: [$(cat "$LANES/7" 2>/dev/null)]"
+PRESETQ="$ROOT/preset-q"
+KP=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PRESETQ" HARNESS_LANE_INDEX=7 \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+{ [ "$KP" = "7" ] && [ -f "$PRESETQ/lanes/7" ]; } && ok "a free preset index is honoured and claimed" \
+  || bad "preset index: '$KP', claim present: $([ -f "$PRESETQ/lanes/7" ] && echo yes || echo no)"
+grep -qF -- "$ROOT/wt" "$PRESETQ/lanes/7" && ok "the preset claim records the presetting worktree" \
+  || bad "preset claim content: [$(cat "$PRESETQ/lanes/7" 2>/dev/null)]"
 
 # --- 5. gc.auto 0: repo-wide, written once, idempotent ------------------------------
 ( cd "$ROOT/wt" && source "$INIT" >/dev/null 2>&1; cd "$ROOT/wt" && source "$INIT" >/dev/null 2>&1 )
@@ -90,7 +92,8 @@ GC_ALL=$(git -C "$ROOT/wt" config --get-all gc.auto | wc -l | tr -d ' ')
 # --- 6. RAM probe (C-HE-11 §5): shortfall at k>=2 -> NOTIFY + stack absent -----------
 # Both clauses must bite: the machine is below the floor AND less is available than one
 # stack needs. Either alone is not a shortfall (case 6b covers the small-but-idle machine).
-OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX_FORCE=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
+RAMQ="$ROOT/ram-q"
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$RAMQ" HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
   bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
 [ "$OUT" = "ABSENT" ] && ok "RAM shortfall at lane>=2 skips the stack" || bad "ram probe said '$OUT'"
 grep -q '| NOTIFY | .*ram_floor' "$HARNESS_LOOP_STATUS_PATH" \
@@ -102,26 +105,28 @@ case "$NOTIFY_ROW" in
   *) ok "cause is environmental, never merge-door-/reservation- (C-HE-13 §3)" ;;
 esac
 
+PROBEQ="$ROOT/probe-q"
+
 # --- 6b. below the floor but genuinely idle: the probe ALLOWS the lane ---------------
 # The machine-class floor decides whether to probe; the probe is of AVAILABLE memory. A
 # floor-only gate would refuse a lane on a small machine with the whole of it free.
-OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=0 \
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$ROOT/idle-q" HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=0 \
   bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
 [ "$OUT" = "ALLOWED" ] && ok "below the floor but with headroom, the lane is allowed" \
   || bad "idle small machine refused: '$OUT'"
 
 # --- 7. RAM probe never gates lanes 0/1, however low the machine --------------------
-# A SEPARATE registry: indices 0/1 are claimed by wt/wt2 above, and presetting an index
-# another worktree owns is now (correctly) refused — a different assertion from this one.
-PROBEQ="$ROOT/probe-q"
+# A SEPARATE registry per preset: indices 0/1 are claimed by wt/wt2 above, presetting an
+# index another worktree owns is refused (case 21 asserts that), and a worktree may hold
+# only one claim — so each preset case gets its own registry.
 for k in 0 1; do
-  OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ" HARNESS_LANE_INDEX="$k" HARNESS_RAM_FLOOR_GB=99999 \
+  OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ-$k" HARNESS_LANE_INDEX="$k" HARNESS_RAM_FLOOR_GB=99999 \
     bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
   [ "$OUT" = "ALLOWED" ] && ok "lane $k is never gated by the RAM floor" || bad "lane $k said '$OUT'"
 done
 
 # --- 8. a lane above the floor is allowed -------------------------------------------
-OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ" HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=0 \
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ-above" HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=0 \
   bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT")
 [ "$OUT" = "ALLOWED" ] && ok "lane 2 above the floor brings the stack up" || bad "floor 0 said '$OUT'"
 
@@ -143,7 +148,7 @@ esac
 # Under `ln` publication a claim is never observable without its owner, so an empty entry is
 # a pre-protocol crash or a stray touch. Skipping past it would burn that index forever.
 CORPSE="$ROOT/corpse"; mkdir -p "$CORPSE/lanes"; : > "$CORPSE/lanes/0"
-KC=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$CORPSE" HARNESS_LANE_INDEX_FORCE=0 \
+KC=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$CORPSE" \
   bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
 { [ "$KC" = "0" ] && [ -s "$CORPSE/lanes/0" ]; } && ok "a zero-byte claim is reclaimed, not skipped" \
   || bad "corpse claim: k=$KC, entry now: [$(cat "$CORPSE/lanes/0" 2>/dev/null)]"
@@ -174,7 +179,7 @@ printf '%s\n' "$ID_OTHER" > "$ROOT/wt2/.harness/.lane-id"
 # loser must adopt k — incrementing would give one lane two indices and two Docker stacks.
 RACE="$ROOT/race"; mkdir -p "$RACE/lanes"
 printf '%s %s\n' "someone-else" "$(cd "$ROOT/wt" && pwd -P)" > "$RACE/lanes/0"
-KR=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$RACE" HARNESS_LANE_INDEX_FORCE=0 \
+KR=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$RACE" \
   bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
 { [ "$KR" = "0" ] && [ ! -f "$RACE/lanes/1" ]; } && ok "a lost create race for our own path adopts that index" \
   || bad "lost race allocated a second index: k=$KR, lanes/1 present: $([ -f "$RACE/lanes/1" ] && echo yes || echo no)"
@@ -225,9 +230,6 @@ for bad_k in 350 999 ../escape abc " " 00 08 007; do
   OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$bad_k" \
     bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$?\"")
   [ "$OUT" = "rc=1" ] && ok "HARNESS_LANE_INDEX='$bad_k' refused" || bad "index '$bad_k' accepted: $OUT"
-  OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX_FORCE="$bad_k" \
-    bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$?\"")
-  [ "$OUT" = "rc=1" ] && ok "HARNESS_LANE_INDEX_FORCE='$bad_k' refused" || bad "force '$bad_k' accepted: $OUT"
 done
 [ ! -e "$LANES/../escape" ] && ok "no claim was published outside the registry" || bad "claim escaped QUEUE_DIR/lanes"
 
@@ -246,7 +248,7 @@ KS2=$(cd "$ROOT/with space" && source "$INIT" >/dev/null 2>&1 && printf '%s' "$H
 : > "$ROOT/not-a-dir"   # a REGULAR FILE as the venue's parent: mkdir -p cannot create under it,
                        # so the ledger genuinely cannot be published (a merely-absent
                        # directory does not test this — loop_status_ensure creates it).
-ERR=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
+ERR=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$ROOT/notify-q" HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=99999 HARNESS_LANE_STACK_NEED_GB=99999 \
   HARNESS_LOOP_STATUS_PATH="$ROOT/not-a-dir/loop_status.md" \
   bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed" 2>&1 >/dev/null)
 case "$ERR" in
@@ -448,6 +450,35 @@ printf 'just-an-id-no-path\n' > "$BADQ/lanes/4"      # malformed: no path field
 OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$BADQ" HARNESS_LANE_INDEX=4 \
   bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
 [ "$OUT" = "rc=1" ] && ok "a preset index with a malformed claim is refused" || bad "malformed claim accepted: $OUT"
+
+# --- 26. one worktree, one claim — a later preset cannot add a second -----------------
+# Two shells in one lane holding different indices would run different Compose projects,
+# ports and volumes while both believed they were the same lane.
+ONEQ="$ROOT/oneclaim-q"
+K_FIRST=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$ONEQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+[ -n "$K_FIRST" ] && ok "the lane takes its first index" || bad "no first index"
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$ONEQ" HARNESS_LANE_INDEX=42 \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=1" ] && ok "a second index for the same worktree is refused" \
+  || bad "worktree took a second claim: $OUT"
+[ ! -f "$ONEQ/lanes/42" ] && ok "the refused preset left no claim behind" || bad "claim 42 was published"
+OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$ONEQ" HARNESS_LANE_INDEX="$K_FIRST" \
+  bash -c "source '$INIT' >/dev/null 2>&1; echo rc=\$?")
+[ "$OUT" = "rc=0" ] && ok "presetting the index it already holds is accepted" \
+  || bad "lane refused its own index: $OUT"
+
+# --- 27. a lane id carrying whitespace cannot corrupt the claim record ----------------
+SANQ="$ROOT/sanitize-q"
+git -C "$ROOT/repo" worktree add -q "$ROOT/wt7" -b lane-g || { echo "FATAL: worktree g"; exit 1; }
+K_SAN=$(cd "$ROOT/wt7" && ARC_METRICS_QUEUE_DIR="$SANQ" HARNESS_LANE_ID="bad id with spaces" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
+ID_SAN=$(cd "$ROOT/wt7" && ARC_METRICS_QUEUE_DIR="$SANQ" \
+  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_ID\"")
+case "$ID_SAN" in *" "*) bad "an exported id's spaces reached the marker: '$ID_SAN'" ;; *) ok "an exported id is sanitised before it seeds the marker" ;; esac
+grep -qF -- "$ROOT/wt7" "$SANQ/lanes/$K_SAN" \
+  && ok "the claim record still parses back to this worktree" \
+  || bad "claim record corrupted: [$(cat "$SANQ/lanes/$K_SAN" 2>/dev/null)]"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
