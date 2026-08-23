@@ -5713,6 +5713,37 @@ frozen the wrong number into the code as its rationale. Two lessons worth keepin
 semantics change makes every historical file a DIFFERENT format, and a measurement taken with
 the new rule is not evidence about data written under the old one.
 
+(xviii) **Rounds 15-17, and the terminal.** r15 caught two defects introduced by r14's own
+fixes: the NUL-safe worktree list was printed BACK through newlines to feed a `read` loop
+(re-creating the split `-z` had just removed), and `_loop_resolved_map` sat inside the
+per-worktree loop, making the pass O(worktrees x ledger) inside SessionStart's 8 s bounded
+slice. It also exposed that the test meant to pin the single-scan property counted textual
+CALL SITES — green while the map was rebuilt per worktree. Replaced with a behavioural
+witness that stubs the builder, migrates three worktrees, and asserts exactly one read.
+
+r16 added claim owner-liveness (two concurrent migrations were each treating the other's
+in-flight claim as an orphan), removed the guessable staging fallback that survived a failed
+`mktemp`, and sorted orphans by basename. Its liveness check needed a second pass of its own:
+`kill -0` fails with EPERM for another user's process, which means the process EXISTS —
+reading that as dead would let a migration steal a live claim — so `_loop_pid_alive` falls
+back to `ps -p`.
+
+**r17 returned four findings and ZERO new ones.** Every one maps to a class already
+registered with a reasoned disposition: the lane-scoping objection is B-196 (registered after
+three flips precisely so it stops being re-litigated per round), the check-then-append
+atomicity is B-195(a) (whose consequence is §4's SAFE direction), the open-fd-survives-rename
+hole is B-195(b) (not fixable from this side), and the lossy lane encoding is B-194
+(misclassification half fixed; collision half needs a mint-time or encoding decision). That
+is the terminal condition — not reviewer silence, which proves nothing, but a round in which
+the reviewer produced no information the register did not already hold.
+
+Seventeen rounds. The shape of the arc is worth stating plainly: r1-r3 hardened the UNIT;
+r4-r16 almost entirely hardened the cutover MIGRATION that r2 introduced to protect the venue
+move; and r14 then showed that migration's founding measurement had been wrong all along
+(xvii). The unit's own contracts — venue, structured column, ACTIVATE scoping, NOTIFY — were
+settled by r3 and never regressed.
+
+
 
 at the round cap.
 
