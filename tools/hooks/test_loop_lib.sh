@@ -1016,6 +1016,53 @@ kill "$SIBPID" 2>/dev/null; wait "$SIBPID" 2>/dev/null
 [ $? -eq 0 ] && ok "the pass completes once the sibling is gone" || bad "pass still incomplete after the sibling exited"
 [ "$(HARNESS_LOOP_STATUS_PATH="$MIGEV" loop_skip_set)" = "B-970" ] && ok "the sibling's row is drained by the later pass" || bad "row lost: [$(HARNESS_LOOP_STATUS_PATH="$MIGEV" loop_skip_set)]"
 
+# 56) merge-gate witness lens (#1426) — claim-name uniqueness was pinned only by a text grep,
+#     while this very file already proves the race style IS testable (test 26 forks). N
+#     migrators racing the SAME legacy ledger must not overwrite each other's claim: every
+#     row must survive, exactly once.
+MIGF="$REPO/migf"; rm -rf "$MIGF"; mkdir -p "$MIGF"
+( cd "$MIGF" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b mfwt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIGF/wt1/.harness"
+MIGFV="$MIGF/shared/loop_status.md"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-995 — raced by N migrators |\n' \
+  > "$MIGF/wt1/.harness/loop_status.md"
+for i in 1 2 3 4 5 6 7 8; do
+  ( cd "$MIGF" && CLAUDE_PROJECT_DIR="$MIGF" HARNESS_LOOP_STATUS_PATH="$MIGFV" loop_status_migrate ) >/dev/null 2>&1 &
+done
+wait
+[ "$(HARNESS_LOOP_STATUS_PATH="$MIGFV" loop_skip_set)" = "B-995" ] \
+  && ok "8 racing migrators keep the row (no claim overwritten)" || bad "raced migration lost/garbled the row: [$(HARNESS_LOOP_STATUS_PATH="$MIGFV" loop_skip_set)]"
+[ -z "$(find "$MIGF/wt1/.harness" -name '*.migrating-*' 2>/dev/null)" ] \
+  && ok "no claim is orphaned by the race" || bad "a claim leaked: $(find "$MIGF/wt1/.harness" -name '*.migrating-*')"
+
+# 57) merge-gate witness lens (#1426) — the basename-vs-fullpath orphan sort was pinned only
+#     by a text grep, and the two discriminating conditions were never combined: multiple
+#     orphans in ONE worktree whose PATH contains a newline. Sorting full paths splits them
+#     into nonexistent filenames; sorting basenames does not.
+NLM="$REPO/nlmulti"; rm -rf "$NLM"; mkdir -p "$NLM"
+( cd "$NLM" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b nlmwt "$(printf 'wt\nmulti')" ) >/dev/null 2>&1
+NLMWT="$NLM/$(printf 'wt\nmulti')"
+if [ -d "$NLMWT" ]; then
+  mkdir -p "$NLMWT/.harness"
+  NLMV="$NLM/shared/loop_status.md"
+  printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-996 — first, on a newline path |\n' \
+    > "$NLMWT/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z-999999-1"
+  printf '| 2026-08-02T00:00:00Z | DEFERRED-HIL | B-997 — second, on a newline path |\n' \
+    > "$NLMWT/.harness/loop_status.md.migrating-2026-08-02T00:00:00Z-999999-2"
+  printf '| 2026-08-03T00:00:00Z | RESOLVED-HIL | B-996 — answered LAST |\n' \
+    > "$NLMWT/.harness/loop_status.md.migrating-2026-08-03T00:00:00Z-999999-3"
+  ( cd "$NLM" && CLAUDE_PROJECT_DIR="$NLM" HARNESS_LOOP_STATUS_PATH="$NLMV" loop_status_migrate ) >/dev/null 2>&1
+  [ "$(HARNESS_LOOP_STATUS_PATH="$NLMV" loop_skip_set)" = "B-997" ] \
+    && ok "multiple orphans on a NEWLINE-bearing worktree path fold in order" \
+    || bad "newline path broke the multi-orphan fold: [$(HARNESS_LOOP_STATUS_PATH="$NLMV" loop_skip_set)]"
+else
+  ok "newline-named worktree not creatable here — multi-orphan newline case skipped"
+fi
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

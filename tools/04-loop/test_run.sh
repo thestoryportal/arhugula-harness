@@ -30,6 +30,7 @@ RUN="$REPO/tools/04-loop/run.sh"
 cat > "$REPO/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
+printf '%s\n' "$*" >> "$CLAUDE_PROJECT_DIR/.harness/child_prompt.log"
 N=$(wc -l < "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log" | tr -d ' ')
 if [ -f "$CLAUDE_PROJECT_DIR/.harness/HALT_ON" ] && [ "$N" -ge "$(cat "$CLAUDE_PROJECT_DIR/.harness/HALT_ON")" ]; then
   : > "$CLAUDE_PROJECT_DIR/.harness/.loop-halt"
@@ -113,6 +114,37 @@ sleep 1
 # process left running with auto-approval armed).
 LEFT=$(pgrep -f "$REPO/bin/claude" 2>/dev/null | wc -l | tr -d ' ')
 [ "${LEFT:-0}" = "0" ] && ok "in-flight claude child killed on signal (no orphan)" || bad "orphaned claude child after signal: $LEFT"
+
+# merge-gate concurrency lens (#1426) — the runner must DRAIN a pre-U-HE-29 legacy ledger
+# before computing the skip-set it bakes into the child's prompt. The child's own SessionStart
+# migration runs too late: the prompt is already built. On iteration 1 this is deterministic,
+# and before the venue move `loop_skip_set` read that legacy file directly — so leaving it
+# unwired is a REGRESSION in the unsafe (under-skip) direction.
+rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness/claude_calls.log" "$REPO/.harness/child_prompt.log"
+rm -f "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/HALT_ON" \
+      "$REPO/.harness/.loop-halt" "$REPO/.harness/.loop-iter" "$REPO/.harness/child_env.log"
+# The migration enumerates through `git worktree list`, so the throwaway repo has to BE one.
+( cd "$REPO" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init ) >/dev/null 2>&1
+cat > "$REPO/.harness/loop_status.md" <<'EOF'
+| ts | kind | detail |
+|---|---|---|
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | R-888 — declined by the operator, never drained |
+EOF
+# A later test in this file replaces $REPO/bin/claude, so this block installs its OWN stub
+# rather than relying on the one defined at setup.
+cat > "$REPO/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$CLAUDE_PROJECT_DIR/.harness/child_prompt.log"
+EOF
+chmod +x "$REPO/bin/claude"
+CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 1 >/dev/null 2>&1
+if grep -q 'R-888' "$REPO/.harness/child_prompt.log" 2>/dev/null; then
+  ok "the runner drains a legacy ledger before baking the skip-set into the prompt"
+else
+  bad "un-drained legacy deferral omitted from the child's skip-set: prompt=[$(head -c 160 "$REPO/.harness/child_prompt.log" 2>/dev/null)]"
+fi
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/child_prompt.log"
 
 echo "----"
 echo "loop_run: $PASS passed, $FAIL failed"

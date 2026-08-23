@@ -84,6 +84,12 @@ fi
 ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
 NEXT=$(hook_roadmap_next "$PROJECT_DIR/.harness/roadmap_status.md")
 NEXT=${NEXT:-"(derive per CLAUDE.md §4 from the dashboard)"}
+# Same reason as tools/04-loop/run.sh (merge-gate concurrency lens, #1426): the skip-set
+# reads the SHARED venue, so an un-drained pre-U-HE-29 ledger contributes nothing to it. A
+# session whose own SessionStart migration was incomplete (rc 2 — a live sibling held the
+# claim) would otherwise stay blind to that worktree's legacy rows for its ENTIRE lifetime,
+# because nothing retries within the session. Draining here makes every Stop-turn re-try it.
+command -v loop_status_migrate >/dev/null 2>&1 && loop_status_migrate >/dev/null 2>&1
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
 

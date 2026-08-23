@@ -103,6 +103,24 @@ echo "$OUT" | jq -e '.reason | test("tools/04-loop/defer.sh")'      >/dev/null 2
 echo "$OUT" | jq -e '.reason | test("tools/04-loop/halt.sh")'       >/dev/null 2>&1 && ok "instructs the allowlisted halt.sh wrapper for stand-down" || bad "missing halt.sh wrapper guidance"
 echo "$OUT" | jq -e '.reason | test("exhausted")'                >/dev/null 2>&1 && ok "exhaustion is the ONLY stand-down condition" || bad "missing exhaustion condition"
 
+# 8) merge-gate concurrency lens (#1426) — the skip-set must NOT be blind to an un-drained
+#    pre-U-HE-29 legacy ledger. `loop_skip_set` reads the SHARED venue, so a worktree whose
+#    legacy per-worktree ledger has not been drained contributes nothing to it — and before
+#    the venue move that same file WAS what the skip-set read. Leaving it unwired is a
+#    REGRESSION: the loop would re-attempt an item the operator already declined.
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt" "$HARNESS_LOOP_STATUS_PATH"
+( cd "$REPO" && git init -q . && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init ) >/dev/null 2>&1
+cat > "$REPO/.harness/loop_status.md" <<'EOF'
+| ts | kind | detail |
+|---|---|---|
+| 2026-08-01T00:00:00Z | DEFERRED-HIL | R-999 — declined by the operator, never drained |
+EOF
+OUT=$(run_on)
+echo "$OUT" | jq -e '.reason | test("R-999")' >/dev/null 2>&1 \
+  && ok "the Stop hook drains a legacy ledger before computing the skip-set" \
+  || bad "un-drained legacy deferral omitted from the skip-set (the loop would re-attempt it): $OUT"
+rm -f "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
+
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

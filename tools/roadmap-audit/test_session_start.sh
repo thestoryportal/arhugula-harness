@@ -177,6 +177,28 @@ rm -f "$HARNESS_LOOP_STATUS_PATH"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "clean cutover reported an error: $OUT" || ok "a clean pass emits no mig= segment"
 
+# 5g) merge-gate witness lens (#1426) — rc==2 ("a live sibling holds the claim; the venue is
+#     not complete yet") is ROUTINE concurrency on a shared venue, not a failure. Without the
+#     carve-out every concurrent drain would cry mig=ERR at every session start; with it, a
+#     REAL failure must still surface. Both arms pinned.
+rm -f "$HARNESS_LOOP_STATUS_PATH" "$REPO/.harness"/loop_status.md.migrat*
+mkdir -p "$REPO/.harness"
+# A claim owned by a LIVE pid we do not own -> the pass skips it and returns 2.
+sleep 30 & SIBPID=$!
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-991 — held by a live sibling |\n' \
+  > "$REPO/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z-${SIBPID}-1"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "a live-sibling drain (rc 2) was reported as an ERROR: $OUT" || ok "rc=2 (live sibling) is routine, not mig=ERR"
+kill "$SIBPID" 2>/dev/null; wait "$SIBPID" 2>/dev/null
+rm -f "$REPO/.harness"/loop_status.md.migrat*
+# ... while a genuinely unreadable ledger (rc 1) still surfaces.
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-992 — unreadable |\n' > "$REPO/.harness/loop_status.md"
+chmod 000 "$REPO/.harness/loop_status.md"
+OUT=$(run)
+chmod 644 "$REPO/.harness/loop_status.md"
+printf '%s' "$OUT" | grep -q 'mig=ERR' && ok "a real drain failure still surfaces as mig=ERR" || bad "real failure suppressed by the rc=2 carve-out: $OUT"
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$HARNESS_LOOP_STATUS_PATH"
+
 # 6) Reservation reconcile-log surfacing (U-HE-18, gate r1 witness P2): the log-READER
 #    block is UNGATED by the U-HE-29 activation gate, so its behavior needs witnesses now.
 #    The fixture repo has no tools/reservations.py, so the spawn gate stays cold -- only
