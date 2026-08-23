@@ -1217,9 +1217,20 @@ def test_u_he_29_closeout_drains_an_orphan_only_recovery_state(
     main, wt = worktree_pair
     subprocess.run(["git", "init", "-q", "."], cwd=wt, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q",
-         "--allow-empty", "-m", "init"],
-        cwd=wt, check=True,
+        [
+            "git",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+        cwd=wt,
+        check=True,
     )
     (wt / ".harness").mkdir(exist_ok=True)
     # Orphan ONLY — no loop_status.md at all. Dead owner pid so it is recoverable.
