@@ -96,21 +96,57 @@ printf '%s' "$OUT" | grep -q "ROADMAP DRIFT" && ok "mis-titled substantive commi
 #    rows, EVERY emit branch appends the operator-facing summary (so the last unattended
 #    run's deferrals are "clearly presented when the operator engages next"). Absent when
 #    there is no ledger. Branch-agnostic: the suffix rides whatever audit verdict fires.
-cat > "$HARNESS_LOOP_STATUS_PATH" <<'EOF'
+#    Timestamps must be REAL ISO-8601 (the ts column's contract, and what loop_now
+#    writes): C-HE-10's coalescer parses them, and a placeholder like `t2` is an
+#    unparseable shape no writer can produce. A RECENT row is still inside the
+#    coalescing window, so the bounded summary is what surfaces here.
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat > "$HARNESS_LOOP_STATUS_PATH" <<EOF
 | ts | kind | detail |
 |---|---|---|
-| t1 | ACTIVATE | run |
-| t2 | DEFERRED-HIL | R-410 — needs container runtime |
+| $NOW | ACTIVATE | run |
+| $NOW | DEFERRED-HIL | R-410 — needs container runtime |
 EOF
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && printf '%s' "$OUT" | grep -q "R-410" \
   && ok "pending-HIL summary appended to SessionStart ($OUT)" || bad "no pending-HIL suffix: $OUT"
 
+# 5a) C-HE-10 §2 (U-HE-30) INTEGRATION: once a group's window has closed, the SessionStart
+#     path emits the BATCHED cause-grouped prompt instead of the bounded summary, and the
+#     two lanes gated on one cause collapse into a single line. Exercising loop_hil_deliver
+#     directly (test_loop_lib.sh) cannot catch a mis-wiring here.
+cat > "$HARNESS_LOOP_STATUS_PATH" <<'EOF'
+| ts | kind | lane;cause | detail |
+|---|---|---|---|
+| 2020-01-01T00:00:00Z | DEFERRED-HIL | lane=LA;cause=merge-door-lease-acquire:transient-retry:lease_contended | B-81 — waiting |
+| 2020-01-01T00:00:30Z | DEFERRED-HIL | lane=LB;cause=merge-door-lease-acquire:transient-retry:lease_contended | B-82 — waiting |
+EOF
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "2 item(s) need you" \
+  && ok "past-window group delivers as ONE batched prompt at SessionStart ($OUT)" \
+  || bad "no batched delivery: $OUT"
+printf '%s' "$OUT" | grep -q "B-81" && printf '%s' "$OUT" | grep -q "B-82" \
+  && ok "both lanes' gates ride the one batched prompt" || bad "batch lost a lane: $OUT"
+printf '%s' "$OUT" | grep -q "await your input" \
+  && bad "the bounded summary fired alongside the batch: $OUT" \
+  || ok "the batch REPLACES the bounded summary when a group is due"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "need you" \
+  && bad "the same generation was delivered twice: $OUT" \
+  || ok "a second SessionStart does not re-deliver the same generation"
+
+# Restore the inside-window fixture for the NOTIFY assertions below.
+cat > "$HARNESS_LOOP_STATUS_PATH" <<EOF
+| ts | kind | detail |
+|---|---|---|
+| $NOW | ACTIVATE | run |
+| $NOW | DEFERRED-HIL | R-410 — needs container runtime |
+EOF
+
 # 5b) C-HE-09 §5 (U-HE-29, codex r1 P3): a recent NOTIFY row surfaces as its OWN segment
 #     BESIDE the HIL summary — never merged into it, and never counted as an item awaiting
 #     input. Without this the production `loop_notify_summary` wiring in session-start.sh
 #     could be deleted outright and this suite would stay green.
-NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '| %s | NOTIFY | lane=L7;cause=g:f:c | B-2 reservation aged past its TTL |\n' "$NOW" \
   >> "$HARNESS_LOOP_STATUS_PATH"
 OUT=$(run)

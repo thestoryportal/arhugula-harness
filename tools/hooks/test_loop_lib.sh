@@ -564,10 +564,12 @@ printf '%s' "$EBODY" | grep -q '_staged.*-eq 0.*ln \|\[ "\$_staged" -eq 0 \]' \
 #     Lanes only APPEND deferrals; `loop_hil_deliver` is the single place a group becomes
 #     a prompt, and only once `first_seen + window` has elapsed. The claims dir is
 #     QUEUE_DIR-adjacent, so ARC_METRICS_QUEUE_DIR is pinned into the throwaway repo.
+#     Delivery serialises on the SAME .loop-status.lock loop_hil_ttl_resurface uses, so
+#     the whole mechanism is hermetic under the pinned HARNESS_LOOP_STATUS_PATH -- there
+#     is no side-car claim directory to reset, and nothing is written under the real HOME.
 export ARC_METRICS_QUEUE_DIR="$REPO/queue"
-CLAIMS="$ARC_METRICS_QUEUE_DIR/hil-deliveries"
 mkdir -p "$ARC_METRICS_QUEUE_DIR"
-_coalesce_reset() { : > "$(loop_status_path)"; loop_status_ensure >/dev/null; rm -rf "$CLAIMS"; }
+_coalesce_reset() { : > "$(loop_status_path)"; loop_status_ensure >/dev/null; }
 
 _coalesce_reset
 loop_now() { echo "2026-08-18T00:00:00Z"; }
@@ -592,12 +594,19 @@ OUT=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
 [ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
   && ok "second SessionStart does not re-prompt" || bad "double delivery"
 
-# The DURABLE guard: the ledger's own COALESCE-DELIVERED rows, not the scratch claims
-# dir. Wiping QUEUE_DIR must never resurrect a prompt the operator already received.
-rm -rf "$CLAIMS"
+# The ledger is the SOLE delivered-authority (codex r1 P1): no side-car claim file exists,
+# so no scratch-dir cleanup can resurrect a prompt the operator already received, and no
+# cause_signature is ever squeezed through a filename character set where two distinct
+# valid triples could collide.
+[ ! -d "$ARC_METRICS_QUEUE_DIR/hil-deliveries" ] \
+  && ok "no side-car claim directory is created (ledger is the sole authority)" \
+  || bad "a claims directory was created"
+rm -rf "$ARC_METRICS_QUEUE_DIR"
 [ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
-  && ok "a wiped claims dir does not re-prompt (ledger is the durable authority)" \
-  || bad "claims-dir wipe resurrected a delivered prompt"
+  && ok "a wiped queue dir does not re-prompt (ledger is the durable authority)" \
+  || bad "queue-dir wipe resurrected a delivered prompt"
+mkdir -p "$ARC_METRICS_QUEUE_DIR"
+
 
 # A LATER same-signature generation is a NEW group and must still be delivered -- the
 # claim is keyed by the exact generation, never by "any delivery at or after first_seen".
@@ -609,6 +618,21 @@ loop_now() { echo "2026-08-18T00:45:00Z"; }
 [[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-4"* ]] \
   && ok "later same-signature generation is delivered (not suppressed by the earlier one)" \
   || bad "later generation suppressed"
+
+# Two cause signatures that a filename-safe sanitisation would collapse onto each other
+# (`:` and `_` both becoming `_`) must stay DISTINCT groups and both be delivered, even
+# when they share a first_seen second. This is the collision the claim-file design had.
+_coalesce_reset
+loop_now() { echo "2026-08-18T08:00:00Z"; }
+loop_log_structured DEFERRED-HIL L1 'gate_a:fail:b' 'B-70 — underscore then colon'
+loop_log_structured DEFERRED-HIL L2 'gate:a_fail:b' 'B-71 — colon then underscore'
+[ "$(loop_hil_groups | grep -c .)" = "2" ] \
+  && ok "signatures differing only in : vs _ stay two groups" || bad "sanitisation-collision groups: $(loop_hil_groups)"
+loop_now() { echo "2026-08-18T08:11:00Z"; }
+OUT_C=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_C" == *"B-70"* && "$OUT_C" == *"B-71"* ]] \
+  && ok "neither colliding-when-sanitised signature suppresses the other" \
+  || bad "one cause group suppressed the other: $OUT_C"
 
 # Atomic claim: two CONCURRENT deliverers -> exactly one prompt. The ledger check alone
 # cannot close this (both read "not delivered" before either appends); the exclusive
@@ -677,6 +701,33 @@ printf '| 2026-08-18T05:00:00Z | DEFERRED-HIL | B-42 — three-column legacy row
   && ok "window clamps up to the 300 s floor" || bad "floor clamp wrong"
 [ "$(HARNESS_HIL_COALESCE_WINDOW_S=99999 _loop_coalesce_window)" = "900" ] \
   && ok "window clamps down to the 900 s ceiling" || bad "ceiling clamp wrong"
+
+# first_seen is the FIRST arrival, not the latest (codex r1 P2). The session-start
+# reservation reconcile pass RE-EMITS the same unresolved deferral every session; with a
+# latest-wins anchor, sessions closer together than the window postpone delivery forever.
+_coalesce_reset
+loop_now() { echo "2026-08-18T06:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — waiting'
+loop_now() { echo "2026-08-18T06:05:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — waiting'
+loop_now() { echo "2026-08-18T06:09:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — waiting'
+loop_now() { echo "2026-08-18T06:10:00Z"; }
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-50"* ]] \
+  && ok "a re-emitted deferral does not postpone delivery (first_seen is the FIRST arrival)" \
+  || bad "re-emission pushed the window anchor forward"
+# ...but a genuinely NEW deferral after a RESOLVED-HIL does re-anchor: that is a fresh gate.
+loop_log_structured RESOLVED-HIL L1 'x:y:z' 'B-50 — answered'
+loop_now() { echo "2026-08-18T06:11:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — deferred again'
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "a NEW deferral after RESOLVED re-anchors the window" || bad "re-deferral did not re-anchor"
+
+# Detail is free text and the writer preserves TABS, while the inter-pass stream is
+# tab-delimited: an unneutralised tab splits into extra fields and the renderer, which
+# keeps only $5, truncates the operator-facing gate detail (codex r1 P3).
+_coalesce_reset
+loop_now() { echo "2026-08-18T07:00:00Z"; }
+loop_log_structured DEFERRED-HIL L1 'x:y:z' "$(printf 'B-60 — reason\twith a tab after it')"
+G4=$(loop_hil_groups)
+[[ "$G4" == *"with a tab after it"* ]] \
+  && ok "a tab in the detail does not truncate the rendered gate" || bad "tab truncated the detail: $G4"
 
 # ONE epoch authority: the grouper must use the same awk implementation every other
 # reducer uses, not a second `date`-forking copy free to drift on the edges.

@@ -46,6 +46,10 @@ uv run pytest -q \
   tools/test_self_hosted_readiness.py \
   tools/test_tools_test_coverage_guard.py
 
-for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh; do
+# tools/roadmap-audit/ is named explicitly alongside the other two dirs: pytest's
+# testpaths does not reach tools/, so a shell suite that is not listed here simply never
+# runs in CI. test_session_start.sh had been in that gap -- U-HE-30's SessionStart wiring
+# broke one of its assertions and every gate stayed green.
+for test_script in tools/hooks/test_*.sh tools/statusline/test_*.sh tools/roadmap-audit/test_*.sh; do
   bash "$test_script"
 done

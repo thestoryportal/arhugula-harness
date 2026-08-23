@@ -492,7 +492,19 @@ loop_hil_groups() {
       # (its arrival is unknown), so it anchors at epoch 0 and is therefore always past
       # its window -- delivered on the next pass, once, as its own signature group.
       if (e < 0) e = 0
-      state[tok] = "PENDING"; sig[tok] = cause; when[tok] = e; lanes[tok] = lane; det[tok] = d
+      # first_seen is the FIRST arrival, never the latest (codex r1 P2). The item key is
+      # last-write-wins for STATE, but the window anchor must not move: the session-start
+      # reservation reconcile pass RE-EMITS the same unresolved deferral every session, so
+      # a latest-wins anchor pushes first_seen forward on every run -- sessions closer
+      # together than the window postpone delivery forever, and sessions further apart
+      # mint a new generation each time and re-deliver the same gate. A RESOLVED-HIL row
+      # clears the state, so a genuinely NEW deferral of the same item does re-anchor.
+      if (state[tok] != "PENDING") when[tok] = e
+      # Detail is free text and the writer preserves TABS, but the inter-pass stream below
+      # is tab-delimited: an embedded tab would split into extra fields and the renderer,
+      # which keeps only $5, would truncate the operator-facing gate detail (codex r1 P3).
+      gsub(/\t/, " ", d)
+      state[tok] = "PENDING"; sig[tok] = cause; lanes[tok] = lane; det[tok] = d
     }
     END { for (t in state) if (state[t] == "PENDING") printf "%d\t%s\t%s\t%s\t%s\n", when[t], t, sig[t], lanes[t], det[t] }
   ' "$p" 2>/dev/null \
@@ -517,13 +529,20 @@ loop_hil_groups() {
 # delivered (C-HE-10 §2). Keying on the exact generation (rather than "any delivery at
 # or after first_seen") is what keeps a LATER same-signature generation deliverable.
 #
-# Delivery is guarded TWICE, for two different failures:
-#   1. the ledger's own COALESCE-DELIVERED rows are the DURABLE authority (C-HE-10 §2
-#      names them) -- they survive a wiped or relocated queue dir, so a scratch-dir
-#      cleanup can never resurrect a prompt the operator already received;
-#   2. an exclusive-create claim file under QUEUE_DIR/hil-deliveries closes the
-#      concurrent window the ledger check cannot: two SessionStart paths both read "not
-#      delivered" before either appends. O_EXCL makes exactly one of them the deliverer.
+# The eligibility read and the COALESCE-DELIVERED append are ONE critical section under
+# the same kernel flock on `.loop-status.lock` that loop_hil_ttl_resurface uses (fd 9
+# here, 8 there, so a nested caller cannot collide). This replaces an earlier
+# exclusive-create claim file under QUEUE_DIR, which had two defects the lock does not
+# (both codex r1 P1):
+#   1. the claim was persisted BEFORE the prompt and the ledger row, so a crash in that
+#      interval left a claim no later deliverer could ever get past -- the gate was
+#      permanently un-prompted, with nothing recording that it had been seen;
+#   2. the claim was a FILENAME, so `cause_signature` had to be sanitised to a portable
+#      character set -- and that sanitisation was lossy: `gate_a:fail:b` and
+#      `gate:a_fail:b` both collapsed to `gate_a_fail_b`, letting one cause group
+#      silently suppress an unrelated one that shared a first_seen second.
+# The ledger is now the ONE authority, exactly as C-HE-10 §2 names it, and the
+# generation id carries the EXACT signature -- no sanitisation, so no collision.
 loop_hil_deliver() {
   local p; p=$(loop_status_path); [ -f "$p" ] || return 0
   local w; w=$(_loop_coalesce_window)
@@ -532,23 +551,63 @@ loop_hil_deliver() {
     echo "loop_hil_deliver: unparseable current timestamp; nothing delivered" >&2
     return 1
   fi
-  local claims="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}/hil-deliveries"
-  mkdir -p "$claims" 2>/dev/null
+  local lock out rc
+  lock="$(dirname "$p")/.loop-status.lock"
+  exec 9>> "$lock" 2>/dev/null || return 0
+  if ! /usr/bin/python3 - 9 "${HARNESS_LOOP_STATUS_LOCK_TIMEOUT_SECONDS:-10}" <<'PY'
+import fcntl, sys, time
+fd = int(sys.argv[1]); deadline = time.monotonic() + float(sys.argv[2])
+while True:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+    except BlockingIOError:
+        if time.monotonic() >= deadline:
+            raise SystemExit(1)
+        time.sleep(0.05)
+PY
+  then
+    # A lock we cannot take within the bounded wait means another SessionStart path is
+    # delivering right now: skip this session rather than risk a second prompt. Nothing
+    # is lost -- the group stays undelivered if that path dies, and the still-PENDING
+    # rows keep rendering through loop_pending_hil_summary meanwhile.
+    exec 9>&-; return 0
+  fi
+  out=$(_loop_hil_deliver_unlocked "$p" "$w" "$now"); rc=$?
+  exec 9>&-
+  [ -n "$out" ] && printf '%s\n' "$out"
+  return $rc
+}
+
+_loop_hil_deliver_unlocked() {
+  local p="$1" w="$2" now="$3"
   # The durable delivered-set: every generation id already announced by a
-  # COALESCE-DELIVERED row. The leading detail token rowparse() extracts IS the generation id
-  # (loop_log_structured writes it as the whole detail), so this shares the one row
-  # parser rather than re-deriving the column layout.
-  local delivered
+  # COALESCE-DELIVERED row. The leading detail token rowparse() extracts IS the
+  # generation id (loop_log_structured writes it as the whole detail), so this shares
+  # the one row parser rather than re-deriving the column layout. Read INSIDE the lock:
+  # reading it outside is the check-then-act the lock exists to remove.
+  local delivered lane sig n first items gen
   delivered=$(awk -F'|' "$_LOOP_AWK_ROW"'{ rowparse() } k == "COALESCE-DELIVERED" { print tok }' "$p" 2>/dev/null)
-  local lane; lane=$(_loop_lane_id)
-  loop_hil_groups | while IFS=$'\t' read -r sig n first items; do
+  lane=$(_loop_lane_id)
+  # Fed by here-doc rather than a pipe so the loop body runs in THIS shell: `delivered`
+  # must accumulate across iterations, and a pipeline subshell would discard it.
+  while IFS=$'\t' read -r sig n first items; do
+    [ -n "$sig" ] || continue
     [ $(( now - first )) -ge "$w" ] || continue
-    local gen; gen="gen-${first}-$(printf '%s' "$sig" | tr -c 'A-Za-z0-9_.-' '_')"
+    gen="gen-${first}-${sig}"
     printf '%s\n' "$delivered" | grep -qxF "$gen" && continue
-    ( set -o noclobber; printf '%s\n' "$(loop_now) ${lane}" > "$claims/$gen" ) 2>/dev/null || continue
+    # Prompt FIRST, ledger row second -- both inside the lock. A concurrent second prompt
+    # is impossible (the lock serialises, and the loser reads the row this branch
+    # appended), so the only ordering that still matters is the crash case: a crash
+    # between the two leaves NO row and the group is re-prompted next session.
+    # At-least-once is the correct failure mode for an operator gate; row-first would
+    # mark a gate delivered that the operator never actually saw.
     printf '[loop] ⏸ %s item(s) need you (%s): %s\n' "$n" "$sig" "$items"
-    loop_log_structured COALESCE-DELIVERED "$lane" "$sig" "$gen"
-  done
+    loop_log_structured COALESCE-DELIVERED "$lane" "$sig" "$gen" || return 1
+    delivered=$(printf '%s\n%s' "$delivered" "$gen")
+  done <<EOF
+$(loop_hil_groups)
+EOF
+  return 0
 }
 
 # NOTIFY rows (C-HE-09 §5): append-only informational signals -- an aged reservation, a
