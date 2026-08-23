@@ -297,8 +297,23 @@ loop_status_migrate() {
     echo "loop_status_migrate: could not enumerate worktrees (rc=$wt_rc) — nothing inspected" >&2
     return 1
   fi
+  # The shared venue's resolutions are read ONCE for the whole migration (codex r15 P2).
+  # Rebuilding the map per worktree made the pass O(worktrees x ledger) -- 30+ rescans of a
+  # multi-thousand-line ledger inside SessionStart's 8 s bounded slice, which discards its
+  # output on timeout. The map stays valid across the loop because imports only ever append
+  # DEFERRED-HIL rows; nothing here can add a RESOLVED-HIL.
+  local resolved_map map_rc
+  resolved_map=$(_loop_resolved_map "$shared"); map_rc=$?
+  if [ -z "$dry" ] && [ "$map_rc" -ne 0 ]; then
+    echo "loop_status_migrate: could not read the shared venue's resolutions — nothing imported" >&2
+    return 1
+  fi
   local imported=0 wt legacy rows
-  while IFS= read -r wt; do
+  # Iterate the ARRAY (codex r15 P2). Printing it back through newlines to feed a `read` loop
+  # re-introduced exactly the defect the NUL-safe enumeration removed: a worktree path
+  # containing a newline would split into nonexistent paths, its legacy ledger would be
+  # silently skipped, and the pass would still report success.
+  for wt in "${wt_list[@]}"; do
     [ -n "$wt" ] || continue
     legacy="$wt/.harness/loop_status.md"
     # RECOVER an orphaned claim first (codex r6 P2). A crash -- or the import failure below --
@@ -404,13 +419,6 @@ loop_status_migrate() {
     fi
     rows=$(printf '%s' "$open_rows" | grep -c . 2>/dev/null || echo 0)
     if [ "$rows" -gt 0 ]; then
-      local resolved_map map_rc
-      resolved_map=$(_loop_resolved_map "$shared"); map_rc=$?
-      if [ "$map_rc" -ne 0 ]; then
-        mv "$claim" "$legacy" 2>/dev/null
-        echo "loop_status_migrate: could not read the shared venue's resolutions — not imported" >&2
-        return 1
-      fi
       while IFS=$'\t' read -r src_ts lane detail; do
         [ -n "$detail" ] || continue
         [ -n "$lane" ] || lane="-"
@@ -448,7 +456,7 @@ loop_status_migrate() {
       || { echo "loop_status_migrate: imported but could not retire $legacy" >&2; return 1; }
     echo "imported $rows still-open row(s): $legacy"
     imported=$((imported + 1))
-  done < <(printf '%s\n' "${wt_list[@]}")
+  done
   echo "loop_status_migrate: $imported file(s) imported into $shared"
   return 0
 }

@@ -823,9 +823,26 @@ chmod 644 "$MIG9V"
 #     per imported row. The per-row form was O(rows x ledger), and SessionStart runs this
 #     inside an 8 s bounded slice that swallows a timeout — a large cutover could have cost
 #     the operator the entire SessionStart emit.
-MBODY3=$(declare -f loop_status_migrate)
-printf '%s' "$MBODY3" | grep -q '_loop_resolved_map "$shared"' && ok "the resolved-map is built once per migration" || bad "resolutions still scanned per row"
-[ "$(printf '%s' "$MBODY3" | grep -c '_loop_resolved_map')" = "1" ] && ok "exactly one resolved-map build site" || bad "resolved-map built more than once"
+# BEHAVIOURAL, not textual (codex r15 P2 caught the earlier version of this test counting
+# call SITES — which stayed green while the map was rebuilt once per WORKTREE inside the
+# loop). Stub the map builder to count invocations and migrate across THREE worktrees that
+# each hold a legacy ledger: a correct pass reads the shared venue exactly once.
+MIGC="$REPO/migc"; rm -rf "$MIGC"; mkdir -p "$MIGC"
+( cd "$MIGC" && git init -q .   && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init   && git worktree add -q -b mc1 wt1 && git worktree add -q -b mc2 wt2 && git worktree add -q -b mc3 wt3 ) >/dev/null 2>&1
+MIGCV="$MIGC/shared/loop_status.md"
+for n in 1 2 3; do
+  mkdir -p "$MIGC/wt$n/.harness"
+  printf '| 2026-08-0%s T00:00:00Z | DEFERRED-HIL | B-98%s — from wt%s |
+' "$n" "$n" "$n"     | sed 's/ T/T/' > "$MIGC/wt$n/.harness/loop_status.md"
+done
+MAP_CALLS="$REPO/map-calls"; : > "$MAP_CALLS"
+_orig_map=$(declare -f _loop_resolved_map)
+_loop_resolved_map() { echo x >> "$MAP_CALLS"; return 0; }
+( cd "$MIGC" && CLAUDE_PROJECT_DIR="$MIGC" HARNESS_LOOP_STATUS_PATH="$MIGCV" loop_status_migrate ) >/dev/null 2>&1
+eval "$_orig_map"
+[ "$(grep -c . "$MAP_CALLS")" = "1" ]   && ok "the shared venue's resolutions are read ONCE for the whole migration"   || bad "resolved-map rebuilt per worktree: $(grep -c . "$MAP_CALLS") call(s)"
+SKC=$(HARNESS_LOOP_STATUS_PATH="$MIGCV" loop_skip_set)
+{ printf '%s' "$SKC" | grep -q 'B-981' && printf '%s' "$SKC" | grep -q 'B-983'; }   && ok "all three worktrees' gates still import under the single-scan form" || bad "a worktree was skipped: [$SKC]"
 
 # 50) codex r12 P2 — the claim name is unique per ATTEMPT, so two migrations in the same
 #     second cannot overwrite each other's claim and discard the loser's rows unread.
