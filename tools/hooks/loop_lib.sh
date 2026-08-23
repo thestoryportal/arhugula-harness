@@ -517,8 +517,15 @@ loop_hil_groups() {
     { s = $3; e = $1 + 0
       if (!(s in gstart) || e - gstart[s] > w) { gid++; gstart[s] = e; gsig[gid] = s; gfirst[gid] = e; gn[gid] = 0; gitems[gid] = ""; cur[s] = gid }
       g = cur[s]; gn[g]++
+      # MEMBERS are `<item>@<arrival>` (codex r4 P2). The delivery record must name who was
+      # in the batch: generation identity alone is derived from live membership, and a
+      # timestamp alone cannot tell "arrived before the delivery but was not in it" (an
+      # adjacent same-cause group whose own window had not closed yet) from "was in it".
+      # The @arrival suffix is what lets a RESOLVED-then-re-deferred item be prompted
+      # again: re-deferral re-anchors its arrival, so it is a different member key.
+      gmem[g] = gmem[g] (gmem[g] == "" ? "" : " ") $2 "@" $1
       gitems[g] = gitems[g] (gitems[g] == "" ? "" : "; ") "[" $4 "] " $5 }
-    END { for (g = 1; g <= gid; g++) printf "%s\t%d\t%d\t%s\n", gsig[g], gn[g], gfirst[g], gitems[g] }
+    END { for (g = 1; g <= gid; g++) printf "%s\t%d\t%d\t%s\t%s\n", gsig[g], gn[g], gfirst[g], gmem[g], gitems[g] }
   ' | sed 's/\\|/|/g'
 }
 
@@ -589,40 +596,39 @@ _loop_hil_deliver_unlocked() {
   # generation id (loop_log_structured writes it as the whole detail), so this shares
   # the one row parser rather than re-deriving the column layout. Read INSIDE the lock:
   # reading it outside is the check-then-act the lock exists to remove.
-  # Coverage is the spec's LITERAL rule (C-HE-10 §2): a row is delivered when a
-  # COALESCE-DELIVERED row for its cause exists AT/AFTER its first_seen. So the
-  # delivered-set is the LATEST delivery epoch per cause_signature, not a set of
-  # generation ids. Matching generation ids instead was wrong (codex r3 P2): a
-  # generation is recomputed from the earliest still-PENDING member, so resolving the
-  # earliest member of a delivered group moves first_seen forward, mints a different id,
-  # and re-prompts the members that WERE in the first batch. Comparing timestamps has no
-  # such dependence on who is still pending. It also still delivers a LATER generation of
-  # the same cause: that group's first_seen is after the earlier delivery, so no delivery
-  # at/after it exists yet.
-  local delivered lane sig n first items gen last
-  delivered=$(awk -F'|' "$_LOOP_AWK_EPOCH$_LOOP_AWK_ROW"'
+  # Coverage is per-MEMBER, not per-generation and not per-timestamp. Each
+  # COALESCE-DELIVERED row records `<gen-id> <item>@<arrival> ...`, so the delivered-set is
+  # exactly who has already been shown. The two rules this replaces both failed:
+  #   * matching generation ids re-prompted survivors of a delivered batch, because a
+  #     generation is recomputed from the earliest still-PENDING member and resolving that
+  #     member moves first_seen forward (codex r3 P2);
+  #   * comparing the latest delivery timestamp against a group's first_seen permanently
+  #     swallowed an ADJACENT same-cause group -- with groups anchored at t and t+w+1, a
+  #     delivery at t+w+50 emits only the first (the second is not due yet) yet its
+  #     timestamp then covers the second forever (codex r4 P2).
+  # Naming the members has neither failure mode, and the `@arrival` suffix keeps a
+  # resolved-then-re-deferred item promptable (re-deferral re-anchors its arrival).
+  local delivered lane sig n first members items gen undelivered m
+  delivered=$(awk -F'|' "$_LOOP_AWK_ROW"'
     { rowparse() }
-    k == "COALESCE-DELIVERED" {
-      cause = $4
-      if (cause ~ /^[ \t]*lane=/) { sub(/^[^;]*;cause=/, "", cause); gsub(/[ \t]/, "", cause) }
-      else next
-      e = epoch($2); if (e < 0) next
-      if (!(cause in mx) || e > mx[cause]) mx[cause] = e
-    }
-    END { for (c in mx) printf "%s\t%d\n", c, mx[c] }' "$p" 2>/dev/null)
+    k == "COALESCE-DELIVERED" { nf = split(d, f, /[ \t]+/); for (i = 2; i <= nf; i++) if (f[i] != "") print f[i] }
+  ' "$p" 2>/dev/null)
   lane=$(_loop_lane_id)
   # Fed by here-doc rather than a pipe so the loop body runs in THIS shell: `delivered`
   # must accumulate across iterations, and a pipeline subshell would discard it.
-  while IFS=$'\t' read -r sig n first items; do
+  while IFS=$'\t' read -r sig n first members items; do
     [ -n "$sig" ] || continue
     [ $(( now - first )) -ge "$w" ] || continue
     gen="gen-${first}-${sig}"
-    last=$(printf '%s\n' "$delivered" | awk -F'\t' -v s="$sig" '$1 == s { print $2 }')
-    # No in-pass update of `delivered`: loop_hil_groups emits each group exactly once, and
-    # two DUE generations of one cause in a single pass are two genuinely undelivered
-    # generations that must BOTH be prompted. Stamping this pass's `now` into the map
-    # would suppress the second.
-    [ -n "$last" ] && [ "$last" -ge "$first" ] && continue
+    # A group is skipped only when EVERY member has already been shown. If any member is
+    # new the whole group is prompted: the batch's contract is "these N gates share one
+    # cause", and re-showing an already-seen sibling beside a new one is a strictly safer
+    # error than silently dropping the new one from every batch it could appear in.
+    undelivered=0
+    for m in $members; do
+      printf '%s\n' "$delivered" | grep -qxF "$m" || undelivered=1
+    done
+    [ "$undelivered" -eq 0 ] && continue
     # Prompt FIRST, ledger row second -- both inside the lock. A concurrent second prompt
     # is impossible (the lock serialises, and the loser reads the row this branch
     # appended), so the only ordering that still matters is the crash case: a crash
@@ -630,7 +636,8 @@ _loop_hil_deliver_unlocked() {
     # At-least-once is the correct failure mode for an operator gate; row-first would
     # mark a gate delivered that the operator never actually saw.
     printf '[loop] ⏸ %s item(s) need you (%s): %s\n' "$n" "$sig" "$items"
-    loop_log_structured COALESCE-DELIVERED "$lane" "$sig" "$gen" || return 1
+    loop_log_structured COALESCE-DELIVERED "$lane" "$sig" "$gen $members" || return 1
+    delivered=$(printf '%s\n%s' "$delivered" "$(printf '%s\n' $members)")
   done <<EOF
 $(loop_hil_groups)
 EOF

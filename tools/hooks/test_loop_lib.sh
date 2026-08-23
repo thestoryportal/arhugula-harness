@@ -676,9 +676,30 @@ loop_now() { echo "2026-08-18T04:10:00Z"; }
 loop_log_structured DEFERRED-HIL L2 'x:y:z' 'B-31 — joined at the boundary second'
 [ "$(loop_hil_groups | grep -c .)" = "1" ] \
   && ok "a boundary-second arrival joins the SAME group (e - first == w)" || bad "boundary row opened a new group"
+OUT_B=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_B" == *"B-31"* ]] \
+  && ok "a boundary join is prompted: it is a gate no batch has shown" \
+  || bad "a never-shown gate was swallowed by the delivered generation: $OUT_B"
 [ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
-  && ok "generation id carries no member count: a boundary join does not re-prompt" \
-  || bad "member-count-keyed generation re-prompted a delivered group"
+  && ok "once every member has been shown, the group falls silent again" \
+  || bad "group re-prompted with no new member"
+
+# ADJACENT same-cause groups (codex r4 P2). With anchors 601 s apart and a 600 s window
+# they are two groups; a delivery that fires while only the FIRST is due must not record
+# anything that covers the second, which no batch has shown.
+_coalesce_reset
+loop_now() { echo "2026-08-18T12:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'adj:c:s' 'B-99 — group one'
+loop_now() { echo "2026-08-18T12:10:01Z"; }; loop_log_structured DEFERRED-HIL L2 'adj:c:s' 'B-100 — group two'
+[ "$(loop_hil_groups | grep -c .)" = "2" ] && ok "601 s apart under a 600 s window is two groups" || bad "adjacency grouping: $(loop_hil_groups)"
+loop_now() { echo "2026-08-18T12:10:50Z"; }
+OUT_D1=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_D1" == *"B-99"* && "$OUT_D1" != *"B-100"* ]] \
+  && ok "only the due adjacent group delivers" || bad "adjacent delivery wrong: $OUT_D1"
+loop_now() { echo "2026-08-18T12:21:00Z"; }
+OUT_D2=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_D2" == *"B-100"* ]] \
+  && ok "the adjacent group delivers once ITS window closes (not swallowed by the earlier delivery)" \
+  || bad "adjacent group permanently suppressed by the earlier delivery timestamp: $OUT_D2"
 
 # Legacy / signature-less rows reduce as their OWN singleton group (C-HE-10 §1).
 # Collapsing them under a shared `-` would batch unrelated gates into one prompt.
