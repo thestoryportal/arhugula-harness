@@ -190,13 +190,19 @@ _loop_pending_rows_with_ts() {
   return 0
 }
 
-# The timestamp of the LAST RESOLVED-HIL recorded for <item> in <ledger>, or empty.
-_loop_last_resolved_ts() {
+# `<item> <ts>` for the LAST RESOLVED-HIL of every item in <ledger>. Computed ONCE per
+# migration rather than re-scanned per imported row (codex r12 P2): the per-row form made the
+# pass O(rows x ledger), and SessionStart runs it inside an 8 s bounded slice that swallows a
+# timeout -- so a large cutover could have cost the operator the whole SessionStart emit,
+# roadmap context and HIL summary included. Returns nonzero if the ledger cannot be read: an
+# unreadable shared ledger must NOT read as "nothing was ever resolved", which would let every
+# imported row reopen an answered gate.
+_loop_resolved_map() {
   [ -f "$1" ] || return 0
-  awk -F'|' -v want="$2" "$_LOOP_AWK_ROW"'
+  awk -F'|' "$_LOOP_AWK_ROW"'
     { rowparse() }
-    k == "RESOLVED-HIL" && tok == want { ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts); last = ts }
-    END { if (last != "") print last }
+    k == "RESOLVED-HIL" { ts = $2; gsub(/^[ \t]+|[ \t]+$/, "", ts); last[tok] = ts }
+    END { for (t in last) print t " " last[t] }
   ' "$1" 2>/dev/null
 }
 
@@ -329,7 +335,12 @@ loop_status_migrate() {
     # since later passes look only at the original filename, it would never be seen again.
     # `mv` is atomic: exactly one process claims the file, and a concurrent writer that
     # recreates the original path simply produces a file the NEXT pass handles normally.
-    local claim="${legacy}.migrating-$(loop_now)"
+    # UNIQUE per attempt (codex r12 P2). A second-resolution name alone could collide: two
+    # migrations in the same second -- with an old writer recreating the legacy path between
+    # them -- would have the second `mv` OVERWRITE the first migrator's claim and discard its
+    # rows unread. The pid+random suffix makes the destination this attempt's alone, and the
+    # sort that orders orphans still keys on the timestamp prefix.
+    local claim="${legacy}.migrating-$(loop_now)-$$-${RANDOM}"
     mv "$legacy" "$claim" 2>/dev/null || { echo "loop_status_migrate: could not claim $legacy" >&2; return 1; }
     # HONOUR the reducer's exit status (codex r4 P2). An unreadable ledger returns rc!=0 with
     # empty output; treating that as "nothing pending" would retire the file and report a
@@ -345,6 +356,13 @@ loop_status_migrate() {
     fi
     rows=$(printf '%s' "$open_rows" | grep -c . 2>/dev/null || echo 0)
     if [ "$rows" -gt 0 ]; then
+      local resolved_map map_rc
+      resolved_map=$(_loop_resolved_map "$shared"); map_rc=$?
+      if [ "$map_rc" -ne 0 ]; then
+        mv "$claim" "$legacy" 2>/dev/null
+        echo "loop_status_migrate: could not read the shared venue's resolutions — not imported" >&2
+        return 1
+      fi
       while IFS=$'\t' read -r src_ts lane detail; do
         [ -n "$detail" ] || continue
         [ -n "$lane" ] || lane="-"
@@ -360,7 +378,7 @@ loop_status_migrate() {
         # then it is stale and must not reopen. A legacy row written AFTER the resolution is a
         # genuinely newer gate and is imported, honouring last-write-wins. ISO-8601 second
         # precision sorts lexicographically, so `>` on the strings is a true time comparison.
-        local resolved_ts; resolved_ts=$(_loop_last_resolved_ts "$shared" "$item")
+        local resolved_ts; resolved_ts=$(printf '%s\n' "$resolved_map" | awk -v w="$item" '$1 == w { print $2 }' | tail -1)
         # EQUALITY IMPORTS (codex r10 P2). loop_now has one-second precision, so a legacy
         # DEFERRED-HIL written just AFTER a shared RESOLVED-HIL can carry the same stamp.
         # Skipping on equality would archive a genuinely newer gate; importing on equality at

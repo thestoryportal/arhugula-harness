@@ -797,6 +797,36 @@ chmod 644 "$UNREAD2"
 MBODY2=$(declare -f loop_status_migrate)
 printf '%s' "$MBODY2" | grep -q 'wt_raw=$(git' && ok "git's status is captured before the awk filter" || bad "git status still masked by the pipeline"
 
+# 48) codex r12 P2 — an UNREADABLE shared venue must not read as "nothing was ever
+#     resolved". That would let every imported row reopen an answered gate, and the claim
+#     must be restored so the next pass retries rather than archiving it unread.
+MIG9="$REPO/mig9"; rm -rf "$MIG9"; mkdir -p "$MIG9"
+( cd "$MIG9" && git init -q . \
+  && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init \
+  && git worktree add -q -b m9wt wt1 ) >/dev/null 2>&1
+mkdir -p "$MIG9/wt1/.harness" "$MIG9/shared"
+MIG9V="$MIG9/shared/loop_status.md"
+printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-950 — pending |\n' > "$MIG9/wt1/.harness/loop_status.md"
+printf '# Loop status ledger\n' > "$MIG9V"; chmod 000 "$MIG9V"
+( cd "$MIG9" && CLAUDE_PROJECT_DIR="$MIG9" HARNESS_LOOP_STATUS_PATH="$MIG9V" loop_status_migrate ) >/dev/null 2>&1
+RC=$?
+chmod 644 "$MIG9V"
+[ "$RC" -ne 0 ] && ok "an unreadable shared venue fails the import closed" || bad "unreadable shared venue treated as no-resolutions"
+[ -f "$MIG9/wt1/.harness/loop_status.md" ] && ok "the claim is restored for the next pass" || bad "legacy ledger archived despite the failed import"
+
+# 49) codex r12 P2 — the shared venue's resolutions are scanned ONCE per migration, not once
+#     per imported row. The per-row form was O(rows x ledger), and SessionStart runs this
+#     inside an 8 s bounded slice that swallows a timeout — a large cutover could have cost
+#     the operator the entire SessionStart emit.
+MBODY3=$(declare -f loop_status_migrate)
+printf '%s' "$MBODY3" | grep -q '_loop_resolved_map "$shared"' && ok "the resolved-map is built once per migration" || bad "resolutions still scanned per row"
+[ "$(printf '%s' "$MBODY3" | grep -c '_loop_resolved_map')" = "1" ] && ok "exactly one resolved-map build site" || bad "resolved-map built more than once"
+
+# 50) codex r12 P2 — the claim name is unique per ATTEMPT, so two migrations in the same
+#     second cannot overwrite each other's claim and discard the loser's rows unread.
+printf '%s' "$(declare -f loop_status_migrate)" | grep -q 'migrating-$(loop_now)-\$\$-' \
+  && ok "the claim name carries a per-attempt suffix" || bad "claim name is only second-resolution"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
