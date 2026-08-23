@@ -559,6 +559,262 @@ printf '%s' "$EBODY" | grep -q '_staged.*-eq 0.*ln \|\[ "\$_staged" -eq 0 \]' \
   && ok "the venue is published only when the staging write SUCCEEDED" \
   || bad "ln can publish a partially-written header"
 
+
+# 63) U-HE-30 / C-HE-10 — gate coalescing by `cause_signature`, windowed, pull-based.
+#     Lanes only APPEND deferrals; `loop_hil_deliver` is the single place a group becomes
+#     a prompt, and only once `first_seen + window` has elapsed. The claims dir is
+#     QUEUE_DIR-adjacent, so ARC_METRICS_QUEUE_DIR is pinned into the throwaway repo.
+#     Delivery serialises on the SAME .loop-status.lock loop_hil_ttl_resurface uses, so
+#     the whole mechanism is hermetic under the pinned HARNESS_LOOP_STATUS_PATH -- there
+#     is no side-car claim directory to reset, and nothing is written under the real HOME.
+export ARC_METRICS_QUEUE_DIR="$REPO/queue"
+mkdir -p "$ARC_METRICS_QUEUE_DIR"
+_coalesce_reset() { : > "$(loop_status_path)"; loop_status_ensure >/dev/null; }
+
+_coalesce_reset
+loop_now() { echo "2026-08-18T00:00:00Z"; }
+loop_log_structured DEFERRED-HIL L1 'merge-door-lease-acquire:transient-retry:lease_contended' 'B-1 — waiting'
+loop_log_structured DEFERRED-HIL L2 'merge-door-lease-acquire:transient-retry:lease_contended' 'B-2 — waiting'
+loop_log_structured DEFERRED-HIL L3 'reviewer:permanent-fail-exit:codex_login' 'B-3 — login'
+G=$(loop_hil_groups)
+[ "$(printf '%s\n' "$G" | grep -c .)" = "2" ] && ok "two cause groups" || bad "groups: $G"
+printf '%s\n' "$G" | grep -qF $'lease_contended\t2\t' \
+  && ok "equal signatures within window -> one group of 2" || bad "no 2-group: $G"
+
+loop_now() { echo "2026-08-18T00:05:00Z"; }
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "inside window: nothing delivered yet" || bad "delivered early"
+
+loop_now() { echo "2026-08-18T00:11:00Z"; }
+OUT=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT" == *"[L1] B-1"* && "$OUT" == *"[L2] B-2"* ]] \
+  && ok "one batched prompt per cause after window" || bad "deliver: $OUT"
+[ "$(grep -c '| COALESCE-DELIVERED |' "$(loop_status_path)")" = "2" ] \
+  && ok "delivery rows appended (one per due group)" || bad "no delivery rows"
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "second SessionStart does not re-prompt" || bad "double delivery"
+
+# The ledger is the SOLE delivered-authority (codex r1 P1): no side-car claim file exists,
+# so no scratch-dir cleanup can resurrect a prompt the operator already received, and no
+# cause_signature is ever squeezed through a filename character set where two distinct
+# valid triples could collide.
+[ ! -d "$ARC_METRICS_QUEUE_DIR/hil-deliveries" ] \
+  && ok "no side-car claim directory is created (ledger is the sole authority)" \
+  || bad "a claims directory was created"
+rm -rf "$ARC_METRICS_QUEUE_DIR"
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "a wiped queue dir does not re-prompt (ledger is the durable authority)" \
+  || bad "queue-dir wipe resurrected a delivered prompt"
+mkdir -p "$ARC_METRICS_QUEUE_DIR"
+
+
+# A LATER same-signature generation is a NEW group and must still be delivered -- the
+# claim is keyed by the exact generation, never by "any delivery at or after first_seen".
+loop_now() { echo "2026-08-18T00:30:00Z"; }
+loop_log_structured DEFERRED-HIL L4 'merge-door-lease-acquire:transient-retry:lease_contended' 'B-4 — later'
+[ "$(loop_hil_groups | grep -c lease_contended)" = "2" ] \
+  && ok "same signature outside window -> separate group" || bad "window merge wrong: $(loop_hil_groups)"
+loop_now() { echo "2026-08-18T00:45:00Z"; }
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-4"* ]] \
+  && ok "later same-signature generation is delivered (not suppressed by the earlier one)" \
+  || bad "later generation suppressed"
+
+# Two cause signatures that a filename-safe sanitisation would collapse onto each other
+# (`:` and `_` both becoming `_`) must stay DISTINCT groups and both be delivered, even
+# when they share a first_seen second. This is the collision the claim-file design had.
+_coalesce_reset
+loop_now() { echo "2026-08-18T08:00:00Z"; }
+loop_log_structured DEFERRED-HIL L1 'gate_a:fail:b' 'B-70 — underscore then colon'
+loop_log_structured DEFERRED-HIL L2 'gate:a_fail:b' 'B-71 — colon then underscore'
+[ "$(loop_hil_groups | grep -c .)" = "2" ] \
+  && ok "signatures differing only in : vs _ stay two groups" || bad "sanitisation-collision groups: $(loop_hil_groups)"
+loop_now() { echo "2026-08-18T08:11:00Z"; }
+OUT_C=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_C" == *"B-70"* && "$OUT_C" == *"B-71"* ]] \
+  && ok "neither colliding-when-sanitised signature suppresses the other" \
+  || bad "one cause group suppressed the other: $OUT_C"
+
+# Atomic claim: two CONCURRENT deliverers -> exactly one prompt. The ledger check alone
+# cannot close this (both read "not delivered" before either appends); the exclusive
+# create does.
+_coalesce_reset
+loop_now() { echo "2026-08-18T01:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-7 — a'
+loop_now() { echo "2026-08-18T01:11:00Z"; }
+OUT_A=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver & HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver & wait)
+[ "$(printf '%s\n' "$OUT_A" | grep -c 'need you')" = "1" ] \
+  && ok "concurrent deliverers: exactly one prompt" || bad "double prompt under concurrency: $OUT_A"
+
+# The window anchor is the first ARRIVAL, not the lexically-first item id: a lexically
+# earlier item deferred 20 min LATER must open its own group, not re-anchor the first.
+_coalesce_reset
+loop_now() { echo "2026-08-18T02:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-9 — first'
+loop_now() { echo "2026-08-18T02:20:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-1 — later but lexically first'
+[ "$(loop_hil_groups | grep -c .)" = "2" ] \
+  && ok "groups keyed by arrival time (20 min apart -> 2 groups)" || bad "timestamp ordering wrong: $(loop_hil_groups)"
+
+# A RESOLVED-HIL row clears its item from grouping under the same last-write-wins rule
+# the skip-set uses -- the grouper must not batch an already-answered gate into a prompt.
+_coalesce_reset
+loop_now() { echo "2026-08-18T03:00:00Z"; }
+loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-20 — waiting'
+loop_log_structured DEFERRED-HIL L2 'x:y:z' 'B-21 — waiting'
+loop_log_structured RESOLVED-HIL L1 'x:y:z' 'B-20 — answered'
+G3=$(loop_hil_groups)
+[ "$(printf '%s\n' "$G3" | grep -c .)" = "1" ] && [[ "$G3" == *"B-21"* && "$G3" != *"B-20 — waiting"* ]] \
+  && ok "a RESOLVED item leaves the group (last-write-wins, shared with loop_skip_set)" \
+  || bad "resolved item still grouped: $G3"
+
+# The generation id is (signature, first_seen) and MUST NOT carry the member count. If it
+# did, one more lane deferring into an already-delivered window at the boundary second
+# would mint a second generation and re-prompt items the operator already received --
+# C-HE-10 §2 says rows covered by a delivery at/after their first_seen ARE delivered.
+_coalesce_reset
+loop_now() { echo "2026-08-18T04:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-30 — a'
+loop_now() { echo "2026-08-18T04:10:00Z"; }
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-30"* ]] \
+  && ok "boundary case: the first generation delivers" || bad "boundary generation not delivered"
+loop_log_structured DEFERRED-HIL L2 'x:y:z' 'B-31 — joined at the boundary second'
+[ "$(loop_hil_groups | grep -c .)" = "1" ] \
+  && ok "a boundary-second arrival joins the SAME group (e - first == w)" || bad "boundary row opened a new group"
+OUT_B=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_B" == *"B-31"* ]] \
+  && ok "a boundary join is prompted: it is a gate no batch has shown" \
+  || bad "a never-shown gate was swallowed by the delivered generation: $OUT_B"
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "once every member has been shown, the group falls silent again" \
+  || bad "group re-prompted with no new member"
+
+# ADJACENT same-cause groups (codex r4 P2). With anchors 601 s apart and a 600 s window
+# they are two groups; a delivery that fires while only the FIRST is due must not record
+# anything that covers the second, which no batch has shown.
+_coalesce_reset
+loop_now() { echo "2026-08-18T12:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'adj:c:s' 'B-99 — group one'
+loop_now() { echo "2026-08-18T12:10:01Z"; }; loop_log_structured DEFERRED-HIL L2 'adj:c:s' 'B-100 — group two'
+[ "$(loop_hil_groups | grep -c .)" = "2" ] && ok "601 s apart under a 600 s window is two groups" || bad "adjacency grouping: $(loop_hil_groups)"
+loop_now() { echo "2026-08-18T12:10:50Z"; }
+OUT_D1=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_D1" == *"B-99"* && "$OUT_D1" != *"B-100"* ]] \
+  && ok "only the due adjacent group delivers" || bad "adjacent delivery wrong: $OUT_D1"
+loop_now() { echo "2026-08-18T12:21:00Z"; }
+OUT_D2=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_D2" == *"B-100"* ]] \
+  && ok "the adjacent group delivers once ITS window closes (not swallowed by the earlier delivery)" \
+  || bad "adjacent group permanently suppressed by the earlier delivery timestamp: $OUT_D2"
+
+# Legacy / signature-less rows reduce as their OWN singleton group (C-HE-10 §1).
+# Collapsing them under a shared `-` would batch unrelated gates into one prompt.
+_coalesce_reset
+loop_now() { echo "2026-08-18T05:00:00Z"; }
+loop_log DEFERRED-HIL "B-40 — no cause"
+loop_log DEFERRED-HIL "B-41 — also no cause"
+printf '| 2026-08-18T05:00:00Z | DEFERRED-HIL | B-42 — three-column legacy row |\n' >> "$(loop_status_path)"
+[ "$(loop_hil_groups | grep -c .)" = "3" ] \
+  && ok "signature-less rows are singleton groups, never one merged no-cause batch" \
+  || bad "legacy grouping wrong: $(loop_hil_groups)"
+
+# A NON-NUMERIC window override must fall back to the default, never reach `[ -lt ]` and
+# leave garbage in place: awk would read that as w == 0 and prompt on EVERY deferral --
+# silently disabling the whole contract.
+[ "$(HARNESS_HIL_COALESCE_WINDOW_S=abc _loop_coalesce_window)" = "600" ] \
+  && ok "non-numeric window falls back to the 600 s default" \
+  || bad "bad window value not rejected: $(HARNESS_HIL_COALESCE_WINDOW_S=abc _loop_coalesce_window)"
+[ "$(HARNESS_HIL_COALESCE_WINDOW_S=60 _loop_coalesce_window)" = "300" ] \
+  && ok "window clamps up to the 300 s floor" || bad "floor clamp wrong"
+[ "$(HARNESS_HIL_COALESCE_WINDOW_S=99999 _loop_coalesce_window)" = "900" ] \
+  && ok "window clamps down to the 900 s ceiling" || bad "ceiling clamp wrong"
+
+# first_seen is the FIRST arrival, not the latest (codex r1 P2). The session-start
+# reservation reconcile pass RE-EMITS the same unresolved deferral every session; with a
+# latest-wins anchor, sessions closer together than the window postpone delivery forever.
+_coalesce_reset
+loop_now() { echo "2026-08-18T06:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — waiting'
+loop_now() { echo "2026-08-18T06:05:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — waiting'
+loop_now() { echo "2026-08-18T06:09:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — waiting'
+loop_now() { echo "2026-08-18T06:10:00Z"; }
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-50"* ]] \
+  && ok "a re-emitted deferral does not postpone delivery (first_seen is the FIRST arrival)" \
+  || bad "re-emission pushed the window anchor forward"
+# ...but a genuinely NEW deferral after a RESOLVED-HIL does re-anchor: that is a fresh gate.
+loop_log_structured RESOLVED-HIL L1 'x:y:z' 'B-50 — answered'
+loop_now() { echo "2026-08-18T06:11:00Z"; }; loop_log_structured DEFERRED-HIL L1 'x:y:z' 'B-50 — deferred again'
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "a NEW deferral after RESOLVED re-anchors the window" || bad "re-deferral did not re-anchor"
+
+# Resolving the EARLIEST member of a delivered group must not re-prompt the members that
+# were already in that batch (codex r3 P2). A generation id is recomputed from the earliest
+# still-PENDING member, so id-matching re-prompts here; comparing the delivery TIMESTAMP
+# against the group's first_seen -- C-HE-10 §2's literal rule -- does not.
+_coalesce_reset
+loop_now() { echo "2026-08-18T10:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'q:r:s' 'B-95 — earliest member'
+loop_now() { echo "2026-08-18T10:00:30Z"; }; loop_log_structured DEFERRED-HIL L2 'q:r:s' 'B-96 — later member'
+loop_now() { echo "2026-08-18T10:11:00Z"; }
+OUT_R=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_R" == *"B-95"* && "$OUT_R" == *"B-96"* ]] \
+  && ok "both members ride the one batch" || bad "batch incomplete: $OUT_R"
+loop_log_structured RESOLVED-HIL L1 'q:r:s' 'B-95 — answered'
+loop_now() { echo "2026-08-18T10:12:00Z"; }
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "resolving the earliest member does not re-prompt the rest of a delivered batch" \
+  || bad "delivered member re-prompted after an earlier member resolved"
+
+# Two DUE generations of one cause in a single pass are two genuinely undelivered
+# generations: both must be prompted, so the pass must not stamp itself into the map.
+_coalesce_reset
+loop_now() { echo "2026-08-18T11:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'u:v:w' 'B-97 — gen one'
+loop_now() { echo "2026-08-18T11:30:00Z"; }; loop_log_structured DEFERRED-HIL L2 'u:v:w' 'B-98 — gen two'
+loop_now() { echo "2026-08-18T11:45:00Z"; }
+OUT_T=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)
+[[ "$OUT_T" == *"B-97"* && "$OUT_T" == *"B-98"* ]] \
+  && ok "two due generations of one cause both deliver in a single pass" \
+  || bad "one due generation suppressed the other in-pass: $OUT_T"
+
+# A CHANGED cause is a new gate and re-anchors the window (codex r2 P2). Without this the
+# item keeps cause A's first arrival while grouping under cause B, so B can be instantly
+# eligible instead of receiving its own coalescing window.
+_coalesce_reset
+loop_now() { echo "2026-08-18T09:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'cause:a:one' 'B-90 — first cause'
+loop_now() { echo "2026-08-18T09:09:00Z"; }; loop_log_structured DEFERRED-HIL L1 'cause:b:two' 'B-90 — different cause now'
+G5=$(loop_hil_groups)
+[[ "$G5" == *"cause:b:two"* ]] && ok "a re-deferral under a new cause groups under the NEW signature" || bad "cause not updated: $G5"
+loop_now() { echo "2026-08-18T09:10:00Z"; }
+[ -z "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" ] \
+  && ok "the new cause gets its OWN window (not the old cause's anchor)" \
+  || bad "changed cause inherited the previous anchor and delivered early"
+loop_now() { echo "2026-08-18T09:20:00Z"; }
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-90"* ]] \
+  && ok "the new cause delivers once ITS window closes" || bad "new cause never delivered"
+
+# Detail is free text and the writer preserves TABS, while the inter-pass stream is
+# tab-delimited: an unneutralised tab splits into extra fields and the renderer, which
+# keeps only $5, truncates the operator-facing gate detail (codex r1 P3).
+_coalesce_reset
+loop_now() { echo "2026-08-18T07:00:00Z"; }
+loop_log_structured DEFERRED-HIL L1 'x:y:z' "$(printf 'B-60 — reason\twith a tab after it')"
+G4=$(loop_hil_groups)
+[[ "$G4" == *"with a tab after it"* ]] \
+  && ok "a tab in the detail does not truncate the rendered gate" || bad "tab truncated the detail: $G4"
+
+# An UNOPENABLE delivery lock must fail loud, not report "nothing was due" (codex r5 P2):
+# a permission or ownership problem on the shared queue dir would otherwise skip every
+# batched delivery forever with no diagnostic anywhere.
+_coalesce_reset
+loop_now() { echo "2026-08-18T13:00:00Z"; }; loop_log_structured DEFERRED-HIL L1 'lk:e:f' 'B-110 — gated'
+loop_now() { echo "2026-08-18T13:11:00Z"; }
+_LOCKDIR="$(dirname "$(loop_status_path)")/.loop-status.lock"
+command rm -f "$_LOCKDIR"; mkdir -p "$_LOCKDIR"
+_LOUT=$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver 2>&1); _LRC=$?
+[ "$_LRC" -ne 0 ] && ok "an unopenable delivery lock returns non-zero" || bad "unopenable lock reported success (rc=$_LRC)"
+[[ "$_LOUT" == *"cannot open the delivery lock"* ]] \
+  && ok "an unopenable delivery lock says so on stderr" || bad "no diagnostic for an unopenable lock: $_LOUT"
+rmdir "$_LOCKDIR"
+[[ "$(HARNESS_HIL_COALESCE_WINDOW_S=600 loop_hil_deliver)" == *"B-110"* ]] \
+  && ok "the gate delivers once the lock is usable again" || bad "gate lost after a lock failure"
+
+# ONE epoch authority: the grouper must use the same awk implementation every other
+# reducer uses, not a second `date`-forking copy free to drift on the edges.
+[ "$(_loop_epoch_of '1970-01-01T00:00:00Z')" = "0" ] && ok "epoch helper agrees with the shared awk implementation" || bad "epoch helper wrong: $(_loop_epoch_of '1970-01-01T00:00:00Z')"
+[ "$(_loop_epoch_of 'not-a-timestamp')" = "-1" ] && ok "epoch helper reports unparseable as -1" || bad "epoch helper did not reject garbage"
+
 echo "----"
 echo "loop_lib: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
