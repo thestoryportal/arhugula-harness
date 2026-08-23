@@ -178,6 +178,15 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         )
 
     def down(k: int) -> int:
+        # Never raises: this runs from the finally block, where an exception would abort the
+        # remaining teardown and the claim release — stranding exactly the lanes and stacks
+        # this cleanup exists to remove, precisely when Docker is already wedged.
+        try:
+            return _down(k)
+        except (subprocess.TimeoutExpired, OSError):
+            return 1
+
+    def _down(k: int) -> int:
         return subprocess.run(
             ["just", "r420-self-hosted-stack-down"],
             env=_lane_env(k),
@@ -205,7 +214,17 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
             check=True,
             cwd=REPO,
         ).stdout
-        return [json.loads(line) for line in out.splitlines() if line.strip()]
+        # Compose emits EITHER a JSON array or one object per line depending on version and
+        # formatting; parsing only the line form fails on a compact array (each line is the
+        # whole list) and on a pretty-printed one (each line is a fragment).
+        text = out.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return [json.loads(line) for line in text.splitlines() if line.strip()]
+        return parsed if isinstance(parsed, list) else [parsed]
 
     # CLAIM the two indices in the real registry, exactly as a lane does. The absence check
     # below is not atomic with `up` on its own — a concurrent lane could take 348 in the
@@ -298,22 +317,25 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
         # asserts on them, so it removes its own: leaving lane348/lane349 volumes behind
         # would feed stale traces to the next run, or to a real lane on those indices.
         for k in started:
-            rc = subprocess.run(
-                [
-                    "docker",
-                    "compose",
-                    "-p",
-                    lane_ports.project(k),
-                    "-f",
-                    str(COMPOSE),
-                    "down",
-                    "--volumes",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-                cwd=REPO,
-            ).returncode
+            try:
+                rc = subprocess.run(
+                    [
+                        "docker",
+                        "compose",
+                        "-p",
+                        lane_ports.project(k),
+                        "-f",
+                        str(COMPOSE),
+                        "down",
+                        "--volumes",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    cwd=REPO,
+                ).returncode
+            except (subprocess.TimeoutExpired, OSError):
+                rc = 1
             # A volume left behind feeds stale dashboards and traces to the next run of this
             # case, or to a real lane on that index — an ignored rc would pass regardless.
             if rc != 0 and k not in failed:

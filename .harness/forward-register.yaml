@@ -10349,7 +10349,7 @@ items:
     lane-init''s claim path, a primitive neither has. (2) §5 asks for "available memory /
     Docker-VM headroom"; lane-init checks the VM MemTotal ceiling AND host availability
     against the stack''s need, but no Docker API exposes the VM''s FREE memory, so a VM sized
-    adequately and already consumed passes both. Measuring it means a probe container.'
+    adequately and already consumed passes both. Measuring it means a probe container. A THIRD symptom joined at round 15: a lane reaped between its worktree''s deletion and its claim''s release strands that index forever. A reclaim-by-absent-path fix was built and then REVERTED — unlocked, it deletes a peer''s newly published live claim (P1), and absence is not death because the removal path quarantines a live worktree before restoring it. Same lock, third symptom.'
   close_out: '(1) Give the registry a per-index lock (the mkdir primitive lane-init already
     uses for corpse repair) and take it in BOTH the release path and lane-init''s claim path;
     (2) for headroom, decide between an opt-in probe container and treating the VM ceiling as

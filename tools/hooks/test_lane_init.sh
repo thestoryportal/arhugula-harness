@@ -139,8 +139,8 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$PROBEQ-above" HARNESS_LANE_INDEX=
 # with the lane-0 project name and ports, exactly what the registry exists to prevent.
 EXH="$ROOT/exhausted"
 mkdir -p "$EXH/lanes"
-# The held paths must EXIST: a claim naming a vanished worktree is a stranded claim the
-# allocator reclaims (a teardown that died before its release), not a taken index.
+# The held paths are real directories so the fixture models 350 lanes that genuinely hold
+# their indices, rather than 350 records pointing at nothing.
 mkdir -p "$ROOT/held"
 i=0; while [ "$i" -lt 350 ]; do mkdir -p "$ROOT/held/$i"; printf 'other-lane %s\n' "$ROOT/held/$i" > "$EXH/lanes/$i"; i=$((i + 1)); done
 OUT=$(cd "$ROOT/wt2" && ARC_METRICS_QUEUE_DIR="$EXH" \
@@ -623,29 +623,6 @@ STICK_RC=$(
   || bad "the init itself failed (rc=$STICK_RC) — the ABSENT above proves nothing"
 chmod 700 "$STICKQ/lanes"
 
-# --- 32. a claim whose worktree is gone is reclaimed, fenced, not stranded -------------
-# The release runs only after the tree is already deleted, so a teardown killed in between
-# leaves a claim nothing will ever retry — that index would be consumed for good.
-STRANDQ="$ROOT/strand-q"; mkdir -p "$STRANDQ/lanes"
-printf '%s %s\n' "dead-lane" "$ROOT/worktree-that-no-longer-exists" > "$STRANDQ/lanes/0"
-KS_STRAND=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$STRANDQ" \
-  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
-[ "$KS_STRAND" = "0" ] && ok "a stranded claim's index is reclaimed by the next lane" \
-  || bad "stranded index not reclaimed: k='$KS_STRAND'"
-[ -f "$STRANDQ/lanes/.orphaned-0" ] && ok "the reclaimed index is fenced — its stack is unaccounted for" \
-  || bad "stranded index reclaimed with no fence"
-grep -qF -- "$ROOT/wt" "$STRANDQ/lanes/0" && ok "the reclaimed claim names the new holder" \
-  || bad "claim after reclaim: [$(cat "$STRANDQ/lanes/0" 2>/dev/null)]"
-
-# --- 33. an index whose holder still EXISTS is never reclaimed ------------------------
-LIVEQ="$ROOT/live-q"; mkdir -p "$LIVEQ/lanes"
-printf '%s %s\n' "live-lane" "$(cd "$ROOT/wt2" && pwd -P)" > "$LIVEQ/lanes/0"
-KS_LIVE=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$LIVEQ" \
-  bash -c "source '$INIT' >/dev/null 2>&1; printf '%s' \"\$HARNESS_LANE_INDEX\"")
-{ [ "$KS_LIVE" != "0" ] && grep -qF -- "live-lane" "$LIVEQ/lanes/0"; } \
-  && ok "a live peer's claim is left alone and the new lane takes the next index" \
-  || bad "took a live lane's index: k='$KS_LIVE', claim=[$(cat "$LIVEQ/lanes/0" 2>/dev/null)]"
-
 # --- 34. an oversized digit string cannot become a claim filename ---------------------
 # `test -ge` exits 2 on an integer too large for the shell, which `if` reads as false.
 OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX=999999999999999999999999999999 \
@@ -684,6 +661,40 @@ GC_N=$(wc -l < "$GC_WRITES" 2>/dev/null | tr -d ' ')
 [ "${GC_N:-0}" = "1" ] && ok "gc.auto is WRITTEN once across three sources (not once per source)" \
   || bad "gc.auto write count across three sources = ${GC_N:-0}, want 1"
 unset GC_STATE GC_WRITES
+
+# --- 36. SOURCING alone never runs a teardown (the status recipe must stay read-only) --
+# `just r420-self-hosted-stack-status` sources lane-init. If clearing a fence happened at
+# source time, that read-only command would delete an orphaned project's containers and
+# named volumes before printing anything — and it is an auto-allowed command in loop mode.
+rm -f "$ROOT/docker-calls.log"
+cat > "$STUB/docker" <<STUBEOF
+#!/usr/bin/env bash
+echo "\$@" >> "$ROOT/docker-calls.log"
+exit 0
+STUBEOF
+chmod +x "$STUB/docker"
+QUIETQ="$ROOT/quiet-q"; mkdir -p "$QUIETQ/lanes"
+printf 'stale\n' > "$QUIETQ/lanes/.orphaned-2"
+(
+  PATH="$STUB:$PATH"; export PATH
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$QUIETQ" \
+    HARNESS_LANE_INDEX=2 bash -c "source '$INIT'"
+) >/dev/null 2>&1
+grep -q 'down' "$ROOT/docker-calls.log" 2>/dev/null \
+  && bad "sourcing ran a teardown: [$(cat "$ROOT/docker-calls.log" 2>/dev/null | tr '\n' '/')]" \
+  || ok "sourcing alone runs no teardown — the fence is honoured at stack-up, not at source"
+[ -f "$QUIETQ/lanes/.orphaned-2" ] && ok "and the fence is still standing for the lane that asks" \
+  || bad "the fence was cleared by a mere source"
+# ...while the lane that actually asks for a stack DOES honour it.
+OUT=$(
+  PATH="$STUB:$PATH"; export PATH
+  cd "$ROOT/wt" && CLAUDE_PROJECT_DIR="$SCRIPT_DIR/../.." ARC_METRICS_QUEUE_DIR="$QUIETQ" \
+    HARNESS_LANE_INDEX=2 HARNESS_RAM_FLOOR_GB=0 \
+    bash -c "source '$INIT' >/dev/null 2>&1; lane_stack_allowed && echo ALLOWED || echo ABSENT"
+)
+{ [ "$OUT" = "ALLOWED" ] && [ ! -f "$QUIETQ/lanes/.orphaned-2" ]; } \
+  && ok "lane_stack_allowed clears the fence and admits the lane" \
+  || bad "stack-up path did not honour the fence: '$OUT'"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

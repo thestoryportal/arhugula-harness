@@ -234,19 +234,6 @@ _li_have=""
 for _li_f in "$_LI_Q"/lanes/*; do
   [ -f "$_li_f" ] || continue
   IFS=' ' read -r _li_id _li_path < "$_li_f"
-  # A claim naming a worktree that no longer EXISTS is stranded: the release runs only after
-  # the tree has already been deleted, so a crash in between (or during the Docker cleanup)
-  # leaves the claim with nothing to retry it, and that index is consumed forever.
-  # Reclaimable — but its stack is unaccounted for, so it is fenced exactly like an inherited
-  # claim before the index is freed.
-  if [ -n "${_li_path:-}" ] && [ "${_li_path:-}" != "$_LI_WT" ] && [ ! -d "${_li_path:-}" ]; then
-    if printf '%s stranded-claim %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${_li_id:-}" \
-         > "$_LI_Q/lanes/.orphaned-$(basename "$_li_f")" 2>/dev/null; then
-      rm -f "$_li_f" 2>/dev/null
-      echo "lane-init: freed lane index $(basename "$_li_f") — its worktree ${_li_path} is gone (a teardown died before the release); its stack is fenced" >&2
-    fi
-    continue
-  fi
   if [ "${_li_path:-}" = "$_LI_WT" ]; then
     _li_have="$(basename "$_li_f")"
     # A claim recorded under a DIFFERENT lane id at this path belongs to a previous occupant
@@ -471,7 +458,11 @@ _lane_clear_orphaned_stack() {
   return 1
 }
 _LI_ORPHAN_DIR="$_LI_Q/lanes"
-_lane_clear_orphaned_stack || true
+# NOT called at source time. Sourcing is what `just r420-self-hosted-stack-status` does, and
+# clearing a fence runs `down --volumes` — which would make a read-only status command delete
+# an orphaned project's containers and volumes before printing anything. The fence is honoured
+# where it matters instead: inside lane_stack_allowed, which only a lane bringing a stack UP
+# calls.
 
 # ── git gc ───────────────────────────────────────────────────────────────────────────
 # Repo-wide and idempotent: `extensions.worktreeConfig` is unset, so `git config` already
