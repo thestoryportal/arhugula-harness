@@ -119,7 +119,18 @@ OUT=$(run_on)
 echo "$OUT" | jq -e '.reason | test("R-999")' >/dev/null 2>&1 \
   && ok "the Stop hook drains a legacy ledger before computing the skip-set" \
   || bad "un-drained legacy deferral omitted from the skip-set (the loop would re-attempt it): $OUT"
+# ... and a FAILED drain must SAY the list is incomplete (codex r19 P1). Blocking the turn
+# would wedge the loop on a broken legacy file; reading "not in the list" as "safe to
+# attempt" is the unsafe direction. The reason carries the warning instead.
 rm -f "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
+printf '| t | DEFERRED-HIL | R-777 — unreadable |\n' > "$REPO/.harness/loop_status.md"
+chmod 000 "$REPO/.harness/loop_status.md"
+OUT=$(run_on)
+chmod 644 "$REPO/.harness/loop_status.md"
+echo "$OUT" | jq -e '.reason | test("INCOMPLETE")' >/dev/null 2>&1 \
+  && ok "a failed drain warns that the skip-set is incomplete" \
+  || bad "a failed drain left the skip-set silently incomplete: $OUT"
+rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
 
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"

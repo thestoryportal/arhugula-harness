@@ -10207,7 +10207,12 @@ items:
     orphan can each fold+republish+re-claim it, producing a duplicate DEFERRED-HIL row and
     two archives for one orphan. Safe-direction under C-HE-09 §4 (an extra DEFERRED-HIL,
     never a false RESOLVED-HIL), so log-noise rather than a correctness break -- but it shows
-    the claim-first guarantee does not span the whole function.'
+    the claim-first guarantee does not span the whole function. (e) FOURTH instance (codex
+    r19 P2): `loop_resolve`''s pre-write byte offset narrows the search but cannot EXCLUDE a
+    concurrent append -- if this process''s write fails while another appends a byte-identical
+    lane/cause/item/note row in the same window, the grep succeeds and a false "resolved" is
+    reported. Same root as (c) and the same fix shape: a per-call nonce in the row, since no
+    offset alone can distinguish two identical writers.'
   close_out: '(1) The coherent fix for (a) is a DECOMPOSITION of the ignore class, not a
     reversal of either prior decision — `.migrated-*` is a permanent archive and must STAY
     ignored (codex r5 P2: untracked residue wedges the worktree GC forever), while

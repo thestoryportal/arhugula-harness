@@ -89,12 +89,24 @@ NEXT=${NEXT:-"(derive per CLAUDE.md §4 from the dashboard)"}
 # session whose own SessionStart migration was incomplete (rc 2 — a live sibling held the
 # claim) would otherwise stay blind to that worktree's legacy rows for its ENTIRE lifetime,
 # because nothing retries within the session. Draining here makes every Stop-turn re-try it.
-command -v loop_status_migrate >/dev/null 2>&1 && loop_status_migrate >/dev/null 2>&1
+# Capture the drain's status (codex r19 P1). A FAILED drain (rc 1) leaves the skip-set
+# incomplete by an unknown amount, and the next autonomous turn reads "not in the list" as
+# "safe to attempt" — the unsafe direction. Blocking the turn outright would wedge the loop
+# on a broken legacy file, so the incompleteness is stated IN the continuation reason.
+_MIGRC=0
+if command -v loop_status_migrate >/dev/null 2>&1; then
+  loop_status_migrate >/dev/null 2>&1; _MIGRC=$?
+fi
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
+case "$_MIGRC" in
+  0) SKIPWARN="" ;;
+  2) SKIPWARN=" WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — absence from it is NOT permission to attempt an item." ;;
+  *) SKIPWARN=" WARNING: a legacy loop_status ledger could NOT be drained (rc ${_MIGRC}); this list is INCOMPLETE by an unknown amount — absence from it is NOT permission to attempt an item, and this should be surfaced to the operator." ;;
+esac
 
 REASON="[stop-loop] autonomous loop continuing (turn ${ITER}/${MAX}). Dashboard next-action: ${NEXT}.
-ALREADY DEFERRED this run — do NOT re-attempt these (build elsewhere): ${SKIP}.
+ALREADY DEFERRED this run — do NOT re-attempt these (build elsewhere): ${SKIP}.${SKIPWARN}
 Pick the highest-priority forward item per CLAUDE.md §12.4.1 that is NOT in the deferred set, and drive it: ground empirically → build the slice that does NOT need any gated input → tests → PR → CI-green → merge → fixed-point refresh (CLAUDE.md §12). Use /resolve for reversible in-repo forks.
 If the item is GATED (needs a paid call / secret / vendor selection / missing credential / infra you cannot provide): do NOT force it and do NOT raise .loop-halt. Build whatever slice is possible WITHOUT the gated input, then record the deferral with the allowlisted wrapper — \`tools/04-loop/defer.sh <ITEM-ID> 'what operator input is needed (plain text, no shell metacharacters) — built without it: slice or none'\` — and ADVANCE to the next forward item. (Run it as a single command; do NOT chain it or source the libs yourself — the wrapper does that and is the only guard-allowed path.) The hard-stop deny-list still blocks the dangerous TOOL; this is the item-level disposition.
 ONLY when EVERY forward item per §12.4.1 is already in the deferred set (no buildable slice remains anywhere) do you stand the run down with \`tools/04-loop/halt.sh 'forward menu exhausted — N items awaiting operator input'\`. Then the run ends for operator review."

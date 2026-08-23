@@ -188,7 +188,10 @@ sleep 30 & SIBPID=$!
 printf '| 2026-08-01T00:00:00Z | DEFERRED-HIL | B-991 — held by a live sibling |\n' \
   > "$REPO/.harness/loop_status.md.migrating-2026-08-01T00:00:00Z-${SIBPID}-1"
 OUT=$(run)
-printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "a live-sibling drain (rc 2) was reported as an ERROR: $OUT" || ok "rc=2 (live sibling) is routine, not mig=ERR"
+printf '%s' "$OUT" | grep -q 'mig=ERR' && bad "a live-sibling drain (rc 2) was reported as an ERROR: $OUT" || ok "rc=2 (live sibling) is not mig=ERR"
+# ... but it must not be SILENT either (codex r19 P2): if the live claim holds the only
+# pending gate, silence shows the operator neither the gate nor any hint one may exist.
+printf '%s' "$OUT" | grep -q 'mig=PENDING' && ok "rc=2 surfaces as a distinct PENDING notice" || bad "an incomplete venue was rendered as complete: $OUT"
 kill "$SIBPID" 2>/dev/null; wait "$SIBPID" 2>/dev/null
 rm -f "$REPO/.harness"/loop_status.md.migrat*
 # ... while a genuinely unreadable ledger (rc 1) still surfaces.

@@ -106,14 +106,28 @@ while [ "$i" -lt "$MAX" ]; do
   # re-attempt an item the operator already declined, which is the exact under-skip C-HE-09's
   # ledger exists to prevent. Before this venue move `loop_skip_set` read that same
   # per-worktree file directly, so leaving this unwired would be a REGRESSION, not a gap.
-  # Best-effort: an incomplete drain (rc 2, a live sibling holds the claim) still yields a
-  # skip-set that is a superset of what we had, and the next pass completes it.
-  command -v loop_status_migrate >/dev/null 2>&1 && loop_status_migrate >/dev/null 2>&1
+  # NOT best-effort-and-silent (codex r19 P1): a FAILED drain (rc 1) means we could not read
+  # a legacy ledger at all, so the skip-set below is incomplete by an UNKNOWN amount — and
+  # "not in the list" is exactly what the child reads as "safe to attempt". Halting the whole
+  # run on a broken legacy file would be worse (it wedges every forward item), so the
+  # incompleteness is carried INTO the prompt instead: the child is told not to treat absence
+  # from the list as permission. rc 2 (a live sibling holds a claim) is the milder form.
+  _MIGRC=0
+  if command -v loop_status_migrate >/dev/null 2>&1; then
+    loop_status_migrate >/dev/null 2>&1; _MIGRC=$?
+  fi
+  _SKIPWARN=""
+  case "$_MIGRC" in
+    0) ;;
+    2) _SKIPWARN=" [WARNING: a concurrent migration still holds a legacy ledger, so this list may be INCOMPLETE — do NOT treat absence from it as permission to attempt an item]" ;;
+    *) _SKIPWARN=" [WARNING: a legacy loop_status ledger could NOT be drained (rc ${_MIGRC}), so this list is INCOMPLETE by an unknown amount — do NOT treat absence from it as permission to attempt an item; surface this to the operator]" ;;
+  esac
+  [ -n "$_SKIPWARN" ] && echo "[loop] migration rc=${_MIGRC}: skip-set may be incomplete" >&2
   # Compute the run-scoped skip-set HERE (the fresh child cannot — loop_skip_set is a
   # chained/sourced command the guard denies) and append it to the prompt so the child
   # advances past already-deferred items instead of re-attempting the static next-action.
   SKIP=$(loop_skip_set); SKIP=${SKIP:-none}
-  ITER_PROMPT="${PROMPT} [already deferred this run — do NOT re-attempt: ${SKIP}]"
+  ITER_PROMPT="${PROMPT} [already deferred this run — do NOT re-attempt: ${SKIP}]${_SKIPWARN}"
   echo "[loop] iteration ${i}/${MAX} → claude -p (deferred so far: ${SKIP})"
   # Loop mode on for the child so the in-session hooks fire; bounded per turn. NOTE: no
   # --allowedTools — every tool flows through the U-HK-12 permission guard (allow safe /

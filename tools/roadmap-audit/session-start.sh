@@ -59,7 +59,13 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
     _migerr=$(loop_status_migrate 2>&1 >/dev/null); _migrc=$?
     # rc 2 == a live sibling holds a claim we correctly refused to steal. That is routine
     # concurrency on a shared venue, not a failure, and must not cry ERR at every session.
-    if [ "$_migrc" -ne 0 ] && [ "$_migrc" -ne 2 ]; then
+    if [ "$_migrc" -eq 2 ]; then
+      # NOT an error, but NOT nothing either (codex r19 P2): rc 2 means the venue is
+      # incomplete right now, and if the live claim holds the only pending gate the operator
+      # would otherwise see neither the gate nor any hint that one might exist. A distinct
+      # PENDING marker says "come back", without the false alarm of ERR.
+      _MIG=" mig=PENDING(a concurrent migration still holds a legacy ledger; the pending list may be incomplete)"
+    elif [ "$_migrc" -ne 0 ]; then
       _MIG=" mig=ERR(legacy loop_status cutover incomplete: $(printf '%s' "$_migerr" | tr '\n' ';' | cut -c1-160))"
     fi
   fi

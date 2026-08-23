@@ -144,6 +144,16 @@ if grep -q 'R-888' "$REPO/.harness/child_prompt.log" 2>/dev/null; then
 else
   bad "un-drained legacy deferral omitted from the child's skip-set: prompt=[$(head -c 160 "$REPO/.harness/child_prompt.log" 2>/dev/null)]"
 fi
+# ... and a FAILED drain must SAY so in the prompt (codex r19 P1): the child reads "not in
+# the list" as "safe to attempt", so an unknowably-incomplete list must never look complete.
+rm -f "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/child_prompt.log"
+printf '| t | DEFERRED-HIL | R-777 — unreadable |\n' > "$REPO/.harness/loop_status.md"
+chmod 000 "$REPO/.harness/loop_status.md"
+CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 1 >/dev/null 2>&1
+chmod 644 "$REPO/.harness/loop_status.md"
+grep -q 'INCOMPLETE' "$REPO/.harness/child_prompt.log" 2>/dev/null \
+  && ok "a failed drain warns the child that the skip-set is incomplete" \
+  || bad "a failed drain left the child's skip-set silently incomplete"
 rm -f "$REPO/.harness/loop_status.md" "$REPO/.harness"/loop_status.md.migrat* "$REPO/.harness/child_prompt.log"
 
 echo "----"
