@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import pytest
 import reservations as rs
 
 _VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
@@ -229,3 +230,49 @@ def test_the_session_temp_root_is_removed_when_the_session_ends(tmp_path):
         f"the session temp root outlived its pytest run: {survivors} — one tree accrues "
         "per run, which is the B-207-shaped leak this fixture's teardown exists to close"
     )
+
+
+_MODULE_PHASE: dict[str, object] = {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _emit_during_module_setup():
+    """Emit from a MODULE-scoped fixture, i.e. outside any test body.
+
+    Higher-scoped fixtures are set up before the function-scoped ones and torn down after
+    them, so this runs in the phase a per-test redirect cannot reach. It is a fixture
+    rather than a test on purpose: the phase IS the thing under test.
+    """
+    _MODULE_PHASE["venue"] = os.environ.get(_VENUE_ENV)
+    try:
+        rs.emit_loop_row(
+            "NOTIFY", "b-208-witness", "b-208:module-phase:probe", "row from module setup"
+        )
+        _MODULE_PHASE["emitted"] = True
+    except Exception as exc:
+        _MODULE_PHASE["emitted"] = exc
+    yield
+
+
+def test_the_redirect_covers_fixture_phases_not_just_test_bodies():
+    """(6) The boundary holds for the whole item lifecycle, not only the test body.
+
+    A function-scoped autouse fixture — this conftest's shape for four rounds — starts
+    after higher-scoped fixtures are set up and ends before they tear down, so anything
+    emitting from a session- or module-scoped fixture still resolved the operator's
+    ledger. No witness up to round 6 ran outside a test body, so none could see it
+    (out-of-family review, round 7).
+
+    Revert the conftest to a function-scoped autouse fixture and this reds: the module
+    fixture above observes no venue at all.
+    """
+    venue = _MODULE_PHASE.get("venue")
+    assert venue, (
+        "a module-scoped fixture saw no redirect — an emit from any fixture phase would "
+        "resolve the operator's ledger"
+    )
+    assert "harness-loop-status-" in str(venue), f"not the session venue: {venue!r}"
+    assert _MODULE_PHASE.get("emitted") is True, (
+        f"the module-phase emit did not succeed: {_MODULE_PHASE.get('emitted')!r}"
+    )
+    assert "b-208:module-phase:probe" in Path(str(venue)).read_text()

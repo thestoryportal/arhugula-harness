@@ -10543,7 +10543,18 @@ items:
     passing proves a directory WAS created there). Same round found witness 4''s line
     citations stale by exactly two — shifted by this arc''s OWN docstring edit, the same
     day it was written — so they are replaced by a grep anchor rather than corrected:
-    a citation that rots on the next edit is worse than the grep that always resolves.
+    a citation that rots on the next edit is worse than the grep that always resolves
+    (round 8 found that replacement count ALSO false, so the enumeration is gone
+    entirely). Round 8 also closed the last real hole: the redirect was function-scoped,
+    so it covered only test BODIES — a session- or module-scoped fixture that emitted
+    still resolved the operator''s ledger, and no witness ran outside a test body to
+    see it. Now a per-item pytest_runtest_protocol hookwrapper brackets setup, call and
+    teardown together. The path guard on it is load-bearing and was NOT assumed: a
+    subdirectory conftest''s runtest hooks fire for items ANYWHERE in the run, measured
+    on a scratch tree before building on it, and without the guard the axis test sees
+    the variable again. Six witnesses now, each pinning a distinct property — dropping
+    the guard reds only the axis-leak one, reverting to a function-scoped fixture reds
+    only the fixture-phase one.
     Witnesses at tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to

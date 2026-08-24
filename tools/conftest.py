@@ -30,73 +30,69 @@ invariants true instead of trading one for the other.
 
 from __future__ import annotations
 
+import pathlib
 import shutil
 import tempfile
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 _VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
+_DIR = Path(__file__).resolve().parent
+_ROOT_KEY: pytest.StashKey[Path] = pytest.StashKey()
 
 
-@pytest.fixture(scope="session")
-def _loop_status_root() -> Iterator[Path]:
-    """One throwaway directory per session, removed when the session ends.
+def _venue_root(config: pytest.Config) -> Path:
+    """One throwaway directory per session, made on first use and owned by this module."""
+    if _ROOT_KEY not in config.stash:
+        config.stash[_ROOT_KEY] = Path(tempfile.mkdtemp(prefix="harness-loop-status-"))
+    return config.stash[_ROOT_KEY]
 
-    Session-scoped so a run does not create a tree per test, and OWNED so it does not
-    accrue a tree per run either: `mkdtemp` with nobody to clean it up is the shape
-    B-207's sibling leak was filed under, and a fixture already has the teardown.
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
+    """Redirect the ledger around each `tools/` item's WHOLE lifecycle.
+
+    A function-scoped autouse fixture -- this file's previous shape -- only covers the
+    test BODY. Higher-scoped fixtures are set up before it and torn down after it, so a
+    session- or module-scoped fixture that emitted would still resolve the operator's
+    ledger, which contradicts the boundary this module claims (out-of-family review,
+    round 7). Wrapping the run protocol brackets setup, call and teardown together.
+
+    Per-ITEM rather than per-session, because the variable lives in process-global state
+    that outlives whichever suite set it: `RuntimeConfig`'s env loader consumes the whole
+    `HARNESS_*` namespace, and `harness-runtime`'s
+    `test_env_defaults_to_os_environ_when_none` asserts none of them is set. A session-wide
+    redirect fails that test in a mixed invocation (round 2, confirmed by running it);
+    `test_the_redirect_does_not_outlive_a_tools_test` is the witness.
+
+    The path guard is NOT decoration. A subdirectory conftest's `pytest_runtest_protocol`
+    fires for items ANYWHERE in the run, not only those beneath it -- measured, and
+    without the guard the axis test above sees the variable and fails. Only items under
+    this directory get the redirect.
+
+    An INDEPENDENT `MonkeyPatch` restores it: `undo()` empties only the instance it is
+    called on, so the mid-test `monkeypatch.undo()` several tools tests perform cannot
+    lift this (round 3; `rg 'monkeypatch.undo' tools/`). Delegating also avoids a
+    hand-rolled two-armed restore whose was-set arm nothing could reach (round 4).
     """
-    root = Path(tempfile.mkdtemp(prefix="harness-loop-status-"))
-    try:
-        yield root
-    finally:
-        # Swallowing here is deliberate and bounded: the tree is ours, lives under
-        # TMPDIR, and nothing downstream reads it. Raising would turn a cleanup hiccup
-        # into a red session, the wrong trade for a directory the OS reaps anyway --
-        # the leak this closes is about accrual, not correctness.
-        shutil.rmtree(root, ignore_errors=True)
-
-
-@pytest.fixture(autouse=True)
-def _isolated_loop_status_venue(_loop_status_root: Path) -> Iterator[Path]:
-    """Redirect the ledger around EACH `tools/` test, restoring it by hand.
-
-    Per-TEST rather than session-scoped, because the variable lives in process-global
-    state that outlives whichever suite set it. A session-scoped setter leaves
-    `HARNESS_LOOP_STATUS_PATH` in place for everything that runs afterwards in the same
-    process, so a mixed `pytest tools/... harness-runtime/...` invocation would fail the
-    axis suite's no-`HARNESS_*` invariant. That was this fixture's second shape and it
-    failed exactly that way when run; `test_the_redirect_does_not_outlive_a_tools_test`
-    is the witness.
-
-    Deliberately NOT the `monkeypatch` FIXTURE -- the same reason
-    `test_arc_exit_report.py::shared_ledger` gives, and the same trap: that fixture is ONE
-    function-scoped instance shared with the test body, and nine tools tests call
-    `monkeypatch.undo()` mid-test to drop a `run` stub before exercising the real
-    subprocess runner. An `undo()` empties the whole stack, so a redirect riding on it is
-    silently lifted mid-test and the very next real emit resolves the operator's ledger.
-    That was this fixture's third shape; out-of-family review and CI caught it
-    independently, the latter by rolling `test_arc_exit_report.py`'s own pin back
-    underneath it. `test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect` is the
-    witness.
-
-    An INDEPENDENT `MonkeyPatch` is immune to that -- `undo()` only empties the instance
-    it is called on. It is preferred over a hand-rolled `try/finally` because restoring an
-    environment variable has two modes (it was set; it was not), only one of which is
-    reachable from a pytest process that nobody pre-configured. The hand-rolled version
-    therefore shipped a restore branch no witness could reach, confirmed dead by mutation
-    (merge-gate witness lens). Delegating to `MonkeyPatch` deletes the branch rather than
-    testing it: one implementation owns both modes, and it is already covered by pytest's
-    own suite.
-
-    Set unconditionally rather than only-if-unset: no test here legitimately writes the
-    real venue, so an ambient value pointing at it is a misconfiguration, not an intent
-    worth honouring. A test that pins its own venue later (`shared_ledger`) still wins,
-    and this restores whatever it found underneath.
-    """
-    venue = _loop_status_root / "loop_status.md"
+    if _DIR not in pathlib.Path(str(item.path)).resolve().parents:
+        yield
+        return
     with pytest.MonkeyPatch.context() as mp:
-        mp.setenv(_VENUE_ENV, str(venue))
-        yield venue
+        mp.setenv(_VENUE_ENV, str(_venue_root(item.config) / "loop_status.md"))
+        yield
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Take the venue directory with us, so a run does not accrue one tree.
+
+    `mkdtemp` with nobody to clean up after it is the shape B-207 was filed under.
+    Swallowing a removal failure is deliberate and bounded: the tree is ours, lives under
+    TMPDIR, and nothing downstream reads it -- the leak this closes is about accrual, not
+    correctness. `test_the_session_temp_root_is_removed_when_the_session_ends` is the
+    witness.
+    """
+    root = config.stash.get(_ROOT_KEY, None)
+    if root is not None:
+        shutil.rmtree(root, ignore_errors=True)
