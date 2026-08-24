@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
 # Advisory textual sweep of the current diff for high-signal defect-class shapes.
-# ALWAYS exits 0: this is a collection aid for the agent's judgment, never a gate
-# (an advisory diagnostic that can raise is worse than none). Silence proves
-# nothing; each hit demands a named answer in the preflight, not necessarily a fix.
+# Exit contract: 0 = the sweep RAN (with or without hits); 2 = the sweep COULD NOT
+# RUN (git discovery failed) — "couldn't look" must never read as "looked and found
+# nothing" (codex round 4 on the skills PR). Pattern hits never affect the exit
+# code: this is a collection aid for the agent's judgment, never a gate. Silence
+# proves nothing; each hit demands a named answer in the preflight.
 set -u
 # `git diff HEAD` already covers staged + unstaged changes to tracked files —
 # concatenating `--cached` on top duplicated staged hits and let them eat the
 # per-class head cap (codex round 1). Untracked NEW files are outside any diff,
 # so their content is appended as +lines to honor the SKILL's "plus any new
 # files" scope.
-diff_text=$(git diff HEAD 2>/dev/null) || diff_text=""
-untracked=$(git ls-files --others --exclude-standard 2>/dev/null | while IFS= read -r f; do
+if ! diff_text=$(git diff HEAD 2>&1); then
+  echo "preflight-grep: SWEEP DID NOT RUN — git diff HEAD failed: $diff_text" >&2
+  exit 2
+fi
+if ! untracked_list=$(git ls-files --others --exclude-standard 2>&1); then
+  echo "preflight-grep: SWEEP DID NOT RUN — git ls-files failed: $untracked_list" >&2
+  exit 2
+fi
+untracked=$(printf '%s\n' "$untracked_list" | while IFS= read -r f; do
   [ -f "$f" ] && sed 's/^/+/' "$f"
 done) || untracked=""
 added=$(printf '%s\n%s\n' "$diff_text" "$untracked" | grep '^+' | grep -v '^+++') || true
-[ -z "$added" ] && { echo "preflight-grep: no added lines in diff or new files"; exit 0; }
+[ -z "$added" ] && { echo "preflight-grep: swept — no added lines in diff or new files"; exit 0; }
 
 report() { # $1 label, $2 pattern
   hits=$(printf '%s\n' "$added" | grep -nE "$2" 2>/dev/null | head -8) || true
