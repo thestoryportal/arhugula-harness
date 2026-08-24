@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 210
+  total: 212
   open: 1
   design_substrate_gated: 3
   registered_finding: 57
   operator_gated: 0
   held: 2
-  closed: 147
-  identity_digest: faff8c81a5c35d76
+  closed: 149
+  identity_digest: a9835f05dc620ba2
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10600,7 +10600,7 @@ items:
     the B-208 session belt shadows the production-default probe in
     test_queue_lives_outside_the_repo
   pr: '#1445'
-  status: registered_finding
+  status: closed
   summary: 'SURFACED by codex round 3 on the skills PR #1445, on merged B-208 code that PR
     does not touch. tools/conftest.py installs ARC_METRICS_QUEUE_DIR before collection
     imports arc_metrics, so module-level QUEUE_DIR always resolves the temporary belt and
@@ -10609,16 +10609,18 @@ items:
     that probe green because the environment value wins. Closure shape: test the default in
     an isolated import (a child process with the variable stripped), the same idiom the
     isolation module already uses for process-boundary claims.'
-  close_out: 'OPEN — closure = an isolated-import witness for the unset production default
-    (child process, variable stripped), registered from codex round 3 on PR #1445.'
+  close_out: 'CLOSED at PR #1447 (2026-08-24) — test_queue_lives_outside_the_repo now runs
+    an isolated child interpreter with ARC_METRICS_QUEUE_DIR and ARC_METRICS_QUEUE_DIR_PREBELT
+    stripped and asserts the import-time default resolves outside the repo; probe-verified (a
+    repo-resident default reds the test).'
   council: 'NO — single-module test-adequacy gap; no cross-axis tension.'
-  heading: '### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*'
+  heading: '### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; CLOSED at #1447)*'
 - id: B-210
   title: >-
     production_queue_dir() is witnessed in isolation but its Docker-test callsite is not
     pinned
   pr: '#1445'
-  status: registered_finding
+  status: closed
   summary: 'SURFACED by codex round 3 on the skills PR #1445, on merged B-208 code that PR
     does not touch. Case 7d proves production_queue_dir() never returns the belt, but no
     witness proves test_two_lanes_disjoint_names_and_ports still resolves its lanes_dir
@@ -10627,8 +10629,42 @@ items:
     go back to the throwaway registry, and the docker test is skipif-gated so CI cannot see
     the regression. Closure shape: pin the callsite with a source-shape witness on the
     lanes_dir assignment, or factor claim-path selection into directly tested code.'
-  close_out: 'OPEN — closure = a callsite pin (source-shape witness on the Docker test''s
-    lanes_dir assignment) or refactor to directly tested claim-path selection, registered
-    from codex round 3 on PR #1445.'
+  close_out: 'CLOSED at PR #1447 (2026-08-24) — the fence-honoring claim block is extracted
+    to claim_production_lane_indices() (the one place a test process resolves the registry
+    it claims in), the Docker test routes through it, and three hermetic daemon-free
+    witnesses pin registry choice, fence honor, and refusal-rollback; the merge-gate
+    witness-adequacy lens then hardened the taken-index witness against session-belt
+    cross-test leakage at 562fd965f. All probe-verified.'
   council: 'NO — single-callsite witness-adequacy gap; no cross-axis tension.'
-  heading: '### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*'
+  heading: '### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; CLOSED at #1447)*'
+- id: B-211
+  title: 'Lever: defect-class-preflight — authoring-time defect-class sweep (treated-cohort id)'
+  pr: '#1445'
+  status: registered_finding
+  summary: 'Cohort lever, not a defect. Arcs that actually ran the defect-class-preflight
+    skill (shipped at PR #1445) on their diffs before each commit declare this id in
+    levers_active, so arc-metrics cohort splits can price the skill''s effect on
+    review_rounds / p1_rounds / per-arc reviewer findings against the untreated baseline.
+    First treated arc: pr-1447 (2 codex rounds, 0 codex findings, 1 merge-gate lens
+    finding, at 562fd965f).'
+  close_out: 'OPEN — evaluate after >=5 treated arcs via tools/arc_lever_report.py
+    (treated vs baseline, same arc_type); keep the lever if treated review-round medians
+    sit materially below baseline, retire the id if the cohorts are indistinguishable.
+    Never evaluate against a row whose provenance reads unmapped (B-170 rule).'
+  council: 'NO — measurement bookkeeping; no cross-axis tension.'
+  heading: '### B-211 · Lever id: defect-class-preflight treated cohort *(minted 2026-08-24; OPEN)*'
+- id: B-212
+  title: 'Lever: register-pr-prose — durable-prose binding discipline (treated-cohort id)'
+  pr: '#1445'
+  status: registered_finding
+  summary: 'Cohort lever, not a defect. Arcs whose PR bodies, register rows and close_outs
+    were authored under the register-pr-prose skill (shipped at PR #1445) declare this id
+    in levers_active. The skill targets the prose defect class (145 of 1,084 findings at
+    the 2026-08-24 distillation); its cohort signal is prose-located reviewer findings per
+    arc. First treated arc: pr-1447 (zero prose findings across 2 codex + 2 lens rounds).'
+  close_out: 'OPEN — evaluate after >=5 treated arcs via tools/arc_lever_report.py; keep
+    if treated arcs show fewer prose-class findings than baseline, retire if
+    indistinguishable. Declared only when the skill''s six rules were actually applied to
+    the arc''s durable prose.'
+  council: 'NO — measurement bookkeeping; no cross-axis tension.'
+  heading: '### B-212 · Lever id: register-pr-prose treated cohort *(minted 2026-08-24; OPEN)*'

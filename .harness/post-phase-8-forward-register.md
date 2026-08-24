@@ -2458,12 +2458,28 @@ same spec leg.
 
 - **Deliberately not done.** The 6288 rows already in the ledger are not removed. It is append-only by contract and is operator state outside this repo, so truncating it is the operator's call, not this arc's; the pending synthetic gate was cleared the contract-sanctioned way, with a `RESOLVED-HIL` row.
 
-### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*
+### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; CLOSED at #1447)*
 
 - **What it is.** `tools/conftest.py` installs `ARC_METRICS_QUEUE_DIR` at `pytest_configure`, before collection imports `arc_metrics`, so the module-level `QUEUE_DIR` always resolves the temporary belt. `tools/test_arc_metrics.py::test_queue_lives_outside_the_repo` therefore no longer exercises the UNSET production default: a regression moving the fallback to a repo-resident path stays green because the environment value wins.
 - **Closure shape.** Test the default in an isolated import — a child process with the variable stripped, the same idiom the isolation module already uses for process-boundary claims.
+- **Closed.** PR #1447 (2026-08-24): `test_queue_lives_outside_the_repo` rewritten exactly to that shape — child interpreter, both queue variables stripped, default asserted outside the repo — and probe-verified (a repo-resident default reds it).
 
-### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*
+### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; CLOSED at #1447)*
 
 - **What it is.** Case 7d proves `production_queue_dir()` never returns the belt, but no witness proves `test_two_lanes_disjoint_names_and_ports` still resolves its `lanes_dir` THROUGH that helper. Reverting `test_compose_lanes.py` to the ambient `ARC_METRICS_QUEUE_DIR` lookup leaves 7d green while the Docker test's collision claims go back to the throwaway registry — and the docker test is skipif-gated, so CI cannot see the regression.
 - **Closure shape.** Pin the callsite with a source-shape witness on the `lanes_dir` assignment, or factor claim-path selection into directly tested code.
+- **Closed.** PR #1447 (2026-08-24): closed by the second shape — claim-path selection factored into `claim_production_lane_indices()`, hermetically witnessed without a daemon; the lens round hardened the taken-index witness at `562fd965f`.
+
+### B-211 · Lever id: defect-class-preflight treated cohort *(minted 2026-08-24; OPEN)*
+
+- **What it is.** Not a defect — a treated-cohort marker. An arc that ran the `defect-class-preflight` sweep on its diffs before each commit declares `B-211` in its arc-metrics `levers_active`, so cohort splits can price the skill against the untreated baseline on review rounds, P1 rounds, and per-arc reviewer findings.
+- **Current state.** OPEN as a measurement lever: one treated arc (pr-1447) is in the committed ledger; the n>=5 same-arc_type evaluation bar is not yet reached, so no keep/retire judgment exists.
+- **First treated arc.** pr-1447: 2 codex rounds with 0 codex findings and 1 merge-gate lens finding (at `562fd965f`), against a recent untreated range of 10–22 rounds — a directional signal only; the cohorts decide.
+- **Evaluation.** `tools/arc_lever_report.py` (the `/arc-lever-report` skill) after ≥5 treated arcs, same-arc_type medians; retire the id if treated and baseline are indistinguishable.
+
+### B-212 · Lever id: register-pr-prose treated cohort *(minted 2026-08-24; OPEN)*
+
+- **What it is.** Treated-cohort marker for the `register-pr-prose` authoring discipline. Declared when the arc's PR body, register rows and close_outs were written under the skill's six binding rules; its target class is prose findings (145 of 1,084 at the 2026-08-24 distillation).
+- **Current state.** OPEN as a measurement lever: one treated arc (pr-1447, zero prose-located findings); not separable from B-211 until a treated arc declares only one of the two ids.
+- **First treated arc.** pr-1447: zero prose-located findings across 2 codex + 2 lens rounds.
+- **Evaluation.** Same instrument and bar as B-211; the prose-specific signal is prose-located reviewer findings per arc.
