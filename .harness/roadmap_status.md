@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `29ff6fe8380b` |
+| `workspace_state_hash` | `6995a45b3848` |
 | `last_refreshed` | 2026-08-24T00:00:00Z |
-| `git_head` | `4f32c3a1` —  |
+| `git_head` | `f073281a` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1438).** The next implementable unit is `U-HE-33` (S4d — emitting detections `SPLIT_BRAIN_LEDGER`, `ORPHANED_RESERVATION`, `BASE_TOCTOU` plus a lane-discriminating field and the CI split-brain job, per C-HE-12) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. U-HE-01..32 have landed; 13 units remain (U-HE-33..45). U-HE-32 landed the C-HE-11 §3 bounded local-git lock retry: `hook_git_retry` in `tools/hooks/lib.sh` retries index/ref/config lock contention on full jitter over `{base 100 ms, factor 2, cap 5 s, max 8 attempts}`, overridable only through a validated `--max N` and never through the environment; exhaustion fails the git op with git's own exit code and stderr intact and emits a `NOTIFY` under `git-ref-lock:transient-retry:lock_contention`, a cause that never routes to the merge-door budget (the lease stays fail-fast per C-HE-06 §2). Four production call sites are wired — lane-init's `gc.auto 0` write and, in `lib.sh`, the forward `worktree move`, the `worktree remove`, and the restore-path move — each with an independent regression witness. Three departures from the plan's suggested sketch were deliberate and each is witnessed: stdout stays byte-exact (the sketch's `2>&1` merge would hand callers a stdout git never wrote); stderr is captured to a file rather than `$(…)`, because a command substitution runs git in a subshell that resets the caller's traps and silently disarmed the removal path's interrupt recovery; and the lock classifier requires `File exists`, which the sketch's pattern both missed for the config-lock shape (no `.lock` substring) and over-matched for a stale-expectation ref conflict. Nine out-of-family rounds (findings 6→4→4→1→4→4→3→2→3) plus two merge-gate rounds ending 3/3 APPROVE; 152 hermetic `test_lib.sh` assertions, 119 in `test_lane_init.sh`, and fifteen mutation-probed guards. The reviews caught an infinite retry loop (an unvalidated environment budget made the bound test error every iteration), a signal handler racing `hook_bounded`'s 2 s SIGKILL escalation, a regex branch that never matched, a trap swallowed by a foreground sleep (measured 6 s deferral vs 1 s through `wait`), and six vacuous witnesses. **B-201 is CLOSED** — its sole named close-out condition was this retry. Four obligations are registered: **B-203** (skill-side `git add`/`commit`/`worktree add` stay outside the helper — held at nine raises; a shell function cannot survive an agent's Bash tool call and the guard does not admit a chained `source … && …` form, so U-HE-25 owns the guard shape and U-HE-39 the skill-carrier sweep), **B-205** (the refuse-vs-warn question B-201 shed, now that only a genuinely unwritable config reaches the warning), **B-206** (three retry budgets inside the worktree mutex can add ≤ 33.9 s against a 30 s waiter timeout — reached independently by three reviewers; three candidate remedies recorded, including the grounded finding that the 30 s bound is not contract-pinned), and **B-207** (the `mktemp` stderr capture leaks when the trap `exit`s mid-retry, measured). One non-blocking latent inconsistency is left for a follow-up: `lib.sh:1167` still reads a restore return of 1 as failure where its two sibling callers read it as success, unreachable today because that branch's `-d "$quarantine"` guard admits only 0 or 2.
+**Current next action (post-#1447).** The next implementable unit is `U-HE-33` (S4d — emitting detections `SPLIT_BRAIN_LEDGER`, `ORPHANED_RESERVATION`, `BASE_TOCTOU` plus a lane-discriminating field and the CI split-brain job, per C-HE-12) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`; U-HE-01..32 have landed, 13 units remain (U-HE-33..45). PR #1447 (arc `preflight-flush-residuals`, applying) closed the review backlog that flushed after #1445's merge — the recorded verdict-flushes-after-exit trap: the five round-4/5 codex finding rows landed verbatim in the gate log, and the two defects still live at merged main were fixed with probe-verified witnesses (the queue-default test now reaches arc_metrics' import-time production default through an isolated child interpreter with both queue variables unset, and the Docker teardown test's production-registry claim block is extracted to claim_production_lane_indices() with three hermetic daemon-free witnesses). The arc's own LEAN single-lens merge-gate then caught an empirical non-kill in one new witness (session-belt cross-test leakage faking the taken-index refusal) — fixed by having each witness own both resolver inputs and pinning the refusal to the seeded claim's content; codex r2 + witness-adequacy r2 both clean APPROVE. The third flushed finding (preflight-grep silent git failure) was confirmed already fixed by #1445's round-4 absorb commit. Then U-HE-33.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1447 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1445 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1443 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1441 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1440 | 2026-08-24 | next-action re-derivation landed |
-| 1438 | 2026-08-24 | U-HE-32 bounded git ref-lock retry landed (C-HE-11 §3); B-201 closed; B-203/205/206/207 registered |
 
 ---
 
