@@ -145,9 +145,12 @@ def test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect(monkeypatch, tmp
     `monkeypatch` is ONE function-scoped instance shared between a test body and every
     fixture that requests it, and `undo()` empties the whole stack — not just the
     caller's own entries. Tools tests use it to drop a `run` stub before exercising the
-    real subprocess runner (`test_arc_exit_report.py:942`, `:958`, `:598`,
-    `test_lanes_verify.py:258`, `test_merge_gate_log.py:504`, `:527`,
-    `test_finding_record.py:635`, `test_mutation_probe.py:1785`, `:1825`). If the venue
+    real subprocess runner -- nine call sites, greppable as `monkeypatch.undo()` across
+    `test_arc_exit_report.py`, `test_lanes_verify.py`, `test_merge_gate_log.py`,
+    `test_finding_record.py` and `test_mutation_probe.py`. (Named rather than cited by
+    line: an earlier version gave line numbers and this PR's own docstring edit shifted
+    every one of them by two the same day, which the merge-gate lens caught. A citation
+    that rots on the next edit is worse than the grep that always resolves.) If the venue
     redirect rode on that stack it would be lifted right before the emit that most needs
     it, and the row would land in the operator's ledger.
 
@@ -170,3 +173,57 @@ def test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect(monkeypatch, tmp
 
     assert not fallback.exists(), "a post-undo emit reached the computed fallback venue"
     assert "b-208:undo:probe" in Path(venue).read_text()
+
+
+def test_the_session_temp_root_is_removed_when_the_session_ends(tmp_path):
+    """(5) The venue directory does not accrue one tree per pytest run.
+
+    `mkdtemp` with nobody to clean up after it is the shape B-207 was filed under, and
+    this arc reintroduced it before giving the root a fixture teardown. That teardown
+    then sat unwitnessed for three rounds: deleting it left all 96 tests across this file
+    and `test_arc_exit_report.py` green (merge-gate witness lens, round 3), so a future
+    edit dropping it would restore the leak with no signal at all.
+
+    Session teardown cannot be observed from inside the session, so the witness is a
+    child pytest run with `TMPDIR` pointed at a directory this test owns — `mkdtemp`
+    honours it — and the assertion is that nothing matching the venue prefix survives the
+    child's exit.
+
+    Not vacuous: the child runs the redirect witness, which asserts the venue path
+    contains `harness-loop-status-`. Its passing therefore proves a directory WAS created
+    under the child's `TMPDIR`, so an empty survivor list means removed, not never-made.
+    """
+    tmproot = tmp_path / "tmproot"
+    tmproot.mkdir()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
+    env["TMPDIR"] = str(tmproot)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:randomly",
+            "tools/test_loop_status_isolation.py"
+            "::test_session_venue_is_redirected_away_from_the_default",
+            "--basetemp",
+            str(tmp_path / "bt"),
+        ],
+        cwd=Path(__file__).resolve().parent.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        "the child could not establish a venue, so this test proves nothing:\n"
+        f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+    )
+
+    survivors = sorted(p.name for p in tmproot.glob("harness-loop-status-*"))
+    assert survivors == [], (
+        f"the session temp root outlived its pytest run: {survivors} — one tree accrues "
+        "per run, which is the B-207-shaped leak this fixture's teardown exists to close"
+    )

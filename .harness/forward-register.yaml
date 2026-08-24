@@ -10534,7 +10534,15 @@ items:
     directory-level autouse redirect made test_arc_exit_report::shared_ledger''s own
     prev-is-None arm unreachable (92/92 green with it dropped), so that fixture is
     delegated to MonkeyPatch.context() too — cleaning up an orphan this change created,
-    in the very file the arc cites as prior art.
+    in the very file the arc cites as prior art. Round 6 (third gate round): the rmtree
+    teardown that closed round 1''s leak had itself gone THREE rounds unwitnessed —
+    deleting it left 96/96 green — so a fifth witness runs a child pytest with TMPDIR
+    pointed at a directory it owns and asserts nothing matching the venue prefix
+    survives the child''s exit (non-vacuous: the child runs the redirect witness, whose
+    passing proves a directory WAS created there). Same round found witness 4''s line
+    citations stale by exactly two — shifted by this arc''s OWN docstring edit, the same
+    day it was written — so they are replaced by a grep anchor rather than corrected:
+    a citation that rots on the next edit is worse than the grep that always resolves.
     Witnesses at tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to
