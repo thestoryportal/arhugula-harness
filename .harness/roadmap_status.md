@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8caaeea199ba` |
+| `workspace_state_hash` | `3df7ac0f345f` |
 | `last_refreshed` | 2026-08-24T00:00:00Z |
-| `git_head` | `56006e7c` —  |
+| `git_head` | `6cedafd3` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1443 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1441 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1440 | 2026-08-24 | next-action re-derivation landed |
 | 1438 | 2026-08-24 | U-HE-32 bounded git ref-lock retry landed (C-HE-11 §3); B-201 closed; B-203/205/206/207 registered |
 | PR #1438 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1436 | 2026-08-23 | U-HE-31 lane-init landed (#1434 + refresh #1435); this row carries the merge door's own gate finding |
 
 ---
 
