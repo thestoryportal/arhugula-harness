@@ -10510,10 +10510,16 @@ items:
     invocation failed the axis no-HARNESS_* invariant. CONFIRMED by running it, not
     conceded: the isolation was order-dependent, and my own verification had only ever
     exercised the separated case. Now per-test via monkeypatch, with a session-scoped
-    root; re-broadening it is structurally refused by pytest (a session fixture cannot
-    request function-scoped monkeypatch — ScopeMismatch, verified), and a third witness
-    runs the mixed invocation in a subprocess in BOTH orders. Witnesses at
-    tools/test_loop_status_isolation.py, the
+    root, and a third witness runs the mixed invocation in a subprocess in BOTH orders.
+    Round 3: that per-test redirect rode on `monkeypatch`, which is ONE function-scoped
+    instance shared with the test body — and nine tools tests call monkeypatch.undo()
+    mid-test to drop a `run` stub before exercising the REAL subprocess runner, which
+    empties the whole stack and would lift the redirect immediately before the emit that
+    most needs it. test_arc_exit_report.py::shared_ledger documents this exact trap and
+    avoids it the same way; the fix had walked into it. Found by review AND independently
+    by CI, where arc_exit_report''s own pin was rolled back underneath it (4 reds).
+    Now an explicit save/restore, with a fourth witness performing the mid-test undo.
+    Witnesses at tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to
     end: the full 119-test door suite left the operator''s ledger byte-identical

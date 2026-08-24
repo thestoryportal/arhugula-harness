@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import reservations as rs
 
+_VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
+
 
 def test_session_venue_is_redirected_away_from_the_default():
     """(1) The redirect happened at all, and named a real absolute path."""
@@ -123,3 +125,36 @@ def test_the_redirect_does_not_outlive_a_tools_test(tmp_path):
             f"the tools redirect leaked across suites in order {order}:\n"
             f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
         )
+
+
+def test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect(monkeypatch, tmp_path):
+    """(4) The redirect survives the `monkeypatch.undo()` several tools tests perform.
+
+    `monkeypatch` is ONE function-scoped instance shared between a test body and every
+    fixture that requests it, and `undo()` empties the whole stack — not just the
+    caller's own entries. Tools tests use it to drop a `run` stub before exercising the
+    real subprocess runner (`test_arc_exit_report.py:942`, `:958`, `:598`,
+    `test_lanes_verify.py:258`, `test_merge_gate_log.py:504`, `:527`,
+    `test_finding_record.py:635`, `test_mutation_probe.py:1785`, `:1825`). If the venue
+    redirect rode on that stack it would be lifted right before the emit that most needs
+    it, and the row would land in the operator's ledger.
+
+    `test_arc_exit_report.py::shared_ledger` documents this same trap and avoids it the
+    same way; the fixture in `tools/conftest.py` briefly did not, and this pins it.
+    """
+    queue = tmp_path / "arc-metrics-queue"
+    queue.mkdir()
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR", str(queue))
+    fallback = tmp_path / "loop_status.md"
+
+    monkeypatch.undo()  # exactly what those tests do mid-test
+
+    venue = os.environ.get(_VENUE_ENV)
+    assert venue, (
+        "the undo() lifted the redirect — a real emit would now resolve the operator's ledger"
+    )
+
+    rs.emit_loop_row("NOTIFY", "b-208-witness", "b-208:undo:probe", "row after a mid-test undo")
+
+    assert not fallback.exists(), "a post-undo emit reached the computed fallback venue"
+    assert "b-208:undo:probe" in Path(venue).read_text()

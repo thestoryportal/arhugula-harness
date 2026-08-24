@@ -30,6 +30,7 @@ invariants true instead of trading one for the other.
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -60,28 +61,40 @@ def _loop_status_root() -> Iterator[Path]:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_loop_status_venue(monkeypatch: pytest.MonkeyPatch, _loop_status_root: Path) -> Path:
-    """Redirect the ledger around EACH `tools/` test, not around the whole session.
+def _isolated_loop_status_venue(_loop_status_root: Path) -> Iterator[Path]:
+    """Redirect the ledger around EACH `tools/` test, restoring it by hand.
 
     Per-TEST rather than session-scoped, because the variable lives in process-global
     state that outlives whichever suite set it. A session-scoped setter leaves
     `HARNESS_LOOP_STATUS_PATH` in place for everything that runs afterwards in the same
-    process, so a mixed invocation --
+    process, so a mixed `pytest tools/... harness-runtime/...` invocation would fail the
+    axis suite's no-`HARNESS_*` invariant. That was this fixture's second shape and it
+    failed exactly that way when run; `test_the_redirect_does_not_outlive_a_tools_test`
+    is the witness.
 
-        pytest tools/test_loop_status_isolation.py \
-               harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none
-
-    -- would activate this fixture for the tools test and then fail the axis test's
-    no-`HARNESS_*` invariant. That was the first shape of this fixture and it failed
-    exactly that way when run (out-of-family review, round 2). Isolation that holds only
-    when the suites are invoked separately is a coincidence of ordering, not a property;
-    `monkeypatch` undoes the mutation at each test's teardown, which makes it a property.
+    Deliberately NOT `monkeypatch.setenv` -- the same reason
+    `test_arc_exit_report.py::shared_ledger` gives, and the same trap: `monkeypatch` is
+    ONE function-scoped instance shared with the test body, and several tools tests call
+    `monkeypatch.undo()` mid-test to drop a `run` stub before exercising the real
+    subprocess runner. An undo() empties the whole stack, so a monkeypatch-based redirect
+    is silently lifted mid-test and the very next real emit resolves the operator's
+    ledger. That was this fixture's third shape; it was caught by out-of-family review
+    and, independently, by CI, where `test_arc_exit_report.py`'s own pin was rolled back
+    underneath it. `test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect` is the
+    witness.
 
     Set unconditionally rather than only-if-unset: no test here legitimately writes the
     real venue, so an ambient value pointing at it is a misconfiguration, not an intent
-    worth honouring. A per-test `monkeypatch.setenv` in a test body still wins, since it
-    runs later and is undone first.
+    worth honouring. A test that pins its own venue later (`shared_ledger`) still wins,
+    and this restores whatever it found underneath.
     """
     venue = _loop_status_root / "loop_status.md"
-    monkeypatch.setenv(_VENUE_ENV, str(venue))
-    return venue
+    previous = os.environ.get(_VENUE_ENV)
+    os.environ[_VENUE_ENV] = str(venue)
+    try:
+        yield venue
+    finally:
+        if previous is None:
+            os.environ.pop(_VENUE_ENV, None)
+        else:
+            os.environ[_VENUE_ENV] = previous
