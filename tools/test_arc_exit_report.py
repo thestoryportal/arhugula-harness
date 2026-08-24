@@ -161,22 +161,24 @@ def shared_ledger(tmp_path):
     test builds. Without this pin the real `loop_lib.sh` copied into each fake repo would
     resolve the OPERATOR's live ledger and these tests would read (and grow) it.
 
-    Deliberately NOT `monkeypatch.setenv`: several tests below call `monkeypatch.undo()`
-    mid-test to drop their `run` stub, and `monkeypatch` is one function-scoped instance
-    shared with this fixture — an undo() would silently unpin the venue mid-test and point
-    the very next real subprocess at the operator's ledger.
+    Deliberately NOT the `monkeypatch` FIXTURE: several tests below call
+    `monkeypatch.undo()` mid-test to drop their `run` stub, and that fixture is one
+    function-scoped instance shared with this one — an undo() would silently unpin the
+    venue mid-test and point the very next real subprocess at the operator's ledger.
+
+    An INDEPENDENT `MonkeyPatch` keeps that immunity (`undo()` only empties the instance
+    it is called on) without the hand-rolled two-armed restore this used to carry. That
+    restore had a `prev is not None` arm which `tools/conftest.py`'s directory-level
+    autouse redirect (B-208) made unreachable — conftest-level autouse sets up before
+    module-level, so `prev` is never None any more, and a mutation dropping the arm left
+    all 92 tests here green. Delegating removes the branch instead of leaving it
+    unwitnessed, and stays correct if that conftest fixture ever goes away.
     """
     p = tmp_path / "shared" / "loop_status.md"
     p.parent.mkdir(parents=True, exist_ok=True)
-    prev = os.environ.get("HARNESS_LOOP_STATUS_PATH")
-    os.environ["HARNESS_LOOP_STATUS_PATH"] = str(p)
-    try:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("HARNESS_LOOP_STATUS_PATH", str(p))
         yield p
-    finally:
-        if prev is None:
-            os.environ.pop("HARNESS_LOOP_STATUS_PATH", None)
-        else:
-            os.environ["HARNESS_LOOP_STATUS_PATH"] = prev
 
 
 @pytest.fixture

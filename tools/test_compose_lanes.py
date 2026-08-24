@@ -110,6 +110,23 @@ def test_shell_mode_emits_project_and_every_port() -> None:
     assert proj == "arhugula-r420-self-hosted-local-lane2"
 
 
+def production_queue_dir() -> Path:
+    """The queue dir a REAL lane on this machine resolves — the PRODUCTION registry.
+
+    Under a tools pytest session the ambient `ARC_METRICS_QUEUE_DIR` is the session
+    belt (`tools/conftest.py`), so reading it here would claim lane indices in a
+    throwaway registry and void the docker test's collision safety (codex round 13,
+    P1). The belt preserves the demoted production value at
+    `ARC_METRICS_QUEUE_DIR_PREBELT` (empty string = there was none, fall to the home
+    default). This module's tests only run under pytest, so the ambient variable is
+    never the right answer here.
+    """
+    return Path(
+        os.environ.get("ARC_METRICS_QUEUE_DIR_PREBELT")
+        or str(Path.home() / ".gstack/projects/arhugula-v2/arc-metrics-queue")
+    )
+
+
 def test_stack_recipes_pass_a_per_lane_project() -> None:
     """A recipe that omits `-p` silently reuses compose.yaml's fixed top-level name."""
     justfile = (REPO / "justfile").read_text(encoding="utf-8")
@@ -231,15 +248,7 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
     # window and then have its stack adopted and torn down here. Holding the claim closes
     # that window at the same primitive lane-init uses (exclusive create), and the claims
     # are released in the finally.
-    lanes_dir = (
-        Path(
-            os.environ.get(
-                "ARC_METRICS_QUEUE_DIR",
-                str(Path.home() / ".gstack/projects/arhugula-v2/arc-metrics-queue"),
-            )
-        )
-        / "lanes"
-    )
+    lanes_dir = production_queue_dir() / "lanes"
     lanes_dir.mkdir(parents=True, exist_ok=True)
     # Honour the production registry's FENCES as well as its claims. A `.orphaned-<k>` marker
     # says that index was released without a verified-clean teardown, so containers or

@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 207
+  total: 208
   open: 1
   design_substrate_gated: 3
   registered_finding: 55
   operator_gated: 0
   held: 2
-  closed: 146
-  identity_digest: bad54dc329b62dbb
+  closed: 147
+  identity_digest: 5c2a2842ffc0a2d4
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10477,3 +10477,121 @@ items:
     (2) otherwise close WONTFIX once the pilots confirm no operator notices it.'
   council: 'NO -- a bounded resource nit with a known, cheap shape if it is ever wanted.'
   heading: '### B-207 · `hook_git_retry`''s stderr-capture temp file leaks when a signal trap `exit`s mid-retry *(surfaced and measured by the merge-gate concurrency lens against U-HE-32, 2026-08-24; registered — the lens itself judged it register-not-block)*'
+- id: B-208
+  title: >-
+    the shared HITL loop ledger was reachable from a test process — 6288 of its 6589 rows
+    were synthetic
+  pr: '#1443'
+  status: closed
+  summary: 'SURFACED while clearing the U-HE-32 refresh gates and CLOSED in the same arc.
+    loop_status_path() resolves the ledger from the ambient environment and falls back to the
+    operator''s real ~/.gstack/projects/arhugula-v2/loop_status.md whenever
+    HARNESS_LOOP_STATUS_PATH is unset — the default state of every pytest process — so any
+    test reaching a real emit path appended REAL DEFERRED-HIL rows to the venue the
+    SessionStart hook reads. Measured on main at e6913c112: 6288 synthetic lane=A rows and
+    only 82 from real lanes, out of 6589 lines / 1.07 MB — NOT a partition, the balance is
+    lane=- infra rows and the header (the first phrasing implied an exhaustive split and did
+    not reconcile; caught by the round-5 lens). With a fabricated "pr-1 — pr #1: gh transport
+    exploded" gate nagging at every session start. Reproduced rather than inferred: one door
+    test run with the variable pointed at a scratch file emitted that exact row into it. Fixed
+    at tools/conftest.py — one point for the whole directory — rather than per test file,
+    because per-file isolation is what the workspace already tried and what drifted (two files
+    remember, test_merge_door.py does not) and because several door tests drive merge_door.py
+    as a real SUBPROCESS, which monkeypatching the Python seam cannot reach and only the
+    inherited environment can. NOT at the root conftest: the first cut put it there and CI
+    caught the over-reach, because a root redirect leaks a HARNESS_* name into every axis
+    suite and harness-runtime test_env_defaults_to_os_environ_when_none asserts none is set
+    (RuntimeConfig''s env loader consumes that namespace). Every loop-row producer lives under
+    tools/, so the joint is the directory, and both invariants stay true.'
+  close_out: 'CLOSED at #1443 after two out-of-family rounds, each of which found a real
+    defect in the fix rather than in the original code. Round 1: the mkdtemp venue had no
+    owner and accrued one tree per run (B-207''s shape); the re-home to a fixture gave it a
+    teardown, measured 9 dirs before and after where it had grown by one. Round 2: the
+    fixture was session-scoped, so HARNESS_LOOP_STATUS_PATH stayed set for everything that
+    ran later IN THE SAME PROCESS — a mixed `pytest tools/... harness-runtime/...`
+    invocation failed the axis no-HARNESS_* invariant. CONFIRMED by running it, not
+    conceded: the isolation was order-dependent, and my own verification had only ever
+    exercised the separated case. Now per-test via monkeypatch, with a session-scoped
+    root, and a third witness runs the mixed invocation in a subprocess in BOTH orders.
+    Round 3: that per-test redirect rode on `monkeypatch`, which is ONE function-scoped
+    instance shared with the test body — and nine tools tests call monkeypatch.undo()
+    mid-test to drop a `run` stub before exercising the REAL subprocess runner, which
+    empties the whole stack and would lift the redirect immediately before the emit that
+    most needs it. test_arc_exit_report.py::shared_ledger documents this exact trap and
+    avoids it the same way; the fix had walked into it. Found by review AND independently
+    by CI, where arc_exit_report''s own pin was rolled back underneath it (4 reds).
+    Round 4 (merge-gate witness lens, which built a worktree and ran every mutation):
+    that explicit save/restore had TWO modes — the variable was set, or it was not — and
+    only one is reachable from a pytest process nobody pre-configured, so half the
+    mechanism shipped untested (confirmed dead: replacing the teardown with an
+    unconditional pop left 4/4 and 92/92 green). Resolved by DELETING the branch rather
+    than contriving a witness for it: an independent pytest.MonkeyPatch.context() owns
+    both modes, and being a separate instance it is still immune to the test body''s
+    undo(). Round 5 (same lens, second gate round): the round-4 justification for keeping
+    witness 3''s reverse order — that it alone catches an import/collection-time redirect
+    — was FALSE, and probing it settled the matter (a collection-time redirect reds both
+    orders equally, since pytest imports every conftest before running any test). No shape
+    was found that the reverse order alone catches, so it is dropped rather than kept as
+    ceremony. The same round also caught a branch this arc DEADENED elsewhere: the
+    directory-level autouse redirect made test_arc_exit_report::shared_ledger''s own
+    prev-is-None arm unreachable (92/92 green with it dropped), so that fixture is
+    delegated to MonkeyPatch.context() too — cleaning up an orphan this change created,
+    in the very file the arc cites as prior art. Round 6 (third gate round): the rmtree
+    teardown that closed round 1''s leak had itself gone THREE rounds unwitnessed —
+    deleting it left the affected suites entirely green — so a fifth witness runs a child
+    pytest with TMPDIR
+    pointed at a directory it owns and asserts nothing matching the venue prefix
+    survives the child''s exit (non-vacuous: the child runs the redirect witness, whose
+    passing proves a directory WAS created there). Same round found witness 4''s line
+    citations stale by exactly two — shifted by this arc''s OWN docstring edit, the same
+    day it was written — so they are replaced by a grep anchor rather than corrected:
+    a citation that rots on the next edit is worse than the grep that always resolves
+    (round 8 found that replacement count ALSO false, so the enumeration is gone
+    entirely). Round 8 also closed the last real hole: the redirect was function-scoped,
+    so it covered only test BODIES — a session- or module-scoped fixture that emitted
+    still resolved the operator''s ledger, and no witness ran outside a test body to
+    see it. Now a per-item pytest_runtest_protocol hookwrapper brackets setup, call and
+    teardown together. The path guard on it is load-bearing and was NOT assumed: a
+    subdirectory conftest''s runtest hooks fire for items ANYWHERE in the run, measured
+    on a scratch tree before building on it, and without the guard the axis test sees
+    the variable again. Post-resume codex rounds 9–12 then hardened the witnesses
+    themselves: the module-phase witness now owns its computed fallback before emitting
+    (it cannot commit the damage it detects); per-scenario witnessing of the phases
+    outside the per-item bracket was shown non-convergent and replaced by the BELT —
+    pytest_configure owns ARC_METRICS_QUEUE_DIR (the input the shell fallback is
+    computed from, C-HE-05) for the whole session through a stashed MonkeyPatch undone
+    at pytest_unconfigure, so import time, collection, any-scope teardown and
+    un-isolated child processes resolve an owned belt directory — every consumer but
+    one, below; round 12 APPROVEd. Rounds 13–15 then carved and converged the belt:
+    the Docker lane test is the ONE deliberate exception, because its
+    destructive-teardown collision claims must live in the PRODUCTION lane registry
+    (the same variable names both authorities), so the belt preserves the demoted
+    production value at ARC_METRICS_QUEUE_DIR_PREBELT — first writer wins, a nested
+    session must never re-derive it from the parent belt — and the lane test resolves
+    through production_queue_dir(), never the ambient variable (rounds 13–14, both
+    P1); and the belt-implied fallback file now IS the bracket venue file, one ledger
+    per session (round 15, P2). Round 16 APPROVEd the converged head. Gate round 2:
+    concurrency and witness-adequacy APPROVE; spec-conformance BLOCKed on exactly
+    this paragraph lagging rounds 13–15, corrected here. One named residual is
+    tracked, not hidden: the 7c driver leaks its own mkdtemp root when an arm fails
+    mid-flight (bounded to already-failing runs — both code lenses judged it
+    non-blocking).
+    The 3-lens gate then caught the belt carrying only a presence witness plus a
+    hand-rolled two-armed restore (the round-4 shape recurring): the restore now
+    delegates to the stashed MonkeyPatch, a behavioral witness lifts the bracket and
+    asserts the real writer resolves the belt fallback (subscript read, so a
+    belt-deletion probe reds before any emit), and a driver witnesses the
+    configure/unconfigure pair in both prior states. Every case is mutation-probed;
+    the tally is deliberately not restated in prose — counts drifted twice this arc,
+    the module is the source of truth.
+    Witnesses at tools/test_loop_status_isolation.py, the
+    load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
+    fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to
+    end: the full 119-test door suite left the operator''s ledger byte-identical
+    (1097455 bytes both sides). The 6288 rows ALREADY in the ledger are deliberately NOT
+    removed — it is append-only by contract (C-HE-09 §1; §2 is venue determinism) and is operator state outside this
+    repo, so truncating it is the operator''s call; the pending synthetic gate was cleared the
+    contract-sanctioned way, with a RESOLVED-HIL row.'
+  council: 'NO — a hermeticity boundary with one obvious enforcement point; no cross-axis
+    tension and no contract change.'
+  heading: '### B-208 · the shared HITL loop ledger was reachable from a test process — 6288 of its 6589 rows were synthetic *(surfaced while clearing the U-HE-32 refresh gates, 2026-08-24; CLOSED at #1443 the same arc)*'

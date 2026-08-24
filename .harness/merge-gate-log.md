@@ -646,3 +646,15 @@ B-206) rather than unaddressed defects.
 | 2026-08-24T05:24:59Z | #1438 | 5f9fca6e8fd7 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
 | 2026-08-24T05:25:00Z | #1438 | 5f9fca6e8fd7 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
 | 2026-08-24T05:25:00Z | #1438 | 5f9fca6e8fd7 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+| 2026-08-24T14:24:01Z | #1443 | bea655a3e783 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-24T14:27:57Z | #1443 | bea655a3e783 | merge-gate-spec-conformance | BLOCK | 2 finding(s) | r1 |
+| 2026-08-24T14:27:58Z | #1443 | bea655a3e783 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-08-24 | #1443 | fix/b-208-loop-ledger-test-pollution | gate round at bea655a3e: concurrency APPROVE / spec-conformance BLOCK (stale B-208 register narrative + C-HE-09 §2→§1 append cite) / witness-adequacy BLOCK (belt presence-only witness; two-armed unwitnessed restore) → all four findings absorbed (stashed-MonkeyPatch restore, behavioral belt witness 7b, pair driver 7c, register supersede in both carriers); blast-radius: 16 consumer files enumerated via grep+graft | re-gate owed at the absorbing head |
+| 2026-08-24T15:13:47Z | #1443 | 7095120707c0 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r2 |
+| 2026-08-24T15:15:49Z | #1443 | 7095120707c0 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-24T15:15:50Z | #1443 | 7095120707c0 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-24 | #1443 | fix/b-208-loop-ledger-test-pollution | gate round 2 at 709512070: concurrency APPROVE / witness-adequacy APPROVE / spec-conformance BLOCK (register belt sentence falsified by the round-13 PREBELT carve-out; rounds 13-15 unnarrated) → registers superseded docs-only, code byte-identical to reviewed head; blast-radius: carried from round 1 (16 consumer files) | re-gate owed at the register head |
+| 2026-08-24T15:23:03Z | #1443 | e308cc76fd44 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-08-24T15:23:04Z | #1443 | e308cc76fd44 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| 2026-08-24T15:23:46Z | #1443 | e308cc76fd44 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-08-24 | #1443 | fix/b-208-loop-ledger-test-pollution | gate round 3 at e308cc76f: concurrency APPROVE / spec-conformance APPROVE / witness-adequacy APPROVE (docs-only delta verified; spec lens confirmed its round-2 finding closed against code) → ALL-APPROVE, merge authorized; blast-radius: carried from round 1 (16 consumer files) | proceed to safe-merge |

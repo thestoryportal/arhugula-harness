@@ -1,0 +1,158 @@
+"""B-208 — keep the SHARED loop ledger unreachable from a `tools/` test process.
+
+`loop_status_path()` (tools/hooks/loop_lib.sh) resolves the ledger from the ambient
+environment and falls back to the operator's real
+`~/.gstack/projects/<project>/loop_status.md` whenever `HARNESS_LOOP_STATUS_PATH` is
+unset -- the default state of every pytest process. Any test reaching a real emit path
+therefore appended real `DEFERRED-HIL` rows to the venue the SessionStart hook reads,
+where a synthetic `pr-1` gate nags forever and only a hand-written `RESOLVED-HIL`
+clears it. It is append-only by contract (C-HE-09 §1, the single-file atomic-append
+guarantee; §2 is venue determinism), so the debris is not removable
+after the fact: by the time this landed, 6288 of the ledger's 6589 lines (1.07 MB) were
+synthetic `lane=A` fixture rows and only 82 came from real lanes — the rest are `lane=-`
+infra rows and the file's own header, so those two figures are not a partition of the whole.
+
+Isolating per test FILE is what the workspace tried and what drifted -- two files
+remember (`test_arc_exit_report.py`, `test_review_wrapper.py`), `test_merge_door.py`
+does not, and a file written tomorrow will not either. `emit_loop_row` also shells out
+to bash and several door tests drive `merge_door.py` as a real SUBPROCESS, so
+monkeypatching the Python seam cannot reach them; only the inherited environment can.
+Hence one enforcement point for the whole directory: no `tools/` test can reach the
+production ledger by omission. The bracket is per-ITEM, so phases run outside it —
+collection, and session-scope fixture teardown after a non-tools FINAL item in a mixed
+run (module scope is bracketed: pytest tears down to the next item's level inside the
+current item's teardown phase — measured). Covering those with the venue variable would
+hold a `HARNESS_*` name alive outside tools items, the exact session-wide leak rejected
+below. They are covered instead by the BELT: `pytest_configure` — which runs before
+collection imports any tools module — points `ARC_METRICS_QUEUE_DIR`, the input
+`loop_status_path()` computes its fallback from (and a documented override seam,
+C-HE-05), into the same session-owned throwaway; `pytest_unconfigure` restores it after
+the last teardown. One enforcer for everything the bracket cannot reach: import time,
+collection, any-scope fixture teardown, and every subprocess a test forgets to isolate
+— the operator's store is simply not computable while the session is alive. The
+variable is outside the `HARNESS_*` namespace RuntimeConfig consumes and nothing under
+`harness-*` reads it, so the axis invariant is untouched. The demoted production value
+survives at `ARC_METRICS_QUEUE_DIR_PREBELT` (set in `pytest_configure`, its one
+writer) for the one consumer that must reach the LIVE lane registry, the Docker lane
+test's collision claims.
+(`test_loop_status_isolation.py` cases 7–8 witness the contract end to end.)
+
+This lives HERE and not in the root conftest deliberately. Every producer of loop rows
+is under `tools/` (`reservations.emit_loop_row`, its `merge_door` callers, the hook
+suites -- which already isolate themselves); no `harness-*` package writes the ledger.
+A root-level redirect additionally leaks a `HARNESS_*` name into every axis suite, and
+`harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none`
+asserts that NO `HARNESS_*` variable is set, because RuntimeConfig's env loader consumes
+that namespace. Enforcing at the joint where the concern actually lives keeps both
+invariants true instead of trading one for the other.
+"""
+
+from __future__ import annotations
+
+import os
+import pathlib
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+
+_VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
+_QUEUE_ENV = "ARC_METRICS_QUEUE_DIR"
+_PREBELT_ENV = "ARC_METRICS_QUEUE_DIR_PREBELT"
+_DIR = Path(__file__).resolve().parent
+_ROOT_KEY: pytest.StashKey[Path] = pytest.StashKey()
+_BELT_MP: pytest.StashKey[pytest.MonkeyPatch] = pytest.StashKey()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """The session-wide belt under the per-item bracket (round 11).
+
+    Every path to the operator's ledger goes through `loop_status_path()`'s fallback,
+    which is computed from `ARC_METRICS_QUEUE_DIR`. Owning that variable for the whole
+    session — set here, before collection imports a single tools module; restored at
+    `pytest_unconfigure`, after the last fixture teardown — closes the entire phase
+    class at one joint instead of witnessing phases one by one. `arc_metrics.QUEUE_DIR`
+    is read at import time, so the ordering is load-bearing: configure precedes
+    collection by pytest contract. A stashed `MonkeyPatch` instance carries the set:
+    its `undo()` at unconfigure IS the restore, deleting the hand-rolled two-armed
+    save/restore whose arms nothing could witness — the same defect shape round 4
+    removed for the venue variable (gate lens: witness-adequacy).
+    """
+    # dirname(belt)/loop_status.md — the fallback the shell computes from this — is
+    # exactly the file the per-item bracket names: ONE ledger per session, whichever
+    # mechanism a phase resolves through (codex round 15 — distinct paths split the
+    # session's rows across two files and break C-HE-09's one-venue reduction).
+    belt = _venue_root(config) / "arc-metrics-queue"
+    belt.mkdir(parents=True)
+    mp = pytest.MonkeyPatch()
+    config.stash[_BELT_MP] = mp
+    # The variable names TWO authorities: the loop-ledger fallback input AND the live
+    # lane registry. The belt demotes both, but the Docker lane test must claim real
+    # lane indices in the PRODUCTION registry or its collision safety is void (codex
+    # round 13, P1) — so the demoted value survives at the sibling variable, this hook
+    # its one writer; empty string means "no pre-belt value" (env cannot carry None).
+    # First writer wins (codex round 14, P1): in a NESTED session the ambient queue
+    # var is the parent's throwaway belt — the outermost capture is the authority and
+    # an inner configure must not re-derive from an already-demoted value.
+    mp.setenv(_PREBELT_ENV, os.environ.get(_PREBELT_ENV, os.environ.get(_QUEUE_ENV, "")))
+    mp.setenv(_QUEUE_ENV, str(belt))
+
+
+def _venue_root(config: pytest.Config) -> Path:
+    """One throwaway directory per session, made on first use and owned by this module."""
+    if _ROOT_KEY not in config.stash:
+        config.stash[_ROOT_KEY] = Path(tempfile.mkdtemp(prefix="harness-loop-status-"))
+    return config.stash[_ROOT_KEY]
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
+    """Redirect the ledger around each `tools/` item's WHOLE lifecycle.
+
+    A function-scoped autouse fixture -- this file's previous shape -- only covers the
+    test BODY. Higher-scoped fixtures are set up before it and torn down after it, so a
+    session- or module-scoped fixture that emitted would still resolve the operator's
+    ledger, which contradicts the boundary this module claims (out-of-family review,
+    round 7). Wrapping the run protocol brackets setup, call and teardown together.
+
+    Per-ITEM rather than per-session, because the variable lives in process-global state
+    that outlives whichever suite set it: `RuntimeConfig`'s env loader consumes the whole
+    `HARNESS_*` namespace, and `harness-runtime`'s
+    `test_env_defaults_to_os_environ_when_none` asserts none of them is set. A session-wide
+    redirect fails that test in a mixed invocation (round 2, confirmed by running it);
+    `test_the_redirect_does_not_outlive_a_tools_test` is the witness.
+
+    The path guard is NOT decoration. A subdirectory conftest's `pytest_runtest_protocol`
+    fires for items ANYWHERE in the run, not only those beneath it -- measured, and
+    without the guard the axis test above sees the variable and fails. Only items under
+    this directory get the redirect.
+
+    An INDEPENDENT `MonkeyPatch` restores it: `undo()` empties only the instance it is
+    called on, so the mid-test `monkeypatch.undo()` several tools tests perform cannot
+    lift this (round 3; `rg 'monkeypatch.undo' tools/`). Delegating also avoids a
+    hand-rolled two-armed restore whose was-set arm nothing could reach (round 4).
+    """
+    if _DIR not in pathlib.Path(str(item.path)).resolve().parents:
+        yield
+        return
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(_VENUE_ENV, str(_venue_root(item.config) / "loop_status.md"))
+        yield
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Take the venue directory with us, so a run does not accrue one tree.
+
+    `mkdtemp` with nobody to clean up after it is the shape B-207 was filed under.
+    Swallowing a removal failure is deliberate and bounded: the tree is ours, lives under
+    TMPDIR, and nothing downstream reads it -- the leak this closes is about accrual, not
+    correctness. `test_the_session_temp_root_is_removed_when_the_session_ends` is the
+    witness.
+    """
+    mp = config.stash.get(_BELT_MP, None)
+    if mp is not None:
+        mp.undo()
+    root = config.stash.get(_ROOT_KEY, None)
+    if root is not None:
+        shutil.rmtree(root, ignore_errors=True)
