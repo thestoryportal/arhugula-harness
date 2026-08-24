@@ -549,11 +549,39 @@ def test_the_cli_refuses_a_queue_without_its_declared_judgements(monkeypatch, tm
     assert exc.value.code != 0
 
 
-# mutation-probe: point QUEUE_DIR at a path inside the repo
+# mutation-probe: point QUEUE_DIR's home-default arm at a path inside the repo
 def test_queue_lives_outside_the_repo():
-    """A topic worktree is disposed at loop completion; anything queued in it dies."""
-    assert am.REPO not in am.QUEUE_DIR.parents, (
-        f"queue {am.QUEUE_DIR} must not sit inside the repo, or arc closure "
+    """A topic worktree is disposed at loop completion; anything queued in it dies.
+
+    Checked through an isolated import with the queue variable UNSET: under a tools
+    session the conftest belt owns `ARC_METRICS_QUEUE_DIR` before collection, so this
+    process's own `am.QUEUE_DIR` always carries the belt — never the production
+    default this test exists to pin (codex rounds 3-5 on the skills PR: mutating the
+    default to a repo-resident path left the in-process assertion green).
+    """
+    # [LAW:verifiable-goals] the witness must see the mechanism — the import-time
+    # default with the variable absent — not the session belt that shadows it.
+    probe = (
+        "import json, arc_metrics as am\n"
+        "print(json.dumps({'queue': str(am.QUEUE_DIR), 'repo': str(am.REPO)}))\n"
+    )
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("ARC_METRICS_QUEUE_DIR", "ARC_METRICS_QUEUE_DIR_PREBELT")
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(am.__file__).resolve().parent,
+        env=env,
+    ).stdout
+    got = json.loads(out)
+    queue, repo = Path(got["queue"]), Path(got["repo"])
+    assert repo not in queue.parents and queue != repo, (
+        f"default queue {queue} must not sit inside the repo, or arc closure "
         "both strands the row and blocks worktree disposal"
     )
 

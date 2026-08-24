@@ -127,6 +127,103 @@ def production_queue_dir() -> Path:
     )
 
 
+def claim_production_lane_indices(indices: tuple[int, ...], owner: str) -> list[Path]:
+    """Claim `indices` in the PRODUCTION lane registry, honoring its fences.
+
+    [LAW:single-enforcer] This helper is the one place a test process resolves the
+    registry it claims in, and it resolves through `production_queue_dir()` — never
+    the ambient `ARC_METRICS_QUEUE_DIR`, which under a tools pytest session is the
+    throwaway belt. A claim taken in the belt is invisible to real lanes, voiding
+    exactly the collision safety the claim exists to provide (codex rounds 4-5 on
+    the skills PR: the belt-vs-production choice had no non-skipped witness while
+    the Docker consumer is deselected from codex-parity-check). All-or-nothing: on
+    any refusal, every claim this call already took is released before raising.
+    """
+    lanes_dir = production_queue_dir() / "lanes"
+    lanes_dir.mkdir(parents=True, exist_ok=True)
+    # Honour the production registry's FENCES as well as its claims. A `.orphaned-<k>`
+    # marker says that index was released without a verified-clean teardown, so
+    # containers or volumes may survive under its project name — and `ps` cannot see a
+    # volume-only remnant. Adopting a fenced index would delete exactly the state the
+    # production registry has flagged as unaccounted for.
+    for k in indices:
+        fence = lanes_dir / f".orphaned-{k}"
+        if fence.exists():
+            raise AssertionError(
+                f"lane index {k} is fenced ({fence}: {fence.read_text().strip()}) — refusing "
+                f"to start or tear down a project whose prior stack is unaccounted for"
+            )
+    claimed: list[Path] = []
+    for k in indices:
+        claim = lanes_dir / str(k)
+        # Published exactly as lane-init publishes one: a complete temp file linked into
+        # place. `open(..., "x")` then write makes the claim visible EMPTY in between, and a
+        # concurrent initializer reading it there treats it as an unowned corpse to repair.
+        tmp = lanes_dir / f".claim.{owner}-{k}"
+        tmp.write_text(f"{owner} {REPO}\n", encoding="utf-8")
+        try:
+            os.link(tmp, claim)
+            tmp.unlink(missing_ok=True)
+        except FileExistsError:
+            tmp.unlink(missing_ok=True)
+            for c in claimed:
+                c.unlink(missing_ok=True)
+            raise AssertionError(
+                f"lane index {k} is already claimed ({claim.read_text().strip()}) — refusing "
+                f"to run against a live lane's project"
+            ) from None
+        claimed.append(claim)
+    return claimed
+
+
+# mutation-probe(tools/test_compose_lanes.py): resolve lanes_dir from the ambient queue var
+def test_lane_claims_land_in_the_production_registry_not_the_belt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The Docker consumer's collision safety, witnessed without a daemon.
+
+    Under a tools session the ambient queue variable is the throwaway belt; a claim
+    taken there guards nothing. Reverting the helper to the ambient chain puts the
+    claim under `belt/` and reds both assertions — the exact regression codex rounds
+    4-5 found unwitnessed while the Docker test sits outside codex-parity-check.
+    """
+    production = tmp_path / "prod"
+    belt = tmp_path / "belt"
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR_PREBELT", str(production))
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR", str(belt))
+    claimed = claim_production_lane_indices((348,), "witness")
+    assert claimed == [production / "lanes" / "348"]
+    assert claimed[0].read_text(encoding="utf-8") == f"witness {REPO}\n"
+    assert not (belt / "lanes").exists(), "the ambient (belt) registry must never be consulted"
+
+
+# mutation-probe(tools/test_compose_lanes.py): drop the fence check from the claim helper
+def test_a_fenced_index_is_refused_and_nothing_is_claimed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    lanes = tmp_path / "prod" / "lanes"
+    lanes.mkdir(parents=True)
+    (lanes / ".orphaned-348").write_text("unverified teardown\n", encoding="utf-8")
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR_PREBELT", str(tmp_path / "prod"))
+    with pytest.raises(AssertionError, match="fenced"):
+        claim_production_lane_indices((348,), "witness")
+    assert not (lanes / "348").exists()
+
+
+# mutation-probe(tools/test_compose_lanes.py): drop the release loop in the FileExistsError arm
+def test_a_taken_index_is_refused_and_earlier_claims_are_released(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """All-or-nothing: a partial claim set left behind blocks the next honest taker."""
+    lanes = tmp_path / "prod" / "lanes"
+    lanes.mkdir(parents=True)
+    (lanes / "349").write_text("live-lane /elsewhere\n", encoding="utf-8")
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR_PREBELT", str(tmp_path / "prod"))
+    with pytest.raises(AssertionError, match="already claimed"):
+        claim_production_lane_indices((348, 349), "witness")
+    assert not (lanes / "348").exists(), "the refused call must release the claim it took first"
+
+
 def test_stack_recipes_pass_a_per_lane_project() -> None:
     """A recipe that omits `-p` silently reuses compose.yaml's fixed top-level name."""
     justfile = (REPO / "justfile").read_text(encoding="utf-8")
@@ -247,43 +344,11 @@ def test_two_lanes_disjoint_names_and_ports() -> None:
     # below is not atomic with `up` on its own — a concurrent lane could take 348 in the
     # window and then have its stack adopted and torn down here. Holding the claim closes
     # that window at the same primitive lane-init uses (exclusive create), and the claims
-    # are released in the finally.
-    lanes_dir = production_queue_dir() / "lanes"
-    lanes_dir.mkdir(parents=True, exist_ok=True)
-    # Honour the production registry's FENCES as well as its claims. A `.orphaned-<k>` marker
-    # says that index was released without a verified-clean teardown, so containers or
-    # volumes may survive under its project name — and `ps` cannot see a volume-only remnant.
-    # The recipes below resolve their lane against a scratch registry and so never consult
-    # these markers; adopting a fenced index here would delete exactly the state the
-    # production registry has flagged as unaccounted for.
-    for k in (a, b):
-        fence = lanes_dir / f".orphaned-{k}"
-        if fence.exists():
-            raise AssertionError(
-                f"lane index {k} is fenced ({fence}: {fence.read_text().strip()}) — refusing "
-                f"to start or tear down a project whose prior stack is unaccounted for"
-            )
-
-    claimed: list[Path] = []
-    for k in (a, b):
-        claim = lanes_dir / str(k)
-        # Published exactly as lane-init publishes one: a complete temp file linked into
-        # place. `open(..., "x")` then write makes the claim visible EMPTY in between, and a
-        # concurrent initializer reading it there treats it as an unowned corpse to repair.
-        tmp = lanes_dir / f".claim.test-{k}"
-        tmp.write_text(f"test-compose-lanes {REPO}\n", encoding="utf-8")
-        try:
-            os.link(tmp, claim)
-            tmp.unlink(missing_ok=True)
-        except FileExistsError:
-            tmp.unlink(missing_ok=True)
-            for c in claimed:
-                c.unlink(missing_ok=True)
-            raise AssertionError(
-                f"lane index {k} is already claimed ({claim.read_text().strip()}) — refusing "
-                f"to run against a live lane's project"
-            ) from None
-        claimed.append(claim)
+    # are released in the finally. The recipes below resolve their lane against a scratch
+    # registry and so never consult the production registry's fences; the helper honours
+    # them here, and its belt-vs-production resolution is pinned by the hermetic witnesses
+    # beside it (this Docker consumer is deselected from codex-parity-check).
+    claimed = claim_production_lane_indices((a, b), "test-compose-lanes")
 
     started: list[int] = []
     try:
