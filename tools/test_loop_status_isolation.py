@@ -88,13 +88,18 @@ def test_the_redirect_does_not_outlive_a_tools_test(tmp_path):
     Asserting it in-process is not possible — this test cannot observe its own teardown
     — so the witness is the mixed invocation itself, in a subprocess.
 
-    The two orders catch DIFFERENT regressions, and only the first catches that one.
-    `[mine, axis]` is the discriminating order for a session-scoped setter: revert the
-    fixture to `scope="session"` and it reds, while `[axis, mine]` stays green, because
-    nothing has set the variable yet when the axis test runs first (verified by mutation,
-    merge-gate witness lens). `[axis, mine]` is kept because it catches the shape the
-    first order cannot — a redirect established at import or collection time rather than
-    per test, which is set before ANY test runs and so leaks in both directions.
+    One order, deliberately. `[mine, axis]` is the order that discriminates: revert the
+    fixture to `scope="session"` and it reds, while the reverse stays green, because
+    nothing has set the variable yet when the axis test runs first. An earlier version
+    ran both and justified the reverse as catching an import/collection-time redirect
+    this order could not — that justification was false, and mutation-probing settled it:
+    a collection-time redirect reds BOTH orders equally (1 failed, 1 passed each),
+    because pytest imports every conftest before running any test. No regression shape
+    was found that the reverse order alone catches, so it is gone rather than kept as
+    ceremony whose stated reason does not hold.
+
+    `-p no:randomly` is not decoration: the ordering IS the mechanism here, and a
+    shuffling plugin would silently reorder the two node ids.
     """
     axis = "harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none"
     mine = (
@@ -109,29 +114,29 @@ def test_the_redirect_does_not_outlive_a_tools_test(tmp_path):
     # as the only thing that can set it — which is exactly the mechanism under test.
     env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
 
-    for order in ([mine, axis], [axis, mine]):
-        proc = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                "-q",
-                "-p",
-                "no:randomly",
-                *order,
-                "--basetemp",
-                str(tmp_path / "bt"),
-            ],
-            cwd=root,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        assert proc.returncode == 0, (
-            f"the tools redirect leaked across suites in order {order}:\n"
-            f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
-        )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:randomly",
+            mine,
+            axis,
+            "--basetemp",
+            str(tmp_path / "bt"),
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        "the tools redirect outlived its test and reached the axis suite:\n"
+        f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+    )
 
 
 def test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect(monkeypatch, tmp_path):

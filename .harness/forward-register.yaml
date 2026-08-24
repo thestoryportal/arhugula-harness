@@ -10525,9 +10525,16 @@ items:
     unconditional pop left 4/4 and 92/92 green). Resolved by DELETING the branch rather
     than contriving a witness for it: an independent pytest.MonkeyPatch.context() owns
     both modes, and being a separate instance it is still immune to the test body''s
-    undo(). Same lens also showed only the [mine, axis] order of witness 3
-    discriminates against a session-scope regression; the second order is kept for the
-    import-time shape it alone catches, and the docstring now says which is which.
+    undo(). Round 5 (same lens, second gate round): the round-4 justification for keeping
+    witness 3''s reverse order — that it alone catches an import/collection-time redirect
+    — was FALSE, and probing it settled the matter (a collection-time redirect reds both
+    orders equally, since pytest imports every conftest before running any test). No shape
+    was found that the reverse order alone catches, so it is dropped rather than kept as
+    ceremony. The same round also caught a branch this arc DEADENED elsewhere: the
+    directory-level autouse redirect made test_arc_exit_report::shared_ledger''s own
+    prev-is-None arm unreachable (92/92 green with it dropped), so that fixture is
+    delegated to MonkeyPatch.context() too — cleaning up an orphan this change created,
+    in the very file the arc cites as prior art.
     Witnesses at tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to
