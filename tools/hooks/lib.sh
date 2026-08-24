@@ -897,7 +897,7 @@ _hook_worktree_restore_transaction() {
 }
 
 _hook_worktree_interrupted() {
-  local rc="$1"
+  local rc="$1" restore_rc
   trap - HUP INT TERM
   # ONE attempt, not the C-HE-11 §3 budget. Every other caller of the restore wants the
   # full bounded wait, because a lock that clears in milliseconds should not strand a
@@ -906,7 +906,15 @@ _hook_worktree_interrupted() {
   # backoff here does not save the worktree -- it guarantees the kill lands mid-restore
   # and strands it anyway. Fail fast, restore what can be restored, exit.
   _hook_worktree_restore_transaction "$_HOOK_REMOVE_ROOT" \
-    "$_HOOK_REMOVE_TRANSACTION" 1 >/dev/null 2>&1 || rc=6
+    "$_HOOK_REMOVE_TRANSACTION" 1 >/dev/null 2>&1
+  restore_rc=$?
+  # 0 = the worktree was moved back; 1 = there was NOTHING to move, a pre-move marker that
+  # was merely cleared. Both are success; only 2 (recovery unsafe) is a failure. This was
+  # `|| rc=6`, which reported the clean pre-move interrupt as a failed restore and lost the
+  # 129/130/143 the caller is entitled to. The window became reachable only when the retry
+  # sleep started honouring signals promptly (`sleep … & wait`) -- before that a signal in
+  # the pre-move gap sat undelivered until the move had already happened (r9).
+  [ "$restore_rc" -le 1 ] || rc=6
   hook_worktree_lock_release || true
   exit "$rc"
 }

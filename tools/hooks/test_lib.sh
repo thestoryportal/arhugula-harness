@@ -1219,6 +1219,27 @@ REAL_GIT="$(command -v git)" HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM3:$PATH
 eq "an ordinary restore against the same lock still spends the full budget" \
   "$(gr_attempts)" "8"
 
+# (17) A signal in the PRE-MOVE window keeps its exit code. The restore returns 1 when
+#      there was nothing to move (the transaction was only a marker, and clearing it IS
+#      success), and the handler used to fold every non-zero into rc=6 -- reporting a
+#      clean interrupt as a failed quarantine restore. The window is reachable only
+#      because the retry sleep now honours signals promptly, so this defect arrived WITH
+#      that fix (out-of-family review r9).
+GR_PRE="$REPO/premove"
+git -C "$REPO" worktree add -q -b premove-branch "$GR_PRE"
+GR_PRE_REAL=$(git -C "$REPO" worktree list --porcelain | sed -n 's|^worktree ||p' \
+  | grep '/premove$' | head -n1)
+GR_PRE_TXN="$REPO/premove-txn"
+_hook_worktree_write_transaction "$GR_PRE_TXN" "$GR_PRE_REAL" \
+  "$(dirname "$GR_PRE_REAL")/.harness-removing-premove"
+(
+  _HOOK_REMOVE_ROOT="$REPO" _HOOK_REMOVE_TRANSACTION="$GR_PRE_TXN" \
+    _hook_worktree_interrupted 143
+) >/dev/null 2>&1
+eq "a pre-move interrupt exits with its SIGNAL code, not a restore failure" "$?" "143"
+[ ! -e "$GR_PRE_TXN" ] && ok "and the stale marker is cleared" \
+  || bad "the pre-move marker survived at $GR_PRE_TXN"
+
 # (16) `--max` is the ONLY way to move the budget, and it is validated. It used to be an
 #      inherited environment variable, which meant any ambient value silently lowered the
 #      C-HE-11 §3 budget for every caller -- and a NON-INTEGER one made the bound test
