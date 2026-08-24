@@ -1,6 +1,6 @@
 ---
 name: defect-class-preflight
-description: Pre-commit self-review sweep against the ten defect classes this workspace's reviewers actually catch, distilled from 1,084 real merge-gate and codex findings. Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), and whenever a review round's fix is being committed (fixes introduce their own defects at a measured rate). Running this sweep is how a first draft survives review instead of generating BLOCK rounds — skipping it is how arcs run 9–17 review rounds.
+description: Pre-commit self-review sweep against the ten defect classes this workspace's reviewers actually catch, distilled from the workspace's merge-gate/codex finding corpus (1,084 findings at first distillation, 2026-08-24; the log only grows and scripts/refresh-classes.py rederives). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), and whenever a review round's fix is being committed (fixes introduce their own defects at a measured rate). Running this sweep is how a first draft survives review instead of generating BLOCK rounds — skipping it is how arcs run 9–17 review rounds.
 ---
 
 # defect-class-preflight — sweep the diff before the reviewers do
@@ -9,7 +9,7 @@ description: Pre-commit self-review sweep against the ten defect classes this wo
 
 This workspace's review loop is fail-closed: every defect a reviewer finds costs a full
 serial cycle (fix → probe → commit → CI → re-review → re-bind), typically 15–30 minutes.
-Analysis of **1,084 recorded findings** in `.harness/merge-gate-log.jsonl` shows they
+Analysis of the recorded findings in `.harness/merge-gate-log.jsonl` (1,084 at first distillation, 2026-08-24; the committed corpus below is newer) shows they
 cluster into ten recurring classes — and repeatedly, the defect found was a shape the
 workspace had *already fixed once elsewhere* (the same two-armed restore shipped twice in
 one arc). The knowledge exists; this skill is its activation at authoring time. One pass
@@ -40,9 +40,9 @@ Two meta-rules that outrank the list:
 
 ## The ten classes, ranked by finding count
 
-*(Counts and order regenerated from the committed log by `scripts/refresh-classes.py` at the 2026-08-24 corpus, 1,090 findings, head `d6ccc50fb` — rerun the script for live figures; the log only grows.)*
+*(Counts and order regenerated from the committed log by `scripts/refresh-classes.py` at the 2026-08-24 committed corpus of 1,095 findings — rerun the script for live figures; the log only grows, so these are a bound snapshot, not live state.)*
 
-### 1. Race / TOCTOU / atomicity (377 findings)
+### 1. Race / TOCTOU / atomicity (379 findings)
 Any check-then-act on files, refs, locks, or shared state. Ask: *between my check and my
 act, what can another lane, process, or signal do?* Shapes: absence-check then create
 (use exclusive create); read-modify-write without CAS; cleanup racing a writer;
@@ -52,7 +52,7 @@ mid-sequence leaves a half-state. This workspace's idioms: exclusive-create CAS
 adds coordination, name which existing idiom it uses — a new hand-rolled one is a
 finding waiting to be filed.
 
-### 2. Prose that will drift (145 findings)
+### 2. Prose that will drift (151 findings)
 Docstrings, comments, and `.harness` prose containing checkable facts: counts, line
 numbers, §-cites, "all/every/only" absolutes, arithmetic that implies a partition.
 Rule: a fact checkable against HEAD does not belong in prose unless bound to a commit
@@ -61,13 +61,13 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
-### 3. Silent failure / meaning-changing fallback (111 findings)
+### 3. Silent failure / meaning-changing fallback (114 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the
 primary path fails, an empty result indistinguishable from "could not look". Ask of
 every error path: *if this fails at 3 a.m., does anyone find out, and does "empty"
 mean empty or unlooked?* A gate that can't tell those apart must fail loud.
 
-### 4. Vacuous witness (105 findings)
+### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
 load-bearing line were deleted or inverted, does this test actually red?* Traps seen
 repeatedly: presence-check standing in for behavior (asserting a variable is set, not
@@ -101,13 +101,13 @@ assert the namespace empty (`HARNESS_*` must never escape tools items), and — 
 shape — does the variable serve MORE THAN ONE consumer meaning? Enumerate every reader
 of the variable before repurposing it.
 
-### 8. Subprocess boundary (57 findings)
+### 8. Subprocess boundary (58 findings)
 Monkeypatching a Python seam cannot reach a child process — only inherited env can.
 Children get a COPY of env at spawn; later parent changes don't propagate. Nested
 sessions of the same tool (pytest-in-pytest) re-run your own hooks against
 already-modified state — first-writer-wins any value that must survive nesting.
 
-### 9. Path / default resolution (54 findings)
+### 9. Path / default resolution (56 findings)
 Any path computed from env-or-default: TRACE the chain to the concrete path it lands
 on when NOTHING is set, and write that path into your review — "falls back to
 `~/.reports/` (the operator's real store) when the env var is unset" is a *named
@@ -115,7 +115,7 @@ finding*, not an implementation default to read past. Def-time constants bake th
 at import (`QUEUE_DIR`) — a later env change does not reach them. A worktree does NOT
 isolate `$HOME`-absolute paths; isolate by ENVIRONMENT.
 
-### 10. Fixture scope / lifecycle phase (33 findings, but two P1s)
+### 10. Fixture scope / lifecycle phase (35 findings, but two P1s)
 pytest specifics that shipped defects: a per-item bracket covers setup+call+teardown
 but NOT collection/import time or session-fixture teardown after a foreign final item;
 higher-scope teardown runs inside the CURRENT item's teardown phase (measured);

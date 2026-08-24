@@ -1,6 +1,6 @@
 ---
 name: register-pr-prose
-description: Authoring discipline for every piece of durable prose in this workspace — PR bodies, register close_outs (.harness/forward-register.yaml, post-phase-8-forward-register.md), arc-ledger entries, checkpoint files, and any docstring or comment that states a checkable fact. Use WHENEVER writing or updating a PR body, a register row, a close_out narrative, a grounding-pass section, or prose containing counts, §-cites, line numbers, or claims about what a mechanism does. Prose findings are the second-largest defect class in this workspace (145 of 1,084 recorded findings) and cost full gate rounds; this skill is how the prose passes the spec-conformance lens on the first read.
+description: Authoring discipline for every piece of durable prose in this workspace — PR bodies, register close_outs (.harness/forward-register.yaml, post-phase-8-forward-register.md), arc-ledger entries, checkpoint files, and any docstring or comment that states a checkable fact. Use WHENEVER writing or updating a PR body, a register row, a close_out narrative, a grounding-pass section, or prose containing counts, §-cites, line numbers, or claims about what a mechanism does. Prose findings are the second-largest defect class in this workspace (145 of 1,084 findings at first distillation, 2026-08-24) and cost full gate rounds; this skill is how the prose passes the spec-conformance lens on the first read.
 ---
 
 # Canonical Claude Workflow Bridge

@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 208
+  total: 210
   open: 1
   design_substrate_gated: 3
-  registered_finding: 55
+  registered_finding: 57
   operator_gated: 0
   held: 2
   closed: 147
-  identity_digest: 5c2a2842ffc0a2d4
+  identity_digest: faff8c81a5c35d76
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10595,3 +10595,40 @@ items:
   council: 'NO — a hermeticity boundary with one obvious enforcement point; no cross-axis
     tension and no contract change.'
   heading: '### B-208 · the shared HITL loop ledger was reachable from a test process — 6288 of its 6589 rows were synthetic *(surfaced while clearing the U-HE-32 refresh gates, 2026-08-24; CLOSED at #1443 the same arc)*'
+- id: B-209
+  title: >-
+    the B-208 session belt shadows the production-default probe in
+    test_queue_lives_outside_the_repo
+  pr: '#1445'
+  status: registered_finding
+  summary: 'SURFACED by codex round 3 on the skills PR #1445, on merged B-208 code that PR
+    does not touch. tools/conftest.py installs ARC_METRICS_QUEUE_DIR before collection
+    imports arc_metrics, so module-level QUEUE_DIR always resolves the temporary belt and
+    tools/test_arc_metrics.py::test_queue_lives_outside_the_repo no longer exercises the
+    UNSET production default — changing the fallback to a repo-resident path would leave
+    that probe green because the environment value wins. Closure shape: test the default in
+    an isolated import (a child process with the variable stripped), the same idiom the
+    isolation module already uses for process-boundary claims.'
+  close_out: 'OPEN — closure = an isolated-import witness for the unset production default
+    (child process, variable stripped), registered from codex round 3 on PR #1445.'
+  council: 'NO — single-module test-adequacy gap; no cross-axis tension.'
+  heading: '### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*'
+- id: B-210
+  title: >-
+    production_queue_dir() is witnessed in isolation but its Docker-test callsite is not
+    pinned
+  pr: '#1445'
+  status: registered_finding
+  summary: 'SURFACED by codex round 3 on the skills PR #1445, on merged B-208 code that PR
+    does not touch. Case 7d proves production_queue_dir() never returns the belt, but no
+    witness proves test_two_lanes_disjoint_names_and_ports still resolves its lanes_dir
+    THROUGH that helper — reverting test_compose_lanes.py to the ambient
+    ARC_METRICS_QUEUE_DIR lookup leaves 7d green while the Docker test''s collision claims
+    go back to the throwaway registry, and the docker test is skipif-gated so CI cannot see
+    the regression. Closure shape: pin the callsite with a source-shape witness on the
+    lanes_dir assignment, or factor claim-path selection into directly tested code.'
+  close_out: 'OPEN — closure = a callsite pin (source-shape witness on the Docker test''s
+    lanes_dir assignment) or refactor to directly tested claim-path selection, registered
+    from codex round 3 on PR #1445.'
+  council: 'NO — single-callsite witness-adequacy gap; no cross-axis tension.'
+  heading: '### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*'

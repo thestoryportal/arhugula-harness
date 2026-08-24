@@ -2457,3 +2457,13 @@ same spec leg.
 - **Gate round 2 (at the converged head).** Concurrency and witness-adequacy: APPROVE — the mid-arm-failure hazard in the 7c driver traces to a self-healing outcome through pytest's live-value `undo` semantics. Spec-conformance: BLOCK on exactly this register lagging rounds 13–15 (the round-12 belt sentence had become false once the round-13 carve-out existed) — corrected in this entry. One named residual is tracked rather than fixed-and-re-reviewed: the 7c driver leaks its own `mkdtemp` root when an arm fails mid-flight — bounded to already-failing runs, judged non-blocking by both code lenses, and left so the reviewed code stays byte-identical to its verdicts.
 
 - **Deliberately not done.** The 6288 rows already in the ledger are not removed. It is append-only by contract and is operator state outside this repo, so truncating it is the operator's call, not this arc's; the pending synthetic gate was cleared the contract-sanctioned way, with a `RESOLVED-HIL` row.
+
+### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*
+
+- **What it is.** `tools/conftest.py` installs `ARC_METRICS_QUEUE_DIR` at `pytest_configure`, before collection imports `arc_metrics`, so the module-level `QUEUE_DIR` always resolves the temporary belt. `tools/test_arc_metrics.py::test_queue_lives_outside_the_repo` therefore no longer exercises the UNSET production default: a regression moving the fallback to a repo-resident path stays green because the environment value wins.
+- **Closure shape.** Test the default in an isolated import — a child process with the variable stripped, the same idiom the isolation module already uses for process-boundary claims.
+
+### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*
+
+- **What it is.** Case 7d proves `production_queue_dir()` never returns the belt, but no witness proves `test_two_lanes_disjoint_names_and_ports` still resolves its `lanes_dir` THROUGH that helper. Reverting `test_compose_lanes.py` to the ambient `ARC_METRICS_QUEUE_DIR` lookup leaves 7d green while the Docker test's collision claims go back to the throwaway registry — and the docker test is skipif-gated, so CI cannot see the regression.
+- **Closure shape.** Pin the callsite with a source-shape witness on the `lanes_dir` assignment, or factor claim-path selection into directly tested code.
