@@ -192,9 +192,20 @@ def test_the_session_temp_root_is_removed_when_the_session_ends(tmp_path):
     honours it — and the assertion is that nothing matching the venue prefix survives the
     child's exit.
 
+    The child runs TWO items, not one, and that is the load-bearing detail. With a single
+    item, "one root cached for the session" and "a fresh root minted per item" are
+    indistinguishable: both leave exactly one directory, and `pytest_unconfigure` removes
+    the one in the stash either way. Removing the cache guard in `_venue_root` therefore
+    kept all six witnesses green while stranding five directories per run — the same
+    B-207-shaped accrual this teardown exists to close (merge-gate witness lens, round 5).
+    With two items, the uncached shape mints two and cleans one, so the survivor shows up.
+
     Not vacuous: the child runs the redirect witness, which asserts the venue path
     contains `harness-loop-status-`. Its passing therefore proves a directory WAS created
     under the child's `TMPDIR`, so an empty survivor list means removed, not never-made.
+
+    The two chosen items must not themselves spawn a child — this test does, and naming
+    the whole module here would recurse.
     """
     tmproot = tmp_path / "tmproot"
     tmproot.mkdir()
@@ -211,6 +222,8 @@ def test_the_session_temp_root_is_removed_when_the_session_ends(tmp_path):
             "no:randomly",
             "tools/test_loop_status_isolation.py"
             "::test_session_venue_is_redirected_away_from_the_default",
+            "tools/test_loop_status_isolation.py"
+            "::test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect",
             "--basetemp",
             str(tmp_path / "bt"),
         ],

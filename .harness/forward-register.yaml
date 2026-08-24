@@ -10488,8 +10488,10 @@ items:
     operator''s real ~/.gstack/projects/arhugula-v2/loop_status.md whenever
     HARNESS_LOOP_STATUS_PATH is unset — the default state of every pytest process — so any
     test reaching a real emit path appended REAL DEFERRED-HIL rows to the venue the
-    SessionStart hook reads. Measured on main at e6913c112: 6288 synthetic lane=A rows against
-    82 real-lane rows, 6589 total, 1.07 MB, with a fabricated "pr-1 — pr #1: gh transport
+    SessionStart hook reads. Measured on main at e6913c112: 6288 synthetic lane=A rows and
+    only 82 from real lanes, out of 6589 lines / 1.07 MB — NOT a partition, the balance is
+    lane=- infra rows and the header (the first phrasing implied an exhaustive split and did
+    not reconcile; caught by the round-5 lens). With a fabricated "pr-1 — pr #1: gh transport
     exploded" gate nagging at every session start. Reproduced rather than inferred: one door
     test run with the variable pointed at a scratch file emitted that exact row into it. Fixed
     at tools/conftest.py — one point for the whole directory — rather than per test file,

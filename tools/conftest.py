@@ -7,8 +7,9 @@ unset -- the default state of every pytest process. Any test reaching a real emi
 therefore appended real `DEFERRED-HIL` rows to the venue the SessionStart hook reads,
 where a synthetic `pr-1` gate nags forever and only a hand-written `RESOLVED-HIL`
 clears it. It is append-only by contract (C-HE-09 §2), so the debris is not removable
-after the fact: by the time this landed, 6288 of the ledger's 6589 rows (1.07 MB) were
-`lane=A` fixtures against 82 real-lane rows.
+after the fact: by the time this landed, 6288 of the ledger's 6589 lines (1.07 MB) were
+synthetic `lane=A` fixture rows and only 82 came from real lanes — the rest are `lane=-`
+infra rows and the file's own header, so those two figures are not a partition of the whole.
 
 Isolating per test FILE is what the workspace tried and what drifted -- two files
 remember (`test_arc_exit_report.py`, `test_review_wrapper.py`), `test_merge_door.py`
