@@ -64,6 +64,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - Branch off the default branch (never the operator's working branch); conventional-commit
   title; body lists what changed + verification (tests/assertions, codex rounds) + the
   R-NNN it advances. End the body with the standard generated-with trailer.
+  **Adopt the `register-pr-prose` skill for the body and for any register close_out this
+  PR carries** — its six rules (head-bound counts, round-bound mechanisms, verified
+  cites, no implied partitions, named residuals, close_out written once at the end) are
+  the distilled prose-findings history; prose that follows them passes the
+  spec-conformance lens on the first read instead of costing a gate round.
 - Commit/PR trailers per the workspace convention (Co-Authored-By; 🤖 Generated-with).
 - **Reservation back-fill at PR creation (C-HE-03 §3, U-HE-21).** The arc's reservation was
   minted at selection by `roadmap-continue`; its `<arc-id>` is the id you reserved there
