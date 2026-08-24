@@ -145,12 +145,14 @@ def test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect(monkeypatch, tmp
     `monkeypatch` is ONE function-scoped instance shared between a test body and every
     fixture that requests it, and `undo()` empties the whole stack — not just the
     caller's own entries. Tools tests use it to drop a `run` stub before exercising the
-    real subprocess runner -- nine call sites, greppable as `monkeypatch.undo()` across
-    `test_arc_exit_report.py`, `test_lanes_verify.py`, `test_merge_gate_log.py`,
-    `test_finding_record.py` and `test_mutation_probe.py`. (Named rather than cited by
-    line: an earlier version gave line numbers and this PR's own docstring edit shifted
-    every one of them by two the same day, which the merge-gate lens caught. A citation
-    that rots on the next edit is worse than the grep that always resolves.) If the venue
+    real subprocess runner. `rg 'monkeypatch.undo' tools/` finds them.
+
+    No count, no file list, and no line numbers -- deliberately. This paragraph named
+    line numbers first, and this PR's own docstring edit shifted every one of them by two
+    the same day; it then named a count and a file list, and that was wrong on arrival and
+    missed a file entirely. Both were maps somebody has to remember to redraw, and neither
+    fact the mechanism actually depends on: what matters is THAT tools tests undo()
+    mid-test, not how many or where. The grep stays true by construction. If the venue
     redirect rode on that stack it would be lifted right before the emit that most needs
     it, and the row would land in the operator's ledger.
 
@@ -180,9 +182,9 @@ def test_the_session_temp_root_is_removed_when_the_session_ends(tmp_path):
 
     `mkdtemp` with nobody to clean up after it is the shape B-207 was filed under, and
     this arc reintroduced it before giving the root a fixture teardown. That teardown
-    then sat unwitnessed for three rounds: deleting it left all 96 tests across this file
-    and `test_arc_exit_report.py` green (merge-gate witness lens, round 3), so a future
-    edit dropping it would restore the leak with no signal at all.
+    then sat unwitnessed for three rounds: deleting it left this file and
+    `test_arc_exit_report.py` entirely green (merge-gate witness lens, round 3), so a
+    future edit dropping it would restore the leak with no signal at all.
 
     Session teardown cannot be observed from inside the session, so the witness is a
     child pytest run with `TMPDIR` pointed at a directory this test owns — `mkdtemp`
