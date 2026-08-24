@@ -299,3 +299,102 @@ def test_the_redirect_covers_fixture_phases_not_just_test_bodies():
         f"the module-phase emit did not succeed: {_MODULE_PHASE.get('emitted')!r}"
     )
     assert "b-208:module-phase:probe" in Path(str(venue)).read_text()
+
+
+def test_the_phases_outside_any_tools_item_emit_nothing(tmp_path):
+    """(7) The phases the per-item bracket CANNOT cover stay emit-free — witnessed.
+
+    Collection, and any higher-scope fixture teardown reached from a NON-tools item's
+    protocol in a mixed run, execute with the redirect restored: covering them would
+    mean holding `HARNESS_LOOP_STATUS_PATH` alive outside tools items, which is the
+    session-wide shape round 2 rejected (it leaks the name into the axis suite that
+    asserts none is set). So the boundary there is not a redirect but an emptiness
+    claim: nothing under `tools/` emits in those phases. This turns that claim from
+    prose into a canary (out-of-family review, round 10): the child's COMPUTED fallback
+    is owned, so an emit from any uncovered phase lands in a file this test reads.
+
+    The child runs a tools item from THIS module followed by the axis item, then
+    session teardown. Module-scope teardown turned out to be BRACKETED — pytest tears
+    down to the next item's level inside the CURRENT item's teardown phase, so a probe
+    emit after this module fixture's `yield` reaches the venue and stays green
+    (measured). What the bracket cannot reach is session-scope teardown after a
+    non-tools FINAL item: a probe session fixture emitting after `yield` lands in the
+    fallback and reds this test (measured), as does an import-time emit in either
+    module the child reaches.
+    """
+    axis = "harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none"
+    mine = (
+        "tools/test_loop_status_isolation.py"
+        "::test_session_venue_is_redirected_away_from_the_default"
+    )
+    root = Path(__file__).resolve().parent.parent
+    queue = tmp_path / "arc-metrics-queue"
+    queue.mkdir()
+    fallback = tmp_path / "loop_status.md"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
+    env["ARC_METRICS_QUEUE_DIR"] = str(queue)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:randomly",
+            mine,
+            axis,
+            "--basetemp",
+            str(tmp_path / "bt"),
+        ],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"the canary child itself broke, so this witnesses nothing:\n"
+        f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+    )
+    assert not fallback.exists(), (
+        "an emit from a phase outside every tools item's bracket reached the computed "
+        "fallback — under a production environment that is the operator's ledger:\n"
+        f"{fallback.read_text() if fallback.exists() else ''}"
+    )
+
+
+def test_collecting_the_whole_tools_suite_emits_nothing(tmp_path):
+    """(8) Import/collection time is emit-free for EVERY tools module — witnessed.
+
+    Case 7's child imports only the modules its two items live in. Collection imports
+    every `tools/` test module with the redirect absent (`pytest_runtest_protocol` has
+    not started), so a module-level emit anywhere in the suite would resolve the
+    computed fallback. Same canary shape: own the fallback, then assert no import put
+    a row in it.
+    """
+    root = Path(__file__).resolve().parent.parent
+    queue = tmp_path / "arc-metrics-queue"
+    queue.mkdir()
+    fallback = tmp_path / "loop_status.md"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
+    env["ARC_METRICS_QUEUE_DIR"] = str(queue)
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--collect-only", "tools/"],
+        cwd=root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"collection itself broke, so this witnesses nothing:\n"
+        f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
+    )
+    assert not fallback.exists(), (
+        "importing a tools module emitted a loop row — collection runs before any "
+        "redirect exists, so under a production environment that row lands in the "
+        "operator's ledger:\n"
+        f"{fallback.read_text() if fallback.exists() else ''}"
+    )

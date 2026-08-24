@@ -17,7 +17,13 @@ does not, and a file written tomorrow will not either. `emit_loop_row` also shel
 to bash and several door tests drive `merge_door.py` as a real SUBPROCESS, so
 monkeypatching the Python seam cannot reach them; only the inherited environment can.
 Hence one enforcement point for the whole directory: no `tools/` test can reach the
-production ledger by omission.
+production ledger by omission. The bracket is per-ITEM, so two phases run outside it —
+collection, and session-scope fixture teardown after a non-tools FINAL item in a mixed
+run (module scope is bracketed: pytest tears down to the next item's level inside the
+current item's teardown phase — measured). Covering them would hold the variable alive
+outside tools items, the exact session-wide leak rejected below; there the boundary is
+instead the witnessed emptiness claim that nothing under `tools/` emits in those phases
+(`test_loop_status_isolation.py` cases 7–8, the owned-fallback canaries).
 
 This lives HERE and not in the root conftest deliberately. Every producer of loop rows
 is under `tools/` (`reservations.emit_loop_row`, its `merge_door` callers, the hook
