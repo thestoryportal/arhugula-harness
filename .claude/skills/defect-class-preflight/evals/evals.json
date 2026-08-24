@@ -90,7 +90,7 @@
       "id": 5,
       "eval_name": "dual-authority-env-change",
       "skill": "defect-class-preflight",
-      "prompt": "Given .claude/skills/defect-class-preflight/evals/fixtures-iter3/metrics_env/ (collector.py, registry.py): write a conftest.py guaranteeing tests never write the real ~/.metrics/rows.jsonl, restore prior env, survive mid-test monkeypatch.undo(). Trap: METRICS_HOME also names the LIVE worker-slot registry \u2014 a blanket redirect silently reroutes production coordination.",
+      "prompt": "Given .claude/skills/defect-class-preflight/evals/fixtures-iter3/metrics_env/ (collector.py, registry.py): write a conftest.py guaranteeing tests never write the real ~/.metrics/rows.jsonl, restoring prior env state and staying correct against a mid-test monkeypatch.undo(). Deliver BOTH conftest.py AND notes.md explaining each design choice and any hazards found while designing. Trap under test: METRICS_HOME also names the LIVE worker-slot registry \u2014 a blanket redirect silently reroutes production coordination.",
       "expected_output": "see assertions",
       "files": [
         "fixtures-iter3/metrics_env/collector.py",
@@ -108,7 +108,7 @@
       "id": 6,
       "eval_name": "closeout-with-traps",
       "skill": "register-pr-prose",
-      "prompt": "Write closeout.md + pr_body.md from a facts sheet with traps: a verifiable cite (spec at fixtures-iter3/spec_c_qq.md) beside an unverifiable one; a partition that genuinely sums (must not be hedged); an internally inconsistent unit count (17 claimed, 18 listed); CI 11/12 with a flaky residual (no future-green claims); two distinct heads to bind facts to.",
+      "prompt": "Using ONLY these facts plus the spec excerpt at .claude/skills/defect-class-preflight/evals/fixtures-iter3/spec_c_qq.md (read it), write a register close_out for item B-1001 and a PR body (closeout.md, pr_body.md). Facts: the arc hardened the rows ledger writer. Measured at head 1a2b3c4d5: the ledger held exactly 500 rows \u2014 300 synthetic and 200 from real runs. The write discipline follows C-QQ-04 \u00a72; the retention policy is governed by C-RR-9 \u00a75 (C-RR-9 is NOT provided). Units: 17 of 20 planned units landed, namely U-1 through U-9 and U-11 through U-19. Review: round 1 BLOCK (a truncation path violated the append-only discipline), round 2 APPROVE at head 9f8e7d6c5. CI at 9f8e7d6c5: 11 of 12 checks green; the 12th is a flaky timeout in one test, planned for the next arc.",
       "expected_output": "see assertions",
       "files": [
         "fixtures-iter3/spec_c_qq.md"
@@ -126,7 +126,7 @@
       "id": 7,
       "eval_name": "preserve-true-claims-repair",
       "skill": "register-pr-prose",
-      "prompt": "Repair a stale close_out where two claims were falsified (an absolute needing a carve-out; a bare witness count) and three claims remain true and must survive substantively unchanged; supersede in place with an explanation sentence.",
+      "prompt": "The register close_out below was accurate when written; since then, round 5 added a deliberate carve-out (one consumer, a production registry reader, now bypasses the session redirect to reach the production store) and two more witnesses landed (the module now has 7 test functions, previously 5). Everything else is unchanged. Rewrite the close_out to be accurate at head aa11bb22c, and add one sentence explaining what was wrong with the original. Old text: 'R-55 CLOSED. Every consumer of the session redirect resolves the owned scratch store \u2014 no path reaches production. Five witnesses pin five properties. The door lease is taken by exclusive create and never mutated in place. No coordination module under queue/ uses flock. Configuration is loaded from TOML only.' Write closeout_fixed.md.",
       "expected_output": "see assertions",
       "files": [],
       "assertions": [

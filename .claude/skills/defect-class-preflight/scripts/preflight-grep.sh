@@ -4,16 +4,28 @@
 # (an advisory diagnostic that can raise is worse than none). Silence proves
 # nothing; each hit demands a named answer in the preflight, not necessarily a fix.
 set -u
-diff_text=$(git diff HEAD 2>/dev/null; git diff --cached 2>/dev/null) || diff_text=""
-added=$(printf '%s\n' "$diff_text" | grep '^+' | grep -v '^+++') || true
-[ -z "$added" ] && { echo "preflight-grep: no added lines in diff"; exit 0; }
+# `git diff HEAD` already covers staged + unstaged changes to tracked files —
+# concatenating `--cached` on top duplicated staged hits and let them eat the
+# per-class head cap (codex round 1). Untracked NEW files are outside any diff,
+# so their content is appended as +lines to honor the SKILL's "plus any new
+# files" scope.
+diff_text=$(git diff HEAD 2>/dev/null) || diff_text=""
+untracked=$(git ls-files --others --exclude-standard 2>/dev/null | while IFS= read -r f; do
+  [ -f "$f" ] && sed 's/^/+/' "$f"
+done) || untracked=""
+added=$(printf '%s\n%s\n' "$diff_text" "$untracked" | grep '^+' | grep -v '^+++') || true
+[ -z "$added" ] && { echo "preflight-grep: no added lines in diff or new files"; exit 0; }
 
 report() { # $1 label, $2 pattern
   hits=$(printf '%s\n' "$added" | grep -nE "$2" 2>/dev/null | head -8) || true
   [ -n "$hits" ] && printf '\n[%s]\n%s\n' "$1" "$hits"
 }
 
+# Two silent-failure patterns: the one-liner form, and the except-line-with-empty-
+# suffix that opens the standard MULTILINE `except ...:\n    pass` (a line-based
+# grep cannot span lines, so the opener is the flaggable half — codex round 1).
 report "silent-failure shapes"        '2>/dev/null|\|\| true|except[^:]*: *pass'
+report "except-block opener (check its body for pass/swallow)" 'except[^:]*: *$'
 report "env writes outside MonkeyPatch" 'os\.environ\[[^]]+\] *='
 # The hand-rolled save/restore pair was named in only 1 of 4 skill-eval review runs
 # despite being in the checklist — class 6 demoted to a mechanical pattern (the

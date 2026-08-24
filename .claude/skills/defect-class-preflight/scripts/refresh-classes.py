@@ -64,10 +64,11 @@ def main() -> int:
             r = json.loads(line)
         except json.JSONDecodeError:
             continue
-        # Real findings only: verdict/outcome rows also carry observed_evidence
-        # (e.g. "APPROVE from stdout: 0 findings") and would flood the unmatched
-        # tail with non-defects.
-        if r.get("observed_evidence") and r.get("severity") in ("P1", "P2", "P3", "hard"):
+        # Real findings only, by the log's own discriminator: record_kind. A severity
+        # filter is NOT a finding filter — it drops warn-severity findings while
+        # admitting hard-severity infrastructure rows, skewing the counts this file
+        # claims to derive (codex round 1 on the skills PR measured the mismatch).
+        if r.get("observed_evidence") and r.get("record_kind", "finding") == "finding":
             rows.append(r)
 
     counts = dict.fromkeys(CLASSES, 0)
