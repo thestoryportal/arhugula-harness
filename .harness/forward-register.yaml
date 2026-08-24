@@ -10501,7 +10501,19 @@ items:
     suite and harness-runtime test_env_defaults_to_os_environ_when_none asserts none is set
     (RuntimeConfig''s env loader consumes that namespace). Every loop-row producer lives under
     tools/, so the joint is the directory, and both invariants stay true.'
-  close_out: 'CLOSED at #1443. Witnesses at tools/test_loop_status_isolation.py, the
+  close_out: 'CLOSED at #1443 after two out-of-family rounds, each of which found a real
+    defect in the fix rather than in the original code. Round 1: the mkdtemp venue had no
+    owner and accrued one tree per run (B-207''s shape); the re-home to a fixture gave it a
+    teardown, measured 9 dirs before and after where it had grown by one. Round 2: the
+    fixture was session-scoped, so HARNESS_LOOP_STATUS_PATH stayed set for everything that
+    ran later IN THE SAME PROCESS — a mixed `pytest tools/... harness-runtime/...`
+    invocation failed the axis no-HARNESS_* invariant. CONFIRMED by running it, not
+    conceded: the isolation was order-dependent, and my own verification had only ever
+    exercised the separated case. Now per-test via monkeypatch, with a session-scoped
+    root; re-broadening it is structurally refused by pytest (a session fixture cannot
+    request function-scoped monkeypatch — ScopeMismatch, verified), and a third witness
+    runs the mixed invocation in a subprocess in BOTH orders. Witnesses at
+    tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to
     end: the full 119-test door suite left the operator''s ledger byte-identical

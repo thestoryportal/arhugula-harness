@@ -30,7 +30,6 @@ invariants true instead of trading one for the other.
 
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -41,31 +40,48 @@ import pytest
 _VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _isolated_loop_status_venue() -> Iterator[Path]:
-    """Redirect the ledger for the whole `tools/` session, then take the venue with it.
+@pytest.fixture(scope="session")
+def _loop_status_root() -> Iterator[Path]:
+    """One throwaway directory per session, removed when the session ends.
 
-    Set unconditionally rather than only-if-unset: no test here legitimately writes the
-    real venue, so an ambient value pointing at it is a misconfiguration, not an intent
-    worth honouring. A per-test `monkeypatch.setenv` still wins -- it runs later and is
-    undone first.
-
-    The directory is removed on teardown rather than left to the OS. `mkdtemp` with no
-    owner is how B-207's sibling leak got filed; a fixture already has the teardown, so
-    there is no reason to accrue one temp tree per test run.
+    Session-scoped so a run does not create a tree per test, and OWNED so it does not
+    accrue a tree per run either: `mkdtemp` with nobody to clean it up is the shape
+    B-207's sibling leak was filed under, and a fixture already has the teardown.
     """
     root = Path(tempfile.mkdtemp(prefix="harness-loop-status-"))
-    previous = os.environ.get(_VENUE_ENV)
-    os.environ[_VENUE_ENV] = str(root / "loop_status.md")
     try:
         yield root
     finally:
-        if previous is None:
-            os.environ.pop(_VENUE_ENV, None)
-        else:
-            os.environ[_VENUE_ENV] = previous
         # Swallowing here is deliberate and bounded: the tree is ours, lives under
         # TMPDIR, and nothing downstream reads it. Raising would turn a cleanup hiccup
-        # into a red session, which is the wrong trade for a directory the OS reaps
-        # anyway -- the leak this closes is about accrual, not correctness.
+        # into a red session, the wrong trade for a directory the OS reaps anyway --
+        # the leak this closes is about accrual, not correctness.
         shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_loop_status_venue(monkeypatch: pytest.MonkeyPatch, _loop_status_root: Path) -> Path:
+    """Redirect the ledger around EACH `tools/` test, not around the whole session.
+
+    Per-TEST rather than session-scoped, because the variable lives in process-global
+    state that outlives whichever suite set it. A session-scoped setter leaves
+    `HARNESS_LOOP_STATUS_PATH` in place for everything that runs afterwards in the same
+    process, so a mixed invocation --
+
+        pytest tools/test_loop_status_isolation.py \
+               harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none
+
+    -- would activate this fixture for the tools test and then fail the axis test's
+    no-`HARNESS_*` invariant. That was the first shape of this fixture and it failed
+    exactly that way when run (out-of-family review, round 2). Isolation that holds only
+    when the suites are invoked separately is a coincidence of ordering, not a property;
+    `monkeypatch` undoes the mutation at each test's teardown, which makes it a property.
+
+    Set unconditionally rather than only-if-unset: no test here legitimately writes the
+    real venue, so an ambient value pointing at it is a misconfiguration, not an intent
+    worth honouring. A per-test `monkeypatch.setenv` in a test body still wins, since it
+    runs later and is undone first.
+    """
+    venue = _loop_status_root / "loop_status.md"
+    monkeypatch.setenv(_VENUE_ENV, str(venue))
+    return venue
