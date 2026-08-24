@@ -1045,6 +1045,14 @@ GR_JITTER=$(awk '$2 != "-" {
 eq "every wait is a VARYING draw from [0, ceiling], not a constant fraction of it" \
   "$(echo "$GR_JITTER" | awk '{ print ($1 == 0 && $2 >= 3) ? "ok" \
       : "no (over-ceiling=" $1 " distinct-ratios=" $2 ")" }')" "ok"
+# ...and the RANGE itself, at its endpoints, deterministically. The distribution checks
+# above reject a zero delay and a constant fraction, but NOT "equal jitter"
+# (ceiling/2 + random(0, ceiling/2)) -- bounded, varying, and still not full jitter. No
+# sample separates the two without flaking, so the draw is asserted at r=0 and r=32767
+# instead (merge-gate witness lens).
+eq "the draw reaches the BOTTOM of [0, ceiling]" "$(_hook_git_retry_jitter 5000 0)" "0.000"
+eq "the draw reaches the TOP of [0, ceiling]" "$(_hook_git_retry_jitter 5000 32767)" "5.000"
+eq "and scales linearly between them" "$(_hook_git_retry_jitter 4000 16384)" "2.000"
 # And that the waits were actually TAKEN. The assertions above read values the helper
 # wrote BEFORE sleeping, so deleting `sleep "$slept"` left them all green (r3) -- the
 # lock here is released on attempt count, so nothing else notices the missing delay. A

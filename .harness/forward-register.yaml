@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 206
+  total: 207
   open: 1
   design_substrate_gated: 3
-  registered_finding: 54
+  registered_finding: 55
   operator_gated: 0
   held: 2
   closed: 146
-  identity_digest: 342f4aec42e9900a
+  identity_digest: bad54dc329b62dbb
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10456,3 +10456,24 @@ items:
   council: 'NO -- one bounded question awaiting a scheduled measurement (the C-HE-13 §3
     pilots); no cross-domain tension to convene over.'
   heading: '### B-206 · `hook_git_retry` inside the worktree-removal mutex can add up to ~23 s to a critical section whose waiters time out at 30 s *(surfaced by the merge-gate concurrency lens against U-HE-32, 2026-08-24; registered — the measurement is the close-out, not a code change)*'
+- id: B-207
+  title: >-
+    hook_git_retry stderr-capture temp file leaks when a signal trap exits mid-retry
+  status: registered_finding
+  summary: 'SURFACED AND MEASURED by the merge-gate concurrency lens against U-HE-32; the lens
+    itself judged it register-not-block. hook_git_retry captures git stderr to a mktemp file
+    and removes it only on a normal return. _hook_worktree_interrupted exits straight from the
+    HUP/INT/TERM trap, so a signal arriving mid-backoff skips cleanup. Measured: permanent
+    index.lock, SIGTERM mid-backoff, exactly one surviving suffix-less tmp.* under TMPDIR
+    (4353 -> 4354). One small file per INTERRUPTED teardown in an OS-reaped directory; no
+    correctness, contract, or restore behaviour depends on it. Both obvious fixes cost more
+    than the leak: an EXIT trap inside a library function clobbers the caller trap (and
+    hook_safe_worktree_remove installs three), and a deterministic per-PID path trades the
+    leak for a predictable name in a shared temp dir. REACHABLE only because the trap now
+    fires promptly -- before the sleep-and-wait fix the signal was deferred to the end of the
+    sleep -- so it is the small cost of a much larger correctness win.'
+  close_out: '(1) If fixed, the cheap shape is a per-invocation directory under a caller-owned
+    root, removed by the code that owns the trap, rather than a trap inside the library;
+    (2) otherwise close WONTFIX once the pilots confirm no operator notices it.'
+  council: 'NO -- a bounded resource nit with a known, cheap shape if it is ever wanted.'
+  heading: '### B-207 · `hook_git_retry`''s stderr-capture temp file leaks when a signal trap `exit`s mid-retry *(surfaced and measured by the merge-gate concurrency lens against U-HE-32, 2026-08-24; registered — the lens itself judged it register-not-block)*'

@@ -117,6 +117,20 @@ _hook_git_lock_contention() {
     "(Unable to create .*\.lock.?|could not lock config file [^:]*): File exists|Another git process seems to be running"
 }
 
+# Full jitter (C-HE-11 §3): the wait is drawn from the CLOSED range [0, ceiling].
+# Usage: _hook_git_retry_jitter <ceiling_ms> <random 0..32767> -> seconds, 3dp.
+#
+# Split out so the draw is testable AT ITS ENDPOINTS rather than inferred from a sample.
+# A sample cannot do the job: "equal jitter" (ceiling/2 + random(0, ceiling/2)) is bounded
+# AND genuinely varying, so it satisfies any bounded-and-varies check, and the only
+# statistic that separates it -- some draw landing in the bottom half -- fails ~0.8% of the
+# time under real full jitter, which is a flaky CI gate rather than a witness. Taking the
+# random value as an ARGUMENT makes r=0 and r=32767 exact, deterministic assertions
+# (merge-gate witness lens).
+_hook_git_retry_jitter() {
+  awk -v d="$1" -v r="$2" 'BEGIN { printf "%.3f", (d * (r / 32767)) / 1000 }'
+}
+
 # One trace row per attempt: `<attempt> <ceiling_ms> <slept_s>` (`- -` on the attempt
 # that exhausts the budget and therefore never sleeps). The ceiling and the drawn sleep
 # are recorded, not just the count, because a count-only trace is blind to the numbers
@@ -192,7 +206,7 @@ hook_git_retry() {
       fi
       break
     fi
-    slept=$(awk -v d="$delay_ms" -v r="$RANDOM" 'BEGIN { printf "%.3f", (d * (r / 32767)) / 1000 }')
+    slept=$(_hook_git_retry_jitter "$delay_ms" "$RANDOM")
     _hook_git_retry_trace "$attempt" "$delay_ms" "$slept"
     # `sleep … & wait` rather than a bare `sleep`. bash defers a trapped signal until a
     # FOREGROUND child exits, so with a draw near the 5 s ceiling a TERM would sit unhandled
