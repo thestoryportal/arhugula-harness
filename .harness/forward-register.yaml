@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 205
+  total: 206
   open: 1
   design_substrate_gated: 3
-  registered_finding: 53
+  registered_finding: 54
   operator_gated: 0
   held: 2
   closed: 146
-  identity_digest: 4222126c00fbb7f1
+  identity_digest: 342f4aec42e9900a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10428,3 +10428,29 @@ items:
   council: 'NO -- one bounded question awaiting a measurement that is already scheduled
     (the C-HE-13 §3 pilots); no cross-domain tension to convene over.'
   heading: '### B-205 · C-HE-11 §2 `gc.auto 0` — refuse-to-open vs warn-and-continue once the write fails a NON-transient way, i.e. after U-HE-32''s retry is exhausted *(split out of B-201 at its closure so the surviving obligation stays tracked; out-of-family Codex r2 against U-HE-32, 2026-08-24)*'
+- id: B-206
+  title: >-
+    hook_git_retry inside the worktree-removal mutex can add up to ~23 s to a critical
+    section whose waiters time out at 30 s
+  status: registered_finding
+  summary: 'SURFACED BY THE merge-gate CONCURRENCY LENS against U-HE-32. The sibling half of
+    the same finding (the signal-handler path racing a 2 s SIGKILL) WAS fixed in the unit --
+    the trap now restores fail-fast at one attempt. This half is a budget-vs-timeout
+    interaction. hook_safe_worktree_remove holds the worktree mutex from lib.sh:1024 to
+    :1123 and BOTH retried calls are inside it (worktree move :1077, worktree remove :1099).
+    Each can spend <= 11.3 s worst case (~5.6 s expected), so <= 22.6 s added to the critical
+    section, against waiters whose HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS default is 30 s
+    (:428) -- SessionStart lease registration at :488/:526/:561. NOT FIXED HERE: the retry
+    only engages under contention, the worst case needs sustained collision across two git
+    ops, and both fixes are design changes (shrink the mutex span, or a lock-aware budget via
+    the HOOK_GIT_RETRY_MAX_ATTEMPTS seam the trap fix introduced) -- lowering the budget
+    inside the mutex would put a number below the C-HE-11 §3 MUST. Adjacent to but distinct
+    from B-202: that row is a MISSING lock, this is an EXISTING lock held longer.'
+  close_out: '(1) During the 3-4 lane pilots (C-HE-13 §3) record whether any lease
+    registration actually times out and whether any worktree move/remove ever exhausts its
+    budget -- both reasoned, neither observed; (2) if it fires, choose between shrinking the
+    span and a lock-aware budget and record it against C-HE-11 §3; (3) nothing owed before
+    that measurement. Close with B-202 if its lock work reshapes this critical section.'
+  council: 'NO -- one bounded question awaiting a scheduled measurement (the C-HE-13 §3
+    pilots); no cross-domain tension to convene over.'
+  heading: '### B-206 · `hook_git_retry` inside the worktree-removal mutex can add up to ~23 s to a critical section whose waiters time out at 30 s *(surfaced by the merge-gate concurrency lens against U-HE-32, 2026-08-24; registered — the measurement is the close-out, not a code change)*'

@@ -161,14 +161,21 @@ _hook_git_retry_trace() {
 # operator signal either way and must never be a silent one.
 # Usage: hook_git_retry [-C dir] <git args...>
 hook_git_retry() {
-  local attempt=0 delay_ms=100 errfile err rc slept
+  local attempt=0 delay_ms=100 errfile err rc slept max
+  # 8 is C-HE-11 §3's number and the default everywhere. It is a VALUE rather than a
+  # constant for exactly one caller: the HUP/INT/TERM handler below, which restores a
+  # quarantined worktree while racing this codebase's own `-k 2` SIGKILL escalation
+  # (`hook_bounded`). A handler that waits out an 8-attempt budget (up to ~11 s) is
+  # killed mid-restore and strands the worktree -- the precise damage the retry exists
+  # to prevent (merge-gate concurrency lens, PR #1438).
+  max="${HOOK_GIT_RETRY_MAX_ATTEMPTS:-8}"
   errfile=$(mktemp) || { echo "hook_git_retry: could not create a stderr capture" >&2; return 1; }
   while :; do
     if LC_ALL=C git "$@" 2>"$errfile"; then rc=0; else rc=$?; fi
     err=$(cat "$errfile")
     { [ "$rc" -eq 0 ] || ! _hook_git_lock_contention "$err"; } && break
     attempt=$((attempt + 1))
-    if [ "$attempt" -ge 8 ]; then
+    if [ "$attempt" -ge "$max" ]; then
       _hook_git_retry_trace "$attempt" - -
       if ! command -v loop_log_structured >/dev/null 2>&1 \
         || ! loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" \
@@ -863,7 +870,13 @@ _hook_worktree_restore_transaction() {
 _hook_worktree_interrupted() {
   local rc="$1"
   trap - HUP INT TERM
-  _hook_worktree_restore_transaction "$_HOOK_REMOVE_ROOT" \
+  # ONE attempt, not the C-HE-11 §3 budget. Every other caller of the restore wants the
+  # full bounded wait, because a lock that clears in milliseconds should not strand a
+  # worktree in quarantine. This caller is the exception: it is already being torn down,
+  # and `hook_bounded` escalates SIGTERM to SIGKILL after 2 s, so sitting in an ~11 s
+  # backoff here does not save the worktree -- it guarantees the kill lands mid-restore
+  # and strands it anyway. Fail fast, restore what can be restored, exit.
+  HOOK_GIT_RETRY_MAX_ATTEMPTS=1 _hook_worktree_restore_transaction "$_HOOK_REMOVE_ROOT" \
     "$_HOOK_REMOVE_TRANSACTION" >/dev/null 2>&1 || rc=6
   hook_worktree_lock_release || true
   exit "$rc"

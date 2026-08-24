@@ -898,6 +898,15 @@ gr_attempts() { wc -l < "$TRACE" | tr -d ' '; }
 # Trace rows are `<attempt> <ceiling_ms> <slept_s>`; these read the two number columns.
 gr_ceilings() { awk '{ printf "%s ", $2 }' "$TRACE"; }
 
+# NOTE on what witnesses WHICH classifier branch. Cases (1), (2) and (9) below drive REAL
+# git, and real git's index/ref-lock stderr always ALSO carries "Another git process seems
+# to be running" -- a separate alternative in the matcher. So those three cannot, on their
+# own, tell the `Unable to create ….lock': File exists` branch from the advice sentence, and
+# a merge-gate lens correctly noticed that. The branch is nonetheless witnessed: the PATH
+# shims used by the call-site cases emit ONLY the `Unable to create` line, so deleting that
+# alternative reds 7 assertions (measured). Keep it that way -- if those shims ever grow the
+# advice sentence, the branch silently loses its only independent witness.
+#
 # (1) A lock that clears mid-flight: the op succeeds, and it demonstrably retried.
 : > "$TRACE"
 : > "$GR/.git/index.lock"
@@ -1144,6 +1153,52 @@ eq "a contended restore still puts the worktree back" "$?" "0"
   || bad "restore move did NOT go through hook_git_retry: '$(gr_attempts)' attempts"
 [ -d "$GR_ORIG" ] && ok "the worktree is back at its original path" \
   || bad "worktree left in quarantine at $GR_QUAR"
+
+# (14) The SIGNAL-HANDLER restore is fail-fast, where every other restore caller is not.
+#      `hook_bounded` escalates SIGTERM to SIGKILL after 2 s, so a handler that sits in
+#      the ~11 s budget is killed mid-restore and strands the worktree -- the exact damage
+#      the retry exists to prevent (merge-gate concurrency lens). The two assertions are a
+#      PAIR: fail-fast here is only correct because the ordinary path above still waits.
+GR_TRAP="$REPO/trapme"
+git -C "$REPO" worktree add -q -b trap-branch "$GR_TRAP"
+git -C "$REPO" worktree move "$GR_TRAP" "$REPO/.harness-removing-trapme"
+GR_TQUAR=$(git -C "$REPO" worktree list --porcelain | sed -n 's|^worktree ||p' \
+  | grep '/[.]harness-removing-trapme$' | head -n1)
+GR_TORIG="$(dirname "$GR_TQUAR")/trapme"
+GR_TTXN="$REPO/trap-txn"
+_hook_worktree_write_transaction "$GR_TTXN" "$GR_TORIG" "$GR_TQUAR"
+# The shim used here fails EVERY time, not just once. A fail-once shim cannot tell the
+# two budgets apart -- both record exactly one trace row (a single retry under max=8, a
+# single exhaust row under max=1) -- so the assertion would hold no matter which the
+# handler used. Only a lock that never clears separates 1 attempt from 8.
+GR_SHIM3="$REPO/shim3"
+mkdir -p "$GR_SHIM3"
+cat > "$GR_SHIM3/git" <<'GRSHIM3'
+#!/usr/bin/env bash
+if [ "${3:-} ${4:-}" = "worktree move" ]; then
+  echo "fatal: Unable to create '/tmp/wt/.git/index.lock': File exists." >&2
+  exit 128
+fi
+exec "$REAL_GIT" "$@"
+GRSHIM3
+chmod +x "$GR_SHIM3/git"
+: > "$TRACE"
+(
+  _HOOK_REMOVE_ROOT="$REPO" _HOOK_REMOVE_TRANSACTION="$GR_TTXN" \
+  REAL_GIT="$(command -v git)" \
+    HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM3:$PATH" \
+    _hook_worktree_interrupted 143
+) >/dev/null 2>&1
+eq "the signal-handler restore takes ONE attempt, not the 8-attempt budget" \
+  "$(gr_attempts)" "1"
+# ...and the ordinary restore path, against the SAME never-clearing lock, still spends
+# the full budget. Asserted as a pair: fail-fast in the handler is only correct because
+# the non-handler callers still wait.
+: > "$TRACE"
+REAL_GIT="$(command -v git)" HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM3:$PATH" \
+  _hook_worktree_restore_transaction "$REPO" "$GR_TTXN" >/dev/null 2>&1
+eq "an ordinary restore against the same lock still spends the full budget" \
+  "$(gr_attempts)" "8"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
