@@ -895,6 +895,8 @@ gr_unlock_after_attempts() {
     rm -f "$lock" ) &
 }
 gr_attempts() { wc -l < "$TRACE" | tr -d ' '; }
+# Trace rows are `<attempt> <ceiling_ms> <slept_s>`; these read the two number columns.
+gr_ceilings() { awk '{ printf "%s ", $2 }' "$TRACE"; }
 
 # (1) A lock that clears mid-flight: the op succeeds, and it demonstrably retried.
 : > "$TRACE"
@@ -996,6 +998,63 @@ grep -q "but expected" "$REPO/gr-stale.err" \
   && ok "the stale-expectation error reaches the caller's stderr" \
   || bad "stale-expectation error swallowed: '$(cat "$REPO/gr-stale.err")'"
 eq "a stale-expectation ref conflict is not retried" "$(gr_attempts)" "0"
+
+# (8) The backoff NUMBERS, not merely the attempt count. C-HE-11 §3 fixes base 100 ms,
+#     factor 2 and a 5 s cap, and "full jitter" means each wait is drawn from [0, ceiling]
+#     rather than being the ceiling itself. A count-only witness is blind to all of it —
+#     a zero-delay tight loop would pass every assertion above (out-of-family review r1).
+#     Asserted as SHAPE, never as elapsed wall clock: the ceiling sequence is exact, and
+#     the drawn sleeps are checked against their own ceiling, so load cannot flake it.
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" add -A >/dev/null 2>&1
+eq "the ceiling doubles from 100 ms and caps at 5 s" \
+  "$(gr_ceilings)" "100 200 400 800 1600 3200 5000 - "
+# BOTH ends of the range must be exercised. "<= ceiling" alone is satisfied by an
+# always-zero sleep, and "< ceiling" alone is too -- a mutation probe caught exactly that,
+# so the assertion also requires a strictly positive draw. Together they reject the two
+# degenerate implementations: a zero-delay tight loop and a fixed-ceiling backoff.
+GR_JITTER=$(awk '$2 != "-" {
+    c = $2 / 1000
+    if ($3 + 0 > c) over++
+    if ($3 + 0 < c) below++
+    if ($3 + 0 > 0) positive++
+  } END { printf "%d %d %d", over + 0, below + 0, positive + 0 }' "$TRACE")
+eq "every wait is drawn from [0, ceiling], with both ends of the range exercised" \
+  "$(echo "$GR_JITTER" | awk '{ print ($1 == 0 && $2 > 0 && $3 > 0) ? "ok" \
+      : "no (over=" $1 " below=" $2 " positive=" $3 ")" }')" "ok"
+rm -f "$GR/.git/index.lock"
+
+# (9) A HELD ref lock — `refs/heads/<name>.lock`. The contract names ref AND index
+#     collisions, and the only ref case above is the stale-expectation NEGATIVE one, so
+#     narrowing the matcher back to index-only would have kept this suite green while
+#     breaking half the contract (out-of-family review r1).
+: > "$TRACE"
+: > "$GR/.git/refs/heads/contended.lock"
+gr_unlock_after_attempts "$GR/.git/refs/heads/contended.lock" 2
+GR_UNLOCKER=$!
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" branch contended
+eq "transient refs/heads/*.lock clears -> op succeeds" "$?" "0"
+wait "$GR_UNLOCKER" 2>/dev/null
+[ "$(gr_attempts)" -ge 2 ] && ok "held ref-lock contention is retried ($(gr_attempts) attempts)" \
+  || bad "ref-lock contention not retried: '$(gr_attempts)' attempts"
+git -C "$GR" rev-parse --verify -q refs/heads/contended >/dev/null \
+  && ok "the retried branch creation actually landed" || bad "branch contended missing"
+
+# (10) A caller running under `set -e` must survive the collision this helper exists to
+#      absorb. As a bare `git …; rc=$?` the failing command is NOT exempt from errexit,
+#      so the shell dies at the first attempt — before the retry, the cleanup or the
+#      NOTIFY (out-of-family review r1). Witnessed by attempt count, not by survival of
+#      the outer shell: an exhausted budget legitimately returns non-zero, which errexit
+#      then acts on, so only the trace can tell "died at attempt 1" from "ran all 8".
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+bash -euo pipefail -c '
+  . "$1/lib.sh"
+  HOOK_GIT_RETRY_TRACE="$3" hook_git_retry -C "$2" add -A
+' _ "$SCRIPT_DIR" "$GR" "$TRACE" >/dev/null 2>&1
+eq "a set -e caller is not killed mid-retry" "$(gr_attempts)" "8"
+rm -f "$GR/.git/index.lock"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

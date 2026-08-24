@@ -90,7 +90,10 @@ hook_bounded() {
 # True when git's stderr describes LOCAL lock contention. git serialises index, ref
 # and config writes through a `<target>.lock` sidecar created with O_EXCL, so two
 # lanes touching one repo collide transiently and the loser aborts before doing any
-# work. Two shapes, both measured against git 2.39:
+# work. Two shapes, both measured against git 2.39 UNDER `LC_ALL=C`, which the caller
+# below pins for exactly this reason: these are translated strings, and on a host with
+# a localised LC_MESSAGES the same EEXIST collision would not match, silently turning
+# the unconditional retry contract into a no-op (out-of-family review r1).
 #
 #   fatal: Unable to create '…/index.lock': File exists.          (index, and ref —
 #     a ref collision prints `cannot lock ref '…':` in FRONT of this same clause)
@@ -110,6 +113,16 @@ _hook_git_lock_contention() {
     "(Unable to create .*\.lock|could not lock config file [^:]*): File exists|Another git process seems to be running"
 }
 
+# One trace row per attempt: `<attempt> <ceiling_ms> <slept_s>` (`- -` on the attempt
+# that exhausts the budget and therefore never sleeps). The ceiling and the drawn sleep
+# are recorded, not just the count, because a count-only trace is blind to the numbers
+# the contract actually fixes — a zero-delay tight loop would satisfy it (r1). Inert
+# unless HOOK_GIT_RETRY_TRACE names a file.
+_hook_git_retry_trace() {
+  [ -n "${HOOK_GIT_RETRY_TRACE:-}" ] || return 0
+  echo "$1 $2 $3" >> "$HOOK_GIT_RETRY_TRACE"
+}
+
 # Run a git command, retrying ONLY local lock contention, on the C-HE-11 §3 budget:
 # full jitter over {base 100 ms, factor 2, cap 5 s, max 8 attempts}. Exhaustion FAILS
 # the git operation (git's own exit code and stderr survive) and emits a NOTIFY.
@@ -123,6 +136,12 @@ _hook_git_lock_contention() {
 # hand `hook_git_retry rev-parse HEAD` a stdout git never wrote. The cost of the
 # capture is that stderr arrives when the command ends rather than streaming; every
 # caller here runs a short, quiet plumbing op, so nothing is waiting on progress.
+#
+# git runs inside an `if` so that a caller with `set -e` cannot be killed by the very
+# lock collision this exists to absorb: as a bare `git …; rc=$?` the failing command is
+# not exempt from errexit, and the shell would exit before the retry, the cleanup or the
+# NOTIFY ever ran (out-of-family review r1). `LC_ALL=C` pins the diagnostics the
+# classifier reads; every wrapped call is locale-insensitive plumbing.
 #
 # stderr goes to a FILE rather than a `$(…)` capture, and that choice is load-bearing:
 # a command substitution runs git in a subshell, which resets this shell's traps to
@@ -138,15 +157,15 @@ _hook_git_lock_contention() {
 # operator signal either way and must never be a silent one.
 # Usage: hook_git_retry [-C dir] <git args...>
 hook_git_retry() {
-  local attempt=0 delay_ms=100 errfile err rc
+  local attempt=0 delay_ms=100 errfile err rc slept
   errfile=$(mktemp) || { echo "hook_git_retry: could not create a stderr capture" >&2; return 1; }
   while :; do
-    git "$@" 2>"$errfile"; rc=$?
+    if LC_ALL=C git "$@" 2>"$errfile"; then rc=0; else rc=$?; fi
     err=$(cat "$errfile")
     { [ "$rc" -eq 0 ] || ! _hook_git_lock_contention "$err"; } && break
     attempt=$((attempt + 1))
-    [ -n "${HOOK_GIT_RETRY_TRACE:-}" ] && echo "$attempt" >> "$HOOK_GIT_RETRY_TRACE"
     if [ "$attempt" -ge 8 ]; then
+      _hook_git_retry_trace "$attempt" - -
       if ! command -v loop_log_structured >/dev/null 2>&1 \
         || ! loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" \
                "git-ref-lock:transient-retry:lock_contention" \
@@ -155,7 +174,9 @@ hook_git_retry() {
       fi
       break
     fi
-    sleep "$(awk -v d="$delay_ms" -v r="$RANDOM" 'BEGIN { printf "%.3f", (d * (r / 32767)) / 1000 }')"
+    slept=$(awk -v d="$delay_ms" -v r="$RANDOM" 'BEGIN { printf "%.3f", (d * (r / 32767)) / 1000 }')
+    _hook_git_retry_trace "$attempt" "$delay_ms" "$slept"
+    sleep "$slept"
     delay_ms=$((delay_ms * 2))
     [ "$delay_ms" -gt 5000 ] && delay_ms=5000
   done
