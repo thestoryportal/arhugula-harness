@@ -986,11 +986,17 @@ mkdir -p "$GR_SHIM"
 cat > "$GR_SHIM/git" <<'GRSHIM'
 #!/usr/bin/env bash
 echo "$PPID" > "$GIT_SHIM_PPID_FILE"
+echo "${LC_ALL:-unset}" > "$GIT_SHIM_PPID_FILE.locale"
 GRSHIM
 chmod +x "$GR_SHIM/git"
 GIT_SHIM_PPID_FILE="$REPO/shim-ppid" PATH="$GR_SHIM:$PATH" hook_git_retry status
 eq "git is forked by the calling shell, so its traps stay armed" \
   "$(cat "$REPO/shim-ppid")" "$$"
+# The classifier reads git's ENGLISH diagnostics, so the helper pins LC_ALL=C on the
+# invocation. Nothing else proves that: every real-git and shim message in this suite is
+# already English, so deleting the pin would leave the whole suite green while a host
+# with a localised LC_MESSAGES silently stopped matching (out-of-family review r5).
+eq "the child git is invoked under LC_ALL=C" "$(cat "$REPO/shim-ppid.locale")" "C"
 
 # (7) `cannot lock ref '…': is at <a> but expected <b>` is a stale-expectation conflict,
 #     not contention — no amount of waiting resolves it. Retrying would burn the whole
@@ -1199,6 +1205,22 @@ REAL_GIT="$(command -v git)" HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM3:$PATH
   _hook_worktree_restore_transaction "$REPO" "$GR_TTXN" >/dev/null 2>&1
 eq "an ordinary restore against the same lock still spends the full budget" \
   "$(gr_attempts)" "8"
+
+# (15) The WRAPPER's own ledger dependency. `safe-worktree-remove.sh` sources loop_lib.sh
+#      so an exhausted budget leaves a durable NOTIFY rather than only a line on stderr.
+#      Every other exhaustion case in this file sources loop_lib itself, and every wiring
+#      case calls the library function directly, so reverting that one line left the suite
+#      green (out-of-family review r5). This drives the SCRIPT, as a subprocess.
+GR_WRAP="$REPO/wrapme"
+git -C "$REPO" worktree add -q -b wrap-branch "$GR_WRAP"
+GR_WRAP_LEDGER="$REPO/wrapper-ledger.md"
+rm -f "$GR_WRAP_LEDGER"
+REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim-wrap" \
+  HARNESS_LOOP_STATUS_PATH="$GR_WRAP_LEDGER" PATH="$GR_SHIM3:$PATH" \
+  bash "$SCRIPT_DIR/safe-worktree-remove.sh" "$GR_WRAP" >/dev/null 2>&1
+grep -q 'cause=git-ref-lock:transient-retry:lock_contention' "$GR_WRAP_LEDGER" 2>/dev/null \
+  && ok "the wrapper writes a durable NOTIFY when the budget is exhausted" \
+  || bad "no NOTIFY row from the wrapper: [$(cat "$GR_WRAP_LEDGER" 2>/dev/null)]"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
