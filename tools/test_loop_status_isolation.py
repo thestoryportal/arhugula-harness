@@ -249,21 +249,31 @@ _MODULE_PHASE: dict[str, object] = {}
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _emit_during_module_setup():
+def _emit_during_module_setup(tmp_path_factory):
     """Emit from a MODULE-scoped fixture, i.e. outside any test body.
 
     Higher-scoped fixtures are set up before the function-scoped ones and torn down after
     them, so this runs in the phase a per-test redirect cannot reach. It is a fixture
     rather than a test on purpose: the phase IS the thing under test.
+
+    The observation (the ambient venue) is captured first; the emit then runs with the
+    COMPUTED fallback relocated to an owned dir (case 2's idiom, module-scoped): in the
+    regressed world this fixture exists to detect, the ambient fallback IS the operator's
+    append-only ledger, and a witness must not commit the damage it witnesses. With the
+    redirect in place the relocation is inert — HARNESS_LOOP_STATUS_PATH wins.
     """
     _MODULE_PHASE["venue"] = os.environ.get(_VENUE_ENV)
-    try:
-        rs.emit_loop_row(
-            "NOTIFY", "b-208-witness", "b-208:module-phase:probe", "row from module setup"
-        )
-        _MODULE_PHASE["emitted"] = True
-    except Exception as exc:
-        _MODULE_PHASE["emitted"] = exc
+    queue = tmp_path_factory.mktemp("b208-module-phase") / "arc-metrics-queue"
+    queue.mkdir()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("ARC_METRICS_QUEUE_DIR", str(queue))
+        try:
+            rs.emit_loop_row(
+                "NOTIFY", "b-208-witness", "b-208:module-phase:probe", "row from module setup"
+            )
+            _MODULE_PHASE["emitted"] = True
+        except Exception as exc:
+            _MODULE_PHASE["emitted"] = exc
     yield
 
 
