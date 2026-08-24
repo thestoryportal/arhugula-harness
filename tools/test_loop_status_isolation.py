@@ -313,6 +313,15 @@ def test_the_belt_owns_the_computed_fallback_for_the_whole_session():
     assert belt, "tools/conftest.py must own ARC_METRICS_QUEUE_DIR for the session"
     assert "harness-loop-status-" in belt, f"not the session's owned root: {belt!r}"
     assert ".gstack" not in belt, f"belt still resolves inside the operator's store: {belt!r}"
+    # ONE ledger per session (C-HE-09's venue reduction, codex round 15): the fallback
+    # the belt implies and the venue the bracket names must be the same file, or rows
+    # emitted in uncovered phases are invisible to bracketed readers and vice versa.
+    venue = os.environ.get(_VENUE_ENV)
+    assert venue, "the bracket must be on when this item runs"
+    assert Path(belt).parent / "loop_status.md" == Path(venue), (
+        f"the belt-derived fallback and the bracket venue are two files: "
+        f"{Path(belt).parent / 'loop_status.md'} vs {venue}"
+    )
 
 
 def test_the_belt_governs_the_real_writer_when_the_bracket_is_lifted(monkeypatch):

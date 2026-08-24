@@ -79,7 +79,11 @@ def pytest_configure(config: pytest.Config) -> None:
     save/restore whose arms nothing could witness — the same defect shape round 4
     removed for the venue variable (gate lens: witness-adequacy).
     """
-    belt = _venue_root(config) / "belt" / "arc-metrics-queue"
+    # dirname(belt)/loop_status.md — the fallback the shell computes from this — is
+    # exactly the file the per-item bracket names: ONE ledger per session, whichever
+    # mechanism a phase resolves through (codex round 15 — distinct paths split the
+    # session's rows across two files and break C-HE-09's one-venue reduction).
+    belt = _venue_root(config) / "arc-metrics-queue"
     belt.mkdir(parents=True)
     mp = pytest.MonkeyPatch()
     config.stash[_BELT_MP] = mp
