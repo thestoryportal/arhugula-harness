@@ -10379,8 +10379,11 @@ items:
     an unretried collision fails the agent git command visibly.'
   close_out: '(1) Decide the invocation shape -- a just recipe is the obvious candidate,
     since a recipe name is one clean token the guard can admit where a source-plus-call chain
-    is not; (2) admit it in tools/hooks/permission-guard.sh with its own assertions; (3)
-    convert the raw git mutations in ship-pr and two-lane to it.'
+    is not; (2) admit it in tools/hooks/permission-guard.sh with its own assertions -- the
+    U-HE-25 surface; (3) convert the raw git mutations in ship-pr and two-lane to it -- the
+    U-HE-39 skill-carrier sweep, which also owes the wiring-suite update. Doing (2) and (3)
+    inside U-HE-32 would be a silent scope extension across two other units Files lists.
+    HELD through four out-of-family raises (r1-r4; the only finding standing at r4).'
   council: 'NO -- one bounded mechanism question (which invocation shape the guard admits)
     on an existing surface; no cross-domain tension to convene over.'
   heading: '### B-203 · `hook_git_retry` does not reach the skill-side lane git operations — a shell function cannot survive an agent''s Bash tool call, and the guard does not admit a `source … && hook_git_retry …` shape *(surfaced by out-of-family Codex r1 against U-HE-32, 2026-08-24; registered, not blocking the unit)*'
