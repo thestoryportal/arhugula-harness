@@ -301,26 +301,55 @@ def test_the_redirect_covers_fixture_phases_not_just_test_bodies():
     assert "b-208:module-phase:probe" in Path(str(venue)).read_text()
 
 
-def test_the_phases_outside_any_tools_item_emit_nothing(tmp_path):
-    """(7) The phases the per-item bracket CANNOT cover stay emit-free — witnessed.
+def test_the_belt_owns_the_computed_fallback_for_the_whole_session():
+    """(7a) The session belt is on: the fallback input names the owned throwaway.
 
-    Collection, and any higher-scope fixture teardown reached from a NON-tools item's
-    protocol in a mixed run, execute with the redirect restored: covering them would
-    mean holding `HARNESS_LOOP_STATUS_PATH` alive outside tools items, which is the
-    session-wide shape round 2 rejected (it leaks the name into the axis suite that
-    asserts none is set). So the boundary there is not a redirect but an emptiness
-    claim: nothing under `tools/` emits in those phases. This turns that claim from
-    prose into a canary (out-of-family review, round 10): the child's COMPUTED fallback
-    is owned, so an emit from any uncovered phase lands in a file this test reads.
+    `pytest_configure` points `ARC_METRICS_QUEUE_DIR` into the session venue root, so
+    the fallback `loop_status_path()` would compute — in any phase, any scope, any
+    child process inheriting this environment — resolves inside a directory the
+    conftest deletes at unconfigure, never the operator's store.
+    """
+    belt = os.environ.get("ARC_METRICS_QUEUE_DIR")
+    assert belt, "tools/conftest.py must own ARC_METRICS_QUEUE_DIR for the session"
+    assert "harness-loop-status-" in belt, f"not the session's owned root: {belt!r}"
+    assert ".gstack" not in belt, f"belt still resolves inside the operator's store: {belt!r}"
 
-    The child runs a tools item from THIS module followed by the axis item, then
-    session teardown. Module-scope teardown turned out to be BRACKETED — pytest tears
-    down to the next item's level inside the CURRENT item's teardown phase, so a probe
-    emit after this module fixture's `yield` reaches the venue and stays green
-    (measured). What the bracket cannot reach is session-scope teardown after a
-    non-tools FINAL item: a probe session fixture emitting after `yield` lands in the
-    fallback and reds this test (measured), as does an import-time emit in either
-    module the child reaches.
+
+def _scratch_home_env(home: Path) -> dict[str, str]:
+    """A child environment in which the operator's venue is only reachable by defect:
+    `HOME` is a scratch tree (with the `.gstack` project parent pre-made, so a leaked
+    write CAN land and be seen) and both levers are stripped, leaving the child's own
+    `tools/conftest.py` as the only thing standing between an emit and `$HOME`."""
+    (home / ".gstack" / "projects" / "arhugula-v2").mkdir(parents=True)
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("HARNESS_") and k != "ARC_METRICS_QUEUE_DIR"
+    }
+    env["HOME"] = str(home)
+    return env
+
+
+def _no_ledger_under(home: Path) -> None:
+    leaked = sorted(p for p in (home / ".gstack").rglob("loop_status.md"))
+    assert leaked == [], (
+        f"an emit reached the operator-shaped venue under the child's HOME: "
+        f"{[str(p) for p in leaked]}\n{leaked[0].read_text() if leaked else ''}"
+    )
+
+
+def test_a_mixed_run_never_reaches_the_operator_venue(tmp_path):
+    """(7) End to end: a mixed [tools, axis] child leaves the operator venue untouched.
+
+    The child exercises every phase class in one run — collection imports of both
+    modules, module-fixture setup under the bracket, module teardown (bracketed:
+    pytest tears down to the next item's level inside the CURRENT item's teardown
+    phase — measured), the axis item running with the bracket off, and session
+    teardown after a non-tools FINAL item, the phase a per-item redirect can never
+    reach. The assertion is the CONTRACT, not a mechanism: no `loop_status.md`
+    anywhere under the scratch HOME. Which layer catches an emit is deliberately
+    invisible here; the probes discriminate the layers (disable the conftest belt and
+    a session-teardown or import-time emit reds this — measured, round 11).
     """
     axis = "harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none"
     mine = (
@@ -328,11 +357,8 @@ def test_the_phases_outside_any_tools_item_emit_nothing(tmp_path):
         "::test_session_venue_is_redirected_away_from_the_default"
     )
     root = Path(__file__).resolve().parent.parent
-    queue = tmp_path / "arc-metrics-queue"
-    queue.mkdir()
-    fallback = tmp_path / "loop_status.md"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
-    env["ARC_METRICS_QUEUE_DIR"] = str(queue)
+    home = tmp_path / "home"
+    env = _scratch_home_env(home)
 
     proc = subprocess.run(
         [
@@ -357,28 +383,21 @@ def test_the_phases_outside_any_tools_item_emit_nothing(tmp_path):
         f"the canary child itself broke, so this witnesses nothing:\n"
         f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
     )
-    assert not fallback.exists(), (
-        "an emit from a phase outside every tools item's bracket reached the computed "
-        "fallback — under a production environment that is the operator's ledger:\n"
-        f"{fallback.read_text() if fallback.exists() else ''}"
-    )
+    _no_ledger_under(home)
 
 
-def test_collecting_the_whole_tools_suite_emits_nothing(tmp_path):
-    """(8) Import/collection time is emit-free for EVERY tools module — witnessed.
+def test_collecting_the_whole_tools_suite_never_reaches_the_operator_venue(tmp_path):
+    """(8) Import/collection time, for EVERY tools module, under the same contract.
 
-    Case 7's child imports only the modules its two items live in. Collection imports
-    every `tools/` test module with the redirect absent (`pytest_runtest_protocol` has
-    not started), so a module-level emit anywhere in the suite would resolve the
-    computed fallback. Same canary shape: own the fallback, then assert no import put
-    a row in it.
+    Case 7's child imports only the modules its two items live in; collection imports
+    all of them, before any `pytest_runtest_protocol` has started. The belt is what
+    covers this phase (`pytest_configure` precedes collection), and the probe pair is
+    the discriminator: an import-time emit stays green with the belt on and reds with
+    it disabled (measured, round 11).
     """
     root = Path(__file__).resolve().parent.parent
-    queue = tmp_path / "arc-metrics-queue"
-    queue.mkdir()
-    fallback = tmp_path / "loop_status.md"
-    env = {k: v for k, v in os.environ.items() if not k.startswith("HARNESS_")}
-    env["ARC_METRICS_QUEUE_DIR"] = str(queue)
+    home = tmp_path / "home"
+    env = _scratch_home_env(home)
 
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "--collect-only", "tools/"],
@@ -392,9 +411,4 @@ def test_collecting_the_whole_tools_suite_emits_nothing(tmp_path):
         f"collection itself broke, so this witnesses nothing:\n"
         f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}"
     )
-    assert not fallback.exists(), (
-        "importing a tools module emitted a loop row — collection runs before any "
-        "redirect exists, so under a production environment that row lands in the "
-        "operator's ledger:\n"
-        f"{fallback.read_text() if fallback.exists() else ''}"
-    )
+    _no_ledger_under(home)

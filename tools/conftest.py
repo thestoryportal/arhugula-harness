@@ -17,13 +17,21 @@ does not, and a file written tomorrow will not either. `emit_loop_row` also shel
 to bash and several door tests drive `merge_door.py` as a real SUBPROCESS, so
 monkeypatching the Python seam cannot reach them; only the inherited environment can.
 Hence one enforcement point for the whole directory: no `tools/` test can reach the
-production ledger by omission. The bracket is per-ITEM, so two phases run outside it —
+production ledger by omission. The bracket is per-ITEM, so phases run outside it —
 collection, and session-scope fixture teardown after a non-tools FINAL item in a mixed
 run (module scope is bracketed: pytest tears down to the next item's level inside the
-current item's teardown phase — measured). Covering them would hold the variable alive
-outside tools items, the exact session-wide leak rejected below; there the boundary is
-instead the witnessed emptiness claim that nothing under `tools/` emits in those phases
-(`test_loop_status_isolation.py` cases 7–8, the owned-fallback canaries).
+current item's teardown phase — measured). Covering those with the venue variable would
+hold a `HARNESS_*` name alive outside tools items, the exact session-wide leak rejected
+below. They are covered instead by the BELT: `pytest_configure` — which runs before
+collection imports any tools module — points `ARC_METRICS_QUEUE_DIR`, the input
+`loop_status_path()` computes its fallback from (and a documented override seam,
+C-HE-05), into the same session-owned throwaway; `pytest_unconfigure` restores it after
+the last teardown. One enforcer for everything the bracket cannot reach: import time,
+collection, any-scope fixture teardown, and every subprocess a test forgets to isolate
+— the operator's store is simply not computable while the session is alive. The
+variable is outside the `HARNESS_*` namespace RuntimeConfig consumes and nothing under
+`harness-*` reads it, so the axis invariant is untouched.
+(`test_loop_status_isolation.py` cases 7–8 witness the contract end to end.)
 
 This lives HERE and not in the root conftest deliberately. Every producer of loop rows
 is under `tools/` (`reservations.emit_loop_row`, its `merge_door` callers, the hook
@@ -37,6 +45,7 @@ invariants true instead of trading one for the other.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 import tempfile
@@ -45,8 +54,28 @@ from pathlib import Path
 import pytest
 
 _VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
+_QUEUE_ENV = "ARC_METRICS_QUEUE_DIR"
 _DIR = Path(__file__).resolve().parent
 _ROOT_KEY: pytest.StashKey[Path] = pytest.StashKey()
+_QUEUE_SAVED: pytest.StashKey[str | None] = pytest.StashKey()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """The session-wide belt under the per-item bracket (round 11).
+
+    Every path to the operator's ledger goes through `loop_status_path()`'s fallback,
+    which is computed from `ARC_METRICS_QUEUE_DIR`. Owning that variable for the whole
+    session — set here, before collection imports a single tools module; restored at
+    `pytest_unconfigure`, after the last fixture teardown — closes the entire phase
+    class at one joint instead of witnessing phases one by one. `arc_metrics.QUEUE_DIR`
+    is read at import time, so the ordering is load-bearing: configure precedes
+    collection by pytest contract. Plain `os.environ` rather than `MonkeyPatch` on
+    purpose — the restore point (unconfigure) is not a context exit.
+    """
+    belt = _venue_root(config) / "belt" / "arc-metrics-queue"
+    belt.mkdir(parents=True)
+    config.stash[_QUEUE_SAVED] = os.environ.get(_QUEUE_ENV)
+    os.environ[_QUEUE_ENV] = str(belt)
 
 
 def _venue_root(config: pytest.Config) -> Path:
@@ -100,6 +129,12 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     correctness. `test_the_session_temp_root_is_removed_when_the_session_ends` is the
     witness.
     """
+    if _QUEUE_SAVED in config.stash:
+        saved = config.stash[_QUEUE_SAVED]
+        if saved is None:
+            os.environ.pop(_QUEUE_ENV, None)
+        else:
+            os.environ[_QUEUE_ENV] = saved
     root = config.stash.get(_ROOT_KEY, None)
     if root is not None:
         shutil.rmtree(root, ignore_errors=True)
