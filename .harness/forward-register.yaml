@@ -10438,8 +10438,10 @@ items:
     the trap now restores fail-fast at one attempt. This half is a budget-vs-timeout
     interaction. hook_safe_worktree_remove holds the worktree mutex from lib.sh:1024 to
     :1123 and BOTH retried calls are inside it (worktree move :1077, worktree remove :1099).
-    Each can spend <= 11.3 s worst case (~5.6 s expected), so <= 22.6 s added to the critical
-    section, against waiters whose HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS default is 30 s
+    Each can spend <= 11.3 s worst case (~5.6 s expected). r7 sharpened the count: the RESTORE
+    path is a THIRD retried call in the same span, so the worst case is <= 33.9 s, which
+    EXCEEDS rather than merely erodes the waiters whose
+    HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS default is 30 s
     (:428) -- SessionStart lease registration at :488/:526/:561. NOT FIXED HERE: the retry
     only engages under contention, the worst case needs sustained collision across two git
     ops, and both fixes are design changes (shrink the mutex span, or a lock-aware budget via
