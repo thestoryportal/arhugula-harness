@@ -87,6 +87,83 @@ hook_bounded() {
   return "$rc"
 }
 
+# True when git's stderr describes LOCAL lock contention. git serialises index, ref
+# and config writes through a `<target>.lock` sidecar created with O_EXCL, so two
+# lanes touching one repo collide transiently and the loser aborts before doing any
+# work. Two shapes, both measured against git 2.39:
+#
+#   fatal: Unable to create '…/index.lock': File exists.          (index, and ref —
+#     a ref collision prints `cannot lock ref '…':` in FRONT of this same clause)
+#   error: could not lock config file .git/config: File exists    (config)
+#
+# The config wording is matched on its own because it names no `.lock` file at all,
+# and a pattern written from the index/ref messages alone silently misses the
+# `gc.auto 0` write of C-HE-11 §2 — the one B-201 is about.
+#
+# `File exists` is required, not incidental: it is what separates a lock another
+# process is holding from a lock git refuses on the merits. `cannot lock ref 'x': is
+# at <a> but expected <b>` is a stale-expectation conflict that no amount of waiting
+# resolves, so matching the bare phrase would burn the whole budget on it and then
+# file a `lock_contention` NOTIFY naming a cause that never happened.
+_hook_git_lock_contention() {
+  printf '%s' "$1" | grep -Eq \
+    "(Unable to create .*\.lock|could not lock config file [^:]*): File exists|Another git process seems to be running"
+}
+
+# Run a git command, retrying ONLY local lock contention, on the C-HE-11 §3 budget:
+# full jitter over {base 100 ms, factor 2, cap 5 s, max 8 attempts}. Exhaustion FAILS
+# the git operation (git's own exit code and stderr survive) and emits a NOTIFY.
+#
+# This is LOCAL-git retry, deliberately unrelated to the merge-door lease, which
+# stays fail-fast (C-HE-06 §2). Hence the `git-ref-lock:` cause: a lock collision is
+# environmental, and must never be read as merge-door budget spend (C-HE-13 §3).
+#
+# stdout is the CALLER's, byte for byte — only stderr is captured, because that is
+# where git puts the text the retry decision reads. Merging the two streams would
+# hand `hook_git_retry rev-parse HEAD` a stdout git never wrote. The cost of the
+# capture is that stderr arrives when the command ends rather than streaming; every
+# caller here runs a short, quiet plumbing op, so nothing is waiting on progress.
+#
+# stderr goes to a FILE rather than a `$(…)` capture, and that choice is load-bearing:
+# a command substitution runs git in a subshell, which resets this shell's traps to
+# default. `hook_safe_worktree_remove` arms HUP/INT/TERM handlers around exactly the
+# `worktree move` this wraps, so the subshell form silently disarmed its interrupt
+# recovery — caught as three timed-out signal witnesses in test_lib.sh. Run as a plain
+# foreground child, git keeps the trap semantics the callsite had before the retry.
+#
+# The NOTIFY writer lives in loop_lib.sh, one layer ABOVE this file, and lib.sh must
+# not source it (loop_lib.sh depends on lib.sh; the reverse would close a cycle). So
+# a caller that sourced only lib.sh has no ledger — reported on stderr through the
+# SAME arm as a ledger that refuses the write, because an unrecorded NOTIFY is a lost
+# operator signal either way and must never be a silent one.
+# Usage: hook_git_retry [-C dir] <git args...>
+hook_git_retry() {
+  local attempt=0 delay_ms=100 errfile err rc
+  errfile=$(mktemp) || { echo "hook_git_retry: could not create a stderr capture" >&2; return 1; }
+  while :; do
+    git "$@" 2>"$errfile"; rc=$?
+    err=$(cat "$errfile")
+    { [ "$rc" -eq 0 ] || ! _hook_git_lock_contention "$err"; } && break
+    attempt=$((attempt + 1))
+    [ -n "${HOOK_GIT_RETRY_TRACE:-}" ] && echo "$attempt" >> "$HOOK_GIT_RETRY_TRACE"
+    if [ "$attempt" -ge 8 ]; then
+      if ! command -v loop_log_structured >/dev/null 2>&1 \
+        || ! loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" \
+               "git-ref-lock:transient-retry:lock_contention" \
+               "git $* failed after $attempt lock retries"; then
+        echo "hook_git_retry: git $* exhausted $attempt lock retries, and the NOTIFY row could NOT be written" >&2
+      fi
+      break
+    fi
+    sleep "$(awk -v d="$delay_ms" -v r="$RANDOM" 'BEGIN { printf "%.3f", (d * (r / 32767)) / 1000 }')"
+    delay_ms=$((delay_ms * 2))
+    [ "$delay_ms" -gt 5000 ] && delay_ms=5000
+  done
+  rm -f "$errfile"
+  [ -n "$err" ] && printf '%s\n' "$err" >&2
+  return "$rc"
+}
+
 # The §12.1 step-2 workspace_state_hash recipe: sha256(head|prs|forks|batch)[:12].
 # Usage: hook_state_hash <head8> <prs_csv> <forks_count> <batch_path>
 hook_state_hash() {
@@ -964,7 +1041,7 @@ hook_safe_worktree_remove() {
   trap '_hook_worktree_interrupted 129' HUP
   trap '_hook_worktree_interrupted 130' INT
   trap '_hook_worktree_interrupted 143' TERM
-  git -C "$root" worktree move "$wt" "$quarantine"
+  hook_git_retry -C "$root" worktree move "$wt" "$quarantine"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f "$transaction" 2>/dev/null
@@ -986,7 +1063,7 @@ hook_safe_worktree_remove() {
           identity_rc=$?
           case "$identity_rc" in
             0)
-              git -C "$root" worktree remove "$quarantine"
+              hook_git_retry -C "$root" worktree remove "$quarantine"
               rc=$?
               ;;
             1) rc=10 ;;

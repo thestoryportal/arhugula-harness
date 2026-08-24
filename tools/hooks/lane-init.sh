@@ -583,7 +583,10 @@ if [ "$(git config --get gc.auto 2>/dev/null)" != "0" ]; then
   # A discarded failure here silently leaves automatic GC enabled — the very concurrency
   # hazard §2 exists to remove — with nothing to notice. The lane still opens (gc.auto is
   # hygiene, not a correctness invariant of the lane), but never quietly.
-  if ! git config gc.auto 0 2>/dev/null; then
+  # Through the §3 retry: a concurrent lane holding `.git/config.lock` is the ordinary
+  # way this write loses, and it clears in milliseconds. Only an exhausted budget is a
+  # real failure, and only that reaches the warning below (B-201 narrows to that case).
+  if ! hook_git_retry config gc.auto 0 2>/dev/null; then
     echo "lane-init: could NOT set gc.auto=0 (C-HE-11 §2) — automatic git gc stays enabled for this repo" >&2
   fi
 fi

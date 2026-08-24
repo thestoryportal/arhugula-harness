@@ -7,6 +7,11 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 [ -f "$_LIB" ] || exit 2
 # shellcheck source=lib.sh
 . "$_LIB"
+# hook_git_retry's exhaustion NOTIFY is written by loop_lib.sh, which layers on top of
+# lib.sh. Sourced here so a lock that outlasts the §3 budget leaves a durable row rather
+# than only a line on this script's stderr.
+# shellcheck source=loop_lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/loop_lib.sh"
 
 MODE=remove
 if [ "$#" -eq 2 ] && [ "$1" = "--status" ]; then

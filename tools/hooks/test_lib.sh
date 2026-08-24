@@ -866,5 +866,136 @@ case "$DETACHED_OUT" in
   *) bad "residue missing detached-HEAD line: '$DETACHED_OUT'" ;;
 esac
 
+
+# ── hook_git_retry — C-HE-11 §3 bounded local-git lock retry (U-HE-32) ────────
+# The ledger writer lives one layer ABOVE lib.sh (loop_lib.sh depends on lib.sh,
+# never the reverse), so these assertions source it the way every real caller
+# does — lib.sh first, then loop_lib.sh — instead of stubbing the writer.
+. "$SCRIPT_DIR/loop_lib.sh"
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared/loop_status.md"
+GR="$REPO/gitretry"
+git init -q -b main "$GR"
+git -C "$GR" config user.email t@t.t; git -C "$GR" config user.name t
+( cd "$GR" && echo x > f && git add -A && git commit -qm base )
+TRACE="$REPO/git-retry-trace"
+
+# The lock is cleared on ATTEMPT COUNT, never on a wall-clock sleep. Full jitter
+# means seven draws can in principle sum to almost nothing, so a `sleep 0.4`
+# unlocker would let the budget exhaust before it fired — a flake whose rate
+# depends on load. Watching the trace ties the clear to the thing under test.
+gr_unlock_after_attempts() {
+  local lock="$1" n="$2" _gr_i=0
+  # BOUNDED. A regression that stops retrying never grows the trace, and an
+  # unbounded poller would then spin forever -- CI would HANG rather than go red.
+  # At the bound the lock is cleared regardless, so the op completes and the
+  # attempt-count assertion below is what reports the failure.
+  ( while [ "$(wc -l < "$TRACE" 2>/dev/null | tr -d ' ')" -lt "$n" ] && [ "$_gr_i" -lt 500 ]; do
+      sleep 0.01; _gr_i=$((_gr_i + 1))
+    done
+    rm -f "$lock" ) &
+}
+gr_attempts() { wc -l < "$TRACE" | tr -d ' '; }
+
+# (1) A lock that clears mid-flight: the op succeeds, and it demonstrably retried.
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+gr_unlock_after_attempts "$GR/.git/index.lock" 2
+GR_UNLOCKER=$!
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" add -A
+eq "transient index.lock clears -> op succeeds" "$?" "0"
+wait "$GR_UNLOCKER" 2>/dev/null
+[ "$(gr_attempts)" -ge 2 ] && ok "transient index.lock retried ($(gr_attempts) attempts)" \
+  || bad "expected >=2 attempts, got '$(gr_attempts)'"
+
+# (2) A lock that never clears: exactly 8 attempts, the op fails with git's own
+#     exit code, git's error still reaches stderr, and a NOTIFY row lands under a
+#     cause that never routes to the merge-door budget.
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" add -A \
+  >"$REPO/gr-held.out" 2>"$REPO/gr-held.err"
+eq "held index.lock -> op fails with git's exit code" "$?" "128"
+eq "held index.lock exhausts exactly 8 attempts" "$(gr_attempts)" "8"
+grep -q "index.lock" "$REPO/gr-held.err" \
+  && ok "exhaustion still reports git's error on stderr" \
+  || bad "exhaustion swallowed git's error: '$(cat "$REPO/gr-held.err")'"
+grep -q 'cause=git-ref-lock:transient-retry:lock_contention' "$HARNESS_LOOP_STATUS_PATH" \
+  && ok "exhaustion emits the git-ref-lock NOTIFY" \
+  || bad "no git-ref-lock NOTIFY row: '$(cat "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null)'"
+grep -q '| NOTIFY |' "$HARNESS_LOOP_STATUS_PATH" \
+  && ok "the exhaustion row is a NOTIFY" || bad "exhaustion row is not a NOTIFY"
+grep -q 'cause=merge-door' "$HARNESS_LOOP_STATUS_PATH" \
+  && bad "git lock exhaustion must NOT route to the merge-door budget" \
+  || ok "exhaustion stays off the merge-door budget"
+rm -f "$GR/.git/index.lock"
+
+# (3) A failure that is not lock contention is returned immediately — retrying a
+#     genuine error would burn the budget and delay the real diagnosis.
+: > "$TRACE"
+hook_git_retry -C "$GR" rev-parse --verify refs/heads/no-such-branch \
+  >/dev/null 2>"$REPO/gr-nonlock.err"
+GR_RC=$?
+[ "$GR_RC" -ne 0 ] && ok "non-lock failure propagates git's exit code ($GR_RC)" \
+  || bad "non-lock failure returned 0"
+eq "non-lock failure is not retried" "$(gr_attempts)" "0"
+
+# (4) The caller's stdout is git's stdout, byte for byte. `git checkout -b`
+#     announces itself on STDERR, so a helper that merged the two streams would
+#     hand the caller a stdout it never wrote — silently corrupting anyone who
+#     parses it.
+hook_git_retry -C "$GR" checkout -b passthrough \
+  >"$REPO/gr-pass.out" 2>"$REPO/gr-pass.err"
+eq "success keeps stderr out of stdout" "$(cat "$REPO/gr-pass.out")" ""
+grep -q "passthrough" "$REPO/gr-pass.err" \
+  && ok "git's stderr reaches the caller's stderr" \
+  || bad "git's stderr was swallowed: '$(cat "$REPO/gr-pass.err")'"
+eq "stdout is byte-exact" "$(hook_git_retry -C "$GR" rev-parse HEAD)" "$(git -C "$GR" rev-parse HEAD)"
+
+# (5) The config-lock shape. git says `could not lock config file …: File exists`
+#     with no `.lock` anywhere in the text, so a pattern written only against the
+#     index/ref wording would miss it — and this is the exact write C-HE-11 §2
+#     makes (`gc.auto 0`), whose unretried failure is B-201.
+: > "$TRACE"
+: > "$GR/.git/config.lock"
+gr_unlock_after_attempts "$GR/.git/config.lock" 2
+GR_UNLOCKER=$!
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" config gc.auto 0
+eq "transient config.lock clears -> op succeeds" "$?" "0"
+wait "$GR_UNLOCKER" 2>/dev/null
+[ "$(gr_attempts)" -ge 2 ] && ok "config-lock contention is retried ($(gr_attempts) attempts)" \
+  || bad "config-lock contention not retried: '$(gr_attempts)' attempts"
+eq "the retried config write actually landed" "$(git -C "$GR" config --get gc.auto)" "0"
+
+# (6) git runs as a foreground child of the CALLING shell. A `$(…)` capture would run
+#     it in a subshell, and a subshell resets this shell's traps to default — silently
+#     disarming the HUP/INT/TERM interrupt recovery that hook_safe_worktree_remove arms
+#     around the very `worktree move` this now wraps. The shim reports who forked it.
+GR_SHIM="$REPO/shim"
+mkdir -p "$GR_SHIM"
+cat > "$GR_SHIM/git" <<'GRSHIM'
+#!/usr/bin/env bash
+echo "$PPID" > "$GIT_SHIM_PPID_FILE"
+GRSHIM
+chmod +x "$GR_SHIM/git"
+GIT_SHIM_PPID_FILE="$REPO/shim-ppid" PATH="$GR_SHIM:$PATH" hook_git_retry status
+eq "git is forked by the calling shell, so its traps stay armed" \
+  "$(cat "$REPO/shim-ppid")" "$$"
+
+# (7) `cannot lock ref '…': is at <a> but expected <b>` is a stale-expectation conflict,
+#     not contention — no amount of waiting resolves it. Retrying would burn the whole
+#     budget and then file a NOTIFY naming a `lock_contention` that never happened, which
+#     C-HE-13 §3 reads as pilot friction. The discriminator is `File exists`.
+: > "$TRACE"
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" update-ref refs/heads/main \
+  "$(git -C "$GR" rev-parse HEAD)" 0000000000000000000000000000000000000001 \
+  >/dev/null 2>"$REPO/gr-stale.err"
+GR_STALE_RC=$?
+[ "$GR_STALE_RC" -ne 0 ] && ok "stale-expectation ref conflict still fails ($GR_STALE_RC)" \
+  || bad "stale-expectation ref conflict returned 0"
+grep -q "but expected" "$REPO/gr-stale.err" \
+  && ok "the stale-expectation error reaches the caller's stderr" \
+  || bad "stale-expectation error swallowed: '$(cat "$REPO/gr-stale.err")'"
+eq "a stale-expectation ref conflict is not retried" "$(gr_attempts)" "0"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
