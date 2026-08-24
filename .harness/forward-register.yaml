@@ -10554,15 +10554,28 @@ items:
     teardown together. The path guard on it is load-bearing and was NOT assumed: a
     subdirectory conftest''s runtest hooks fire for items ANYWHERE in the run, measured
     on a scratch tree before building on it, and without the guard the axis test sees
-    the variable again. Six witnesses now, each pinning a distinct property — dropping
-    the guard reds only the axis-leak one, reverting to a function-scoped fixture reds
-    only the fixture-phase one.
+    the variable again. Post-resume codex rounds 9–12 then hardened the witnesses
+    themselves: the module-phase witness now owns its computed fallback before emitting
+    (it cannot commit the damage it detects); per-scenario witnessing of the phases
+    outside the per-item bracket was shown non-convergent and replaced by the BELT —
+    pytest_configure owns ARC_METRICS_QUEUE_DIR (the input the shell fallback is
+    computed from, C-HE-05) for the whole session through a stashed MonkeyPatch undone
+    at pytest_unconfigure, so import time, collection, any-scope teardown and
+    un-isolated child processes all resolve an owned belt directory; round 12 APPROVEd.
+    The 3-lens gate then caught the belt carrying only a presence witness plus a
+    hand-rolled two-armed restore (the round-4 shape recurring): the restore now
+    delegates to the stashed MonkeyPatch, a behavioral witness lifts the bracket and
+    asserts the real writer resolves the belt fallback (subscript read, so a
+    belt-deletion probe reds before any emit), and a driver witnesses the
+    configure/unconfigure pair in both prior states. Every case is mutation-probed;
+    the tally is deliberately not restated in prose — counts drifted twice this arc,
+    the module is the source of truth.
     Witnesses at tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to
     end: the full 119-test door suite left the operator''s ledger byte-identical
     (1097455 bytes both sides). The 6288 rows ALREADY in the ledger are deliberately NOT
-    removed — it is append-only by contract (C-HE-09 §2) and is operator state outside this
+    removed — it is append-only by contract (C-HE-09 §1; §2 is venue determinism) and is operator state outside this
     repo, so truncating it is the operator''s call; the pending synthetic gate was cleared the
     contract-sanctioned way, with a RESOLVED-HIL row.'
   council: 'NO — a hermeticity boundary with one obvious enforcement point; no cross-axis

@@ -315,6 +315,64 @@ def test_the_belt_owns_the_computed_fallback_for_the_whole_session():
     assert ".gstack" not in belt, f"belt still resolves inside the operator's store: {belt!r}"
 
 
+def test_the_belt_governs_the_real_writer_when_the_bracket_is_lifted(monkeypatch):
+    """(7b) The belt's BEHAVIOR, not just its presence (gate lens: witness-adequacy).
+
+    Lift the bracket and drive the real shell writer: the row must land in the
+    belt-derived fallback. This is the regression witness for belt deletion — the
+    subscript read is deliberate: with the belt gone this test errors on the missing
+    variable BEFORE the emit runs, so probing the belt can never re-inflict the
+    operator-ledger damage (the observation-first discipline of case 2, inverted).
+    """
+    belt = os.environ["ARC_METRICS_QUEUE_DIR"]  # KeyError = belt gone: red pre-emit
+    fallback = Path(belt).parent / "loop_status.md"
+    monkeypatch.delenv(_VENUE_ENV)
+    before = fallback.read_text() if fallback.exists() else ""
+    rs.emit_loop_row("NOTIFY", "b-208-witness", "b-208:belt:probe", "row via the belt fallback")
+    appended = fallback.read_text()[len(before) :]
+    assert "b-208:belt:probe" in appended, (
+        f"the real writer did not resolve the belt-derived fallback: {appended!r}"
+    )
+
+
+def test_the_belt_is_paired_configure_sets_unconfigure_restores(monkeypatch):
+    """(7c) Drive the conftest hook pair directly: configure sets, unconfigure restores.
+
+    Both prior states — variable set and variable absent — because the driver controls
+    them, which is exactly what a live pytest session cannot witness (the process exits
+    right after unconfigure). Delete the `undo()` in `pytest_unconfigure` and both arms
+    red; the stashed-`MonkeyPatch` restore replaced the hand-rolled two-armed shape
+    whose arms nothing could reach (gate lens: witness-adequacy).
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "b208_conftest_driver", Path(__file__).resolve().parent / "conftest.py"
+    )
+    assert spec is not None and spec.loader is not None
+    cf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cf)
+
+    class _Cfg:  # the two hooks touch only .stash
+        def __init__(self) -> None:
+            self.stash = pytest.Stash()
+
+    for prior in ("sentinel-prior-queue", None):
+        cfg = _Cfg()
+        if prior is None:
+            monkeypatch.delenv("ARC_METRICS_QUEUE_DIR", raising=False)
+        else:
+            monkeypatch.setenv("ARC_METRICS_QUEUE_DIR", prior)
+        cf.pytest_configure(cfg)
+        inside = os.environ.get("ARC_METRICS_QUEUE_DIR", "")
+        assert "harness-loop-status-" in inside, f"configure did not set the belt: {inside!r}"
+        cf.pytest_unconfigure(cfg)
+        assert os.environ.get("ARC_METRICS_QUEUE_DIR") == prior, (
+            f"unconfigure did not restore prior state {prior!r}: "
+            f"{os.environ.get('ARC_METRICS_QUEUE_DIR')!r}"
+        )
+
+
 def _scratch_home_env(home: Path) -> dict[str, str]:
     """A child environment in which the operator's venue is only reachable by defect:
     `HOME` is a scratch tree (with the `.gstack` project parent pre-made, so a leaked
@@ -348,8 +406,10 @@ def test_a_mixed_run_never_reaches_the_operator_venue(tmp_path):
     teardown after a non-tools FINAL item, the phase a per-item redirect can never
     reach. The assertion is the CONTRACT, not a mechanism: no `loop_status.md`
     anywhere under the scratch HOME. Which layer catches an emit is deliberately
-    invisible here; the probes discriminate the layers (disable the conftest belt and
-    a session-teardown or import-time emit reds this — measured, round 11).
+    invisible here, and this canary reds only when an uncovered-phase emit EXISTS and
+    nothing catches it — the compound probe (INSERT a session-teardown emit AND
+    disable the belt) reds it, the same emit with the belt on is absorbed (both
+    measured). Belt deletion alone is pinned by cases 7a–7c, not here.
     """
     axis = "harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none"
     mine = (
@@ -391,9 +451,10 @@ def test_collecting_the_whole_tools_suite_never_reaches_the_operator_venue(tmp_p
 
     Case 7's child imports only the modules its two items live in; collection imports
     all of them, before any `pytest_runtest_protocol` has started. The belt is what
-    covers this phase (`pytest_configure` precedes collection), and the probe pair is
-    the discriminator: an import-time emit stays green with the belt on and reds with
-    it disabled (measured, round 11).
+    covers this phase (`pytest_configure` precedes collection), and the compound probe
+    is the discriminator: an INSERTED import-time emit stays green with the belt on
+    and reds this with the belt disabled (both measured). Belt deletion alone — with
+    no such emit in the tree — is pinned by cases 7a–7c, not here.
     """
     root = Path(__file__).resolve().parent.parent
     home = tmp_path / "home"

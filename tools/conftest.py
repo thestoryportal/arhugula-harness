@@ -6,7 +6,8 @@ environment and falls back to the operator's real
 unset -- the default state of every pytest process. Any test reaching a real emit path
 therefore appended real `DEFERRED-HIL` rows to the venue the SessionStart hook reads,
 where a synthetic `pr-1` gate nags forever and only a hand-written `RESOLVED-HIL`
-clears it. It is append-only by contract (C-HE-09 §2), so the debris is not removable
+clears it. It is append-only by contract (C-HE-09 §1, the single-file atomic-append
+guarantee; §2 is venue determinism), so the debris is not removable
 after the fact: by the time this landed, 6288 of the ledger's 6589 lines (1.07 MB) were
 synthetic `lane=A` fixture rows and only 82 came from real lanes — the rest are `lane=-`
 infra rows and the file's own header, so those two figures are not a partition of the whole.
@@ -45,7 +46,6 @@ invariants true instead of trading one for the other.
 
 from __future__ import annotations
 
-import os
 import pathlib
 import shutil
 import tempfile
@@ -57,7 +57,7 @@ _VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
 _QUEUE_ENV = "ARC_METRICS_QUEUE_DIR"
 _DIR = Path(__file__).resolve().parent
 _ROOT_KEY: pytest.StashKey[Path] = pytest.StashKey()
-_QUEUE_SAVED: pytest.StashKey[str | None] = pytest.StashKey()
+_BELT_MP: pytest.StashKey[pytest.MonkeyPatch] = pytest.StashKey()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -69,13 +69,16 @@ def pytest_configure(config: pytest.Config) -> None:
     `pytest_unconfigure`, after the last fixture teardown — closes the entire phase
     class at one joint instead of witnessing phases one by one. `arc_metrics.QUEUE_DIR`
     is read at import time, so the ordering is load-bearing: configure precedes
-    collection by pytest contract. Plain `os.environ` rather than `MonkeyPatch` on
-    purpose — the restore point (unconfigure) is not a context exit.
+    collection by pytest contract. A stashed `MonkeyPatch` instance carries the set:
+    its `undo()` at unconfigure IS the restore, deleting the hand-rolled two-armed
+    save/restore whose arms nothing could witness — the same defect shape round 4
+    removed for the venue variable (gate lens: witness-adequacy).
     """
     belt = _venue_root(config) / "belt" / "arc-metrics-queue"
     belt.mkdir(parents=True)
-    config.stash[_QUEUE_SAVED] = os.environ.get(_QUEUE_ENV)
-    os.environ[_QUEUE_ENV] = str(belt)
+    mp = pytest.MonkeyPatch()
+    config.stash[_BELT_MP] = mp
+    mp.setenv(_QUEUE_ENV, str(belt))
 
 
 def _venue_root(config: pytest.Config) -> Path:
@@ -129,12 +132,9 @@ def pytest_unconfigure(config: pytest.Config) -> None:
     correctness. `test_the_session_temp_root_is_removed_when_the_session_ends` is the
     witness.
     """
-    if _QUEUE_SAVED in config.stash:
-        saved = config.stash[_QUEUE_SAVED]
-        if saved is None:
-            os.environ.pop(_QUEUE_ENV, None)
-        else:
-            os.environ[_QUEUE_ENV] = saved
+    mp = config.stash.get(_BELT_MP, None)
+    if mp is not None:
+        mp.undo()
     root = config.stash.get(_ROOT_KEY, None)
     if root is not None:
         shutil.rmtree(root, ignore_errors=True)
