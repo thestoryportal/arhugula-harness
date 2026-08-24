@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `de4efac4b24e` |
-| `last_refreshed` | 2026-08-23T00:00:00Z |
-| `git_head` | `d0198201` —  |
+| `workspace_state_hash` | `f4b373b68437` |
+| `last_refreshed` | 2026-08-24T00:00:00Z |
+| `git_head` | `98b10cbe` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1438 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1436 | 2026-08-23 | U-HE-31 lane-init landed (#1434 + refresh #1435); this row carries the merge door's own gate finding |
 | PR #1434 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1430 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1431 | 2026-08-23 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| 1428 | 2026-08-23 | U-HE-29 session audit landed (doc-only); makes the roadmap_status pointer resolve |
 
 ---
 
