@@ -1007,7 +1007,9 @@ eq "a stale-expectation ref conflict is not retried" "$(gr_attempts)" "0"
 #     the drawn sleeps are checked against their own ceiling, so load cannot flake it.
 : > "$TRACE"
 : > "$GR/.git/index.lock"
+GR_T0=$SECONDS
 HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" add -A >/dev/null 2>&1
+GR_ELAPSED=$((SECONDS - GR_T0))
 eq "the ceiling doubles from 100 ms and caps at 5 s" \
   "$(gr_ceilings)" "100 200 400 800 1600 3200 5000 - "
 # BOTH ends of the range must be exercised. "<= ceiling" alone is satisfied by an
@@ -1023,6 +1025,14 @@ GR_JITTER=$(awk '$2 != "-" {
 eq "every wait is drawn from [0, ceiling], with both ends of the range exercised" \
   "$(echo "$GR_JITTER" | awk '{ print ($1 == 0 && $2 > 0 && $3 > 0) ? "ok" \
       : "no (over=" $1 " below=" $2 " positive=" $3 ")" }')" "ok"
+# And that the waits were actually TAKEN. The assertions above read values the helper
+# wrote BEFORE sleeping, so deleting `sleep "$slept"` left them all green (r3) -- the
+# lock here is released on attempt count, so nothing else notices the missing delay. A
+# LOWER bound on elapsed time is the load-immune shape: load can only make it slower.
+GR_SLEPT_S=$(awk '$3 != "-" { t += $3 } END { printf "%d", t }' "$TRACE")
+[ "${GR_ELAPSED:-0}" -ge "$GR_SLEPT_S" ] \
+  && ok "the waits were actually taken (${GR_ELAPSED}s elapsed >= ${GR_SLEPT_S}s slept)" \
+  || bad "elapsed ${GR_ELAPSED}s is below the ${GR_SLEPT_S}s the trace claims to have slept"
 rm -f "$GR/.git/index.lock"
 
 # (9) A HELD ref lock — `refs/heads/<name>.lock`. The contract names ref AND index
@@ -1079,26 +1089,61 @@ GR_SHIM2="$REPO/shim2"
 mkdir -p "$GR_SHIM2"
 cat > "$GR_SHIM2/git" <<'GRSHIM2'
 #!/usr/bin/env bash
-if [ "${3:-} ${4:-}" = "worktree move" ]; then
-  n=$(cat "$GIT_SHIM_COUNT" 2>/dev/null || echo 0)
-  if [ "$n" -lt 1 ]; then
-    echo $((n + 1)) > "$GIT_SHIM_COUNT"
-    echo "fatal: Unable to create '/tmp/wt/.git/index.lock': File exists." >&2
-    exit 128
-  fi
-fi
+# Fail the FIRST call of EACH wrapped subcommand, once, via a per-subcommand marker.
+# A single shared budget is NOT equivalent and was the bug in the first version of this
+# shim: `worktree move` retried twice, consumed the whole budget, and `worktree remove`
+# was never contended -- so reverting the remove call site to raw git left the suite
+# green. Caught by mutation probe, which is the only reason it is written this way.
+case "${3:-} ${4:-}" in
+  "worktree move"|"worktree remove")
+    marker="$GIT_SHIM_COUNT.$(echo "${3:-} ${4:-}" | tr ' ' '-')"
+    if [ ! -e "$marker" ]; then
+      : > "$marker"
+      echo "fatal: Unable to create '/tmp/wt/.git/index.lock': File exists." >&2
+      exit 128
+    fi
+    ;;
+esac
 exec "$REAL_GIT" "$@"
 GRSHIM2
 chmod +x "$GR_SHIM2/git"
 : > "$TRACE"
-printf '0\n' > "$REPO/shim2-count"
-REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim2-count" \
+rm -f "$REPO"/shim-wired.* 2>/dev/null
+REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim-wired" \
   HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM2:$PATH" \
   hook_safe_worktree_remove "$REPO" "$GR_WIRED"
 eq "a contended worktree move still completes the removal" "$?" "0"
+[ "$(gr_attempts)" -ge 2 ] \
+  && ok "both worktree call sites are wired to the retry ($(gr_attempts) attempts)" \
+  || bad "worktree move/remove did NOT both go through hook_git_retry: '$(gr_attempts)'"
+
+# (13) The RESTORE call site. r3 found it still on raw git after the forward move and
+#      the removal were wrapped; three of its four callers are ordinary recovery, not
+#      the signal trap the exclusion assumed, so a lock collision there strands the
+#      worktree in quarantine. Same shim, driven straight at the restore.
+GR_RESTORE="$REPO/restoreme"
+git -C "$REPO" worktree add -q -b restore-branch "$GR_RESTORE"
+git -C "$REPO" worktree move "$GR_RESTORE" "$REPO/.harness-removing-restoreme"
+# The transaction must carry git's OWN spelling of the paths -- registered_path
+# string-compares against `worktree list --porcelain`, and on macOS mktemp hands back
+# /var/... where git reports /private/var/... . The production path reads them from
+# git for the same reason.
+GR_QUAR=$(git -C "$REPO" worktree list --porcelain | sed -n 's|^worktree ||p' \
+  | grep '/[.]harness-removing-restoreme$' | head -n1)
+GR_ORIG="$(dirname "$GR_QUAR")/restoreme"
+GR_TXN="$REPO/restore-txn"
+_hook_worktree_write_transaction "$GR_TXN" "$GR_ORIG" "$GR_QUAR"
+: > "$TRACE"
+rm -f "$REPO"/shim-restore.* 2>/dev/null
+REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim-restore" \
+  HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM2:$PATH" \
+  _hook_worktree_restore_transaction "$REPO" "$GR_TXN" >/dev/null
+eq "a contended restore still puts the worktree back" "$?" "0"
 [ "$(gr_attempts)" -ge 1 ] \
-  && ok "the worktree-move call site is wired to the retry ($(gr_attempts) attempt)" \
-  || bad "worktree move did NOT go through hook_git_retry: '$(gr_attempts)' attempts"
+  && ok "the restore call site is wired to the retry ($(gr_attempts) attempts)" \
+  || bad "restore move did NOT go through hook_git_retry: '$(gr_attempts)' attempts"
+[ -d "$GR_ORIG" ] && ok "the worktree is back at its original path" \
+  || bad "worktree left in quarantine at $GR_QUAR"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

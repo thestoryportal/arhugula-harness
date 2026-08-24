@@ -89,6 +89,41 @@ GC_ALL=$(git -C "$ROOT/wt" config --get-all gc.auto | wc -l | tr -d ' ')
 [ "$(git -C "$ROOT/repo" config --get gc.auto)" = "0" ] \
   && ok "gc.auto is repo-wide (visible from the main checkout)" || bad "gc.auto not repo-wide"
 
+# --- 5b. the gc.auto write goes through the C-HE-11 §3 bounded retry (U-HE-32) ------
+# Out-of-family review r3 noted the wiring at this call site had no regression witness:
+# reverting it to raw git left every suite green. A shim refuses the first `config
+# gc.auto` with the CONFIG lock wording -- which carries no `.lock` substring at all,
+# so it also pins the classifier branch that shape needs.
+git -C "$ROOT/wt" config --unset-all gc.auto 2>/dev/null
+GC_SHIM="$ROOT/gcshim"
+mkdir -p "$GC_SHIM"
+cat > "$GC_SHIM/git" <<'GCSHIM'
+#!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "config gc.auto" ] && [ ! -e "$GIT_SHIM_MARK" ]; then
+  : > "$GIT_SHIM_MARK"
+  echo "error: could not lock config file .git/config: File exists" >&2
+  exit 255
+fi
+exec "$REAL_GIT" "$@"
+GCSHIM
+chmod +x "$GC_SHIM/git"
+GC_TRACE="$ROOT/gc-trace"
+: > "$GC_TRACE"
+rm -f "$ROOT/gc-mark"
+(
+  cd "$ROOT/wt" || exit 1
+  REAL_GIT="$(command -v git)"
+  export REAL_GIT GIT_SHIM_MARK="$ROOT/gc-mark" HOOK_GIT_RETRY_TRACE="$GC_TRACE"
+  export PATH="$GC_SHIM:$PATH"
+  source "$INIT" >/dev/null 2>&1
+)
+[ "$(wc -l < "$GC_TRACE" | tr -d ' ')" -ge 1 ] \
+  && ok "the gc.auto write is wired to the bounded retry" \
+  || bad "gc.auto write did NOT go through hook_git_retry"
+[ "$(git -C "$ROOT/wt" config --get gc.auto)" = "0" ] \
+  && ok "and a contended gc.auto write still lands" \
+  || bad "gc.auto unset after contention: [$(git -C "$ROOT/wt" config --get gc.auto)]"
+
 # --- 6. RAM probe (C-HE-11 §5): shortfall at k>=2 -> NOTIFY + stack absent -----------
 # Both clauses must bite: the machine is below the floor AND less is available than one
 # stack needs. Either alone is not a shortfall (case 6b covers the small-but-idle machine).

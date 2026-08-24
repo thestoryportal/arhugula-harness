@@ -827,7 +827,12 @@ _hook_worktree_restore_transaction() {
 
   if [ "$quarantine_rc" -eq 0 ]; then
     [ ! -e "$original" ] || return 2
-    git -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
+    # Retried like the forward move. This was first left as raw git on the theory that
+    # restore only runs from a signal trap where a multi-second backoff would stall
+    # teardown -- but three of the four callers (:1011, :1025, :1113) are ordinary
+    # recovery, and a lock collision there strands the worktree in quarantine, which is
+    # durable damage. A bounded wait is the cheaper failure (out-of-family review r3).
+    hook_git_retry -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
     rm -f "$transaction" 2>/dev/null || return 2
     printf '%s' "$original"
     return 0
