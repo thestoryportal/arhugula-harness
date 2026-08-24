@@ -102,7 +102,9 @@ MANIFEST: list[Row] = [
         "local + CI",
         True,
     ),
-    Row("C-HE-04", "shell:tools/hooks/test_lib.sh", "phase0", "local + CI", True),
+    # C-HE-11 §3 (U-HE-32) joins this row rather than adding a second one: the manifest
+    # forbids a duplicate artifact, and `hook_git_retry`'s witnesses live in this suite.
+    Row("C-HE-04/11", "shell:tools/hooks/test_lib.sh", "phase0", "local + CI", True),
     # C-HE-04 §2/§4/§5 (U-HE-19): holder-gated append + drain ⇄ reservation integration —
     # one row per contract section so reverting any half leaves a RED row (codex r2 P3)
     Row(

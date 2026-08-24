@@ -866,5 +866,414 @@ case "$DETACHED_OUT" in
   *) bad "residue missing detached-HEAD line: '$DETACHED_OUT'" ;;
 esac
 
+
+# ── hook_git_retry — C-HE-11 §3 bounded local-git lock retry (U-HE-32) ────────
+# The ledger writer lives one layer ABOVE lib.sh (loop_lib.sh depends on lib.sh,
+# never the reverse), so these assertions source it the way every real caller
+# does — lib.sh first, then loop_lib.sh — instead of stubbing the writer.
+. "$SCRIPT_DIR/loop_lib.sh"
+export HARNESS_LOOP_STATUS_PATH="$REPO/shared/loop_status.md"
+GR="$REPO/gitretry"
+git init -q -b main "$GR"
+git -C "$GR" config user.email t@t.t; git -C "$GR" config user.name t
+( cd "$GR" && echo x > f && git add -A && git commit -qm base )
+TRACE="$REPO/git-retry-trace"
+
+# The lock is cleared on ATTEMPT COUNT, never on a wall-clock sleep. Full jitter
+# means seven draws can in principle sum to almost nothing, so a `sleep 0.4`
+# unlocker would let the budget exhaust before it fired — a flake whose rate
+# depends on load. Watching the trace ties the clear to the thing under test.
+gr_unlock_after_attempts() {
+  local lock="$1" n="$2" _gr_i=0
+  # BOUNDED. A regression that stops retrying never grows the trace, and an
+  # unbounded poller would then spin forever -- CI would HANG rather than go red.
+  # At the bound the lock is cleared regardless, so the op completes and the
+  # attempt-count assertion below is what reports the failure.
+  ( while [ "$(wc -l < "$TRACE" 2>/dev/null | tr -d ' ')" -lt "$n" ] && [ "$_gr_i" -lt 500 ]; do
+      sleep 0.01; _gr_i=$((_gr_i + 1))
+    done
+    rm -f "$lock" ) &
+}
+gr_attempts() { wc -l < "$TRACE" | tr -d ' '; }
+# Trace rows are `<attempt> <ceiling_ms> <slept_s>`; these read the two number columns.
+gr_ceilings() { awk '{ printf "%s ", $2 }' "$TRACE"; }
+
+# NOTE on what witnesses WHICH classifier branch. Cases (1), (2) and (9) below drive REAL
+# git, and real git's index/ref-lock stderr always ALSO carries "Another git process seems
+# to be running" -- a separate alternative in the matcher. So those three cannot, on their
+# own, tell the `Unable to create ….lock': File exists` branch from the advice sentence, and
+# a merge-gate lens correctly noticed that. The branch is nonetheless witnessed: the PATH
+# shims used by the call-site cases emit ONLY the `Unable to create` line, so deleting that
+# alternative reds 7 assertions (measured). Keep it that way -- if those shims ever grow the
+# advice sentence, the branch silently loses its only independent witness.
+#
+# (1) A lock that clears mid-flight: the op succeeds, and it demonstrably retried.
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+gr_unlock_after_attempts "$GR/.git/index.lock" 2
+GR_UNLOCKER=$!
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" add -A
+eq "transient index.lock clears -> op succeeds" "$?" "0"
+wait "$GR_UNLOCKER" 2>/dev/null
+[ "$(gr_attempts)" -ge 2 ] && ok "transient index.lock retried ($(gr_attempts) attempts)" \
+  || bad "expected >=2 attempts, got '$(gr_attempts)'"
+
+# (2) A lock that never clears: exactly 8 attempts, the op fails with git's own
+#     exit code, git's error still reaches stderr, and a NOTIFY row lands under a
+#     cause that never routes to the merge-door budget.
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" add -A \
+  >"$REPO/gr-held.out" 2>"$REPO/gr-held.err"
+eq "held index.lock -> op fails with git's exit code" "$?" "128"
+eq "held index.lock exhausts exactly 8 attempts" "$(gr_attempts)" "8"
+grep -q "index.lock" "$REPO/gr-held.err" \
+  && ok "exhaustion still reports git's error on stderr" \
+  || bad "exhaustion swallowed git's error: '$(cat "$REPO/gr-held.err")'"
+grep -q 'cause=git-ref-lock:transient-retry:lock_contention' "$HARNESS_LOOP_STATUS_PATH" \
+  && ok "exhaustion emits the git-ref-lock NOTIFY" \
+  || bad "no git-ref-lock NOTIFY row: '$(cat "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null)'"
+grep -q '| NOTIFY |' "$HARNESS_LOOP_STATUS_PATH" \
+  && ok "the exhaustion row is a NOTIFY" || bad "exhaustion row is not a NOTIFY"
+grep -q 'cause=merge-door' "$HARNESS_LOOP_STATUS_PATH" \
+  && bad "git lock exhaustion must NOT route to the merge-door budget" \
+  || ok "exhaustion stays off the merge-door budget"
+rm -f "$GR/.git/index.lock"
+
+# (3) A failure that is not lock contention is returned immediately — retrying a
+#     genuine error would burn the budget and delay the real diagnosis.
+: > "$TRACE"
+hook_git_retry -C "$GR" rev-parse --verify refs/heads/no-such-branch \
+  >/dev/null 2>"$REPO/gr-nonlock.err"
+GR_RC=$?
+[ "$GR_RC" -ne 0 ] && ok "non-lock failure propagates git's exit code ($GR_RC)" \
+  || bad "non-lock failure returned 0"
+eq "non-lock failure is not retried" "$(gr_attempts)" "0"
+
+# (4) The caller's stdout is git's stdout, byte for byte. `git checkout -b`
+#     announces itself on STDERR, so a helper that merged the two streams would
+#     hand the caller a stdout it never wrote — silently corrupting anyone who
+#     parses it.
+hook_git_retry -C "$GR" checkout -b passthrough \
+  >"$REPO/gr-pass.out" 2>"$REPO/gr-pass.err"
+eq "success keeps stderr out of stdout" "$(cat "$REPO/gr-pass.out")" ""
+grep -q "passthrough" "$REPO/gr-pass.err" \
+  && ok "git's stderr reaches the caller's stderr" \
+  || bad "git's stderr was swallowed: '$(cat "$REPO/gr-pass.err")'"
+eq "stdout is byte-exact" "$(hook_git_retry -C "$GR" rev-parse HEAD)" "$(git -C "$GR" rev-parse HEAD)"
+
+# (5) The config-lock shape. git says `could not lock config file …: File exists`
+#     with no `.lock` anywhere in the text, so a pattern written only against the
+#     index/ref wording would miss it — and this is the exact write C-HE-11 §2
+#     makes (`gc.auto 0`), whose unretried failure is B-201.
+: > "$TRACE"
+: > "$GR/.git/config.lock"
+gr_unlock_after_attempts "$GR/.git/config.lock" 2
+GR_UNLOCKER=$!
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" config gc.auto 0
+eq "transient config.lock clears -> op succeeds" "$?" "0"
+wait "$GR_UNLOCKER" 2>/dev/null
+[ "$(gr_attempts)" -ge 2 ] && ok "config-lock contention is retried ($(gr_attempts) attempts)" \
+  || bad "config-lock contention not retried: '$(gr_attempts)' attempts"
+eq "the retried config write actually landed" "$(git -C "$GR" config --get gc.auto)" "0"
+
+# (6) git runs as a foreground child of the CALLING shell. A `$(…)` capture would run
+#     it in a subshell, and a subshell resets this shell's traps to default — silently
+#     disarming the HUP/INT/TERM interrupt recovery that hook_safe_worktree_remove arms
+#     around the very `worktree move` this now wraps. The shim reports who forked it.
+GR_SHIM="$REPO/shim"
+mkdir -p "$GR_SHIM"
+cat > "$GR_SHIM/git" <<'GRSHIM'
+#!/usr/bin/env bash
+echo "$PPID" > "$GIT_SHIM_PPID_FILE"
+echo "${LC_ALL:-unset}" > "$GIT_SHIM_PPID_FILE.locale"
+GRSHIM
+chmod +x "$GR_SHIM/git"
+GIT_SHIM_PPID_FILE="$REPO/shim-ppid" PATH="$GR_SHIM:$PATH" hook_git_retry status
+eq "git is forked by the calling shell, so its traps stay armed" \
+  "$(cat "$REPO/shim-ppid")" "$$"
+# The classifier reads git's ENGLISH diagnostics, so the helper pins LC_ALL=C on the
+# invocation. Nothing else proves that: every real-git and shim message in this suite is
+# already English, so deleting the pin would leave the whole suite green while a host
+# with a localised LC_MESSAGES silently stopped matching (out-of-family review r5).
+eq "the child git is invoked under LC_ALL=C" "$(cat "$REPO/shim-ppid.locale")" "C"
+
+# (7) `cannot lock ref '…': is at <a> but expected <b>` is a stale-expectation conflict,
+#     not contention — no amount of waiting resolves it. Retrying would burn the whole
+#     budget and then file a NOTIFY naming a `lock_contention` that never happened, which
+#     C-HE-13 §3 reads as pilot friction. The discriminator is `File exists`.
+: > "$TRACE"
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" update-ref refs/heads/main \
+  "$(git -C "$GR" rev-parse HEAD)" 0000000000000000000000000000000000000001 \
+  >/dev/null 2>"$REPO/gr-stale.err"
+GR_STALE_RC=$?
+[ "$GR_STALE_RC" -ne 0 ] && ok "stale-expectation ref conflict still fails ($GR_STALE_RC)" \
+  || bad "stale-expectation ref conflict returned 0"
+grep -q "but expected" "$REPO/gr-stale.err" \
+  && ok "the stale-expectation error reaches the caller's stderr" \
+  || bad "stale-expectation error swallowed: '$(cat "$REPO/gr-stale.err")'"
+eq "a stale-expectation ref conflict is not retried" "$(gr_attempts)" "0"
+
+# (8) The backoff NUMBERS, not merely the attempt count. C-HE-11 §3 fixes base 100 ms,
+#     factor 2 and a 5 s cap, and "full jitter" means each wait is drawn from [0, ceiling]
+#     rather than being the ceiling itself. A count-only witness is blind to all of it —
+#     a zero-delay tight loop would pass every assertion above (out-of-family review r1).
+#     Asserted as SHAPE, never as elapsed wall clock: the ceiling sequence is exact, and
+#     the drawn sleeps are checked against their own ceiling, so load cannot flake it.
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+GR_T0=$SECONDS
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" add -A >/dev/null 2>&1
+GR_ELAPSED=$((SECONDS - GR_T0))
+eq "the ceiling doubles from 100 ms and caps at 5 s" \
+  "$(gr_ceilings)" "100 200 400 800 1600 3200 5000 - "
+# BOTH ends of the range must be exercised. "<= ceiling" alone is satisfied by an
+# always-zero sleep, and "< ceiling" alone is too -- a mutation probe caught exactly that,
+# so the assertion also requires a strictly positive draw. Together they reject the two
+# degenerate implementations: a zero-delay tight loop and a fixed-ceiling backoff.
+# Bounded-and-nonzero is NOT enough: a deterministic HALF-ceiling delay satisfies both
+# (r6). Full jitter's distinguishing property is that the draw VARIES relative to its
+# ceiling, so the ratio slept/ceiling must take more than one value across the seven
+# waits. A constant-ratio backoff -- half, or the ceiling itself, or zero -- collapses to
+# a single distinct ratio and is rejected.
+GR_JITTER=$(awk '$2 != "-" {
+    c = $2 / 1000
+    if ($3 + 0 > c) over++
+    r = sprintf("%.2f", ($3 + 0) / c)
+    if (!(r in seen)) { seen[r] = 1; distinct++ }
+  } END { printf "%d %d", over + 0, distinct + 0 }' "$TRACE")
+eq "every wait is a VARYING draw from [0, ceiling], not a constant fraction of it" \
+  "$(echo "$GR_JITTER" | awk '{ print ($1 == 0 && $2 >= 3) ? "ok" \
+      : "no (over-ceiling=" $1 " distinct-ratios=" $2 ")" }')" "ok"
+# ...and the RANGE itself, at its endpoints, deterministically. The distribution checks
+# above reject a zero delay and a constant fraction, but NOT "equal jitter"
+# (ceiling/2 + random(0, ceiling/2)) -- bounded, varying, and still not full jitter. No
+# sample separates the two without flaking, so the draw is asserted at r=0 and r=32767
+# instead (merge-gate witness lens).
+eq "the draw reaches the BOTTOM of [0, ceiling]" "$(_hook_git_retry_jitter 5000 0)" "0.000"
+eq "the draw reaches the TOP of [0, ceiling]" "$(_hook_git_retry_jitter 5000 32767)" "5.000"
+eq "and scales linearly between them" "$(_hook_git_retry_jitter 4000 16384)" "2.000"
+# And that the waits were actually TAKEN. The assertions above read values the helper
+# wrote BEFORE sleeping, so deleting `sleep "$slept"` left them all green (r3) -- the
+# lock here is released on attempt count, so nothing else notices the missing delay. A
+# LOWER bound on elapsed time is the load-immune shape: load can only make it slower.
+GR_SLEPT_S=$(awk '$3 != "-" { t += $3 } END { printf "%d", t }' "$TRACE")
+[ "${GR_ELAPSED:-0}" -ge "$GR_SLEPT_S" ] \
+  && ok "the waits were actually taken (${GR_ELAPSED}s elapsed >= ${GR_SLEPT_S}s slept)" \
+  || bad "elapsed ${GR_ELAPSED}s is below the ${GR_SLEPT_S}s the trace claims to have slept"
+rm -f "$GR/.git/index.lock"
+
+# (9) A HELD ref lock — `refs/heads/<name>.lock`. The contract names ref AND index
+#     collisions, and the only ref case above is the stale-expectation NEGATIVE one, so
+#     narrowing the matcher back to index-only would have kept this suite green while
+#     breaking half the contract (out-of-family review r1).
+: > "$TRACE"
+: > "$GR/.git/refs/heads/contended.lock"
+gr_unlock_after_attempts "$GR/.git/refs/heads/contended.lock" 2
+GR_UNLOCKER=$!
+HOOK_GIT_RETRY_TRACE="$TRACE" hook_git_retry -C "$GR" branch contended
+eq "transient refs/heads/*.lock clears -> op succeeds" "$?" "0"
+wait "$GR_UNLOCKER" 2>/dev/null
+[ "$(gr_attempts)" -ge 2 ] && ok "held ref-lock contention is retried ($(gr_attempts) attempts)" \
+  || bad "ref-lock contention not retried: '$(gr_attempts)' attempts"
+git -C "$GR" rev-parse --verify -q refs/heads/contended >/dev/null \
+  && ok "the retried branch creation actually landed" || bad "branch contended missing"
+
+# (10) A caller running under `set -e` must survive the collision this helper exists to
+#      absorb. As a bare `git …; rc=$?` the failing command is NOT exempt from errexit,
+#      so the shell dies at the first attempt — before the retry, the cleanup or the
+#      NOTIFY (out-of-family review r1). Witnessed by attempt count, not by survival of
+#      the outer shell: an exhausted budget legitimately returns non-zero, which errexit
+#      then acts on, so only the trace can tell "died at attempt 1" from "ran all 8".
+: > "$TRACE"
+: > "$GR/.git/index.lock"
+bash -euo pipefail -c '
+  . "$1/lib.sh"
+  HOOK_GIT_RETRY_TRACE="$3" hook_git_retry -C "$2" add -A
+' _ "$SCRIPT_DIR" "$GR" "$TRACE" >/dev/null 2>&1
+eq "a set -e caller is not killed mid-retry" "$(gr_attempts)" "8"
+rm -f "$GR/.git/index.lock"
+
+# (11) The SUCCESS path under `set -e`. r2 read the trailing `[ -n "$err" ] && printf …`
+#      as an errexit trigger that would kill a caller on every quiet success. It is not:
+#      bash exempts the non-final command of an `&&` list, and `return "$rc"` follows it
+#      anyway. Measured, not argued — and pinned here so the next reader does not have to
+#      re-derive it. (The r1 witness above covers only the EXHAUSTED path.)
+GR_OK=$(bash -euo pipefail -c '
+  . "$1/lib.sh"
+  hook_git_retry -C "$2" rev-parse --short HEAD >/dev/null
+  echo SURVIVED
+' _ "$SCRIPT_DIR" "$GR" 2>/dev/null)
+eq "a set -e caller survives a QUIET SUCCESS through the helper" "$GR_OK" "SURVIVED"
+
+# (12) The production call sites, not just the helper. r2 (P3) was right that reverting
+#      lib.sh's worktree mutations to raw `git` would leave every assertion above green.
+#      A PATH shim fails the first `worktree move` with a lock message and then delegates
+#      to the real git, so a wired call site retries and completes while an unwired one
+#      dies on the shim's first refusal.
+GR_WIRED="$REPO/wired"
+git -C "$REPO" worktree add -q -b wired-branch "$GR_WIRED"
+GR_SHIM2="$REPO/shim2"
+mkdir -p "$GR_SHIM2"
+cat > "$GR_SHIM2/git" <<'GRSHIM2'
+#!/usr/bin/env bash
+# Fail the FIRST call of EACH wrapped subcommand, once, via a per-subcommand marker.
+# A single shared budget is NOT equivalent and was the bug in the first version of this
+# shim: `worktree move` retried twice, consumed the whole budget, and `worktree remove`
+# was never contended -- so reverting the remove call site to raw git left the suite
+# green. Caught by mutation probe, which is the only reason it is written this way.
+case "${3:-} ${4:-}" in
+  "worktree move"|"worktree remove")
+    marker="$GIT_SHIM_COUNT.$(echo "${3:-} ${4:-}" | tr ' ' '-')"
+    if [ ! -e "$marker" ]; then
+      : > "$marker"
+      echo "fatal: Unable to create '/tmp/wt/.git/index.lock': File exists." >&2
+      exit 128
+    fi
+    ;;
+esac
+exec "$REAL_GIT" "$@"
+GRSHIM2
+chmod +x "$GR_SHIM2/git"
+: > "$TRACE"
+rm -f "$REPO"/shim-wired.* 2>/dev/null
+REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim-wired" \
+  HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM2:$PATH" \
+  hook_safe_worktree_remove "$REPO" "$GR_WIRED"
+eq "a contended worktree move still completes the removal" "$?" "0"
+[ "$(gr_attempts)" -ge 2 ] \
+  && ok "both worktree call sites are wired to the retry ($(gr_attempts) attempts)" \
+  || bad "worktree move/remove did NOT both go through hook_git_retry: '$(gr_attempts)'"
+
+# (13) The RESTORE call site. r3 found it still on raw git after the forward move and
+#      the removal were wrapped; three of its four callers are ordinary recovery, not
+#      the signal trap the exclusion assumed, so a lock collision there strands the
+#      worktree in quarantine. Same shim, driven straight at the restore.
+GR_RESTORE="$REPO/restoreme"
+git -C "$REPO" worktree add -q -b restore-branch "$GR_RESTORE"
+git -C "$REPO" worktree move "$GR_RESTORE" "$REPO/.harness-removing-restoreme"
+# The transaction must carry git's OWN spelling of the paths -- registered_path
+# string-compares against `worktree list --porcelain`, and on macOS mktemp hands back
+# /var/... where git reports /private/var/... . The production path reads them from
+# git for the same reason.
+GR_QUAR=$(git -C "$REPO" worktree list --porcelain | sed -n 's|^worktree ||p' \
+  | grep '/[.]harness-removing-restoreme$' | head -n1)
+GR_ORIG="$(dirname "$GR_QUAR")/restoreme"
+GR_TXN="$REPO/restore-txn"
+_hook_worktree_write_transaction "$GR_TXN" "$GR_ORIG" "$GR_QUAR"
+: > "$TRACE"
+rm -f "$REPO"/shim-restore.* 2>/dev/null
+REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim-restore" \
+  HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM2:$PATH" \
+  _hook_worktree_restore_transaction "$REPO" "$GR_TXN" >/dev/null
+eq "a contended restore still puts the worktree back" "$?" "0"
+[ "$(gr_attempts)" -ge 1 ] \
+  && ok "the restore call site is wired to the retry ($(gr_attempts) attempts)" \
+  || bad "restore move did NOT go through hook_git_retry: '$(gr_attempts)' attempts"
+[ -d "$GR_ORIG" ] && ok "the worktree is back at its original path" \
+  || bad "worktree left in quarantine at $GR_QUAR"
+
+# (14) The SIGNAL-HANDLER restore is fail-fast, where every other restore caller is not.
+#      `hook_bounded` escalates SIGTERM to SIGKILL after 2 s, so a handler that sits in
+#      the ~11 s budget is killed mid-restore and strands the worktree -- the exact damage
+#      the retry exists to prevent (merge-gate concurrency lens). The two assertions are a
+#      PAIR: fail-fast here is only correct because the ordinary path above still waits.
+GR_TRAP="$REPO/trapme"
+git -C "$REPO" worktree add -q -b trap-branch "$GR_TRAP"
+git -C "$REPO" worktree move "$GR_TRAP" "$REPO/.harness-removing-trapme"
+GR_TQUAR=$(git -C "$REPO" worktree list --porcelain | sed -n 's|^worktree ||p' \
+  | grep '/[.]harness-removing-trapme$' | head -n1)
+GR_TORIG="$(dirname "$GR_TQUAR")/trapme"
+GR_TTXN="$REPO/trap-txn"
+_hook_worktree_write_transaction "$GR_TTXN" "$GR_TORIG" "$GR_TQUAR"
+# The shim used here fails EVERY time, not just once. A fail-once shim cannot tell the
+# two budgets apart -- both record exactly one trace row (a single retry under max=8, a
+# single exhaust row under max=1) -- so the assertion would hold no matter which the
+# handler used. Only a lock that never clears separates 1 attempt from 8.
+GR_SHIM3="$REPO/shim3"
+mkdir -p "$GR_SHIM3"
+cat > "$GR_SHIM3/git" <<'GRSHIM3'
+#!/usr/bin/env bash
+if [ "${3:-} ${4:-}" = "worktree move" ]; then
+  echo "fatal: Unable to create '/tmp/wt/.git/index.lock': File exists." >&2
+  exit 128
+fi
+exec "$REAL_GIT" "$@"
+GRSHIM3
+chmod +x "$GR_SHIM3/git"
+: > "$TRACE"
+(
+  _HOOK_REMOVE_ROOT="$REPO" _HOOK_REMOVE_TRANSACTION="$GR_TTXN" \
+  REAL_GIT="$(command -v git)" \
+    HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM3:$PATH" \
+    _hook_worktree_interrupted 143
+) >/dev/null 2>&1
+eq "the signal-handler restore takes ONE attempt, not the 8-attempt budget" \
+  "$(gr_attempts)" "1"
+# ...and the ordinary restore path, against the SAME never-clearing lock, still spends
+# the full budget. Asserted as a pair: fail-fast in the handler is only correct because
+# the non-handler callers still wait.
+: > "$TRACE"
+REAL_GIT="$(command -v git)" HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM3:$PATH" \
+  _hook_worktree_restore_transaction "$REPO" "$GR_TTXN" >/dev/null 2>&1
+eq "an ordinary restore against the same lock still spends the full budget" \
+  "$(gr_attempts)" "8"
+
+# (17) A signal in the PRE-MOVE window keeps its exit code. The restore returns 1 when
+#      there was nothing to move (the transaction was only a marker, and clearing it IS
+#      success), and the handler used to fold every non-zero into rc=6 -- reporting a
+#      clean interrupt as a failed quarantine restore. The window is reachable only
+#      because the retry sleep now honours signals promptly, so this defect arrived WITH
+#      that fix (out-of-family review r9).
+GR_PRE="$REPO/premove"
+git -C "$REPO" worktree add -q -b premove-branch "$GR_PRE"
+GR_PRE_REAL=$(git -C "$REPO" worktree list --porcelain | sed -n 's|^worktree ||p' \
+  | grep '/premove$' | head -n1)
+GR_PRE_TXN="$REPO/premove-txn"
+_hook_worktree_write_transaction "$GR_PRE_TXN" "$GR_PRE_REAL" \
+  "$(dirname "$GR_PRE_REAL")/.harness-removing-premove"
+(
+  _HOOK_REMOVE_ROOT="$REPO" _HOOK_REMOVE_TRANSACTION="$GR_PRE_TXN" \
+    _hook_worktree_interrupted 143
+) >/dev/null 2>&1
+eq "a pre-move interrupt exits with its SIGNAL code, not a restore failure" "$?" "143"
+[ ! -e "$GR_PRE_TXN" ] && ok "and the stale marker is cleared" \
+  || bad "the pre-move marker survived at $GR_PRE_TXN"
+
+# (16) `--max` is the ONLY way to move the budget, and it is validated. It used to be an
+#      inherited environment variable, which meant any ambient value silently lowered the
+#      C-HE-11 §3 budget for every caller -- and a NON-INTEGER one made the bound test
+#      error on every iteration, so the loop never exhausted and never emitted its NOTIFY.
+#      That is an infinite retry against a permanent lock (out-of-family review r6).
+: > "$REPO/amb-trace"
+: > "$GR/.git/index.lock"
+HOOK_GIT_RETRY_MAX_ATTEMPTS=1 HOOK_GIT_RETRY_TRACE="$REPO/amb-trace" \
+  hook_git_retry -C "$GR" add -A >/dev/null 2>&1
+rm -f "$GR/.git/index.lock"
+eq "an ambient HOOK_GIT_RETRY_MAX_ATTEMPTS cannot move the budget" \
+  "$(wc -l < "$REPO/amb-trace" | tr -d ' ')" "8"
+hook_git_retry --max abc -C "$GR" rev-parse HEAD >/dev/null 2>"$REPO/gr-max.err"
+eq "a non-integer --max is refused, not defaulted past" "$?" "2"
+grep -q "positive integer" "$REPO/gr-max.err" \
+  && ok "and it says why" || bad "unclear --max error: '$(cat "$REPO/gr-max.err")'"
+hook_git_retry --max 0 -C "$GR" rev-parse HEAD >/dev/null 2>&1
+eq "a zero --max is refused" "$?" "2"
+
+# (15) The WRAPPER's own ledger dependency. `safe-worktree-remove.sh` sources loop_lib.sh
+#      so an exhausted budget leaves a durable NOTIFY rather than only a line on stderr.
+#      Every other exhaustion case in this file sources loop_lib itself, and every wiring
+#      case calls the library function directly, so reverting that one line left the suite
+#      green (out-of-family review r5). This drives the SCRIPT, as a subprocess.
+GR_WRAP="$REPO/wrapme"
+git -C "$REPO" worktree add -q -b wrap-branch "$GR_WRAP"
+GR_WRAP_LEDGER="$REPO/wrapper-ledger.md"
+rm -f "$GR_WRAP_LEDGER"
+REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim-wrap" \
+  HARNESS_LOOP_STATUS_PATH="$GR_WRAP_LEDGER" PATH="$GR_SHIM3:$PATH" \
+  bash "$SCRIPT_DIR/safe-worktree-remove.sh" "$GR_WRAP" >/dev/null 2>&1
+grep -q 'cause=git-ref-lock:transient-retry:lock_contention' "$GR_WRAP_LEDGER" 2>/dev/null \
+  && ok "the wrapper writes a durable NOTIFY when the budget is exhausted" \
+  || bad "no NOTIFY row from the wrapper: [$(cat "$GR_WRAP_LEDGER" 2>/dev/null)]"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

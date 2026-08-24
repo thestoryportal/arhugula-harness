@@ -87,6 +87,144 @@ hook_bounded() {
   return "$rc"
 }
 
+# True when git's stderr describes LOCAL lock contention. git serialises index, ref
+# and config writes through a `<target>.lock` sidecar created with O_EXCL, so two
+# lanes touching one repo collide transiently and the loser aborts before doing any
+# work. Two shapes, both measured against git 2.39 UNDER `LC_ALL=C`, which the caller
+# below pins for exactly this reason: these are translated strings, and on a host with
+# a localised LC_MESSAGES the same EEXIST collision would not match, silently turning
+# the unconditional retry contract into a no-op (out-of-family review r1).
+#
+#   fatal: Unable to create '…/index.lock': File exists.          (index, and ref —
+#     note the closing quote BETWEEN `.lock` and the colon: an anchored
+#     `\.lock: File exists` never matches, and the alternation would then be
+#     carried entirely by the `Another git process` sentence below — advice text,
+#     not a diagnostic. A shim emitting only this line caught that.
+#     a ref collision prints `cannot lock ref '…':` in FRONT of this same clause)
+#   error: could not lock config file .git/config: File exists    (config)
+#
+# The config wording is matched on its own because it names no `.lock` file at all,
+# and a pattern written from the index/ref messages alone silently misses the
+# `gc.auto 0` write of C-HE-11 §2 — the one B-201 is about.
+#
+# `File exists` is required, not incidental: it is what separates a lock another
+# process is holding from a lock git refuses on the merits. `cannot lock ref 'x': is
+# at <a> but expected <b>` is a stale-expectation conflict that no amount of waiting
+# resolves, so matching the bare phrase would burn the whole budget on it and then
+# file a `lock_contention` NOTIFY naming a cause that never happened.
+_hook_git_lock_contention() {
+  printf '%s' "$1" | grep -Eq \
+    "(Unable to create .*\.lock.?|could not lock config file [^:]*): File exists|Another git process seems to be running"
+}
+
+# Full jitter (C-HE-11 §3): the wait is drawn from the CLOSED range [0, ceiling].
+# Usage: _hook_git_retry_jitter <ceiling_ms> <random 0..32767> -> seconds, 3dp.
+#
+# Split out so the draw is testable AT ITS ENDPOINTS rather than inferred from a sample.
+# A sample cannot do the job: "equal jitter" (ceiling/2 + random(0, ceiling/2)) is bounded
+# AND genuinely varying, so it satisfies any bounded-and-varies check, and the only
+# statistic that separates it -- some draw landing in the bottom half -- fails ~0.8% of the
+# time under real full jitter, which is a flaky CI gate rather than a witness. Taking the
+# random value as an ARGUMENT makes r=0 and r=32767 exact, deterministic assertions
+# (merge-gate witness lens).
+_hook_git_retry_jitter() {
+  awk -v d="$1" -v r="$2" 'BEGIN { printf "%.3f", (d * (r / 32767)) / 1000 }'
+}
+
+# One trace row per attempt: `<attempt> <ceiling_ms> <slept_s>` (`- -` on the attempt
+# that exhausts the budget and therefore never sleeps). The ceiling and the drawn sleep
+# are recorded, not just the count, because a count-only trace is blind to the numbers
+# the contract actually fixes — a zero-delay tight loop would satisfy it (r1). Inert
+# unless HOOK_GIT_RETRY_TRACE names a file.
+_hook_git_retry_trace() {
+  [ -n "${HOOK_GIT_RETRY_TRACE:-}" ] || return 0
+  echo "$1 $2 $3" >> "$HOOK_GIT_RETRY_TRACE"
+}
+
+# Run a git command, retrying ONLY local lock contention, on the C-HE-11 §3 budget:
+# full jitter over {base 100 ms, factor 2, cap 5 s, max 8 attempts}. Exhaustion FAILS
+# the git operation (git's own exit code and stderr survive) and emits a NOTIFY.
+#
+# This is LOCAL-git retry, deliberately unrelated to the merge-door lease, which
+# stays fail-fast (C-HE-06 §2). Hence the `git-ref-lock:` cause: a lock collision is
+# environmental, and must never be read as merge-door budget spend (C-HE-13 §3).
+#
+# stdout is the CALLER's, byte for byte — only stderr is captured, because that is
+# where git puts the text the retry decision reads. Merging the two streams would
+# hand `hook_git_retry rev-parse HEAD` a stdout git never wrote. The cost of the
+# capture is that stderr arrives when the command ends rather than streaming; every
+# caller here runs a short, quiet plumbing op, so nothing is waiting on progress.
+#
+# git runs inside an `if` so that a caller with `set -e` cannot be killed by the very
+# lock collision this exists to absorb: as a bare `git …; rc=$?` the failing command is
+# not exempt from errexit, and the shell would exit before the retry, the cleanup or the
+# NOTIFY ever ran (out-of-family review r1). `LC_ALL=C` pins the diagnostics the
+# classifier reads; every wrapped call is locale-insensitive plumbing.
+#
+# stderr goes to a FILE rather than a `$(…)` capture, and that choice is load-bearing:
+# a command substitution runs git in a subshell, which resets this shell's traps to
+# default. `hook_safe_worktree_remove` arms HUP/INT/TERM handlers around exactly the
+# `worktree move` this wraps, so the subshell form silently disarmed its interrupt
+# recovery — caught as three timed-out signal witnesses in test_lib.sh. Run as a plain
+# foreground child, git keeps the trap semantics the callsite had before the retry.
+#
+# The NOTIFY writer lives in loop_lib.sh, one layer ABOVE this file, and lib.sh must
+# not source it (loop_lib.sh depends on lib.sh; the reverse would close a cycle). So
+# a caller that sourced only lib.sh has no ledger — reported on stderr through the
+# SAME arm as a ledger that refuses the write, because an unrecorded NOTIFY is a lost
+# operator signal either way and must never be a silent one.
+# Usage: hook_git_retry [-C dir] <git args...>
+hook_git_retry() {
+  local attempt=0 delay_ms=100 errfile err rc slept max=8
+  # 8 is C-HE-11 §3's number and the default. It is overridable ONLY through an explicit
+  # leading `--max N`, never through the environment: an inherited variable would let any
+  # ambient value silently lower the contract's budget for every caller, and a non-integer
+  # one made `[ "$attempt" -ge "$max" ]` fail on EVERY iteration -- an infinite retry loop
+  # that never emits its exhaustion NOTIFY (out-of-family review r6; measured). Anything
+  # but a positive integer is refused outright rather than defaulted past.
+  if [ "${1:-}" = "--max" ]; then
+    case "${2:-}" in
+      "" | *[!0-9]*) echo "hook_git_retry: --max needs a positive integer, got '${2:-}'" >&2; return 2 ;;
+    esac
+    [ "$2" -ge 1 ] || { echo "hook_git_retry: --max must be >= 1, got '$2'" >&2; return 2; }
+    max="$2"
+    shift 2
+  fi
+  errfile=$(mktemp) || { echo "hook_git_retry: could not create a stderr capture" >&2; return 1; }
+  while :; do
+    if LC_ALL=C git "$@" 2>"$errfile"; then rc=0; else rc=$?; fi
+    err=$(cat "$errfile")
+    { [ "$rc" -eq 0 ] || ! _hook_git_lock_contention "$err"; } && break
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge "$max" ]; then
+      _hook_git_retry_trace "$attempt" - -
+      if ! command -v loop_log_structured >/dev/null 2>&1 \
+        || ! loop_log_structured NOTIFY "${HARNESS_LANE_ID:--}" \
+               "git-ref-lock:transient-retry:lock_contention" \
+               "git $* failed after $attempt lock retries"; then
+        echo "hook_git_retry: git $* exhausted $attempt lock retries, and the NOTIFY row could NOT be written" >&2
+      fi
+      break
+    fi
+    slept=$(_hook_git_retry_jitter "$delay_ms" "$RANDOM")
+    _hook_git_retry_trace "$attempt" "$delay_ms" "$slept"
+    # `sleep … & wait` rather than a bare `sleep`. bash defers a trapped signal until a
+    # FOREGROUND child exits, so with a draw near the 5 s ceiling a TERM would sit unhandled
+    # past `hook_bounded`'s 2 s TERM-to-KILL grace and the worktree-restore handler would
+    # never run (measured: 6 s deferral foreground vs 1 s through `wait`). `wait` is
+    # interruptible, so the trap fires when the signal arrives (out-of-family review r6).
+    sleep "$slept" & wait $!
+    delay_ms=$((delay_ms * 2))
+    [ "$delay_ms" -gt 5000 ] && delay_ms=5000
+  done
+  rm -f "$errfile"
+  # Safe under a `set -e` caller even when $err is empty: bash exempts the non-final
+  # command of an `&&` list from errexit, and `return` follows regardless. Witnessed
+  # (test_lib.sh, quiet-success case) rather than argued -- r2 read it the other way.
+  [ -n "$err" ] && printf '%s\n' "$err" >&2
+  return "$rc"
+}
+
 # The §12.1 step-2 workspace_state_hash recipe: sha256(head|prs|forks|batch)[:12].
 # Usage: hook_state_hash <head8> <prs_csv> <forks_count> <batch_path>
 hook_state_hash() {
@@ -702,6 +840,9 @@ _hook_worktree_write_transaction() {
 # 1 when a pre-move marker was merely cleared, and 2 when recovery is unsafe.
 _hook_worktree_restore_transaction() {
   local root="$1" transaction="$2" original quarantine third original_rc quarantine_rc
+  # Third argument: the retry budget for the restore's own git call, defaulting to the
+  # C-HE-11 §3 number. Only the signal handler passes anything else.
+  local max_attempts="${3:-8}"
   [ -f "$transaction" ] || return 1
   original=$(sed -n '1p' "$transaction" 2>/dev/null)
   quarantine=$(sed -n '2p' "$transaction" 2>/dev/null)
@@ -722,7 +863,12 @@ _hook_worktree_restore_transaction() {
 
   if [ "$quarantine_rc" -eq 0 ]; then
     [ ! -e "$original" ] || return 2
-    git -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
+    # Retried like the forward move. This was first left as raw git on the theory that
+    # restore only runs from a signal trap where a multi-second backoff would stall
+    # teardown -- but three of the four callers (:1011, :1025, :1113) are ordinary
+    # recovery, and a lock collision there strands the worktree in quarantine, which is
+    # durable damage. A bounded wait is the cheaper failure (out-of-family review r3).
+    hook_git_retry --max "$max_attempts" -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
     rm -f "$transaction" 2>/dev/null || return 2
     printf '%s' "$original"
     return 0
@@ -751,10 +897,24 @@ _hook_worktree_restore_transaction() {
 }
 
 _hook_worktree_interrupted() {
-  local rc="$1"
+  local rc="$1" restore_rc
   trap - HUP INT TERM
+  # ONE attempt, not the C-HE-11 §3 budget. Every other caller of the restore wants the
+  # full bounded wait, because a lock that clears in milliseconds should not strand a
+  # worktree in quarantine. This caller is the exception: it is already being torn down,
+  # and `hook_bounded` escalates SIGTERM to SIGKILL after 2 s, so sitting in an ~11 s
+  # backoff here does not save the worktree -- it guarantees the kill lands mid-restore
+  # and strands it anyway. Fail fast, restore what can be restored, exit.
   _hook_worktree_restore_transaction "$_HOOK_REMOVE_ROOT" \
-    "$_HOOK_REMOVE_TRANSACTION" >/dev/null 2>&1 || rc=6
+    "$_HOOK_REMOVE_TRANSACTION" 1 >/dev/null 2>&1
+  restore_rc=$?
+  # 0 = the worktree was moved back; 1 = there was NOTHING to move, a pre-move marker that
+  # was merely cleared. Both are success; only 2 (recovery unsafe) is a failure. This was
+  # `|| rc=6`, which reported the clean pre-move interrupt as a failed restore and lost the
+  # 129/130/143 the caller is entitled to. The window became reachable only when the retry
+  # sleep started honouring signals promptly (`sleep … & wait`) -- before that a signal in
+  # the pre-move gap sat undelivered until the move had already happened (r9).
+  [ "$restore_rc" -le 1 ] || rc=6
   hook_worktree_lock_release || true
   exit "$rc"
 }
@@ -964,7 +1124,7 @@ hook_safe_worktree_remove() {
   trap '_hook_worktree_interrupted 129' HUP
   trap '_hook_worktree_interrupted 130' INT
   trap '_hook_worktree_interrupted 143' TERM
-  git -C "$root" worktree move "$wt" "$quarantine"
+  hook_git_retry -C "$root" worktree move "$wt" "$quarantine"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -f "$transaction" 2>/dev/null
@@ -986,7 +1146,7 @@ hook_safe_worktree_remove() {
           identity_rc=$?
           case "$identity_rc" in
             0)
-              git -C "$root" worktree remove "$quarantine"
+              hook_git_retry -C "$root" worktree remove "$quarantine"
               rc=$?
               ;;
             1) rc=10 ;;

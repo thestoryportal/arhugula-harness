@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 202
+  total: 207
   open: 1
   design_substrate_gated: 3
-  registered_finding: 51
+  registered_finding: 55
   operator_gated: 0
   held: 2
-  closed: 145
-  identity_digest: e7ca95927c86b0da
+  closed: 146
+  identity_digest: bad54dc329b62dbb
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10318,7 +10318,8 @@ items:
   title: >-
     C-HE-11 §2 gc.auto 0 — warn-and-continue vs refuse-to-open when the shared git config
     cannot be written
-  status: registered_finding
+  pr: '#1438'
+  status: closed
   summary: 'RAISED THREE TIMES by out-of-family Codex (U-HE-31 rounds 4/5/6) against a
     DOCUMENTED design choice, and register-and-held per the oscillation discipline. §2 makes
     gc.auto 0 a MUST; lane-init attempts it and, on a locked/unwritable shared config, warns
@@ -10334,7 +10335,7 @@ items:
     are the measurement that settles it; (3) no further narrowing owed meanwhile.'
   council: 'NO — a single bounded disposition with a named sibling mitigation already
     scheduled; no cross-axis tension.'
-  heading: '### B-201 · C-HE-11 §2 `gc.auto 0` — warn-and-continue vs refuse-to-open when the shared git config cannot be written *(raised three times by out-of-family Codex against U-HE-31, 2026-08-23; register-and-held on the documented reading)*'
+  heading: '### B-201 · C-HE-11 §2 `gc.auto 0` — warn-and-continue vs refuse-to-open when the shared git config cannot be written *(raised three times by out-of-family Codex against U-HE-31, 2026-08-23; register-and-held on the documented reading; CLOSED at U-HE-32, 2026-08-24)*'
 - id: B-202
   title: >-
     C-HE-11 §1/§5 lane-teardown and headroom residuals needing a primitive outside this unit
@@ -10359,3 +10360,120 @@ items:
   council: 'NO — two bounded mechanism questions inside one unit''s surface; the pilots
     supply the evidence that would settle them.'
   heading: '### B-202 · C-HE-11 §1/§5 lane-teardown and headroom residuals that need a primitive this unit does not have — a claim↔cleanup lock, and available-memory INSIDE the Docker VM *(surfaced by out-of-family Codex across U-HE-31 rounds 9–11, 2026-08-23; registered at the 11-round cap)*'
+- id: B-203
+  title: >-
+    hook_git_retry does not reach the skill-side lane git operations — a shell function
+    cannot survive an agent's Bash tool call, and the guard does not admit a chained
+    source-plus-call shape
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-32 r1). The hook-side consumers named by the
+    unit Scope are wired -- lane-init gc.auto and the two worktree mutations
+    safe-worktree-remove drives -- but ship-pr and two-lane still issue raw git add / git
+    commit / git worktree add from skill prose, and those contend for index.lock identically.
+    NOT CLOSEABLE HERE: a shell function does not survive across an agent Bash tool call (same
+    reason roadmap-continue restates HARNESS_ARC_ID inline every command), and the permission
+    guard auto-allows bare git but not a chained source-plus-hook_git_retry form, so in loop
+    mode every wrapped call would stall at ask-then-deny. Needs a guard-allowlisted invocation
+    shape -- a just recipe is the obvious candidate since a recipe name is one clean token --
+    which is U-HE-25 permission-guard surface, not this unit. Blast radius bounded and loud:
+    an unretried collision fails the agent git command visibly.'
+  close_out: '(1) Decide the invocation shape -- a just recipe is the obvious candidate,
+    since a recipe name is one clean token the guard can admit where a source-plus-call chain
+    is not; (2) admit it in tools/hooks/permission-guard.sh with its own assertions -- the
+    U-HE-25 surface; (3) convert the raw git mutations in ship-pr and two-lane to it -- the
+    U-HE-39 skill-carrier sweep, which also owes the wiring-suite update. Doing (2) and (3)
+    inside U-HE-32 would be a silent scope extension across two other units Files lists.
+    HELD through four out-of-family raises (r1-r4; the only finding standing at r4).'
+  council: 'NO -- one bounded mechanism question (which invocation shape the guard admits)
+    on an existing surface; no cross-domain tension to convene over.'
+  heading: '### B-203 · `hook_git_retry` does not reach the skill-side lane git operations — a shell function cannot survive an agent''s Bash tool call, and the guard does not admit a `source … && hook_git_retry …` shape *(surfaced by out-of-family Codex r1 against U-HE-32, 2026-08-24; registered, not blocking the unit)*'
+- id: B-204
+  title: >-
+    reservations.py update --set coerces a valid abbreviated sha to a float, so a head_sha
+    whose hex reads as scientific notation is refused as inf
+  status: registered_finding
+  summary: 'SURFACED IN-LANE while back-filling U-HE-32 reservation. `--set
+    head_sha=65106e2179` (a valid 10-char abbreviated sha) is refused with "must be a 7-64
+    char lowercase-hex sha/oid or null (C-HE-03 §3), got inf": the --set parser coerces
+    numeric-looking values before the field validator runs, and that string is legal
+    scientific notation which overflows to inf. Any abbreviated sha shaped <digits>e<digits>
+    hits it. WORSE THAN IT LOOKS: the coercion runs over EVERY --set value, so a field whose
+    validator accepts a float would take the coerced value silently -- this one is loud only
+    because the sha validator rejected inf. FIX: keep --set values as strings and let each
+    field validator convert; pin a head_sha=<digits>e<digits> case.'
+  close_out: '(1) Keep --set values as strings and let each field validator convert; (2) add
+    a case pinning head_sha=<digits>e<digits>, the fixture that would have caught it.'
+  council: 'NO -- a localised parser defect with one obvious fix.'
+  heading: '### B-204 · `reservations.py update --set` coerces a valid abbreviated sha to a float, so `head_sha=<hex that reads as scientific notation>` is refused as `inf` *(surfaced in-lane while back-filling U-HE-32''s reservation, 2026-08-24; registered)*'
+- id: B-205
+  title: >-
+    C-HE-11 §2 gc.auto 0 — refuse-to-open vs warn-and-continue once the write fails a
+    NON-transient way, after U-HE-32 retry exhaustion
+  status: registered_finding
+  summary: 'SPLIT OUT OF B-201 at its closure so the surviving obligation stays tracked;
+    out-of-family Codex r2 against U-HE-32 objected that closing B-201 buried it, and was
+    right. B-201 held on warn-and-continue with ONE named close-out -- U-HE-32 bounded retry
+    -- which has landed, so transient .git/config.lock contention no longer surfaces. What
+    survives is narrower: when the write fails AFTER an exhausted budget (unwritable or
+    corrupt shared config, not a peer holding the lock for milliseconds), should lane-init
+    still open the lane? Both readings have force: the MUST is unqualified and every other
+    MUST in lane-init fails closed, but refusing makes EVERY lane un-openable over a hygiene
+    knob, and the hazard gc.auto 0 removes is itself lock contention that hook_git_retry now
+    absorbs. Different from B-201 because the transient case is gone, so the decision is no
+    longer made against a failure mode that mostly was not real.'
+  close_out: '(1) The 3-4 lane pilots (C-HE-13 §3) are the measurement -- a cause_signature
+    naming lock contention recurring across runs says warn-and-continue is too permissive;
+    (2) decide refuse-vs-warn against that evidence rather than the unqualified MUST alone,
+    and record it at C-HE-11 §2; (3) nothing owed before the pilots.'
+  council: 'NO -- one bounded question awaiting a measurement that is already scheduled
+    (the C-HE-13 §3 pilots); no cross-domain tension to convene over.'
+  heading: '### B-205 · C-HE-11 §2 `gc.auto 0` — refuse-to-open vs warn-and-continue once the write fails a NON-transient way, i.e. after U-HE-32''s retry is exhausted *(split out of B-201 at its closure so the surviving obligation stays tracked; out-of-family Codex r2 against U-HE-32, 2026-08-24)*'
+- id: B-206
+  title: >-
+    hook_git_retry inside the worktree-removal mutex can add up to ~23 s to a critical
+    section whose waiters time out at 30 s
+  status: registered_finding
+  summary: 'SURFACED BY THE merge-gate CONCURRENCY LENS against U-HE-32. The sibling half of
+    the same finding (the signal-handler path racing a 2 s SIGKILL) WAS fixed in the unit --
+    the trap now restores fail-fast at one attempt. This half is a budget-vs-timeout
+    interaction. hook_safe_worktree_remove holds the worktree mutex from lib.sh:1024 to
+    :1123 and BOTH retried calls are inside it (worktree move :1077, worktree remove :1099).
+    Each can spend <= 11.3 s worst case (~5.6 s expected). r7 sharpened the count: the RESTORE
+    path is a THIRD retried call in the same span, so the worst case is <= 33.9 s, which
+    EXCEEDS rather than merely erodes the waiters whose
+    HARNESS_WORKTREE_LOCK_TIMEOUT_SECONDS default is 30 s
+    (:428) -- SessionStart lease registration at :488/:526/:561. NOT FIXED HERE: the retry
+    only engages under contention, the worst case needs sustained collision across two git
+    ops, and both fixes are design changes (shrink the mutex span, or a lock-aware budget via
+    the HOOK_GIT_RETRY_MAX_ATTEMPTS seam the trap fix introduced) -- lowering the budget
+    inside the mutex would put a number below the C-HE-11 §3 MUST. Adjacent to but distinct
+    from B-202: that row is a MISSING lock, this is an EXISTING lock held longer.'
+  close_out: '(1) During the 3-4 lane pilots (C-HE-13 §3) record whether any lease
+    registration actually times out and whether any worktree move/remove ever exhausts its
+    budget -- both reasoned, neither observed; (2) if it fires, choose between shrinking the
+    span and a lock-aware budget and record it against C-HE-11 §3; (3) nothing owed before
+    that measurement. Close with B-202 if its lock work reshapes this critical section.'
+  council: 'NO -- one bounded question awaiting a scheduled measurement (the C-HE-13 §3
+    pilots); no cross-domain tension to convene over.'
+  heading: '### B-206 · `hook_git_retry` inside the worktree-removal mutex can add up to ~23 s to a critical section whose waiters time out at 30 s *(surfaced by the merge-gate concurrency lens against U-HE-32, 2026-08-24; registered — the measurement is the close-out, not a code change)*'
+- id: B-207
+  title: >-
+    hook_git_retry stderr-capture temp file leaks when a signal trap exits mid-retry
+  status: registered_finding
+  summary: 'SURFACED AND MEASURED by the merge-gate concurrency lens against U-HE-32; the lens
+    itself judged it register-not-block. hook_git_retry captures git stderr to a mktemp file
+    and removes it only on a normal return. _hook_worktree_interrupted exits straight from the
+    HUP/INT/TERM trap, so a signal arriving mid-backoff skips cleanup. Measured: permanent
+    index.lock, SIGTERM mid-backoff, exactly one surviving suffix-less tmp.* under TMPDIR
+    (4353 -> 4354). One small file per INTERRUPTED teardown in an OS-reaped directory; no
+    correctness, contract, or restore behaviour depends on it. Both obvious fixes cost more
+    than the leak: an EXIT trap inside a library function clobbers the caller trap (and
+    hook_safe_worktree_remove installs three), and a deterministic per-PID path trades the
+    leak for a predictable name in a shared temp dir. REACHABLE only because the trap now
+    fires promptly -- before the sleep-and-wait fix the signal was deferred to the end of the
+    sleep -- so it is the small cost of a much larger correctness win.'
+  close_out: '(1) If fixed, the cheap shape is a per-invocation directory under a caller-owned
+    root, removed by the code that owns the trap, rather than a trap inside the library;
+    (2) otherwise close WONTFIX once the pilots confirm no operator notices it.'
+  council: 'NO -- a bounded resource nit with a known, cheap shape if it is ever wanted.'
+  heading: '### B-207 · `hook_git_retry`''s stderr-capture temp file leaks when a signal trap `exit`s mid-retry *(surfaced and measured by the merge-gate concurrency lens against U-HE-32, 2026-08-24; registered — the lens itself judged it register-not-block)*'
