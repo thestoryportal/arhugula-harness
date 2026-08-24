@@ -10561,7 +10561,21 @@ items:
     pytest_configure owns ARC_METRICS_QUEUE_DIR (the input the shell fallback is
     computed from, C-HE-05) for the whole session through a stashed MonkeyPatch undone
     at pytest_unconfigure, so import time, collection, any-scope teardown and
-    un-isolated child processes all resolve an owned belt directory; round 12 APPROVEd.
+    un-isolated child processes resolve an owned belt directory — every consumer but
+    one, below; round 12 APPROVEd. Rounds 13–15 then carved and converged the belt:
+    the Docker lane test is the ONE deliberate exception, because its
+    destructive-teardown collision claims must live in the PRODUCTION lane registry
+    (the same variable names both authorities), so the belt preserves the demoted
+    production value at ARC_METRICS_QUEUE_DIR_PREBELT — first writer wins, a nested
+    session must never re-derive it from the parent belt — and the lane test resolves
+    through production_queue_dir(), never the ambient variable (rounds 13–14, both
+    P1); and the belt-implied fallback file now IS the bracket venue file, one ledger
+    per session (round 15, P2). Round 16 APPROVEd the converged head. Gate round 2:
+    concurrency and witness-adequacy APPROVE; spec-conformance BLOCKed on exactly
+    this paragraph lagging rounds 13–15, corrected here. One named residual is
+    tracked, not hidden: the 7c driver leaks its own mkdtemp root when an arm fails
+    mid-flight (bounded to already-failing runs — both code lenses judged it
+    non-blocking).
     The 3-lens gate then caught the belt carrying only a presence witness plus a
     hand-rolled two-armed restore (the round-4 shape recurring): the restore now
     delegates to the stashed MonkeyPatch, a behavioral witness lifts the bracket and
