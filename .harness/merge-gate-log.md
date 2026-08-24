@@ -594,3 +594,55 @@ can never leave zero survivors; the code, the tests and the register now state t
 instead of claiming the invariant. Surfaced via `AskUserQuestion`; the operator selected
 "land it; residual registered", consistent with the B-190/B-191 precedent of landing with a
 reasoned, registered residual rather than iterating past the point of convergence.
+### PR #1438 — 2026-08-24 — `feat/u-he-32-git-ref-lock-retry` (U-HE-32 bounded git ref-lock retry, C-HE-11 §3)
+
+**Gate outcome: all three APPROVE at head `5f9fca6e`.** Two gate rounds were needed; round 1
+split 2 APPROVE / 1 BLOCK.
+
+`blast-radius: 12 consumer files` — enumerated by grep, NOT by graft: the graph does not index
+shell functions (`graft callers hook_git_retry` returns "no symbol in the graph"), so the
+mechanical enumeration ran over `hook_git_retry`, `hook_safe_worktree_remove` and
+`_hook_worktree_restore_transaction` call sites plus every script sourcing `lib.sh`. Recorded
+as a substitution rather than a silent skip; it is a floor, not a ceiling.
+
+**Round 1 — the concurrency lens found the best defect of the arc.** Round 3 of the
+out-of-family review had wired the retry into `_hook_worktree_restore_transaction` on the
+grounds that three of its four callers are ordinary recovery. The fourth is the HUP/INT/TERM
+handler, and `hook_bounded` escalates SIGTERM to SIGKILL after 2 s — so the fix gave that
+handler an ~11 s backoff and guaranteed the kill would land mid-restore, stranding the very
+worktree the retry was added to save. Both readings were right about different callers, so the
+budget became a value and only the trap passes 1. Its second finding (three budgets inside the
+worktree mutex, ≤ 33.9 s against a 30 s waiter timeout) is registered as B-206; its third (the
+`mktemp` stderr file leaking when the trap `exit`s, measured 4353 → 4354 under `$TMPDIR`) as
+B-207.
+
+**Round 1 — the witness lens BLOCKed correctly, on the fifth vacuous version of one
+assertion.** The full-jitter check required each wait to be bounded and varying, which "equal
+jitter" (`ceiling/2 + random(0, ceiling/2)`) satisfies. The natural statistic that separates
+them fails ~0.8 % of the time under real full jitter, so the fix was structural instead: the
+draw is now its own unit taking the random value as an argument, and the endpoints are asserted
+exactly (r=0 → 0.000, r=32767 → ceiling). The named mutant now fails deterministically.
+
+**Round 1 — the witness lens also BLOCKed on a claim measurement falsified.** It argued the
+`Unable to create ….lock': File exists` branch had no independent witness, since real git always
+co-emits "Another git process…". True of the real-git cases, but the shim-based call-site cases
+emit only the `Unable to create` line — deleting that alternative reds 7 assertions (measured).
+A note now records which case witnesses which branch.
+
+**Round 2 — all three APPROVE.** The concurrency lens re-derived the bash trap-deferral
+mechanism independently (6 s deferred on a foreground `sleep`, 1 s through `wait`) and confirmed
+both prior fixes. It surfaced one non-blocking latent inconsistency: `lib.sh:1167` still uses
+`[ "$restore_rc" -eq 0 ]` where the two sibling callers (`:1066`, `:1080`) treat return-1 as
+success. Verified unreachable today — that branch's `-d "$quarantine"` guard means the restore
+can only return 0 or 2 — so it is left for a follow-up rather than invalidating three
+head-bound verdicts for a behaviour-neutral edit. The witness lens re-ran both suites on the
+commit (152/152, 119/119) and re-ran real git against index/config/ref locks to confirm the
+classifier's comments.
+
+Findings across the nine out-of-family rounds that preceded this gate: 6, 4, 4, 1, 4, 4, 3, 2,
+3 — converging, with the residue being two registered dispositions (B-203 held at nine raises;
+B-206) rather than unaddressed defects.
+
+| 2026-08-24T05:24:59Z | #1438 | 5f9fca6e8fd7 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-24T05:25:00Z | #1438 | 5f9fca6e8fd7 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-24T05:25:00Z | #1438 | 5f9fca6e8fd7 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
