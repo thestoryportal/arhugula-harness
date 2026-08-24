@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 202
+  total: 204
   open: 1
   design_substrate_gated: 3
-  registered_finding: 51
+  registered_finding: 52
   operator_gated: 0
   held: 2
-  closed: 145
-  identity_digest: e7ca95927c86b0da
+  closed: 146
+  identity_digest: 7c1676487cbc8f85
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10318,7 +10318,8 @@ items:
   title: >-
     C-HE-11 §2 gc.auto 0 — warn-and-continue vs refuse-to-open when the shared git config
     cannot be written
-  status: registered_finding
+  pr: '#1438'
+  status: closed
   summary: 'RAISED THREE TIMES by out-of-family Codex (U-HE-31 rounds 4/5/6) against a
     DOCUMENTED design choice, and register-and-held per the oscillation discipline. §2 makes
     gc.auto 0 a MUST; lane-init attempts it and, on a locked/unwritable shared config, warns
@@ -10334,7 +10335,7 @@ items:
     are the measurement that settles it; (3) no further narrowing owed meanwhile.'
   council: 'NO — a single bounded disposition with a named sibling mitigation already
     scheduled; no cross-axis tension.'
-  heading: '### B-201 · C-HE-11 §2 `gc.auto 0` — warn-and-continue vs refuse-to-open when the shared git config cannot be written *(raised three times by out-of-family Codex against U-HE-31, 2026-08-23; register-and-held on the documented reading)*'
+  heading: '### B-201 · C-HE-11 §2 `gc.auto 0` — warn-and-continue vs refuse-to-open when the shared git config cannot be written *(raised three times by out-of-family Codex against U-HE-31, 2026-08-23; register-and-held on the documented reading; CLOSED at U-HE-32, 2026-08-24)*'
 - id: B-202
   title: >-
     C-HE-11 §1/§5 lane-teardown and headroom residuals needing a primitive outside this unit
@@ -10359,3 +10360,45 @@ items:
   council: 'NO — two bounded mechanism questions inside one unit''s surface; the pilots
     supply the evidence that would settle them.'
   heading: '### B-202 · C-HE-11 §1/§5 lane-teardown and headroom residuals that need a primitive this unit does not have — a claim↔cleanup lock, and available-memory INSIDE the Docker VM *(surfaced by out-of-family Codex across U-HE-31 rounds 9–11, 2026-08-23; registered at the 11-round cap)*'
+- id: B-203
+  title: >-
+    hook_git_retry does not reach the skill-side lane git operations — a shell function
+    cannot survive an agent's Bash tool call, and the guard does not admit a chained
+    source-plus-call shape
+  status: registered_finding
+  summary: 'SURFACED BY OUT-OF-FAMILY CODEX (U-HE-32 r1). The hook-side consumers named by the
+    unit Scope are wired -- lane-init gc.auto and the two worktree mutations
+    safe-worktree-remove drives -- but ship-pr and two-lane still issue raw git add / git
+    commit / git worktree add from skill prose, and those contend for index.lock identically.
+    NOT CLOSEABLE HERE: a shell function does not survive across an agent Bash tool call (same
+    reason roadmap-continue restates HARNESS_ARC_ID inline every command), and the permission
+    guard auto-allows bare git but not a chained source-plus-hook_git_retry form, so in loop
+    mode every wrapped call would stall at ask-then-deny. Needs a guard-allowlisted invocation
+    shape -- a just recipe is the obvious candidate since a recipe name is one clean token --
+    which is U-HE-25 permission-guard surface, not this unit. Blast radius bounded and loud:
+    an unretried collision fails the agent git command visibly.'
+  close_out: '(1) Decide the invocation shape -- a just recipe is the obvious candidate,
+    since a recipe name is one clean token the guard can admit where a source-plus-call chain
+    is not; (2) admit it in tools/hooks/permission-guard.sh with its own assertions; (3)
+    convert the raw git mutations in ship-pr and two-lane to it.'
+  council: 'NO -- one bounded mechanism question (which invocation shape the guard admits)
+    on an existing surface; no cross-domain tension to convene over.'
+  heading: '### B-203 · `hook_git_retry` does not reach the skill-side lane git operations — a shell function cannot survive an agent''s Bash tool call, and the guard does not admit a `source … && hook_git_retry …` shape *(surfaced by out-of-family Codex r1 against U-HE-32, 2026-08-24; registered, not blocking the unit)*'
+- id: B-204
+  title: >-
+    reservations.py update --set coerces a valid abbreviated sha to a float, so a head_sha
+    whose hex reads as scientific notation is refused as inf
+  status: registered_finding
+  summary: 'SURFACED IN-LANE while back-filling U-HE-32 reservation. `--set
+    head_sha=65106e2179` (a valid 10-char abbreviated sha) is refused with "must be a 7-64
+    char lowercase-hex sha/oid or null (C-HE-03 §3), got inf": the --set parser coerces
+    numeric-looking values before the field validator runs, and that string is legal
+    scientific notation which overflows to inf. Any abbreviated sha shaped <digits>e<digits>
+    hits it. WORSE THAN IT LOOKS: the coercion runs over EVERY --set value, so a field whose
+    validator accepts a float would take the coerced value silently -- this one is loud only
+    because the sha validator rejected inf. FIX: keep --set values as strings and let each
+    field validator convert; pin a head_sha=<digits>e<digits> case.'
+  close_out: '(1) Keep --set values as strings and let each field validator convert; (2) add
+    a case pinning head_sha=<digits>e<digits>, the fixture that would have caught it.'
+  council: 'NO -- a localised parser defect with one obvious fix.'
+  heading: '### B-204 · `reservations.py update --set` coerces a valid abbreviated sha to a float, so `head_sha=<hex that reads as scientific notation>` is refused as `inf` *(surfaced in-lane while back-filling U-HE-32''s reservation, 2026-08-24; registered)*'
