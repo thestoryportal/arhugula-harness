@@ -161,14 +161,21 @@ _hook_git_retry_trace() {
 # operator signal either way and must never be a silent one.
 # Usage: hook_git_retry [-C dir] <git args...>
 hook_git_retry() {
-  local attempt=0 delay_ms=100 errfile err rc slept max
-  # 8 is C-HE-11 §3's number and the default everywhere. It is a VALUE rather than a
-  # constant for exactly one caller: the HUP/INT/TERM handler below, which restores a
-  # quarantined worktree while racing this codebase's own `-k 2` SIGKILL escalation
-  # (`hook_bounded`). A handler that waits out an 8-attempt budget (up to ~11 s) is
-  # killed mid-restore and strands the worktree -- the precise damage the retry exists
-  # to prevent (merge-gate concurrency lens, PR #1438).
-  max="${HOOK_GIT_RETRY_MAX_ATTEMPTS:-8}"
+  local attempt=0 delay_ms=100 errfile err rc slept max=8
+  # 8 is C-HE-11 §3's number and the default. It is overridable ONLY through an explicit
+  # leading `--max N`, never through the environment: an inherited variable would let any
+  # ambient value silently lower the contract's budget for every caller, and a non-integer
+  # one made `[ "$attempt" -ge "$max" ]` fail on EVERY iteration -- an infinite retry loop
+  # that never emits its exhaustion NOTIFY (out-of-family review r6; measured). Anything
+  # but a positive integer is refused outright rather than defaulted past.
+  if [ "${1:-}" = "--max" ]; then
+    case "${2:-}" in
+      "" | *[!0-9]*) echo "hook_git_retry: --max needs a positive integer, got '${2:-}'" >&2; return 2 ;;
+    esac
+    [ "$2" -ge 1 ] || { echo "hook_git_retry: --max must be >= 1, got '$2'" >&2; return 2; }
+    max="$2"
+    shift 2
+  fi
   errfile=$(mktemp) || { echo "hook_git_retry: could not create a stderr capture" >&2; return 1; }
   while :; do
     if LC_ALL=C git "$@" 2>"$errfile"; then rc=0; else rc=$?; fi
@@ -187,7 +194,12 @@ hook_git_retry() {
     fi
     slept=$(awk -v d="$delay_ms" -v r="$RANDOM" 'BEGIN { printf "%.3f", (d * (r / 32767)) / 1000 }')
     _hook_git_retry_trace "$attempt" "$delay_ms" "$slept"
-    sleep "$slept"
+    # `sleep … & wait` rather than a bare `sleep`. bash defers a trapped signal until a
+    # FOREGROUND child exits, so with a draw near the 5 s ceiling a TERM would sit unhandled
+    # past `hook_bounded`'s 2 s TERM-to-KILL grace and the worktree-restore handler would
+    # never run (measured: 6 s deferral foreground vs 1 s through `wait`). `wait` is
+    # interruptible, so the trap fires when the signal arrives (out-of-family review r6).
+    sleep "$slept" & wait $!
     delay_ms=$((delay_ms * 2))
     [ "$delay_ms" -gt 5000 ] && delay_ms=5000
   done
@@ -814,6 +826,9 @@ _hook_worktree_write_transaction() {
 # 1 when a pre-move marker was merely cleared, and 2 when recovery is unsafe.
 _hook_worktree_restore_transaction() {
   local root="$1" transaction="$2" original quarantine third original_rc quarantine_rc
+  # Third argument: the retry budget for the restore's own git call, defaulting to the
+  # C-HE-11 §3 number. Only the signal handler passes anything else.
+  local max_attempts="${3:-8}"
   [ -f "$transaction" ] || return 1
   original=$(sed -n '1p' "$transaction" 2>/dev/null)
   quarantine=$(sed -n '2p' "$transaction" 2>/dev/null)
@@ -839,7 +854,7 @@ _hook_worktree_restore_transaction() {
     # teardown -- but three of the four callers (:1011, :1025, :1113) are ordinary
     # recovery, and a lock collision there strands the worktree in quarantine, which is
     # durable damage. A bounded wait is the cheaper failure (out-of-family review r3).
-    hook_git_retry -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
+    hook_git_retry --max "$max_attempts" -C "$root" worktree move "$quarantine" "$original" >/dev/null 2>&1 || return 2
     rm -f "$transaction" 2>/dev/null || return 2
     printf '%s' "$original"
     return 0
@@ -876,8 +891,8 @@ _hook_worktree_interrupted() {
   # and `hook_bounded` escalates SIGTERM to SIGKILL after 2 s, so sitting in an ~11 s
   # backoff here does not save the worktree -- it guarantees the kill lands mid-restore
   # and strands it anyway. Fail fast, restore what can be restored, exit.
-  HOOK_GIT_RETRY_MAX_ATTEMPTS=1 _hook_worktree_restore_transaction "$_HOOK_REMOVE_ROOT" \
-    "$_HOOK_REMOVE_TRANSACTION" >/dev/null 2>&1 || rc=6
+  _hook_worktree_restore_transaction "$_HOOK_REMOVE_ROOT" \
+    "$_HOOK_REMOVE_TRANSACTION" 1 >/dev/null 2>&1 || rc=6
   hook_worktree_lock_release || true
   exit "$rc"
 }

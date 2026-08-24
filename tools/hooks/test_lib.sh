@@ -1031,15 +1031,20 @@ eq "the ceiling doubles from 100 ms and caps at 5 s" \
 # always-zero sleep, and "< ceiling" alone is too -- a mutation probe caught exactly that,
 # so the assertion also requires a strictly positive draw. Together they reject the two
 # degenerate implementations: a zero-delay tight loop and a fixed-ceiling backoff.
+# Bounded-and-nonzero is NOT enough: a deterministic HALF-ceiling delay satisfies both
+# (r6). Full jitter's distinguishing property is that the draw VARIES relative to its
+# ceiling, so the ratio slept/ceiling must take more than one value across the seven
+# waits. A constant-ratio backoff -- half, or the ceiling itself, or zero -- collapses to
+# a single distinct ratio and is rejected.
 GR_JITTER=$(awk '$2 != "-" {
     c = $2 / 1000
     if ($3 + 0 > c) over++
-    if ($3 + 0 < c) below++
-    if ($3 + 0 > 0) positive++
-  } END { printf "%d %d %d", over + 0, below + 0, positive + 0 }' "$TRACE")
-eq "every wait is drawn from [0, ceiling], with both ends of the range exercised" \
-  "$(echo "$GR_JITTER" | awk '{ print ($1 == 0 && $2 > 0 && $3 > 0) ? "ok" \
-      : "no (over=" $1 " below=" $2 " positive=" $3 ")" }')" "ok"
+    r = sprintf("%.2f", ($3 + 0) / c)
+    if (!(r in seen)) { seen[r] = 1; distinct++ }
+  } END { printf "%d %d", over + 0, distinct + 0 }' "$TRACE")
+eq "every wait is a VARYING draw from [0, ceiling], not a constant fraction of it" \
+  "$(echo "$GR_JITTER" | awk '{ print ($1 == 0 && $2 >= 3) ? "ok" \
+      : "no (over-ceiling=" $1 " distinct-ratios=" $2 ")" }')" "ok"
 # And that the waits were actually TAKEN. The assertions above read values the helper
 # wrote BEFORE sleeping, so deleting `sleep "$slept"` left them all green (r3) -- the
 # lock here is released on attempt count, so nothing else notices the missing delay. A
@@ -1205,6 +1210,25 @@ REAL_GIT="$(command -v git)" HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM3:$PATH
   _hook_worktree_restore_transaction "$REPO" "$GR_TTXN" >/dev/null 2>&1
 eq "an ordinary restore against the same lock still spends the full budget" \
   "$(gr_attempts)" "8"
+
+# (16) `--max` is the ONLY way to move the budget, and it is validated. It used to be an
+#      inherited environment variable, which meant any ambient value silently lowered the
+#      C-HE-11 §3 budget for every caller -- and a NON-INTEGER one made the bound test
+#      error on every iteration, so the loop never exhausted and never emitted its NOTIFY.
+#      That is an infinite retry against a permanent lock (out-of-family review r6).
+: > "$REPO/amb-trace"
+: > "$GR/.git/index.lock"
+HOOK_GIT_RETRY_MAX_ATTEMPTS=1 HOOK_GIT_RETRY_TRACE="$REPO/amb-trace" \
+  hook_git_retry -C "$GR" add -A >/dev/null 2>&1
+rm -f "$GR/.git/index.lock"
+eq "an ambient HOOK_GIT_RETRY_MAX_ATTEMPTS cannot move the budget" \
+  "$(wc -l < "$REPO/amb-trace" | tr -d ' ')" "8"
+hook_git_retry --max abc -C "$GR" rev-parse HEAD >/dev/null 2>"$REPO/gr-max.err"
+eq "a non-integer --max is refused, not defaulted past" "$?" "2"
+grep -q "positive integer" "$REPO/gr-max.err" \
+  && ok "and it says why" || bad "unclear --max error: '$(cat "$REPO/gr-max.err")'"
+hook_git_retry --max 0 -C "$GR" rev-parse HEAD >/dev/null 2>&1
+eq "a zero --max is refused" "$?" "2"
 
 # (15) The WRAPPER's own ledger dependency. `safe-worktree-remove.sh` sources loop_lib.sh
 #      so an exhausted budget leaves a durable NOTIFY rather than only a line on stderr.
