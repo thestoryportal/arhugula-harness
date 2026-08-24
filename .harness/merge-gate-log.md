@@ -654,3 +654,7 @@ B-206) rather than unaddressed defects.
 | 2026-08-24T15:15:49Z | #1443 | 7095120707c0 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
 | 2026-08-24T15:15:50Z | #1443 | 7095120707c0 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-08-24 | #1443 | fix/b-208-loop-ledger-test-pollution | gate round 2 at 709512070: concurrency APPROVE / witness-adequacy APPROVE / spec-conformance BLOCK (register belt sentence falsified by the round-13 PREBELT carve-out; rounds 13-15 unnarrated) → registers superseded docs-only, code byte-identical to reviewed head; blast-radius: carried from round 1 (16 consumer files) | re-gate owed at the register head |
+| 2026-08-24T15:23:03Z | #1443 | e308cc76fd44 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-08-24T15:23:04Z | #1443 | e308cc76fd44 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| 2026-08-24T15:23:46Z | #1443 | e308cc76fd44 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-08-24 | #1443 | fix/b-208-loop-ledger-test-pollution | gate round 3 at e308cc76f: concurrency APPROVE / spec-conformance APPROVE / witness-adequacy APPROVE (docs-only delta verified; spec lens confirmed its round-2 finding closed against code) → ALL-APPROVE, merge authorized; blast-radius: carried from round 1 (16 consumer files) | proceed to safe-merge |
