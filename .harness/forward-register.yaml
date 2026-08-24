@@ -10518,7 +10518,16 @@ items:
     most needs it. test_arc_exit_report.py::shared_ledger documents this exact trap and
     avoids it the same way; the fix had walked into it. Found by review AND independently
     by CI, where arc_exit_report''s own pin was rolled back underneath it (4 reds).
-    Now an explicit save/restore, with a fourth witness performing the mid-test undo.
+    Round 4 (merge-gate witness lens, which built a worktree and ran every mutation):
+    that explicit save/restore had TWO modes — the variable was set, or it was not — and
+    only one is reachable from a pytest process nobody pre-configured, so half the
+    mechanism shipped untested (confirmed dead: replacing the teardown with an
+    unconditional pop left 4/4 and 92/92 green). Resolved by DELETING the branch rather
+    than contriving a witness for it: an independent pytest.MonkeyPatch.context() owns
+    both modes, and being a separate instance it is still immune to the test body''s
+    undo(). Same lens also showed only the [mine, axis] order of witness 3
+    discriminates against a session-scope regression; the second order is kept for the
+    import-time shape it alone catches, and the docstring now says which is which.
     Witnesses at tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to

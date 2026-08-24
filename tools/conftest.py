@@ -30,7 +30,6 @@ invariants true instead of trading one for the other.
 
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 from collections.abc import Iterator
@@ -72,16 +71,25 @@ def _isolated_loop_status_venue(_loop_status_root: Path) -> Iterator[Path]:
     failed exactly that way when run; `test_the_redirect_does_not_outlive_a_tools_test`
     is the witness.
 
-    Deliberately NOT `monkeypatch.setenv` -- the same reason
-    `test_arc_exit_report.py::shared_ledger` gives, and the same trap: `monkeypatch` is
-    ONE function-scoped instance shared with the test body, and several tools tests call
+    Deliberately NOT the `monkeypatch` FIXTURE -- the same reason
+    `test_arc_exit_report.py::shared_ledger` gives, and the same trap: that fixture is ONE
+    function-scoped instance shared with the test body, and nine tools tests call
     `monkeypatch.undo()` mid-test to drop a `run` stub before exercising the real
-    subprocess runner. An undo() empties the whole stack, so a monkeypatch-based redirect
-    is silently lifted mid-test and the very next real emit resolves the operator's
-    ledger. That was this fixture's third shape; it was caught by out-of-family review
-    and, independently, by CI, where `test_arc_exit_report.py`'s own pin was rolled back
+    subprocess runner. An `undo()` empties the whole stack, so a redirect riding on it is
+    silently lifted mid-test and the very next real emit resolves the operator's ledger.
+    That was this fixture's third shape; out-of-family review and CI caught it
+    independently, the latter by rolling `test_arc_exit_report.py`'s own pin back
     underneath it. `test_a_mid_test_monkeypatch_undo_does_not_lift_the_redirect` is the
     witness.
+
+    An INDEPENDENT `MonkeyPatch` is immune to that -- `undo()` only empties the instance
+    it is called on. It is preferred over a hand-rolled `try/finally` because restoring an
+    environment variable has two modes (it was set; it was not), only one of which is
+    reachable from a pytest process that nobody pre-configured. The hand-rolled version
+    therefore shipped a restore branch no witness could reach, confirmed dead by mutation
+    (merge-gate witness lens). Delegating to `MonkeyPatch` deletes the branch rather than
+    testing it: one implementation owns both modes, and it is already covered by pytest's
+    own suite.
 
     Set unconditionally rather than only-if-unset: no test here legitimately writes the
     real venue, so an ambient value pointing at it is a misconfiguration, not an intent
@@ -89,12 +97,6 @@ def _isolated_loop_status_venue(_loop_status_root: Path) -> Iterator[Path]:
     and this restores whatever it found underneath.
     """
     venue = _loop_status_root / "loop_status.md"
-    previous = os.environ.get(_VENUE_ENV)
-    os.environ[_VENUE_ENV] = str(venue)
-    try:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(_VENUE_ENV, str(venue))
         yield venue
-    finally:
-        if previous is None:
-            os.environ.pop(_VENUE_ENV, None)
-        else:
-            os.environ[_VENUE_ENV] = previous

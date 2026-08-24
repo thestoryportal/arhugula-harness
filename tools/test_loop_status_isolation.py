@@ -86,8 +86,15 @@ def test_the_redirect_does_not_outlive_a_tools_test(tmp_path):
     way (out-of-family review, round 2, confirmed by running it).
 
     Asserting it in-process is not possible — this test cannot observe its own teardown
-    — so the witness is the mixed invocation itself, in a subprocess, in both orders.
-    Revert the fixture to `scope="session"` and this reds.
+    — so the witness is the mixed invocation itself, in a subprocess.
+
+    The two orders catch DIFFERENT regressions, and only the first catches that one.
+    `[mine, axis]` is the discriminating order for a session-scoped setter: revert the
+    fixture to `scope="session"` and it reds, while `[axis, mine]` stays green, because
+    nothing has set the variable yet when the axis test runs first (verified by mutation,
+    merge-gate witness lens). `[axis, mine]` is kept because it catches the shape the
+    first order cannot — a redirect established at import or collection time rather than
+    per test, which is set before ANY test runs and so leaks in both directions.
     """
     axis = "harness-runtime/tests/test_config_loader.py::test_env_defaults_to_os_environ_when_none"
     mine = (
