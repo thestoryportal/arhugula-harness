@@ -658,3 +658,4 @@ B-206) rather than unaddressed defects.
 | 2026-08-24T15:23:04Z | #1443 | e308cc76fd44 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
 | 2026-08-24T15:23:46Z | #1443 | e308cc76fd44 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
 | 2026-08-24 | #1443 | fix/b-208-loop-ledger-test-pollution | gate round 3 at e308cc76f: concurrency APPROVE / spec-conformance APPROVE / witness-adequacy APPROVE (docs-only delta verified; spec lens confirmed its round-2 finding closed against code) → ALL-APPROVE, merge authorized; blast-radius: carried from round 1 (16 consumer files) | proceed to safe-merge |
+| 2026-08-24T22:14:05Z | #1447 | 00385628b764 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |

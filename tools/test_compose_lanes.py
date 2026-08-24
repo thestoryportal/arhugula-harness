@@ -205,6 +205,11 @@ def test_a_fenced_index_is_refused_and_nothing_is_claimed(
     lanes.mkdir(parents=True)
     (lanes / ".orphaned-348").write_text("unverified teardown\n", encoding="utf-8")
     monkeypatch.setenv("ARC_METRICS_QUEUE_DIR_PREBELT", str(tmp_path / "prod"))
+    # Own BOTH resolver inputs: pointing the ambient variable at this test's own empty
+    # belt keeps a mis-resolved helper from reading or writing the session-shared one —
+    # the cross-test leakage that let a sibling's residue fake this refusal (merge-gate
+    # witness-adequacy round 1 on PR #1447).
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR", str(tmp_path / "belt"))
     with pytest.raises(AssertionError, match="fenced"):
         claim_production_lane_indices((348,), "witness")
     assert not (lanes / "348").exists()
@@ -219,8 +224,15 @@ def test_a_taken_index_is_refused_and_earlier_claims_are_released(
     lanes.mkdir(parents=True)
     (lanes / "349").write_text("live-lane /elsewhere\n", encoding="utf-8")
     monkeypatch.setenv("ARC_METRICS_QUEUE_DIR_PREBELT", str(tmp_path / "prod"))
-    with pytest.raises(AssertionError, match="already claimed"):
+    # Own BOTH resolver inputs (see the fence test above): under the ambient-chain
+    # mutation this test must land in ITS empty belt and red on DID-NOT-RAISE, not
+    # coincidentally collide with a sibling's leftover claim in the session belt.
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR", str(tmp_path / "belt"))
+    with pytest.raises(AssertionError, match="already claimed") as excinfo:
         claim_production_lane_indices((348, 349), "witness")
+    # Pin the refusal to THIS registry's seeded claim: any collision elsewhere carries
+    # different claim content and must not satisfy this witness.
+    assert "live-lane /elsewhere" in str(excinfo.value)
     assert not (lanes / "348").exists(), "the refused call must release the claim it took first"
 
 
