@@ -55,7 +55,9 @@ def test_a_real_emit_lands_in_the_redirect_and_not_in_the_computed_fallback(monk
     venue = Path(redirect) if redirect else None
     before = venue.read_text() if venue and venue.exists() else ""
 
-    rs.emit_loop_row("NOTIFY", "b-208-witness", "b-208:isolation:probe", "row from the B-208 witness")
+    rs.emit_loop_row(
+        "NOTIFY", "b-208-witness", "b-208:isolation:probe", "row from the B-208 witness"
+    )
 
     assert not fallback.exists(), (
         "a real emit reached the COMPUTED fallback venue — under a production environment "

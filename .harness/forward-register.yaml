@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 207
+  total: 208
   open: 1
   design_substrate_gated: 3
   registered_finding: 55
   operator_gated: 0
   held: 2
-  closed: 146
-  identity_digest: bad54dc329b62dbb
+  closed: 147
+  identity_digest: 5c2a2842ffc0a2d4
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10477,3 +10477,34 @@ items:
     (2) otherwise close WONTFIX once the pilots confirm no operator notices it.'
   council: 'NO -- a bounded resource nit with a known, cheap shape if it is ever wanted.'
   heading: '### B-207 · `hook_git_retry`''s stderr-capture temp file leaks when a signal trap `exit`s mid-retry *(surfaced and measured by the merge-gate concurrency lens against U-HE-32, 2026-08-24; registered — the lens itself judged it register-not-block)*'
+- id: B-208
+  title: >-
+    the shared HITL loop ledger was reachable from a test process — 6288 of its 6589 rows
+    were synthetic
+  pr: '#1443'
+  status: closed
+  summary: 'SURFACED while clearing the U-HE-32 refresh gates and CLOSED in the same arc.
+    loop_status_path() resolves the ledger from the ambient environment and falls back to the
+    operator''s real ~/.gstack/projects/arhugula-v2/loop_status.md whenever
+    HARNESS_LOOP_STATUS_PATH is unset — the default state of every pytest process — so any
+    test reaching a real emit path appended REAL DEFERRED-HIL rows to the venue the
+    SessionStart hook reads. Measured on main at e6913c112: 6288 synthetic lane=A rows against
+    82 real-lane rows, 6589 total, 1.07 MB, with a fabricated "pr-1 — pr #1: gh transport
+    exploded" gate nagging at every session start. Reproduced rather than inferred: one door
+    test run with the variable pointed at a scratch file emitted that exact row into it. Fixed
+    at the OUTERMOST venue (root conftest pytest_configure) rather than per test file, because
+    per-file isolation is what the workspace already tried and what drifted — two files
+    remember, test_merge_door.py does not — and because several door tests drive merge_door.py
+    as a real SUBPROCESS, which monkeypatching the Python seam cannot reach and only the
+    inherited environment can.'
+  close_out: 'CLOSED at #1443. Witnesses at tools/test_loop_status_isolation.py, the
+    load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
+    fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to
+    end: the full 119-test door suite left the operator''s ledger byte-identical
+    (1097455 bytes both sides). The 6288 rows ALREADY in the ledger are deliberately NOT
+    removed — it is append-only by contract (C-HE-09 §2) and is operator state outside this
+    repo, so truncating it is the operator''s call; the pending synthetic gate was cleared the
+    contract-sanctioned way, with a RESOLVED-HIL row.'
+  council: 'NO — a hermeticity boundary with one obvious enforcement point; no cross-axis
+    tension and no contract change.'
+  heading: '### B-208 · the shared HITL loop ledger was reachable from a test process — 6288 of its 6589 rows were synthetic *(surfaced while clearing the U-HE-32 refresh gates, 2026-08-24; CLOSED at #1443 the same arc)*'
