@@ -10492,11 +10492,15 @@ items:
     82 real-lane rows, 6589 total, 1.07 MB, with a fabricated "pr-1 — pr #1: gh transport
     exploded" gate nagging at every session start. Reproduced rather than inferred: one door
     test run with the variable pointed at a scratch file emitted that exact row into it. Fixed
-    at the OUTERMOST venue (root conftest pytest_configure) rather than per test file, because
-    per-file isolation is what the workspace already tried and what drifted — two files
-    remember, test_merge_door.py does not — and because several door tests drive merge_door.py
+    at tools/conftest.py — one point for the whole directory — rather than per test file,
+    because per-file isolation is what the workspace already tried and what drifted (two files
+    remember, test_merge_door.py does not) and because several door tests drive merge_door.py
     as a real SUBPROCESS, which monkeypatching the Python seam cannot reach and only the
-    inherited environment can.'
+    inherited environment can. NOT at the root conftest: the first cut put it there and CI
+    caught the over-reach, because a root redirect leaks a HARNESS_* name into every axis
+    suite and harness-runtime test_env_defaults_to_os_environ_when_none asserts none is set
+    (RuntimeConfig''s env loader consumes that namespace). Every loop-row producer lives under
+    tools/, so the joint is the directory, and both invariants stay true.'
   close_out: 'CLOSED at #1443. Witnesses at tools/test_loop_status_isolation.py, the
     load-bearing one driving a real emit_loop_row and deliberately relocating the COMPUTED
     fallback to a tmp dir so a mutation probe cannot re-inflict the damage. Verified end to

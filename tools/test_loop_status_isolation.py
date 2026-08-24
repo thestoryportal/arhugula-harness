@@ -3,8 +3,10 @@
 `loop_status_path()` (tools/hooks/loop_lib.sh) resolves the venue from the ambient
 environment, falling back to the operator's real ledger when `HARNESS_LOOP_STATUS_PATH`
 is unset. Every pytest process starts with it unset, so any test reaching a real emit
-path appended real `DEFERRED-HIL` rows to the venue the SessionStart hook reads. The
-root conftest now redirects it once per session; these are the witnesses for that.
+path appended real `DEFERRED-HIL` rows to the venue the SessionStart hook reads.
+`tools/conftest.py` now redirects it once per `tools/` session -- at the joint where
+every loop-row producer lives, rather than at the root, where the redirect would also
+leak a `HARNESS_*` name into axis suites that assert none is set. These witness that.
 
 Case 2 is the load-bearing one and is deliberately hermetic: it moves the COMPUTED
 FALLBACK to a temp dir, so removing the conftest redirect sends the write into a file
@@ -26,7 +28,7 @@ import reservations as rs
 def test_session_venue_is_redirected_away_from_the_default():
     """(1) The redirect happened at all, and named a real absolute path."""
     venue = os.environ.get("HARNESS_LOOP_STATUS_PATH")
-    assert venue, "conftest.pytest_configure must set HARNESS_LOOP_STATUS_PATH"
+    assert venue, "tools/conftest.py must redirect HARNESS_LOOP_STATUS_PATH"
     assert venue.startswith("/"), f"loop_status_path rejects a relative venue, got {venue!r}"
     assert "harness-loop-status-" in venue, f"not the session's throwaway venue: {venue!r}"
     assert ".gstack" not in venue, f"venue still resolves inside the operator's store: {venue!r}"
@@ -63,7 +65,7 @@ def test_a_real_emit_lands_in_the_redirect_and_not_in_the_computed_fallback(monk
         "a real emit reached the COMPUTED fallback venue — under a production environment "
         f"that path is the operator's shared append-only ledger ({fallback})"
     )
-    assert venue is not None, "conftest.pytest_configure must set HARNESS_LOOP_STATUS_PATH"
+    assert venue is not None, "tools/conftest.py must redirect HARNESS_LOOP_STATUS_PATH"
     assert venue.exists(), "the emit did not reach the redirected venue"
     appended = venue.read_text()[len(before) :]
     assert "b-208:isolation:probe" in appended, f"row missing from the redirect: {appended!r}"
