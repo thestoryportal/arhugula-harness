@@ -357,6 +357,7 @@ def test_the_belt_is_paired_configure_sets_unconfigure_restores(monkeypatch):
         def __init__(self) -> None:
             self.stash = pytest.Stash()
 
+    monkeypatch.delenv("ARC_METRICS_QUEUE_DIR_PREBELT", raising=False)
     for prior in ("sentinel-prior-queue", None):
         cfg = _Cfg()
         if prior is None:
@@ -366,11 +367,41 @@ def test_the_belt_is_paired_configure_sets_unconfigure_restores(monkeypatch):
         cf.pytest_configure(cfg)
         inside = os.environ.get("ARC_METRICS_QUEUE_DIR", "")
         assert "harness-loop-status-" in inside, f"configure did not set the belt: {inside!r}"
+        assert os.environ.get("ARC_METRICS_QUEUE_DIR_PREBELT") == (prior or ""), (
+            "the demoted production value was not preserved at the PREBELT sibling: "
+            f"{os.environ.get('ARC_METRICS_QUEUE_DIR_PREBELT')!r} (prior {prior!r})"
+        )
         cf.pytest_unconfigure(cfg)
         assert os.environ.get("ARC_METRICS_QUEUE_DIR") == prior, (
             f"unconfigure did not restore prior state {prior!r}: "
             f"{os.environ.get('ARC_METRICS_QUEUE_DIR')!r}"
         )
+        assert os.environ.get("ARC_METRICS_QUEUE_DIR_PREBELT") is None, (
+            "the PREBELT sibling outlived unconfigure"
+        )
+
+
+def test_production_registry_authority_survives_the_belt(monkeypatch):
+    """(7d) The consumer needing PRODUCTION-registry authority still reaches it.
+
+    The docker lane test claims real lane indices before destructive teardown; under
+    the belt the ambient variable is a throwaway registry, which would void that
+    collision safety (codex round 13, P1). Its resolver must therefore never see the
+    belt: PREBELT wins when the pre-belt environment had a value, and the home default
+    applies when it did not — the ambient (belt) value is never consulted. Mutating
+    the resolver back to the ambient chain reds the first assertion, because in a
+    belted session the ambient value carries the session-root marker.
+    """
+    from test_compose_lanes import production_queue_dir
+
+    resolved = str(production_queue_dir())
+    assert "harness-loop-status-" not in resolved, (
+        f"production resolver returned the belt: {resolved}"
+    )
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR_PREBELT", "/relocated/queue")
+    assert production_queue_dir() == Path("/relocated/queue")
+    monkeypatch.setenv("ARC_METRICS_QUEUE_DIR_PREBELT", "")
+    assert production_queue_dir() == Path.home() / ".gstack/projects/arhugula-v2/arc-metrics-queue"
 
 
 def _scratch_home_env(home: Path) -> dict[str, str]:

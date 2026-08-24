@@ -31,7 +31,10 @@ the last teardown. One enforcer for everything the bracket cannot reach: import 
 collection, any-scope fixture teardown, and every subprocess a test forgets to isolate
 — the operator's store is simply not computable while the session is alive. The
 variable is outside the `HARNESS_*` namespace RuntimeConfig consumes and nothing under
-`harness-*` reads it, so the axis invariant is untouched.
+`harness-*` reads it, so the axis invariant is untouched. The demoted production value
+survives at `ARC_METRICS_QUEUE_DIR_PREBELT` (set in `pytest_configure`, its one
+writer) for the one consumer that must reach the LIVE lane registry, the Docker lane
+test's collision claims.
 (`test_loop_status_isolation.py` cases 7–8 witness the contract end to end.)
 
 This lives HERE and not in the root conftest deliberately. Every producer of loop rows
@@ -46,6 +49,7 @@ invariants true instead of trading one for the other.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import shutil
 import tempfile
@@ -55,6 +59,7 @@ import pytest
 
 _VENUE_ENV = "HARNESS_LOOP_STATUS_PATH"
 _QUEUE_ENV = "ARC_METRICS_QUEUE_DIR"
+_PREBELT_ENV = "ARC_METRICS_QUEUE_DIR_PREBELT"
 _DIR = Path(__file__).resolve().parent
 _ROOT_KEY: pytest.StashKey[Path] = pytest.StashKey()
 _BELT_MP: pytest.StashKey[pytest.MonkeyPatch] = pytest.StashKey()
@@ -78,6 +83,12 @@ def pytest_configure(config: pytest.Config) -> None:
     belt.mkdir(parents=True)
     mp = pytest.MonkeyPatch()
     config.stash[_BELT_MP] = mp
+    # The variable names TWO authorities: the loop-ledger fallback input AND the live
+    # lane registry. The belt demotes both, but the Docker lane test must claim real
+    # lane indices in the PRODUCTION registry or its collision safety is void (codex
+    # round 13, P1) — so the demoted value survives at the sibling variable, this hook
+    # its one writer; empty string means "no pre-belt value" (env cannot carry None).
+    mp.setenv(_PREBELT_ENV, os.environ.get(_QUEUE_ENV, ""))
     mp.setenv(_QUEUE_ENV, str(belt))
 
 
