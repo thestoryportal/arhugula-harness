@@ -40,7 +40,9 @@ Two meta-rules that outrank the list:
 
 ## The ten classes, ranked by finding count
 
-### 1. Race / TOCTOU / atomicity (383 findings)
+*(Counts and order regenerated from the committed log by `scripts/refresh-classes.py` at the 2026-08-24 corpus, 1,090 findings, head `d6ccc50fb` — rerun the script for live figures; the log only grows.)*
+
+### 1. Race / TOCTOU / atomicity (377 findings)
 Any check-then-act on files, refs, locks, or shared state. Ask: *between my check and my
 act, what can another lane, process, or signal do?* Shapes: absence-check then create
 (use exclusive create); read-modify-write without CAS; cleanup racing a writer;
@@ -59,7 +61,7 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
-### 3. Silent failure / meaning-changing fallback (113 findings)
+### 3. Silent failure / meaning-changing fallback (111 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the
 primary path fails, an empty result indistinguishable from "could not look". Ask of
 every error path: *if this fails at 3 a.m., does anyone find out, and does "empty"
@@ -75,7 +77,7 @@ thing under test; an assertion after an early return. Where feasible, actually r
 mutation probe (`just mutation-probe`) rather than reasoning it — and probe the fix
 BOTH ways (kill confirmed, then green restored).
 
-### 5. Timeout / retry / budget arithmetic (94 findings)
+### 5. Timeout / retry / budget arithmetic (93 findings)
 Any bound, retry, or budget: sum the worst case and compare against every enclosing
 bound (three retry budgets inside a 30 s waiter summed to 33.9 s). Unvalidated
 environment-sourced budgets, wall-clock assertions that breach under load (assert the
@@ -99,19 +101,19 @@ assert the namespace empty (`HARNESS_*` must never escape tools items), and — 
 shape — does the variable serve MORE THAN ONE consumer meaning? Enumerate every reader
 of the variable before repurposing it.
 
-### 8. Path / default resolution (54 findings)
+### 8. Subprocess boundary (57 findings)
+Monkeypatching a Python seam cannot reach a child process — only inherited env can.
+Children get a COPY of env at spawn; later parent changes don't propagate. Nested
+sessions of the same tool (pytest-in-pytest) re-run your own hooks against
+already-modified state — first-writer-wins any value that must survive nesting.
+
+### 9. Path / default resolution (54 findings)
 Any path computed from env-or-default: TRACE the chain to the concrete path it lands
 on when NOTHING is set, and write that path into your review — "falls back to
 `~/.reports/` (the operator's real store) when the env var is unset" is a *named
 finding*, not an implementation default to read past. Def-time constants bake the env
 at import (`QUEUE_DIR`) — a later env change does not reach them. A worktree does NOT
 isolate `$HOME`-absolute paths; isolate by ENVIRONMENT.
-
-### 9. Subprocess boundary (53 findings)
-Monkeypatching a Python seam cannot reach a child process — only inherited env can.
-Children get a COPY of env at spawn; later parent changes don't propagate. Nested
-sessions of the same tool (pytest-in-pytest) re-run your own hooks against
-already-modified state — first-writer-wins any value that must survive nesting.
 
 ### 10. Fixture scope / lifecycle phase (33 findings, but two P1s)
 pytest specifics that shipped defects: a per-item bracket covers setup+call+teardown
@@ -149,8 +151,8 @@ trail — no separate ledger.
 **Staleness check:** `scripts/refresh-classes.py` re-clusters the live gate log and
 prints per-class counts plus recent findings matching NO known class — those
 unmatched findings are new-class candidates. Run it when the log has grown
-meaningfully since the counts in this file (they are bound to a 1,084-row log,
-2026-08-24).
+meaningfully since the counts in this file (the class headings are bound to the
+corpus named above them).
 
 ## Exit condition
 

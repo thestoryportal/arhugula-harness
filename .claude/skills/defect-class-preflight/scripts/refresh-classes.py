@@ -39,10 +39,10 @@ CLASSES: dict[str, str] = {
         r"unreachable|dead|never reach|no witness could|half-dead|cannot see|restore arm"
     ),
     "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
-    "8 path / default resolution": (
+    "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
+    "9 path / default resolution": (
         r"fallback ledger|venue|QUEUE_DIR|path default|resolves|home default|\$HOME"
     ),
-    "9 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "10 fixture scope / lifecycle": (
         r"session-scoped|module-scoped|function-scoped|teardown|collection|autouse|fixture"
     ),
@@ -59,10 +59,16 @@ def main() -> int:
         return 0
 
     rows = []
-    for line in log.read_text().splitlines():
+    malformed = 0
+    for lineno, line in enumerate(log.read_text().splitlines(), start=1):
         try:
             r = json.loads(line)
         except json.JSONDecodeError:
+            # A damaged row silently dropped would understate counts while the
+            # output still reads authoritative — report it and mark the result
+            # incomplete below (no-silent-failure; codex round 2 on this PR).
+            malformed += 1
+            print(f"refresh-classes: WARNING malformed JSONL at line {lineno} — skipped")
             continue
         # Real findings only, by the log's own discriminator: record_kind. A severity
         # filter is NOT a finding filter — it drops warn-severity findings while
@@ -83,7 +89,8 @@ def main() -> int:
         if not hit:
             unmatched.append(r)
 
-    print(f"refresh-classes: {len(rows)} findings in {log}")
+    status = f" (INCOMPLETE — {malformed} malformed row(s) skipped)" if malformed else ""
+    print(f"refresh-classes: {len(rows)} findings in {log}{status}")
     print("\nPer-class counts (multi-match rows count in every class they touch):")
     for name, n in counts.items():
         print(f"  {n:5}  {name}")
