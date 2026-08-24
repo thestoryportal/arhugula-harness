@@ -96,6 +96,10 @@ hook_bounded() {
 # the unconditional retry contract into a no-op (out-of-family review r1).
 #
 #   fatal: Unable to create '…/index.lock': File exists.          (index, and ref —
+#     note the closing quote BETWEEN `.lock` and the colon: an anchored
+#     `\.lock: File exists` never matches, and the alternation would then be
+#     carried entirely by the `Another git process` sentence below — advice text,
+#     not a diagnostic. A shim emitting only this line caught that.
 #     a ref collision prints `cannot lock ref '…':` in FRONT of this same clause)
 #   error: could not lock config file .git/config: File exists    (config)
 #
@@ -110,7 +114,7 @@ hook_bounded() {
 # file a `lock_contention` NOTIFY naming a cause that never happened.
 _hook_git_lock_contention() {
   printf '%s' "$1" | grep -Eq \
-    "(Unable to create .*\.lock|could not lock config file [^:]*): File exists|Another git process seems to be running"
+    "(Unable to create .*\.lock.?|could not lock config file [^:]*): File exists|Another git process seems to be running"
 }
 
 # One trace row per attempt: `<attempt> <ceiling_ms> <slept_s>` (`- -` on the attempt
@@ -181,6 +185,9 @@ hook_git_retry() {
     [ "$delay_ms" -gt 5000 ] && delay_ms=5000
   done
   rm -f "$errfile"
+  # Safe under a `set -e` caller even when $err is empty: bash exempts the non-final
+  # command of an `&&` list from errexit, and `return` follows regardless. Witnessed
+  # (test_lib.sh, quiet-success case) rather than argued -- r2 read it the other way.
   [ -n "$err" ] && printf '%s\n' "$err" >&2
   return "$rc"
 }

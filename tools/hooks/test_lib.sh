@@ -1056,5 +1056,49 @@ bash -euo pipefail -c '
 eq "a set -e caller is not killed mid-retry" "$(gr_attempts)" "8"
 rm -f "$GR/.git/index.lock"
 
+# (11) The SUCCESS path under `set -e`. r2 read the trailing `[ -n "$err" ] && printf …`
+#      as an errexit trigger that would kill a caller on every quiet success. It is not:
+#      bash exempts the non-final command of an `&&` list, and `return "$rc"` follows it
+#      anyway. Measured, not argued — and pinned here so the next reader does not have to
+#      re-derive it. (The r1 witness above covers only the EXHAUSTED path.)
+GR_OK=$(bash -euo pipefail -c '
+  . "$1/lib.sh"
+  hook_git_retry -C "$2" rev-parse --short HEAD >/dev/null
+  echo SURVIVED
+' _ "$SCRIPT_DIR" "$GR" 2>/dev/null)
+eq "a set -e caller survives a QUIET SUCCESS through the helper" "$GR_OK" "SURVIVED"
+
+# (12) The production call sites, not just the helper. r2 (P3) was right that reverting
+#      lib.sh's worktree mutations to raw `git` would leave every assertion above green.
+#      A PATH shim fails the first `worktree move` with a lock message and then delegates
+#      to the real git, so a wired call site retries and completes while an unwired one
+#      dies on the shim's first refusal.
+GR_WIRED="$REPO/wired"
+git -C "$REPO" worktree add -q -b wired-branch "$GR_WIRED"
+GR_SHIM2="$REPO/shim2"
+mkdir -p "$GR_SHIM2"
+cat > "$GR_SHIM2/git" <<'GRSHIM2'
+#!/usr/bin/env bash
+if [ "${3:-} ${4:-}" = "worktree move" ]; then
+  n=$(cat "$GIT_SHIM_COUNT" 2>/dev/null || echo 0)
+  if [ "$n" -lt 1 ]; then
+    echo $((n + 1)) > "$GIT_SHIM_COUNT"
+    echo "fatal: Unable to create '/tmp/wt/.git/index.lock': File exists." >&2
+    exit 128
+  fi
+fi
+exec "$REAL_GIT" "$@"
+GRSHIM2
+chmod +x "$GR_SHIM2/git"
+: > "$TRACE"
+printf '0\n' > "$REPO/shim2-count"
+REAL_GIT="$(command -v git)" GIT_SHIM_COUNT="$REPO/shim2-count" \
+  HOOK_GIT_RETRY_TRACE="$TRACE" PATH="$GR_SHIM2:$PATH" \
+  hook_safe_worktree_remove "$REPO" "$GR_WIRED"
+eq "a contended worktree move still completes the removal" "$?" "0"
+[ "$(gr_attempts)" -ge 1 ] \
+  && ok "the worktree-move call site is wired to the retry ($(gr_attempts) attempt)" \
+  || bad "worktree move did NOT go through hook_git_retry: '$(gr_attempts)' attempts"
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

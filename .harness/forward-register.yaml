@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 204
+  total: 205
   open: 1
   design_substrate_gated: 3
-  registered_finding: 52
+  registered_finding: 53
   operator_gated: 0
   held: 2
   closed: 146
-  identity_digest: 7c1676487cbc8f85
+  identity_digest: 4222126c00fbb7f1
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10402,3 +10402,26 @@ items:
     a case pinning head_sha=<digits>e<digits>, the fixture that would have caught it.'
   council: 'NO -- a localised parser defect with one obvious fix.'
   heading: '### B-204 · `reservations.py update --set` coerces a valid abbreviated sha to a float, so `head_sha=<hex that reads as scientific notation>` is refused as `inf` *(surfaced in-lane while back-filling U-HE-32''s reservation, 2026-08-24; registered)*'
+- id: B-205
+  title: >-
+    C-HE-11 §2 gc.auto 0 — refuse-to-open vs warn-and-continue once the write fails a
+    NON-transient way, after U-HE-32 retry exhaustion
+  status: registered_finding
+  summary: 'SPLIT OUT OF B-201 at its closure so the surviving obligation stays tracked;
+    out-of-family Codex r2 against U-HE-32 objected that closing B-201 buried it, and was
+    right. B-201 held on warn-and-continue with ONE named close-out -- U-HE-32 bounded retry
+    -- which has landed, so transient .git/config.lock contention no longer surfaces. What
+    survives is narrower: when the write fails AFTER an exhausted budget (unwritable or
+    corrupt shared config, not a peer holding the lock for milliseconds), should lane-init
+    still open the lane? Both readings have force: the MUST is unqualified and every other
+    MUST in lane-init fails closed, but refusing makes EVERY lane un-openable over a hygiene
+    knob, and the hazard gc.auto 0 removes is itself lock contention that hook_git_retry now
+    absorbs. Different from B-201 because the transient case is gone, so the decision is no
+    longer made against a failure mode that mostly was not real.'
+  close_out: '(1) The 3-4 lane pilots (C-HE-13 §3) are the measurement -- a cause_signature
+    naming lock contention recurring across runs says warn-and-continue is too permissive;
+    (2) decide refuse-vs-warn against that evidence rather than the unqualified MUST alone,
+    and record it at C-HE-11 §2; (3) nothing owed before the pilots.'
+  council: 'NO -- one bounded question awaiting a measurement that is already scheduled
+    (the C-HE-13 §3 pilots); no cross-domain tension to convene over.'
+  heading: '### B-205 · C-HE-11 §2 `gc.auto 0` — refuse-to-open vs warn-and-continue once the write fails a NON-transient way, i.e. after U-HE-32''s retry is exhausted *(split out of B-201 at its closure so the surviving obligation stays tracked; out-of-family Codex r2 against U-HE-32, 2026-08-24)*'
