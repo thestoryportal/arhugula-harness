@@ -88,7 +88,11 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
    `C-*`/`U-*`/seam/`H_T-*` cite, resolve it with `just overlay-query` (the `overlay-query`
    skill, R-IF-112) before ad-hoc grep. Call `advisor()` before substantive cross-axis work (§13.1).
-4. **Implement with tests.** Posture-correct edits (§11). Hermetic test per new unit;
+4. **Implement with tests.** Posture-correct edits (§11). Adopt the
+   `defect-class-preflight` skill and run its sweep on the diff BEFORE every commit —
+   its ten classes are the distilled findings history of this workspace's own
+   reviewers, and a swept diff turns review rounds into confirmations (skipping it is
+   how arcs run 9–17 rounds). Hermetic test per new unit;
    `just codex-check` (the superset gate — `just check` omits `codex-parity-check`, so it
    never executes the `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites
    that lane runs); commit the arc's edits (the out-of-family
