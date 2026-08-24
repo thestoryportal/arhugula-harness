@@ -88,7 +88,10 @@ def pytest_configure(config: pytest.Config) -> None:
     # lane indices in the PRODUCTION registry or its collision safety is void (codex
     # round 13, P1) — so the demoted value survives at the sibling variable, this hook
     # its one writer; empty string means "no pre-belt value" (env cannot carry None).
-    mp.setenv(_PREBELT_ENV, os.environ.get(_QUEUE_ENV, ""))
+    # First writer wins (codex round 14, P1): in a NESTED session the ambient queue
+    # var is the parent's throwaway belt — the outermost capture is the authority and
+    # an inner configure must not re-derive from an already-demoted value.
+    mp.setenv(_PREBELT_ENV, os.environ.get(_PREBELT_ENV, os.environ.get(_QUEUE_ENV, "")))
     mp.setenv(_QUEUE_ENV, str(belt))
 
 

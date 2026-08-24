@@ -357,27 +357,42 @@ def test_the_belt_is_paired_configure_sets_unconfigure_restores(monkeypatch):
         def __init__(self) -> None:
             self.stash = pytest.Stash()
 
-    monkeypatch.delenv("ARC_METRICS_QUEUE_DIR_PREBELT", raising=False)
-    for prior in ("sentinel-prior-queue", None):
+    # Arms: (prior queue value, prior PREBELT value, expected PREBELT during session).
+    # The third arm is the NESTED session (codex round 14, P1): under a belted parent
+    # the ambient queue var is the parent's throwaway belt, and the outermost session's
+    # PREBELT capture is the production authority — an inner configure must preserve
+    # it, never re-derive from the already-demoted ambient value.
+    arms = [
+        ("sentinel-prior-queue", None, "sentinel-prior-queue"),
+        (None, None, ""),
+        ("parent-belt-throwaway", "outermost-production", "outermost-production"),
+    ]
+    for prior_queue, prior_prebelt, expected in arms:
         cfg = _Cfg()
-        if prior is None:
-            monkeypatch.delenv("ARC_METRICS_QUEUE_DIR", raising=False)
-        else:
-            monkeypatch.setenv("ARC_METRICS_QUEUE_DIR", prior)
+        for name, value in (
+            ("ARC_METRICS_QUEUE_DIR", prior_queue),
+            ("ARC_METRICS_QUEUE_DIR_PREBELT", prior_prebelt),
+        ):
+            if value is None:
+                monkeypatch.delenv(name, raising=False)
+            else:
+                monkeypatch.setenv(name, value)
         cf.pytest_configure(cfg)
         inside = os.environ.get("ARC_METRICS_QUEUE_DIR", "")
         assert "harness-loop-status-" in inside, f"configure did not set the belt: {inside!r}"
-        assert os.environ.get("ARC_METRICS_QUEUE_DIR_PREBELT") == (prior or ""), (
-            "the demoted production value was not preserved at the PREBELT sibling: "
-            f"{os.environ.get('ARC_METRICS_QUEUE_DIR_PREBELT')!r} (prior {prior!r})"
+        assert os.environ.get("ARC_METRICS_QUEUE_DIR_PREBELT") == expected, (
+            "the production authority was not preserved at the PREBELT sibling: "
+            f"{os.environ.get('ARC_METRICS_QUEUE_DIR_PREBELT')!r} "
+            f"(queue {prior_queue!r}, prebelt {prior_prebelt!r})"
         )
         cf.pytest_unconfigure(cfg)
-        assert os.environ.get("ARC_METRICS_QUEUE_DIR") == prior, (
-            f"unconfigure did not restore prior state {prior!r}: "
+        assert os.environ.get("ARC_METRICS_QUEUE_DIR") == prior_queue, (
+            f"unconfigure did not restore prior state {prior_queue!r}: "
             f"{os.environ.get('ARC_METRICS_QUEUE_DIR')!r}"
         )
-        assert os.environ.get("ARC_METRICS_QUEUE_DIR_PREBELT") is None, (
-            "the PREBELT sibling outlived unconfigure"
+        assert os.environ.get("ARC_METRICS_QUEUE_DIR_PREBELT") == prior_prebelt, (
+            f"unconfigure did not restore the PREBELT sibling to {prior_prebelt!r}: "
+            f"{os.environ.get('ARC_METRICS_QUEUE_DIR_PREBELT')!r}"
         )
 
 
@@ -413,7 +428,8 @@ def _scratch_home_env(home: Path) -> dict[str, str]:
     env = {
         k: v
         for k, v in os.environ.items()
-        if not k.startswith("HARNESS_") and k != "ARC_METRICS_QUEUE_DIR"
+        if not k.startswith("HARNESS_")
+        and k not in ("ARC_METRICS_QUEUE_DIR", "ARC_METRICS_QUEUE_DIR_PREBELT")
     }
     env["HOME"] = str(home)
     return env
