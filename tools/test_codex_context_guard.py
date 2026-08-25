@@ -2007,6 +2007,10 @@ def test_uv_driver_string_actually_executes(tmp_path, monkeypatch) -> None:
     repo = _init_repo(tmp_path)
     env = dict(**__import__("os").environ)
     env["HARNESS_GATE_LOG"] = str(tmp_path / "child-gate-log.jsonl")
+    (repo / ".harness" / "arc-metrics.jsonl").write_text(
+        '{"arc_id":"pr-1","record_kind":"arc"}\n{"arc_id":"pr-1","record_kind":"arc"}\n',
+        encoding="utf-8",
+    )
     proc = subprocess.run(
         [sys.executable, "-c", cg._UV_DRIVER, str(repo), "driver-test-lane"],
         capture_output=True,
@@ -2020,6 +2024,9 @@ def test_uv_driver_string_actually_executes(tmp_path, monkeypatch) -> None:
     assert isinstance(parsed, list)
     for d in parsed:
         assert set(d) == {"severity", "code", "message"}
+    # The planted duplicate MUST surface through the child -- a driver replaced by
+    # `print([])` cannot pass (codex r21 P3: the suite provably RAN).
+    assert any(d["code"] == "SPLIT_BRAIN_LEDGER" for d in parsed), parsed
 
 
 def test_gate_log_open_site_refuses_symlink_and_fifo(tmp_path, monkeypatch) -> None:
@@ -2122,12 +2129,51 @@ def test_dead_holder_lease_does_not_suppress_orphan(tmp_path, monkeypatch) -> No
             "pid": pid,
         }
 
-    import os as os_module
+    import merge_door as md
 
-    monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_with(os_module.getpid()))
+    monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_with(4242))
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: True)
     assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []
 
-    dead_pid = 2**22 - 3  # far above any live pid on this host
-    monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_with(dead_pid))
+    # Deterministic death (codex r21 P3: a large literal pid can be LIVE on a
+    # high-pid_max host) -- the unit under test is the liveness GATING, so the
+    # probe itself is stubbed.
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
     fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
     assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
+
+
+def test_conflicting_merge_sha_claims_surface(tmp_path, monkeypatch) -> None:
+    """codex r21: two heads claiming one landing with different verified bases raise
+    (dispatch -> hard) instead of last-writer-wins hiding a mismatch."""
+    repo = _init_repo(tmp_path)
+    tip = _git(repo, "rev-parse", "HEAD")
+    heads = [
+        {"arc_id": "u-a", "state": "merged", "merge_sha": tip, "base_sha": "a" * 40},
+        {"arc_id": "u-b", "state": "merged", "merge_sha": tip, "base_sha": "b" * 40},
+    ]
+
+    try:
+        cg._recent_main_merges(repo, heads)
+    except RuntimeError as exc:
+        assert "both claim landing" in str(exc)
+    else:
+        raise AssertionError("conflicting merge_sha claims must surface")
+
+
+def test_unknown_pr_state_fails_loud(monkeypatch) -> None:
+    """codex r21: an unknown gh state must raise, not silently skip detection."""
+
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args, returncode=0, stdout='{"state": "WEIRD", "mergedAt": null}', stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    try:
+        cg._gh_pr_state(9)
+    except RuntimeError as exc:
+        assert "unknown state" in str(exc)
+    else:
+        raise AssertionError("an unknown state must fail loud")

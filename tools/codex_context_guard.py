@@ -1025,8 +1025,12 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
     for h in heads:
         # An open head with pr=None is LEGITIMATE pre-back-fill state (reserve mints
         # pr null; ship-pr back-fills it) -- skipping the PR query for it is correct,
-        # not a corruption swallow (adjudicated against codex r9).
-        info = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
+        # not a corruption swallow (adjudicated against codex r9). `is not None`, not
+        # truthiness (codex r21): a malformed pr=0 must reach the query and fail loud,
+        # never silently bypass detection.
+        info = (
+            _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") is not None else None
+        )
         pr_state = info.get("state") if info else None
         if pr_state in ("MERGED", "CLOSED"):
             if pr_state == "MERGED" and _door_continuation_live(h):
@@ -1144,7 +1148,9 @@ def _door_continuation_live(h: dict) -> bool:
     lease = _door_lease_strict()
     if not lease:
         return False
-    if not (lease.get("reservation_id") == h.get("arc_id") or lease.get("pr") == h.get("pr")):
+    # reservation_id ONLY (codex r21): two reservations can reference one PR, and a
+    # PR-keyed match would let one arc's lease suppress the OTHER arc's orphan.
+    if lease.get("reservation_id") != h.get("arc_id"):
         return False
     if lease.get("host") and lease["host"] != socket.gethostname():
         return False  # not this store's writer; foreign liveness is not checkable here
@@ -1183,8 +1189,10 @@ def _gh_pr_state(pr: int) -> dict:
     if p.returncode != 0 or not p.stdout.strip():
         raise RuntimeError(f"gh pr view {pr} failed: {p.stderr.strip() or 'empty output'}")
     info = json.loads(p.stdout)
-    if not isinstance(info, dict) or not info.get("state"):
-        raise RuntimeError(f"gh pr view {pr} returned no state")
+    if not isinstance(info, dict) or info.get("state") not in ("OPEN", "MERGED", "CLOSED"):
+        # Enum-bound like _valid_head's STATES check (codex r21, same class): an
+        # unknown state must fail loud, not silently skip orphan detection.
+        raise RuntimeError(f"gh pr view {pr} returned unknown state {info.get('state')!r}")
     return info
 
 
@@ -1270,7 +1278,21 @@ def _recent_main_merges(
         # An unreadable history must not read as a clean backstop -- the dispatch
         # converts this raise into a hard DETECTIONS_UNAVAILABLE finding.
         raise RuntimeError(f"git log --first-parent failed: {proc.stderr.strip() or proc.args}")
-    by_merge_sha = {h["merge_sha"]: h for h in heads if h.get("merge_sha")}
+    by_merge_sha: dict[str, dict] = {}
+    for hd in heads:
+        sha_claim = hd.get("merge_sha")
+        if not sha_claim:
+            continue
+        prior = by_merge_sha.get(sha_claim)
+        if prior is not None and prior.get("base_sha") != hd.get("base_sha"):
+            # Two heads claiming ONE landing with different verified bases is an
+            # authoritative-state conflict -- surfacing beats last-writer-wins, which
+            # could hide a real mismatch (codex r21).
+            raise RuntimeError(
+                f"reservations {prior.get('arc_id')!r} and {hd.get('arc_id')!r} both "
+                f"claim landing {sha_claim[:12]} with different verified bases"
+            )
+        by_merge_sha[sha_claim] = hd
     merges: list[tuple[str, str, str]] = []
     unattributed: list[str] = []
     for line in proc.stdout.strip().splitlines():
