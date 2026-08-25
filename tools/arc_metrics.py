@@ -49,6 +49,9 @@ from pathlib import Path
 #: are the checkout root and its tracked ledger -- production behaviour is unchanged when unset.
 REPO = Path(os.environ.get("ARC_METRICS_REPO", Path(__file__).resolve().parent.parent))
 LEDGER = Path(os.environ.get("ARC_METRICS_LEDGER", REPO / ".harness" / "arc-metrics.jsonl"))
+#: N6's numerator source (C-HE-27 §4): finding/adjudication rows. Same override
+#: pattern as LEDGER so a test or a second lane can point at its own log.
+GATE_LOG = Path(os.environ.get("ARC_METRICS_GATE_LOG", REPO / ".harness" / "merge-gate-log.jsonl"))
 
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
 #: disposed at loop completion, so anything queued inside one is lost with it --
@@ -1903,6 +1906,46 @@ def arc_duration(row: dict) -> float | None:
     return span if span is not None else row.get("total_arc_wall_s")
 
 
+def phase_spans(row: dict) -> dict[str, float]:
+    """Per-phase seconds from the row's OWN {start,end} pairs -- never from a
+    neighbouring row (C-HE-27 §2: an intervening record can be dropped, reordered,
+    or written by another lane, so an inter-record delta silently becomes a
+    different quantity). An edge-only phase (e.g. the result_capture pair, which
+    records single completion timestamps) is recorded but yields no span."""
+    out = {}
+    for name, span in (row.get("phases") or {}).items():
+        if span.get("start") and span.get("end"):
+            out[name] = (parse_iso(span["end"]) - parse_iso(span["start"])).total_seconds()
+    return out
+
+
+def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, float]:
+    """C-HE-27 §4: problems prevented per hour = COUNT(DISTINCT finding_id last-disposed
+    accepted) / sum(verify + edit) hours, read from the durable phases map. verify spans
+    of rounds that terminated REVIEWER_UNAVAILABLE are excluded (returned as the third
+    element) so reviewer downtime cannot deflate N6. Returns None, not 0, when no hours
+    are measured -- an absent denominator is not a measured zero."""
+    import finding_record as fr
+
+    last = fr.reduce_last_by_finding_id(gate_rows)
+    accepted = {fid for fid, r in last.items() if r.get("disposition") == "accepted"}
+    denom_s = 0.0
+    excluded_s = 0.0
+    for r in rows:
+        spans = phase_spans(r)
+        unavailable = any(
+            o.get("terminal") == "REVIEWER_UNAVAILABLE"
+            for o in (r.get("round_outcomes") or {}).values()
+        )
+        if unavailable:
+            excluded_s += spans.get("verify", 0.0)
+        else:
+            denom_s += spans.get("verify", 0.0)
+        denom_s += spans.get("edit", 0.0)
+    hours = denom_s / 3600.0
+    return (len(accepted) / hours if hours else None), hours, excluded_s
+
+
 def summary(_args: argparse.Namespace) -> int:
     rows = read_ledger()
     if not rows:
@@ -2017,6 +2060,23 @@ def summary(_args: argparse.Namespace) -> int:
             else "  review rounds    --"
         )
         print()
+
+    # C-HE-27 §4: N6 from the durable phases map + the gate log's dispositions.
+    # An absent gate log or an unmeasured denominator prints as "--", never as a
+    # zero -- "could not look" must stay distinguishable from "looked, found none".
+    if GATE_LOG.exists():
+        import finding_record as fr
+
+        n6_val, n6_hours, n6_excluded_s = n6(rows, fr.read_rows(GATE_LOG))
+        n6_txt = "-- (no verify/edit spans measured)" if n6_val is None else f"{n6_val:.2f}"
+        print(
+            f"N6 problems-prevented/hour  {n6_txt}  "
+            f"[{n6_hours:.2f}h verify+edit; {n6_excluded_s:.0f}s verify excluded as "
+            "REVIEWER_UNAVAILABLE]"
+        )
+    else:
+        print(f"N6 problems-prevented/hour  -- (gate log absent: {GATE_LOG})")
+    print()
 
     allgaps = [g for r in rows for g in (r.get("round_wall_s") or [])]
     if allgaps:

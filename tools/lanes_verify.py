@@ -358,6 +358,21 @@ MANIFEST: list[Row] = [
     ),
     Row("C-HE-23", "pytest:tools/test_merge_gate_log.py", "phase0", "local + CI", True),
     Row("C-HE-23", "just:merge-gate-log-check", "phase0", "local + CI", False),
+    # C-HE-27 (U-HE-34)
+    Row(
+        "C-HE-27/28",
+        "pytest:tools/test_arc_metrics.py::test_phase_spans_no_deltas",
+        "measurement",
+        "local + CI",
+        False,
+    ),
+    Row(
+        "C-HE-27",
+        "pytest:tools/test_arc_metrics.py::test_n6_formula",
+        "measurement",
+        "local + CI",
+        False,
+    ),
     # C-HE-30 (U-HE-14)
     # spec §8.1: mutation-probe `—` (static doc witness; no deletion-expressible target)
     Row("C-HE-30", "pytest:tools/test_store_audit.py", "phase0", "local + CI", False),

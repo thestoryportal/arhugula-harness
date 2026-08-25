@@ -740,6 +740,29 @@ review-attest-budget extra reason:
 review-gate-check base='main':
     uv run python tools/review_loop_gate.py check --base {{base}}
 
+# U-HE-34 (C-HE-27 §1): bounded watch for a review round log's write-completion.
+# The reviewer's verdict can flush AFTER its process exits, so `result_capture`
+# records process-exit and log-write-completion as SEPARATE phase edges; this
+# recipe supplies the second timestamp's trigger. Exit 0 the moment the file's
+# size holds steady across one poll; exit 1 on an absent file or a log still
+# growing at the bound -- record NOTHING then (an unsettled log has no true
+# completion timestamp; a guessed edge would be an answer-shaped void).
+review-log-settle file timeout='130':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    f="{{file}}"
+    [ -f "$f" ] || { echo "review-log-settle: no such file: $f" >&2; exit 1; }
+    deadline=$(( $(date +%s) + {{timeout}} ))
+    prev=-1
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+      cur=$(wc -c < "$f")
+      [ "$cur" -eq "$prev" ] && exit 0
+      prev=$cur
+      sleep 5
+    done
+    echo "review-log-settle: $f still growing after {{timeout}}s" >&2
+    exit 1
+
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.
 _require-coderabbit:

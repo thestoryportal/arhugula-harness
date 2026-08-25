@@ -6339,6 +6339,32 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
 Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/reservations.py phase --arc-id "$HARNESS_ARC_ID" --phase execute --edge start`; before ship-pr: `--phase execute --edge end`; `ship-pr/SKILL.md` — around the review gate: `--phase verify --edge start|end` (and on `REVIEWER_UNAVAILABLE`: `--phase verify_unavailable --edge start|end`), around fix rounds: `--phase edit --edge start|end`, at capture: `--phase capture --edge start|end`; the review-log writer hook records `result_capture_process_exit` at process exit and `result_capture_log_write` when the log file's size stops changing (bounded 130 s), both as phase edges. `summary` prints N6 with the excluded seconds.
 - [ ] **Step 4: GREEN**, register `Row("C-HE-27/28", "pytest:tools/test_arc_metrics.py::test_phase_spans_no_deltas", "measurement", "local + CI", False)` and `Row("C-HE-27", "pytest:tools/test_arc_metrics.py::test_n6_formula", "measurement", "local + CI", False)`. Commit `feat(he-lanes): U-HE-34 durable phase spans + N6 (C-HE-27)`.
 
+> **As-built rev (2026-08-25, U-HE-34 landing; marker
+> `implementation-plan-he-loop-lanes-v1-u-he-34-as-built-rev-cleared-2026-08-25.md`).**
+> Four execution-time corrections, stated in place so the drafted bodies above are
+> superseded rather than silently contradicted. **(i) Step-1 `test_n6_formula` fixture
+> order.** The drafted gate fixture lists f1's adjudication BEFORE its finding row — a
+> shape the emitter itself refuses (`test_retry_after_adjudication_is_rejected`) and one
+> the C-HE-24 §5 file-order reducer resolves to `disposition=None`, so the drafted test
+> fails against the drafted implementation. As built, the fixture uses the legal append
+> order (finding, then adjudication); the formula and expected values are unchanged.
+> **(ii) Step-1 static witness strengthened.** The drafted first assertion
+> (`"phases[" not in src or "prev" not in <n6 body>`) is vacuously green while no reader
+> indexes `phases` at all. As built, the witness inspects n6's body unconditionally
+> (`\bprev\b`, word-bounded so the docstring's "prevented" cannot trip it) —
+> mutation-probed both ways at landing. **(iii) `result_capture` observation site.** The
+> Files-list primary (`tools/hooks/stop-gate.sh` / a `REVIEW-*.log` writer hook) does not
+> exist — no hook in `tools/hooks/` writes round logs (they are session-tee'd files, per
+> the ledger's `round_log_source` history). The plan's own alternative branch is taken:
+> the bounded log-settle watch lands as the `review-log-settle` justfile recipe
+> (130 s bound, exit 1 = record nothing), and ship-pr/SKILL.md instruments the two
+> edges at the tee site. **(iv) Guard carrier verb `phase` (outside the Files list,
+> execution-correction-H_E-tooling).** The emitters this unit wires call
+> `reservations.py phase`; the U-HE-25 allowlist did not carry that verb, so every
+> emitter would strand headless at ask→deny — the wired-but-unreachable class. The
+> alternation gains `|phase` (accretion-only, replay-idempotent, terminal-refused) with
+> an exact-shape witness in `test_permission_guard.sh`.
+
 ---
 
 # S6 — Reviewer-concurrency probe → coalescing live → pilot gate + pilots + O1 + O3 / `arc_disjoint_check` + cohort report

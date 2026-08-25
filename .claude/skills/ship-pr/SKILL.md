@@ -72,6 +72,31 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   working tree pollutes + dilutes the review of the actual diff (the 2026-06-26 finding at
   `.harness/uncommitted-review-flaw-verification-arc.md`). `-uncommitted` is for genuine
   pre-commit review in a CLEAN tree only.
+- **Phase-span edges (U-HE-34; C-HE-27).** Durable review/edit wall-clock accretes on the
+  reservation as explicit `{start, end}` pairs — N6 reads ONLY these spans, never a gap
+  between two records. Each command is a single literal-id invocation (guard-allowlisted,
+  replay-idempotent; skip all of them when the arc is unreserved — an absent span reads
+  null downstream, never zero):
+  - Before the FIRST review invocation: `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start`;
+    after the loop converges (terminal APPROVE): the same command with `--edge end`.
+  - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): `--phase verify_unavailable
+    --edge start` at the failed invocation and `--edge end` when the arc resumes or is
+    held — C-HE-27 §4 excludes unavailable-terminated verify wall-clock from N6's
+    denominator so reviewer downtime cannot deflate it.
+  - Around fix rounds: `--phase edit --edge start` at the first BLOCK absorption,
+    `--edge end` after the final fix commit. The durable map holds ONE pair per phase;
+    later re-runs of an already-recorded edge are no-ops (first edge wins).
+  - **`result_capture` split (C-HE-27 §1 — process exit and log write DIVERGE: the
+    reviewer's verdict can flush after its process exits).** When teeing a round's output
+    to its round log: immediately after the review process exits, record
+    `--phase result_capture_process_exit --edge end`; then `just review-log-settle
+    <round-log>` (bounded 130 s) and, ONLY on its exit 0, record
+    `--phase result_capture_log_write --edge end`. Invoke the settle with a Bash tool
+    timeout ABOVE its bound (e.g. 200000 ms) — the tool's 120 s default would kill the
+    recipe before its own 130 s bound and misread a settling log as a failure. A log
+    still growing at the bound records nothing — there is no true completion timestamp
+    to record. A divergence
+    between the two timestamps is recorded, not audit-worthy (v1 decision, plan §11 #5).
 - **Posture check (§11).** Confirm the edit scope matches one posture (design-phase /
   Phase 7 / mode-agnostic). A `design-substrate/**` + `harness-*/src/**` mix MUST carry
   back-flow documentation (§11.4) or it is silent absorption — halt + ask.
@@ -475,7 +500,11 @@ inputs, the next arc *folds* them into the ledger. Skip both on a terminating
 roadmap-status refresh (§12.2.1) — a refresh is not an arc.
 
 **Step 1 — queue, at closure (writes NOTHING to the repo).** After the exit report above,
-because `merged_at` and the merge SHA do not exist before merge:
+because `merged_at` and the merge SHA do not exist before merge. Bracket it with the
+capture-phase edges (U-HE-34; same literal-id, replay-idempotent, skip-if-unreserved
+rules as the other phase edges): `uv run python tools/reservations.py phase --arc-id
+<arc-id> --phase capture --edge start` before the queue command, `--edge end` after it
+succeeds:
 
 ```
 just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \

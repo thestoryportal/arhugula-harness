@@ -492,11 +492,14 @@ OUT=$(run_on "$(pl Bash 'gh pr merge 5 --admin' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "--admin merge stays denied" || bad "--admin merge not denied: $OUT"
 
 # U-HE-25 registered allowlist additions (from U-HE-21 codex r1-r6; EXACT-SHAPE only).
-# (a) reservations.py carrier verbs — selectable|show|reserve|update|mint-lane-id ONLY.
+# (a) reservations.py carrier verbs — selectable|show|reserve|update|mint-lane-id|phase ONLY
+# (`phase` added at U-HE-34: the C-HE-27 span emitters in roadmap-continue/ship-pr must not
+# strand headless at ask→deny — record_phase is accretion-only and replay-idempotent).
 for c in 'uv run python tools/reservations.py selectable --arc-id u-he-25' \
          'uv run python tools/reservations.py show --arc-id u-he-25' \
          'uv run python tools/reservations.py reserve --arc-id u-he-25 --lane-id lane-1 --branch feat/x --arc-type applying' \
          'uv run python tools/reservations.py update --arc-id u-he-25 --pr 1' \
+         'uv run python tools/reservations.py phase --arc-id u-he-34 --phase execute --edge start' \
          'uv run python tools/reservations.py mint-lane-id'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "reservations carrier verb → allow: '$c'" || bad "reservations carrier not allowed: $c → $OUT"

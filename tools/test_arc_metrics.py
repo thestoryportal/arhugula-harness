@@ -2695,3 +2695,93 @@ def test_reconciliation_stops_on_a_corrupt_committed_line(tmp_path, monkeypatch,
     monkeypatch.setattr(am, "_committed_ledger_lines", lambda: {'{"arc_id": TRUNC'})
     am._reconcile_local_rows()
     assert [r["arc_id"] for r in am.read_ledger()] == ["pr-89"], "row survived corruption"
+
+
+# ------------------------------------------------------- U-HE-34: phase spans + N6 (C-HE-27)
+
+
+def test_phase_spans_no_deltas():
+    """Static witness (C-HE-27 §2): no metrics reader derives a duration from the gap
+    between two records -- end_of_row_n - start_of_row_{n-1} is a different quantity
+    indistinguishable from a real measurement once a record is dropped or reordered.
+    Mutation probe: index a neighbouring row's timestamp in n6 -> this reds."""
+    tools = Path(am.__file__).resolve().parent
+    src = (tools / "arc_metrics.py").read_text()
+    # The plan's guard ("phases[" in src AND "prev" in the n6 body) is vacuously green
+    # while no reader indexes phases at all -- inspect n6's body unconditionally so
+    # introducing a neighbouring-row variable ever reds this.
+    n6_body = src.split("def n6")[1].split("\ndef ")[0]
+    # \b: the docstring's own "problems prevented per hour" must not trip the witness.
+    assert not re.search(r"\bprev\b", n6_body)
+    for reader in ("arc_metrics.py", "shadow_trial.py", "lanes_pilot_report.py"):
+        p = tools / reader
+        if p.exists():
+            assert not re.search(
+                r"rows\[\s*\w+\s*-\s*1\s*\]\[['\"](captured_at|merged_at|ts)['\"]\]",
+                p.read_text(),
+            ), reader
+
+
+def test_out_of_order_rows_still_yield_correct_spans():
+    """C-HE-27 §2 verification: spans come from each phase's OWN {start,end} pair, so
+    phase entries listed in any order still measure correctly."""
+    row = {
+        "phases": {
+            "verify": {"end": "2026-08-18T01:00:00Z", "start": "2026-08-18T00:30:00Z"},
+            "edit": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T00:20:00Z"},
+        }
+    }
+    s = am.phase_spans(row)
+    assert s["verify"] == 1800.0 and s["edit"] == 1200.0
+
+
+def test_n6_formula():
+    """C-HE-27 §4: accepted-count / (verify+edit) hours; verify spans of rounds that
+    terminated REVIEWER_UNAVAILABLE are excluded from the denominator (bucketed), so
+    reviewer downtime cannot deflate N6. Mutation probe: count arc b's verify span in
+    the denominator -> n6 halves and this reds."""
+    rows = [
+        {
+            "arc_id": "a",
+            "phases": {
+                "verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T01:00:00Z"},
+                "edit": {"start": "2026-08-18T01:00:00Z", "end": "2026-08-18T02:00:00Z"},
+            },
+            "round_outcomes": {"1": {"terminal": "APPROVE"}},
+        },
+        {
+            "arc_id": "b",
+            "phases": {"verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T02:00:00Z"}},
+            "round_outcomes": {"1": {"terminal": "REVIEWER_UNAVAILABLE"}},
+        },
+    ]
+    # Legal append order (the emitter refuses a finding row AFTER its adjudication --
+    # test_retry_after_adjudication_is_rejected): raw finding first, adjudication last,
+    # so the file-order reducer (C-HE-24 §5) lands on the accepted adjudication. The
+    # plan's fixture listed the adjudication first; that shape is emitter-illegal and
+    # reduces to disposition=None (as-built deviation, noted in the PR body).
+    gate = [
+        {
+            "finding_id": "f1",
+            "arc_id": "a",
+            "disposition": None,
+            "ts": "t1",
+            "record_kind": "finding",
+        },
+        {
+            "finding_id": "f1",
+            "arc_id": "a",
+            "disposition": "accepted",
+            "ts": "t2",
+            "record_kind": "finding_adjudication",
+        },
+        {
+            "finding_id": "f2",
+            "arc_id": "a",
+            "disposition": "rejected",
+            "ts": "t1",
+            "record_kind": "finding_adjudication",
+        },
+    ]
+    n6, hours, excluded_s = am.n6(rows, gate)
+    assert n6 == pytest.approx(0.5) and hours == 2.0 and excluded_s == 7200.0
