@@ -2502,4 +2502,11 @@ same spec leg.
 - **Current state.** OPEN. The interim mitigation is the skill's new "after every review round" section (instruction-tier).
 - **Closure shape.** A deterministic post-round step in the review loop: extract the round's findings, grep the branch diff for class-sibling shapes, refuse the next review invocation until each hit carries a named answer. Review-wrapper surface — own reviewed arc (B-213 precedent).
 
+### B-216 · u-he-33 review-loop tail refinements *(deferred at the operator stop, 2026-08-25; REGISTERED)*
+
+- **What it is.** Three bounded guard refinements surfaced by codex r22 and deferred when the operator stopped the u-he-33 review loop at its measured negative-marginal-value point (the r22 absorption broke 20 tests while fixing 3 findings): the `ci` lane-id fallback ignoring the persisted `.harness/.lane-id`; detection rows carrying `head_sha=None` so adjudications recall identical recurrences at later heads (C-HE-24 §4); the continuation-lease check accepting a lease missing state/host.
+- **Current state.** OPEN. None undermines the landed C-HE-12 contract (acceptance met at round 4). A draft absorption existed and was reverted for breaking the suite — re-derive from this row.
+- **Closure shape.** A small follow-up arc with witnesses, alongside or after B-215's deterministic review-loop gate (this arc is B-215's grounding evidence for the termination-predicate requirement).
+
+
 

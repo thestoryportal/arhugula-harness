@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 215
+  total: 216
   open: 1
   design_substrate_gated: 3
-  registered_finding: 60
+  registered_finding: 61
   operator_gated: 0
   held: 2
   closed: 149
-  identity_digest: 22d50265f54700dd
+  identity_digest: 69979982b0ae31b7
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10740,3 +10740,29 @@ items:
     (B-213 precedent).'
   council: 'NO — single-surface loop-tooling gap; no cross-axis tension.'
   heading: '### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*'
+- id: B-216
+  title: >-
+    u-he-33 review-loop tail: three bounded guard refinements deferred when the
+    loop was stopped on measured negative marginal value
+  pr: 'u-he-33 arc'
+  status: registered_finding
+  summary: 'SURFACED by codex r22 on the u-he-33 arc and DEFERRED by the operator''s
+    stop of the review loop after the r22 absorption broke 20 existing tests while
+    fixing 3 findings — the measured point where absorption added defects faster than
+    review retired them (the grounding evidence for B-215''s termination-predicate
+    requirement: the loop''s only exit was reviewer-finds-nothing, unreachable on a
+    guard-class file). The three deferred refinements: (1) _lane_id() falls back to
+    "ci" when HARNESS_LANE_ID is unset instead of reading the persisted
+    .harness/.lane-id marker (misattributes local main audits and cross-suppresses CI
+    dedupe); (2) detection rows carry head_sha=None so an adjudication recalls an
+    identical recurrence at a LATER head, contrary to C-HE-24 §4 head-bound ids; (3)
+    _door_continuation_live accepts a lease missing state/host as an active
+    continuation. All three are real, small, and bounded; none undermines the landed
+    contract (C-HE-12 acceptance was met at round 4).'
+  close_out: 'OPEN — closure = a small follow-up arc applying the three refinements
+    with their witnesses (a draft absorption existed and was reverted for breaking the
+    suite; re-derive from this row, not from that reverted diff), landing alongside or
+    after B-215''s deterministic review-loop gate.'
+  council: 'NO — single-surface refinements; the loop-termination question lives at
+    B-215.'
+  heading: '### B-216 · u-he-33 review-loop tail refinements *(deferred at the operator stop, 2026-08-25; REGISTERED)*'
