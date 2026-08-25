@@ -30,9 +30,13 @@ expected values unchanged.
 the reader); as built it inspects n6's body unconditionally, word-bounded, and was
 mutation-probed both ways.
 
-**(iii)** The `result_capture` split lands at the plan's own alternative site: the
-`review-log-settle` justfile recipe (130 s bound, fail-loud) + ship-pr SKILL.md edges at
-the session tee site — no `tools/hooks` round-log writer exists to instrument.
+**(iii)** The `result_capture` split does NOT land: no `tools/hooks` round-log writer
+exists to instrument, and the divergence (process exit vs log flush) is internal to the
+reviewer process — a session-layer recorder around a synchronous tee measures one event
+twice, so the interim `review-log-settle` recipe was removed in this same arc (codex
+r4) and the split's recorder is registered as wrapper-internal work on `B-218`. Round
+logs themselves are produced headless by the `review-with-failover-logged` recipe
+(in-recipe tee, containment-checked).
 
 **(iv)** The permission guard gains a dedicated POSITIONAL exact-shape branch for the
 `phase` carrier verb (codex r1 P1: a duplicated `--arc-id` riding a prefix allow would

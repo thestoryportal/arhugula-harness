@@ -1939,13 +1939,28 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
     the denominator: the verify span of an arc whose ROUND-1 outcomes all terminated
     REVIEWER_UNAVAILABLE (verify is the round-1 window, so only round 1's terminal can
     invalidate it -- a later round's downtime must not erase valid round-1 review), and
-    any explicit `verify_unavailable` span. Where such a span nests inside a COUNTED
-    verify window it is subtracted from the verify contribution rather than merely
-    reported; where the whole verify span is already excluded (round-1 unavailable) it
-    is NOT added again -- the nested span is part of the excluded window, and summing
-    both would overstate downtime (codex r3). Returns None, not 0, when no hours are
-    measured -- an absent denominator is not a measured zero."""
+    any explicit `verify_unavailable` span. The downtime span carries its own
+    timestamps, so the subtraction is INTERVAL arithmetic, not scalar (codex r5): each
+    counted phase loses exactly its measured OVERLAP with the downtime window -- an
+    outage overlapping edit is removed from edit, one overlapping neither phase
+    removes nothing -- and the excluded bucket is the UNION of the excluded-verify
+    window and the downtime window, never their sum (codex r3: summing a nested pair
+    overstated downtime). Returns None, not 0, when no hours are measured -- an
+    absent denominator is not a measured zero."""
     import finding_record as fr
+
+    def interval(r: dict, name: str) -> tuple[datetime, datetime] | None:
+        span = (r.get("phases") or {}).get(name) or {}
+        if span.get("start") and span.get("end"):
+            return (parse_iso(span["start"]), parse_iso(span["end"]))
+        return None
+
+    def overlap_s(
+        a: tuple[datetime, datetime] | None, b: tuple[datetime, datetime] | None
+    ) -> float:
+        if a is None or b is None:
+            return 0.0
+        return max(0.0, (min(a[1], b[1]) - max(a[0], b[0])).total_seconds())
 
     denom_s = 0.0
     excluded_s = 0.0
@@ -1956,14 +1971,19 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
             o for key, o in (r.get("round_outcomes") or {}).items() if str(key).split("/")[0] == "1"
         ]
         r1_unavailable = bool(r1) and all(o.get("terminal") == "REVIEWER_UNAVAILABLE" for o in r1)
+        vu_iv = interval(r, "verify_unavailable")
         vu = spans.get("verify_unavailable", 0.0)
+        verify_iv = interval(r, "verify")
+        edit_iv = interval(r, "edit")
         contributed = 0.0
         if r1_unavailable:
-            excluded_s += spans.get("verify", 0.0)
+            # union, not sum: a downtime window nested in the excluded verify span is
+            # already inside it
+            excluded_s += spans.get("verify", 0.0) + vu - overlap_s(verify_iv, vu_iv)
         else:
-            contributed += max(spans.get("verify", 0.0) - vu, 0.0)
+            contributed += spans.get("verify", 0.0) - overlap_s(verify_iv, vu_iv)
             excluded_s += vu
-        contributed += spans.get("edit", 0.0)
+        contributed += spans.get("edit", 0.0) - overlap_s(edit_iv, vu_iv)
         denom_s += contributed
         if contributed > 0:
             window_arcs.add(r.get("arc_id"))

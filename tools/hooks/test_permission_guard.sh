@@ -533,6 +533,8 @@ for c in 'just review-with-failover-logged .harness/tmp/u-he-34-rounds/r1.log' \
 done
 for c in 'just review-with-failover-logged .harness/tmp/r1.log main review-attest-budget' \
          'just review-with-failover-logged ${victim:=x}.log' \
+         'just review-with-failover-logged -a' \
+         'just review-with-failover-logged .harness/tmp/r1.log -b' \
          'just review-with-failover-logged'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "review-logged hardening: '$c' → not allow" || bad "review-logged over-matched: $c"

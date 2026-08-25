@@ -495,9 +495,11 @@ _review_logged_shape() {
   set -f; set -- $cmd; set +f
   { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
   [ "$1" = "just" ] && [ "$2" = "review-with-failover-logged" ] || return 1
-  printf '%s' "$3" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
+  # First char never a dash (codex r5 P2): `-a` would reach `tee` as an option and
+  # silently produce no log; the recipe also passes `--`, this is the second wall.
+  printf '%s' "$3" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
   if [ "$#" -eq 4 ]; then
-    printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
+    printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
   fi
 }
 

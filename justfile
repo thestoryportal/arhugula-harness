@@ -733,14 +733,29 @@ review-with-failover base='main':
 # route the tee outside the worktree; refuse loudly, never truncate the target.
 review-with-failover-logged log base='main':
     #!/usr/bin/env bash
-    set -uo pipefail
+    set -u
     log="{{log}}"
     [ -L "$log" ] && { echo "review-with-failover-logged: $log is a symlink -- refused (containment)" >&2; exit 4; }
     if [ -e "$log" ] && [ ! -f "$log" ]; then echo "review-with-failover-logged: $log is not a regular file -- refused" >&2; exit 4; fi
-    mkdir -p "$(dirname "$log")"
-    phys="$(cd "$(dirname "$log")" && pwd -P)" || exit 4
+    # Containment BEFORE mkdir (codex r5 P1): resolve the deepest EXISTING ancestor
+    # first -- `mkdir -p link/new` through a pre-planted symlink would create dirs
+    # outside the worktree before any post-mkdir check could refuse.
+    dir="$(dirname "$log")"
+    probe="$dir"
+    while [ ! -d "$probe" ]; do probe="$(dirname "$probe")"; done
+    phys="$(cd "$probe" && pwd -P)" || exit 4
+    case "$phys/" in "$(pwd -P)/"*) ;; *) echo "review-with-failover-logged: $log's existing ancestor resolves outside the worktree ($phys) -- refused (containment)" >&2; exit 4 ;; esac
+    mkdir -p "$dir"
+    phys="$(cd "$dir" && pwd -P)" || exit 4
     case "$phys/" in "$(pwd -P)/"*) ;; *) echo "review-with-failover-logged: $log resolves outside the worktree ($phys) -- refused (containment)" >&2; exit 4 ;; esac
-    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee "$log"
+    # `--` stops tee option-parsing a dash-led name; PIPESTATUS[0] preserves the
+    # wrapper's verdict exit (0/1/2/3) -- pipefail would let a failing tee (rightmost
+    # nonzero) overwrite REVIEWER_UNAVAILABLE/GATE_REFUSED semantics (codex r5). A
+    # tee failure is loud but never rewrites the verdict.
+    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee -- "$log"
+    rc=("${PIPESTATUS[@]}")
+    [ "${rc[1]}" -ne 0 ] && echo "review-with-failover-logged: WARNING tee exited ${rc[1]} -- round log $log is unreliable" >&2
+    exit "${rc[0]}"
 
 # B-215 admission-gate attest verbs (tools/review_loop_gate.py): deterministic
 # entry/sweep attestations the wrapper enforces before any review round.

@@ -6355,10 +6355,9 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > mutation-probed both ways at landing. **(iii) `result_capture` observation site.** The
 > Files-list primary (`tools/hooks/stop-gate.sh` / a `REVIEW-*.log` writer hook) does not
 > exist — no hook in `tools/hooks/` writes round logs (they are session-tee'd files, per
-> the ledger's `round_log_source` history). The plan's own alternative branch is taken:
-> the bounded log-settle watch lands as the `review-log-settle` justfile recipe
-> (130 s bound, exit 1 = record nothing), and ship-pr/SKILL.md instruments the two
-> edges at the tee site. **(iv) Guard carrier verb `phase` (outside the Files list,
+> the ledger's `round_log_source` history). *(Superseded at item (ix): the interim
+> `review-log-settle` watch was removed — a synchronous tee cannot observe the
+> wrapper-internal divergence; the split's recorder is registered on `B-218`.)* **(iv) Guard carrier verb `phase` (outside the Files list,
 > execution-correction-H_E-tooling).** The emitters this unit wires call
 > `reservations.py phase`; the U-HE-25 allowlist did not carry that verb, so every
 > emitter would strand headless at ask→deny — the wired-but-unreachable class. As built

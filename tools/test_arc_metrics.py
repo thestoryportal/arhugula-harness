@@ -2892,6 +2892,47 @@ def test_n6_round1_unavailable_does_not_double_count_nested_downtime():
     assert n6 is None and hours == 0.0 and excluded_s == 3600.0
 
 
+def test_n6_downtime_overlap_is_interval_arithmetic():
+    """codex r5: the downtime window carries timestamps, so each phase loses exactly
+    its measured OVERLAP -- an outage overlapping edit is removed from edit, and an
+    outage outside both phases removes nothing. Mutation probe: revert to the scalar
+    verify-only clip -> the edit-overlap case reports 2.0h instead of 1.5h, reds."""
+    # vu 00:30-01:30 straddles verify's tail (30m) and edit's head (30m):
+    # denominator = (1h - 0.5h) + (1h - 0.5h) = 1.0h; excluded = 1h.
+    straddle = [
+        {
+            "arc_id": "a",
+            "phases": {
+                "verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T01:00:00Z"},
+                "edit": {"start": "2026-08-18T01:00:00Z", "end": "2026-08-18T02:00:00Z"},
+                "verify_unavailable": {
+                    "start": "2026-08-18T00:30:00Z",
+                    "end": "2026-08-18T01:30:00Z",
+                },
+            },
+            "round_outcomes": {"1": {"terminal": "APPROVE"}},
+        }
+    ]
+    n6, hours, excluded_s = am.n6(straddle, [])
+    assert n6 == 0.0 and hours == 1.0 and excluded_s == 3600.0
+    # vu disjoint from both phases: nothing subtracted, still bucketed.
+    disjoint = [
+        {
+            "arc_id": "a",
+            "phases": {
+                "verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T01:00:00Z"},
+                "verify_unavailable": {
+                    "start": "2026-08-18T05:00:00Z",
+                    "end": "2026-08-18T05:30:00Z",
+                },
+            },
+            "round_outcomes": {"1": {"terminal": "APPROVE"}},
+        }
+    ]
+    n6, hours, excluded_s = am.n6(disjoint, [])
+    assert n6 == 0.0 and hours == 1.0 and excluded_s == 1800.0
+
+
 def test_phase_spans_negative_span_fails_loud():
     """A reversed pair (end before start) is corrupt phase state -- the edges are
     recorded independently so the shape is representable; it must abort, never flow
