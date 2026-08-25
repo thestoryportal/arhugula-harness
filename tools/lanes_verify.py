@@ -360,8 +360,11 @@ MANIFEST: list[Row] = [
     Row("C-HE-23", "just:merge-gate-log-check", "phase0", "local + CI", False),
     # C-HE-27 (U-HE-34) — §-granular on purpose: §1's `capture` pair is structurally
     # unrecordable post-terminal (B-218), so no row claims the whole contract green.
+    # (The plan's draft label said "C-HE-27/28"; the no-deltas witness inspects the
+    # phase-duration readers only and exercises no C-HE-28 cohort reporting, so the
+    # C-HE-28 half is dropped — codex r4.)
     Row(
-        "C-HE-27 §2/C-HE-28",
+        "C-HE-27 §2",
         "pytest:tools/test_arc_metrics.py::test_phase_spans_no_deltas",
         "measurement",
         "local + CI",

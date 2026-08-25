@@ -728,12 +728,19 @@ review-with-failover base='main':
 # in Bash commands before its allowlist, so a session-level `... | tee round.log`
 # can never run there; this recipe carries the tee INSIDE an allowlisted invocation.
 # pipefail keeps the wrapper's exit code (0 APPROVE / 1 BLOCK / 2 UNAVAILABLE /
-# 3 GATE_REFUSED) as the recipe's own.
+# 3 GATE_REFUSED) as the recipe's own. Containment (r4 P1): the recipe WRITES through
+# an auto-allowed path, so a pre-planted symlink — the leaf or a parent dir — must not
+# route the tee outside the worktree; refuse loudly, never truncate the target.
 review-with-failover-logged log base='main':
     #!/usr/bin/env bash
     set -uo pipefail
-    mkdir -p "$(dirname "{{log}}")"
-    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee "{{log}}"
+    log="{{log}}"
+    [ -L "$log" ] && { echo "review-with-failover-logged: $log is a symlink -- refused (containment)" >&2; exit 4; }
+    if [ -e "$log" ] && [ ! -f "$log" ]; then echo "review-with-failover-logged: $log is not a regular file -- refused" >&2; exit 4; fi
+    mkdir -p "$(dirname "$log")"
+    phys="$(cd "$(dirname "$log")" && pwd -P)" || exit 4
+    case "$phys/" in "$(pwd -P)/"*) ;; *) echo "review-with-failover-logged: $log resolves outside the worktree ($phys) -- refused (containment)" >&2; exit 4 ;; esac
+    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee "$log"
 
 # B-215 admission-gate attest verbs (tools/review_loop_gate.py): deterministic
 # entry/sweep attestations the wrapper enforces before any review round.
@@ -751,37 +758,12 @@ review-attest-budget extra reason:
 review-gate-check base='main':
     uv run python tools/review_loop_gate.py check --base {{base}}
 
-# U-HE-34 (C-HE-27 §1): bounded watch for a review round log's write-completion.
-# The reviewer's verdict can flush AFTER its process exits, so `result_capture`
-# records process-exit and log-write-completion as SEPARATE phase edges; this
-# recipe supplies the second timestamp's trigger. Exit 0 the moment the file's
-# size holds steady across one poll; exit 1 on an absent file or a log still
-# growing at the bound -- record NOTHING then (an unsettled log has no true
-# completion timestamp; a guessed edge would be an answer-shaped void).
-review-log-settle file timeout='130':
-    #!/usr/bin/env bash
-    set -euo pipefail
-    f="{{file}}"
-    [ -f "$f" ] || { echo "review-log-settle: no such file: $f" >&2; exit 1; }
-    deadline=$(( $(date +%s) + {{timeout}} ))
-    # Four equal samples across three 5 s intervals — a full 15 s of observed
-    # stability: a writer that pauses one or two polls and flushes later would
-    # otherwise be stamped complete early (codex U-HE-34 r2+r3: `stable >= 2`
-    # exited after only ~10 s of stability).
-    prev=-1; stable=0
-    while [ "$(date +%s)" -lt "$deadline" ]; do
-      cur=$(wc -c < "$f")
-      if [ "$cur" -eq "$prev" ]; then
-        stable=$(( stable + 1 ))
-        [ "$stable" -ge 3 ] && exit 0
-      else
-        stable=0
-      fi
-      prev=$cur
-      sleep 5
-    done
-    echo "review-log-settle: $f still growing after {{timeout}}s" >&2
-    exit 1
+# U-HE-34 r4 NOTE: no session-layer result_capture recorder exists. The C-HE-27 §1
+# process-exit vs log-write divergence is internal to the reviewer process — a
+# synchronous in-recipe tee returns only after the log is flushed, so two session
+# timestamps around it would measure one event. The split's recorder is registered
+# as wrapper-internal work on B-218 (an earlier `review-log-settle` polling recipe
+# was removed for exactly this reason).
 
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.

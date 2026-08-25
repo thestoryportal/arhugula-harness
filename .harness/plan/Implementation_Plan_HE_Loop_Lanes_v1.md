@@ -6397,7 +6397,16 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > (15 s) and n6 no longer double-counts nested downtime under a round-1-unavailable
 > exclusion; coverage rows are §-granular (no whole-C-HE-27 green claim while
 > `capture` is unrecordable — B-218, whose scope now also carries the per-round-record
-> and wrapper-internal-emitter reconciliation).
+> and wrapper-internal-emitter reconciliation). **(ix) result_capture subtraction +
+> containment (codex r4).** The §1 result_capture split is session-unrecordable — the
+> logged recipe's synchronous tee flushes before it returns, so the r2 settle recipe
+> measured nothing and was REMOVED (recorder folded into B-218); the logged recipe is
+> now the CANONICAL review invocation (its tee is the only headless round-log
+> producer) and refuses symlinked / outside-worktree log paths (containment — it
+> writes through an auto-allowed path); the `verify_unavailable` span is defined as
+> the observable outage window (detection → resume; the phase CLI stamps now()); the
+> no-deltas row drops its draft C-HE-28 half (the witness exercises no cohort
+> reporting).
 
 ---
 

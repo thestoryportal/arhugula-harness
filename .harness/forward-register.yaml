@@ -10840,7 +10840,11 @@ items:
     wrapper-internal verify_unavailable emitter — a SUCCESSFUL failover''s
     primary-channel downtime is unobservable at the session layer and stays inside
     verify until the wrapper records it (n6''s nested-span subtraction already
-    consumes it once recorded).'
+    consumes it once recorded). Extended again at r4: the §1 result_capture split
+    (process-exit vs log-write) is ALSO session-unrecordable — a synchronous in-recipe
+    tee returns only after the log flushes, so two session timestamps measure one
+    event; the split''s recorder is wrapper-internal work on this same row (the
+    u-he-34 r2 `review-log-settle` polling recipe was removed for this reason).'
   council: 'NO — single-contract timing reconciliation; no cross-axis tension.'
   heading: '### B-218 · capture-phase span vs terminal-accretion refusal *(surfaced
     by codex r1 on the u-he-34 arc, 2026-08-25; REGISTERED)*'

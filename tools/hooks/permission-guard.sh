@@ -486,22 +486,6 @@ _phase_exact_shape() {
   printf '%s' "${13}" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
 }
 
-# U-HE-34 r2 P1: `just review-log-settle <file> [timeout]` — the result_capture_log_write
-# edge's trigger must not strand headless at ask→deny. Arity-bounded per the B-217
-# precedent (no surplus token can be parsed as a second recipe name): exactly 3 or 4
-# tokens, the file a positively-charset-bounded path (slashes allowed, no expansions,
-# no dash-led token), the optional timeout digits-only.
-_review_log_settle_shape() {
-  local cmd="$1"
-  set -f; set -- $cmd; set +f
-  { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
-  [ "$1" = "just" ] && [ "$2" = "review-log-settle" ] || return 1
-  printf '%s' "$3" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
-  if [ "$#" -eq 4 ]; then
-    printf '%s' "$4" | grep -Eq '^[0-9]+$' || return 1
-  fi
-}
-
 # U-HE-34 r3 P2: `just review-with-failover-logged <log> [base]` — the guard rejects
 # `|` in Bash commands before this allowlist, so the round-log tee must live INSIDE
 # an allowlisted recipe. Same arity-bounded discipline: 3 or 4 tokens, charset path,
@@ -761,11 +745,6 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
        && _bash_args_safe "$CMD"; then
       # U-HE-34: the C-HE-27 span emitters (roadmap-continue / ship-pr) — positional
       # exact-shape only; see _phase_exact_shape for the duplicate-flag rationale.
-      emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-log-settle([[:space:]]|$)' \
-       && _review_log_settle_shape "$TRIM" \
-       && _bash_args_safe "$CMD"; then
-      # U-HE-34 r2: the settle watch feeding result_capture_log_write — arity-bounded.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-with-failover-logged([[:space:]]|$)' \
        && _review_logged_shape "$TRIM" \

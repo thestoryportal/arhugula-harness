@@ -56,9 +56,12 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `DEFAULT_ROUND_BUDGET` in `tools/review_loop_gate.py` (the one authority on the
   number); exhaustion is the register-and-hold point (`defer.sh` + register row), and
   only an operator extends it (`just review-attest-budget`, deliberately ask-gated).
-- **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`
+- **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log`
   (branch-vs-`main`; the C-HE-18 fail-closed `codex-review` wrapper with the C-HE-17
-  `gemini-review` failover) to convergence — the inline `HARNESS_*` prefix is REQUIRED
+  `gemini-review` failover; the logged variant is CANONICAL — its in-recipe tee is the
+  only way a guarded venue produces the round log that `arc-metrics queue
+  --round-logs` later reads, and the bare `just review-with-failover` remains only for
+  a venue that cannot take the log path) to convergence — the inline `HARNESS_*` prefix is REQUIRED
   even when ship-pr is invoked standalone: shell exports do not survive across Bash tool
   calls, and a bare invocation writes the wrapper's `branch-*`/`-nolane` fallback ids
   into the C-HE-24/25 rows instead of joining the arc's real reservation (`<arc-id>` from
@@ -93,32 +96,27 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
     with one pair per phase the alternation is not exactly representable; the recorded
     denominator is round-1 review + the fix window, never a double count.
   - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): `--phase verify_unavailable
-    --edge start` at the failed invocation and `--edge end` when the arc resumes or is
-    held. n6() buckets this span (and round-1-unavailable verify spans) OUT of the
+    --edge start` immediately on OBSERVING the exit, `--edge end` when review attempts
+    resume (or the arc is held) — the phase CLI stamps now(), so the span is the
+    observable outage window, detection → resume, not the wrapper-internal failure
+    instant. n6() buckets this span (and round-1-unavailable verify spans) OUT of the
     denominator so reviewer downtime cannot deflate N6. Named bound: a SUCCESSFUL
     failover's primary-channel downtime is internal to the wrapper — this session-layer
     emitter cannot observe it, so that downtime stays inside verify until a
-    wrapper-internal emitter exists (n6's nested-span subtraction already handles the
-    day one records it).
+    wrapper-internal emitter exists (B-218; n6's nested-span subtraction already
+    handles the day one records it).
   - **No `capture` pair.** The arc-metrics queue step runs after the merge door has
     transitioned the reservation to `merged`, and accretion refuses terminal states
     (C-HE-03 §3) — a capture edge there necessarily fails. The structural conflict
     (C-HE-27 §1 lists `capture`; the reservation cannot carry it post-terminal) is
     registered as forward work rather than wired to fail (codex U-HE-34 r1).
-  - **`result_capture` split (C-HE-27 §1 — process exit and log write DIVERGE: the
-    reviewer's verdict can flush after its process exits).** Produce each round's log
-    with the logged recipe — a session-level `| tee` never survives the guard, which
-    rejects pipes before its allowlist:
-    `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log`
-    (the tee lives inside the allowlisted recipe; the log home is the gitignored
-    in-worktree `.harness/tmp/` because the settle allow is path-bounded to the
-    worktree — a job-tmp path falls to ask and, in a headless venue, strands the
-    edge). Immediately after the recipe returns, record
-    `--phase result_capture_process_exit --edge end`; then
-    `just review-log-settle <round-log>` (bounded 130 s; allowlisted in exactly the
-    2-arg/3-arg literal form) and, ONLY on its exit 0, record
-    `--phase result_capture_log_write --edge end`. A refused settle invocation
-    degrades to skipping the edge — say so in the PR body. Invoke the settle with a Bash tool
+  - **`result_capture` split — session-unrecordable (named bound, B-218).** C-HE-27 §1
+    requires process-exit and log-write-completion recorded separately because they
+    diverge inside the reviewer process; the logged recipe's tee is SYNCHRONOUS, so it
+    returns only after the log is flushed — two session timestamps around it would
+    measure one event, not the divergence. Record neither edge; the split's recorder
+    is wrapper-internal work carried on B-218 (the phases stay reserved in the
+    reservations domain for it). Invoke the settle with a Bash tool
     timeout ABOVE its bound (e.g. 200000 ms) — the tool's 120 s default would kill the
     recipe before its own 130 s bound and misread a settling log as a failure. A log
     still growing at the bound records nothing — there is no true completion timestamp

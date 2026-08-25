@@ -518,19 +518,11 @@ for c in 'uv run python tools/reservations.py phase --arc-id a --phase execute -
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "phase hardening: '$c' → not allow" || bad "phase over-matched: $c"
 done
-# (a''''') U-HE-34 r2: the settle watch — arity-bounded 2/3-arg literal forms only.
-for c in 'just review-log-settle .harness/tmp/u-he-34-rounds/r1.log' \
-         'just review-log-settle .harness/tmp/u-he-34-rounds/r1.log 200'; do
-  OUT=$(run_on "$(pl Bash "$c" '')")
-  [ "$(dec "$OUT")" = "allow" ] && ok "review-log-settle → allow: '$c'" || bad "review-log-settle not allowed: $c → $OUT"
-done
-for c in 'just review-log-settle .harness/tmp/r1.log review-attest-budget' \
-         'just review-log-settle ${victim:=x}.log' \
-         'just review-log-settle .harness/tmp/r1.log 200 extra' \
-         'just review-log-settle'; do
-  OUT=$(run_on "$(pl Bash "$c" '')")
-  [ "$(dec "$OUT")" != "allow" ] && ok "review-log-settle hardening: '$c' → not allow" || bad "review-log-settle over-matched: $c"
-done
+# (a''''') U-HE-34 r4: the settle recipe was REMOVED (a synchronous in-recipe tee
+# cannot observe the reviewer-internal log-write divergence; B-218 carries the
+# wrapper-internal recorder) — its former allow shape must no longer match anything.
+OUT=$(run_on "$(pl Bash 'just review-log-settle .harness/tmp/r1.log' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "removed review-log-settle → not allow" || bad "review-log-settle still allowlisted"
 # (a'''''') U-HE-34 r3: the logged review variant — tee inside the recipe; bare and
 # HARNESS-prefixed forms allow, chained/expansion forms fall through.
 for c in 'just review-with-failover-logged .harness/tmp/u-he-34-rounds/r1.log' \
