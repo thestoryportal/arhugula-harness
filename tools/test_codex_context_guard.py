@@ -1217,7 +1217,9 @@ def test_base_toctou(tmp_path, monkeypatch) -> None:
 def test_orphaned_reservation(tmp_path, monkeypatch) -> None:
     _isolate_gate_log(monkeypatch, tmp_path)
     monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    monkeypatch.setattr(
+        cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": "2020-01-01T00:00:00Z"}
+    )
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
 
     fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
@@ -1324,10 +1326,12 @@ def test_detection_new_evidence_mints_new_ordinal(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
 
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    monkeypatch.setattr(
+        cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": "2020-01-01T00:00:00Z"}
+    )
     fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
     assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "CLOSED")
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: {"state": "CLOSED", "mergedAt": None})
     fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
     assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
 
@@ -1344,12 +1348,14 @@ def test_adjudication_does_not_suppress_new_evidence(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
 
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    monkeypatch.setattr(
+        cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": "2020-01-01T00:00:00Z"}
+    )
     assert len(cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")) == 1
     _adjudicate(fr.read_rows()[0], "suppressed")
 
     assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []  # recalled
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "CLOSED")
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: {"state": "CLOSED", "mergedAt": None})
     assert len(cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")) == 1
 
 
@@ -1374,7 +1380,9 @@ def test_orphan_emission_revalidates_current_generation(tmp_path, monkeypatch) -
     """A normal open->merged transition landing between the snapshot and the GitHub
     answer must not be recorded as an orphan."""
     log = _isolate_gate_log(monkeypatch, tmp_path)
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    monkeypatch.setattr(
+        cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": "2020-01-01T00:00:00Z"}
+    )
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
     monkeypatch.setattr(
         cg,
@@ -2058,3 +2066,18 @@ def test_read_lease_open_site_refuses_fifo_lease(tmp_path, monkeypatch) -> None:
         assert "not a regular file" in str(exc)
     else:
         raise AssertionError("a FIFO LEASE must refuse at the read, not hang")
+
+
+def test_freshly_merged_pr_is_continuation_not_orphan(tmp_path, monkeypatch) -> None:
+    """codex r16 P3: an open head whose PR merged moments ago is the door's ordinary
+    §4(vii)-(viii) continuation (lease held through post-merge CI + refresh), not an
+    orphan -- no durable row, no guard red, until the door's own lease bounds pass."""
+    from datetime import UTC, datetime
+
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    fresh = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": fresh})
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+
+    assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []
+    assert not log.exists()

@@ -1005,8 +1005,17 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
         # An open head with pr=None is LEGITIMATE pre-back-fill state (reserve mints
         # pr null; ship-pr back-fills it) -- skipping the PR query for it is correct,
         # not a corruption swallow (adjudicated against codex r9).
-        pr_state = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
+        info = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
+        pr_state = info.get("state") if info else None
         if pr_state in ("MERGED", "CLOSED"):
+            if pr_state == "MERGED" and _within_continuation_window(info.get("mergedAt")):
+                # An ORDINARY in-flight landing (codex r16 P3): the door holds its
+                # lease through post-merge CI + the terminating refresh BEFORE
+                # flipping the reservation, so an open head with a freshly-merged PR
+                # is the normal continuation, not an orphan. The window is the
+                # door's own lease bounds -- past them, an unflipped head is genuinely
+                # orphaned and emits.
+                continue
             # Revalidate against the CURRENT generation before the durable emission: the
             # bounded GitHub query left a window in which a normal open->merged
             # transition can land, and that ordinary completion must not be recorded as
@@ -1102,6 +1111,22 @@ def _valid_head(head, *, arc_id: str) -> bool:
     )
 
 
+def _within_continuation_window(merged_at: str | None) -> bool:
+    """True while a merged PR is inside the door's lease bounds (its §4(vii)-(viii)
+    continuation): POST_MERGE_CI_BOUND_S + REFRESH_BOUND_S past mergedAt."""
+    if not merged_at:
+        return False
+    import merge_door as md
+
+    age_s = (
+        datetime.now(timezone.utc)  # noqa: UP017 - /usr/bin/python3 is pre-3.11 on macOS
+        - datetime.strptime(merged_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc  # noqa: UP017 - same stdlib-runtime constraint
+        )
+    ).total_seconds()
+    return age_s <= md.POST_MERGE_CI_BOUND_S + md.REFRESH_BOUND_S
+
+
 def _reservation_head_current(arc_id: str) -> dict | None:
     """None means the head genuinely no longer exists (arc gc'd); a READ failure or a
     schema-corrupt head propagates to the dispatch boundary rather than reading as
@@ -1116,23 +1141,26 @@ def _reservation_head_current(arc_id: str) -> dict | None:
     return cur[1]
 
 
-def _gh_pr_state(pr: int) -> str:
-    """A failed query RAISES (dispatch -> hard DETECTIONS_UNAVAILABLE): a missing or
-    unauthenticated `gh` must not read as "PR not merged/closed", which would let every
-    open reservation evade ORPHANED_RESERVATION while the suite exits green."""
+def _gh_pr_state(pr: int) -> dict:
+    """Returns {"state": ..., "mergedAt": ...}. A failed query RAISES (dispatch -> hard
+    DETECTIONS_UNAVAILABLE): a missing or unauthenticated `gh` must not read as "PR not
+    merged/closed", which would let every open reservation evade ORPHANED_RESERVATION
+    while the suite exits green."""
     try:
         p = subprocess.run(
-            ["gh", "pr", "view", str(pr), "--json", "state", "--jq", ".state"],
+            ["gh", "pr", "view", str(pr), "--json", "state,mergedAt"],
             capture_output=True,
             text=True,
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"gh pr view {pr} failed: {exc}") from exc
-    state = p.stdout.strip()
-    if p.returncode != 0 or not state:
-        raise RuntimeError(f"gh pr view {pr} failed: {p.stderr.strip() or 'empty state'}")
-    return state
+    if p.returncode != 0 or not p.stdout.strip():
+        raise RuntimeError(f"gh pr view {pr} failed: {p.stderr.strip() or 'empty output'}")
+    info = json.loads(p.stdout)
+    if not isinstance(info, dict) or not info.get("state"):
+        raise RuntimeError(f"gh pr view {pr} returned no state")
+    return info
 
 
 def _door_lease_strict() -> dict | None:
