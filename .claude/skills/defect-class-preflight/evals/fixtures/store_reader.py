@@ -1,8 +1,8 @@
 """Reservation-store reader (the producer detector_suite.py consumes)."""
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
-import json
 
 STORE = Path.home() / ".detector" / "heads.json"
 
