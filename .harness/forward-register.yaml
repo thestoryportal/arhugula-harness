@@ -61,11 +61,11 @@ snapshot:
   total: 217
   open: 1
   design_substrate_gated: 3
-  registered_finding: 62
+  registered_finding: 61
   operator_gated: 0
   held: 2
-  closed: 149
-  identity_digest: 88f4ba2c77c95602
+  closed: 150
+  identity_digest: 3731443599a2e116
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10723,7 +10723,7 @@ items:
     the post-review-round class-sibling sweep is instruction-dependent; wire it as a
     deterministic gate in the review loop
   pr: 'u-he-33 arc'
-  status: registered_finding
+  status: closed
   summary: 'SURFACED by the operator during the u-he-33 arc (8 review rounds): the
     empty-on-exception defect class recurred in sibling helpers across multiple rounds
     despite being written in defect-class-preflight class 3 — instruction-following
@@ -10732,12 +10732,26 @@ items:
     (the review wrapper writes C-HE-24 rows per round; refresh-classes.py re-derives
     class counts), but the classify-then-sweep-the-diff-for-siblings step between
     rounds runs only if the agent chooses to run it.'
-  close_out: 'OPEN — closure = a deterministic post-round step wired into the review
-    loop (the wrapper or a companion script): extract the round''s findings, grep the
-    branch diff for class-sibling shapes, and refuse the next review invocation until
-    each hit carries a named answer. The review wrapper is the workspace''s
-    highest-blast-radius shared-surface class, so this takes its own reviewed arc
-    (B-213 precedent).'
+  close_out: 'CLOSED at PR #1456 (b-215 arc). The admission gate (tools/review_loop_gate.py)
+    converts the loop''s disciplines into refusals at the one seam both channels share
+    (codex_review.main + agy_review.main standalone): CURRENCY (every admission needs a
+    preflight-or-sweep attestation bound head+digest to the exact reviewable diff, via
+    the same rw.code_binding formula the reviewer binding uses), OBLIGATIONS (every
+    finding_id across both loop producers must carry a token-exact sweep answer — round
+    arithmetic dropped as incoherent across per-producer scales), and TERMINATION
+    (distinct (producer, round) pairs vs DEFAULT_ROUND_BUDGET=10 + ask-gated auditable
+    extensions; refusal cites the u-he-29 no-cap counter-evidence at the decision
+    point). Refusal is exit 3 GATE_REFUSED — not a review terminal (C-HE-16 §3 enum
+    untouched, no C-HE-24 row). Review trail: 10 codex rounds to the arc''s own live
+    BUDGET_EXHAUSTED refusal — the predicate demonstrated on its own construction; ~31
+    findings absorbed or adjudicated round-by-round in commit messages + sweep
+    attestations. Named residuals: textual-sweep label granularity is class-level (ids
+    are per-occurrence; 5x-raised, held per the honest-floor design); parent-dir
+    symlink chains beyond the final-component containment idiom (3x, precedent scope);
+    admit-to-emission/review TOCTOU (3x, arc-serial flow exclusion, U-HE-19/21);
+    standalone gemini gated but raw codex CLI un-gated (mints no rounds); unreserved
+    arcs run gate-Inactive loudly (sanctioned headless degradation). Guard chaining
+    class spun out as B-217.'
   council: 'NO — single-surface loop-tooling gap; no cross-axis tension.'
   heading: '### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*'
 - id: B-216

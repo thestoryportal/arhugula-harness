@@ -2499,8 +2499,8 @@ same spec leg.
 ### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*
 
 - **What it is.** The u-he-33 arc measured that the between-rounds classify-then-sweep step is instruction-dependent and fails under load: the empty-on-exception class recurred in sibling helpers across multiple review rounds despite being written in defect-class-preflight class 3. Finding capture is already deterministic (per-round C-HE-24 rows; refresh-classes.py); the sweep is not.
-- **Current state.** OPEN. The interim mitigation is the skill's new "after every review round" section (instruction-tier).
-- **Closure shape.** A deterministic post-round step in the review loop: extract the round's findings, grep the branch diff for class-sibling shapes, refuse the next review invocation until each hit carries a named answer. Review-wrapper surface — own reviewed arc (B-213 precedent).
+- **Current state.** CLOSED at PR #1456 (b-215 arc): the admission gate `tools/review_loop_gate.py` wired into both loop channels — CURRENCY (attestation bound head+digest to the exact reviewable diff), OBLIGATIONS (every finding_id across both producers, token-exact answers), TERMINATION (10-round budget + ask-gated auditable extensions, refusal citing the u-he-29 counter-evidence). 10 codex rounds ending in the arc's own live BUDGET_EXHAUSTED refusal — the predicate demonstrated on its own construction. Residuals named in the register close_out; guard chaining class spun out as B-217.
+- **Closure shape (as registered).** A deterministic post-round step in the review loop: extract the round's findings, grep the branch diff for class-sibling shapes, refuse the next review invocation until each hit carries a named answer. Review-wrapper surface — own reviewed arc (B-213 precedent).
 
 ### B-216 · u-he-33 review-loop tail refinements *(deferred at the operator stop, 2026-08-25; REGISTERED)*
 
