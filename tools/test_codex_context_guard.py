@@ -1826,3 +1826,26 @@ def test_symlinked_door_dir_refused_in_lease_read(tmp_path, monkeypatch) -> None
         assert "symlink" in str(exc)
     else:
         raise AssertionError("a symlinked door dir must refuse")
+
+
+def test_core_mutated_adjudication_does_not_suppress(tmp_path, monkeypatch) -> None:
+    """An adjudication reusing a REAL finding_id but mutating immutable core (lane_id)
+    passes fr.validate in isolation and must still not mute (codex r12: cross-row
+    core + ts invariants re-checked at read time)."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="l")] == ["BASE_TOCTOU"]
+    row = json.loads(log.read_text().splitlines()[0])
+    forged = {
+        **row,
+        "record_kind": "finding_adjudication",
+        "ts": "2099-01-01T00:00:00Z",
+        "disposition": "suppressed",
+        "disposition_actor": "operator",
+        "lane_id": "attacker-lane",  # mutated immutable core
+    }
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(forged) + "\n")
+
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="l")] == ["BASE_TOCTOU"]

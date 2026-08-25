@@ -775,6 +775,14 @@ def _record_detection(payload: dict) -> str:
       rejected as a core mutation, C-HE-24 §4)."""
     import finding_record as fr
 
+    # The log is both the append target and the suppression authority (codex r12):
+    # a symlinked or non-regular file at its path would let append_observations
+    # write outside the repository and let an externally mutable target supply
+    # adjudications -- and a linked worktree's root-checkout guard never sees it.
+    log = fr.GATE_LOG_JSONL
+    if log.is_symlink() or (log.exists() and not log.is_file()):
+        raise RuntimeError(f"gate log {log} is not a regular file -- refused (containment)")
+
     code, arc_id, evidence = payload["code"], payload["arc_id"], payload["evidence"]
     outcome = ["appended"]
 
@@ -822,7 +830,19 @@ def _record_detection(payload: dict) -> str:
                 if a.get("record_kind") == "finding_adjudication"
                 and a.get("finding_id") == r["finding_id"]
             ]
-            if _validated(r) and adjs and _validated(adjs[-1]):
+            if not adjs:
+                continue
+            adj = adjs[-1]
+            # C-HE-24 §5 cross-row invariants re-checked at READ time (codex r12):
+            # an adjudication honored for suppression must carry the finding row's
+            # exact immutable core and a strictly later ts -- a raw append reusing a
+            # real finding_id with mutated lane/evidence passes fr.validate in
+            # isolation and must not mute the detection.
+            if (
+                _validated(adj)
+                and all(adj.get(k) == r.get(k) for k in fr._CORE_IMMUTABLE)
+                and adj.get("ts", "") > r.get("ts", "")
+            ):
                 outcome[0] = "adjudicated"
                 return []
         # Dedupe counts only VALIDATED rows (codex r11): a schema-invalid but
