@@ -459,6 +459,30 @@ def test_attest_budget_requires_reason_and_records(repo: Path, monkeypatch: pyte
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     rc = rlg.main(["attest-budget", "--extra", "2", "--reason", "", "--repo", str(repo)])
     assert rc != 0
+    # codex r5 P2: a non-positive "extension" would invert the tightening invariant
+    rc = rlg.main(["attest-budget", "--extra", "0", "--reason", "ok", "--repo", str(repo)])
+    assert rc != 0
+    rc = rlg.main(["attest-budget", "--extra", "-3", "--reason", "ok", "--repo", str(repo)])
+    assert rc != 0
+    assert rlg.load_state(repo).extensions == ()
+    rlg.state_path(repo).write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "kind": "budget_extension",
+                        "arc_id": ARC,
+                        "extra_rounds": -2,
+                        "reason": "r",
+                        "ts": "t",
+                    }
+                ]
+            }
+        )
+    )
+    with pytest.raises(rlg.GateError, match="extra_rounds"):
+        rlg.load_state(repo)
+    rlg.state_path(repo).unlink()
     rc = rlg.main(
         ["attest-budget", "--extra", "2", "--reason", "operator approved", "--repo", str(repo)]
     )

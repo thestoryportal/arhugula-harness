@@ -419,6 +419,11 @@ OUT=$(run_on "$(pl Bash "just review-gate-check main review-attest-budget 2 oper
 [ "$(dec "$OUT")" != "allow" ] && ok "chained review-attest-budget after review-gate-check → not auto-allowed" || bad "multi-recipe budget chain auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just review-attest-sweep .harness/tmp/a.md main review-attest-budget 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "chained budget after review-attest-sweep → not auto-allowed" || bad "attest-sweep budget chain auto-allowed: $OUT"
+# codex r5 P1: the budget verb chained after ANY generic-prefix allowlisted recipe
+# (the B-217 class) — the load-bearing ask-gate is pinned by a pre-allowlist reject
+# on every `just` line mentioning it, regardless of which prefix fronts the chain.
+OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-budget 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained budget after generic-prefix recipe → not auto-allowed" || bad "generic-prefix budget chain auto-allowed: $OUT"
 SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"

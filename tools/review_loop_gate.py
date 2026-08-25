@@ -208,6 +208,10 @@ def _parse_state(data: bytes, path: Path) -> GateState:
                 want = int if f.type == "int" else str if f.type == "str" else None
                 if want is not None and not isinstance(getattr(obj, f.name), want):
                     raise ValueError(f"{f.name} is not {want.__name__}")
+            if isinstance(obj, BudgetExtension) and obj.extra_rounds < 1:
+                # the tightening invariant lives in the type (codex r5 P2): a persisted
+                # non-positive extension would loosen the gate when state is lost
+                raise ValueError("extra_rounds must be >= 1")
             buckets[attr].append(obj)
         return GateState(**{attr: tuple(v) for attr, v in buckets.items()})
     except (KeyError, TypeError, ValueError) as exc:
@@ -250,14 +254,11 @@ def _append_record(root: Path, kind: str, record: object) -> None:
     ]
     existing.append({"kind": kind, **asdict(record)})
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    # exclusive-create the temp (codex r2 P1: write_text on a fixed .tmp name follows a
-    # pre-planted symlink) — unlink removes a stale tmp or a planted link ITSELF, never
-    # its target; O_EXCL|O_NOFOLLOW then cannot land on any pre-existing entry
-    try:
-        os.unlink(tmp)
-    except FileNotFoundError:
-        pass
+    # per-pid temp + exclusive create (codex r2 P1, r5 P2): O_EXCL|O_NOFOLLOW cannot
+    # land on any pre-existing entry (a planted link fails loud), and the unique name
+    # removes the shared-fixed-tmp hazard between an operator verb and a loop attest.
+    # A crash may leak one tmp; the next same-pid run fails loud on it — remove by hand.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     try:
         payload = (json.dumps({"records": existing}, indent=1) + "\n").encode()
@@ -572,6 +573,11 @@ def _attest_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int
 
 
 def _attest_budget(repo: Path, extra: int, reason: str, arc_id: str) -> int:
+    if extra < 1:
+        # a zero/negative "extension" would invert the tightening invariant: dropping
+        # the record on corruption recovery would then LOOSEN the gate (codex r5 P2)
+        print("review-gate: budget extension must be >= 1 round", file=sys.stderr)
+        return 1
     if not reason.strip():
         print("review-gate: budget extension requires a non-empty --reason", file=sys.stderr)
         return 1

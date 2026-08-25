@@ -604,9 +604,14 @@ esac
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   # Reject (→ ask) if the command (a) chains/nests/redirects, OR (b) uses a destructive
   # SUBMODE of an otherwise-allowlisted verb that the deny-list doesn't cover —
-  # `find ... -delete/-exec`, `gh api -X DELETE/POST/...` (mutating). Allowlisted verbs
-  # are auto-allowed only in their read-only forms.
+  # `find ... -delete/-exec`, `gh api -X DELETE/POST/...` (mutating), OR (c) is a `just`
+  # line mentioning review-attest-budget ANYWHERE (codex r5 P1: `just` chains recipes,
+  # so the ask-gated budget verb could ride as a chained second recipe behind ANY
+  # allowlisted prefix — B-217 tracks the general class; this pins the one verb whose
+  # ask-gate is load-bearing). Allowlisted verbs are auto-allowed only in their
+  # read-only forms.
   if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
+     || printf '%s' "$CMD" | grep -Eq 'just[[:space:]].*review-attest-budget' \
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge.*--admin' \
