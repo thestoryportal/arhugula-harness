@@ -6,14 +6,18 @@ reviewer subprocess starts ([LAW:single-enforcer] — codex_review.main() is the
 seam both channels share). The gate converts the review loop's authoring-time
 disciplines from instruction-following into refusals:
 
-- round 1 requires a PREFLIGHT attestation bound to the exact reviewed bytes
-  (`rw.code_binding` — the same digest formula the reviewer binding uses,
-  [LAW:one-source-of-truth]);
-- after a BLOCK round, the next round requires a SWEEP attestation covering every
-  finding_id that round recorded (both loop producers — a failover round's
-  findings land under the gemini producer at the forced shared round number);
-- rounds beyond the budget (default 10, the merge-gate cap precedent) refuse with
-  the register-and-hold recipe. Extensions are auditable records, not env flags
+- CURRENCY: every admission requires the current bytes (head + diff digest via
+  `rw.code_binding`, the same formula the reviewer binding uses,
+  [LAW:one-source-of-truth]) to carry a sweep-run attestation — a preflight or a
+  sweep bound to exactly this diff. A REVIEWER_UNAVAILABLE round reviewed nothing
+  and never satisfies it (codex r2 P1).
+- OBLIGATIONS: every finding_id ever recorded for the arc (both loop producers —
+  round numbers are per-producer scales, so round arithmetic is incoherent across
+  them, codex r2 P1) must be answered by some sweep attestation before the next
+  round is admitted; refusals enumerate the unanswered ids.
+- TERMINATION: review invocations spent — distinct (producer, round) pairs —
+  beyond the budget (default 10, the merge-gate cap precedent) refuse with the
+  register-and-hold recipe. Extensions are auditable records, not env flags
   ([LAW:no-mode-explosion]).
 
 A refusal is NOT a review terminal: C-HE-16 §3 closes that enum at
@@ -97,10 +101,9 @@ class PreflightAttestation:
 @dataclass(frozen=True)
 class SweepAttestation:
     arc_id: str
-    round_n: int
     head_sha: str
     diff_digest: str  # full code binding, not head alone: a different --base is a different diff
-    finding_ids: tuple[str, ...]
+    finding_ids: tuple[str, ...]  # the obligations this sweep answered (any producer, any round)
     answers_digest: str
     ts: str
 
@@ -145,7 +148,7 @@ class Inactive:
 
 @dataclass(frozen=True)
 class Refused:
-    code: str  # PREFLIGHT_MISSING | PREFLIGHT_STALE | SWEEP_MISSING | SWEEP_STALE
+    code: str  # PREFLIGHT_MISSING | PREFLIGHT_STALE | SWEEP_MISSING
     #           | BUDGET_EXHAUSTED | ARC_UNRESERVED | STATE_UNREADABLE
     detail: str
     recipe: str
@@ -223,7 +226,18 @@ def _append_record(root: Path, kind: str, record: object) -> None:
     existing.append({"kind": kind, **asdict(record)})
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps({"records": existing}, indent=1) + "\n")
+    # exclusive-create the temp (codex r2 P1: write_text on a fixed .tmp name follows a
+    # pre-planted symlink) — unlink removes a stale tmp or a planted link ITSELF, never
+    # its target; O_EXCL|O_NOFOLLOW then cannot land on any pre-existing entry
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        os.write(fd, (json.dumps({"records": existing}, indent=1) + "\n").encode())
+    finally:
+        os.close(fd)
     os.replace(tmp, path)
 
 
@@ -240,6 +254,23 @@ def _loop_rounds(rows: list[dict], arc_id: str) -> list[dict]:
     ]
 
 
+def unanswered_findings(state: GateState, rows: list[dict], arc_id: str) -> list[str]:
+    """Findings are OBLIGATIONS, not round rows (codex r2 P1): round numbers are
+    per-producer scales, so a standalone gemini finding minted at its own round 1
+    while codex sits at round 5 must still block admission. The unit is the
+    finding_id; coverage is a set difference against every sweep ever attested."""
+    all_ids = {
+        r["finding_id"]
+        for r in _loop_rounds(rows, arc_id)
+        if r.get("record_kind") == "finding" and r.get("finding_id")
+    }
+    answered: set[str] = set()
+    for s in state.sweeps:
+        if s.arc_id == arc_id:
+            answered.update(s.finding_ids)
+    return sorted(all_ids - answered)
+
+
 def decide(
     state: GateState,
     rows: list[dict],
@@ -250,12 +281,15 @@ def decide(
     budget: int = DEFAULT_ROUND_BUDGET,
 ) -> Allowed | Refused:
     scoped = _loop_rounds(rows, arc_id)
-    last = max((r["round_n"] for r in scoped), default=0)
+    # budget counts review invocations SPENT — distinct (producer, round) pairs, since
+    # round numbers are per-producer scales and a max() across them undercounts
+    # (codex r2 P1: codex round 5 + three standalone gemini rounds = 8 spent, not 5)
+    rounds_spent = len({(r["producer"], r["round_n"]) for r in scoped})
     allowed_total = budget + sum(e.extra_rounds for e in state.extensions if e.arc_id == arc_id)
-    if last >= allowed_total:
+    if rounds_spent >= allowed_total:
         return Refused(
             code="BUDGET_EXHAUSTED",
-            detail=f"{last} review rounds recorded for {arc_id}; budget {allowed_total}",
+            detail=f"{rounds_spent} review rounds spent for {arc_id}; budget {allowed_total}",
             recipe=(
                 "round budget spent — this is the register-and-hold point, not a bug to "
                 "keep iterating: register the residual findings as a forward item and "
@@ -263,9 +297,24 @@ def decide(
                 "instead extend deliberately via `just review-attest-budget` (ask-gated)."
             ),
         )
-    if last == 0:
-        pf = next((p for p in reversed(state.preflights) if p.arc_id == arc_id), None)
-        if pf is None:
+    unanswered = unanswered_findings(state, rows, arc_id)
+    if unanswered:
+        return Refused(
+            code="SWEEP_MISSING",
+            detail="findings without a class-sibling sweep answer: " + ", ".join(unanswered),
+            recipe=(
+                "answer each finding_id in a sweep answers file (classify the miss, grep "
+                "the diff for class siblings), commit the absorption, then "
+                "`just review-attest-sweep <answers-file>`"
+            ),
+        )
+    # currency invariant (codex r2 P1, subsuming the earlier post-APPROVE residual):
+    # the CURRENT bytes must carry a sweep-run attestation — a preflight or a sweep
+    # bound to exactly this (head, digest). A REVIEWER_UNAVAILABLE round minted no
+    # findings and reviewed nothing, so it never satisfies this by itself.
+    arc_attestations = [a for a in (*state.preflights, *state.sweeps) if a.arc_id == arc_id]
+    if not any(a.head_sha == head_sha and a.diff_digest == diff_digest for a in arc_attestations):
+        if not arc_attestations:
             return Refused(
                 code="PREFLIGHT_MISSING",
                 detail=f"no preflight attestation for {arc_id}",
@@ -275,55 +324,19 @@ def decide(
                     "`just review-attest-preflight <answers-file>`"
                 ),
             )
-        if pf.head_sha != head_sha or pf.diff_digest != diff_digest:
-            return Refused(
-                code="PREFLIGHT_STALE",
-                detail=(
-                    f"preflight attested {pf.head_sha[:12]}/{pf.diff_digest[:12]} but the "
-                    f"reviewable diff is {head_sha[:12]}/{diff_digest[:12]}"
-                ),
-                recipe=(
-                    "the tree moved since attesting — re-run "
-                    "`just review-attest-preflight` after the last commit"
-                ),
-            )
-        return Allowed(round_n=1)
-    unanswered_ids = sorted(
-        r["finding_id"]
-        for r in scoped
-        if r["round_n"] == last and r.get("record_kind") == "finding" and r.get("finding_id")
-    )
-    if unanswered_ids:
-        sweep = next(
-            (s for s in reversed(state.sweeps) if s.arc_id == arc_id and s.round_n == last), None
+        return Refused(
+            code="PREFLIGHT_STALE",
+            detail=(
+                f"no attestation covers the reviewable diff "
+                f"{head_sha[:12]}/{diff_digest[:12]} — the tree moved since the last "
+                "preflight or sweep"
+            ),
+            recipe=(
+                "re-run `just review-attest-preflight <answers-file>` after the last "
+                "commit (every reviewed byte is attested-swept, always)"
+            ),
         )
-        if sweep is not None:
-            if sweep.head_sha != head_sha or sweep.diff_digest != diff_digest:
-                return Refused(
-                    code="SWEEP_STALE",
-                    detail=(
-                        f"sweep for round {last} attested {sweep.head_sha[:12]}/"
-                        f"{sweep.diff_digest[:12]} but the reviewable diff is "
-                        f"{head_sha[:12]}/{diff_digest[:12]} — the sweep must cover the "
-                        "fix's final form against the same base"
-                    ),
-                    recipe="re-run `just review-attest-sweep <answers-file>` after the last commit",
-                )
-            unanswered_ids = [i for i in unanswered_ids if i not in sweep.finding_ids]
-        if unanswered_ids:
-            return Refused(
-                code="SWEEP_MISSING",
-                detail=(
-                    f"round {last} findings without a class-sibling sweep answer: "
-                    + ", ".join(unanswered_ids)
-                ),
-                recipe=(
-                    "answer each finding_id in a sweep answers file (classify the miss, grep "
-                    "the diff for class siblings), commit the absorption, then "
-                    "`just review-attest-sweep <answers-file>`"
-                ),
-            )
-    return Allowed(round_n=last + 1)
+    return Allowed(round_n=max((r["round_n"] for r in scoped), default=0) + 1)
 
 
 # ── edge: admit ──────────────────────────────────────────────────────────────
@@ -343,17 +356,9 @@ def _reservation_exists(arc_id: str) -> bool:
 
 
 def admit(repo: Path, base: str, arc_id: str) -> Decision:
-    try:
-        state = load_state(repo)
-    except GateError as exc:
-        return Refused(
-            code="STATE_UNREADABLE",
-            detail=str(exc),
-            recipe=(
-                "inspect the file; any attest verb re-initializes it loudly (state loss "
-                "only tightens the gate — round counts live in the gate log)"
-            ),
-        )
+    # Reservation scope FIRST: Inactive means the gate is not in force for this arc,
+    # so an unreadable state file must not refuse an out-of-scope invocation (it broke
+    # the whole wrapper battery on a live schema migration before this ordering).
     try:
         reserved = _reservation_exists(arc_id)
     except Exception as exc:  # unreadable store: cannot tell -> never read as reserved
@@ -370,6 +375,17 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
                 ),
             )
         return Inactive(reason=f"arc {arc_id} unreserved — attestation gate not in force")
+    try:
+        state = load_state(repo)
+    except GateError as exc:
+        return Refused(
+            code="STATE_UNREADABLE",
+            detail=str(exc),
+            recipe=(
+                "inspect the file; any attest verb re-initializes it loudly (state loss "
+                "only tightens the gate — round counts live in the gate log)"
+            ),
+        )
     try:
         binding = rw.code_binding(repo, base)
     except subprocess.CalledProcessError as exc:
@@ -421,15 +437,23 @@ def _read_answers(path: Path) -> str:
     return text
 
 
-def _unanswered(needles: tuple[str, ...], answers: str) -> list[str]:
-    return [n for n in needles if n not in answers]
+def _unanswered_labels(labels: tuple[str, ...], answers: str) -> list[str]:
+    # hit labels are fixed multi-word strings from the sweep script — substring is exact
+    return [n for n in labels if n not in answers]
+
+
+def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
+    # token-exact, not substring (codex r2 P2: an answer naming ...:10 must not
+    # satisfy the sibling ...:1) — ids are whitespace/punctuation-delimited tokens
+    tokens = set(re.split(r"[\s,;()\[\]{}'\"`]+", answers))
+    return [n for n in ids if n not in tokens]
 
 
 def _attest_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:
     b = rw.code_binding(repo, base)
     labels = _run_sweep_script(repo, f"{b['base_sha']}..{b['head_sha']}")
     answers = _read_answers(answers_path)
-    missing = _unanswered(labels, answers)
+    missing = _unanswered_labels(labels, answers)
     if missing:
         print(
             "review-gate: preflight NOT attested — hits without a named answer: "
@@ -456,26 +480,16 @@ def _attest_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) ->
     return 0
 
 
-def _attest_sweep(
-    repo: Path, base: str, answers_path: Path, arc_id: str, round_arg: int | None
-) -> int:
-    scoped = _loop_rounds(fr.read_rows(), arc_id)
-    last = max((r["round_n"] for r in scoped), default=0)
-    target = round_arg if round_arg is not None else last
-    if target == 0:
-        print(
-            f"review-gate: no recorded review rounds for {arc_id} — nothing to sweep",
-            file=sys.stderr,
-        )
-        return 1
-    ids = sorted(
-        r["finding_id"]
-        for r in scoped
-        if r["round_n"] == target and r.get("record_kind") == "finding" and r.get("finding_id")
-    )
+def _attest_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:
+    """Attest the OUTSTANDING obligations — every unanswered finding_id for the arc,
+    any producer, any round (the finding-as-obligation model, codex r2 P1) — plus the
+    class-sibling textual floor over the attested bytes."""
+    state = load_state(repo)  # GateError (containment/corrupt) propagates loud to main
+    ids = unanswered_findings(state, fr.read_rows(), arc_id)
     if not ids:
         print(
-            f"review-gate: round {target} of {arc_id} has no findings — nothing to sweep",
+            f"review-gate: no unanswered findings for {arc_id} — nothing to sweep "
+            "(a moved tree re-attests via review-attest-preflight)",
             file=sys.stderr,
         )
         return 1
@@ -483,7 +497,7 @@ def _attest_sweep(
     # class-sibling textual floor over the attested bytes, same enforcer as preflight
     labels = _run_sweep_script(repo, f"{b['base_sha']}..{b['head_sha']}")
     answers = _read_answers(answers_path)
-    missing = _unanswered(tuple(ids), answers) + _unanswered(labels, answers)
+    missing = _unanswered_ids(tuple(ids), answers) + _unanswered_labels(labels, answers)
     if missing:
         print(
             "review-gate: sweep NOT attested — unanswered: " + "; ".join(missing),
@@ -495,7 +509,6 @@ def _attest_sweep(
         "sweep",
         SweepAttestation(
             arc_id=arc_id,
-            round_n=target,
             head_sha=b["head_sha"],
             diff_digest=b["diff_digest"],
             finding_ids=tuple(ids),
@@ -503,10 +516,7 @@ def _attest_sweep(
             ts=_now_iso(),
         ),
     )
-    print(
-        f"review-gate: round {target} sweep attested at {b['head_sha'][:12]} "
-        f"({len(ids)} findings answered)"
-    )
+    print(f"review-gate: sweep attested at {b['head_sha'][:12]} ({len(ids)} findings answered)")
     return 0
 
 
@@ -531,8 +541,6 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--answers", required=True, help="in-worktree relative path")
         sp.add_argument("--base", default="main")
         sp.add_argument("--repo", default=".")
-        if name == "attest-sweep":
-            sp.add_argument("--round", type=int, default=None)
     sp = sub.add_parser("attest-budget")
     sp.add_argument("--extra", type=int, required=True)
     sp.add_argument("--reason", required=True)
@@ -547,7 +555,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "attest-preflight":
             return _attest_preflight(repo, args.base, Path(args.answers), arc_id)
         if args.cmd == "attest-sweep":
-            return _attest_sweep(repo, args.base, Path(args.answers), arc_id, args.round)
+            return _attest_sweep(repo, args.base, Path(args.answers), arc_id)
         if args.cmd == "attest-budget":
             return _attest_budget(repo, args.extra, args.reason, arc_id)
     except GateError as exc:

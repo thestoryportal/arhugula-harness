@@ -46,12 +46,9 @@ def _pf(head=HEAD, digest=DIGEST, arc=ARC) -> rlg.PreflightAttestation:
     )
 
 
-def _sw(
-    round_n: int, ids: tuple[str, ...], head=HEAD, digest=DIGEST, arc=ARC
-) -> rlg.SweepAttestation:
+def _sw(ids: tuple[str, ...], head=HEAD, digest=DIGEST, arc=ARC) -> rlg.SweepAttestation:
     return rlg.SweepAttestation(
         arc_id=arc,
-        round_n=round_n,
         head_sha=head,
         diff_digest=digest,
         finding_ids=ids,
@@ -114,50 +111,61 @@ def test_block_round_without_sweep_refuses_and_enumerates_ids():
 
 def test_block_round_with_covering_sweep_allows():
     rows = [_row(1, "finding", "cw:aa:11:1")]
-    d = _decide(_state(sweeps=(_sw(1, ("cw:aa:11:1",)),)), rows)
+    d = _decide(_state(sweeps=(_sw(("cw:aa:11:1",)),)), rows)
     assert d == rlg.Allowed(round_n=2)
 
 
 def test_sweep_missing_one_finding_names_it():
     rows = [_row(1, "finding", "cw:aa:11:1"), _row(1, "finding", "cw:aa:11:2")]
-    d = _decide(_state(sweeps=(_sw(1, ("cw:aa:11:1",)),)), rows)
+    d = _decide(_state(sweeps=(_sw(("cw:aa:11:1",)),)), rows)
     assert isinstance(d, rlg.Refused)
     assert d.code == "SWEEP_MISSING"
     assert "cw:aa:11:2" in d.detail
     assert "cw:aa:11:1" not in d.detail  # answered ids are not re-demanded
 
 
-def test_sweep_at_old_head_refuses_stale():
+def test_covering_sweep_at_old_head_fails_currency():
+    # obligations answered, but the CURRENT bytes carry no attestation
     rows = [_row(1, "finding", "cw:aa:11:1")]
-    d = _decide(_state(sweeps=(_sw(1, ("cw:aa:11:1",), head="e" * 40),)), rows)
+    d = _decide(_state(sweeps=(_sw(("cw:aa:11:1",), head="e" * 40),)), rows)
     assert isinstance(d, rlg.Refused)
-    assert d.code == "SWEEP_STALE"
+    assert d.code == "PREFLIGHT_STALE"
 
 
-def test_sweep_at_same_head_different_base_refuses_stale():
+def test_covering_sweep_different_base_fails_currency():
     # codex r1 P2: head alone under-binds — a different --base is a different diff
     rows = [_row(1, "finding", "cw:aa:11:1")]
-    d = _decide(_state(sweeps=(_sw(1, ("cw:aa:11:1",), digest="f" * 64),)), rows)
+    d = _decide(_state(sweeps=(_sw(("cw:aa:11:1",), digest="f" * 64),)), rows)
     assert isinstance(d, rlg.Refused)
-    assert d.code == "SWEEP_STALE"
+    assert d.code == "PREFLIGHT_STALE"
 
 
-def test_sweep_for_wrong_round_does_not_cover():
-    rows = [_row(2, "finding", "cw:bb:22:9")]
-    d = _decide(_state(sweeps=(_sw(1, ("cw:bb:22:9",)),)), rows)
+def test_standalone_gemini_interleave_still_blocks():
+    # codex r2 P1: round numbers are per-producer scales — a gemini finding minted
+    # at gemini-round-1 while codex sits at round 5 is still an unanswered
+    # obligation; round arithmetic must not hide it
+    rows = [
+        *[_row(n, "no_finding") for n in range(1, 6)],
+        _row(1, "finding", "gw:aa:11:9", producer="gemini_review_wrapper"),
+    ]
+    d = _decide(_state(preflights=(_pf(),)), rows)
     assert isinstance(d, rlg.Refused)
     assert d.code == "SWEEP_MISSING"
+    assert "gw:aa:11:9" in d.detail
 
 
-def test_approve_last_round_allows_without_sweep():
+def test_approve_round_plus_current_attestation_allows():
     rows = [_row(1, "no_finding")]
-    d = _decide(_state(), rows)
+    d = _decide(_state(preflights=(_pf(),)), rows)
     assert d == rlg.Allowed(round_n=2)
 
 
-def test_unavailable_last_round_allows_retry():
+def test_unavailable_round_does_not_satisfy_currency():
+    # codex r2 P1: an UNAVAILABLE round reviewed nothing — with no attestation for
+    # the current bytes the next invocation must not bypass the entry preflight
     rows = [_row(1, "reviewer_unavailable")]
-    d = _decide(_state(), rows)
+    assert isinstance(_decide(_state(), rows), rlg.Refused)
+    d = _decide(_state(preflights=(_pf(),)), rows)
     assert d == rlg.Allowed(round_n=2)
 
 
@@ -177,10 +185,14 @@ def test_failover_gemini_findings_same_round_must_be_swept():
 # ── pure core: termination predicate ─────────────────────────────────────────
 
 
-def test_budget_exhausted_refuses_with_loop_reachable_recipe():
-    rows = [_row(n, "finding", f"cw:aa:11:{n}") for n in range(1, 11)]
-    sweeps = tuple(_sw(n, (f"cw:aa:11:{n}",)) for n in range(1, 11))
-    d = _decide(_state(sweeps=sweeps), rows)
+def test_budget_counts_distinct_producer_round_pairs():
+    # codex r2 P1: rounds spent = review invocations across BOTH producer scales —
+    # 6 codex + 4 standalone gemini = 10 spent, even though max(round_n) is only 6
+    rows = [
+        *[_row(n, "no_finding") for n in range(1, 7)],
+        *[_row(n, "no_finding", producer="gemini_review_wrapper") for n in range(1, 5)],
+    ]
+    d = _decide(_state(preflights=(_pf(),)), rows)
     assert isinstance(d, rlg.Refused)
     assert d.code == "BUDGET_EXHAUSTED"
     # the unblock verb attest-budget is ask-gated in loop mode: the recipe must
@@ -192,7 +204,7 @@ def test_budget_exhausted_refuses_with_loop_reachable_recipe():
 def test_budget_extension_extends():
     rows = [_row(n, "no_finding") for n in range(1, 11)]
     ext = rlg.BudgetExtension(arc_id=ARC, extra_rounds=2, reason="operator ok", ts="t")
-    d = _decide(_state(extensions=(ext,)), rows)
+    d = _decide(_state(preflights=(_pf(),), extensions=(ext,)), rows)
     assert d == rlg.Allowed(round_n=11)
 
 
@@ -213,7 +225,7 @@ def test_state_loss_only_tightens():
     # round counts live in the gate log — losing state can refuse what was
     # allowed, never allow what was refused
     rows = [_row(1, "finding", "cw:aa:11:1")]
-    with_state = _decide(_state(sweeps=(_sw(1, ("cw:aa:11:1",)),)), rows)
+    with_state = _decide(_state(sweeps=(_sw(("cw:aa:11:1",)),)), rows)
     without_state = _decide(_state(), rows)
     assert isinstance(with_state, rlg.Allowed)
     assert isinstance(without_state, rlg.Refused)
@@ -256,11 +268,21 @@ def test_load_state_missing_file_is_empty(repo: Path):
     assert rlg.load_state(repo) == _state()
 
 
-def test_admit_state_unreadable_refuses(repo: Path):
+def test_admit_state_unreadable_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
     rlg.state_path(repo).write_text("{not json")
     d = rlg.admit(repo, "main", ARC)
     assert isinstance(d, rlg.Refused)
     assert d.code == "STATE_UNREADABLE"
+
+
+def test_admit_out_of_scope_arc_ignores_unreadable_state(repo: Path):
+    # Inactive means NOT IN FORCE: an unreadable state file must not refuse an
+    # unreserved interactive invocation (live schema migrations would otherwise
+    # brick every wrapper call in the checkout)
+    rlg.state_path(repo).write_text("{not json")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Inactive)
 
 
 def test_admit_unreserved_loop_mode_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch):
@@ -370,8 +392,43 @@ def test_attest_sweep_records_and_covers(repo: Path, monkeypatch: pytest.MonkeyP
     rc = rlg.main(["attest-sweep", "--answers", str(a), "--base", "main", "--repo", str(repo)])
     assert rc == 0
     (sw,) = rlg.load_state(repo).sweeps
-    assert sw.round_n == 1
     assert set(sw.finding_ids) == {"cw:aa:11:1", "cw:aa:11:2"}
+    binding = rw.code_binding(repo, "main")
+    assert sw.head_sha == binding["head_sha"]
+    assert sw.diff_digest == binding["diff_digest"]
+
+
+def test_attest_sweep_id_matching_is_token_exact(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r2 P2: an answer naming ...:10 must not satisfy the sibling ...:1
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(
+        json.dumps(_row(1, "finding", "cw:aa:11:1"))
+        + "\n"
+        + json.dumps(_row(1, "finding", "cw:aa:11:10"))
+        + "\n"
+    )
+    a = repo / "sweep.md"
+    a.write_text("cw:aa:11:10 fixed\n")
+    rc = rlg.main(["attest-sweep", "--answers", str(a), "--base", "main", "--repo", str(repo)])
+    assert rc != 0
+    assert rlg.load_state(repo).sweeps == ()
+
+
+def test_attest_tmp_symlink_cannot_redirect_write(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r2 P1: a pre-planted symlink at the fixed .tmp name must not receive the
+    # write — unlink removes the LINK itself, exclusive-create refuses any survivor
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    victim = repo / "victim.json"
+    victim.write_text("precious\n")
+    sp = rlg.state_path(repo)
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    sp.with_name(sp.name + ".tmp").symlink_to(victim)
+    rc = _attest_preflight(repo)
+    assert rc == 0
+    assert victim.read_text() == "precious\n"  # never written through
+    assert len(rlg.load_state(repo).preflights) == 1
 
 
 def test_attest_sweep_missing_id_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch):
@@ -419,6 +476,7 @@ def test_symlinked_state_file_is_containment_refusal(repo: Path, monkeypatch: py
     rlg.state_path(repo).symlink_to(target)
     with pytest.raises(rlg.GateError, match="containment"):
         rlg.load_state(repo)
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
     d = rlg.admit(repo, "main", ARC)
     assert isinstance(d, rlg.Refused)
     assert d.code == "STATE_UNREADABLE"

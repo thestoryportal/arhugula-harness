@@ -291,4 +291,5 @@ commit, `just review-attest-preflight <answers-file>` — the review wrapper ref
 round 1 of a reserved arc without a live attestation (`tools/review_loop_gate.py`;
 the attestation binds head+diff, so attest after the last commit). The
 "after every review round" sweep ends the same way: absorb, commit, then
-`just review-attest-sweep <answers-file>` naming every finding_id of the round.
+`just review-attest-sweep <answers-file>` naming every outstanding finding_id
+(token-exact; obligations span both loop channels and all rounds).

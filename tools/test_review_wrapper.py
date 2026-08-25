@@ -32,6 +32,9 @@ def _no_live_reviewers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # real reservation store
     monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
     monkeypatch.setattr(rlg, "_loop_mode", lambda root: False)
+    # ...and off the REAL checkout's state file: joining root with an absolute
+    # STATE_REL yields the absolute path, so cwd never reaches the live state
+    monkeypatch.setattr(rlg, "STATE_REL", tmp_path / "review-gate-state.json")
     # in-process runs are not git checkouts at EXPECTED's head: pin HEAD and the tree export
     monkeypatch.setattr(cr, "_head", lambda repo: EXPECTED["head_sha"])
     monkeypatch.setattr(

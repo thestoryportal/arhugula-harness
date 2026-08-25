@@ -22,6 +22,7 @@ _REVIEWER_START_TIMEOUT_SECONDS = 60.0
 sys.path.insert(0, str(ROOT / "tools"))
 
 import finding_record as fr  # noqa: E402
+import review_loop_gate as rlg  # noqa: E402
 
 #: A fixed six-field binding for in-process tests (the subprocess harness derives the real one
 #: from the fake `git`; see `_fake_commands`).
@@ -46,6 +47,9 @@ def _isolate_gate_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # session exports HARNESS_LOOP=1 to every child, which would flip the gate's
     # unreserved-arc path from inactive to REFUSE for in-process AND subprocess runs
     monkeypatch.delenv("HARNESS_LOOP", raising=False)
+    # ...and isolate the gate state file from the real checkout for in-process runs
+    # (root / absolute-STATE_REL resolves to the absolute path)
+    monkeypatch.setattr(rlg, "STATE_REL", tmp_path / "review-gate-state.json")
     return log
 
 

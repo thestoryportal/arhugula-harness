@@ -45,7 +45,9 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   (attest AFTER the final commit; the attestation binds head+digest and goes stale on
   any later commit). After every BLOCK round: absorb, classify each finding, commit,
   then `just review-attest-sweep <answers-file>` — the answers file must name every
-  finding_id (the refusal enumerates any it is missing). The round budget is
+  outstanding finding_id token-exactly (the refusal enumerates any it is missing;
+  findings are obligations across both loop channels, not per-round rows). The
+  round budget is
   `DEFAULT_ROUND_BUDGET` in `tools/review_loop_gate.py` (the one authority on the
   number); exhaustion is the register-and-hold point (`defer.sh` + register row), and
   only an operator extends it (`just review-attest-budget`, deliberately ask-gated).
