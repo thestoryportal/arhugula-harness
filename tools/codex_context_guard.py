@@ -762,7 +762,7 @@ _UV_DRIVER = (
 )
 
 
-def _record_detection(payload: dict) -> str:
+def _record_detection(payload: dict) -> tuple[str, dict | None]:
     """Emit-once against the C-HE-24 log, under ONE locked critical section (the
     dedupe read, the id mint, and the append share `append_observations`' lock -- two
     concurrent checks cannot both miss the prior row and append twins). Outcome tokens:
@@ -799,6 +799,7 @@ def _record_detection(payload: dict) -> str:
 
     code, arc_id, evidence = payload["code"], payload["arc_id"], payload["evidence"]
     outcome = ["appended"]
+    matched: list[dict] = []
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
         site = [r for r in rows if r.get("producer") == code and r.get("location") == arc_id]
@@ -864,6 +865,7 @@ def _record_detection(payload: dict) -> str:
         # C-HE-24 emission.
         if valid_findings_mine:
             outcome[0] = "recorded"
+            matched.append(valid_findings_mine[0])
             return []
         return [
             (
@@ -892,8 +894,10 @@ def _record_detection(payload: dict) -> str:
             )
         ]
 
-    fr.append_observations(build)
-    return outcome[0]
+    written = fr.append_observations(build)
+    if written:
+        matched.append(written[0])
+    return outcome[0], (matched[0] if matched else None)
 
 
 def _detection(
@@ -918,26 +922,37 @@ def _detection(
         "arc_id": arc_id,
         "severity": severity,
     }
-    # ADJUDICATED against the reviewer's to_guard_finding canonicalization (raised
-    # codex r5 and r8): the row is the single authority with TWO derived projections --
-    # `to_guard_finding` (C-HE-24 §3, record-replay consumers) and THIS one, the plan's
-    # own U-HE-33 CI-surface sketch (spec-named code per C-HE-12 §2, lane-prefixed
-    # evidence per its §2 lane-discriminating field). The round-trip test pins their
-    # shared severity derivation. Plan authority; recorded in the PR body.
-    projection = Finding(severity, code, f"[{lane_id}] {evidence}")
     try:
-        outcome = _record_detection(payload)
+        outcome, row = _record_detection(payload)
     except Exception as exc:
         print(f"guard: finding row not written ({exc})", file=sys.stderr)
+        # No row exists on this path -- the payload-shaped projection is the only
+        # honest carrier, and the hard finding says the durable half is missing.
         return [
-            projection,
+            Finding(severity, code, f"[{lane_id}] {evidence}"),
             _detections_unavailable(
                 lane_id, f"the C-HE-24 row for {code} at {arc_id} was not written ({exc})"
             ),
         ]
     if outcome == "adjudicated":
         return []
-    return [projection]
+    if row is not None:
+        return [_ci_finding(row)]
+    return [Finding(severity, code, f"[{lane_id}] {evidence}")]
+
+
+def _ci_finding(row: dict) -> Finding:
+    """The CI-surface projection DERIVED from the persisted C-HE-24 row (codex r5-r17
+    convergence): severity round-trips through finding_record.to_guard_finding (the
+    canonical §3 fail-class derivation); code is the row's own producer -- the C-HE-12
+    §2 spec-named detection code the CI surface requires; the message is the §2
+    lane-discriminating prefix over the row's observed evidence. This and
+    to_guard_finding are two projections of the ONE persisted row, sharing its
+    severity derivation -- nothing here is authored independently of the row."""
+    import finding_record as fr
+
+    base = fr.to_guard_finding(row)
+    return Finding(base.severity, row["producer"], f"[{row['lane_id']}] {row['observed_evidence']}")
 
 
 def check_split_brain(ledger: Path, *, lane_id: str) -> list[Finding]:
