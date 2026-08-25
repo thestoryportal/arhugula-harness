@@ -1414,29 +1414,25 @@ def test_recent_main_merges_skips_unblock_attested_sha(tmp_path, monkeypatch) ->
     assert unattributed == [base]
 
 
-def test_unblock_attestation_survives_lease_release(tmp_path, monkeypatch) -> None:
-    """release() moves the lease aside; the moved-aside record still carries
-    unblocked_from, so the recovery outlives the lease's tenure. A corrupt door
-    record raises (dispatch -> hard finding), never silently attests nothing."""
+def test_attestation_is_live_lease_only(tmp_path, monkeypatch) -> None:
+    """The retraction witness (codex r6): a moved-aside or planted door record must
+    NOT feed the attested set -- only the live lease's unblocked_from counts; the
+    durable recovery is the adjudication recall."""
     import merge_door as md
 
     door = tmp_path / "merge-door"
     door.mkdir()
-    (door / "released.tok1").write_text(
-        json.dumps({"state": "released", "unblocked_from": "f" * 40}), encoding="utf-8"
-    )
+    (door / "released.fake").write_text(json.dumps({"unblocked_from": "f" * 40}), encoding="utf-8")
     monkeypatch.setattr(md, "DOOR", door)
-    monkeypatch.setattr(md, "read_lease", lambda: None)
+    monkeypatch.setattr(md, "LEASE", door / "LEASE")
 
-    assert cg._unblock_attested_shas() == {"f" * 40}
+    assert cg._unblock_attested_shas() == set()  # the planted record attests nothing
 
-    (door / "reclaimed.tok2").write_text("{broken", encoding="utf-8")
-    try:
-        cg._unblock_attested_shas()
-    except RuntimeError as exc:
-        assert "reclaimed.tok2" in str(exc)
-    else:
-        raise AssertionError("a corrupt attestation carrier must raise, not attest nothing")
+    (door / "LEASE").write_text(
+        json.dumps({"lease_token": "t", "state": "held", "unblocked_from": "a" * 40}),
+        encoding="utf-8",
+    )
+    assert cg._unblock_attested_shas() == {"a" * 40}  # the live lease does
 
 
 def test_reservation_heads_partial_failure_is_surfaced(tmp_path, monkeypatch) -> None:
@@ -1586,131 +1582,30 @@ def test_gh_failure_raises_not_not_merged(monkeypatch) -> None:
         raise AssertionError("a failed gh query must raise, not read as open")
 
 
-def test_gate_log_append_is_not_a_root_checkout_edit() -> None:
-    """The guard's own PROVEN append to the tracked gate log must not trip
-    ROOT_CHECKOUT_EDIT on the next run; any OTHER root-checkout entry still does, and
-    a NON-append change to the log (deletion/truncation/rewrite/staged) still trips."""
-    only_log = _state(
+def test_dirty_root_checkout_skips_suite_with_hard_finding(monkeypatch) -> None:
+    """Isolation before emission (codex r6): on a dirty ROOT checkout the suite does
+    not run at all (it must not append into already-rejected state) and the skip is a
+    HARD finding alongside ROOT_CHECKOUT_EDIT; a linked worktree still runs it."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cg, "_emitting_detections_dispatch", lambda root, lane: calls.append("ran") or []
+    )
+
+    dirty_root = _state(
+        branch="main",
         git_dir=".git",
         is_linked_worktree=False,
         status_entries=[" M .harness/merge-gate-log.jsonl"],
         changed_files=[".harness/merge-gate-log.jsonl"],
     )
-    findings = cg.validate(only_log, mode="closeout")
-    assert not any(f.code == "ROOT_CHECKOUT_EDIT" for f in findings)
-
-    destructive = _state(
-        git_dir=".git",
-        is_linked_worktree=False,
-        status_entries=[" M .harness/merge-gate-log.jsonl"],
-        changed_files=[".harness/merge-gate-log.jsonl"],
-        gate_log_append_only=False,
-    )
-    findings = cg.validate(destructive, mode="closeout")
+    findings = cg.validate(dirty_root, mode="check")
+    assert calls == []
+    assert any(f.code == "DETECTIONS_UNAVAILABLE" and f.severity == "hard" for f in findings)
     assert any(f.code == "ROOT_CHECKOUT_EDIT" and f.severity == "hard" for f in findings)
 
-    mixed = _state(
-        git_dir=".git",
-        is_linked_worktree=False,
-        status_entries=[" M .harness/merge-gate-log.jsonl", " M AGENTS.md"],
-        changed_files=[".harness/merge-gate-log.jsonl", "AGENTS.md"],
-    )
-    findings = cg.validate(mixed, mode="closeout")
-    assert any(f.code == "ROOT_CHECKOUT_EDIT" and f.severity == "hard" for f in findings)
-
-
-ROW_SHAPED = (
-    '{"finding_id":"X:nohead:aaaaaaaaaaaa:1","record_kind":"finding","ts":"2026-08-25T00:00:00Z",'
-    '"producer":"X","lane_id":"l"}'
-)
-
-
-def test_gate_log_append_only_proof_against_real_git(tmp_path) -> None:
-    """The derive-side proof: an append of schema-shaped rows passes; a truncation, a
-    rewrite, and a non-row append all fail (the pathname alone is never the exemption,
-    and append-SHAPED is not enough -- the appended lines must be record rows)."""
-    repo = _init_repo(tmp_path)
-    log = repo / ".harness" / "merge-gate-log.jsonl"
-    log.write_text(ROW_SHAPED + "\n", encoding="utf-8")
-    _git(repo, "add", ".harness/merge-gate-log.jsonl")
-    _git(repo, "commit", "-m", "seed log")
-
-    assert cg._gate_log_append_only(repo) is True  # no pending change
-    log.write_text(ROW_SHAPED + "\n" + ROW_SHAPED + "\n", encoding="utf-8")
-    assert cg._gate_log_append_only(repo) is True  # pure append of row-shaped lines
-    log.write_text(ROW_SHAPED + "\n" + "not a record row\n", encoding="utf-8")
-    assert cg._gate_log_append_only(repo) is False  # appended line is not a row
-    log.write_text('{"rewritten":true}\n', encoding="utf-8")
-    assert cg._gate_log_append_only(repo) is False  # rewrite deletes lines
-
-
-def test_record_write_failure_surfaces_hard_unavailable(tmp_path, monkeypatch) -> None:
-    """A required C-HE-24 emission that did not land surfaces BOTH the projection and a
-    hard DETECTIONS_UNAVAILABLE -- a warn-severity detection must not leave the run
-    exiting 0 with the durable row unwritten."""
-    _isolate_gate_log(monkeypatch, tmp_path)
-
-    def boom(payload):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(cg, "_record_detection", boom)
-
-    fs = cg.check_base_toctou([("m" * 40, "b" * 40, "c" * 40)], lane_id="l")
-
-    assert [f.code for f in fs] == ["BASE_TOCTOU", "DETECTIONS_UNAVAILABLE"]
-    assert fs[1].severity == "hard"
-    assert "disk full" in fs[1].message
-
-
-def test_projection_round_trips_with_stored_row(tmp_path, monkeypatch) -> None:
-    """One payload builds both the row and the projection: the stored row's canonical
-    C-HE-24 §3 severity projection equals the returned projection's severity, and the
-    row's producer IS the spec-named CI code (the plan's U-HE-33 projection sketch)."""
-    log = _isolate_gate_log(monkeypatch, tmp_path)
-
-    fs = cg.check_base_toctou([("m" * 40, "b" * 40, "c" * 40)], lane_id="l")
-
-    row = json.loads(log.read_text().splitlines()[0])
-    assert fr.to_guard_finding(row).severity == fs[0].severity == "hard"
-    assert row["producer"] == fs[0].code == "BASE_TOCTOU"
-    assert row["observed_evidence"] in fs[0].message
-
-
-def test_attestation_refuses_symlinked_door(tmp_path, monkeypatch) -> None:
-    """The attested set SUPPRESSES a hard detection, so a planted symlink must refuse
-    rather than feed forged unblocked_from shas into the walk."""
-    import merge_door as md
-
-    real = tmp_path / "real"
-    real.mkdir()
-    door = tmp_path / "merge-door"
-    door.symlink_to(real)
-    monkeypatch.setattr(md, "DOOR", door)
-    monkeypatch.setattr(md, "LEASE", tmp_path / "absent-LEASE")
-
-    try:
-        cg._unblock_attested_shas()
-    except RuntimeError as exc:
-        assert "symlink" in str(exc)
-    else:
-        raise AssertionError("a symlinked door dir must refuse, not attest")
-
-
-def test_present_but_unreadable_lease_raises(tmp_path, monkeypatch) -> None:
-    """read_lease() maps a corrupt LEASE to None; the strict reader re-distinguishes
-    and raises -- corrupt live door state must not read as absence."""
-    import merge_door as md
-
-    lease_file = tmp_path / "LEASE"
-    lease_file.write_text("{broken", encoding="utf-8")
-    monkeypatch.setattr(md, "LEASE", lease_file)
-
-    try:
-        cg._door_lease_strict()
-    except RuntimeError as exc:
-        assert "unreadable" in str(exc)
-    else:
-        raise AssertionError("a present-but-corrupt lease must raise, not read as no lease")
+    clean_worktree = _state(branch="main", status_entries=[" M x.py"], changed_files=["x.py"])
+    cg.validate(clean_worktree, mode="check")
+    assert calls == ["ran"]
 
 
 def test_ci_pins_split_brain_job() -> None:

@@ -109,10 +109,6 @@ class GuardState:
     latest_retirement_batch: str
     lag_expected: bool
     owed_lag: bool
-    #: True iff any pending change to the tracked gate log is provably append-only
-    #: (unstaged, zero deleted lines). Computed by derive(); defaults True so
-    #: synthetic states without a gate-log entry are unaffected.
-    gate_log_append_only: bool = True
 
 
 @dataclass(frozen=True)
@@ -599,45 +595,7 @@ def derive(
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
         owed_lag=_owed_lag(root),
-        gate_log_append_only=_gate_log_append_only(root),
     )
-
-
-def _gate_log_append_only(root: Path) -> bool:
-    """True iff the gate log's pending state is provably the guard's own append:
-    no staged change, and the unstaged diff deletes zero lines. Deletion, truncation,
-    rewrite, or a staged replacement all fail this proof and stay ROOT_CHECKOUT_EDIT
-    material -- the pathname alone must never be the exemption."""
-    staged = _run(["git", "diff", "--cached", "--numstat", "--", GATE_LOG_REL], cwd=root)
-    unstaged = _run(["git", "diff", "--numstat", "--", GATE_LOG_REL], cwd=root)
-    if staged.returncode != 0 or unstaged.returncode != 0 or staged.stdout.strip():
-        return False
-    line = unstaged.stdout.strip()
-    if not line:
-        return True  # no pending change at all
-    fields = line.split("\t")
-    if len(fields) < 2 or fields[1] != "0" or fields[0] == "-":
-        return False
-    # Append-shaped is necessary, not sufficient: every appended line must also be a
-    # schema-shaped record row, so a stray manual append (or crude forgery) stays
-    # ROOT_CHECKOUT_EDIT material. Named residual: a fully schema-shaped forged row
-    # passes this structural check -- write provenance belongs to the record layer's
-    # locked append, not a status-time diff.
-    diff = _run(["git", "diff", "-U0", "--", GATE_LOG_REL], cwd=root)
-    if diff.returncode != 0:
-        return False
-    added = [
-        ln[1:] for ln in diff.stdout.splitlines() if ln.startswith("+") and not ln.startswith("+++")
-    ]
-    required = {"finding_id", "record_kind", "ts", "producer", "lane_id"}
-    for ln in added:
-        try:
-            row = json.loads(ln)
-        except ValueError:
-            return False
-        if not isinstance(row, dict) or not required.issubset(row):
-            return False
-    return True
 
 
 def _has_design_impl_mix(files: list[str]) -> bool:
@@ -770,10 +728,6 @@ def _codex_loop_issues(state: GuardState) -> list[str]:
 # --- U-HE-33: emitting detections (C-HE-12 §1-§3; §9 rows 1, 4, 7) -----------------------
 
 ARC_METRICS_JSONL = Path(".harness/arc-metrics.jsonl")
-#: The C-HE-24 record the detections append to. finding_record.GATE_LOG_JSONL is the
-#: path authority; this rel-path copy exists because the guard's isolation check runs
-#: under interpreters that cannot import finding_record at all.
-GATE_LOG_REL = ".harness/merge-gate-log.jsonl"
 #: How many first-parent landings on the default branch the BASE_TOCTOU re-check walks.
 TOCTOU_LOOKBACK = 10
 #: C-HE-24 §3: `to_guard_finding` derives severity from the fail-class prefix, so the
@@ -1128,41 +1082,21 @@ def _recent_main_merges(
 
 
 def _unblock_attested_shas() -> set[str]:
-    """Merge shas the operator re-validated through `merge_door.unblock`
+    """Merge shas the operator re-validated through `merge_door.unblock`, read ONLY from
+    the LIVE lease via read_lease() -- the door's own authoritative view
     (`unblocked_from` == the sha the door blocked at, which for a BASE_TOCTOU block is
-    the landed merge sha -- merge_door.mark_blocked at the first-parent check). Carriers:
-    the LIVE lease, and the moved-aside lease records (`released.*` / `reclaimed.*` in
-    the door dir) that `_move_lease` leaves behind after release -- the attestation must
-    outlive the lease's tenure, or the next main check re-raises the recovered race as
-    hard. Retention arithmetic: the door's gc prunes moved-aside records on a ~30-day
-    horizon, far beyond the TOCTOU_LOOKBACK landing window at this repo's cadence; a
-    landing that somehow outlasts both is re-raised once and the operator's
-    finding_adjudication (`_record_detection`) retires it permanently."""
-    import merge_door as md
-
-    # Same containment posture as reservations_root(): the attested set SUPPRESSES a
-    # hard detection, so a planted symlink (the door dir itself or a record file)
-    # must refuse rather than feed forged `unblocked_from` shas into the walk.
-    if md.DOOR.is_symlink():
-        raise RuntimeError("merge-door dir is a symlink -- refused (containment)")
-    records: list[dict] = []
+    the landed merge sha -- merge_door.mark_blocked at the first-parent check). This
+    covers the continuation window while the recovery is in flight. The DURABLE half is
+    the adjudication recall in `_record_detection` (disposition `suppressed`), which the
+    record layer's write invariants make forgery-resistant. A moved-record
+    (`released.*`/`reclaimed.*`) scan was tried and RETRACTED (codex r6): any peer can
+    drop a JSON file carrying `unblocked_from`, and an unprovenanced file must never
+    suppress a hard detection. Bounded cost of the retraction: after lease release, one
+    re-raise per lane until the operator disposes it."""
     lease = _door_lease_strict()
-    if lease:
-        records.append(lease)
-    for prefix in ("released", "reclaimed"):
-        for p in md.DOOR.glob(f"{prefix}.*"):
-            if p.is_symlink():
-                raise RuntimeError(f"door record {p.name!r} is a symlink -- refused (containment)")
-            try:
-                rec = json.loads(p.read_text())
-            except (OSError, ValueError) as exc:
-                # An unreadable attestation carrier could silently re-raise a race the
-                # operator already recovered -- propagate (dispatch -> hard finding);
-                # the door dir is small and the fix (remove/repair one file) is named.
-                raise RuntimeError(f"door record {p.name!r} unreadable: {exc}") from exc
-            if isinstance(rec, dict):
-                records.append(rec)
-    return {r["unblocked_from"] for r in records if r.get("unblocked_from")}
+    if lease and lease.get("unblocked_from"):
+        return {lease["unblocked_from"]}
+    return set()
 
 
 def _emitting_detections(root: Path, lane: str) -> list[Finding]:
@@ -1276,23 +1210,26 @@ def validate(
     if mode == "check" and state.branch == state.default_branch:
         # U-HE-33: the emitting detections run where landings live -- `check` on the
         # default branch (the CI push run and local main-audit venues). Feature-branch
-        # and preflight/closeout runs never walk the landing history.
-        findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
+        # and preflight/closeout runs never walk the landing history. Isolation is
+        # enforced BEFORE any durable emission (codex r6): on a DIRTY root checkout
+        # (possibly a staged replacement or truncation of the gate log itself) the
+        # suite must not append into already-rejected state -- it is skipped with a
+        # hard finding, and ROOT_CHECKOUT_EDIT below reports the dirt itself. On a
+        # clean root checkout a fired detection's append then stands as a loud pending
+        # edit for the next arc (or the operator) to commit -- an earlier pathname
+        # exemption for that write was RETRACTED as an unprovenanced bypass surface.
+        if state.status_entries and not state.is_linked_worktree:
+            findings.append(
+                _detections_unavailable(
+                    _lane_id(),
+                    "root checkout has pending edits; the suite must not append into "
+                    "that state -- commit or clean first",
+                )
+            )
+        else:
+            findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
 
-    # The guard's own emitting detections (U-HE-33) append to the tracked gate log
-    # from any venue, including a `check` on the root checkout's default branch --
-    # that append-only operational write is a durable record landing where it lives,
-    # not a checkout edit, and must not make the guard's NEXT invocation fail on its
-    # own output (the CODEX_LOOP_STATE exclusion in worktree_fingerprint is the same
-    # posture). The exemption requires the APPEND-ONLY PROOF from derive(), never the
-    # pathname alone: deletion, truncation, rewrite, or a staged replacement of the
-    # log keeps its entry ROOT_CHECKOUT_EDIT material. Any OTHER entry always trips.
-    isolation_entries = [
-        e
-        for e in state.status_entries
-        if not (e.split()[-1] == GATE_LOG_REL and state.gate_log_append_only)
-    ]
-    if isolation_entries and not state.is_linked_worktree:
+    if state.status_entries and not state.is_linked_worktree:
         findings.append(
             Finding(
                 "hard",
