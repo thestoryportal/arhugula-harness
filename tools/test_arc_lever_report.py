@@ -216,6 +216,39 @@ def test_a_missing_ledger_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(tmp_path / "absent.jsonl")
 
 
+# mutation-probe(tools/arc_lever_report.py): advertise separability from non-evaluable data
+def test_separability_is_gated_on_group_evaluability(tmp_path: Path) -> None:
+    """A clean {} vs {B-211} contrast in a close-declared group must not advertise."""
+    rows = [
+        _row("pr-a", 10, [], p1=[1], declared_at="close"),
+        _row("pr-b", 2, ["B-211"], declared_at="close"),
+    ]
+    key = "applying (close-declared — outcome-contaminated, C-HE-26)"
+    s = _summary(tmp_path, rows)["arc_types"][key]
+    assert s["per_skill_separable"] is False
+    assert s["separable_levers"] == []
+
+
+# mutation-probe(tools/arc_lever_report.py): treat any open-declared label as evaluable
+def test_unknown_arc_type_labels_are_non_evaluable(tmp_path: Path) -> None:
+    """C-HE-26 admits inventing/applying only; five 'research' rows form no cohort."""
+    rows = [_row(f"pr-{i}", 3, ["B-211", "B-212"], arc_type="research") for i in range(5)]
+    s = _summary(tmp_path, rows)["arc_types"]["research"]
+    assert s["evaluable_for_lever_decision"] is False
+
+
+# mutation-probe(tools/arc_lever_report.py): read an explicit null completeness as complete
+def test_explicit_null_completeness_fails_closed(tmp_path: Path) -> None:
+    """Absent field = legacy complete; an explicit null is unknown and excludes."""
+    rows = [
+        {**_row("pr-a", 10, [], p1=[1]), "round_completeness": None},
+        _row("pr-b", 14, [], p1=[2]),
+    ]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["excluded_partial"] == ["pr-a"]
+    assert s["baseline_median"]["review_rounds"] == 14
+
+
 # mutation-probe(tools/arc_lever_report.py): mark unclassified groups evaluable
 def test_untyped_groups_are_non_evaluable(tmp_path: Path) -> None:
     """C-HE-26 needs an open-time inventing/applying label; untyped rows have none."""

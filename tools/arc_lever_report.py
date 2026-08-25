@@ -69,7 +69,9 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
         group = out.setdefault(
             arc_type,
             {
-                "evaluable": not contaminated and arc_type != "unclassified",
+                # C-HE-26 admits exactly two open-declared labels — an unknown
+                # label ("research") is no more evaluable than none (codex r10).
+                "evaluable": not contaminated and arc_type in ("inventing", "applying"),
                 "buckets": {b: [] for b in _BUCKETS},
             },
         )
@@ -88,10 +90,10 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
         )
         if r.get("review_rounds") is None:
             buckets["unmapped"].append(r)
-        elif r.get("round_completeness") not in (None, "complete"):
-            # An ABSENT completeness field is the legacy shape the ledger reader
-            # treats as complete — only an explicit non-complete value is a
-            # partial lower bound (codex r9).
+        elif "round_completeness" in r and r["round_completeness"] != "complete":
+            # An ABSENT field is the legacy shape the ledger reader treats as
+            # complete; an EXPLICIT null is an unknown that fails closed with
+            # every other non-complete value (codex r9 + r10).
             # A partial suffix carries review_rounds as a LOWER BOUND and an
             # unknown P1 count; letting it into a median converts "unknown"
             # into a score (codex r1 on this tool).
@@ -157,15 +159,21 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
     # from every cohort median.
     patterns = {tuple(sorted(m["levers"])) for m in treated + other}
     patterns |= {()} if baseline else set()
-    separable = sorted(
-        {
-            lv
-            for a in patterns
-            for b in patterns
-            if len(set(a) ^ set(b)) == 1
-            for lv in set(a) ^ set(b)
-            if lv in levers
-        }
+    # A contrast built from non-evaluable (contaminated/untyped) data must not
+    # be advertised as available separation (codex r10).
+    separable = (
+        sorted(
+            {
+                lv
+                for a in patterns
+                for b in patterns
+                if len(set(a) ^ set(b)) == 1
+                for lv in set(a) ^ set(b)
+                if lv in levers
+            }
+        )
+        if group["evaluable"]
+        else []
     )
     # An excluded row keeps its treatment identity: "no evaluable treated arcs"
     # and "no treated arcs declared" are different states (codex r2, P3).
