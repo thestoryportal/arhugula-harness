@@ -2,8 +2,9 @@
 
 The load-bearing property is FAIL-CLOSED bucketing: an unmapped or partial row
 must never enter a median, an other-lever row must never contaminate either
-cohort, arc types must never pool into one median, and a malformed ledger line
-must abort loudly rather than shrink the data silently.
+cohort, arc types must never pool into one median, a null P1 count must never
+read as zero, and a malformed ledger line must abort loudly rather than shrink
+the data silently.
 """
 
 from __future__ import annotations
@@ -92,6 +93,61 @@ def test_per_skill_separation_ignores_non_target_levers(tmp_path: Path) -> None:
     diverged = [*contaminated, _row("pr-8", 3, ["B-211"])]
     s2 = _summary(tmp_path, diverged)["arc_types"]["applying"]
     assert s2["per_skill_separable"] is True
+    assert s2["separable_levers"] == ["B-211", "B-212"], (
+        "{}<->{211} isolates B-211; {211}<->{211,212} isolates B-212"
+    )
+
+
+# mutation-probe(tools/arc_lever_report.py): mark separable on any pattern divergence
+def test_separation_requires_a_single_lever_contrast(tmp_path: Path) -> None:
+    """No baseline + patterns {211} vs {211,212}: only B-212 has a contrast."""
+    rows = [
+        _row("pr-a", 4, ["B-211"]),
+        _row("pr-b", 5, ["B-211", "B-212"]),
+    ]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["separable_levers"] == ["B-212"], "B-211 is present in every observation"
+    # The discriminating half: a pattern pair differing in BOTH levers at once
+    # ({} vs {211,212}) must separate neither — a >=1-sized diff is not a contrast.
+    confounded = [_row("pr-c", 10, [], p1=[1]), _row("pr-d", 2, ["B-211", "B-212"])]
+    s2 = _summary(tmp_path, confounded)["arc_types"]["applying"]
+    assert s2["separable_levers"] == [], "the two levers are fully confounded"
+
+
+# mutation-probe(tools/arc_lever_report.py): count a null p1_rounds as zero
+def test_null_p1_is_unmapped_not_a_measured_zero(tmp_path: Path) -> None:
+    """p1_rounds=null with complete rounds is unmapped provenance, never a score."""
+    rows = [
+        _row("pr-a", 10, [], p1=[1, 2]),
+        _row("pr-b", 12, [], p1=None),
+        _row("pr-c", 2, ["B-211", "B-212"], p1=None),
+    ]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["baseline_median"]["p1_rounds"] == 2.0, "pr-b's null must not enter as 0"
+    (treated,) = s["treated_arcs"]
+    assert treated["p1_rounds"] is None
+    assert s["treated_median_p1"] is None, "no measured treated P1 exists"
+
+
+# mutation-probe(tools/arc_lever_report.py): drop the treated P1 median from the summary
+def test_treated_p1_median_is_computed(tmp_path: Path) -> None:
+    """B-211/B-212's register bar names round AND P1 cohort medians."""
+    rows = [*ROWS, _row("pr-8", 4, ["B-211", "B-212"], p1=[1])]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["treated_median_p1"] == 0.5
+
+
+# mutation-probe(tools/arc_lever_report.py): tell excluded-treated operators to declare levers
+def test_no_evaluable_treated_arcs_is_not_a_declaration_failure(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Rows that DID declare the levers but are unmapped must not be told to declare."""
+    rows = [_row("pr-a", 10, [], p1=[1]), _row("pr-b", None, ["B-211", "B-212"], span=None)]
+    ledger = _write(tmp_path / "ledger.jsonl", rows)
+    assert alr.main(["--ledger", str(ledger)]) == 0
+    out = capsys.readouterr().out
+    assert "no evaluable treated arcs (1 treated row(s) excluded" in out
+    assert "declare the lever ids" not in out
 
 
 # mutation-probe(tools/arc_lever_report.py): pool arc types into one summary
@@ -134,5 +190,6 @@ def test_cli_renders_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixtur
     out = capsys.readouterr().out
     assert "[applying] 1 treated / 2 baseline" in out
     assert "NOT separable" in out
+    assert "span_h>=" in out and "lower bound" in out, "span must read as a lower bound"
     assert "pr-4" in out, "the excluded unmapped arc must be visible in the human view"
     assert "pr-6" in out, "the excluded partial arc must be visible in the human view"

@@ -58,7 +58,9 @@ what it printed; skipping one is how a scoreboard reading turns into a false cla
 4. **`delta_rounds_vs_baseline_median` is per treated arc, not per cohort.** Negative
    means that arc took fewer review rounds than the untreated baseline's median.
    Report deltas as a spread across the treated arcs shown, not averaged into one
-   number that hides how many arcs are actually behind it.
+   number that hides how many arcs are actually behind it. And `span_h` is a LOWER
+   BOUND (the ledger derives it excluding the first round's duration) — present it as
+   "at least", never as an exact duration.
 
 ## What this skill must never do
 

@@ -10644,7 +10644,8 @@ items:
   summary: 'Cohort lever, not a defect. Arcs that actually ran the defect-class-preflight
     skill (shipped at PR #1445) on their diffs before each commit declare this id in
     levers_active, so arc-metrics cohort splits can price the skill''s effect on
-    review_rounds / p1_rounds / per-arc reviewer findings against the untreated baseline.
+    review_rounds / p1_rounds against the untreated baseline (per-arc reviewer-finding
+    counts share B-212''s named residual: no committed pr-to-gate-log join key exists).
     First treated arc: pr-1447 (2 codex rounds, 0 codex findings, 1 merge-gate lens
     finding, at 562fd965f).'
   close_out: 'OPEN — evaluate after >=5 treated arcs via tools/arc_lever_report.py

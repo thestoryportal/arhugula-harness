@@ -79,10 +79,13 @@ def split_cohorts(
 def _metrics(r: dict[str, Any], levers: tuple[str, ...]) -> dict[str, Any]:
     span = r.get("arc_span_s")
     declared = r.get("levers_active") or []
+    p1 = r.get("p1_rounds")
     return {
         "arc_id": r.get("arc_id"),
         "review_rounds": r["review_rounds"],
-        "p1_rounds": len(r.get("p1_rounds") or []),
+        # A null p1_rounds is unmapped provenance, not a clean arc — len(None or [])
+        # would award the best possible P1 score to an unmeasured value (codex r2).
+        "p1_rounds": len(p1) if p1 is not None else None,
         "arc_span_h": round(span / 3600, 1) if isinstance(span, (int, float)) else None,
         "levers": declared,
         "target_levers_declared": sorted(lv for lv in declared if lv in levers),
@@ -101,7 +104,7 @@ def summarize_type(
     baseline = [_metrics(r, levers) for r in buckets["baseline"]]
     base_median = {
         "review_rounds": _median([m["review_rounds"] for m in baseline]),
-        "p1_rounds": _median([m["p1_rounds"] for m in baseline]),
+        "p1_rounds": _median([m["p1_rounds"] for m in baseline if m["p1_rounds"] is not None]),
         "arc_span_h": _median([m["arc_span_h"] for m in baseline if m["arc_span_h"] is not None]),
     }
     for m in treated:
@@ -110,15 +113,40 @@ def summarize_type(
             if base_median["review_rounds"] is not None
             else None
         )
-    # Separability judged ONLY on how treated rows intersect the target set:
-    # an extra unrelated lever must not fake a per-skill split (codex r1).
-    target_patterns = {tuple(m["target_levers_declared"]) for m in treated}
+    # Per-skill attribution needs a CONTRAST, not merely divergent lever lists
+    # (codex r1+r2): lever L is separable iff two evaluable target-patterns differ
+    # in exactly {L} — the baseline's empty pattern counts, so {} vs {211,212}
+    # separates nothing while {} vs {211} isolates B-211.
+    patterns = {tuple(m["target_levers_declared"]) for m in treated}
+    patterns |= {()} if baseline else set()
+    separable = sorted(
+        {
+            lv
+            for a in patterns
+            for b in patterns
+            if len(set(a) ^ set(b)) == 1
+            for lv in set(a) ^ set(b)
+        }
+    )
+    # An excluded row keeps its treatment identity: "no evaluable treated arcs"
+    # and "no treated arcs declared" are different states (codex r2, P3).
+    excluded_treated = sum(
+        1
+        for b in ("unmapped", "partial")
+        for r in buckets[b]
+        if any(lv in (r.get("levers_active") or []) for lv in levers)
+    )
     return {
         "cohort_sizes": {k: len(v) for k, v in buckets.items()},
         "baseline_median": base_median,
         "treated_arcs": treated,
         "treated_median_rounds": _median([m["review_rounds"] for m in treated]),
-        "per_skill_separable": len(target_patterns) > 1,
+        "treated_median_p1": _median(
+            [m["p1_rounds"] for m in treated if m["p1_rounds"] is not None]
+        ),
+        "separable_levers": separable,
+        "per_skill_separable": bool(separable),
+        "excluded_treated_count": excluded_treated,
         "excluded_unmapped": [r.get("arc_id") for r in buckets["unmapped"]],
         "excluded_partial": [r.get("arc_id") for r in buckets["partial"]],
         "excluded_other_levers": [r.get("arc_id") for r in buckets["other_levers"]],
@@ -143,23 +171,33 @@ def render(summary: dict[str, Any]) -> str:
         lines.append(
             f"[{arc_type}] {sizes['treated']} treated / {sizes['baseline']} baseline — "
             f"baseline median: rounds={bm['review_rounds']} p1={bm['p1_rounds']} "
-            f"span_h={bm['arc_span_h']}"
+            f"span_h>={bm['arc_span_h']} (span is a lower bound: derived excludes "
+            f"first-round duration)"
         )
         if not s["treated_arcs"]:
-            lines.append("  no treated arcs — declare the lever ids at arc-metrics queue time")
-        for m in s["treated_arcs"]:
+            # "declare the levers" would be a false repair when treated rows exist
+            # but none is evaluable (codex r2, P3) — the states are different.
             lines.append(
-                f"  {m['arc_id']} rounds={m['review_rounds']} p1={m['p1_rounds']} "
-                f"span_h={m['arc_span_h']} "
+                f"  no evaluable treated arcs ({s['excluded_treated_count']} treated "
+                "row(s) excluded as unmapped/partial)"
+                if s["excluded_treated_count"]
+                else "  no treated arcs — declare the lever ids at arc-metrics queue time"
+            )
+        for m in s["treated_arcs"]:
+            p1 = m["p1_rounds"] if m["p1_rounds"] is not None else "unmapped"
+            lines.append(
+                f"  {m['arc_id']} rounds={m['review_rounds']} p1={p1} "
+                f"span_h>={m['arc_span_h']} "
                 f"delta_rounds_vs_baseline={m['delta_rounds_vs_baseline_median']}"
             )
         lines.append(
-            f"  treated median rounds: {s['treated_median_rounds']}"
+            f"  treated median: rounds={s['treated_median_rounds']} "
+            f"p1={s['treated_median_p1']}"
             f" | per-skill separation: "
             + (
-                "available (target-lever patterns diverge)"
+                f"available for {', '.join(s['separable_levers'])} (single-lever contrast exists)"
                 if s["per_skill_separable"]
-                else "NOT separable — every treated arc declares the same target levers"
+                else "NOT separable — no two evaluable patterns differ in exactly one target lever"
             )
         )
         for key, label in (
