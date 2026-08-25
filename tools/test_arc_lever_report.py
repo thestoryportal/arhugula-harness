@@ -215,6 +215,16 @@ def test_a_missing_ledger_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(tmp_path / "absent.jsonl")
 
 
+# mutation-probe(tools/arc_lever_report.py): collect contrast patterns from treated rows only
+def test_a_matched_other_lever_contrast_isolates_the_target(tmp_path: Path) -> None:
+    """{B-999} vs {B-211,B-999} differs only in B-211 — a valid matched contrast,
+    even though the B-999-only row belongs to no cohort median."""
+    rows = [_row("pr-a", 9, ["B-999"]), _row("pr-b", 3, ["B-211", "B-999"])]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["separable_levers"] == ["B-211"]
+    assert s["excluded_other_levers"] == ["pr-a"], "the contrast row still joins no cohort"
+
+
 # mutation-probe(tools/arc_lever_report.py): read a null/absent levers_active as []
 def test_undeclared_levers_are_no_claim_not_a_baseline(tmp_path: Path) -> None:
     """[] is an explicit claim; an absent or null field is structurally incomplete."""

@@ -114,6 +114,7 @@ def summarize_type(
     """Pure summary for one arc type — one JSON-able value."""
     treated = [_metrics(r, levers) for r in buckets["treated"]]
     baseline = [_metrics(r, levers) for r in buckets["baseline"]]
+    other = [_metrics(r, levers) for r in buckets["other_levers"]]
     base_p1 = [m["p1_rounds"] for m in baseline if m["p1_rounds"] is not None]
     base_span = [m["arc_span_h"] for m in baseline if m["arc_span_h"] is not None]
     base_median = {
@@ -138,7 +139,10 @@ def summarize_type(
     # lever L is separable iff two evaluable rows' complete declarations differ in
     # exactly {L}. {} vs {211,212} separates nothing; {} vs {211,999} is confounded
     # by the non-target lever; only {} vs {211} (or {211} vs {211,212}) isolates.
-    patterns = {tuple(sorted(m["levers"])) for m in treated}
+    # Evaluable other-lever rows contribute their PATTERNS (a matched contrast
+    # like {999} vs {211,999} isolates B-211 — codex r5) while staying excluded
+    # from every cohort median.
+    patterns = {tuple(sorted(m["levers"])) for m in treated + other}
     patterns |= {()} if baseline else set()
     separable = sorted(
         {
