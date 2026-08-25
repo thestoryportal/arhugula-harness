@@ -220,6 +220,25 @@ higher-scope teardown runs inside the CURRENT item's teardown phase (measured);
 `conftest` runtest hooks fire for items ANYWHERE in the run unless path-guarded; a
 function-scoped autouse fixture covers only the test body.
 
+## After every review round — the class-sibling sweep (before the next invocation)
+
+A reviewer finding names an INSTANCE; the absorption owes the CLASS. Measured on the
+u-he-33 arc: the returns-empty-on-exception shape was found in one helper in round 2
+and then re-found in two sibling helpers across rounds 4-5 — two full rounds spent
+re-discovering a class already in hand. So, after adjudicating a round's findings and
+BEFORE re-invoking the reviewer:
+
+1. Classify each finding into the classes below (or the pause's dimensions).
+2. Sweep the ENTIRE diff for other instances of that class — grep the shape
+   (`except`, `return []`/`return None` on error arms, the suppression inputs, the
+   bare counts), then read each hit's semantics. Fix siblings in the SAME absorption
+   commit; the reviewer should never meet the same class twice in one arc.
+3. If the class was absent/unfired in this file, repair the skill in that commit too
+   (the loop below).
+4. When two consecutive rounds' findings target mechanisms YOUR absorption invented
+   (not the plan floor), stop hardening and re-scope by subtraction — the recorded
+   adversarial-hardening arms race does not converge by adding layers.
+
 ## When a reviewer catches what this sweep missed — the skill's own repair loop
 
 This checklist is a distilled map of `.harness/merge-gate-log.jsonl`; the log is the
