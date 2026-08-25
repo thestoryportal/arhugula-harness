@@ -408,6 +408,33 @@ def test_a_mistyped_field_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(ledger)
 
 
+# mutation-probe(tools/arc_lever_report.py): relax the boundary back to lax coercion
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"review_rounds": "3"},
+        {"review_rounds": 3.0},
+        {"review_rounds": -1},
+        {"p1_rounds": ["1"]},
+        {"arc_span_s": -5.0},
+    ],
+)
+def test_coercible_and_negative_values_are_not_measurements(tmp_path: Path, patch: dict) -> None:
+    """codex r13: a coerced "3"/3.0/["1"] would enter a median as a measurement the
+    producer never took, and negative rounds/spans are no measurement at all."""
+    ledger = _write(tmp_path / "ledger.jsonl", [{**_row("pr-a", 3, []), **patch}])
+    with pytest.raises(SystemExit, match="illegal row shape"):
+        alr.load_rows(ledger)
+
+
+def test_an_integral_span_is_a_lossless_legacy_shape(tmp_path: Path) -> None:
+    """Strict float admits int by design; a legacy integer span stays readable."""
+    rows = alr.load_rows(
+        _write(tmp_path / "l.jsonl", [{**_row("pr-a", 3, []), "arc_span_s": 3600}])
+    )
+    assert rows[0].arc_span_s == 3600.0
+
+
 # mutation-probe(tools/arc_lever_report.py): re-derive the non-evaluable cause in render
 def test_open_declared_unknown_type_carries_its_own_reason(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]

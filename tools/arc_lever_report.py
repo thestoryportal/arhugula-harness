@@ -27,9 +27,9 @@ import argparse
 import json
 import statistics
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_LEDGER = REPO / ".harness" / "arc-metrics.jsonl"
@@ -50,19 +50,26 @@ class LedgerRow(BaseModel):
     never reads; any other illegal shape (missing ``arc_id``, a non-arc
     ``record_kind``, a mistyped field) is refused ONCE, here, instead of
     flowing anonymously into a cohort median.
+
+    Strict mode, not lax (codex r13): a coerced ``review_rounds="3"`` or
+    ``p1_rounds=["1"]`` would enter a median as a genuine measurement the
+    producer never took, and a negative round/span count is no measurement at
+    all — the producer only writes real non-negative numbers, so the type
+    says exactly that. The one lossless coercion kept is int→float for
+    ``arc_span_s`` (pydantic's strict float admits ints by design).
     """
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     arc_id: str
     record_kind: Literal["arc"] = "arc"
     arc_type: str | None = None
     arc_type_declared_at: str | None = None
     levers_active: list[str] | None = None
-    review_rounds: int | None = None
+    review_rounds: int | None = Field(default=None, ge=0)
     round_completeness: str | None = "complete"
-    p1_rounds: list[int] | None = None
-    arc_span_s: float | None = None
+    p1_rounds: list[Annotated[int, Field(ge=0)]] | None = None
+    arc_span_s: float | None = Field(default=None, ge=0)
 
 
 def load_rows(ledger: Path) -> list[LedgerRow]:
