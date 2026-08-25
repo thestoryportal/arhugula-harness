@@ -1278,16 +1278,24 @@ def test_defect_class_preflight_description_contract() -> None:
     assert "BEFORE the consumer is written" in canonical
 
 
-def test_project_mcp_context7_registration_is_pinned() -> None:
-    """Config-contract witness for the context7 registration the preflight
-    skill's external-SDK rung names: the project .mcp.json must carry the
-    server, version-pinned (an unpinned `npx -y` resolves whatever the
-    registry serves — the supply-chain finding this pin closed). Presence
-    and pin shape only; server liveness is witnessed at registration time,
-    not in CI."""
+def test_project_mcp_context7_registration_is_locked_local() -> None:
+    """Supply-chain witness for the context7 registration the preflight
+    skill's external-SDK rung names. The .mcp.json entry must run
+    `npx --no-install` (resolves ONLY the locked local installation —
+    never a registry fetch of unattested bytes), and the repository
+    lockfile must bind the exact version WITH an integrity digest, so the
+    bytes a trusted session executes are the bytes this repo reviewed.
+    Server liveness is witnessed at registration time, not in CI."""
     mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
     context7 = mcp["mcpServers"]["context7"]
     assert context7["command"] == "npx"
-    assert any(
-        re.fullmatch(r"@upstash/context7-mcp@\d+\.\d+\.\d+", arg) for arg in context7["args"]
-    )
+    assert context7["args"][0] == "--no-install"
+    assert "context7-mcp" in context7["args"]
+    assert not any("-y" == arg for arg in context7["args"])
+
+    manifest = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    assert manifest["dependencies"]["@upstash/context7-mcp"] == "4.0.3"
+    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    locked = lock["packages"]["node_modules/@upstash/context7-mcp"]
+    assert locked["version"] == "4.0.3"
+    assert locked["integrity"].startswith("sha512-")
