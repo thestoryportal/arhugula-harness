@@ -38,9 +38,12 @@ corrupt file refuses (an unreadable state must never read as clean,
 Single-writer: the arc-serial holder discipline (one lane per arc) excludes
 concurrent writers of the state file; appends are read-rewrite, not CAS. The same
 discipline flow-excludes the admit-to-emission window (two concurrent wrapper
-invocations for one arc): round minting itself (`round_n_for`) carries the identical
-documented residual, registered to U-HE-19/21 — the gate adds no new window and
-holds no lock.
+invocations for one arc) AND the admit-to-review-binding window inside one
+invocation (HEAD moving between `admit()` and `run_codex_review`'s own
+`compute_binding`, or between the primary and the failover child): the loop is
+serial within its lane and blocked on its own foreground subprocess, and round
+minting itself (`round_n_for`) carries the identical documented residual,
+registered to U-HE-19/21 — the gate adds no new window and holds no lock.
 
 Trust boundary (the u-he-33 `_record_detection` precedent, reaffirmed here): the
 gate enforces DISCIPLINE against drift, not security against an agent with local
@@ -54,6 +57,7 @@ sanctioned path.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -191,8 +195,20 @@ def _parse_state(data: bytes, path: Path) -> GateState:
             fields = {k: v for k, v in rec.items() if k != "kind"}
             for tf in _TUPLE_FIELDS:
                 if tf in fields:
+                    if not isinstance(fields[tf], list) or not all(
+                        isinstance(x, str) for x in fields[tf]
+                    ):
+                        raise ValueError(f"{tf} is not a list of strings")
                     fields[tf] = tuple(fields[tf])
-            buckets[attr].append(cls(**fields))
+            obj = cls(**fields)
+            # dataclasses do not enforce annotations (codex r4 P2): a persisted
+            # extra_rounds="2" would parse here and TypeError later inside decide()
+            # instead of resolving to STATE_UNREADABLE — validate scalars now
+            for f in dataclasses.fields(obj):
+                want = int if f.type == "int" else str if f.type == "str" else None
+                if want is not None and not isinstance(getattr(obj, f.name), want):
+                    raise ValueError(f"{f.name} is not {want.__name__}")
+            buckets[attr].append(obj)
         return GateState(**{attr: tuple(v) for attr, v in buckets.items()})
     except (KeyError, TypeError, ValueError) as exc:
         raise GateError(f"{path} is unreadable as gate state: {exc}") from exc
@@ -306,7 +322,11 @@ def decide(
                 "round budget spent — this is the register-and-hold point, not a bug to "
                 "keep iterating: register the residual findings as a forward item and "
                 "defer (`bash tools/04-loop/defer.sh <arc> '<reason>'`); an operator may "
-                "instead extend deliberately via `just review-attest-budget` (ask-gated)."
+                "instead extend deliberately via `just review-attest-budget` (ask-gated). "
+                "Weigh the counter-evidence before holding: on INVENTING arcs late "
+                "rounds have measured productive (all 8 P1s at round >=10, "
+                ".harness/session-audit-2026-08-22-u-he-29.md §4) — extension exists "
+                "exactly so that evidence is never silently lost."
             ),
         )
     unanswered = unanswered_findings(state, rows, arc_id)
@@ -368,9 +388,18 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
     # the whole wrapper battery on a live schema migration before this ordering).
     try:
         reserved = _reservation_exists(arc_id)
-    except Exception as exc:  # unreadable store: cannot tell -> never read as reserved
-        reserved = False
-        print(f"review-gate: reservation store unreadable ({exc})", file=sys.stderr)
+    except Exception as exc:
+        # Unreadable store REFUSES (codex r4 P1): "cannot tell" must never DISABLE
+        # the gate — a corrupt/symlinked reservation generation would otherwise turn
+        # an actually-reserved arc's gate off (the couldn't-look-reads-as-clean class).
+        return Refused(
+            code="STATE_UNREADABLE",
+            detail=f"reservation store unreadable for {arc_id}: {exc}",
+            recipe=(
+                "inspect the reservation store (tools/reservations.py show --arc-id "
+                f"{arc_id}); the gate cannot distinguish reserved from unreserved"
+            ),
+        )
     if not reserved:
         # Unreserved → Inactive in EVERY mode (codex r3 P1): the headless-degradation
         # path is SANCTIONED — roadmap-continue proceeds unreserved when the permission
@@ -433,9 +462,14 @@ def _run_sweep_script(repo: Path, diff_range: str) -> tuple[str, ...]:
 
 
 def _read_answers(path: Path) -> str:
-    if not path.is_file():
+    # same containment read as the state file (codex r4 P2): the attest verbs are
+    # guard-auto-allowed, so their one file INPUT gets the same O_NOFOLLOW +
+    # regular-file discipline — an in-worktree symlink must not smuggle an outside
+    # file through an approved invocation
+    data = _read_state_bytes(path)
+    if data is None:
         raise GateError(f"answers file {path} does not exist")
-    text = path.read_text()
+    text = data.decode(errors="replace")
     if not text.strip():
         raise GateError(f"answers file {path} is empty")
     return text

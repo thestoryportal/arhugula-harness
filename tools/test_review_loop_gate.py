@@ -500,6 +500,57 @@ def test_symlinked_state_file_is_containment_refusal(repo: Path, monkeypatch: py
     assert target.read_text() == "precious\n"  # never written through
 
 
+def test_admit_reservation_store_unreadable_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r4 P1: "cannot tell" must REFUSE, never disable the gate — a corrupt
+    # store would otherwise turn an actually-reserved arc's gate off
+    def boom(arc_id):
+        raise OSError("corrupt generation")
+
+    monkeypatch.setattr(rlg, "_reservation_exists", boom)
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "STATE_UNREADABLE"
+    assert "reservation store" in d.detail
+
+
+def test_state_field_types_validated_at_parse(repo: Path):
+    # codex r4 P2: dataclasses do not enforce annotations — extra_rounds="2" must
+    # resolve to STATE_UNREADABLE at the boundary, not TypeError inside decide()
+    rlg.state_path(repo).parent.mkdir(parents=True, exist_ok=True)
+    rlg.state_path(repo).write_text(
+        json.dumps(
+            {
+                "records": [
+                    {
+                        "kind": "budget_extension",
+                        "arc_id": ARC,
+                        "extra_rounds": "2",
+                        "reason": "r",
+                        "ts": "t",
+                    }
+                ]
+            }
+        )
+    )
+    with pytest.raises(rlg.GateError, match="extra_rounds"):
+        rlg.load_state(repo)
+
+
+def test_symlinked_answers_file_refused(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r4 P2: the attest verbs' one file input gets the same containment
+    # discipline as the state file — an in-worktree symlink must not smuggle an
+    # outside file through a guard-approved invocation
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    outside = repo.parent / "outside-answers.md"
+    outside.write_text("everything answered\n")
+    a = repo / "answers.md"
+    a.symlink_to(outside)
+    rc = rlg.main(["attest-preflight", "--answers", str(a), "--base", "main", "--repo", str(repo)])
+    assert rc != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
 def test_admit_binding_unavailable_defers_to_wrapper(repo: Path, monkeypatch: pytest.MonkeyPatch):
     # codex r1 P2: an unresolvable base is wrapper infrastructure, not an admission
     # fact — defer to run_codex_review's classifier instead of crashing pre-terminal

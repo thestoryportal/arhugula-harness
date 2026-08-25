@@ -735,7 +735,7 @@ review-attest-sweep answers base='main':
     uv run python tools/review_loop_gate.py attest-sweep --answers {{answers}} --base {{base}}
 
 review-attest-budget extra reason:
-    uv run python tools/review_loop_gate.py attest-budget --extra {{extra}} --reason "{{reason}}"
+    uv run python tools/review_loop_gate.py attest-budget --extra {{extra}} --reason {{quote(reason)}}
 
 review-gate-check base='main':
     uv run python tools/review_loop_gate.py check --base {{base}}
