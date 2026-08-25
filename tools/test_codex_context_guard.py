@@ -1604,8 +1604,11 @@ def test_ci_pins_split_brain_job() -> None:
     job = ci["jobs"]["split-brain"]
     assert job["name"] == "split-brain ledger backstop — blocking"
     assert "if" not in job  # runs on PRs too; a push-only blocking job bricks PR merges
-    run = job["steps"][-1]["run"]
+    step = job["steps"][-1]
+    assert step.get("shell") == "bash"  # -eo pipefail: a jq error inside the pipeline fails
+    run = step["run"]
     assert "jq empty .harness/arc-metrics.jsonl" in run
+    assert 'all(.[]; type=="object")' in run  # non-object rows refuse, not swallow
     assert "uniq -d" in run and "SPLIT_BRAIN_LEDGER" in run
 
 
@@ -2079,12 +2082,52 @@ def test_in_flight_landing_is_continuation_only_while_lease_lives(tmp_path, monk
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
     monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
 
-    monkeypatch.setattr(
-        cg, "_door_lease_strict", lambda: {"reservation_id": "pr-9", "pr": 9, "state": "held"}
-    )
+    import os as os_module
+    import socket
+
+    live_lease = {
+        "reservation_id": "pr-9",
+        "pr": 9,
+        "state": "held",
+        "host": socket.gethostname(),
+        "pid": os_module.getpid(),
+    }
+    monkeypatch.setattr(cg, "_door_lease_strict", lambda: live_lease)
     assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []
     assert not log.exists()  # in-flight: no durable row
 
     monkeypatch.setattr(cg, "_door_lease_strict", lambda: None)
     fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
     assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]  # crash-orphan: emits
+
+
+def test_dead_holder_lease_does_not_suppress_orphan(tmp_path, monkeypatch) -> None:
+    """codex r19 P1: the LEASE file is crash-durable -- a lease naming this head but
+    held by a DEAD pid must not suppress; a live same-host holder does."""
+    import socket
+
+    _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": "2026-08-25T00:00:00Z"}
+    )
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+    monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
+
+    def lease_with(pid):
+        return {
+            "reservation_id": "pr-9",
+            "pr": 9,
+            "state": "held",
+            "host": socket.gethostname(),
+            "pid": pid,
+        }
+
+    import os as os_module
+
+    monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_with(os_module.getpid()))
+    assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []
+
+    dead_pid = 2**22 - 3  # far above any live pid on this host
+    monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_with(dead_pid))
+    fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
+    assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]

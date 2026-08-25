@@ -1126,14 +1126,24 @@ def _valid_head(head, *, arc_id: str) -> bool:
 
 
 def _door_continuation_live(h: dict) -> bool:
-    """True iff the door's LIVE lease names this head's arc or PR -- the in-flight
-    §4(vii)-(viii) continuation. State-based on purpose: the lease is the owned
-    lifecycle authority; a wall-clock window would re-admit exactly the ambient
-    temporal coupling it replaced."""
+    """True iff the door's lease names this head's arc or PR AND its holder process is
+    alive on this host -- the in-flight §4(vii)-(viii) continuation. State-based on
+    purpose (a wall-clock window would re-admit ambient temporal coupling), and
+    liveness-checked on purpose (codex r19 P1): the LEASE file is crash-durable, so a
+    dead holder's lease must not suppress the orphan indefinitely."""
+    import socket
+
+    import merge_door as md
+
     lease = _door_lease_strict()
     if not lease:
         return False
-    return lease.get("reservation_id") == h.get("arc_id") or lease.get("pr") == h.get("pr")
+    if not (lease.get("reservation_id") == h.get("arc_id") or lease.get("pr") == h.get("pr")):
+        return False
+    if lease.get("host") and lease["host"] != socket.gethostname():
+        return False  # not this store's writer; foreign liveness is not checkable here
+    pid = lease.get("pid")
+    return bool(pid) and md._process_is_alive(int(pid))
 
 
 def _reservation_head_current(arc_id: str) -> dict | None:

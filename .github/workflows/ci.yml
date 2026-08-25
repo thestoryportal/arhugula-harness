@@ -567,8 +567,14 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: one arc row per arc_id
+        # `shell: bash` gives -eo pipefail (the default runner shell has neither), so a
+        # jq error INSIDE the pipeline fails the job; the all-objects check refuses
+        # valid-JSON non-object rows that would otherwise error mid-select and be
+        # swallowed (codex r19 P2).
+        shell: bash
         run: |
           jq empty .harness/arc-metrics.jsonl
+          jq -se 'all(.[]; type=="object")' .harness/arc-metrics.jsonl > /dev/null
           dups=$(jq -r 'select(.record_kind=="arc" or (.record_kind|not)) | .arc_id' .harness/arc-metrics.jsonl | sort | uniq -d)
           [ -z "$dups" ] || { echo "SPLIT_BRAIN_LEDGER: $dups"; exit 1; }
 
