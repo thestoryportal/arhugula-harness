@@ -822,10 +822,16 @@ def _record_detection(payload: dict) -> tuple[str, dict | None]:
         # Suppression requires a FINDING row's lineage (a bare adjudication row --
         # e.g. appended raw, bypassing the write-time unknown-id rejection -- is not
         # a lineage), and both halves must pass fr.validate so a crude forgery
-        # (missing fields, self-disposition) cannot mute a hard detection. Named
-        # residual: a FULLY schema-valid forged pair still passes -- raw write access
-        # to the log file is the trust boundary, enforced by the record layer's
-        # locked append, not re-derivable at read time.
+        # (missing fields, self-disposition) cannot mute a hard detection.
+        #
+        # TRUST BOUNDARY (final, codex r9-r20): an adversary with local write access
+        # to the repo checkout or QUEUE_DIR is OUT OF SCOPE beyond loud refusal --
+        # such an adversary can rewrite the log, the store, or this code directly.
+        # In-boundary guarantees: the record layer's locked, O_NOFOLLOW,
+        # fd-consistent append + the C-HE-24 write invariants + adjudication-only
+        # suppression. Held under this boundary: whole-file rename/replace row loss,
+        # parent-directory symlink relocation, and any further single-syscall
+        # hardening against that same local adversary.
         def _validated(r: dict) -> bool:
             try:
                 fr.validate(r)
