@@ -949,7 +949,12 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
         out.extend(
             _detection(
                 "ORPHANED_RESERVATION",
-                f"blocked lease for pr #{lease['pr']} older than its bound",
+                # lease_token + blocked_at_sha discriminate DISTINCT block events at
+                # one reservation: a successor lease blocked again must not recall a
+                # prior event's suppression through identical evidence.
+                f"blocked lease {str(lease.get('lease_token', '?'))[:8]} for pr "
+                f"#{lease['pr']} blocked_at {str(lease.get('blocked_at_sha', '?'))[:12]} "
+                "older than its bound",
                 lane_id=lane_id,
                 arc_id=lease["reservation_id"],
                 severity="warn",
@@ -970,8 +975,12 @@ def _reservation_heads() -> tuple[list[dict], list[str]]:
     import reservations as rs  # importability is the dispatch boundary's concern
 
     root = rs.reservations_root()
+    if not root.exists():
+        return [], []  # genuinely absent store: no reservations yet
     if not root.is_dir():
-        return [], []
+        # A planted regular file at the store path must refuse (dispatch -> hard
+        # finding), never read as an empty store.
+        raise RuntimeError(f"reservations root {root} is not a directory -- refused")
     heads: list[dict] = []
     unreadable: list[str] = []
     for d in sorted(root.iterdir()):
@@ -1054,49 +1063,28 @@ def _recent_main_merges(
     """The last TOCTOU_LOOKBACK first-parent landings, each joined to the reservation that
     recorded it as `merge_sha` (U-HE-23). The door squash-merges, so landings have ONE
     parent and `--merges` would inspect none of them. Returns (attributed
-    `(merge_sha, first_parent, verified_base)` tuples, unattributed landing shas)."""
+    `(merge_sha, first_parent, verified_base)` tuples, unattributed landing shas).
+    Deliberately NO lease-derived suppression: r5-r7 proved every attestation carrier
+    (moved records, then the live lease via a symlinked LEASE) forgeable, so the ONE
+    suppressor of a mismatch is the operator's finding_adjudication (`_record_detection`
+    recall) -- a recovered race re-raises once (emit-once) until disposed."""
     proc = _run(["git", "log", "--first-parent", f"-{TOCTOU_LOOKBACK}", "--format=%H %P"], cwd=root)
     if proc.returncode != 0:
         # An unreadable history must not read as a clean backstop -- the dispatch
         # converts this raise into a hard DETECTIONS_UNAVAILABLE finding.
         raise RuntimeError(f"git log --first-parent failed: {proc.stderr.strip() or proc.args}")
     by_merge_sha = {h["merge_sha"]: h for h in heads if h.get("merge_sha")}
-    attested = _unblock_attested_shas()
     merges: list[tuple[str, str, str]] = []
     unattributed: list[str] = []
     for line in proc.stdout.strip().splitlines():
         parts = line.split()
         sha, parents = parts[0], parts[1:]
-        if sha in attested:
-            # `unblocked_from` is the operator-keyed re-validation of exactly this
-            # landing (merge_door.unblock) -- re-raising it would wedge the recovery
-            # the operator just approved. See `_unblock_attested_shas` for the
-            # attestation carriers and their retention horizon.
-            continue
         head = by_merge_sha.get(sha)
         if head is None or not head.get("base_sha"):
             unattributed.append(sha)
         elif parents:  # a parentless root commit has no first parent to compare
             merges.append((sha, parents[0], head["base_sha"]))
     return merges, unattributed
-
-
-def _unblock_attested_shas() -> set[str]:
-    """Merge shas the operator re-validated through `merge_door.unblock`, read ONLY from
-    the LIVE lease via read_lease() -- the door's own authoritative view
-    (`unblocked_from` == the sha the door blocked at, which for a BASE_TOCTOU block is
-    the landed merge sha -- merge_door.mark_blocked at the first-parent check). This
-    covers the continuation window while the recovery is in flight. The DURABLE half is
-    the adjudication recall in `_record_detection` (disposition `suppressed`), which the
-    record layer's write invariants make forgery-resistant. A moved-record
-    (`released.*`/`reclaimed.*`) scan was tried and RETRACTED (codex r6): any peer can
-    drop a JSON file carrying `unblocked_from`, and an unprovenanced file must never
-    suppress a hard detection. Bounded cost of the retraction: after lease release, one
-    re-raise per lane until the operator disposes it."""
-    lease = _door_lease_strict()
-    if lease and lease.get("unblocked_from"):
-        return {lease["unblocked_from"]}
-    return set()
 
 
 def _emitting_detections(root: Path, lane: str) -> list[Finding]:
@@ -1180,9 +1168,12 @@ def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
         ]
     try:
         parsed = json.loads(proc.stdout.strip().splitlines()[-1])
-        return [
-            Finding(d["severity"], d["code"], d["message"]) for d in parsed if isinstance(d, dict)
-        ]
+        if not isinstance(parsed, list):
+            raise ValueError(f"expected a JSON list, got {type(parsed).__name__}")
+        # No element filtering: a non-dict or key-missing element routes to the
+        # except arm as unparseable output -- silently skipping it would make
+        # malformed fallback output indistinguishable from a clean suite.
+        return [Finding(d["severity"], d["code"], d["message"]) for d in parsed]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         return [
             _detections_unavailable(lane, f"the uv fallback produced unparseable output ({exc})")

@@ -1229,13 +1229,21 @@ def test_orphaned_reservation_blocked_lease_past_bound(tmp_path, monkeypatch) ->
     monkeypatch.setattr(
         cg,
         "_blocked_lease_older_than_bound",
-        lambda: {"pr": 5, "reservation_id": "u-x", "state": "blocked"},
+        lambda: {
+            "pr": 5,
+            "reservation_id": "u-x",
+            "state": "blocked",
+            "lease_token": "aabbccddeeff0011",
+            "blocked_at_sha": "d" * 40,
+        },
     )
 
     fs = cg.check_orphaned_reservations([], lane_id="l")
 
     assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
-    assert "blocked lease" in fs[0].message
+    # token + sha discriminate distinct block events: a successor lease blocked again
+    # must not recall a prior event's suppression through identical evidence
+    assert "aabbccdd" in fs[0].message and "d" * 12 in fs[0].message
 
 
 def test_json_report_carries_lane_id(monkeypatch) -> None:
@@ -1387,52 +1395,12 @@ def test_recent_main_merges_joins_real_git(tmp_path, monkeypatch) -> None:
     _git(repo, "commit", "-m", "landing")
     tip = _git(repo, "rev-parse", "HEAD")
     heads = [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": base}]
-    monkeypatch.setattr(cg, "_unblock_attested_shas", lambda: set())
 
     merges, unattributed = cg._recent_main_merges(repo, heads)
 
     assert merges == [(tip, base, base)]  # first parent read from git == verified base
     assert unattributed == [base]  # the baseline commit has no reservation
     assert cg.check_base_toctou(merges, lane_id="l") == []
-
-
-def test_recent_main_merges_skips_unblock_attested_sha(tmp_path, monkeypatch) -> None:
-    """A landing the operator re-validated through merge_door.unblock is not re-raised
-    as BASE_TOCTOU."""
-    repo = _init_repo(tmp_path)
-    base = _git(repo, "rev-parse", "HEAD")
-    (repo / "landed.txt").write_text("landed\n", encoding="utf-8")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "-m", "landing")
-    tip = _git(repo, "rev-parse", "HEAD")
-    heads = [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": "x" * 40}]
-    monkeypatch.setattr(cg, "_unblock_attested_shas", lambda: {tip})
-
-    merges, unattributed = cg._recent_main_merges(repo, heads)
-
-    assert merges == []  # the mismatching-but-attested landing is not compared
-    assert unattributed == [base]
-
-
-def test_attestation_is_live_lease_only(tmp_path, monkeypatch) -> None:
-    """The retraction witness (codex r6): a moved-aside or planted door record must
-    NOT feed the attested set -- only the live lease's unblocked_from counts; the
-    durable recovery is the adjudication recall."""
-    import merge_door as md
-
-    door = tmp_path / "merge-door"
-    door.mkdir()
-    (door / "released.fake").write_text(json.dumps({"unblocked_from": "f" * 40}), encoding="utf-8")
-    monkeypatch.setattr(md, "DOOR", door)
-    monkeypatch.setattr(md, "LEASE", door / "LEASE")
-
-    assert cg._unblock_attested_shas() == set()  # the planted record attests nothing
-
-    (door / "LEASE").write_text(
-        json.dumps({"lease_token": "t", "state": "held", "unblocked_from": "a" * 40}),
-        encoding="utf-8",
-    )
-    assert cg._unblock_attested_shas() == {"a" * 40}  # the live lease does
 
 
 def test_reservation_heads_partial_failure_is_surfaced(tmp_path, monkeypatch) -> None:
@@ -1623,3 +1591,44 @@ def test_ci_pins_split_brain_job() -> None:
     run = job["steps"][-1]["run"]
     assert "jq empty .harness/arc-metrics.jsonl" in run
     assert "uniq -d" in run and "SPLIT_BRAIN_LEDGER" in run
+
+
+def test_planted_file_at_store_path_refuses(tmp_path, monkeypatch) -> None:
+    """A regular file planted at the reservations-root path must refuse (dispatch ->
+    hard finding), never read as an empty store that disables orphan detection and
+    verified-base attribution."""
+    import reservations as rs
+
+    fake = tmp_path / "reservations"
+    fake.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setattr(rs, "reservations_root", lambda: fake)
+
+    try:
+        cg._reservation_heads()
+    except RuntimeError as exc:
+        assert "not a directory" in str(exc)
+    else:
+        raise AssertionError("a planted file at the store path must refuse")
+
+
+def test_fallback_output_shape_is_validated(monkeypatch) -> None:
+    """Valid JSON of the wrong shape ({} or non-dict elements) must be UNLOOKED, not a
+    clean empty suite."""
+    monkeypatch.setattr(cg, "_record_layer_importable", lambda: False)
+
+    def run_with(stdout):
+        monkeypatch.setattr(
+            cg,
+            "_run",
+            lambda args, *, cwd, timeout=20: subprocess.CompletedProcess(
+                args=args, returncode=0, stdout=stdout, stderr=""
+            ),
+        )
+        return cg._emitting_detections_dispatch(Path("/repo"), "l")
+
+    for bad in ("{}", "[1, 2]", '[{"severity": "hard"}]'):
+        findings = run_with(bad)
+        assert [f.code for f in findings] == ["DETECTIONS_UNAVAILABLE"], bad
+        assert findings[0].severity == "hard"
+
+    assert run_with("[]") == []  # a genuinely empty suite stays clean
