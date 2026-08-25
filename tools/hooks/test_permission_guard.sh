@@ -424,6 +424,12 @@ OUT=$(run_on "$(pl Bash "just review-attest-sweep .harness/tmp/a.md main review-
 # on every `just` line mentioning it, regardless of which prefix fronts the chain.
 OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-budget 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "chained budget after generic-prefix recipe → not auto-allowed" || bad "generic-prefix budget chain auto-allowed: $OUT"
+# codex r6 P1: shell quote-normalization (review-attest-"budget") defeats the raw
+# grep — any just-first command containing a quote character falls through to ask.
+OUT=$(run_on "$(pl Bash 'just codex-loop-status review-attest-"budget" 2 ok' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "quote-normalized budget chain → not auto-allowed" || bad "quote-normalized budget chain auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "single-quote-normalized budget chain → not auto-allowed" || bad "single-quote budget chain auto-allowed: $OUT"
 SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"

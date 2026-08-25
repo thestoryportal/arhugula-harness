@@ -206,7 +206,10 @@ def _parse_state(data: bytes, path: Path) -> GateState:
             # instead of resolving to STATE_UNREADABLE — validate scalars now
             for f in dataclasses.fields(obj):
                 want = int if f.type == "int" else str if f.type == "str" else None
-                if want is not None and not isinstance(getattr(obj, f.name), want):
+                val = getattr(obj, f.name)
+                # bool subclasses int (codex r6 P2): extra_rounds=true must refuse,
+                # not extend the budget by one
+                if want is not None and (not isinstance(val, want) or isinstance(val, bool)):
                     raise ValueError(f"{f.name} is not {want.__name__}")
             if isinstance(obj, BudgetExtension) and obj.extra_rounds < 1:
                 # the tightening invariant lives in the type (codex r5 P2): a persisted
@@ -259,7 +262,10 @@ def _append_record(root: Path, kind: str, record: object) -> None:
     # removes the shared-fixed-tmp hazard between an operator verb and a loop attest.
     # A crash may leak one tmp; the next same-pid run fails loud on it — remove by hand.
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except OSError as exc:  # a pre-existing entry (planted link or crash leftover)
+        raise GateError(f"{tmp} refused (containment): {exc}") from exc
     try:
         payload = (json.dumps({"records": existing}, indent=1) + "\n").encode()
         view = memoryview(payload)

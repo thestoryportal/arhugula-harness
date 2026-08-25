@@ -9,6 +9,7 @@ review terminal per C-HE-16 §3 — no C-HE-24 row, no round outcome).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -418,10 +419,19 @@ def test_attest_tmp_symlink_cannot_redirect_write(repo: Path, monkeypatch: pytes
     victim.write_text("precious\n")
     sp = rlg.state_path(repo)
     sp.parent.mkdir(parents=True, exist_ok=True)
-    sp.with_name(sp.name + ".tmp").symlink_to(victim)
+    # plant at the ACTUAL per-pid temp name production opens (codex r6 P3: the old
+    # fixed-name plant went stale when r5 made temp names per-pid, leaving the
+    # witness green even with O_EXCL/O_NOFOLLOW removed)
+    tmp_name = f"{sp.name}.{os.getpid()}.tmp"
+    sp.with_name(tmp_name).symlink_to(victim)
+    rc = _attest_preflight(repo)
+    assert rc != 0  # O_EXCL refuses the planted entry loudly
+    assert victim.read_text() == "precious\n"  # never written through
+    assert rlg.load_state(repo).preflights == ()
+    sp.with_name(tmp_name).unlink()  # planted link removed by hand -> attest succeeds
     rc = _attest_preflight(repo)
     assert rc == 0
-    assert victim.read_text() == "precious\n"  # never written through
+    assert victim.read_text() == "precious\n"
     assert len(rlg.load_state(repo).preflights) == 1
 
 
@@ -465,23 +475,24 @@ def test_attest_budget_requires_reason_and_records(repo: Path, monkeypatch: pyte
     rc = rlg.main(["attest-budget", "--extra", "-3", "--reason", "ok", "--repo", str(repo)])
     assert rc != 0
     assert rlg.load_state(repo).extensions == ()
-    rlg.state_path(repo).write_text(
-        json.dumps(
-            {
-                "records": [
-                    {
-                        "kind": "budget_extension",
-                        "arc_id": ARC,
-                        "extra_rounds": -2,
-                        "reason": "r",
-                        "ts": "t",
-                    }
-                ]
-            }
+    for bad in (-2, True):  # bool subclasses int (codex r6 P2): true must refuse too
+        rlg.state_path(repo).write_text(
+            json.dumps(
+                {
+                    "records": [
+                        {
+                            "kind": "budget_extension",
+                            "arc_id": ARC,
+                            "extra_rounds": bad,
+                            "reason": "r",
+                            "ts": "t",
+                        }
+                    ]
+                }
+            )
         )
-    )
-    with pytest.raises(rlg.GateError, match="extra_rounds"):
-        rlg.load_state(repo)
+        with pytest.raises(rlg.GateError, match="extra_rounds"):
+            rlg.load_state(repo)
     rlg.state_path(repo).unlink()
     rc = rlg.main(
         ["attest-budget", "--extra", "2", "--reason", "operator approved", "--repo", str(repo)]
