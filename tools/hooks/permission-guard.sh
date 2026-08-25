@@ -608,14 +608,18 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   # line mentioning review-attest-budget ANYWHERE (codex r5 P1: `just` chains recipes,
   # so the ask-gated budget verb could ride as a chained second recipe behind ANY
   # allowlisted prefix — B-217 tracks the general class; this pins the one verb whose
-  # ask-gate is load-bearing), OR (d) is a `just` line containing ANY quote character
-  # (codex r6 P1: shell tokenization normalizes review-attest-"budget" to the bare
-  # verb AFTER the raw-text grep ran — rejecting quotes wholesale on just-first
-  # commands ends the quote-variant ladder; no allowlisted `just` shape needs quotes).
-  # Allowlisted verbs are auto-allowed only in their read-only forms.
+  # ask-gate is load-bearing), OR (d) is a `just`-first command that is NOT composed
+  # solely of plain-charset words (codex r6/r7 P1: shell tokenization normalizes
+  # review-attest-"budget", review-attest-bud\get, $VAR splices, and glob forms to
+  # the bare verb AFTER any raw-text grep ran — rung-by-rung pattern rejection is a
+  # non-convergent ladder, so the POSITIVE structural constraint replaces it: every
+  # token must match [A-Za-z0-9._/:=@-]+ or the command falls to ask. No allowlisted
+  # `just` shape needs any other character). Allowlisted verbs are auto-allowed only
+  # in their read-only forms.
   if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
      || printf '%s' "$CMD" | grep -Eq 'just[[:space:]].*review-attest-budget' \
-     || printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just[[:space:]][^"'"'"']*["'"'"']' \
+     || { printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]|$)' \
+          && ! printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]+[A-Za-z0-9._/:=@-]+)*[[:space:]]*$'; } \
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge.*--admin' \

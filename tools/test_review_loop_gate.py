@@ -586,6 +586,17 @@ def test_symlinked_answers_file_refused(repo: Path, monkeypatch: pytest.MonkeyPa
     assert rlg.load_state(repo).preflights == ()
 
 
+def test_admit_gate_log_unreadable_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r7 P2: the gate log is the round/obligation authority — unreadable must
+    # produce the typed refusal, never a traceback out of the wrapper
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    fr.GATE_LOG_JSONL.write_text("{not jsonl\n")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "STATE_UNREADABLE"
+    assert "gate log" in d.detail
+
+
 def test_admit_binding_unavailable_defers_to_wrapper(repo: Path, monkeypatch: pytest.MonkeyPatch):
     # codex r1 P2: an unresolvable base is wrapper infrastructure, not an admission
     # fact — defer to run_codex_review's classifier instead of crashing pre-terminal

@@ -430,6 +430,13 @@ OUT=$(run_on "$(pl Bash 'just codex-loop-status review-attest-"budget" 2 ok' '')
 [ "$(dec "$OUT")" != "allow" ] && ok "quote-normalized budget chain → not auto-allowed" || bad "quote-normalized budget chain auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "single-quote-normalized budget chain → not auto-allowed" || bad "single-quote budget chain auto-allowed: $OUT"
+# codex r7 P1: backslash normalization (review-attest-bud\get) — the positive
+# plain-charset constraint on just-first commands ends the whole normalization
+# ladder (quotes, backslashes, $VAR splices, globs) in one rule.
+OUT=$(run_on "$(pl Bash 'just check review-attest-bud\get 2 ok' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "backslash-normalized budget chain → not auto-allowed" || bad "backslash budget chain auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'just check review-attest-bud[g]et 2 ok' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "glob-normalized budget chain → not auto-allowed" || bad "glob budget chain auto-allowed: $OUT"
 SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"

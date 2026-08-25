@@ -435,9 +435,21 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         return Inactive(
             reason=f"code binding unavailable ({exc}) — the wrapper's binding path classifies"
         )
+    try:
+        rows = fr.read_rows()
+    except Exception as exc:
+        # the gate log is the round/obligation AUTHORITY (codex r7 P2): unreadable
+        # must refuse, matching the state-file and reservation-store disciplines —
+        # never a raw traceback out of the wrapper
+        return Refused(
+            code="STATE_UNREADABLE",
+            detail=f"gate log unreadable: {exc}",
+            recipe="inspect .harness/merge-gate-log.jsonl (or HARNESS_GATE_LOG) — the "
+            "gate cannot derive rounds or obligations without it",
+        )
     return decide(
         state,
-        fr.read_rows(),
+        rows,
         arc_id=arc_id,
         head_sha=binding["head_sha"],
         diff_digest=binding["diff_digest"],
@@ -543,7 +555,11 @@ def _attest_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int
     any producer, any round (the finding-as-obligation model, codex r2 P1) — plus the
     class-sibling textual floor over the attested bytes."""
     state = _load_state_for_attest(repo)  # containment GateError propagates loud to main
-    ids = unanswered_findings(state, fr.read_rows(), arc_id)
+    try:
+        rows = fr.read_rows()
+    except Exception as exc:  # unreadable obligation authority: refuse to attest (r7 P2)
+        raise GateError(f"gate log unreadable: {exc}") from exc
+    ids = unanswered_findings(state, rows, arc_id)
     if not ids:
         print(
             f"review-gate: no unanswered findings for {arc_id} — nothing to sweep "
