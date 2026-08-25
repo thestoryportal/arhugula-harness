@@ -215,6 +215,31 @@ def test_a_missing_ledger_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(tmp_path / "absent.jsonl")
 
 
+# mutation-probe(tools/arc_lever_report.py): read a null/absent levers_active as []
+def test_undeclared_levers_are_no_claim_not_a_baseline(tmp_path: Path) -> None:
+    """[] is an explicit claim; an absent or null field is structurally incomplete."""
+    absent = {k: v for k, v in _row("pr-a", 10, []).items() if k != "levers_active"}
+    rows = [absent, {**_row("pr-b", 12, []), "levers_active": None}, _row("pr-c", 14, [])]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["excluded_undeclared"] == ["pr-a", "pr-b"]
+    assert s["baseline_median"]["review_rounds"] == 14, "only the explicit [] is baseline"
+
+
+# mutation-probe(tools/arc_lever_report.py): filter --arc-type by exact key equality
+def test_cli_arc_type_flag_matches_contaminated_groups(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """On an all-close-declared ledger the recommended invocation must not go empty."""
+    rows = [
+        _row("pr-a", 22, [], p1=[1], declared_at="close"),
+        _row("pr-b", 2, ["B-211", "B-212"], declared_at="close"),
+    ]
+    ledger = _write(tmp_path / "ledger.jsonl", rows)
+    assert alr.main(["--ledger", str(ledger), "--arc-type", "applying", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert list(out["arc_types"]) == ["applying (close-declared — outcome-contaminated, C-HE-26)"]
+
+
 # mutation-probe(tools/arc_lever_report.py): ignore the --arc-type restriction in main
 def test_cli_arc_type_flag_restricts_to_one_type(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]

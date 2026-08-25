@@ -32,7 +32,7 @@ REPO = Path(__file__).resolve().parent.parent
 DEFAULT_LEDGER = REPO / ".harness" / "arc-metrics.jsonl"
 DEFAULT_LEVERS = ("B-211", "B-212")
 
-_BUCKETS = ("treated", "baseline", "other_levers", "unmapped", "partial")
+_BUCKETS = ("treated", "baseline", "other_levers", "unmapped", "partial", "undeclared")
 
 
 def load_rows(ledger: Path) -> list[dict[str, Any]]:
@@ -63,7 +63,13 @@ def split_cohorts(
         if arc_type != "unclassified" and r.get("arc_type_declared_at") != "open":
             arc_type = f"{arc_type} (close-declared — outcome-contaminated, C-HE-26)"
         buckets = out.setdefault(arc_type, {b: [] for b in _BUCKETS})
-        declared = r.get("levers_active") or []
+        declared = r.get("levers_active")
+        # [] is an explicit claim ("no lever was live"); an ABSENT or null field is
+        # no claim at all — collapsing them would let structurally incomplete rows
+        # contaminate the baseline (codex r4). Undeclared rows are excluded loudly.
+        if declared is None:
+            buckets["undeclared"].append(r)
+            continue
         bucket = (
             "treated"
             if any(lv in declared for lv in levers)
@@ -83,8 +89,9 @@ def split_cohorts(
 
 def _metrics(r: dict[str, Any], levers: tuple[str, ...]) -> dict[str, Any]:
     span = r.get("arc_span_s")
-    declared = r.get("levers_active") or []
+    declared = r.get("levers_active")
     p1 = r.get("p1_rounds")
+    assert declared is not None  # undeclared rows are bucketed before metrics
     return {
         "arc_id": r.get("arc_id"),
         "review_rounds": r["review_rounds"],
@@ -165,6 +172,7 @@ def summarize_type(
         "per_skill_separable": bool(separable),
         "excluded_treated_count": excluded_treated,
         "excluded_unmapped": [r.get("arc_id") for r in buckets["unmapped"]],
+        "excluded_undeclared": [r.get("arc_id") for r in buckets["undeclared"]],
         "excluded_partial": [r.get("arc_id") for r in buckets["partial"]],
         "excluded_other_levers": [r.get("arc_id") for r in buckets["other_levers"]],
     }
@@ -228,6 +236,7 @@ def render(summary: dict[str, Any]) -> str:
             ("excluded_unmapped", "unmapped rounds, B-170 — never evaluated"),
             ("excluded_partial", "partial round data — lower bounds, never evaluated"),
             ("excluded_other_levers", "other lever sets"),
+            ("excluded_undeclared", "levers_active absent/null — no claim, not a baseline"),
         ):
             if s[key]:
                 lines.append(f"  excluded ({label}): " + ", ".join(str(a) for a in s[key]))
@@ -255,7 +264,14 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("arc-lever-report: --levers must name at least one lever id")
     cohorts = split_cohorts(load_rows(args.ledger), levers)
     if args.arc_type is not None:
-        cohorts = {t: b for t, b in cohorts.items() if t == args.arc_type}
+        # Close-declared groups carry an annotation suffix on the bare type key —
+        # the filter must match those too, or the recommended invocation returns
+        # an empty report on today's all-close-declared ledger (codex r4).
+        cohorts = {
+            t: b
+            for t, b in cohorts.items()
+            if t == args.arc_type or t.startswith(f"{args.arc_type} (")
+        }
     summary = summarize(cohorts, levers)
     print(json.dumps(summary, indent=2) if args.json else render(summary))
     return 0
