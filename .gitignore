@@ -201,3 +201,4 @@ graft/
 # would be silently re-appended next build. A negation coexists with that rewrite.
 !.claude/skills/graft/
 !.agents/skills/graft/
+node_modules

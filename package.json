@@ -1,0 +1,8 @@
+{
+  "name": "arhugula-v2-mcp-servers",
+  "private": true,
+  "description": "Locked local installations for npx-launched MCP servers declared in .mcp.json. Install with `npm ci`; the .mcp.json entries run with --no-install so only these attested bytes ever execute.",
+  "dependencies": {
+    "@upstash/context7-mcp": "4.0.3"
+  }
+}

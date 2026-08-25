@@ -1253,3 +1253,49 @@ def test_arc_metrics_capture_is_mirrored_across_both_ship_carriers() -> None:
         # the two properties a carrier must not silently drop
         assert "outside" in section.lower(), path  # queue lives out of the repo
         assert "merged history" in section.lower(), path  # release point, not any merge
+
+
+def _skill_description(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("description:"):
+            return line.removeprefix("description:").strip()
+    raise AssertionError(f"missing description: {path}")
+
+
+def test_defect_class_preflight_description_contract() -> None:
+    """The consumer-inventory trigger lives in the frontmatter description,
+    which is the discovery surface for BOTH runners and is capped fail-closed
+    at 1024 chars by the AS-axis skill_frontmatter_validator. Pin all three
+    properties so a wording revert, a cap breach, or canonical/mirror drift
+    goes red instead of silently dropping the authoring-time pause."""
+    canonical = _skill_description(
+        ROOT / ".claude" / "skills" / "defect-class-preflight" / "SKILL.md"
+    )
+    mirror = _skill_description(ROOT / ".agents" / "skills" / "defect-class-preflight" / "SKILL.md")
+    assert canonical == mirror
+    assert len(canonical) <= 1024
+    assert "new consumer of an existing data surface" in canonical
+    assert "BEFORE the consumer is written" in canonical
+
+
+def test_project_mcp_context7_registration_is_locked_local() -> None:
+    """Supply-chain witness for the context7 registration the preflight
+    skill's external-SDK rung names. The .mcp.json entry must run
+    `npx --no-install` (resolves ONLY the locked local installation —
+    never a registry fetch of unattested bytes), and the repository
+    lockfile must bind the exact version WITH an integrity digest, so the
+    bytes a trusted session executes are the bytes this repo reviewed.
+    Server liveness is witnessed at registration time, not in CI."""
+    mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+    context7 = mcp["mcpServers"]["context7"]
+    assert context7["command"] == "npx"
+    assert context7["args"][0] == "--no-install"
+    assert "context7-mcp" in context7["args"]
+    assert not any("-y" == arg for arg in context7["args"])
+
+    manifest = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+    assert manifest["dependencies"]["@upstash/context7-mcp"] == "4.0.3"
+    lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    locked = lock["packages"]["node_modules/@upstash/context7-mcp"]
+    assert locked["version"] == "4.0.3"
+    assert locked["integrity"].startswith("sha512-")
