@@ -10786,7 +10786,12 @@ items:
     precedent; guard edits take their own reviewed arc per B-213).'
   close_out: 'OPEN — closure shape: arity-bounded anchoring (or a token-count structural
     check) for every argument-bearing recipe in the guard''s `just` alternation, with
-    chained-bypass witnesses per shape.'
+    chained-bypass witnesses per shape. Scope extended at b-215 codex r7-r10: the
+    interim positive token grammar (plain barewords + fully-quoted plain spans) on
+    just-first lines oscillated twice against documented free-form evidence shapes
+    (quotes r8, parens r10) — normalization-proof chain prevention WITHOUT arity
+    knowledge degrades into an inner-charset ladder, which is this row''s whole
+    argument: the closure must know each recipe''s parameter count.'
   council: 'NO — single-surface guard hardening; no cross-axis tension.'
   heading: '### B-217 · permission-guard just-recipe chaining class *(surfaced by
     codex r3 on the b-215 arc, 2026-08-25; REGISTERED)*'

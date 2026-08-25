@@ -608,7 +608,12 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   # bare+quote like review-attest-"budget", backslashes, $VAR, globs) — none of those
   # forms parse under this grammar, and a fully-quoted "review-attest-budget" still
   # contains the literal the budget grep above catches.
-  _JUST_TOKEN='[A-Za-z0-9._/:=@-]+|"[A-Za-z0-9._/:=@, -]*"|'"'"'[A-Za-z0-9._/:=@, -]*'"'"''
+  # quoted-span inner charset: printable prose incl. parens (codex r10 P1: real
+  # evidence strings like "2 passed (0.1s)") but NEVER the splice-enabling chars
+  # (\\ $ \` or a mixed bare/quote boundary — those stay structurally unparseable).
+  # Residual prose chars beyond this set fall to ask; widening further is B-217's
+  # arity-aware closure, not another inner-charset rung.
+  _JUST_TOKEN='[A-Za-z0-9._/:=@-]+|"[A-Za-z0-9._/:=@,() -]*"|'"'"'[A-Za-z0-9._/:=@,() -]*'"'"''
   _JUST_PLAIN_LINE='^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]+('"$_JUST_TOKEN"'))*[[:space:]]*$'
   # Reject (→ ask) if the command (a) chains/nests/redirects, OR (b) uses a destructive
   # SUBMODE of an otherwise-allowlisted verb that the deny-list doesn't cover —

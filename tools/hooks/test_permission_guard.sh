@@ -434,6 +434,9 @@ OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')
 # quoted-evidence loop-record shape must stay allowed (r7's bare charset broke it).
 OUT=$(run_on "$(pl Bash 'just codex-loop-record --phase plan --status passed --command plan --evidence "expected assertion"' '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "quoted-evidence codex-loop-record → allow" || bad "quoted-evidence loop-record not allowed: $OUT"
+# codex r10 P1: real evidence prose carries parens — "2 passed (0.1s)" must allow.
+OUT=$(run_on "$(pl Bash 'just codex-loop-record --phase red --status passed --command pytest --evidence "2 passed (0.1s)"' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "paren-evidence codex-loop-record → allow" || bad "paren-evidence loop-record not allowed: $OUT"
 # codex r7 P1: backslash normalization (review-attest-bud\get) — the positive
 # plain-charset constraint on just-first commands ends the whole normalization
 # ladder (quotes, backslashes, $VAR splices, globs) in one rule.
