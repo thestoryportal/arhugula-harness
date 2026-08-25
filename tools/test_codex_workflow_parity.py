@@ -1253,3 +1253,41 @@ def test_arc_metrics_capture_is_mirrored_across_both_ship_carriers() -> None:
         # the two properties a carrier must not silently drop
         assert "outside" in section.lower(), path  # queue lives out of the repo
         assert "merged history" in section.lower(), path  # release point, not any merge
+
+
+def _skill_description(path: Path) -> str:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("description:"):
+            return line.removeprefix("description:").strip()
+    raise AssertionError(f"missing description: {path}")
+
+
+def test_defect_class_preflight_description_contract() -> None:
+    """The consumer-inventory trigger lives in the frontmatter description,
+    which is the discovery surface for BOTH runners and is capped fail-closed
+    at 1024 chars by the AS-axis skill_frontmatter_validator. Pin all three
+    properties so a wording revert, a cap breach, or canonical/mirror drift
+    goes red instead of silently dropping the authoring-time pause."""
+    canonical = _skill_description(
+        ROOT / ".claude" / "skills" / "defect-class-preflight" / "SKILL.md"
+    )
+    mirror = _skill_description(ROOT / ".agents" / "skills" / "defect-class-preflight" / "SKILL.md")
+    assert canonical == mirror
+    assert len(canonical) <= 1024
+    assert "new consumer of an existing data surface" in canonical
+    assert "BEFORE the consumer is written" in canonical
+
+
+def test_project_mcp_context7_registration_is_pinned() -> None:
+    """Config-contract witness for the context7 registration the preflight
+    skill's external-SDK rung names: the project .mcp.json must carry the
+    server, version-pinned (an unpinned `npx -y` resolves whatever the
+    registry serves — the supply-chain finding this pin closed). Presence
+    and pin shape only; server liveness is witnessed at registration time,
+    not in CI."""
+    mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+    context7 = mcp["mcpServers"]["context7"]
+    assert context7["command"] == "npx"
+    assert any(
+        re.fullmatch(r"@upstash/context7-mcp@\d+\.\d+\.\d+", arg) for arg in context7["args"]
+    )
