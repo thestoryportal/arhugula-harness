@@ -788,9 +788,35 @@ def _record_detection(payload: dict) -> str:
         for r in site:
             if r.get("record_kind") == "finding_adjudication":
                 last_disposition[r["finding_id"]] = r.get("disposition")
-        if any(last_disposition.get(r["finding_id"]) in ("rejected", "suppressed") for r in mine):
-            outcome[0] = "adjudicated"
-            return []
+
+        # Suppression requires a FINDING row's lineage (a bare adjudication row --
+        # e.g. appended raw, bypassing the write-time unknown-id rejection -- is not
+        # a lineage), and both halves must pass fr.validate so a crude forgery
+        # (missing fields, self-disposition) cannot mute a hard detection. Named
+        # residual: a FULLY schema-valid forged pair still passes -- raw write access
+        # to the log file is the trust boundary, enforced by the record layer's
+        # locked append, not re-derivable at read time.
+        def _validated(r: dict) -> bool:
+            try:
+                fr.validate(r)
+            except Exception:
+                return False
+            return True
+
+        for r in mine:
+            if r.get("record_kind") != "finding":
+                continue
+            if last_disposition.get(r["finding_id"]) not in ("rejected", "suppressed"):
+                continue
+            adjs = [
+                a
+                for a in site
+                if a.get("record_kind") == "finding_adjudication"
+                and a.get("finding_id") == r["finding_id"]
+            ]
+            if _validated(r) and adjs and _validated(adjs[-1]):
+                outcome[0] = "adjudicated"
+                return []
         if any(r.get("record_kind") == "finding" for r in mine):
             outcome[0] = "recorded"
             return []
@@ -931,6 +957,9 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
     (`_reservation_heads` via `_emitting_detections`)."""
     out: list[Finding] = []
     for h in heads:
+        # An open head with pr=None is LEGITIMATE pre-back-fill state (reserve mints
+        # pr null; ship-pr back-fills it) -- skipping the PR query for it is correct,
+        # not a corruption swallow (adjudicated against codex r9).
         pr_state = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
         if pr_state in ("MERGED", "CLOSED"):
             # Revalidate against the CURRENT generation before the durable emission: the
@@ -1069,15 +1098,22 @@ def _door_lease_strict() -> dict | None:
     if md.LEASE.is_symlink():
         # read_lease() follows the link; a forged target must not feed the checks.
         raise RuntimeError("merge-door LEASE is a symlink -- refused (containment)")
+    if md.LEASE.exists() and not md.LEASE.is_file():
+        raise RuntimeError("merge-door LEASE is not a regular file -- refused (containment)")
+    # Containment BEFORE read_lease() (codex r9): read_lease itself follows and READS
+    # the sidecars, so a symlinked or non-regular (e.g. FIFO) blocked sidecar must be
+    # refused before anything opens it -- an open() on a FIFO hangs the guard. The
+    # glob needs no lease token, so no chicken-and-egg read of the payload.
+    if md.DOOR.is_dir():
+        for blk in md.DOOR.glob("LEASE.*.blocked"):
+            if blk.is_symlink() or not blk.is_file():
+                raise RuntimeError(
+                    f"merge-door blocked sidecar {blk.name!r} is not a regular file "
+                    "-- refused (containment)"
+                )
     lease = md.read_lease()
     if lease is None and md.LEASE.exists():
         raise RuntimeError("merge-door LEASE present but unreadable -- corrupt door state")
-    if lease and lease.get("state") == "blocked":
-        blk = md._sidecar(lease["lease_token"], "blocked")
-        if blk.is_symlink():
-            # A symlinked blocked sidecar could carry a manipulated timestamp that
-            # keeps the stale-lease detection permanently below its bound.
-            raise RuntimeError("merge-door blocked sidecar is a symlink -- refused (containment)")
     return lease
 
 
@@ -1091,7 +1127,9 @@ def _blocked_lease_older_than_bound() -> dict | None:
         return None
     blocked_at = lease.get("blocked_at")  # ISO sidecar value merged in by md.read_lease()
     if blocked_at is None:
-        return None
+        # A blocked lease ALWAYS carries blocked_at (merge_door.mark_blocked writes
+        # it); its absence is malformed authoritative state, never "not stale".
+        raise RuntimeError("blocked lease missing blocked_at -- malformed door state")
     age_s = (
         datetime.now(timezone.utc)  # noqa: UP017 - /usr/bin/python3 is pre-3.11 on macOS
         - datetime.strptime(blocked_at, "%Y-%m-%dT%H:%M:%SZ").replace(
@@ -1273,7 +1311,22 @@ def validate(
                 )
             )
         else:
-            findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
+            suite = _emitting_detections_dispatch(state.root, _lane_id())
+            findings.extend(suite)
+            if suite and not state.is_linked_worktree:
+                # Same-run disclosure (codex r9): `state` was derived before the
+                # suite ran, so durable rows just appended are not in status_entries
+                # -- say so now rather than letting the next run discover its own
+                # predecessor's write as a hard isolation failure.
+                findings.append(
+                    Finding(
+                        "warn",
+                        "GATE_LOG_PENDING_COMMIT",
+                        "detections appended durable rows to the tracked gate log in "
+                        "this root checkout; commit them (the next arc's ship or a "
+                        "direct commit) before the next guard run.",
+                    )
+                )
 
     if state.status_entries and not state.is_linked_worktree:
         findings.append(

@@ -1739,3 +1739,60 @@ def test_symlinked_blocked_sidecar_refused(tmp_path, monkeypatch) -> None:
         assert "sidecar" in str(exc)
     else:
         raise AssertionError("a symlinked blocked sidecar must refuse")
+
+
+def test_bare_forged_adjudication_does_not_suppress(tmp_path, monkeypatch) -> None:
+    """A standalone adjudication row appended raw (no finding lineage) must not mute a
+    hard detection -- suppression requires a validated finding row PLUS its validated
+    adjudication (codex r9)."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+    evidence = (
+        f"merge {'m' * 12} first parent {'b' * 12} != verified base {'c' * 12} -- "
+        "race window hit; re-validate"
+    )
+    forged = {
+        "finding_id": f"BASE_TOCTOU:nohead:{fr.location_hash('merge-' + 'm' * 12)}:1",
+        "record_kind": "finding_adjudication",
+        "ts": "2099-01-01T00:00:00Z",
+        "arc_id": "merge-" + "m" * 12,
+        "lane_id": "l",
+        "location": "merge-" + "m" * 12,
+        "observed_evidence": evidence,
+        "expected_contract": "C-HE-12",
+        "severity": "hard",
+        "finding_type": "terminal-base_toctou",
+        "lineage_claim": "guard",
+        "producer": "BASE_TOCTOU",
+        "head_sha": None,
+        "base_sha": None,
+        "diff_digest": None,
+        "round_n": None,
+        "cause_attribution": "base_toctou",
+        "disposition": "suppressed",
+        "disposition_actor": "operator",
+        "unique_catch": None,
+    }
+    log.write_text(json.dumps(forged) + "\n", encoding="utf-8")
+
+    fs = cg.check_base_toctou(mismatch, lane_id="l")
+
+    assert [f.code for f in fs] == ["BASE_TOCTOU"]  # the forgery muted nothing
+
+
+def test_blocked_lease_missing_blocked_at_raises(monkeypatch) -> None:
+    """A blocked lease always carries blocked_at (mark_blocked writes it); absence is
+    malformed door state, never 'not stale'."""
+    import merge_door as md
+
+    monkeypatch.setattr(
+        cg, "_door_lease_strict", lambda: {"state": "blocked", "pr": 5, "lease_token": "t"}
+    )
+    monkeypatch.setattr(md, "POST_MERGE_CI_BOUND_S", 1)
+
+    try:
+        cg._blocked_lease_older_than_bound()
+    except RuntimeError as exc:
+        assert "blocked_at" in str(exc)
+    else:
+        raise AssertionError("missing blocked_at must raise, not read as not-stale")
