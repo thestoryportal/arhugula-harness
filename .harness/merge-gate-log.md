@@ -679,3 +679,10 @@ B-206) rather than unaddressed defects.
 | 2026-08-25T13:33:56Z | #1454 | c652da3f9587 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r5 |
 | 2026-08-25T13:33:56Z | #1454 | c652da3f9587 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r5 |
 | 2026-08-25 | PR #1454 | feat/u-he-33-emitting-detections | 6 gate rounds: r1 conc-BLOCK/spec-APPROVE/wit-BLOCK; r2 conc-APPROVE/spec-BLOCK/wit-BLOCK; r3 spec-APPROVE/conc-BLOCK/wit-BLOCK; r4 spec-BLOCK/wit-APPROVE/conc-superseded; r5 all-BLOCK (missing-wrap tree state; verdicts unrecorded, files overwritten by r6); r6 ALL-APPROVE | outcome: MERGE | blast-radius: 10 production consumers enumerated (graft + grep; validate-name ambiguous in graph, floor not ceiling) |
+| 2026-08-25T18:37:19Z | #1456 | 1957523db5e3 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-25T18:43:03Z | #1456 | 1957523db5e3 | merge-gate-spec-conformance | BLOCK | 2 finding(s) | r1 |
+| 2026-08-25T18:43:23Z | #1456 | 1957523db5e3 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-08-25T19:03:43Z | #1456 | 2fbb29ba33fc | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-25T19:07:37Z | #1456 | 2fbb29ba33fc | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-08-25T19:07:38Z | #1456 | 2fbb29ba33fc | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-25 | PR #1456 | feat/b-215-deterministic-review-loop | 2 gate rounds: r1 (head 1957523db) conc-APPROVE / spec-BLOCK (P1 C-HE-21 §1 no-cap conflict + P3 stale heading) / wit-BLOCK (2 P2: cross-arc scoping unwitnessed; agy env hermeticity); absorbed as the operator-ratified Spec_HE_Loop_Lanes v1.5 X5 checkpoint carve-out + clearance marker, the cross-arc mutation witnesses, and the autouse delenv; r2 (head 2fbb29ba3) ALL-APPROVE | outcome: MERGE (all-approve, CI-green precondition) | blast-radius: compute_binding consumers enumerated via graft grep (agy_review.gemini_binding, codex_review._binding/_run_gemini_failover, merge_gate_log.lens_binding) + wrapper/guard/preflight-script consumers pasted into all three lens prompts; floor-not-ceiling caveat stated |
