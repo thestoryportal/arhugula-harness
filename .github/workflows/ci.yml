@@ -557,7 +557,11 @@ jobs:
     # introduces it. A kind-less row predates `record_kind` and IS an arc row (mirrors
     # check_split_brain). The `jq empty` line makes a corrupt ledger fail loud — the
     # default runner shell has no pipefail, so a jq parse error inside the pipeline
-    # would otherwise read as "no duplicates".
+    # would otherwise read as "no duplicates". The C-HE-12 emit-not-just-gate contract
+    # binds the SPEC'd venue (every push to main), where the codex-context-guard job's
+    # check mode dispatches the emitting detections; this PR-venue run is a pure
+    # superset GATE added for main_protection compatibility, not an emission venue
+    # (adjudicated codex r13).
     name: split-brain ledger backstop — blocking
     runs-on: ubuntu-latest
     steps:

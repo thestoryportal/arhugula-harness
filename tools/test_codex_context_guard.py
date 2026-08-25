@@ -1145,6 +1145,8 @@ def test_unavailable_open_prs_are_explicit_warning() -> None:
 
 # --- U-HE-33: emitting detections (C-HE-12) ---------------------------------
 
+from datetime import UTC  # noqa: E402  -- section-local import, same posture as fr below
+
 import finding_record as fr  # noqa: E402  -- shares the tools/ sys.path insert above
 
 
@@ -1550,10 +1552,11 @@ def test_gh_failure_raises_not_not_merged(monkeypatch) -> None:
         raise AssertionError("a failed gh query must raise, not read as open")
 
 
-def test_dirty_root_checkout_skips_suite_with_hard_finding(monkeypatch) -> None:
-    """Isolation before emission (codex r6): on a dirty ROOT checkout the suite does
-    not run at all (it must not append into already-rejected state) and the skip is a
-    HARD finding alongside ROOT_CHECKOUT_EDIT; a linked worktree still runs it."""
+def test_dirty_checkout_skips_suite_with_hard_finding(monkeypatch) -> None:
+    """Isolation before emission (codex r6, widened r13): on ANY dirty default-branch
+    checkout the suite does not run (a dirty linked worktree's uncommitted gate-log
+    edit would otherwise be trusted as the suppression authority); a dirty ROOT
+    checkout also reports ROOT_CHECKOUT_EDIT; a clean checkout runs the suite."""
     calls: list[str] = []
     monkeypatch.setattr(
         cg, "_emitting_detections_dispatch", lambda root, lane: calls.append("ran") or []
@@ -1571,7 +1574,12 @@ def test_dirty_root_checkout_skips_suite_with_hard_finding(monkeypatch) -> None:
     assert any(f.code == "DETECTIONS_UNAVAILABLE" and f.severity == "hard" for f in findings)
     assert any(f.code == "ROOT_CHECKOUT_EDIT" and f.severity == "hard" for f in findings)
 
-    clean_worktree = _state(branch="main", status_entries=[" M x.py"], changed_files=["x.py"])
+    dirty_worktree = _state(branch="main", status_entries=[" M x.py"], changed_files=["x.py"])
+    findings = cg.validate(dirty_worktree, mode="check")
+    assert calls == []
+    assert any(f.code == "DETECTIONS_UNAVAILABLE" and f.severity == "hard" for f in findings)
+
+    clean_worktree = _state(branch="main")
     cg.validate(clean_worktree, mode="check")
     assert calls == ["ran"]
 
@@ -1849,3 +1857,28 @@ def test_core_mutated_adjudication_does_not_suppress(tmp_path, monkeypatch) -> N
         fh.write(json.dumps(forged) + "\n")
 
     assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="l")] == ["BASE_TOCTOU"]
+
+
+def test_blocked_lease_age_arithmetic_uses_real_bounds(monkeypatch) -> None:
+    """The age comparison itself, against the real POST_MERGE_CI_BOUND_S +
+    REFRESH_BOUND_S constants (codex r13: stubbing the whole helper left the
+    arithmetic unexercised)."""
+
+    def lease_at(ts):
+        return {
+            "state": "blocked",
+            "pr": 5,
+            "lease_token": "tok",
+            "reservation_id": "u-x",
+            "blocked_at_sha": "d" * 40,
+            "blocked_at": ts,
+        }
+
+    monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_at("1970-01-01T00:00:00Z"))
+    assert cg._blocked_lease_older_than_bound()["pr"] == 5  # far past the bound
+
+    from datetime import datetime, timedelta
+
+    recent = (datetime.now(UTC) - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_at(recent))
+    assert cg._blocked_lease_older_than_bound() is None  # within the bound

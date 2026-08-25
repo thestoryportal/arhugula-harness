@@ -1348,12 +1348,15 @@ def validate(
         # clean root checkout a fired detection's append then stands as a loud pending
         # edit for the next arc (or the operator) to commit -- an earlier pathname
         # exemption for that write was RETRACTED as an unprovenanced bypass surface.
-        if state.status_entries and not state.is_linked_worktree:
+        if state.status_entries:
+            # ANY dirty default-branch checkout (codex r13): in a linked worktree an
+            # uncommitted gate-log edit would otherwise be trusted as the suppression
+            # authority -- the suite runs only against committed, clean state.
             findings.append(
                 _detections_unavailable(
                     _lane_id(),
-                    "root checkout has pending edits; the suite must not append into "
-                    "that state -- commit or clean first",
+                    "checkout has pending edits; the suite must not run against "
+                    "uncommitted state -- commit or clean first",
                 )
             )
         else:
@@ -1361,7 +1364,7 @@ def validate(
             size_before = log.stat().st_size if log.exists() else 0
             findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
             size_after = log.stat().st_size if log.exists() else 0
-            if size_after > size_before and not state.is_linked_worktree:
+            if size_after > size_before:
                 # Same-run disclosure (codex r9), keyed to an ACTUAL append (codex
                 # r10: a nonempty suite does not imply one -- unattributed-info and
                 # emit-once recalls write nothing): `state` was derived before the
