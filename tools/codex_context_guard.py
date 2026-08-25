@@ -616,7 +616,28 @@ def _gate_log_append_only(root: Path) -> bool:
     if not line:
         return True  # no pending change at all
     fields = line.split("\t")
-    return len(fields) >= 2 and fields[1] == "0" and fields[0] != "-"
+    if len(fields) < 2 or fields[1] != "0" or fields[0] == "-":
+        return False
+    # Append-shaped is necessary, not sufficient: every appended line must also be a
+    # schema-shaped record row, so a stray manual append (or crude forgery) stays
+    # ROOT_CHECKOUT_EDIT material. Named residual: a fully schema-shaped forged row
+    # passes this structural check -- write provenance belongs to the record layer's
+    # locked append, not a status-time diff.
+    diff = _run(["git", "diff", "-U0", "--", GATE_LOG_REL], cwd=root)
+    if diff.returncode != 0:
+        return False
+    added = [
+        ln[1:] for ln in diff.stdout.splitlines() if ln.startswith("+") and not ln.startswith("+++")
+    ]
+    required = {"finding_id", "record_kind", "ts", "producer", "lane_id"}
+    for ln in added:
+        try:
+            row = json.loads(ln)
+        except ValueError:
+            return False
+        if not isinstance(row, dict) or not required.issubset(row):
+            return False
+    return True
 
 
 def _has_design_impl_mix(files: list[str]) -> bool:
@@ -852,12 +873,16 @@ def _record_detection(payload: dict) -> str:
 
 def _detection(
     code: str, evidence: str, *, lane_id: str, arc_id: str, severity: str = "hard"
-) -> Finding | None:
-    """C-HE-12 §3: a detection EMITS a lane-attributed C-HE-24 row and returns the 3-field
-    `Finding` projection for the CI surface -- or None when the operator has already
-    adjudicated this exact observation (the durable recovery path; see
-    `_record_detection`). A record failure degrades to a loud stderr note with the
-    projection still surfacing -- the detection is never swallowed with the write.
+) -> list[Finding]:
+    """C-HE-12 §3: a detection EMITS a lane-attributed C-HE-24 row and returns the
+    3-field `Finding` projection for the CI surface -- [] when the operator's
+    adjudication recalls this exact observation (see `_record_detection`). The
+    projection's code/message shape (spec-named code, lane-prefixed evidence) is the
+    plan's own U-HE-33 projection sketch; row and projection are built from ONE
+    payload, and the round-trip test pins the stored row's §3 severity projection to
+    the returned severity. A record write failure surfaces BOTH the projection AND a
+    hard DETECTIONS_UNAVAILABLE -- a required C-HE-24 emission that did not land must
+    never leave the run exiting 0 (warn-severity detections would otherwise mask it).
     (Venues whose interpreter cannot import the record/store layer never reach this
     function in-process: `_emitting_detections_dispatch` routes the whole detection
     block through `uv run` there.)"""
@@ -868,14 +893,20 @@ def _detection(
         "arc_id": arc_id,
         "severity": severity,
     }
+    projection = Finding(severity, code, f"[{lane_id}] {evidence}")
     try:
         outcome = _record_detection(payload)
-    except Exception as exc:  # the Finding must still surface on a failed write
+    except Exception as exc:
         print(f"guard: finding row not written ({exc})", file=sys.stderr)
-        outcome = "unrecorded"
+        return [
+            projection,
+            _detections_unavailable(
+                lane_id, f"the C-HE-24 row for {code} at {arc_id} was not written ({exc})"
+            ),
+        ]
     if outcome == "adjudicated":
-        return None
-    return Finding(severity, code, f"[{lane_id}] {evidence}")
+        return []
+    return [projection]
 
 
 def check_split_brain(ledger: Path, *, lane_id: str) -> list[Finding]:
@@ -902,40 +933,43 @@ def check_split_brain(ledger: Path, *, lane_id: str) -> list[Finding]:
         if a in seen:
             dup.add(a)
         seen.add(a)
-    found = [
-        _detection(
-            "SPLIT_BRAIN_LEDGER",
-            f"duplicate arc_id in arc-metrics.jsonl: {a}",
-            lane_id=lane_id,
-            arc_id=a,
+    out: list[Finding] = []
+    for a in sorted(dup):
+        out.extend(
+            _detection(
+                "SPLIT_BRAIN_LEDGER",
+                f"duplicate arc_id in arc-metrics.jsonl: {a}",
+                lane_id=lane_id,
+                arc_id=a,
+            )
         )
-        for a in sorted(dup)
-    ]
-    return [f for f in found if f is not None]
+    return out
 
 
 def check_base_toctou(merges: list[tuple[str, str, str]], *, lane_id: str) -> list[Finding]:
     """§9 row 7: a landing's first parent MUST equal the base the merge door verified --
     a mismatch is positive proof the race window was hit (C-HE-12 §2), never silence."""
-    found = [
-        _detection(
-            "BASE_TOCTOU",
-            f"merge {m[:12]} first parent {fp[:12]} != verified base {vb[:12]} -- "
-            "race window hit; re-validate",
-            lane_id=lane_id,
-            arc_id=f"merge-{m[:12]}",
+    out: list[Finding] = []
+    for m, fp, vb in merges:
+        if fp == vb:
+            continue
+        out.extend(
+            _detection(
+                "BASE_TOCTOU",
+                f"merge {m[:12]} first parent {fp[:12]} != verified base {vb[:12]} -- "
+                "race window hit; re-validate",
+                lane_id=lane_id,
+                arc_id=f"merge-{m[:12]}",
+            )
         )
-        for m, fp, vb in merges
-        if fp != vb
-    ]
-    return [f for f in found if f is not None]
+    return out
 
 
 def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Finding]:
     """§9 row 4: an `open` head whose PR is MERGED/CLOSED without a terminal transition,
     or a `blocked` lease older than its bound. `heads` is the suite's ONE store scan
     (`_reservation_heads` via `_emitting_detections`)."""
-    out: list[Finding | None] = []
+    out: list[Finding] = []
     for h in heads:
         pr_state = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
         if pr_state in ("MERGED", "CLOSED"):
@@ -947,7 +981,7 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
             fresh = _reservation_head_current(h["arc_id"])
             if not fresh or fresh.get("state") != "open" or fresh.get("pr") != h["pr"]:
                 continue
-            out.append(
+            out.extend(
                 _detection(
                     "ORPHANED_RESERVATION",
                     f"{h['arc_id']}: open reservation but PR #{h['pr']} is {pr_state}",
@@ -958,7 +992,7 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
             )
     lease = _blocked_lease_older_than_bound()
     if lease:
-        out.append(
+        out.extend(
             _detection(
                 "ORPHANED_RESERVATION",
                 f"blocked lease for pr #{lease['pr']} older than its bound",
@@ -967,7 +1001,7 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
                 severity="warn",
             )
         )
-    return [f for f in out if f is not None]
+    return out
 
 
 def _reservation_heads() -> tuple[list[dict], list[str]]:
@@ -1027,12 +1061,25 @@ def _gh_pr_state(pr: int) -> str:
     return state
 
 
+def _door_lease_strict() -> dict | None:
+    """None means genuinely no lease. read_lease() maps a PRESENT-but-corrupt LEASE
+    file to None too, so re-distinguish here and raise (dispatch -> hard finding):
+    corrupt live door state must not read as absence. The exists() re-check races
+    only with a legitimate concurrent lease transition, observed by the next run."""
+    import merge_door as md
+
+    lease = md.read_lease()
+    if lease is None and md.LEASE.exists():
+        raise RuntimeError("merge-door LEASE present but unreadable -- corrupt door state")
+    return lease
+
+
 def _blocked_lease_older_than_bound() -> dict | None:
     """A malformed or unreadable lease/sidecar propagates to the dispatch boundary --
     it must not suppress the stale-blocked-lease check by reading as absence."""
     import merge_door as md
 
-    lease = md.read_lease()
+    lease = _door_lease_strict()
     if not lease or lease.get("state") != "blocked":
         return None
     blocked_at = lease.get("blocked_at")  # ISO sidecar value merged in by md.read_lease()
@@ -1093,12 +1140,19 @@ def _unblock_attested_shas() -> set[str]:
     finding_adjudication (`_record_detection`) retires it permanently."""
     import merge_door as md
 
+    # Same containment posture as reservations_root(): the attested set SUPPRESSES a
+    # hard detection, so a planted symlink (the door dir itself or a record file)
+    # must refuse rather than feed forged `unblocked_from` shas into the walk.
+    if md.DOOR.is_symlink():
+        raise RuntimeError("merge-door dir is a symlink -- refused (containment)")
     records: list[dict] = []
-    lease = md.read_lease()
+    lease = _door_lease_strict()
     if lease:
         records.append(lease)
     for prefix in ("released", "reclaimed"):
         for p in md.DOOR.glob(f"{prefix}.*"):
+            if p.is_symlink():
+                raise RuntimeError(f"door record {p.name!r} is a symlink -- refused (containment)")
             try:
                 rec = json.loads(p.read_text())
             except (OSError, ValueError) as exc:

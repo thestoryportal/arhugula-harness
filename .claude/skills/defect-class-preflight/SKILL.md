@@ -69,7 +69,13 @@ semantics — not the schema you assume, the semantics the writers actually impl
 can it be null? absent entirely (older rows, optional emit paths)? partially
 written — what does a mid-crash write leave on disk? what provenance / generation /
 versioning does it carry, and must the consumer honor it? which `C-*` contract (if
-any) governs it? Instruments: `graft callers` / `graft grep` on the producer symbol
+any) governs it? Two dimensions field-level inventories measurably miss (u-he-33,
+2 P1s): **venue semantics** — which interpreters/venues can IMPORT or reach the
+producer module at all (a 3.12-only producer consumed from a stdlib-3.9 venue
+silently no-ops every downstream check), and **lifecycle semantics** — where the
+data goes when its carrier ends (a lease's `unblocked_from` had to be found again
+in the moved-aside `released.*` records after release; the live object is not the
+record's whole life). Instruments: `graft callers` / `graft grep` on the producer symbol
 to read every WRITER's semantics — the meta-rule's blast-radius pass, pointed the
 other way — and `just overlay-query` for the `C-*`/`U-*` contract cites. Record the
 answers in a TABLE, field × semantics. That table IS the test matrix — and the unit
@@ -149,7 +155,15 @@ skill.)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the
 primary path fails, an empty result indistinguishable from "could not look". Ask of
 every error path: *if this fails at 3 a.m., does anyone find out, and does "empty"
-mean empty or unlooked?* A gate that can't tell those apart must fail loud.
+mean empty or unlooked?* A gate that can't tell those apart must fail loud. The
+shape that got past this wording for THREE consecutive review rounds (u-he-33): a
+helper whose `except`/error arm returns the success-shaped empty (`return []`,
+`return None`, `return set()`) — every one of those is this class wearing a return
+statement; route the failure to ONE loud enforcement point instead. Rider for
+DETECTION/ENFORCEMENT surfaces: any input that can SUPPRESS a check (an attestation
+set, an exemption list, an allowlist, a dedupe key) is itself attack surface —
+sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
+forged entries) before trusting it to mute anything.
 
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
