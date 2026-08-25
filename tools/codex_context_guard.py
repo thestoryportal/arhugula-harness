@@ -742,44 +742,113 @@ def _lane_id() -> str:
     return os.environ.get("HARNESS_LANE_ID") or "ci"
 
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _record_detection(payload: dict) -> str:
+    """Emit-once against the C-HE-24 log, with the log's own adjudication lineage as the
+    durable recovery attestation. Returns the outcome token:
+
+    - ``adjudicated`` -- the site (producer x location) carries a `finding_adjudication`
+      row: the operator already disposed this detection (C-HE-24 §5), so the guard must
+      not re-raise it on every later check (the merge-door `unblocked_from` lease
+      attestation is transient; the adjudication row is the durable half).
+    - ``recorded`` -- an identical observation already sits in the log; no duplicate
+      append, the projection still surfaces.
+    - ``appended`` -- a new observation was appended, id minted under the log lock by
+      `append_observation` (never a hand-built ordinal: a rerun re-minting the same id
+      with drifted evidence would be rejected as a core mutation, C-HE-24 §4).
+
+    The pre-append read is deliberately outside the append lock: the worst race outcome
+    is two distinct-id rows with identical content, which the reducer collapses; the
+    append itself stays a single locked critical section."""
+    import finding_record as fr
+
+    code, arc_id, evidence = payload["code"], payload["arc_id"], payload["evidence"]
+    prior = [r for r in fr.read_rows() if r.get("producer") == code and r.get("location") == arc_id]
+    if any(r.get("record_kind") == "finding_adjudication" for r in prior):
+        return "adjudicated"
+    if any(r.get("observed_evidence") == evidence for r in prior):
+        return "recorded"
+    fr.append_observation(
+        {
+            "location": arc_id,
+            "observed_evidence": evidence,
+            "expected_contract": "C-HE-12",
+            "severity": payload["severity"],
+            "finding_type": f"{_FAIL_CLASS_BY_SEVERITY[payload['severity']]}{code.lower()}",
+            "lineage_claim": "guard",
+            "producer": code,
+        },
+        fr.Envelope(
+            "finding",
+            fr.now_iso(),
+            arc_id,
+            payload["lane_id"],
+            None,
+            None,
+            None,
+            None,
+            cause_attribution=code.lower(),
+        ),
+    )
+    return "appended"
+
+
+def _record_detection_via_uv(payload: dict) -> str:
+    """The stdlib-only venues (the justfile's `/usr/bin/python3` recipes, the CI runtime
+    step) cannot import the record layer's third-party deps in-process; `uv run` reaches
+    the workspace env that can (the CI guard job syncs it before the runtime check). The
+    child inherits HARNESS_GATE_LOG, so the redirect seam holds across the boundary."""
+    driver = (
+        "import json, sys; sys.path.insert(0, 'tools'); "
+        "import codex_context_guard as cg; "
+        "print(cg._record_detection(json.load(sys.stdin)))"
+    )
+    try:
+        p = subprocess.run(
+            ["uv", "run", "python", "-c", driver],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=_REPO_ROOT,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"guard: finding row not written (uv fallback: {exc})", file=sys.stderr)
+        return "unrecorded"
+    if p.returncode != 0:
+        err = p.stderr.strip().splitlines()[-1] if p.stderr.strip() else f"rc={p.returncode}"
+        print(f"guard: finding row not written (uv fallback: {err})", file=sys.stderr)
+        return "unrecorded"
+    return p.stdout.strip() or "unrecorded"
+
+
 def _detection(
     code: str, evidence: str, *, lane_id: str, arc_id: str, severity: str = "hard"
-) -> Finding:
+) -> Finding | None:
     """C-HE-12 §3: a detection EMITS a lane-attributed C-HE-24 row and returns the 3-field
-    `Finding` projection for the CI surface. The runtime check stays runnable under
-    stdlib-only python3 (the CI job's `/usr/bin/python3` invocation), so the record layer
-    is imported lazily; an unavailable or refusing record layer degrades to a loud stderr
-    note and the projection still surfaces -- the detection is never swallowed with it."""
+    `Finding` projection for the CI surface -- or None when the operator has already
+    adjudicated the site (the durable recovery path; see `_record_detection`). A record
+    layer that cannot import in-process falls over to `uv run`; any other record failure
+    degrades to a loud stderr note with the projection still surfacing -- the detection
+    is never swallowed with the write."""
+    payload = {
+        "code": code,
+        "evidence": evidence,
+        "lane_id": lane_id,
+        "arc_id": arc_id,
+        "severity": severity,
+    }
     try:
-        import finding_record as fr
-
-        core = fr.FindingCore(
-            fr.make_finding_id(code, "nohead", arc_id, 0),
-            arc_id,
-            evidence,
-            "C-HE-12",
-            severity,
-            f"{_FAIL_CLASS_BY_SEVERITY[severity]}{code.lower()}",
-            "guard",
-            code,
-        )
-        row = fr.make_row(
-            core,
-            fr.Envelope(
-                "finding",
-                fr.now_iso(),
-                arc_id,
-                lane_id,
-                None,
-                None,
-                None,
-                None,
-                cause_attribution=code.lower(),
-            ),
-        )
-        fr.append_row(row)
+        outcome = _record_detection(payload)
+    except ImportError:
+        outcome = _record_detection_via_uv(payload)
     except Exception as exc:  # the Finding must still surface on a failed write
         print(f"guard: finding row not written ({exc})", file=sys.stderr)
+        outcome = "unrecorded"
+    if outcome == "adjudicated":
+        return None
     return Finding(severity, code, f"[{lane_id}] {evidence}")
 
 
@@ -807,7 +876,7 @@ def check_split_brain(ledger: Path, *, lane_id: str) -> list[Finding]:
         if a in seen:
             dup.add(a)
         seen.add(a)
-    return [
+    found = [
         _detection(
             "SPLIT_BRAIN_LEDGER",
             f"duplicate arc_id in arc-metrics.jsonl: {a}",
@@ -816,12 +885,13 @@ def check_split_brain(ledger: Path, *, lane_id: str) -> list[Finding]:
         )
         for a in sorted(dup)
     ]
+    return [f for f in found if f is not None]
 
 
 def check_base_toctou(merges: list[tuple[str, str, str]], *, lane_id: str) -> list[Finding]:
     """§9 row 7: a landing's first parent MUST equal the base the merge door verified --
     a mismatch is positive proof the race window was hit (C-HE-12 §2), never silence."""
-    return [
+    found = [
         _detection(
             "BASE_TOCTOU",
             f"merge {m[:12]} first parent {fp[:12]} != verified base {vb[:12]} -- "
@@ -832,12 +902,13 @@ def check_base_toctou(merges: list[tuple[str, str, str]], *, lane_id: str) -> li
         for m, fp, vb in merges
         if fp != vb
     ]
+    return [f for f in found if f is not None]
 
 
 def check_orphaned_reservations(*, lane_id: str) -> list[Finding]:
     """§9 row 4: an `open` head whose PR is MERGED/CLOSED without a terminal transition,
     or a `blocked` lease older than its bound."""
-    out: list[Finding] = []
+    out: list[Finding | None] = []
     for h in _reservation_heads():
         pr_state = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
         if pr_state in ("MERGED", "CLOSED"):
@@ -861,7 +932,7 @@ def check_orphaned_reservations(*, lane_id: str) -> list[Finding]:
                 severity="warn",
             )
         )
-    return out
+    return [f for f in out if f is not None]
 
 
 def _reservation_heads() -> list[dict]:
@@ -871,15 +942,22 @@ def _reservation_heads() -> list[dict]:
         root = rs.reservations_root()
         if not root.is_dir():
             return []
-        heads = []
-        for d in root.iterdir():
-            if d.is_dir() and not d.name.startswith("."):
-                cur = rs.current(d.name)
-                if cur:
-                    heads.append(cur[1])
-        return heads
+        dirs = [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
     except Exception:  # a missing/unreadable store is "nothing to detect", never a guard crash
         return []
+    heads = []
+    for d in dirs:
+        # Per-entry isolation: one corrupt head must not discard every valid head with
+        # it (that would silently suppress ORPHANED_RESERVATION and de-attribute every
+        # BASE_TOCTOU landing). The bad entry is named on stderr and skipped.
+        try:
+            cur = rs.current(d.name)
+        except Exception as exc:
+            print(f"guard: reservation head {d.name!r} unreadable ({exc})", file=sys.stderr)
+            continue
+        if cur:
+            heads.append(cur[1])
+    return heads
 
 
 def _gh_pr_state(pr: int) -> str | None:
@@ -925,17 +1003,39 @@ def _recent_main_merges(root: Path) -> tuple[list[tuple[str, str, str]], list[st
     if proc.returncode != 0:
         return [], []
     by_merge_sha = {h["merge_sha"]: h for h in _reservation_heads() if h.get("merge_sha")}
+    attested = _unblock_attested_shas()
     merges: list[tuple[str, str, str]] = []
     unattributed: list[str] = []
     for line in proc.stdout.strip().splitlines():
         parts = line.split()
         sha, parents = parts[0], parts[1:]
+        if sha in attested:
+            # The live lease's `unblocked_from` is the operator-keyed re-validation of
+            # exactly this landing (merge_door.unblock) -- re-raising it would wedge the
+            # recovery the operator just approved. The durable half of the same
+            # attestation is the adjudication-recall in `_record_detection`.
+            continue
         head = by_merge_sha.get(sha)
         if head is None or not head.get("base_sha"):
             unattributed.append(sha)
         elif parents:  # a parentless root commit has no first parent to compare
             merges.append((sha, parents[0], head["base_sha"]))
     return merges, unattributed
+
+
+def _unblock_attested_shas() -> set[str]:
+    """Merge shas the operator re-validated through `merge_door.unblock` on the LIVE lease
+    (`unblocked_from` == the sha the door blocked at, which for a BASE_TOCTOU block is the
+    landed merge sha -- merge_door.mark_blocked at the first-parent check)."""
+    try:
+        import merge_door as md
+
+        lease = md.read_lease()
+    except Exception:  # no door state on this host attests nothing
+        return set()
+    if lease and lease.get("unblocked_from"):
+        return {lease["unblocked_from"]}
+    return set()
 
 
 def validate(

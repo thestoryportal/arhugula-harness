@@ -1262,3 +1262,146 @@ def test_check_mode_on_default_branch_runs_detections(monkeypatch) -> None:
     cg.validate(_state(branch="feature"), mode="check")
     cg.validate(_state(branch="main"), mode="preflight")
     assert calls == []
+
+
+def test_detection_emit_once_and_adjudication_recall(tmp_path, monkeypatch) -> None:
+    """Round-2 absorption: a repeated identical detection appends no duplicate row, and a
+    site whose lineage carries a finding_adjudication (the operator's durable recovery
+    attestation, C-HE-24 §5) is recalled -- the detection returns None instead of
+    re-raising the recovered race on every later main check."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+
+    first = cg.check_base_toctou(mismatch, lane_id="l")
+    second = cg.check_base_toctou(mismatch, lane_id="l")
+
+    assert [f.code for f in first] == [f.code for f in second] == ["BASE_TOCTOU"]
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 1  # emit-once: the second identical observation did not re-append
+
+    adjudication = {
+        **rows[0],
+        "record_kind": "finding_adjudication",
+        "ts": "2099-01-01T00:00:00Z",
+        "disposition": "accepted",
+        "disposition_actor": "operator",
+    }
+    fr.append_row(adjudication)
+
+    assert cg.check_base_toctou(mismatch, lane_id="l") == []
+
+
+def test_detection_new_evidence_mints_new_ordinal(tmp_path, monkeypatch) -> None:
+    """Round-2 absorption: ids come from append_observation's locked mint, never a
+    hand-built ordinal -- drifted evidence at one site lands as a NEW observation."""
+    _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
+    )
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    assert [f.code for f in cg.check_orphaned_reservations(lane_id="l")] == ["ORPHANED_RESERVATION"]
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "CLOSED")
+    assert [f.code for f in cg.check_orphaned_reservations(lane_id="l")] == ["ORPHANED_RESERVATION"]
+
+    rows = fr.read_rows()
+    assert len(rows) == 2
+    assert rows[0]["finding_id"] != rows[1]["finding_id"]
+    assert {r["finding_id"].rsplit(":", 1)[1] for r in rows} == {"1", "2"}
+
+
+def test_recent_main_merges_joins_real_git(tmp_path, monkeypatch) -> None:
+    """Round-2 absorption: the production join witnessed against a real git history --
+    a landing whose reservation records merge_sha/base_sha attributes with the commit's
+    actual first parent; a landing with no reservation is reported unattributed."""
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "landed.txt").write_text("landed\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "landing")
+    tip = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(
+        cg,
+        "_reservation_heads",
+        lambda: [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": base}],
+    )
+    monkeypatch.setattr(cg, "_unblock_attested_shas", lambda: set())
+
+    merges, unattributed = cg._recent_main_merges(repo)
+
+    assert merges == [(tip, base, base)]  # first parent read from git == verified base
+    assert unattributed == [base]  # the baseline commit has no reservation
+    assert cg.check_base_toctou(merges, lane_id="l") == []
+
+
+def test_recent_main_merges_skips_unblock_attested_sha(tmp_path, monkeypatch) -> None:
+    """Round-2 absorption: a landing the operator re-validated through merge_door.unblock
+    (live lease `unblocked_from`) is not re-raised as BASE_TOCTOU."""
+    repo = _init_repo(tmp_path)
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "landed.txt").write_text("landed\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "landing")
+    tip = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(
+        cg,
+        "_reservation_heads",
+        lambda: [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": "x" * 40}],
+    )
+    monkeypatch.setattr(cg, "_unblock_attested_shas", lambda: {tip})
+
+    merges, unattributed = cg._recent_main_merges(repo)
+
+    assert merges == []  # the mismatching-but-attested landing is not compared
+    assert unattributed == [base]
+
+
+def test_reservation_heads_survive_one_corrupt_entry(tmp_path, monkeypatch, capsys) -> None:
+    """Round-2 absorption: one unreadable head is named on stderr and skipped; the valid
+    heads survive instead of the whole scan collapsing to []."""
+    import reservations as rs
+
+    store = tmp_path / "reservations"
+    (store / "good-arc").mkdir(parents=True)
+    (store / "bad-arc").mkdir()
+    good = {"arc_id": "good-arc", "state": "open", "pr": 7}
+    monkeypatch.setattr(rs, "reservations_root", lambda: store)
+
+    def fake_current(arc_id):
+        if arc_id == "bad-arc":
+            raise ValueError("corrupt head record")
+        return (1, good)
+
+    monkeypatch.setattr(rs, "current", fake_current)
+
+    heads = cg._reservation_heads()
+
+    assert heads == [good]
+    assert "bad-arc" in capsys.readouterr().err
+
+
+def test_detection_uv_fallback_dispatch_on_import_error(monkeypatch) -> None:
+    """Round-2 absorption: a record layer that cannot import in-process (the stdlib-only
+    /usr/bin/python3 venues) dispatches the SAME payload to the uv fallback, and the
+    projection still surfaces."""
+    calls: list[dict] = []
+
+    def raise_import(payload):
+        raise ImportError("no jsonschema on the system interpreter")
+
+    monkeypatch.setattr(cg, "_record_detection", raise_import)
+    monkeypatch.setattr(cg, "_record_detection_via_uv", lambda p: calls.append(p) or "appended")
+
+    f = cg._detection("BASE_TOCTOU", "ev", lane_id="l", arc_id="merge-abc")
+
+    assert f == cg.Finding("hard", "BASE_TOCTOU", "[l] ev")
+    assert calls == [
+        {
+            "code": "BASE_TOCTOU",
+            "evidence": "ev",
+            "lane_id": "l",
+            "arc_id": "merge-abc",
+            "severity": "hard",
+        }
+    ]
