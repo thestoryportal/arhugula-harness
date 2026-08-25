@@ -216,6 +216,24 @@ def test_a_missing_ledger_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(tmp_path / "absent.jsonl")
 
 
+# mutation-probe(tools/arc_lever_report.py): mark unclassified groups evaluable
+def test_untyped_groups_are_non_evaluable(tmp_path: Path) -> None:
+    """C-HE-26 needs an open-time inventing/applying label; untyped rows have none."""
+    rows = [{k: v for k, v in _row("pr-a", 10, ["B-211", "B-212"]).items() if k != "arc_type"}]
+    rows[0]["arc_type"] = None
+    s = _summary(tmp_path, rows)["arc_types"]["unclassified"]
+    assert s["evaluable_for_lever_decision"] is False
+
+
+# mutation-probe(tools/arc_lever_report.py): classify an absent round_completeness as partial
+def test_legacy_rows_without_completeness_field_stay_evaluable(tmp_path: Path) -> None:
+    """Absent field = the legacy complete shape; only explicit non-complete excludes."""
+    legacy = {k: v for k, v in _row("pr-a", 10, [], p1=[1]).items() if k != "round_completeness"}
+    s = _summary(tmp_path, [legacy, _row("pr-b", 14, [], p1=[2])])["arc_types"]["applying"]
+    assert s["excluded_partial"] == []
+    assert s["baseline_median"]["review_rounds"] == 12.0, "the legacy row must count"
+
+
 # mutation-probe(tools/arc_lever_report.py): pool all treated lever sets into one median
 def test_treated_sub_cohorts_split_by_exact_lever_set(tmp_path: Path) -> None:
     """5x B-211-only fast + 5x B-212-only slow must not pool into a meaningless median."""

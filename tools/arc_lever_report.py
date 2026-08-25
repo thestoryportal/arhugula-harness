@@ -63,8 +63,15 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
         contaminated = arc_type != "unclassified" and r.get("arc_type_declared_at") != "open"
         if contaminated:
             arc_type = f"{arc_type} (close-declared — outcome-contaminated, C-HE-26)"
+        # C-HE-26 requires an UNCONTAMINATED OPEN-TIME inventing/applying label for
+        # the lever decision — an untyped group fails that just as a close-declared
+        # one does (codex r9); both stay descriptively visible, neither evaluable.
         group = out.setdefault(
-            arc_type, {"contaminated": contaminated, "buckets": {b: [] for b in _BUCKETS}}
+            arc_type,
+            {
+                "evaluable": not contaminated and arc_type != "unclassified",
+                "buckets": {b: [] for b in _BUCKETS},
+            },
         )
         buckets = group["buckets"]
         declared = r.get("levers_active")
@@ -81,7 +88,10 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
         )
         if r.get("review_rounds") is None:
             buckets["unmapped"].append(r)
-        elif r.get("round_completeness") != "complete":
+        elif r.get("round_completeness") not in (None, "complete"):
+            # An ABSENT completeness field is the legacy shape the ledger reader
+            # treats as complete — only an explicit non-complete value is a
+            # partial lower bound (codex r9).
             # A partial suffix carries review_rounds as a LOWER BOUND and an
             # unknown P1 count; letting it into a median converts "unknown"
             # into a score (codex r1 on this tool).
@@ -184,9 +194,9 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
         for k, ms in by_pattern.items()
     }
     return {
-        # C-HE-26: a contaminated type label cannot support the n>=5 lever
-        # decision — the numbers stay visible but the group says NON-EVALUABLE.
-        "evaluable_for_lever_decision": not group["contaminated"],
+        # C-HE-26: only an uncontaminated, typed group supports the n>=5 lever
+        # decision — the numbers stay visible but others say NON-EVALUABLE.
+        "evaluable_for_lever_decision": group["evaluable"],
         "pattern_metrics": pattern_metrics,
         "cohort_sizes": {k: len(v) for k, v in buckets.items()},
         "baseline_median": base_median,
@@ -227,8 +237,9 @@ def render(summary: dict[str, Any]) -> str:
         )
         if not s["evaluable_for_lever_decision"]:
             lines.append(
-                "  NON-EVALUABLE for the n>=5 lever decision: close-declared arc-type "
-                "labels are outcome-contaminated (C-HE-26) — numbers are descriptive only"
+                "  NON-EVALUABLE for the n>=5 lever decision: C-HE-26 requires an "
+                "uncontaminated open-time arc-type label (this group is close-declared "
+                "or untyped) — numbers are descriptive only"
             )
         for pat, ps in sorted(s["pattern_metrics"].items()):
             lines.append(
