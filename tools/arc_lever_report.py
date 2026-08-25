@@ -50,19 +50,23 @@ def load_rows(ledger: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def split_cohorts(
-    rows: list[dict[str, Any]], levers: tuple[str, ...]
-) -> dict[str, dict[str, list[dict[str, Any]]]]:
-    """Pure per-arc-type cohort split: {arc_type: {bucket: rows}}."""
-    out: dict[str, dict[str, list[dict[str, Any]]]] = {}
+def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """Pure per-arc-type split: {arc_type: {contaminated: bool, buckets: {bucket: rows}}}."""
+    out: dict[str, dict[str, Any]] = {}
     for r in rows:
         arc_type = r.get("arc_type") or "unclassified"
         # C-HE-26: a close-time arc-type label is outcome-contaminated and cannot
         # support arc-type discrimination (codex r3). Close-declared rows group
-        # under an explicitly contaminated key, never beside open-declared ones.
-        if arc_type != "unclassified" and r.get("arc_type_declared_at") != "open":
+        # under an explicitly contaminated key, never beside open-declared ones —
+        # and the group CARRIES the contamination as data, so evaluation logic
+        # never re-derives it from the key string (codex r6).
+        contaminated = arc_type != "unclassified" and r.get("arc_type_declared_at") != "open"
+        if contaminated:
             arc_type = f"{arc_type} (close-declared — outcome-contaminated, C-HE-26)"
-        buckets = out.setdefault(arc_type, {b: [] for b in _BUCKETS})
+        group = out.setdefault(
+            arc_type, {"contaminated": contaminated, "buckets": {b: [] for b in _BUCKETS}}
+        )
+        buckets = group["buckets"]
         declared = r.get("levers_active")
         # [] is an explicit claim ("no lever was live"); an ABSENT or null field is
         # no claim at all — collapsing them would let structurally incomplete rows
@@ -108,10 +112,9 @@ def _median(values: list[float]) -> float | None:
     return round(statistics.median(values), 1) if values else None
 
 
-def summarize_type(
-    buckets: dict[str, list[dict[str, Any]]], levers: tuple[str, ...]
-) -> dict[str, Any]:
+def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, Any]:
     """Pure summary for one arc type — one JSON-able value."""
+    buckets = group["buckets"]
     treated = [_metrics(r, levers) for r in buckets["treated"]]
     baseline = [_metrics(r, levers) for r in buckets["baseline"]]
     other = [_metrics(r, levers) for r in buckets["other_levers"]]
@@ -162,7 +165,27 @@ def summarize_type(
         for r in buckets[b]
         if any(lv in (r.get("levers_active") or []) for lv in levers)
     )
+    # A treated cohort pooling divergent lever sets evaluates NEITHER lever
+    # (codex r6: 5x B-211-only + 5x B-212-only rows pool to a median that scores
+    # nothing) — per-exact-pattern sub-cohorts are the evaluable unit.
+    by_pattern: dict[str, dict[str, Any]] = {}
+    for m in treated:
+        key = "+".join(sorted(m["levers"])) or "(none)"
+        by_pattern.setdefault(key, []).append(m)
+    treated_by_pattern = {
+        k: {
+            "n": len(ms),
+            "median_rounds": _median([m["review_rounds"] for m in ms]),
+            "median_p1": _median([m["p1_rounds"] for m in ms if m["p1_rounds"] is not None]),
+            "p1_measured_n": sum(1 for m in ms if m["p1_rounds"] is not None),
+        }
+        for k, ms in by_pattern.items()
+    }
     return {
+        # C-HE-26: a contaminated type label cannot support the n>=5 lever
+        # decision — the numbers stay visible but the group says NON-EVALUABLE.
+        "evaluable_for_lever_decision": not group["contaminated"],
+        "treated_by_pattern": treated_by_pattern,
         "cohort_sizes": {k: len(v) for k, v in buckets.items()},
         "baseline_median": base_median,
         "treated_arcs": treated,
@@ -187,7 +210,7 @@ def summarize(
 ) -> dict[str, Any]:
     return {
         "target_levers": list(levers),
-        "arc_types": {t: summarize_type(b, levers) for t, b in sorted(cohorts_by_type.items())},
+        "arc_types": {t: summarize_type(g, levers) for t, g in sorted(cohorts_by_type.items())},
     }
 
 
@@ -205,6 +228,16 @@ def render(summary: dict[str, Any]) -> str:
             f"span_h>={bm['arc_span_h']} (n={bm['measured_n']['arc_span_h']}; span is a "
             f"lower bound: derived excludes first-round duration)"
         )
+        if not s["evaluable_for_lever_decision"]:
+            lines.append(
+                "  NON-EVALUABLE for the n>=5 lever decision: close-declared arc-type "
+                "labels are outcome-contaminated (C-HE-26) — numbers are descriptive only"
+            )
+        for pat, ps in s["treated_by_pattern"].items():
+            lines.append(
+                f"  treated[{pat}]: n={ps['n']} median_rounds={ps['median_rounds']} "
+                f"median_p1={ps['median_p1']} (p1 n={ps['p1_measured_n']})"
+            )
         if s["p1_unmapped"]:
             lines.append(
                 "  p1-unmapped rows (in cohorts, excluded from P1 medians only): "

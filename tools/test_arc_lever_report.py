@@ -215,6 +215,41 @@ def test_a_missing_ledger_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(tmp_path / "absent.jsonl")
 
 
+# mutation-probe(tools/arc_lever_report.py): pool all treated lever sets into one median
+def test_treated_sub_cohorts_split_by_exact_lever_set(tmp_path: Path) -> None:
+    """5x B-211-only fast + 5x B-212-only slow must not pool into a meaningless median."""
+    rows = [_row("pr-base", 10, [], p1=[1])]
+    rows += [_row(f"pr-a{i}", 1, ["B-211"]) for i in range(5)]
+    rows += [_row(f"pr-b{i}", 19, ["B-212"]) for i in range(5)]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["treated_by_pattern"]["B-211"] == {
+        "n": 5,
+        "median_rounds": 1,
+        "median_p1": 0,
+        "p1_measured_n": 5,
+    }
+    assert s["treated_by_pattern"]["B-212"]["median_rounds"] == 19
+
+
+# mutation-probe(tools/arc_lever_report.py): leave contaminated groups evaluable
+def test_contaminated_groups_are_non_evaluable_for_the_lever_decision(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Five close-declared treated rows must NOT satisfy the n>=5 gate (C-HE-26)."""
+    rows = [
+        _row("pr-a", 22, [], p1=[1], declared_at="close"),
+        _row("pr-b", 2, ["B-211", "B-212"], declared_at="close"),
+        _row("pr-c", 9, [], p1=[2]),
+    ]
+    s = _summary(tmp_path, rows)
+    contaminated = s["arc_types"]["applying (close-declared — outcome-contaminated, C-HE-26)"]
+    assert contaminated["evaluable_for_lever_decision"] is False
+    assert s["arc_types"]["applying"]["evaluable_for_lever_decision"] is True
+    ledger = _write(tmp_path / "l2.jsonl", rows)
+    assert alr.main(["--ledger", str(ledger)]) == 0
+    assert "NON-EVALUABLE for the n>=5 lever decision" in capsys.readouterr().out
+
+
 # mutation-probe(tools/arc_lever_report.py): collect contrast patterns from treated rows only
 def test_a_matched_other_lever_contrast_isolates_the_target(tmp_path: Path) -> None:
     """{B-999} vs {B-211,B-999} differs only in B-211 — a valid matched contrast,
