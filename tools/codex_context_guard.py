@@ -728,6 +728,10 @@ def _codex_loop_issues(state: GuardState) -> list[str]:
 # --- U-HE-33: emitting detections (C-HE-12 §1-§3; §9 rows 1, 4, 7) -----------------------
 
 ARC_METRICS_JSONL = Path(".harness/arc-metrics.jsonl")
+#: The C-HE-24 record the detections append to. finding_record.GATE_LOG_JSONL is the
+#: path authority; this rel-path copy exists because the guard's isolation check runs
+#: under interpreters that cannot import finding_record at all.
+GATE_LOG_REL = ".harness/merge-gate-log.jsonl"
 #: How many first-parent landings on the default branch the BASE_TOCTOU re-check walks.
 TOCTOU_LOOKBACK = 10
 #: C-HE-24 §3: `to_guard_finding` derives severity from the fail-class prefix, so the
@@ -770,17 +774,23 @@ def _record_detection(payload: dict) -> str:
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
         site = [r for r in rows if r.get("producer") == code and r.get("location") == arc_id]
-        same_evidence = [r for r in site if r.get("observed_evidence") == evidence]
+        # BOTH the recall and the dedupe are scoped to THIS lane's lineages: C-HE-24
+        # adjudicates one finding_id and keeps lane_id immutable core (§5/§6), so lane
+        # A's disposed finding never stands in for lane B's attribution -- a new lane
+        # re-observing a recovered site appends its own row once (bounded by lane
+        # count) and is disposed on its own lineage.
+        mine = [
+            r
+            for r in site
+            if r.get("observed_evidence") == evidence and r.get("lane_id") == payload["lane_id"]
+        ]
         adjudicated_ids = {
             r["finding_id"] for r in site if r.get("record_kind") == "finding_adjudication"
         }
-        if any(r["finding_id"] in adjudicated_ids for r in same_evidence):
+        if any(r["finding_id"] in adjudicated_ids for r in mine):
             outcome[0] = "adjudicated"
             return []
-        if any(
-            r.get("record_kind") == "finding" and r.get("lane_id") == payload["lane_id"]
-            for r in same_evidence
-        ):
+        if any(r.get("record_kind") == "finding" for r in mine):
             outcome[0] = "recorded"
             return []
         return [
@@ -934,15 +944,17 @@ def check_orphaned_reservations(*, lane_id: str) -> list[Finding]:
 
 
 def _reservation_heads() -> list[dict]:
-    try:
-        import reservations as rs
+    import reservations as rs  # importability is the dispatch boundary's concern
 
-        root = rs.reservations_root()
-        if not root.is_dir():
-            return []
-        dirs = [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
-    except Exception:  # a missing/unreadable store is "nothing to detect", never a guard crash
+    # A store-level refusal MUST propagate (the dispatch converts it to a hard
+    # DETECTIONS_UNAVAILABLE): reservations_root() deliberately rejects a symlinked
+    # store as a containment breach, and swallowing that here would disable orphan
+    # detection and de-attribute every landing exactly when the store is suspect.
+    # Only a genuinely absent store directory means "no reservations yet".
+    root = rs.reservations_root()
+    if not root.is_dir():
         return []
+    dirs = [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
     heads = []
     for d in dirs:
         # Per-entry isolation: one corrupt head must not discard every valid head with
@@ -1010,7 +1022,9 @@ def _recent_main_merges(root: Path) -> tuple[list[tuple[str, str, str]], list[st
     `(merge_sha, first_parent, verified_base)` tuples, unattributed landing shas)."""
     proc = _run(["git", "log", "--first-parent", f"-{TOCTOU_LOOKBACK}", "--format=%H %P"], cwd=root)
     if proc.returncode != 0:
-        return [], []
+        # An unreadable history must not read as a clean backstop -- the dispatch
+        # converts this raise into a hard DETECTIONS_UNAVAILABLE finding.
+        raise RuntimeError(f"git log --first-parent failed: {proc.stderr.strip() or proc.args}")
     by_merge_sha = {h["merge_sha"]: h for h in _reservation_heads() if h.get("merge_sha")}
     attested = _unblock_attested_shas()
     merges: list[tuple[str, str, str]] = []
@@ -1101,11 +1115,17 @@ def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
     but the record and store layers need the uv workspace env (`datetime.UTC`,
     jsonschema). In-process where those import; otherwise the WHOLE suite runs once
     through `uv run` (the CI guard job syncs the env before the runtime check, and the
-    child inherits HARNESS_LANE_ID / HARNESS_GATE_LOG). When even the fallback cannot
-    run, a warn Finding says so -- an empty result must never be indistinguishable from
-    "could not look"."""
+    child inherits HARNESS_LANE_ID / HARNESS_GATE_LOG). This function is the ONE
+    enforcement point for suite unavailability: any failure -- an in-process raise
+    (symlinked store, unreadable git history), a failed fallback, unparseable fallback
+    output -- becomes a HARD `DETECTIONS_UNAVAILABLE` finding, because the guard's
+    blocking CI context must go red when the whole C-HE-12 suite is unexecuted; a warn
+    would leave the gate green on UNLOOKED."""
     if _record_layer_importable():
-        return _emitting_detections(root, lane)
+        try:
+            return _emitting_detections(root, lane)
+        except Exception as exc:
+            return [_detections_unavailable(lane, f"in-process suite raised: {exc}")]
     driver = (
         "import json, sys; sys.path.insert(0, 'tools'); "
         "import codex_context_guard as cg; "
@@ -1121,12 +1141,10 @@ def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
     if proc.returncode != 0:
         reason = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "no stderr"
         return [
-            Finding(
-                "warn",
-                "DETECTIONS_UNAVAILABLE",
-                f"[{lane}] the C-HE-12 detections could not run: this interpreter "
-                f"cannot import the record/store layer and the uv fallback failed "
-                f"({reason}). An empty detection set here means UNLOOKED, not clean.",
+            _detections_unavailable(
+                lane,
+                "this interpreter cannot import the record/store layer and the uv "
+                f"fallback failed ({reason})",
             )
         ]
     try:
@@ -1136,13 +1154,17 @@ def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
         ]
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         return [
-            Finding(
-                "warn",
-                "DETECTIONS_UNAVAILABLE",
-                f"[{lane}] the uv fallback produced unparseable detection output "
-                f"({exc}); treating the suite as UNLOOKED, not clean.",
-            )
+            _detections_unavailable(lane, f"the uv fallback produced unparseable output ({exc})")
         ]
+
+
+def _detections_unavailable(lane: str, reason: str) -> Finding:
+    return Finding(
+        "hard",
+        "DETECTIONS_UNAVAILABLE",
+        f"[{lane}] the C-HE-12 detection suite did not run: {reason}. "
+        "An empty detection set here means UNLOOKED, not clean.",
+    )
 
 
 def validate(
@@ -1160,7 +1182,14 @@ def validate(
         # and preflight/closeout runs never walk the landing history.
         findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
 
-    if state.status_entries and not state.is_linked_worktree:
+    # The guard's own emitting detections (U-HE-33) append to the tracked gate log
+    # from any venue, including a `check` on the root checkout's default branch --
+    # that append-only operational write is a durable record landing where it lives,
+    # not a checkout edit, and must not make the guard's NEXT invocation fail on its
+    # own output (the CODEX_LOOP_STATE exclusion in worktree_fingerprint is the same
+    # posture). Any OTHER entry still trips the isolation check.
+    isolation_entries = [e for e in state.status_entries if e.split()[-1] != GATE_LOG_REL]
+    if isolation_entries and not state.is_linked_worktree:
         findings.append(
             Finding(
                 "hard",

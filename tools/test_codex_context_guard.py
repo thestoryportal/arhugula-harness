@@ -1425,7 +1425,7 @@ def test_dispatch_failure_is_unlooked_not_clean(monkeypatch) -> None:
     findings = cg._emitting_detections_dispatch(Path("/repo"), "l")
 
     assert [f.code for f in findings] == ["DETECTIONS_UNAVAILABLE"]
-    assert findings[0].severity == "warn"
+    assert findings[0].severity == "hard"  # blocking CI must go red on UNLOOKED
     assert "uv: not found" in findings[0].message
 
 
@@ -1507,3 +1507,101 @@ def test_unblock_attestation_survives_lease_release(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(md, "read_lease", lambda: None)
 
     assert cg._unblock_attested_shas() == {"f" * 40}
+
+
+def test_in_process_suite_raise_is_hard_unavailable(monkeypatch) -> None:
+    """Round-4 absorption: a store-level refusal (symlinked store, unreadable history)
+    propagates out of the suite and becomes a HARD finding at the one dispatch
+    enforcement point -- never an empty (clean-looking) result."""
+
+    def raise_store(root, lane):
+        raise RuntimeError("QUEUE_DIR/reservations is a symlink -- refused")
+
+    monkeypatch.setattr(cg, "_record_layer_importable", lambda: True)
+    monkeypatch.setattr(cg, "_emitting_detections", raise_store)
+
+    findings = cg._emitting_detections_dispatch(Path("/repo"), "l")
+
+    assert [f.code for f in findings] == ["DETECTIONS_UNAVAILABLE"]
+    assert findings[0].severity == "hard"
+    assert "symlink" in findings[0].message
+
+
+def test_reservation_store_refusal_propagates(monkeypatch) -> None:
+    """Round-4 absorption: _reservation_heads no longer converts a refused store into
+    an empty one -- the containment failure must reach the dispatch boundary."""
+    import reservations as rs
+
+    def refuse():
+        raise rs.ReservationError("QUEUE_DIR/reservations is a symlink -- refused")
+
+    monkeypatch.setattr(rs, "reservations_root", refuse)
+
+    try:
+        cg._reservation_heads()
+    except rs.ReservationError:
+        pass
+    else:
+        raise AssertionError("a refused store must propagate, not read as empty")
+
+
+def test_failed_git_log_raises_not_clean(tmp_path) -> None:
+    """Round-4 absorption: an unreadable history raises (dispatch -> hard finding)
+    instead of returning an empty, clean-looking merge set."""
+    not_a_repo = tmp_path / "empty"
+    not_a_repo.mkdir()
+
+    try:
+        cg._recent_main_merges(not_a_repo)
+    except RuntimeError as exc:
+        assert "git log" in str(exc)
+    else:
+        raise AssertionError("a failed git log must raise, not report clean")
+
+
+def test_adjudication_is_lane_scoped(tmp_path, monkeypatch) -> None:
+    """Round-4 absorption: lane A's adjudicated lineage does not stand in for lane B --
+    a new lane re-observing the same evidence appends its own lane-attributed row."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-a")] == ["BASE_TOCTOU"]
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    fr.append_row(
+        {
+            **rows[0],
+            "record_kind": "finding_adjudication",
+            "ts": "2099-01-01T00:00:00Z",
+            "disposition": "accepted",
+            "disposition_actor": "operator",
+        }
+    )
+
+    assert cg.check_base_toctou(mismatch, lane_id="lane-a") == []  # lane A: recalled
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-b")] == ["BASE_TOCTOU"]
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    lane_b_rows = [r for r in rows if r.get("lane_id") == "lane-b"]
+    assert len(lane_b_rows) == 1  # lane B's own attribution row landed
+
+
+def test_gate_log_append_is_not_a_root_checkout_edit() -> None:
+    """Round-4 absorption: the guard's own append to the tracked gate log (a durable
+    record landing where it lives) must not trip ROOT_CHECKOUT_EDIT on the next run;
+    any OTHER root-checkout entry still does."""
+    only_log = _state(
+        git_dir=".git",
+        is_linked_worktree=False,
+        status_entries=[" M .harness/merge-gate-log.jsonl"],
+        changed_files=[".harness/merge-gate-log.jsonl"],
+    )
+    findings = cg.validate(only_log, mode="closeout")
+    assert not any(f.code == "ROOT_CHECKOUT_EDIT" for f in findings)
+
+    mixed = _state(
+        git_dir=".git",
+        is_linked_worktree=False,
+        status_entries=[" M .harness/merge-gate-log.jsonl", " M AGENTS.md"],
+        changed_files=[".harness/merge-gate-log.jsonl", "AGENTS.md"],
+    )
+    findings = cg.validate(mixed, mode="closeout")
+    assert any(f.code == "ROOT_CHECKOUT_EDIT" and f.severity == "hard" for f in findings)
