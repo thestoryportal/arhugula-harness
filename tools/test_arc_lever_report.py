@@ -435,6 +435,72 @@ def test_an_integral_span_is_a_lossless_legacy_shape(tmp_path: Path) -> None:
     assert rows[0].arc_span_s == 3600.0
 
 
+# mutation-probe(tools/arc_lever_report.py): drop the is-not-None span filters feeding median
+def test_null_span_rows_stay_in_cohorts_but_out_of_span_medians(tmp_path: Path) -> None:
+    """merge-gate witness lens r1 P1: ArcRow permits arc_span_s=None independently of
+    review_rounds; such a row must enter its cohort (rounds ARE measured) while its
+    null span stays out of the span median instead of crashing statistics.median."""
+    rows = [
+        _row("pr-a", 10, [], p1=[1], span=None),
+        _row("pr-b", 14, [], p1=[2], span=7200.0),
+        _row("pr-c", 2, ["B-211", "B-212"], span=None),
+    ]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["cohort_sizes"]["baseline"] == 2, "a null span must not evict the row"
+    assert s["baseline_median"]["arc_span_h"] == 2.0, "median over the one measured span"
+    assert s["baseline_median"]["measured_n"]["arc_span_h"] == 1
+    (treated,) = s["treated_arcs"]
+    assert treated["arc_span_h"] is None, "null span renders as null, never a number"
+
+
+# mutation-probe(tools/arc_lever_report.py): drop the None guard on the baseline delta
+def test_treated_rows_with_zero_baseline_carry_a_null_delta(tmp_path: Path) -> None:
+    """merge-gate witness lens r1 P2: a nascent cohort can have treated rows and no
+    baseline; the delta must be an honest null, not a crash or a number."""
+    s = _summary(tmp_path, [_row("pr-a", 3, ["B-211"])])["arc_types"]["applying"]
+    assert s["baseline_median"]["review_rounds"] is None
+    (treated,) = s["treated_arcs"]
+    assert treated["delta_rounds_vs_baseline_median"] is None
+
+
+# mutation-probe(tools/arc_lever_report.py): invert the target-membership filter in _metrics
+def test_target_levers_declared_lists_targets_only(tmp_path: Path) -> None:
+    """merge-gate witness lens r1 P2: the per-row target/non-target split is data
+    a reader acts on; pin its membership logic."""
+    rows = [_row("pr-base", 10, [], p1=[1]), _row("pr-a", 3, ["B-999", "B-211"])]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    (treated,) = s["treated_arcs"]
+    assert treated["target_levers_declared"] == ["B-211"]
+    assert treated["levers"] == ["B-211", "B-999"]
+
+
+# mutation-probe(tools/arc_lever_report.py): stop filtering empty tokens from --levers
+def test_cli_levers_flag_parses_and_empty_rejects(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """merge-gate witness lens r1 P3: exercise --levers through argparse — custom
+    ids with stray commas/space parse, and an all-empty value aborts loudly."""
+    ledger = _write(tmp_path / "ledger.jsonl", [_row("pr-a", 3, ["B-999"])])
+    assert alr.main(["--ledger", str(ledger), "--levers", " B-999,, ", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["target_levers"] == ["B-999"]
+    assert out["arc_types"]["applying"]["cohort_sizes"]["treated"] == 1
+    with pytest.raises(SystemExit, match="at least one lever id"):
+        alr.main(["--ledger", str(ledger), "--levers", " , "])
+
+
+# mutation-probe(tools/arc_lever_report.py): crash on blank lines / drop the no-treated message
+def test_blank_ledger_lines_skip_and_zero_treated_renders_the_declare_hint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """merge-gate witness lens r1 P3: a trailing/interior blank line is a legal
+    ledger shape, and the zero-treated render branch has its own message."""
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(json.dumps(_row("pr-a", 3, [])) + "\n\n", encoding="utf-8")
+    assert alr.main(["--ledger", str(ledger)]) == 0
+    assert "no treated arcs — declare the lever ids" in capsys.readouterr().out
+
+
 # mutation-probe(tools/arc_lever_report.py): re-derive the non-evaluable cause in render
 def test_open_declared_unknown_type_carries_its_own_reason(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]

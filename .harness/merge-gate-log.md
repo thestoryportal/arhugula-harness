@@ -661,3 +661,4 @@ B-206) rather than unaddressed defects.
 | 2026-08-24T22:14:05Z | #1447 | 00385628b764 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
 | 2026-08-24T22:22:44Z | #1447 | 562fd965fb62 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-08-24 | #1447 | fix/preflight-flush-residuals | LEAN single-lens gate (tooling diff, operator protocol): witness-adequacy r1 BLOCK at 00385628b (empirical non-kill — taken-index witness false-passed under the ambient-chain mutation in a full-file run via session-belt cross-test leakage) → fix 562fd965f (both witnesses own both resolver inputs; refusal pinned to seeded claim content) → codex r2 clean APPROVE + witness-adequacy r2 APPROVE at 562fd965f → gate satisfied; blast-radius: 6 consumers (graft callers, production_queue_dir + claim helper; static-edge floor) | proceed to safe-merge |
+| 2026-08-25T05:17:43Z | #1452 | d3d7a04b8380 | merge-gate-witness-adequacy | BLOCK | 5 finding(s) | r1 |
