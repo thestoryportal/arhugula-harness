@@ -847,6 +847,12 @@ def _detection(
         "arc_id": arc_id,
         "severity": severity,
     }
+    # ADJUDICATED against the reviewer's to_guard_finding canonicalization (raised
+    # codex r5 and r8): the row is the single authority with TWO derived projections --
+    # `to_guard_finding` (C-HE-24 §3, record-replay consumers) and THIS one, the plan's
+    # own U-HE-33 CI-surface sketch (spec-named code per C-HE-12 §2, lane-prefixed
+    # evidence per its §2 lane-discriminating field). The round-trip test pins their
+    # shared severity derivation. Plan authority; recorded in the PR body.
     projection = Finding(severity, code, f"[{lane_id}] {evidence}")
     try:
         outcome = _record_detection(payload)
@@ -984,25 +990,54 @@ def _reservation_heads() -> tuple[list[dict], list[str]]:
     heads: list[dict] = []
     unreadable: list[str] = []
     for d in sorted(root.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
+        if d.name.startswith("."):
+            continue
+        if not d.is_dir():
+            # A regular file or non-directory symlink where an arc's directory
+            # belongs is malformed authoritative state -- surfaced, never skipped
+            # (the r7 store-level refusal, applied at entry level).
+            unreadable.append(d.name)
             continue
         try:
             cur = rs.current(d.name)
         except Exception:
             unreadable.append(d.name)
             continue
-        if cur:
-            heads.append(cur[1])
+        if cur is None:
+            continue
+        head = cur[1]
+        if not _valid_head(head):
+            # Syntactically-valid but schema-corrupt (e.g. {}): downstream .get()
+            # consumers would silently drop the arc from orphan detection and
+            # verified-base attribution.
+            unreadable.append(d.name)
+            continue
+        heads.append(head)
     return heads, unreadable
 
 
+def _valid_head(head) -> bool:
+    """The two fields every downstream consumer keys on. A head missing them is
+    malformed store state, not a lesser head."""
+    return (
+        isinstance(head, dict)
+        and isinstance(head.get("arc_id"), str)
+        and isinstance(head.get("state"), str)
+    )
+
+
 def _reservation_head_current(arc_id: str) -> dict | None:
-    """None means the head genuinely no longer exists (arc gc'd); a READ failure
-    propagates to the dispatch boundary rather than reading as absence."""
+    """None means the head genuinely no longer exists (arc gc'd); a READ failure or a
+    schema-corrupt head propagates to the dispatch boundary rather than reading as
+    absence (the sibling of _reservation_heads' _valid_head check)."""
     import reservations as rs
 
     cur = rs.current(arc_id)
-    return cur[1] if cur else None
+    if cur is None:
+        return None
+    if not _valid_head(cur[1]):
+        raise RuntimeError(f"reservation head {arc_id!r} is schema-corrupt on revalidation")
+    return cur[1]
 
 
 def _gh_pr_state(pr: int) -> str:
@@ -1031,9 +1066,18 @@ def _door_lease_strict() -> dict | None:
     only with a legitimate concurrent lease transition, observed by the next run."""
     import merge_door as md
 
+    if md.LEASE.is_symlink():
+        # read_lease() follows the link; a forged target must not feed the checks.
+        raise RuntimeError("merge-door LEASE is a symlink -- refused (containment)")
     lease = md.read_lease()
     if lease is None and md.LEASE.exists():
         raise RuntimeError("merge-door LEASE present but unreadable -- corrupt door state")
+    if lease and lease.get("state") == "blocked":
+        blk = md._sidecar(lease["lease_token"], "blocked")
+        if blk.is_symlink():
+            # A symlinked blocked sidecar could carry a manipulated timestamp that
+            # keeps the stale-lease detection permanently below its bound.
+            raise RuntimeError("merge-door blocked sidecar is a symlink -- refused (containment)")
     return lease
 
 
@@ -1087,10 +1131,25 @@ def _recent_main_merges(
     return merges, unattributed
 
 
-def _emitting_detections(root: Path, lane: str) -> list[Finding]:
-    """The full C-HE-12 detection suite. Runs only where the record/store layer imports
-    (`_emitting_detections_dispatch` is the venue boundary)."""
-    findings: list[Finding] = []
+def _emitting_detections_safe(root: Path, lane: str) -> list[Finding]:
+    """The suite with partial-result preservation: a raise in a later detector must not
+    discard findings (and their already-appended durable rows) from earlier ones -- the
+    abort becomes a hard DETECTIONS_UNAVAILABLE APPENDED to what completed, so the
+    report says "aborted after N findings", never "the suite did not run"."""
+    acc: list[Finding] = []
+    try:
+        _emitting_detections(root, lane, acc)
+    except Exception as exc:
+        acc.append(
+            _detections_unavailable(lane, f"suite aborted after {len(acc)} finding(s): {exc}")
+        )
+    return acc
+
+
+def _emitting_detections(root: Path, lane: str, findings: list[Finding]) -> None:
+    """The full C-HE-12 detection suite, accreting into the caller's list. Runs only
+    where the record/store layer imports (`_emitting_detections_dispatch` is the venue
+    boundary; `_emitting_detections_safe` is the abort-preserving wrapper)."""
     findings.extend(check_split_brain(root / ARC_METRICS_JSONL, lane_id=lane))
     heads, unreadable = _reservation_heads()
     if unreadable:
@@ -1115,7 +1174,6 @@ def _emitting_detections(root: Path, lane: str) -> list[Finding]:
             )
         )
     findings.extend(check_orphaned_reservations(heads, lane_id=lane))
-    return findings
 
 
 def _record_layer_importable() -> bool:
@@ -1141,15 +1199,12 @@ def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
     blocking CI context must go red when the whole C-HE-12 suite is unexecuted; a warn
     would leave the gate green on UNLOOKED."""
     if _record_layer_importable():
-        try:
-            return _emitting_detections(root, lane)
-        except Exception as exc:
-            return [_detections_unavailable(lane, f"in-process suite raised: {exc}")]
+        return _emitting_detections_safe(root, lane)
     driver = (
         "import json, sys; sys.path.insert(0, 'tools'); "
         "import codex_context_guard as cg; "
         "from pathlib import Path; "
-        "fs = cg._emitting_detections(Path(sys.argv[1]), sys.argv[2]); "
+        "fs = cg._emitting_detections_safe(Path(sys.argv[1]), sys.argv[2]); "
         "print(json.dumps([f.__dict__ for f in fs]))"
     )
     proc = _run(

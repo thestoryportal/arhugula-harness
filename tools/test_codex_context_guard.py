@@ -1434,7 +1434,7 @@ def test_suite_surfaces_unreadable_heads_as_hard(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(cg, "_recent_main_merges", lambda root, heads: ([], []))
     monkeypatch.setattr(cg, "check_orphaned_reservations", lambda heads, *, lane_id: [])
 
-    findings = cg._emitting_detections(tmp_path, "l")
+    findings = cg._emitting_detections_safe(tmp_path, "l")
 
     hard = [f for f in findings if f.code == "DETECTIONS_UNAVAILABLE"]
     assert len(hard) == 1 and hard[0].severity == "hard"
@@ -1488,7 +1488,7 @@ def test_in_process_suite_raise_is_hard_unavailable(monkeypatch) -> None:
     out of the suite and becomes a HARD finding at the one dispatch enforcement point --
     never an empty (clean-looking) result."""
 
-    def raise_store(root, lane):
+    def raise_store(root, lane, findings):
         raise RuntimeError("QUEUE_DIR/reservations is a symlink -- refused")
 
     monkeypatch.setattr(cg, "_record_layer_importable", lambda: True)
@@ -1632,3 +1632,110 @@ def test_fallback_output_shape_is_validated(monkeypatch) -> None:
         assert findings[0].severity == "hard"
 
     assert run_with("[]") == []  # a genuinely empty suite stays clean
+
+
+def test_mid_suite_abort_preserves_earlier_findings(tmp_path, monkeypatch) -> None:
+    """A raise in a later detector must not discard earlier detectors' findings (whose
+    durable rows already appended) -- the abort is APPENDED as a hard finding and the
+    report says aborted-after-N, never "the suite did not run"."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    ledger = tmp_path / "arc-metrics.jsonl"
+    ledger.write_text(
+        '{"arc_id":"pr-1","record_kind":"arc"}\n{"arc_id":"pr-1","record_kind":"arc"}\n'
+    )
+    monkeypatch.setattr(cg, "ARC_METRICS_JSONL", Path("arc-metrics.jsonl"))
+
+    def raise_heads():
+        raise RuntimeError("store went away mid-suite")
+
+    monkeypatch.setattr(cg, "_reservation_heads", raise_heads)
+
+    findings = cg._emitting_detections_safe(tmp_path, "l")
+
+    assert [f.code for f in findings] == ["SPLIT_BRAIN_LEDGER", "DETECTIONS_UNAVAILABLE"]
+    assert "aborted after 1 finding" in findings[1].message
+    assert log.exists()  # the split-brain row landed and kept its projection
+
+
+def test_schema_corrupt_head_is_unreadable_not_missing(tmp_path, monkeypatch) -> None:
+    """A syntactically-valid but schema-corrupt head ({}) and a regular file where an
+    arc directory belongs both surface as unreadable -- neither silently removes the
+    arc from detection."""
+    import reservations as rs
+
+    store = tmp_path / "reservations"
+    (store / "good-arc").mkdir(parents=True)
+    (store / "corrupt-arc").mkdir()
+    (store / "planted-file").write_text("x", encoding="utf-8")
+    good = {"arc_id": "good-arc", "state": "open", "pr": 7}
+    monkeypatch.setattr(rs, "reservations_root", lambda: store)
+    monkeypatch.setattr(rs, "current", lambda arc_id: (1, good if arc_id == "good-arc" else {}))
+
+    heads, unreadable = cg._reservation_heads()
+
+    assert heads == [good]
+    assert unreadable == ["corrupt-arc", "planted-file"]
+
+
+def test_revalidation_raises_on_schema_corrupt_head(monkeypatch) -> None:
+    import reservations as rs
+
+    monkeypatch.setattr(rs, "current", lambda arc_id: (1, {}))
+
+    try:
+        cg._reservation_head_current("pr-9")
+    except RuntimeError as exc:
+        assert "schema-corrupt" in str(exc)
+    else:
+        raise AssertionError("a schema-corrupt head must raise on revalidation")
+
+
+def test_symlinked_lease_refused(tmp_path, monkeypatch) -> None:
+    """read_lease() follows the LEASE symlink, so the strict wrapper must refuse it
+    before a forged target reaches any check."""
+    import merge_door as md
+
+    target = tmp_path / "target.json"
+    target.write_text(json.dumps({"lease_token": "t", "state": "held"}), encoding="utf-8")
+    link = tmp_path / "LEASE"
+    link.symlink_to(target)
+    monkeypatch.setattr(md, "LEASE", link)
+
+    try:
+        cg._door_lease_strict()
+    except RuntimeError as exc:
+        assert "symlink" in str(exc)
+    else:
+        raise AssertionError("a symlinked LEASE must refuse")
+
+
+def test_symlinked_blocked_sidecar_refused(tmp_path, monkeypatch) -> None:
+    """A symlinked blocked sidecar could carry a manipulated timestamp that keeps the
+    stale-lease detection permanently below its bound -- refuse it."""
+    import merge_door as md
+
+    door = tmp_path / "door"
+    door.mkdir()
+    lease_file = door / "LEASE"
+    lease_file.write_text(json.dumps({"lease_token": "tok", "state": "held"}), encoding="utf-8")
+    forged = door / "forged.json"
+    forged.write_text(
+        json.dumps(
+            {
+                "blocked_at_sha": "e" * 40,
+                "blocked_reason": "x",
+                "blocked_at": "2099-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (door / "LEASE.tok.blocked").symlink_to(forged)
+    monkeypatch.setattr(md, "DOOR", door)
+    monkeypatch.setattr(md, "LEASE", lease_file)
+
+    try:
+        cg._door_lease_strict()
+    except RuntimeError as exc:
+        assert "sidecar" in str(exc)
+    else:
+        raise AssertionError("a symlinked blocked sidecar must refuse")

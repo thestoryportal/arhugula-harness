@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 214
+  total: 215
   open: 1
   design_substrate_gated: 3
-  registered_finding: 59
+  registered_finding: 60
   operator_gated: 0
   held: 2
   closed: 149
-  identity_digest: 52ce16eb0398aaed
+  identity_digest: 22d50265f54700dd
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10718,3 +10718,25 @@ items:
   council: 'NO — single-surface authority-placement question; route as Class 2/3
     design note when picked up.'
   heading: '### B-214 · BASE_TOCTOU CI re-check lacks a CI-visible verified-base authority *(surfaced by codex r2 on the u-he-33 arc, 2026-08-25; REGISTERED)*'
+- id: B-215
+  title: >-
+    the post-review-round class-sibling sweep is instruction-dependent; wire it as a
+    deterministic gate in the review loop
+  pr: 'u-he-33 arc'
+  status: registered_finding
+  summary: 'SURFACED by the operator during the u-he-33 arc (8 review rounds): the
+    empty-on-exception defect class recurred in sibling helpers across multiple rounds
+    despite being written in defect-class-preflight class 3 — instruction-following
+    measurably fails to fire the sweep, exactly the skill''s own "mechanical firing
+    beats instruction-following" clause. The finding CAPTURE is already deterministic
+    (the review wrapper writes C-HE-24 rows per round; refresh-classes.py re-derives
+    class counts), but the classify-then-sweep-the-diff-for-siblings step between
+    rounds runs only if the agent chooses to run it.'
+  close_out: 'OPEN — closure = a deterministic post-round step wired into the review
+    loop (the wrapper or a companion script): extract the round''s findings, grep the
+    branch diff for class-sibling shapes, and refuse the next review invocation until
+    each hit carries a named answer. The review wrapper is the workspace''s
+    highest-blast-radius shared-surface class, so this takes its own reviewed arc
+    (B-213 precedent).'
+  council: 'NO — single-surface loop-tooling gap; no cross-axis tension.'
+  heading: '### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*'

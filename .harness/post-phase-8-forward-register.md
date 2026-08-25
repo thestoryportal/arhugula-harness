@@ -2496,3 +2496,10 @@ same spec leg.
 - **Current state.** OPEN. Registered instead of built in-arc: a CI-visible carrier of the verified base (committed sidecar, PR annotation, or ledger row) is a new mechanism — a design decision (X-AL-3), not an impl slice of U-HE-33. Until then the CI backstop for hazard #7 is the door's own at-landing detection (U-HE-23) plus the operator-host re-check.
 - **Closure shape.** A design-phase decision on where the verified-base attestation lives CI-visibly, then a small impl arc re-pointing the guard's join at that carrier.
 
+### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** The u-he-33 arc measured that the between-rounds classify-then-sweep step is instruction-dependent and fails under load: the empty-on-exception class recurred in sibling helpers across multiple review rounds despite being written in defect-class-preflight class 3. Finding capture is already deterministic (per-round C-HE-24 rows; refresh-classes.py); the sweep is not.
+- **Current state.** OPEN. The interim mitigation is the skill's new "after every review round" section (instruction-tier).
+- **Closure shape.** A deterministic post-round step in the review loop: extract the round's findings, grep the branch diff for class-sibling shapes, refuse the next review invocation until each hit carries a named answer. Review-wrapper surface — own reviewed arc (B-213 precedent).
+
+
