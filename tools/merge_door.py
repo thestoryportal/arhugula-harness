@@ -1629,7 +1629,35 @@ def land(
             and live["refresh"].get("merge_attempted_at") is not None
         )
         if live.get("merge_attempted_at") is None and not refresh_attempted:
-            release(live)  # pre-attempt failure: release + re-gate
+            try:
+                release(live)  # pre-attempt failure: release + re-gate
+            except DoorBlocked as rel_exc:
+                # A PERSISTENT containment fault blocks release()'s own internal
+                # re-read too (merge-gate r4 spec P1): adjudicate on the dict we
+                # hold -- mark_blocked performs no reads and cannot be blocked by
+                # the same fault -- never escape with a live wedged lease.
+                mark_blocked(
+                    live,
+                    sha=live.get("head_sha") or head_sha,
+                    reason=f"containment_refusal_during_release:{rel_exc}",
+                )
+                _emit_gate(
+                    live,
+                    gate="merge-door-reconcile",
+                    fail_class="HITL-recoverable",
+                    cause="containment_refusal",
+                    evidence=str(rel_exc),
+                    arc_id=arc_id,
+                    lane_id=lane_id,
+                )
+                _notify(
+                    "DEFERRED-HIL",
+                    lane_id,
+                    "merge-door-reconcile:HITL-recoverable:containment_refusal",
+                    f"{arc_id} — pr #{pr}: {rel_exc}; inspect the door dir, then "
+                    f"`just merge-door-unblock {pr} <sha>`",
+                )
+                raise
             raise
         # a REFRESH attempt is an attempt (codex r8 P1): an externally-MERGED main PR
         # carries no main attempted marker, so an ambiguous refresh merge would
