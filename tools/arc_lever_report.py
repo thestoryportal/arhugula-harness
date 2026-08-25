@@ -27,7 +27,9 @@ import argparse
 import json
 import statistics
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_LEDGER = REPO / ".harness" / "arc-metrics.jsonl"
@@ -36,32 +38,83 @@ DEFAULT_LEVERS = ("B-211", "B-212")
 _BUCKETS = ("treated", "baseline", "other_levers", "unmapped", "partial", "undeclared")
 
 
-def load_rows(ledger: Path) -> list[dict[str, Any]]:
+class LedgerRow(BaseModel):
+    """Typed boundary for the arc-metrics ledger (parse-don't-validate, codex r12).
+
+    Defaults encode the producer's legacy semantics (`ArcRow` at
+    tools/arc_metrics.py): a field ABSENT on a pre-C-HE-25 row is legal legacy
+    shape — ``round_completeness`` absent means complete, ``levers_active``
+    absent means no claim — while an EXPLICIT null keeps its own downstream
+    meaning, so the absent-vs-null distinction lives in the type, not in
+    presence checks. Extra fields are additive C-HE-25 evolution this report
+    never reads; any other illegal shape (missing ``arc_id``, a non-arc
+    ``record_kind``, a mistyped field) is refused ONCE, here, instead of
+    flowing anonymously into a cohort median.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    arc_id: str
+    record_kind: Literal["arc"] = "arc"
+    arc_type: str | None = None
+    arc_type_declared_at: str | None = None
+    levers_active: list[str] | None = None
+    review_rounds: int | None = None
+    round_completeness: str | None = "complete"
+    p1_rounds: list[int] | None = None
+    arc_span_s: float | None = None
+
+
+def load_rows(ledger: Path) -> list[LedgerRow]:
     """Parse the ledger, refusing silently-skipped rows (no-silent-failure)."""
     if not ledger.is_file():
         raise SystemExit(f"arc-lever-report: ledger not found: {ledger}")
-    rows: list[dict[str, Any]] = []
+    rows: list[LedgerRow] = []
     for n, line in enumerate(ledger.read_text(encoding="utf-8").splitlines(), 1):
         if not line.strip():
             continue
         try:
-            rows.append(json.loads(line))
+            obj = json.loads(line)
         except json.JSONDecodeError as exc:
             raise SystemExit(f"arc-lever-report: {ledger}:{n} is not JSON: {exc}") from exc
+        try:
+            rows.append(LedgerRow.model_validate(obj))
+        except ValidationError as exc:
+            raise SystemExit(f"arc-lever-report: {ledger}:{n} illegal row shape: {exc}") from exc
     return rows
 
 
-def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[str, dict[str, Any]]:
-    """Pure per-arc-type split: {arc_type: {contaminated: bool, buckets: {bucket: rows}}}."""
+def _non_evaluable_reason(arc_type: str, contaminated: bool) -> str | None:
+    """The C-HE-26 reason a group cannot support the lever decision, as DATA.
+
+    Computed once, where the discriminators are known, and carried on the
+    group — the human render must never re-derive the cause from the key
+    string (codex r6) and must never misname it: an open-declared unknown
+    type is neither close-declared nor untyped (codex r12).
+    """
+    if contaminated:
+        return "close-declared (outcome-contaminated, C-HE-26)"
+    if arc_type == "unclassified":
+        return "untyped (no arc_type declared)"
+    if arc_type not in ("inventing", "applying"):
+        # C-HE-26 admits exactly two open-declared labels — an unknown
+        # label ("research") is no more evaluable than none (codex r10).
+        return f"unknown open-declared arc type {arc_type!r} (C-HE-26 admits inventing|applying)"
+    return None
+
+
+def split_cohorts(rows: list[LedgerRow], levers: tuple[str, ...]) -> dict[str, dict[str, Any]]:
+    """Pure per-arc-type split: {arc_type: {evaluable, reason, buckets: {bucket: rows}}}."""
     out: dict[str, dict[str, Any]] = {}
     for r in rows:
-        arc_type = r.get("arc_type") or "unclassified"
+        arc_type = r.arc_type or "unclassified"
         # C-HE-26: a close-time arc-type label is outcome-contaminated and cannot
         # support arc-type discrimination (codex r3). Close-declared rows group
         # under an explicitly contaminated key, never beside open-declared ones —
         # and the group CARRIES the contamination as data, so evaluation logic
         # never re-derives it from the key string (codex r6).
-        contaminated = arc_type != "unclassified" and r.get("arc_type_declared_at") != "open"
+        contaminated = arc_type != "unclassified" and r.arc_type_declared_at != "open"
+        reason = _non_evaluable_reason(arc_type, contaminated)
         if contaminated:
             arc_type = f"{arc_type} (close-declared — outcome-contaminated, C-HE-26)"
         # C-HE-26 requires an UNCONTAMINATED OPEN-TIME inventing/applying label for
@@ -70,14 +123,13 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
         group = out.setdefault(
             arc_type,
             {
-                # C-HE-26 admits exactly two open-declared labels — an unknown
-                # label ("research") is no more evaluable than none (codex r10).
-                "evaluable": not contaminated and arc_type in ("inventing", "applying"),
+                "evaluable": reason is None,
+                "reason": reason,
                 "buckets": {b: [] for b in _BUCKETS},
             },
         )
         buckets = group["buckets"]
-        declared = r.get("levers_active")
+        declared = r.levers_active
         # [] is an explicit claim ("no lever was live"); an ABSENT or null field is
         # no claim at all — collapsing them would let structurally incomplete rows
         # contaminate the baseline (codex r4). Undeclared rows are excluded loudly.
@@ -87,18 +139,19 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
         # The queue CLI accepts repeated --levers values; [B-211] and
         # [B-211,B-211] are one declaration, not two cohorts (codex r11).
         declared = sorted(set(declared))
-        r = {**r, "levers_active": declared}
+        r = r.model_copy(update={"levers_active": declared})
         bucket = (
             "treated"
             if any(lv in declared for lv in levers)
             else ("baseline" if declared == [] else "other_levers")
         )
-        if r.get("review_rounds") is None:
+        if r.review_rounds is None:
             buckets["unmapped"].append(r)
-        elif "round_completeness" in r and r["round_completeness"] != "complete":
-            # An ABSENT field is the legacy shape the ledger reader treats as
-            # complete; an EXPLICIT null is an unknown that fails closed with
-            # every other non-complete value (codex r9 + r10).
+        elif r.round_completeness != "complete":
+            # The LedgerRow boundary types the legacy rule: an ABSENT field
+            # defaults to "complete"; an EXPLICIT null survives as None, an
+            # unknown that fails closed with every other non-complete value
+            # (codex r9 + r10).
             # A partial suffix carries review_rounds as a LOWER BOUND and an
             # unknown P1 count; letting it into a median converts "unknown"
             # into a score (codex r1 on this tool).
@@ -108,18 +161,18 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
     return out
 
 
-def _metrics(r: dict[str, Any], levers: tuple[str, ...]) -> dict[str, Any]:
-    span = r.get("arc_span_s")
-    declared = r.get("levers_active")
-    p1 = r.get("p1_rounds")
+def _metrics(r: LedgerRow, levers: tuple[str, ...]) -> dict[str, Any]:
+    span = r.arc_span_s
+    declared = r.levers_active
+    p1 = r.p1_rounds
     assert declared is not None  # undeclared rows are bucketed before metrics
     return {
-        "arc_id": r.get("arc_id"),
-        "review_rounds": r["review_rounds"],
+        "arc_id": r.arc_id,
+        "review_rounds": r.review_rounds,
         # A null p1_rounds is unmapped provenance, not a clean arc — len(None or [])
         # would award the best possible P1 score to an unmeasured value (codex r2).
         "p1_rounds": len(p1) if p1 is not None else None,
-        "arc_span_h": round(span / 3600, 1) if isinstance(span, (int, float)) else None,
+        "arc_span_h": round(span / 3600, 1) if span is not None else None,
         "levers": declared,
         "target_levers_declared": sorted(lv for lv in declared if lv in levers),
     }
@@ -186,7 +239,7 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
         1
         for b in ("unmapped", "partial")
         for r in buckets[b]
-        if any(lv in (r.get("levers_active") or []) for lv in levers)
+        if any(lv in (r.levers_active or []) for lv in levers)
     )
     # The evaluable unit is the EXACT lever pattern (codex r6/r7): pooled
     # treated aggregates are gone — 5x B-211-only + 5x B-212-only rows pooled
@@ -208,8 +261,10 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
     }
     return {
         # C-HE-26: only an uncontaminated, typed group supports the n>=5 lever
-        # decision — the numbers stay visible but others say NON-EVALUABLE.
+        # decision — the numbers stay visible but others say NON-EVALUABLE,
+        # carrying the split-time reason so the render never re-derives it.
         "evaluable_for_lever_decision": group["evaluable"],
+        "non_evaluable_reason": group["reason"],
         "pattern_metrics": pattern_metrics,
         "cohort_sizes": {k: len(v) for k, v in buckets.items()},
         "baseline_median": base_median,
@@ -218,15 +273,15 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
         "separable_levers": separable,
         "per_skill_separable": bool(separable),
         "excluded_treated_count": excluded_treated,
-        "excluded_unmapped": [r.get("arc_id") for r in buckets["unmapped"]],
-        "excluded_undeclared": [r.get("arc_id") for r in buckets["undeclared"]],
-        "excluded_partial": [r.get("arc_id") for r in buckets["partial"]],
-        "excluded_other_levers": [r.get("arc_id") for r in buckets["other_levers"]],
+        "excluded_unmapped": [r.arc_id for r in buckets["unmapped"]],
+        "excluded_undeclared": [r.arc_id for r in buckets["undeclared"]],
+        "excluded_partial": [r.arc_id for r in buckets["partial"]],
+        "excluded_other_levers": [r.arc_id for r in buckets["other_levers"]],
     }
 
 
 def summarize(
-    cohorts_by_type: dict[str, dict[str, list[dict[str, Any]]]], levers: tuple[str, ...]
+    cohorts_by_type: dict[str, dict[str, Any]], levers: tuple[str, ...]
 ) -> dict[str, Any]:
     return {
         "target_levers": list(levers),
@@ -250,9 +305,8 @@ def render(summary: dict[str, Any]) -> str:
         )
         if not s["evaluable_for_lever_decision"]:
             lines.append(
-                "  NON-EVALUABLE for the n>=5 lever decision: C-HE-26 requires an "
-                "uncontaminated open-time arc-type label (this group is close-declared "
-                "or untyped) — numbers are descriptive only"
+                "  NON-EVALUABLE for the n>=5 lever decision: "
+                f"{s['non_evaluable_reason']} — numbers are descriptive only"
             )
         for pat, ps in sorted(s["pattern_metrics"].items()):
             lines.append(

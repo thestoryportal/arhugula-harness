@@ -370,3 +370,61 @@ def test_cli_renders_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert "span_h>=" in out and "lower bound" in out, "span must read as a lower bound"
     assert "pr-4" in out, "the excluded unmapped arc must be visible in the human view"
     assert "pr-6" in out, "the excluded partial arc must be visible in the human view"
+
+
+# mutation-probe(tools/arc_lever_report.py): accept a row missing arc_id into the buckets
+def test_a_row_missing_arc_id_aborts_loudly(tmp_path: Path) -> None:
+    """codex r12: a syntactically-valid row missing arc_id must be refused at the
+    LedgerRow boundary, never absorbed anonymously into a cohort median."""
+    anonymous = {k: v for k, v in _row("pr-a", 3, []).items() if k != "arc_id"}
+    ledger = _write(tmp_path / "ledger.jsonl", [anonymous])
+    with pytest.raises(SystemExit, match=r"ledger\.jsonl:1 illegal row shape"):
+        alr.load_rows(ledger)
+
+
+# mutation-probe(tools/arc_lever_report.py): pass non-object JSON lines through as rows
+def test_a_non_object_row_aborts_loudly(tmp_path: Path) -> None:
+    """A JSON array/scalar line parses as JSON but is not an arc row; the boundary
+    must refuse it there, not crash mid-bucketing."""
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(json.dumps(ROWS[0]) + "\n[1, 2]\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="illegal row shape"):
+        alr.load_rows(ledger)
+
+
+# mutation-probe(tools/arc_lever_report.py): consume non-arc record_kind rows as arcs
+def test_a_non_arc_record_kind_aborts_loudly(tmp_path: Path) -> None:
+    """Only record_kind 'arc' (or the absent legacy shape) is an arc row; any other
+    kind entering a cohort would score a record that is not an arc."""
+    ledger = _write(tmp_path / "ledger.jsonl", [{**_row("pr-a", 3, []), "record_kind": "finding"}])
+    with pytest.raises(SystemExit, match="illegal row shape"):
+        alr.load_rows(ledger)
+
+
+# mutation-probe(tools/arc_lever_report.py): coerce a mistyped review_rounds to a cohort value
+def test_a_mistyped_field_aborts_loudly(tmp_path: Path) -> None:
+    ledger = _write(tmp_path / "ledger.jsonl", [{**_row("pr-a", 3, []), "review_rounds": "many"}])
+    with pytest.raises(SystemExit, match="illegal row shape"):
+        alr.load_rows(ledger)
+
+
+# mutation-probe(tools/arc_lever_report.py): re-derive the non-evaluable cause in render
+def test_open_declared_unknown_type_carries_its_own_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex r12: an open-declared 'research' group is neither close-declared nor
+    untyped — the render must carry the split-time reason, not re-derive a wrong one."""
+    rows = [_row("pr-a", 3, ["B-211"], arc_type="research")]
+    s = _summary(tmp_path, rows)["arc_types"]["research"]
+    assert "unknown open-declared arc type 'research'" in s["non_evaluable_reason"]
+    ledger = _write(tmp_path / "l2.jsonl", rows)
+    assert alr.main(["--ledger", str(ledger)]) == 0
+    out = capsys.readouterr().out
+    assert "unknown open-declared arc type 'research'" in out
+    assert "close-declared or untyped" not in out
+
+
+def test_evaluable_groups_carry_no_reason(tmp_path: Path) -> None:
+    s = _summary(tmp_path, [_row("pr-a", 3, [])])["arc_types"]["applying"]
+    assert s["evaluable_for_lever_decision"] is True
+    assert s["non_evaluable_reason"] is None
