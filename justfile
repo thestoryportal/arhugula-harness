@@ -724,6 +724,17 @@ _require-antigravity:
 review-with-failover base='main':
     uv run python tools/codex_review.py --base {{base}} --failover
 
+# U-HE-34 r3: the logged variant for guarded/headless venues — the guard rejects `|`
+# in Bash commands before its allowlist, so a session-level `... | tee round.log`
+# can never run there; this recipe carries the tee INSIDE an allowlisted invocation.
+# pipefail keeps the wrapper's exit code (0 APPROVE / 1 BLOCK / 2 UNAVAILABLE /
+# 3 GATE_REFUSED) as the recipe's own.
+review-with-failover-logged log base='main':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    mkdir -p "$(dirname "{{log}}")"
+    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee "{{log}}"
+
 # B-215 admission-gate attest verbs (tools/review_loop_gate.py): deterministic
 # entry/sweep attestations the wrapper enforces before any review round.
 # `review-attest-budget` is deliberately NOT guard-allowlisted — extending the
@@ -753,15 +764,16 @@ review-log-settle file timeout='130':
     f="{{file}}"
     [ -f "$f" ] || { echo "review-log-settle: no such file: $f" >&2; exit 1; }
     deadline=$(( $(date +%s) + {{timeout}} ))
-    # Three consecutive equal sizes (a 15 s stability window), not one: a writer that
-    # pauses for a single poll and flushes later would otherwise be stamped complete
-    # early (codex U-HE-34 r2).
+    # Four equal samples across three 5 s intervals — a full 15 s of observed
+    # stability: a writer that pauses one or two polls and flushes later would
+    # otherwise be stamped complete early (codex U-HE-34 r2+r3: `stable >= 2`
+    # exited after only ~10 s of stability).
     prev=-1; stable=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
       cur=$(wc -c < "$f")
       if [ "$cur" -eq "$prev" ]; then
         stable=$(( stable + 1 ))
-        [ "$stable" -ge 2 ] && exit 0
+        [ "$stable" -ge 3 ] && exit 0
       else
         stable=0
       fi

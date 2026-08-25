@@ -470,16 +470,20 @@ fi
 _phase_exact_shape() {
   local cmd="$1"
   set -f; set -- $cmd; set +f
-  [ "$#" -eq 11 ] || return 1
+  [ "$#" -eq 13 ] || return 1
   [ "$1" = "uv" ] && [ "$2" = "run" ] && [ "$3" = "python" ] \
     && [ "$4" = "tools/reservations.py" ] && [ "$5" = "phase" ] \
-    && [ "$6" = "--arc-id" ] && [ "$8" = "--phase" ] && [ "${10}" = "--edge" ] || return 1
+    && [ "$6" = "--arc-id" ] && [ "$8" = "--phase" ] && [ "${10}" = "--edge" ] \
+    && [ "${12}" = "--lane-id" ] || return 1
   # Positive charset, not just not-dash-led (codex U-HE-34 r2 P1): _bash_args_safe
   # rejects only UPPERCASE expansions, so a lowercase `${victim:=other-arc}` would
   # ride a looser check and expand AFTER the allow into an arbitrary reservation id.
+  # The mandatory --lane-id (r3 P1) is the authority half: the guard validates only
+  # FORM — record_phase itself refuses a lane that is not the head's holder.
   printf '%s' "$7" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
   printf '%s' "$9" | grep -Eq '^[a-z_]+$' || return 1
   case "${11}" in start|end) ;; *) return 1 ;; esac
+  printf '%s' "${13}" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
 }
 
 # U-HE-34 r2 P1: `just review-log-settle <file> [timeout]` — the result_capture_log_write
@@ -495,6 +499,21 @@ _review_log_settle_shape() {
   printf '%s' "$3" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
   if [ "$#" -eq 4 ]; then
     printf '%s' "$4" | grep -Eq '^[0-9]+$' || return 1
+  fi
+}
+
+# U-HE-34 r3 P2: `just review-with-failover-logged <log> [base]` — the guard rejects
+# `|` in Bash commands before this allowlist, so the round-log tee must live INSIDE
+# an allowlisted recipe. Same arity-bounded discipline: 3 or 4 tokens, charset path,
+# charset base ref.
+_review_logged_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
+  [ "$1" = "just" ] && [ "$2" = "review-with-failover-logged" ] || return 1
+  printf '%s' "$3" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
+  if [ "$#" -eq 4 ]; then
+    printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
   fi
 }
 
@@ -747,6 +766,13 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
        && _review_log_settle_shape "$TRIM" \
        && _bash_args_safe "$CMD"; then
       # U-HE-34 r2: the settle watch feeding result_capture_log_write — arity-bounded.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-with-failover-logged([[:space:]]|$)' \
+       && _review_logged_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-34 r3: the logged review variant — the tee lives inside the recipe, so a
+      # headless venue can produce the round log without a pipe on the command line.
+      # (TRIM already has the exact-shape HARNESS id prefix stripped above.)
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then

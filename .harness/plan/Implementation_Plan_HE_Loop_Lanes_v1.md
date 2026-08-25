@@ -6386,7 +6386,18 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > queue step now passes `--arc-id` explicitly (a `pr-<N>` default breaks the ledger ↔
 > reservation ↔ gate-log join) and `--levers` as separate arguments (a comma-joined
 > token forges a synthetic single lever in exact-set cohorts); the two rows drained on
-> this arc were corrected and refolded via `_refold_local_row`.
+> this arc were corrected and refolded via `_refold_local_row`. **(viii) Holder fence +
+> reachability (codex r2/r3).** `record_phase` gains the holder fence (a named lane
+> must BE the head's holder — authority at the store's write funnel, the guard
+> validates only form; `--lane-id` is CLI-mandatory and trails the canonical shape);
+> guard values are positively charset-bounded (a lowercase `${victim:=…}` expansion
+> would ride a dash-check); the round-log tee moves inside the allowlisted
+> `review-with-failover-logged` recipe (the guard rejects pipes pre-allowlist) with
+> logs under gitignored `.harness/tmp/`; the settle watch requires four equal samples
+> (15 s) and n6 no longer double-counts nested downtime under a round-1-unavailable
+> exclusion; coverage rows are §-granular (no whole-C-HE-27 green claim while
+> `capture` is unrecordable — B-218, whose scope now also carries the per-round-record
+> and wrapper-internal-emitter reconciliation).
 
 ---
 

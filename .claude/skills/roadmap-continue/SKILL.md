@@ -91,12 +91,14 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    legal on the still-`pending` head — accretion refuses only terminal states — and
    replay-idempotent, so a crash/compaction re-entry may safely re-run any of them):
    ```bash
-   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge start
-   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge end
-   uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge start
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge start --lane-id <lane-id>
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge end --lane-id <lane-id>
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge start --lane-id <lane-id>
    ```
-   An unreserved arc (degradation above) skips these: there is no head to accrete on, and
-   an absent span reads as null downstream, never as a measured zero.
+   The trailing `--lane-id` is mandatory (record_phase refuses a lane that is not the
+   head's holder — the guard validates only the command's form). An unreserved arc
+   (degradation above) skips these: there is no head to accrete on, and an absent span
+   reads as null downstream, never as a measured zero.
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
@@ -131,7 +133,7 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
 6. **Ship.** First close the execute span opened at step 2 (U-HE-34; same literal-id,
    replay-idempotent, skip-if-unreserved rules as the start edge):
    ```bash
-   uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge end
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge end --lane-id <lane-id>
    ```
    Then hand off to the `ship-pr` skill (the PR + fixed-point-refresh half) — including its
    mandatory reflect + `/context-save` step at arc close. Do not hand off to the next arc

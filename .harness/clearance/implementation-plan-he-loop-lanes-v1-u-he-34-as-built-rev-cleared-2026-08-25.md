@@ -1,6 +1,6 @@
 ---
 artifact: .harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md
-version: v1.0 + rev 2026-08-25 (U-HE-34 execution corrections, as-built — rev-note items (i)-(vii))
+version: v1.0 + rev 2026-08-25 (U-HE-34 execution corrections, as-built — rev-note items (i)-(viii))
 cleared_at: 2026-08-25T21:30:00-06:00
 clearance_type: execution-correction-H_E-tooling
 back_reference:

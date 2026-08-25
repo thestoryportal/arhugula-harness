@@ -75,13 +75,15 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **Phase-span edges (U-HE-34; C-HE-27).** Durable review/edit wall-clock accretes on the
   reservation as explicit `{start, end}` pairs — N6 reads ONLY these spans, never a gap
   between two records. Each command is a single literal-id invocation (guard-allowlisted
-  in exactly the canonical flag order `--arc-id <v> --phase <v> --edge <v>`,
+  in exactly the canonical flag order `--arc-id <v> --phase <v> --edge <v> --lane-id <v>`
+  — the mandatory trailing lane is the authority half: record_phase refuses a lane that
+  is not the head's holder, since the guard can validate only the command's FORM;
   replay-idempotent; skip all of them when the arc is unreserved — an absent span reads
   null downstream, never zero). The durable map holds ONE pair per phase and the loop
   alternates review/fix rounds, so the pairs below are DISJOINT by construction — N6
   sums verify + edit, and nested spans would double-count (codex U-HE-34 r1):
   - **verify = the round-1 window.** Before the FIRST review invocation:
-    `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start`;
+    `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start --lane-id <lane-id>`;
     at that round's verdict (APPROVE or BLOCK): the same command with `--edge end`.
   - **absorb = classification.** On a BLOCK: `--phase absorb --edge start` when finding
     classification begins, `--edge end` when fixing starts.
@@ -92,20 +94,27 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
     denominator is round-1 review + the fix window, never a double count.
   - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): `--phase verify_unavailable
     --edge start` at the failed invocation and `--edge end` when the arc resumes or is
-    held. n6() buckets this span (and unavailable-terminated verify spans) OUT of the
-    denominator so reviewer downtime cannot deflate N6 — record it even when a later
-    failover succeeds and the round's terminal folds to APPROVE/BLOCK.
+    held. n6() buckets this span (and round-1-unavailable verify spans) OUT of the
+    denominator so reviewer downtime cannot deflate N6. Named bound: a SUCCESSFUL
+    failover's primary-channel downtime is internal to the wrapper — this session-layer
+    emitter cannot observe it, so that downtime stays inside verify until a
+    wrapper-internal emitter exists (n6's nested-span subtraction already handles the
+    day one records it).
   - **No `capture` pair.** The arc-metrics queue step runs after the merge door has
     transitioned the reservation to `merged`, and accretion refuses terminal states
     (C-HE-03 §3) — a capture edge there necessarily fails. The structural conflict
     (C-HE-27 §1 lists `capture`; the reservation cannot carry it post-terminal) is
     registered as forward work rather than wired to fail (codex U-HE-34 r1).
   - **`result_capture` split (C-HE-27 §1 — process exit and log write DIVERGE: the
-    reviewer's verdict can flush after its process exits).** Tee each round's output to
-    a round log under the gitignored in-worktree `.harness/tmp/<arc-id>-rounds/` (the
-    guard's settle allow is path-bounded to the worktree — a job-tmp path falls to ask
-    and, in a headless venue, strands the edge). Immediately after the review process
-    exits, record `--phase result_capture_process_exit --edge end`; then
+    reviewer's verdict can flush after its process exits).** Produce each round's log
+    with the logged recipe — a session-level `| tee` never survives the guard, which
+    rejects pipes before its allowlist:
+    `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log`
+    (the tee lives inside the allowlisted recipe; the log home is the gitignored
+    in-worktree `.harness/tmp/` because the settle allow is path-bounded to the
+    worktree — a job-tmp path falls to ask and, in a headless venue, strands the
+    edge). Immediately after the recipe returns, record
+    `--phase result_capture_process_exit --edge end`; then
     `just review-log-settle <round-log>` (bounded 130 s; allowlisted in exactly the
     2-arg/3-arg literal form) and, ONLY on its exit 0, record
     `--phase result_capture_log_write --edge end`. A refused settle invocation

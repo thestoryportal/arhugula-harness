@@ -497,9 +497,13 @@ def _outcome_row(channel: str, terminal: str, finding_count: int) -> dict:
     return {"channel": channel, "terminal": terminal, "finding_count": finding_count}
 
 
-def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> dict:
+def record_phase(
+    arc_id: str, phase: str, edge: str, ts: str | None = None, *, lane_id: str | None = None
+) -> dict:
     if phase not in PHASES or edge not in ("start", "end"):
         raise ReservationError(f"bad phase/edge {phase!r}/{edge!r}")
+    if lane_id is not None:
+        _check_id("lane_id", lane_id)
     if ts is not None:
         try:
             datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
@@ -512,6 +516,17 @@ def record_phase(arc_id: str, phase: str, edge: str, ts: str | None = None) -> d
 
     def build(head: dict) -> dict:
         _refuse_terminal_accretion(arc_id, "record_phase", head)
+        # Holder fence (codex U-HE-34 r3 P1): the guard's exact-shape allow can only
+        # validate the command's FORM — any literal arc id passes it. Authority lives
+        # here, the store's single write funnel: a caller naming a lane must BE the
+        # head's holder, exactly the §6 rule terminalization already enforces. The
+        # keyword stays optional for in-process callers (fold/refold/tests) that hold
+        # the ledger claim through other fences.
+        if lane_id is not None and head.get("lane_id") not in (None, lane_id):
+            raise IllegalTransition(
+                f"{arc_id}: record_phase by {lane_id} on a reservation held by "
+                f"{head['lane_id']} -- phase spans accrete holder-only (C-HE-03 §6)"
+            )
         slot = head.setdefault("phases", {}).setdefault(phase, {})
         val = ts or now_iso()
         existing = slot.get(edge)
@@ -1038,6 +1053,7 @@ def main(argv: list[str] | None = None) -> int:
     ph.add_argument("--arc-id", required=True)
     ph.add_argument("--phase", choices=PHASES, required=True)
     ph.add_argument("--edge", choices=["start", "end"], required=True)
+    ph.add_argument("--lane-id", required=True)
     ro = sub.add_parser("round")
     ro.add_argument("--arc-id", required=True)
     ro.add_argument("--round", type=int, required=True)
@@ -1092,7 +1108,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "update":
             out = update_payload(args.arc_id, kv(args.set))
         elif args.cmd == "phase":
-            out = record_phase(args.arc_id, args.phase, args.edge)
+            out = record_phase(args.arc_id, args.phase, args.edge, lane_id=args.lane_id)
         elif args.cmd == "round":
             out = record_round_outcome(
                 args.arc_id,

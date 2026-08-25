@@ -2870,6 +2870,28 @@ def test_n6_numerator_ignores_zero_hour_arcs():
     assert n6 == pytest.approx(1.0) and hours == 1.0
 
 
+def test_n6_round1_unavailable_does_not_double_count_nested_downtime():
+    """When round 1 terminated unavailable, the WHOLE verify span is excluded; a nested
+    explicit `verify_unavailable` span is part of that window and must not be summed
+    again (codex r3: 60m verify + nested 30m downtime reported 90m excluded).
+    Mutation probe: add vu unconditionally -> excluded 3600->5400 and this reds."""
+    rows = [
+        {
+            "arc_id": "a",
+            "phases": {
+                "verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T01:00:00Z"},
+                "verify_unavailable": {
+                    "start": "2026-08-18T00:10:00Z",
+                    "end": "2026-08-18T00:40:00Z",
+                },
+            },
+            "round_outcomes": {"1": {"terminal": "REVIEWER_UNAVAILABLE"}},
+        }
+    ]
+    n6, hours, excluded_s = am.n6(rows, [])
+    assert n6 is None and hours == 0.0 and excluded_s == 3600.0
+
+
 def test_phase_spans_negative_span_fails_loud():
     """A reversed pair (end before start) is corrupt phase state -- the edges are
     recorded independently so the shape is representable; it must abort, never flow

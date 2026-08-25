@@ -1939,10 +1939,12 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
     the denominator: the verify span of an arc whose ROUND-1 outcomes all terminated
     REVIEWER_UNAVAILABLE (verify is the round-1 window, so only round 1's terminal can
     invalidate it -- a later round's downtime must not erase valid round-1 review), and
-    any explicit `verify_unavailable` span, which the emitters record NESTED inside
-    verify (failover downtime), so it is subtracted from the verify contribution rather
-    than merely reported. Returns None, not 0, when no hours are measured -- an absent
-    denominator is not a measured zero."""
+    any explicit `verify_unavailable` span. Where such a span nests inside a COUNTED
+    verify window it is subtracted from the verify contribution rather than merely
+    reported; where the whole verify span is already excluded (round-1 unavailable) it
+    is NOT added again -- the nested span is part of the excluded window, and summing
+    both would overstate downtime (codex r3). Returns None, not 0, when no hours are
+    measured -- an absent denominator is not a measured zero."""
     import finding_record as fr
 
     denom_s = 0.0
@@ -1960,7 +1962,7 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
             excluded_s += spans.get("verify", 0.0)
         else:
             contributed += max(spans.get("verify", 0.0) - vu, 0.0)
-        excluded_s += vu
+            excluded_s += vu
         contributed += spans.get("edit", 0.0)
         denom_s += contributed
         if contributed > 0:
