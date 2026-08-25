@@ -41,10 +41,15 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   reserved arc, `review-with-failover` exits 3 (`GATE_REFUSED`, not a review terminal)
   unless the round is admitted: round 1 needs a preflight attestation bound to the
   committed diff — run the defect-class-preflight sweep, write the named answers to an
-  in-worktree file, COMMIT the work, then `just review-attest-preflight <answers-file>`
-  (attest AFTER the final commit; the attestation binds head+digest and goes stale on
-  any later commit). After every BLOCK round: absorb, classify each finding, commit,
-  then `just review-attest-sweep <answers-file>` — the answers file must name every
+  in-worktree file, COMMIT the work, then
+  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-attest-preflight <answers-file>`
+  (the inline prefix is REQUIRED exactly as for the review itself — the attest verbs
+  resolve the arc via env_arc_and_lane(), so a bare invocation attests the branch-*
+  fallback arc while the prefixed review checks the reserved one and refuses; attest
+  AFTER the final commit — the attestation binds head+digest and goes stale on any
+  later commit). After every BLOCK round: absorb, classify each finding, commit, then
+  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-attest-sweep <answers-file>`
+  — the answers file must name every
   outstanding finding_id token-exactly (the refusal enumerates any it is missing;
   findings are obligations across both loop channels, not per-round rows). The
   round budget is
