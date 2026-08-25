@@ -736,6 +736,13 @@ TOCTOU_LOOKBACK = 10
 _FAIL_CLASS_BY_SEVERITY = {"hard": "terminal-", "warn": "HITL-recoverable-"}
 
 
+def _gate_log_path(root: Path) -> Path:
+    """finding_record.GATE_LOG_JSONL is the path authority (env seam included); this
+    stdlib-safe mirror exists because validate() runs under interpreters that cannot
+    import the record layer, and only ever STATS the file, never writes it."""
+    return Path(os.environ.get("HARNESS_GATE_LOG") or root / ".harness" / "merge-gate-log.jsonl")
+
+
 def _lane_id() -> str:
     """C-HE-12 §2: the lane-discriminating field, so new codes do not inherit the drift
     check's lane-attribution gap (R-3). `ci` attributes lane-less venues (the CI runner)."""
@@ -1035,7 +1042,7 @@ def _reservation_heads() -> tuple[list[dict], list[str]]:
         if cur is None:
             continue
         head = cur[1]
-        if not _valid_head(head):
+        if not _valid_head(head, arc_id=d.name):
             # Syntactically-valid but schema-corrupt (e.g. {}): downstream .get()
             # consumers would silently drop the arc from orphan detection and
             # verified-base attribution.
@@ -1045,13 +1052,15 @@ def _reservation_heads() -> tuple[list[dict], list[str]]:
     return heads, unreadable
 
 
-def _valid_head(head) -> bool:
-    """The two fields every downstream consumer keys on. A head missing them is
-    malformed store state, not a lesser head."""
+def _valid_head(head, *, arc_id: str) -> bool:
+    """The two fields every downstream consumer keys on, bound to their authorities: a
+    state outside reservations.STATES (e.g. a typo'd "opne") would be silently skipped
+    by every `== "open"` comparison, and a head whose arc_id differs from its
+    containing directory would make revalidation consult ANOTHER reservation."""
+    import reservations as rs
+
     return (
-        isinstance(head, dict)
-        and isinstance(head.get("arc_id"), str)
-        and isinstance(head.get("state"), str)
+        isinstance(head, dict) and head.get("arc_id") == arc_id and head.get("state") in rs.STATES
     )
 
 
@@ -1064,7 +1073,7 @@ def _reservation_head_current(arc_id: str) -> dict | None:
     cur = rs.current(arc_id)
     if cur is None:
         return None
-    if not _valid_head(cur[1]):
+    if not _valid_head(cur[1], arc_id=arc_id):
         raise RuntimeError(f"reservation head {arc_id!r} is schema-corrupt on revalidation")
     return cur[1]
 
@@ -1095,6 +1104,13 @@ def _door_lease_strict() -> dict | None:
     only with a legitimate concurrent lease transition, observed by the next run."""
     import merge_door as md
 
+    # DOOR-level containment first: a symlinked door dir relocates LEASE and every
+    # sidecar to externally controlled state (each child check would then pass against
+    # the forged targets); a non-directory DOOR with lease state present is malformed.
+    if md.DOOR.is_symlink():
+        raise RuntimeError("merge-door dir is a symlink -- refused (containment)")
+    if md.DOOR.exists() and not md.DOOR.is_dir():
+        raise RuntimeError("merge-door dir is not a directory -- refused (containment)")
     if md.LEASE.is_symlink():
         # read_lease() follows the link; a forged target must not feed the checks.
         raise RuntimeError("merge-door LEASE is a symlink -- refused (containment)")
@@ -1311,12 +1327,16 @@ def validate(
                 )
             )
         else:
-            suite = _emitting_detections_dispatch(state.root, _lane_id())
-            findings.extend(suite)
-            if suite and not state.is_linked_worktree:
-                # Same-run disclosure (codex r9): `state` was derived before the
-                # suite ran, so durable rows just appended are not in status_entries
-                # -- say so now rather than letting the next run discover its own
+            log = _gate_log_path(state.root)
+            size_before = log.stat().st_size if log.exists() else 0
+            findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
+            size_after = log.stat().st_size if log.exists() else 0
+            if size_after > size_before and not state.is_linked_worktree:
+                # Same-run disclosure (codex r9), keyed to an ACTUAL append (codex
+                # r10: a nonempty suite does not imply one -- unattributed-info and
+                # emit-once recalls write nothing): `state` was derived before the
+                # suite ran, so rows just appended are not in status_entries -- say
+                # so now rather than letting the next run discover its own
                 # predecessor's write as a hard isolation failure.
                 findings.append(
                     Finding(

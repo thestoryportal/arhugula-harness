@@ -1796,3 +1796,33 @@ def test_blocked_lease_missing_blocked_at_raises(monkeypatch) -> None:
         assert "blocked_at" in str(exc)
     else:
         raise AssertionError("missing blocked_at must raise, not read as not-stale")
+
+
+def test_valid_head_binds_enum_and_directory() -> None:
+    """A typo'd state would be silently skipped by every == comparison; an arc_id
+    differing from its directory would consult another reservation (codex r10)."""
+    assert cg._valid_head({"arc_id": "a", "state": "open"}, arc_id="a") is True
+    assert cg._valid_head({"arc_id": "a", "state": "opne"}, arc_id="a") is False
+    assert cg._valid_head({"arc_id": "b", "state": "open"}, arc_id="a") is False
+
+
+def test_symlinked_door_dir_refused_in_lease_read(tmp_path, monkeypatch) -> None:
+    """A symlinked door dir relocates LEASE and every sidecar to external state; each
+    child check would pass against the forged targets (codex r10 -- the r7 retraction
+    dropped this check with the attestation and it is restored here)."""
+    import merge_door as md
+
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "LEASE").write_text(json.dumps({"lease_token": "t", "state": "held"}), encoding="utf-8")
+    door = tmp_path / "merge-door"
+    door.symlink_to(real)
+    monkeypatch.setattr(md, "DOOR", door)
+    monkeypatch.setattr(md, "LEASE", door / "LEASE")
+
+    try:
+        cg._door_lease_strict()
+    except RuntimeError as exc:
+        assert "symlink" in str(exc)
+    else:
+        raise AssertionError("a symlinked door dir must refuse")
