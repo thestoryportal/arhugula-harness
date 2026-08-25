@@ -178,10 +178,11 @@
       "id": 10,
       "eval_name": "detection-surface-venue-and-suppression",
       "skill": "defect-class-preflight",
-      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit .claude/skills/defect-class-preflight/evals/fixtures/detector_suite.py (staged as a fixture). Perform a thorough pre-commit review of the file. List every defect \u2014 cite line, name the defect, say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT execute the fixture code.",
+      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit .claude/skills/defect-class-preflight/evals/fixtures/detector_suite.py and its producer .claude/skills/defect-class-preflight/evals/fixtures/store_reader.py (staged as fixtures). Perform a thorough pre-commit review of both files. List every defect \u2014 cite line, name the defect, say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT execute the fixture code.",
       "expected_output": "review.md naming: the venue-blind producer import (3.11+ producer consumed from a documented 3.9 venue, ImportError arm makes every check silently no-op), the success-shaped empty return on exception (corrupt store reads as nothing-to-detect), and the unguarded suppression input (muted.json can be symlinked/forged and mutes hard detections; $HOME-absolute default)",
       "files": [
-        "fixtures/detector_suite.py"
+        "fixtures/detector_suite.py",
+        "fixtures/store_reader.py"
       ],
       "assertions": [
         "flags that open_heads' except arm returns [] so a store failure is indistinguishable from an empty store \u2014 'couldn't look' reading as clean",

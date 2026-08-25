@@ -810,9 +810,10 @@ def _record_detection(payload: dict) -> str:
                 return False
             return True
 
-        for r in mine:
-            if r.get("record_kind") != "finding":
-                continue
+        valid_findings_mine = [
+            r for r in mine if r.get("record_kind") == "finding" and _validated(r)
+        ]
+        for r in valid_findings_mine:
             if last_disposition.get(r["finding_id"]) not in ("rejected", "suppressed"):
                 continue
             adjs = [
@@ -824,7 +825,10 @@ def _record_detection(payload: dict) -> str:
             if _validated(r) and adjs and _validated(adjs[-1]):
                 outcome[0] = "adjudicated"
                 return []
-        if any(r.get("record_kind") == "finding" for r in mine):
+        # Dedupe counts only VALIDATED rows (codex r11): a schema-invalid but
+        # JSON-readable matching row must not stand in for the required valid
+        # C-HE-24 emission.
+        if valid_findings_mine:
             outcome[0] = "recorded"
             return []
         return [
@@ -1121,10 +1125,12 @@ def _door_lease_strict() -> dict | None:
     # refused before anything opens it -- an open() on a FIFO hangs the guard. The
     # glob needs no lease token, so no chicken-and-egg read of the payload.
     if md.DOOR.is_dir():
-        for blk in md.DOOR.glob("LEASE.*.blocked"):
-            if blk.is_symlink() or not blk.is_file():
+        # ALL sidecars, not only *.blocked (codex r11): read_lease also opens
+        # attempted / refresh / refresh.attempted / refresh.intent.
+        for side in md.DOOR.glob("LEASE.*"):
+            if side.is_symlink() or not side.is_file():
                 raise RuntimeError(
-                    f"merge-door blocked sidecar {blk.name!r} is not a regular file "
+                    f"merge-door sidecar {side.name!r} is not a regular file "
                     "-- refused (containment)"
                 )
     lease = md.read_lease()
@@ -1152,6 +1158,10 @@ def _blocked_lease_older_than_bound() -> dict | None:
             tzinfo=timezone.utc  # noqa: UP017 - same stdlib-runtime constraint
         )
     ).total_seconds()
+    if age_s < 0:
+        # mark_blocked stamps now_iso on this host; a future blocked_at is malformed
+        # or forged state that would otherwise mute the stale check until that time.
+        raise RuntimeError(f"blocked lease blocked_at {blocked_at!r} is in the future")
     return lease if age_s > md.POST_MERGE_CI_BOUND_S + md.REFRESH_BOUND_S else None
 
 
@@ -1338,9 +1348,13 @@ def validate(
                 # suite ran, so rows just appended are not in status_entries -- say
                 # so now rather than letting the next run discover its own
                 # predecessor's write as a hard isolation failure.
+                # HARD (codex r11): this run created exactly the state the next
+                # run hard-fails as ROOT_CHECKOUT_EDIT -- exiting 0 here would
+                # silently dirty the shared checkout and defer the red to a run
+                # that did not cause it.
                 findings.append(
                     Finding(
-                        "warn",
+                        "hard",
                         "GATE_LOG_PENDING_COMMIT",
                         "detections appended durable rows to the tracked gate log in "
                         "this root checkout; commit them (the next arc's ship or a "
