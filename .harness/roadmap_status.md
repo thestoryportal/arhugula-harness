@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `9a85417dc55a` |
+| `workspace_state_hash` | `22450e31905f` |
 | `last_refreshed` | 2026-08-25T00:00:00Z |
-| `git_head` | `7adeb2ad` —  |
+| `git_head` | `c8b58f09` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1448).** The next work is the OPERATOR-DIRECTED two-feature build (mode-agnostic workspace ops, fresh-context arc): (1) the consumer-pattern-inventory amendment to defect-class-preflight — a mandatory pause when a diff introduces a new consumer of an existing data surface: inventory every consumed field's producer semantics (null/absent/partial/provenance/C-* contract) via graft + overlay-query into a table that becomes the test matrix, plus parse-dont-validate typed-row enforcement and a precedent-search step; SKILL.md prose authored by a laws:prompt-loaded delegate per standing feedback — and (2) add the context7 MCP server (claude mcp add context7 -- npx -y @upstash/context7-mcp; not currently configured) wired into the same preflight guidance for external-SDK surfaces, never replacing the run-the-interface probe. Full design + rationale at checkpoint 20260824-182500-lever-observability-held.md. THEN resume the HELD arc on branch feat/lever-observability (9 commits through the r12 record; reservation lever-observability pending; 11 codex rounds absorbed, r12 recorded unacted) and finish it as the features' live test per the checkpoint's resume protocol — one codex round with the new machinery, findings profile compared against rounds 1-11, then LEAN witness-adequacy lens and the door. After that the next implementable unit is `U-HE-33` (S4d detections per C-HE-12).
+**Current next action (post-#1450).** The consumer-pattern-inventory amendment + locked-local context7 MCP landed at #1450, so the operator hold's precondition is met: RESUME the HELD arc on branch feat/lever-observability per the resume protocol at checkpoint 20260824-182500-lever-observability-held.md — re-enter the branch (9 commits through the r12 record; reservation lever-observability pending, lane d56be5f6), apply the new-consumer inventory pause retroactively as the resume's first act, read round 12's recorded verdict in .harness/merge-gate-log.jsonl (bound to head 89d94b643), run ONE codex round with the new machinery active and compare its findings profile against rounds 1-11 (that comparison is the features' live test), then the LEAN witness-adequacy lens and the merge door; queue arc metrics with --arc-id lever-observability and levers B-211+B-212 iff the skills genuinely ran. After that the next implementable unit is `U-HE-33` (S4d detections per C-HE-12).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1450 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1448 | 2026-08-25 | operator hold at cap gate: lever-observability parked; next build = consumer-pattern-inventory skill + context7 |
 | PR #1447 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1445 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1443 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1441 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
