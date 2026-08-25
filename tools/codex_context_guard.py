@@ -109,6 +109,10 @@ class GuardState:
     latest_retirement_batch: str
     lag_expected: bool
     owed_lag: bool
+    #: True iff any pending change to the tracked gate log is provably append-only
+    #: (unstaged, zero deleted lines). Computed by derive(); defaults True so
+    #: synthetic states without a gate-log entry are unaffected.
+    gate_log_append_only: bool = True
 
 
 @dataclass(frozen=True)
@@ -595,7 +599,24 @@ def derive(
         latest_retirement_batch=batch,
         lag_expected=_lag_expected(root),
         owed_lag=_owed_lag(root),
+        gate_log_append_only=_gate_log_append_only(root),
     )
+
+
+def _gate_log_append_only(root: Path) -> bool:
+    """True iff the gate log's pending state is provably the guard's own append:
+    no staged change, and the unstaged diff deletes zero lines. Deletion, truncation,
+    rewrite, or a staged replacement all fail this proof and stay ROOT_CHECKOUT_EDIT
+    material -- the pathname alone must never be the exemption."""
+    staged = _run(["git", "diff", "--cached", "--numstat", "--", GATE_LOG_REL], cwd=root)
+    unstaged = _run(["git", "diff", "--numstat", "--", GATE_LOG_REL], cwd=root)
+    if staged.returncode != 0 or unstaged.returncode != 0 or staged.stdout.strip():
+        return False
+    line = unstaged.stdout.strip()
+    if not line:
+        return True  # no pending change at all
+    fields = line.split("\t")
+    return len(fields) >= 2 and fields[1] == "0" and fields[0] != "-"
 
 
 def _has_design_impl_mix(files: list[str]) -> bool:
@@ -755,11 +776,14 @@ def _record_detection(payload: dict) -> str:
     concurrent checks cannot both miss the prior row and append twins). Outcome tokens:
 
     - ``adjudicated`` -- some prior observation with this exact (producer, location,
-      evidence) belongs to a finding_id lineage that carries a `finding_adjudication`
-      row: the operator disposed that finding (C-HE-24 §5 adjudicates ONE finding_id),
-      and re-raising the identical observation would undo the disposition. Different
-      evidence at the same site is a NEW event and is never suppressed by an old
-      adjudication.
+      evidence, lane) belongs to a finding_id lineage whose LAST adjudication
+      disposition is `rejected` (false positive) or `suppressed` (operator muted):
+      re-raising would undo that disposition. An `accepted` disposition means
+      CONFIRMED REAL and never mutes a still-present condition -- the projection
+      keeps surfacing (via ``recorded``) until the condition itself is repaired.
+      Different evidence at the same site is a NEW event and is never suppressed by
+      an old adjudication. (The BASE_TOCTOU recovery path is the door's
+      `unblocked_from` attestation, not an adjudication.)
     - ``recorded`` -- this lane already has an identical observation in the log; no
       duplicate append, the projection still surfaces. The same evidence seen by a
       DIFFERENT lane appends its own row -- lane_id is immutable core (C-HE-24 §6),
@@ -784,10 +808,12 @@ def _record_detection(payload: dict) -> str:
             for r in site
             if r.get("observed_evidence") == evidence and r.get("lane_id") == payload["lane_id"]
         ]
-        adjudicated_ids = {
-            r["finding_id"] for r in site if r.get("record_kind") == "finding_adjudication"
-        }
-        if any(r["finding_id"] in adjudicated_ids for r in mine):
+        # Last disposition per lineage, file-order (C-HE-29 "last disposition").
+        last_disposition: dict[str, str | None] = {}
+        for r in site:
+            if r.get("record_kind") == "finding_adjudication":
+                last_disposition[r["finding_id"]] = r.get("disposition")
+        if any(last_disposition.get(r["finding_id"]) in ("rejected", "suppressed") for r in mine):
             outcome[0] = "adjudicated"
             return []
         if any(r.get("record_kind") == "finding" for r in mine):
@@ -905,11 +931,12 @@ def check_base_toctou(merges: list[tuple[str, str, str]], *, lane_id: str) -> li
     return [f for f in found if f is not None]
 
 
-def check_orphaned_reservations(*, lane_id: str) -> list[Finding]:
+def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Finding]:
     """§9 row 4: an `open` head whose PR is MERGED/CLOSED without a terminal transition,
-    or a `blocked` lease older than its bound."""
+    or a `blocked` lease older than its bound. `heads` is the suite's ONE store scan
+    (`_reservation_heads` via `_emitting_detections`)."""
     out: list[Finding | None] = []
-    for h in _reservation_heads():
+    for h in heads:
         pr_state = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
         if pr_state in ("MERGED", "CLOSED"):
             # Revalidate against the CURRENT generation before the durable emission: the
@@ -943,45 +970,48 @@ def check_orphaned_reservations(*, lane_id: str) -> list[Finding]:
     return [f for f in out if f is not None]
 
 
-def _reservation_heads() -> list[dict]:
+def _reservation_heads() -> tuple[list[dict], list[str]]:
+    """One scan of the store. Returns (readable heads, unreadable entry names). A
+    store-level refusal MUST propagate (the dispatch converts it to a hard
+    DETECTIONS_UNAVAILABLE): reservations_root() deliberately rejects a symlinked
+    store as a containment breach, and swallowing that would disable orphan detection
+    and de-attribute every landing exactly when the store is suspect. Only a genuinely
+    absent store directory means "no reservations yet". Per-entry failures do not
+    discard the valid heads; the caller surfaces them as a hard partial-failure
+    finding (an stderr note alone is discarded on the uv fallback path)."""
     import reservations as rs  # importability is the dispatch boundary's concern
 
-    # A store-level refusal MUST propagate (the dispatch converts it to a hard
-    # DETECTIONS_UNAVAILABLE): reservations_root() deliberately rejects a symlinked
-    # store as a containment breach, and swallowing that here would disable orphan
-    # detection and de-attribute every landing exactly when the store is suspect.
-    # Only a genuinely absent store directory means "no reservations yet".
     root = rs.reservations_root()
     if not root.is_dir():
-        return []
-    dirs = [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
-    heads = []
-    for d in dirs:
-        # Per-entry isolation: one corrupt head must not discard every valid head with
-        # it (that would silently suppress ORPHANED_RESERVATION and de-attribute every
-        # BASE_TOCTOU landing). The bad entry is named on stderr and skipped.
+        return [], []
+    heads: list[dict] = []
+    unreadable: list[str] = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
         try:
             cur = rs.current(d.name)
-        except Exception as exc:
-            print(f"guard: reservation head {d.name!r} unreadable ({exc})", file=sys.stderr)
+        except Exception:
+            unreadable.append(d.name)
             continue
         if cur:
             heads.append(cur[1])
-    return heads
+    return heads, unreadable
 
 
 def _reservation_head_current(arc_id: str) -> dict | None:
-    try:
-        import reservations as rs
+    """None means the head genuinely no longer exists (arc gc'd); a READ failure
+    propagates to the dispatch boundary rather than reading as absence."""
+    import reservations as rs
 
-        cur = rs.current(arc_id)
-    except Exception as exc:
-        print(f"guard: head {arc_id!r} unreadable on revalidation ({exc})", file=sys.stderr)
-        return None
+    cur = rs.current(arc_id)
     return cur[1] if cur else None
 
 
-def _gh_pr_state(pr: int) -> str | None:
+def _gh_pr_state(pr: int) -> str:
+    """A failed query RAISES (dispatch -> hard DETECTIONS_UNAVAILABLE): a missing or
+    unauthenticated `gh` must not read as "PR not merged/closed", which would let every
+    open reservation evade ORPHANED_RESERVATION while the suite exits green."""
     try:
         p = subprocess.run(
             ["gh", "pr", "view", str(pr), "--json", "state", "--jq", ".state"],
@@ -989,18 +1019,20 @@ def _gh_pr_state(pr: int) -> str | None:
             text=True,
             timeout=30,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return (p.stdout.strip() or None) if p.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"gh pr view {pr} failed: {exc}") from exc
+    state = p.stdout.strip()
+    if p.returncode != 0 or not state:
+        raise RuntimeError(f"gh pr view {pr} failed: {p.stderr.strip() or 'empty state'}")
+    return state
 
 
 def _blocked_lease_older_than_bound() -> dict | None:
-    try:
-        import merge_door as md
+    """A malformed or unreadable lease/sidecar propagates to the dispatch boundary --
+    it must not suppress the stale-blocked-lease check by reading as absence."""
+    import merge_door as md
 
-        lease = md.read_lease()
-    except Exception:  # no door state on this host is "nothing to detect"
-        return None
+    lease = md.read_lease()
     if not lease or lease.get("state") != "blocked":
         return None
     blocked_at = lease.get("blocked_at")  # ISO sidecar value merged in by md.read_lease()
@@ -1015,7 +1047,9 @@ def _blocked_lease_older_than_bound() -> dict | None:
     return lease if age_s > md.POST_MERGE_CI_BOUND_S + md.REFRESH_BOUND_S else None
 
 
-def _recent_main_merges(root: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
+def _recent_main_merges(
+    root: Path, heads: list[dict]
+) -> tuple[list[tuple[str, str, str]], list[str]]:
     """The last TOCTOU_LOOKBACK first-parent landings, each joined to the reservation that
     recorded it as `merge_sha` (U-HE-23). The door squash-merges, so landings have ONE
     parent and `--merges` would inspect none of them. Returns (attributed
@@ -1025,7 +1059,7 @@ def _recent_main_merges(root: Path) -> tuple[list[tuple[str, str, str]], list[st
         # An unreadable history must not read as a clean backstop -- the dispatch
         # converts this raise into a hard DETECTIONS_UNAVAILABLE finding.
         raise RuntimeError(f"git log --first-parent failed: {proc.stderr.strip() or proc.args}")
-    by_merge_sha = {h["merge_sha"]: h for h in _reservation_heads() if h.get("merge_sha")}
+    by_merge_sha = {h["merge_sha"]: h for h in heads if h.get("merge_sha")}
     attested = _unblock_attested_shas()
     merges: list[tuple[str, str, str]] = []
     unattributed: list[str] = []
@@ -1057,24 +1091,23 @@ def _unblock_attested_shas() -> set[str]:
     horizon, far beyond the TOCTOU_LOOKBACK landing window at this repo's cadence; a
     landing that somehow outlasts both is re-raised once and the operator's
     finding_adjudication (`_record_detection`) retires it permanently."""
-    try:
-        import merge_door as md
+    import merge_door as md
 
-        records: list[dict] = []
-        lease = md.read_lease()
-        if lease:
-            records.append(lease)
-        for prefix in ("released", "reclaimed"):
-            for p in md.DOOR.glob(f"{prefix}.*"):
-                try:
-                    rec = json.loads(p.read_text())
-                except (OSError, ValueError) as exc:
-                    print(f"guard: door record {p.name!r} unreadable ({exc})", file=sys.stderr)
-                    continue
-                if isinstance(rec, dict):
-                    records.append(rec)
-    except Exception:  # no door state on this host attests nothing
-        return set()
+    records: list[dict] = []
+    lease = md.read_lease()
+    if lease:
+        records.append(lease)
+    for prefix in ("released", "reclaimed"):
+        for p in md.DOOR.glob(f"{prefix}.*"):
+            try:
+                rec = json.loads(p.read_text())
+            except (OSError, ValueError) as exc:
+                # An unreadable attestation carrier could silently re-raise a race the
+                # operator already recovered -- propagate (dispatch -> hard finding);
+                # the door dir is small and the fix (remove/repair one file) is named.
+                raise RuntimeError(f"door record {p.name!r} unreadable: {exc}") from exc
+            if isinstance(rec, dict):
+                records.append(rec)
     return {r["unblocked_from"] for r in records if r.get("unblocked_from")}
 
 
@@ -1083,7 +1116,17 @@ def _emitting_detections(root: Path, lane: str) -> list[Finding]:
     (`_emitting_detections_dispatch` is the venue boundary)."""
     findings: list[Finding] = []
     findings.extend(check_split_brain(root / ARC_METRICS_JSONL, lane_id=lane))
-    merges, unattributed = _recent_main_merges(root)
+    heads, unreadable = _reservation_heads()
+    if unreadable:
+        findings.append(
+            _detections_unavailable(
+                lane,
+                "reservation heads unreadable: "
+                + ", ".join(sorted(unreadable))
+                + " (detections ran on the readable remainder)",
+            )
+        )
+    merges, unattributed = _recent_main_merges(root, heads)
     findings.extend(check_base_toctou(merges, lane_id=lane))
     if unattributed:
         findings.append(
@@ -1095,7 +1138,7 @@ def _emitting_detections(root: Path, lane: str) -> list[Finding]:
                 "first-parent check skipped for: " + ", ".join(s[:12] for s in unattributed),
             )
         )
-    findings.extend(check_orphaned_reservations(lane_id=lane))
+    findings.extend(check_orphaned_reservations(heads, lane_id=lane))
     return findings
 
 
@@ -1187,8 +1230,14 @@ def validate(
     # that append-only operational write is a durable record landing where it lives,
     # not a checkout edit, and must not make the guard's NEXT invocation fail on its
     # own output (the CODEX_LOOP_STATE exclusion in worktree_fingerprint is the same
-    # posture). Any OTHER entry still trips the isolation check.
-    isolation_entries = [e for e in state.status_entries if e.split()[-1] != GATE_LOG_REL]
+    # posture). The exemption requires the APPEND-ONLY PROOF from derive(), never the
+    # pathname alone: deletion, truncation, rewrite, or a staged replacement of the
+    # log keeps its entry ROOT_CHECKOUT_EDIT material. Any OTHER entry always trips.
+    isolation_entries = [
+        e
+        for e in state.status_entries
+        if not (e.split()[-1] == GATE_LOG_REL and state.gate_log_append_only)
+    ]
     if isolation_entries and not state.is_linked_worktree:
         findings.append(
             Finding(

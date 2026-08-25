@@ -1155,6 +1155,21 @@ def _isolate_gate_log(monkeypatch, tmp_path: Path) -> Path:
     return log
 
 
+def _adjudicate(row: dict, disposition: str) -> None:
+    fr.append_row(
+        {
+            **row,
+            "record_kind": "finding_adjudication",
+            "ts": "2099-01-01T00:00:00Z",
+            "disposition": disposition,
+            "disposition_actor": "operator",
+        }
+    )
+
+
+OPEN_HEAD = {"arc_id": "pr-9", "state": "open", "pr": 9}
+
+
 def test_split_brain_ledger_duplicate_arc_id(tmp_path, monkeypatch) -> None:
     log = _isolate_gate_log(monkeypatch, tmp_path)
     ledger = tmp_path / "arc-metrics.jsonl"
@@ -1199,16 +1214,11 @@ def test_base_toctou(tmp_path, monkeypatch) -> None:
 
 def test_orphaned_reservation(tmp_path, monkeypatch) -> None:
     _isolate_gate_log(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
-    )
-    monkeypatch.setattr(
-        cg, "_reservation_head_current", lambda arc_id: {"arc_id": "pr-9", "state": "open", "pr": 9}
-    )
+    monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
     monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
 
-    fs = cg.check_orphaned_reservations(lane_id="l")
+    fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
 
     assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
     assert fs[0].severity == "warn"
@@ -1216,14 +1226,13 @@ def test_orphaned_reservation(tmp_path, monkeypatch) -> None:
 
 def test_orphaned_reservation_blocked_lease_past_bound(tmp_path, monkeypatch) -> None:
     _isolate_gate_log(monkeypatch, tmp_path)
-    monkeypatch.setattr(cg, "_reservation_heads", lambda: [])
     monkeypatch.setattr(
         cg,
         "_blocked_lease_older_than_bound",
         lambda: {"pr": 5, "reservation_id": "u-x", "state": "blocked"},
     )
 
-    fs = cg.check_orphaned_reservations(lane_id="l")
+    fs = cg.check_orphaned_reservations([], lane_id="l")
 
     assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
     assert "blocked lease" in fs[0].message
@@ -1254,9 +1263,10 @@ def test_check_mode_on_default_branch_runs_detections(monkeypatch) -> None:
     monkeypatch.setattr(
         cg,
         "check_orphaned_reservations",
-        lambda *, lane_id: calls.append("orphan") or [],
+        lambda heads, *, lane_id: calls.append("orphan") or [],
     )
-    monkeypatch.setattr(cg, "_recent_main_merges", lambda root: ([], []))
+    monkeypatch.setattr(cg, "_reservation_heads", lambda: ([], []))
+    monkeypatch.setattr(cg, "_recent_main_merges", lambda root, heads: ([], []))
 
     cg.validate(_state(branch="main"), mode="check")
     assert calls == ["split", "toctou", "orphan"]
@@ -1268,10 +1278,9 @@ def test_check_mode_on_default_branch_runs_detections(monkeypatch) -> None:
 
 
 def test_detection_emit_once_and_adjudication_recall(tmp_path, monkeypatch) -> None:
-    """Round-2 absorption: a repeated identical detection appends no duplicate row, and a
-    site whose lineage carries a finding_adjudication (the operator's durable recovery
-    attestation, C-HE-24 §5) is recalled -- the detection returns None instead of
-    re-raising the recovered race on every later main check."""
+    """A repeated identical detection appends no duplicate row; a lineage whose LAST
+    disposition is `suppressed`/`rejected` is recalled (returns None); an `accepted`
+    disposition means CONFIRMED REAL and keeps the projection surfacing."""
     log = _isolate_gate_log(monkeypatch, tmp_path)
     mismatch = [("m" * 40, "b" * 40, "c" * 40)]
 
@@ -1282,34 +1291,35 @@ def test_detection_emit_once_and_adjudication_recall(tmp_path, monkeypatch) -> N
     rows = [json.loads(line) for line in log.read_text().splitlines()]
     assert len(rows) == 1  # emit-once: the second identical observation did not re-append
 
-    adjudication = {
-        **rows[0],
-        "record_kind": "finding_adjudication",
-        "ts": "2099-01-01T00:00:00Z",
-        "disposition": "accepted",
-        "disposition_actor": "operator",
-    }
-    fr.append_row(adjudication)
+    _adjudicate(rows[0], "accepted")
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="l")] == ["BASE_TOCTOU"]
 
+    # a still-present condition later suppressed by the operator IS recalled
+    _isolate_gate_log(monkeypatch, tmp_path / "second")
+    (tmp_path / "second").mkdir(exist_ok=True)
+    fs = cg.check_base_toctou(mismatch, lane_id="l")
+    assert [f.code for f in fs] == ["BASE_TOCTOU"]
+    rows2 = [
+        json.loads(line)
+        for line in (tmp_path / "second" / "merge-gate-log.jsonl").read_text().splitlines()
+    ]
+    _adjudicate(rows2[0], "suppressed")
     assert cg.check_base_toctou(mismatch, lane_id="l") == []
 
 
 def test_detection_new_evidence_mints_new_ordinal(tmp_path, monkeypatch) -> None:
-    """Round-2 absorption: ids come from append_observation's locked mint, never a
-    hand-built ordinal -- drifted evidence at one site lands as a NEW observation."""
+    """Ids come from append_observations' locked mint, never a hand-built ordinal --
+    drifted evidence at one site lands as a NEW observation."""
     _isolate_gate_log(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
-    )
-    monkeypatch.setattr(
-        cg, "_reservation_head_current", lambda arc_id: {"arc_id": "pr-9", "state": "open", "pr": 9}
-    )
+    monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
 
     monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
-    assert [f.code for f in cg.check_orphaned_reservations(lane_id="l")] == ["ORPHANED_RESERVATION"]
+    fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
+    assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
     monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "CLOSED")
-    assert [f.code for f in cg.check_orphaned_reservations(lane_id="l")] == ["ORPHANED_RESERVATION"]
+    fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
+    assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
 
     rows = fr.read_rows()
     assert len(rows) == 2
@@ -1317,24 +1327,69 @@ def test_detection_new_evidence_mints_new_ordinal(tmp_path, monkeypatch) -> None
     assert {r["finding_id"].rsplit(":", 1)[1] for r in rows} == {"1", "2"}
 
 
+def test_adjudication_does_not_suppress_new_evidence(tmp_path, monkeypatch) -> None:
+    """C-HE-24 §5 adjudicates ONE finding_id -- a suppression at a site must not
+    swallow a NEW observation with different evidence there."""
+    _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    assert len(cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")) == 1
+    _adjudicate(fr.read_rows()[0], "suppressed")
+
+    assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []  # recalled
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "CLOSED")
+    assert len(cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")) == 1
+
+
+def test_adjudication_is_lane_scoped(tmp_path, monkeypatch) -> None:
+    """Lane A's suppressed lineage does not stand in for lane B -- a new lane
+    re-observing the same evidence appends its own lane-attributed row."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-a")] == ["BASE_TOCTOU"]
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    _adjudicate(rows[0], "suppressed")
+
+    assert cg.check_base_toctou(mismatch, lane_id="lane-a") == []  # lane A: recalled
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-b")] == ["BASE_TOCTOU"]
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    lane_b_rows = [r for r in rows if r.get("lane_id") == "lane-b"]
+    assert len(lane_b_rows) == 1  # lane B's own attribution row landed
+
+
+def test_orphan_emission_revalidates_current_generation(tmp_path, monkeypatch) -> None:
+    """A normal open->merged transition landing between the snapshot and the GitHub
+    answer must not be recorded as an orphan."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+    monkeypatch.setattr(
+        cg,
+        "_reservation_head_current",
+        lambda arc_id: {"arc_id": "pr-9", "state": "merged", "pr": 9},
+    )
+
+    assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []
+    assert not log.exists()  # no durable row for the ordinary completion
+
+
 def test_recent_main_merges_joins_real_git(tmp_path, monkeypatch) -> None:
-    """Round-2 absorption: the production join witnessed against a real git history --
-    a landing whose reservation records merge_sha/base_sha attributes with the commit's
-    actual first parent; a landing with no reservation is reported unattributed."""
+    """The production join witnessed against a real git history -- a landing whose
+    reservation records merge_sha/base_sha attributes with the commit's actual first
+    parent; a landing with no reservation is reported unattributed."""
     repo = _init_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD")
     (repo / "landed.txt").write_text("landed\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "landing")
     tip = _git(repo, "rev-parse", "HEAD")
-    monkeypatch.setattr(
-        cg,
-        "_reservation_heads",
-        lambda: [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": base}],
-    )
+    heads = [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": base}]
     monkeypatch.setattr(cg, "_unblock_attested_shas", lambda: set())
 
-    merges, unattributed = cg._recent_main_merges(repo)
+    merges, unattributed = cg._recent_main_merges(repo, heads)
 
     assert merges == [(tip, base, base)]  # first parent read from git == verified base
     assert unattributed == [base]  # the baseline commit has no reservation
@@ -1342,30 +1397,51 @@ def test_recent_main_merges_joins_real_git(tmp_path, monkeypatch) -> None:
 
 
 def test_recent_main_merges_skips_unblock_attested_sha(tmp_path, monkeypatch) -> None:
-    """Round-2 absorption: a landing the operator re-validated through merge_door.unblock
-    (live lease `unblocked_from`) is not re-raised as BASE_TOCTOU."""
+    """A landing the operator re-validated through merge_door.unblock is not re-raised
+    as BASE_TOCTOU."""
     repo = _init_repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD")
     (repo / "landed.txt").write_text("landed\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "landing")
     tip = _git(repo, "rev-parse", "HEAD")
-    monkeypatch.setattr(
-        cg,
-        "_reservation_heads",
-        lambda: [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": "x" * 40}],
-    )
+    heads = [{"arc_id": "u-x", "state": "merged", "merge_sha": tip, "base_sha": "x" * 40}]
     monkeypatch.setattr(cg, "_unblock_attested_shas", lambda: {tip})
 
-    merges, unattributed = cg._recent_main_merges(repo)
+    merges, unattributed = cg._recent_main_merges(repo, heads)
 
     assert merges == []  # the mismatching-but-attested landing is not compared
     assert unattributed == [base]
 
 
-def test_reservation_heads_survive_one_corrupt_entry(tmp_path, monkeypatch, capsys) -> None:
-    """Round-2 absorption: one unreadable head is named on stderr and skipped; the valid
-    heads survive instead of the whole scan collapsing to []."""
+def test_unblock_attestation_survives_lease_release(tmp_path, monkeypatch) -> None:
+    """release() moves the lease aside; the moved-aside record still carries
+    unblocked_from, so the recovery outlives the lease's tenure. A corrupt door
+    record raises (dispatch -> hard finding), never silently attests nothing."""
+    import merge_door as md
+
+    door = tmp_path / "merge-door"
+    door.mkdir()
+    (door / "released.tok1").write_text(
+        json.dumps({"state": "released", "unblocked_from": "f" * 40}), encoding="utf-8"
+    )
+    monkeypatch.setattr(md, "DOOR", door)
+    monkeypatch.setattr(md, "read_lease", lambda: None)
+
+    assert cg._unblock_attested_shas() == {"f" * 40}
+
+    (door / "reclaimed.tok2").write_text("{broken", encoding="utf-8")
+    try:
+        cg._unblock_attested_shas()
+    except RuntimeError as exc:
+        assert "reclaimed.tok2" in str(exc)
+    else:
+        raise AssertionError("a corrupt attestation carrier must raise, not attest nothing")
+
+
+def test_reservation_heads_partial_failure_is_surfaced(tmp_path, monkeypatch) -> None:
+    """One unreadable head does not discard the valid heads, and the failure is
+    returned for the suite to surface as a hard partial-failure finding."""
     import reservations as rs
 
     store = tmp_path / "reservations"
@@ -1381,17 +1457,31 @@ def test_reservation_heads_survive_one_corrupt_entry(tmp_path, monkeypatch, caps
 
     monkeypatch.setattr(rs, "current", fake_current)
 
-    heads = cg._reservation_heads()
+    heads, unreadable = cg._reservation_heads()
 
     assert heads == [good]
-    assert "bad-arc" in capsys.readouterr().err
+    assert unreadable == ["bad-arc"]
+
+
+def test_suite_surfaces_unreadable_heads_as_hard(monkeypatch, tmp_path) -> None:
+    _isolate_gate_log(monkeypatch, tmp_path)
+    (tmp_path / "arc-metrics.jsonl").write_text("")
+    monkeypatch.setattr(cg, "_reservation_heads", lambda: ([], ["bad-arc"]))
+    monkeypatch.setattr(cg, "_recent_main_merges", lambda root, heads: ([], []))
+    monkeypatch.setattr(cg, "check_orphaned_reservations", lambda heads, *, lane_id: [])
+
+    findings = cg._emitting_detections(tmp_path, "l")
+
+    hard = [f for f in findings if f.code == "DETECTIONS_UNAVAILABLE"]
+    assert len(hard) == 1 and hard[0].severity == "hard"
+    assert "bad-arc" in hard[0].message
 
 
 def test_dispatch_runs_whole_suite_via_uv_when_layer_unimportable(monkeypatch) -> None:
-    """Round-3 absorption: reservations.py / merge_door.py themselves need the uv env
-    (datetime.UTC is 3.11+), so a stdlib venue must not silently no-op the store-reading
-    detections -- the WHOLE suite dispatches through `uv run` and the child's findings
-    come back as this process's Findings."""
+    """reservations.py / merge_door.py themselves need the uv env (datetime.UTC is
+    3.11+), so a stdlib venue must not silently no-op the store-reading detections --
+    the WHOLE suite dispatches through `uv run` and the child's findings come back as
+    this process's Findings."""
     monkeypatch.setattr(cg, "_record_layer_importable", lambda: False)
     calls: list[list[str]] = []
 
@@ -1410,9 +1500,9 @@ def test_dispatch_runs_whole_suite_via_uv_when_layer_unimportable(monkeypatch) -
 
 
 def test_dispatch_failure_is_unlooked_not_clean(monkeypatch) -> None:
-    """Round-3 absorption: when neither the in-process layer nor the uv fallback can run,
-    the guard says so with a warn Finding -- an empty detection set must never be
-    indistinguishable from "could not look"."""
+    """When neither the in-process layer nor the uv fallback can run, the guard says so
+    with a HARD Finding -- an empty detection set must never be indistinguishable from
+    "could not look", and the blocking CI context must go red."""
     monkeypatch.setattr(cg, "_record_layer_importable", lambda: False)
     monkeypatch.setattr(
         cg,
@@ -1429,90 +1519,10 @@ def test_dispatch_failure_is_unlooked_not_clean(monkeypatch) -> None:
     assert "uv: not found" in findings[0].message
 
 
-def test_same_evidence_from_another_lane_gets_its_own_row(tmp_path, monkeypatch) -> None:
-    """Round-3 absorption: lane_id is immutable core (C-HE-24 §6) -- one lane's row must
-    not stand in for another lane's attribution of the identical observation."""
-    log = _isolate_gate_log(monkeypatch, tmp_path)
-    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
-
-    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-a")] == ["BASE_TOCTOU"]
-    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-b")] == ["BASE_TOCTOU"]
-
-    rows = [json.loads(line) for line in log.read_text().splitlines()]
-    assert [r["lane_id"] for r in rows] == ["lane-a", "lane-b"]
-    assert rows[0]["finding_id"] != rows[1]["finding_id"]
-
-
-def test_adjudication_does_not_suppress_new_evidence(tmp_path, monkeypatch) -> None:
-    """Round-3 absorption: C-HE-24 §5 adjudicates ONE finding_id -- an old disposition at
-    a site must not swallow a NEW observation with different evidence there."""
-    _isolate_gate_log(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
-    )
-    monkeypatch.setattr(
-        cg, "_reservation_head_current", lambda arc_id: {"arc_id": "pr-9", "state": "open", "pr": 9}
-    )
-    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
-
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
-    assert len(cg.check_orphaned_reservations(lane_id="l")) == 1
-    merged_row = fr.read_rows()[0]
-    fr.append_row(
-        {
-            **merged_row,
-            "record_kind": "finding_adjudication",
-            "ts": "2099-01-01T00:00:00Z",
-            "disposition": "accepted",
-            "disposition_actor": "operator",
-        }
-    )
-
-    assert cg.check_orphaned_reservations(lane_id="l") == []  # same evidence: recalled
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "CLOSED")
-    assert len(cg.check_orphaned_reservations(lane_id="l")) == 1  # new evidence: emits
-
-
-def test_orphan_emission_revalidates_current_generation(tmp_path, monkeypatch) -> None:
-    """Round-3 absorption: a normal open->merged transition landing between the snapshot
-    and the GitHub answer must not be recorded as an orphan."""
-    log = _isolate_gate_log(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
-    )
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
-    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
-    monkeypatch.setattr(
-        cg,
-        "_reservation_head_current",
-        lambda arc_id: {"arc_id": "pr-9", "state": "merged", "pr": 9},
-    )
-
-    assert cg.check_orphaned_reservations(lane_id="l") == []
-    assert not log.exists()  # no durable row for the ordinary completion
-
-
-def test_unblock_attestation_survives_lease_release(tmp_path, monkeypatch) -> None:
-    """Round-3 absorption: release() moves the lease aside; the moved-aside record still
-    carries unblocked_from, so the recovery outlives the lease's tenure."""
-    import merge_door as md
-
-    door = tmp_path / "merge-door"
-    door.mkdir()
-    (door / "released.tok1").write_text(
-        json.dumps({"state": "released", "unblocked_from": "f" * 40}), encoding="utf-8"
-    )
-    (door / "reclaimed.tok2").write_text("{broken", encoding="utf-8")  # named + skipped
-    monkeypatch.setattr(md, "DOOR", door)
-    monkeypatch.setattr(md, "read_lease", lambda: None)
-
-    assert cg._unblock_attested_shas() == {"f" * 40}
-
-
 def test_in_process_suite_raise_is_hard_unavailable(monkeypatch) -> None:
-    """Round-4 absorption: a store-level refusal (symlinked store, unreadable history)
-    propagates out of the suite and becomes a HARD finding at the one dispatch
-    enforcement point -- never an empty (clean-looking) result."""
+    """A store-level refusal (symlinked store, unreadable history, failed gh) propagates
+    out of the suite and becomes a HARD finding at the one dispatch enforcement point --
+    never an empty (clean-looking) result."""
 
     def raise_store(root, lane):
         raise RuntimeError("QUEUE_DIR/reservations is a symlink -- refused")
@@ -1528,8 +1538,8 @@ def test_in_process_suite_raise_is_hard_unavailable(monkeypatch) -> None:
 
 
 def test_reservation_store_refusal_propagates(monkeypatch) -> None:
-    """Round-4 absorption: _reservation_heads no longer converts a refused store into
-    an empty one -- the containment failure must reach the dispatch boundary."""
+    """_reservation_heads does not convert a refused store into an empty one -- the
+    containment failure must reach the dispatch boundary."""
     import reservations as rs
 
     def refuse():
@@ -1546,48 +1556,40 @@ def test_reservation_store_refusal_propagates(monkeypatch) -> None:
 
 
 def test_failed_git_log_raises_not_clean(tmp_path) -> None:
-    """Round-4 absorption: an unreadable history raises (dispatch -> hard finding)
-    instead of returning an empty, clean-looking merge set."""
+    """An unreadable history raises (dispatch -> hard finding) instead of returning an
+    empty, clean-looking merge set."""
     not_a_repo = tmp_path / "empty"
     not_a_repo.mkdir()
 
     try:
-        cg._recent_main_merges(not_a_repo)
+        cg._recent_main_merges(not_a_repo, [])
     except RuntimeError as exc:
         assert "git log" in str(exc)
     else:
         raise AssertionError("a failed git log must raise, not report clean")
 
 
-def test_adjudication_is_lane_scoped(tmp_path, monkeypatch) -> None:
-    """Round-4 absorption: lane A's adjudicated lineage does not stand in for lane B --
-    a new lane re-observing the same evidence appends its own lane-attributed row."""
-    log = _isolate_gate_log(monkeypatch, tmp_path)
-    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+def test_gh_failure_raises_not_not_merged(monkeypatch) -> None:
+    """A missing/unauthenticated gh raises (dispatch -> hard finding) -- it must not
+    read as "PR not merged/closed" and let orphans evade detection."""
 
-    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-a")] == ["BASE_TOCTOU"]
-    rows = [json.loads(line) for line in log.read_text().splitlines()]
-    fr.append_row(
-        {
-            **rows[0],
-            "record_kind": "finding_adjudication",
-            "ts": "2099-01-01T00:00:00Z",
-            "disposition": "accepted",
-            "disposition_actor": "operator",
-        }
-    )
+    def fake_run(args, **kwargs):
+        return subprocess.CompletedProcess(args=args, returncode=1, stdout="", stderr="auth")
 
-    assert cg.check_base_toctou(mismatch, lane_id="lane-a") == []  # lane A: recalled
-    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-b")] == ["BASE_TOCTOU"]
-    rows = [json.loads(line) for line in log.read_text().splitlines()]
-    lane_b_rows = [r for r in rows if r.get("lane_id") == "lane-b"]
-    assert len(lane_b_rows) == 1  # lane B's own attribution row landed
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    try:
+        cg._gh_pr_state(9)
+    except RuntimeError as exc:
+        assert "gh pr view 9" in str(exc)
+    else:
+        raise AssertionError("a failed gh query must raise, not read as open")
 
 
 def test_gate_log_append_is_not_a_root_checkout_edit() -> None:
-    """Round-4 absorption: the guard's own append to the tracked gate log (a durable
-    record landing where it lives) must not trip ROOT_CHECKOUT_EDIT on the next run;
-    any OTHER root-checkout entry still does."""
+    """The guard's own PROVEN append to the tracked gate log must not trip
+    ROOT_CHECKOUT_EDIT on the next run; any OTHER root-checkout entry still does, and
+    a NON-append change to the log (deletion/truncation/rewrite/staged) still trips."""
     only_log = _state(
         git_dir=".git",
         is_linked_worktree=False,
@@ -1597,6 +1599,16 @@ def test_gate_log_append_is_not_a_root_checkout_edit() -> None:
     findings = cg.validate(only_log, mode="closeout")
     assert not any(f.code == "ROOT_CHECKOUT_EDIT" for f in findings)
 
+    destructive = _state(
+        git_dir=".git",
+        is_linked_worktree=False,
+        status_entries=[" M .harness/merge-gate-log.jsonl"],
+        changed_files=[".harness/merge-gate-log.jsonl"],
+        gate_log_append_only=False,
+    )
+    findings = cg.validate(destructive, mode="closeout")
+    assert any(f.code == "ROOT_CHECKOUT_EDIT" and f.severity == "hard" for f in findings)
+
     mixed = _state(
         git_dir=".git",
         is_linked_worktree=False,
@@ -1605,3 +1617,35 @@ def test_gate_log_append_is_not_a_root_checkout_edit() -> None:
     )
     findings = cg.validate(mixed, mode="closeout")
     assert any(f.code == "ROOT_CHECKOUT_EDIT" and f.severity == "hard" for f in findings)
+
+
+def test_gate_log_append_only_proof_against_real_git(tmp_path) -> None:
+    """The derive-side proof: an append passes; a truncation fails."""
+    repo = _init_repo(tmp_path)
+    log = repo / ".harness" / "merge-gate-log.jsonl"
+    log.write_text('{"row":1}\n', encoding="utf-8")
+    _git(repo, "add", ".harness/merge-gate-log.jsonl")
+    _git(repo, "commit", "-m", "seed log")
+
+    assert cg._gate_log_append_only(repo) is True  # no pending change
+    log.write_text('{"row":1}\n{"row":2}\n', encoding="utf-8")
+    assert cg._gate_log_append_only(repo) is True  # pure append
+    log.write_text('{"rewritten":true}\n', encoding="utf-8")
+    assert cg._gate_log_append_only(repo) is False  # rewrite deletes lines
+
+
+def test_ci_pins_split_brain_job() -> None:
+    """The blocking split-brain CI job is pinned: deleting or de-blocking it reds this
+    test, and its run block carries both the corrupt-ledger validation and the
+    duplicate check."""
+    import yaml
+
+    ci = yaml.safe_load(
+        (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text()
+    )
+    job = ci["jobs"]["split-brain"]
+    assert job["name"] == "split-brain ledger backstop — blocking"
+    assert "if" not in job  # runs on PRs too; a push-only blocking job bricks PR merges
+    run = job["steps"][-1]["run"]
+    assert "jq empty .harness/arc-metrics.jsonl" in run
+    assert "uniq -d" in run and "SPLIT_BRAIN_LEDGER" in run
