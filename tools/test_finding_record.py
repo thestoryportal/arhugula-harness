@@ -742,3 +742,56 @@ def test_locked_body_reads_through_the_fd_not_the_pathname(tmp_path: Path, monke
     assert row["finding_id"].endswith(":1")
     monkeypatch.undo()
     assert len(fr.read_rows(p)) == 1
+
+
+def test_append_observations_reads_through_the_fd_not_the_pathname(tmp_path: Path, monkeypatch):
+    """merge-gate r3 witness: the fd-read guarantee at append_observations -- the call
+    site the C-HE-12 detection dispatch actually uses (the r2 witness covered only
+    append_observation; the lens mutation-verified this site's regression path was
+    undetectable). Poisoned pathname reader: a revert to read_rows(path) blows up."""
+    p = tmp_path / "g.jsonl"
+
+    def poisoned(path=None):
+        raise AssertionError("locked body read via the pathname, not the fd")
+
+    monkeypatch.setattr(fr, "read_rows", poisoned)
+    fields = dict(
+        location=LOC,
+        observed_evidence="fd-read witness (observations)",
+        expected_contract="C-HE-24 §4",
+        severity="P2",
+        finding_type="terminal-block",
+        lineage_claim="fresh",
+        producer="merge-gate",
+    )
+    written = fr.append_observations(lambda rows: [(dict(fields), _env())], p)
+    assert len(written) == 1 and written[0]["finding_id"].endswith(":1")
+    monkeypatch.undo()
+    assert len(fr.read_rows(p)) == 1
+
+
+def test_append_row_reads_through_the_fd_not_the_pathname(tmp_path: Path, monkeypatch):
+    """merge-gate r3 witness (P3 sibling): append_row's critical-section prior-rows
+    check also reads via the locked fd."""
+    p = tmp_path / "g.jsonl"
+    env = _env()
+    head = env.head_sha if env.head_sha is not None else "nohead"
+    core = fr.FindingCore(
+        finding_id=fr.make_finding_id("merge-gate", head, LOC, 1),
+        location=LOC,
+        observed_evidence="fd-read witness (row)",
+        expected_contract="C-HE-24 §4",
+        severity="P2",
+        finding_type="terminal-block",
+        lineage_claim="fresh",
+        producer="merge-gate",
+    )
+    row = fr.make_row(core, env)
+
+    def poisoned(path=None):
+        raise AssertionError("locked body read via the pathname, not the fd")
+
+    monkeypatch.setattr(fr, "read_rows", poisoned)
+    fr.append_row(row, p)
+    monkeypatch.undo()
+    assert len(fr.read_rows(p)) == 1

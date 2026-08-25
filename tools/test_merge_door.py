@@ -1391,6 +1391,14 @@ def test_adoption_refuses_symlinked_sidecar(door, monkeypatch):
     with pytest.raises(md.DoorBlocked, match="containment"):
         md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
     assert (2, "s" * 40) not in g.merge_calls
+    # merge-gate r3 P1: the un-bookkept containment DoorBlocked must be ADJUDICATED on
+    # the way out (blocked sidecar persisted), never exit leaving the lease silently
+    # wedged as `held` with no HITL route. Read the view with the plant removed.
+    outside_bytes = outside.read_text()
+    sidecar.unlink()
+    sidecar.write_text(outside_bytes)
+    adjudicated = md.read_lease()
+    assert adjudicated is not None and adjudicated.get("state") == "blocked", adjudicated
     outside.unlink()
 
 

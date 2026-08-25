@@ -670,3 +670,6 @@ B-206) rather than unaddressed defects.
 | 2026-08-25T12:03:03Z | #1454 | 7b6e3664de51 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
 | 2026-08-25T12:03:04Z | #1454 | 7b6e3664de51 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r2 |
 | 2026-08-25T12:03:04Z | #1454 | 7b6e3664de51 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r2 |
+| 2026-08-25T12:57:24Z | #1454 | c78dacd0efdf | merge-gate-concurrency | BLOCK | 1 finding(s) | r3 |
+| 2026-08-25T12:57:25Z | #1454 | c78dacd0efdf | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-08-25T12:57:26Z | #1454 | c78dacd0efdf | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |

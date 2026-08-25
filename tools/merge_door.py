@@ -1196,7 +1196,35 @@ def land(
         # a caller-supplied (resumed) lease must BE the door's current lease for THIS
         # arc/lane/pr (codex r3 P2): a stale or foreign dict would drive gh pr merge
         # while another lease is current, defeating the single-writer fence
-        live = read_lease()
+        try:
+            live = read_lease()
+        except DoorBlocked as exc:
+            # A containment refusal on the RESUME read carries no bookkeeping and this
+            # prologue sits before land()'s adjudicating try (merge-gate r3 P1):
+            # adjudicate HERE on the caller's lease so the wedge is visible and
+            # HITL-routable, never a silent `held` a later reclaim resumes past.
+            mark_blocked(
+                lease,
+                sha=lease.get("head_sha") or head_sha,
+                reason=f"containment_refusal:{exc}",
+            )
+            _emit_gate(
+                lease,
+                gate="merge-door-reconcile",
+                fail_class="HITL-recoverable",
+                cause="containment_refusal",
+                evidence=str(exc),
+                arc_id=arc_id,
+                lane_id=lane_id,
+            )
+            _notify(
+                "DEFERRED-HIL",
+                lane_id,
+                "merge-door-reconcile:HITL-recoverable:containment_refusal",
+                f"{arc_id} — pr #{pr}: {exc}; inspect the door dir, then "
+                f"`just merge-door-unblock {pr} <sha>`",
+            )
+            raise
         if (
             live is None
             or live["lease_token"] != lease["lease_token"]
@@ -1570,15 +1598,29 @@ def land(
                 f"lease released after pr #{pr}",
             )
         return "released"
-    except DoorBlocked:
-        raise  # already adjudicated: the blocked sidecar is persisted at the raise site
     except Exception as exc:
         # NOT only DoorFailed (codex r10 P1): the production seams raise RuntimeError,
         # JSONDecodeError, CalledProcessError, TimeoutExpired — any post-acquire escape
         # must adjudicate the lease (release pre-attempt / block post-attempt), never
         # exit with a live unblocked lease owned by a dead process
+        try:
+            refreshed = read_lease()
+        except DoorBlocked:
+            # a containment refusal while READING the view mid-adjudication: fall back
+            # to the caller dict rather than dying un-adjudicated (merge-gate r3 P1)
+            refreshed = None
+        if (
+            isinstance(exc, DoorBlocked)
+            and refreshed is not None
+            and refreshed.get("state") == "blocked"
+        ):
+            # already adjudicated: the blocked sidecar is persisted at the raise site
+            # (mark_blocked flows). A DoorBlocked WITHOUT that sidecar — e.g. a
+            # containment refusal from _read_regular/read_lease — carries NO
+            # bookkeeping and must take the generic adjudication below, never exit
+            # leaving a live lease silently wedged as `held` (merge-gate r3 P1).
+            raise
         live = lease
-        refreshed = read_lease()
         if refreshed is not None:
             # the persisted sidecar view is the authority, not the caller dict (codex r2)
             live = refreshed
