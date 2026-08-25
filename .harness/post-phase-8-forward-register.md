@@ -2483,3 +2483,9 @@ same spec leg.
 - **Current state.** OPEN as a measurement lever: one treated arc (pr-1447, zero prose-located findings); not separable from B-211 until a treated arc declares only one of the two ids.
 - **First treated arc.** pr-1447: zero prose-located findings across 2 codex + 2 lens rounds.
 - **Evaluation.** Same instrument and bar as B-211, on the shared review-round / P1 cohort medians. The prose-specific signal (prose-located reviewer findings per arc) is a NAMED RESIDUAL: the gate log keys findings by reservation arc_id, the metrics ledger by pr-N, and no committed join key exists — the instrument says so rather than fabricating the split (codex r1 on the report tool).
+
+### B-213 · /arc-lever-report is guard-denied in loop mode *(surfaced by codex r11 on the lever-observability arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** The new read-only cohort report cannot run in autonomous (loop-mode) sessions: no allowlist case matches its invocation, so the guard's ask becomes a headless denial. Loud and fail-closed — nothing is misreported; interactive sessions are unaffected.
+- **Current state.** OPEN. Registered instead of fix-looped at codex r11 because permission-guard edits are the workspace's highest-blast-radius shared-surface class and take their own reviewed arc (the U-HE-25 exact-shape precedent).
+- **Closure shape.** An argument-safe allowlist case in `tools/hooks/permission-guard.sh` for the report's invocation plus a witness in the guard's shell suite.

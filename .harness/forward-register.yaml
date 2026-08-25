@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 212
+  total: 213
   open: 1
   design_substrate_gated: 3
-  registered_finding: 57
+  registered_finding: 58
   operator_gated: 0
   held: 2
   closed: 149
-  identity_digest: a9835f05dc620ba2
+  identity_digest: 718d1f2119dd596c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10675,3 +10675,21 @@ items:
     skill''s six rules were actually applied to the arc''s durable prose.'
   council: 'NO — measurement bookkeeping; no cross-axis tension.'
   heading: '### B-212 · Lever id: register-pr-prose treated cohort *(minted 2026-08-24; OPEN)*'
+- id: B-213
+  title: >-
+    the arc-lever-report recipe has no loop permission-guard allowlist case, so
+    autonomous sessions cannot run the read-only report
+  pr: 'lever-observability arc'
+  status: registered_finding
+  summary: 'SURFACED by codex round 11: neither `just arc-lever-report` nor the direct
+    `uv run python tools/arc_lever_report.py` invocation matches the loop guard''s Bash
+    allowlist, so with HARNESS_LOOP=1 the guard returns ask, which a headless session
+    experiences as denial. The failure is loud and fail-closed (the tool simply does not
+    run; nothing is misreported), and interactive sessions are unaffected — which is why
+    this is registered rather than fix-looped: the permission guard is the workspace''s
+    highest-blast-radius shared surface and its edits take their own reviewed arc.'
+  close_out: 'OPEN — closure = an argument-safe allowlist case for the read-only report
+    invocation in tools/hooks/permission-guard.sh plus a guard witness in its shell
+    suite (the U-HE-25 exact-shape pattern), landed as its own reviewed arc.'
+  council: 'NO — single-surface guard-integration gap; no cross-axis tension.'
+  heading: '### B-213 · /arc-lever-report is guard-denied in loop mode *(surfaced by codex r11 on the lever-observability arc, 2026-08-25; REGISTERED)*'

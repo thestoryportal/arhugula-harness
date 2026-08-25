@@ -216,6 +216,15 @@ def test_a_missing_ledger_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(tmp_path / "absent.jsonl")
 
 
+# mutation-probe(tools/arc_lever_report.py): keep duplicate lever ids as distinct patterns
+def test_duplicate_lever_declarations_normalize_to_one_pattern(tmp_path: Path) -> None:
+    """[B-211] and [B-211,B-211] are one declaration; together they reach n=5."""
+    rows = [_row(f"pr-a{i}", 3, ["B-211"]) for i in range(3)]
+    rows += [_row(f"pr-b{i}", 3, ["B-211", "B-211"]) for i in range(2)]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["pattern_metrics"]["B-211"]["n"] == 5
+
+
 # mutation-probe(tools/arc_lever_report.py): advertise separability from non-evaluable data
 def test_separability_is_gated_on_group_evaluability(tmp_path: Path) -> None:
     """A clean {} vs {B-211} contrast in a close-declared group must not advertise."""

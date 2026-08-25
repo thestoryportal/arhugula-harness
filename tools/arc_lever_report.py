@@ -14,10 +14,11 @@ against a row that was not fully measured):
 - ``round_completeness`` != "complete" — a partial suffix is a lower bound
   whose unknown P1 count would otherwise read as a measured zero.
 
-Per-skill attribution: separability is judged on the rows' intersections with
-the TARGET lever set only — a stray extra lever id on an otherwise-identical
-treated row is not separation (codex r1). While every treated arc intersects
-the targets identically, the report says the skills are not separable.
+Per-skill attribution: separability requires a single-lever contrast on the
+FULL declared lever sets — two evaluable rows whose complete declarations
+differ in exactly one target lever (codex r1-r7). A stray non-target lever
+changing simultaneously confounds the pair; while no such contrast exists,
+the report says the skills are not separable.
 """
 
 from __future__ import annotations
@@ -83,6 +84,10 @@ def split_cohorts(rows: list[dict[str, Any]], levers: tuple[str, ...]) -> dict[s
         if declared is None:
             buckets["undeclared"].append(r)
             continue
+        # The queue CLI accepts repeated --levers values; [B-211] and
+        # [B-211,B-211] are one declaration, not two cohorts (codex r11).
+        declared = sorted(set(declared))
+        r = {**r, "levers_active": declared}
         bucket = (
             "treated"
             if any(lv in declared for lv in levers)
