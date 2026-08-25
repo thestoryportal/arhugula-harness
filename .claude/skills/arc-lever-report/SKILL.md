@@ -50,10 +50,13 @@ what it printed; skipping one is how a scoreboard reading turns into a false cla
 3. **Cohort medians are directional, not causal.** Arcs differ in scope, and a single
    treated arc proves nothing about either lever — a good arc could have been good
    anyway. The evaluation bar lives at the B-211/B-212 rows in
-   `.harness/forward-register.yaml`: judge only once >=5 treated arcs exist of the
-   same `arc_type`, and retire the lever ids if the cohorts turn out indistinguishable
-   at that count. Reporting three treated arcs as "trending well" without naming the
-   n=5 bar and the current count is an unearned verdict — name both.
+   `.harness/forward-register.yaml`: judge only once >=5 evaluable arcs exist of the
+   SAME EXACT lever pattern (or a clean matched contrast) within one `arc_type` —
+   three B-211-only plus two B-212-only arcs satisfy no gate, because neither
+   treatment has five observations. Retire the lever ids if the cohorts turn out
+   indistinguishable at that count. Reporting three treated arcs as "trending well"
+   without naming the per-pattern bar and the current count is an unearned verdict —
+   name both.
 
 4. **`delta_rounds_vs_baseline_median` is per treated arc, not per cohort.** Negative
    means that arc took fewer review rounds than the untreated baseline's median.

@@ -165,14 +165,16 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
         for r in buckets[b]
         if any(lv in (r.get("levers_active") or []) for lv in levers)
     )
-    # A treated cohort pooling divergent lever sets evaluates NEITHER lever
-    # (codex r6: 5x B-211-only + 5x B-212-only rows pool to a median that scores
-    # nothing) — per-exact-pattern sub-cohorts are the evaluable unit.
-    by_pattern: dict[str, dict[str, Any]] = {}
-    for m in treated:
+    # The evaluable unit is the EXACT lever pattern (codex r6/r7): pooled
+    # treated aggregates are gone — 5x B-211-only + 5x B-212-only rows pooled
+    # to one median would evaluate neither lever. Every evaluable row's
+    # pattern is summarized, INCLUDING other-lever control patterns, so any
+    # separability claim ships the metrics of both sides of its contrast.
+    by_pattern: dict[str, list[dict[str, Any]]] = {}
+    for m in treated + baseline + other:
         key = "+".join(sorted(m["levers"])) or "(none)"
         by_pattern.setdefault(key, []).append(m)
-    treated_by_pattern = {
+    pattern_metrics = {
         k: {
             "n": len(ms),
             "median_rounds": _median([m["review_rounds"] for m in ms]),
@@ -185,15 +187,10 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
         # C-HE-26: a contaminated type label cannot support the n>=5 lever
         # decision — the numbers stay visible but the group says NON-EVALUABLE.
         "evaluable_for_lever_decision": not group["contaminated"],
-        "treated_by_pattern": treated_by_pattern,
+        "pattern_metrics": pattern_metrics,
         "cohort_sizes": {k: len(v) for k, v in buckets.items()},
         "baseline_median": base_median,
         "treated_arcs": treated,
-        "treated_median_rounds": _median([m["review_rounds"] for m in treated]),
-        "treated_median_p1": _median(
-            [m["p1_rounds"] for m in treated if m["p1_rounds"] is not None]
-        ),
-        "treated_p1_measured_n": sum(1 for m in treated if m["p1_rounds"] is not None),
         "p1_unmapped": sorted(m["arc_id"] for m in treated + baseline if m["p1_rounds"] is None),
         "separable_levers": separable,
         "per_skill_separable": bool(separable),
@@ -233,9 +230,9 @@ def render(summary: dict[str, Any]) -> str:
                 "  NON-EVALUABLE for the n>=5 lever decision: close-declared arc-type "
                 "labels are outcome-contaminated (C-HE-26) — numbers are descriptive only"
             )
-        for pat, ps in s["treated_by_pattern"].items():
+        for pat, ps in sorted(s["pattern_metrics"].items()):
             lines.append(
-                f"  treated[{pat}]: n={ps['n']} median_rounds={ps['median_rounds']} "
+                f"  pattern[{pat}]: n={ps['n']} median_rounds={ps['median_rounds']} "
                 f"median_p1={ps['median_p1']} (p1 n={ps['p1_measured_n']})"
             )
         if s["p1_unmapped"]:
@@ -260,9 +257,7 @@ def render(summary: dict[str, Any]) -> str:
                 f"delta_rounds_vs_baseline={m['delta_rounds_vs_baseline_median']}"
             )
         lines.append(
-            f"  treated median: rounds={s['treated_median_rounds']} "
-            f"p1={s['treated_median_p1']} (p1 n={s['treated_p1_measured_n']})"
-            f" | per-skill separation: "
+            "  per-skill separation: "
             + (
                 f"available for {', '.join(s['separable_levers'])} (single-lever contrast exists)"
                 if s["per_skill_separable"]

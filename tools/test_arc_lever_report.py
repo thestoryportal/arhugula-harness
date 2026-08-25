@@ -59,7 +59,8 @@ def test_unmapped_rows_are_excluded_from_medians_and_listed(tmp_path: Path) -> N
     s = _summary(tmp_path, ROWS)["arc_types"]["applying"]
     assert s["excluded_unmapped"] == ["pr-4"]
     assert s["cohort_sizes"]["treated"] == 1, "the unmapped treated row must not count"
-    assert s["treated_median_rounds"] == 2
+    assert s["pattern_metrics"]["B-211+B-212"]["n"] == 1
+    assert s["pattern_metrics"]["B-211+B-212"]["median_rounds"] == 2
 
 
 # mutation-probe(tools/arc_lever_report.py): let non-complete rounds into the medians
@@ -136,7 +137,7 @@ def test_p1_medians_carry_their_own_sample_counts(tmp_path: Path) -> None:
         "p1_rounds": 1,
         "arc_span_h": 2,
     }
-    assert s["treated_p1_measured_n"] == 1
+    assert s["pattern_metrics"]["B-211+B-212"]["p1_measured_n"] == 1
     assert s["p1_unmapped"] == ["pr-b"]
 
 
@@ -168,7 +169,7 @@ def test_null_p1_is_unmapped_not_a_measured_zero(tmp_path: Path) -> None:
     assert s["baseline_median"]["p1_rounds"] == 2.0, "pr-b's null must not enter as 0"
     (treated,) = s["treated_arcs"]
     assert treated["p1_rounds"] is None
-    assert s["treated_median_p1"] is None, "no measured treated P1 exists"
+    assert s["pattern_metrics"]["B-211+B-212"]["median_p1"] is None, "no measured treated P1 exists"
 
 
 # mutation-probe(tools/arc_lever_report.py): drop the treated P1 median from the summary
@@ -176,7 +177,7 @@ def test_treated_p1_median_is_computed(tmp_path: Path) -> None:
     """B-211/B-212's register bar names round AND P1 cohort medians."""
     rows = [*ROWS, _row("pr-8", 4, ["B-211", "B-212"], p1=[1])]
     s = _summary(tmp_path, rows)["arc_types"]["applying"]
-    assert s["treated_median_p1"] == 0.5
+    assert s["pattern_metrics"]["B-211+B-212"]["median_p1"] == 0.5
 
 
 # mutation-probe(tools/arc_lever_report.py): tell excluded-treated operators to declare levers
@@ -222,13 +223,14 @@ def test_treated_sub_cohorts_split_by_exact_lever_set(tmp_path: Path) -> None:
     rows += [_row(f"pr-a{i}", 1, ["B-211"]) for i in range(5)]
     rows += [_row(f"pr-b{i}", 19, ["B-212"]) for i in range(5)]
     s = _summary(tmp_path, rows)["arc_types"]["applying"]
-    assert s["treated_by_pattern"]["B-211"] == {
+    assert s["pattern_metrics"]["B-211"] == {
         "n": 5,
         "median_rounds": 1,
         "median_p1": 0,
         "p1_measured_n": 5,
     }
-    assert s["treated_by_pattern"]["B-212"]["median_rounds"] == 19
+    assert s["pattern_metrics"]["B-212"]["median_rounds"] == 19
+    assert "treated_median_rounds" not in s, "pooled treated aggregates evaluate neither lever"
 
 
 # mutation-probe(tools/arc_lever_report.py): leave contaminated groups evaluable
@@ -258,6 +260,9 @@ def test_a_matched_other_lever_contrast_isolates_the_target(tmp_path: Path) -> N
     s = _summary(tmp_path, rows)["arc_types"]["applying"]
     assert s["separable_levers"] == ["B-211"]
     assert s["excluded_other_levers"] == ["pr-a"], "the contrast row still joins no cohort"
+    assert s["pattern_metrics"]["B-999"]["median_rounds"] == 9, (
+        "a separability claim must ship its control pattern's metrics"
+    )
 
 
 # mutation-probe(tools/arc_lever_report.py): read a null/absent levers_active as []
