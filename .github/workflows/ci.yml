@@ -546,6 +546,38 @@ jobs:
       - name: Codex context guard tests
         run: uv run python -m pytest tools/test_codex_context_guard.py -q
 
+  split-brain:
+    # U-HE-33 / C-HE-12 §2 — SPLIT_BRAIN_LEDGER CI backstop: one arc row per `arc_id`
+    # in the metrics ledger (C-HE-25). The plan sketched this job gated to pushes on
+    # main; as built it runs on PRs too — `main_protection.blocking_contexts()` derives
+    # required PR contexts from every job name ending "— blocking" regardless of `if:`,
+    # so a push-only blocking job would be a required context that never reports on PR
+    # heads and would block every merge. Running on both venues is a strict superset of
+    # the spec's "every push to main" floor and catches a duplicate at the PR that
+    # introduces it. A kind-less row predates `record_kind` and IS an arc row (mirrors
+    # check_split_brain). The `jq empty` line makes a corrupt ledger fail loud — the
+    # default runner shell has no pipefail, so a jq parse error inside the pipeline
+    # would otherwise read as "no duplicates". The C-HE-12 emit-not-just-gate contract
+    # binds the SPEC'd venue (every push to main), where the codex-context-guard job's
+    # check mode dispatches the emitting detections; this PR-venue run is a pure
+    # superset GATE added for main_protection compatibility, not an emission venue
+    # (adjudicated codex r13).
+    name: split-brain ledger backstop — blocking
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: one arc row per arc_id
+        # `shell: bash` gives -eo pipefail (the default runner shell has neither), so a
+        # jq error INSIDE the pipeline fails the job; the all-objects check refuses
+        # valid-JSON non-object rows that would otherwise error mid-select and be
+        # swallowed (codex r19 P2).
+        shell: bash
+        run: |
+          jq empty .harness/arc-metrics.jsonl
+          jq -se 'all(.[]; type=="object")' .harness/arc-metrics.jsonl > /dev/null
+          dups=$(jq -r 'select(.record_kind=="arc" or (.record_kind|not)) | .arc_id' .harness/arc-metrics.jsonl | sort | uniq -d)
+          [ -z "$dups" ] || { echo "SPLIT_BRAIN_LEDGER: $dups"; exit 1; }
+
   clearance-corpus:
     # R-CTX-1 / U-CTX-10 — the clearance-marker frontmatter gate. `.harness/clearance/*.md`
     # markers are the version-binding half of the X-AL-3 enforcement triad (root CLAUDE.md

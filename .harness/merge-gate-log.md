@@ -664,3 +664,18 @@ B-206) rather than unaddressed defects.
 | 2026-08-25T05:17:43Z | #1452 | d3d7a04b8380 | merge-gate-witness-adequacy | BLOCK | 5 finding(s) | r1 |
 | 2026-08-25T05:23:24Z | #1452 | 157c7739eea2 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-08-25 | #1452 | feat/lever-observability | LEAN single-lens gate (operator resume protocol, held-arc live test): witness-adequacy r1 BLOCK at d3d7a04b8 (P1 span null-safety unwitnessed + 2xP2 + 2xP3 unwitnessed branches) → five test additions at 157c7739e, all four load-bearing mutations probed red/green → witness-adequacy r2 APPROVE at 157c7739e; codex r13 ran pre-gate per protocol (2 findings: B-213 re-surface registered, strict-boundary absorbed eaf98f770); blast-radius: leaf CLI (graft callers: load_rows <- main only; static-edge floor) | proceed to safe-merge |
+| 2026-08-25T10:43:33Z | #1454 | abc05455675c | merge-gate-concurrency | BLOCK | 3 finding(s) | r1 |
+| 2026-08-25T10:43:36Z | #1454 | abc05455675c | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-25T10:43:43Z | #1454 | abc05455675c | merge-gate-witness-adequacy | BLOCK | 6 finding(s) | r1 |
+| 2026-08-25T12:03:03Z | #1454 | 7b6e3664de51 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-25T12:03:04Z | #1454 | 7b6e3664de51 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r2 |
+| 2026-08-25T12:03:04Z | #1454 | 7b6e3664de51 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r2 |
+| 2026-08-25T12:57:24Z | #1454 | c78dacd0efdf | merge-gate-concurrency | BLOCK | 1 finding(s) | r3 |
+| 2026-08-25T12:57:25Z | #1454 | c78dacd0efdf | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-08-25T12:57:26Z | #1454 | c78dacd0efdf | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |
+| 2026-08-25T13:23:12Z | #1454 | ef396c3cf765 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r4 |
+| 2026-08-25T13:23:13Z | #1454 | ef396c3cf765 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r4 |
+| 2026-08-25T13:33:55Z | #1454 | c652da3f9587 | merge-gate-concurrency | APPROVE | 0 finding(s) | r4 |
+| 2026-08-25T13:33:56Z | #1454 | c652da3f9587 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r5 |
+| 2026-08-25T13:33:56Z | #1454 | c652da3f9587 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r5 |
+| 2026-08-25 | PR #1454 | feat/u-he-33-emitting-detections | 6 gate rounds: r1 conc-BLOCK/spec-APPROVE/wit-BLOCK; r2 conc-APPROVE/spec-BLOCK/wit-BLOCK; r3 spec-APPROVE/conc-BLOCK/wit-BLOCK; r4 spec-BLOCK/wit-APPROVE/conc-superseded; r5 all-BLOCK (missing-wrap tree state; verdicts unrecorded, files overwritten by r6); r6 ALL-APPROVE | outcome: MERGE | blast-radius: 10 production consumers enumerated (graft + grep; validate-name ambiguous in graph, floor not ceiling) |

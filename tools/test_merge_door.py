@@ -1391,6 +1391,14 @@ def test_adoption_refuses_symlinked_sidecar(door, monkeypatch):
     with pytest.raises(md.DoorBlocked, match="containment"):
         md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr, lease=lease)
     assert (2, "s" * 40) not in g.merge_calls
+    # merge-gate r3 P1: the un-bookkept containment DoorBlocked must be ADJUDICATED on
+    # the way out (blocked sidecar persisted), never exit leaving the lease silently
+    # wedged as `held` with no HITL route. Read the view with the plant removed.
+    outside_bytes = outside.read_text()
+    sidecar.unlink()
+    sidecar.write_text(outside_bytes)
+    adjudicated = md.read_lease()
+    assert adjudicated is not None and adjudicated.get("state") == "blocked", adjudicated
     outside.unlink()
 
 
@@ -2609,3 +2617,29 @@ def test_notify_retries_only_the_must_durable_kind(monkeypatch, capsys):
     md._notify("DEFERRED-HIL", "L1", "g:f:c", "B-2 — blocking")
     assert len(calls) == 3, f"DEFERRED-HIL must be retried, saw {len(calls)} attempt(s)"
     assert "after 3 attempt(s)" in capsys.readouterr().err
+
+
+# mutation-probe: drop the release() DoorBlocked adjudication wrap in land()'s generic handler
+def test_persistent_containment_fault_adjudicates_via_release_path(door, monkeypatch):
+    """merge-gate r4 spec P1: under a PERSISTENT containment fault, release()'s own
+    internal re-read raises DoorBlocked a third time -- land() must adjudicate on the
+    dict it holds (mark_blocked is read-free) instead of escaping with a live lease
+    silently wedged as `held` and zero gate rows."""
+    g = FakeGround()
+    rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
+
+    def poisoned_release(lease):
+        raise md.DoorBlocked("door file 'LEASE.x.blocked' is a symlink -- refused (containment)")
+
+    monkeypatch.setattr(md, "release", poisoned_release)
+
+    def failing_view(pr):
+        raise RuntimeError("gh view exploded pre-attempt")
+
+    monkeypatch.setattr(g, "gh_view", failing_view)
+
+    with pytest.raises(md.DoorBlocked, match="containment"):
+        md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr)
+
+    blocked = list(md.DOOR.glob("LEASE.*.blocked"))
+    assert blocked, "no blocked sidecar: the persistent fault escaped unadjudicated"

@@ -2489,3 +2489,24 @@ same spec leg.
 - **What it is.** The new read-only cohort report cannot run in autonomous (loop-mode) sessions: no allowlist case matches its invocation, so the guard's ask becomes a headless denial. Loud and fail-closed — nothing is misreported; interactive sessions are unaffected.
 - **Current state.** OPEN. Registered instead of fix-looped at codex r11 because permission-guard edits are the workspace's highest-blast-radius shared-surface class and take their own reviewed arc (the U-HE-25 exact-shape precedent).
 - **Closure shape.** An argument-safe allowlist case in `tools/hooks/permission-guard.sh` for the report's invocation plus a witness in the guard's shell suite.
+
+### B-214 · BASE_TOCTOU CI re-check lacks a CI-visible verified-base authority *(surfaced by codex r2 on the u-he-33 arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** The U-HE-33 guard re-check joins main landings to the reservation store under the host-local queue dir; a fresh Actions runner has no such store, so on CI every landing is reported through the info `BASE_TOCTOU_UNATTRIBUTED` finding and no first-parent mismatch can become a hard CI finding. Loud and honest — unattributed is named, never silently skipped — and the operator-host main-audit venues run the real comparison.
+- **Current state.** OPEN. Registered instead of built in-arc: a CI-visible carrier of the verified base (committed sidecar, PR annotation, or ledger row) is a new mechanism — a design decision (X-AL-3), not an impl slice of U-HE-33. Until then the CI backstop for hazard #7 is the door's own at-landing detection (U-HE-23) plus the operator-host re-check.
+- **Closure shape.** A design-phase decision on where the verified-base attestation lives CI-visibly, then a small impl arc re-pointing the guard's join at that carrier.
+
+### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** The u-he-33 arc measured that the between-rounds classify-then-sweep step is instruction-dependent and fails under load: the empty-on-exception class recurred in sibling helpers across multiple review rounds despite being written in defect-class-preflight class 3. Finding capture is already deterministic (per-round C-HE-24 rows; refresh-classes.py); the sweep is not.
+- **Current state.** OPEN. The interim mitigation is the skill's new "after every review round" section (instruction-tier).
+- **Closure shape.** A deterministic post-round step in the review loop: extract the round's findings, grep the branch diff for class-sibling shapes, refuse the next review invocation until each hit carries a named answer. Review-wrapper surface — own reviewed arc (B-213 precedent).
+
+### B-216 · u-he-33 review-loop tail refinements *(deferred at the operator stop, 2026-08-25; REGISTERED)*
+
+- **What it is.** Three bounded guard refinements surfaced by codex r22 and deferred when the operator stopped the u-he-33 review loop at its measured negative-marginal-value point (the r22 absorption broke 20 tests while fixing 3 findings): the `ci` lane-id fallback ignoring the persisted `.harness/.lane-id`; detection rows carrying `head_sha=None` so adjudications recall identical recurrences at later heads (C-HE-24 §4); the continuation-lease check accepting a lease missing state/host.
+- **Current state.** OPEN. None undermines the landed C-HE-12 contract (acceptance met at round 4). A draft absorption existed and was reverted for breaking the suite — re-derive from this row.
+- **Closure shape.** A small follow-up arc with witnesses, alongside or after B-215's deterministic review-loop gate (this arc is B-215's grounding evidence for the termination-predicate requirement).
+
+
+

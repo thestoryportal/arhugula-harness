@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -724,6 +725,693 @@ def _codex_loop_issues(state: GuardState) -> list[str]:
     return issues
 
 
+# --- U-HE-33: emitting detections (C-HE-12 §1-§3; §9 rows 1, 4, 7) -----------------------
+
+ARC_METRICS_JSONL = Path(".harness/arc-metrics.jsonl")
+#: How many first-parent landings on the default branch the BASE_TOCTOU re-check walks.
+TOCTOU_LOOKBACK = 10
+#: C-HE-24 §3: `to_guard_finding` derives severity from the fail-class prefix, so the
+#: prefix MUST be chosen from the severity — two representations of one fact would
+#: otherwise drift the first time a warn-severity code carried a `terminal-` class.
+_FAIL_CLASS_BY_SEVERITY = {"hard": "terminal-", "warn": "HITL-recoverable-"}
+
+
+def _gate_log_path(root: Path) -> Path:
+    """finding_record.GATE_LOG_JSONL is the path authority (env seam included); this
+    stdlib-safe mirror exists because validate() runs under interpreters that cannot
+    import the record layer, and only ever STATS the file, never writes it."""
+    return Path(os.environ.get("HARNESS_GATE_LOG") or root / ".harness" / "merge-gate-log.jsonl")
+
+
+def _lane_id() -> str:
+    """C-HE-12 §2: the lane-discriminating field, so new codes do not inherit the drift
+    check's lane-attribution gap (R-3). `ci` attributes lane-less venues (the CI runner)."""
+    return os.environ.get("HARNESS_LANE_ID") or "ci"
+
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+#: The uv-fallback driver, module-level so the test suite EXECUTES the same string the
+#: dispatch passes to `uv run python -c` (merge-gate witness lens: an argv-shape test
+#: alone would let a typo in this string ship).
+_UV_DRIVER = (
+    "import json, sys; sys.path.insert(0, 'tools'); "
+    "import codex_context_guard as cg; "
+    "from pathlib import Path; "
+    "fs = cg._emitting_detections_safe(Path(sys.argv[1]), sys.argv[2]); "
+    "print(json.dumps([f.__dict__ for f in fs]))"
+)
+
+
+def _record_detection(payload: dict) -> tuple[str, dict | None]:
+    """Emit-once against the C-HE-24 log, under ONE locked critical section (the
+    dedupe read, the id mint, and the append share `append_observations`' lock -- two
+    concurrent checks cannot both miss the prior row and append twins). Outcome tokens:
+
+    - ``adjudicated`` -- some prior observation with this exact (producer, location,
+      evidence, lane) belongs to a finding_id lineage whose LAST adjudication
+      disposition is `rejected` (false positive) or `suppressed` (operator muted):
+      re-raising would undo that disposition. An `accepted` disposition means
+      CONFIRMED REAL and never mutes a still-present condition -- the projection
+      keeps surfacing (via ``recorded``) until the condition itself is repaired.
+      Different evidence at the same site is a NEW event and is never suppressed by
+      an old adjudication. (The BASE_TOCTOU recovery path is the door's
+      `unblocked_from` attestation, not an adjudication.)
+    - ``recorded`` -- this lane already has an identical observation in the log; no
+      duplicate append, the projection still surfaces. The same evidence seen by a
+      DIFFERENT lane appends its own row -- lane_id is immutable core (C-HE-24 §6),
+      so one lane's row cannot stand in for another's attribution.
+    - ``appended`` -- a new observation, id minted under the same lock (never a
+      hand-built ordinal: a rerun re-minting an id with drifted evidence would be
+      rejected as a core mutation, C-HE-24 §4)."""
+    import finding_record as fr
+
+    # The log is both the append target and the suppression authority (codex r12):
+    # a symlinked or non-regular file at its path would let append_observations
+    # write outside the repository and let an externally mutable target supply
+    # adjudications -- and a linked worktree's root-checkout guard never sees it.
+    # This stat-based check is the EARLY, clear error; the ENFORCER is the record
+    # layer's own open (O_NOFOLLOW + O_NONBLOCK + post-open fstat in
+    # finding_record._under_log_lock -- merge-gate concurrency lens on this PR), so
+    # a swap in the stat-to-open window still fails at the syscall, never silently.
+    log = fr.GATE_LOG_JSONL
+    if log.is_symlink() or (log.exists() and not log.is_file()):
+        raise RuntimeError(f"gate log {log} is not a regular file -- refused (containment)")
+
+    code, arc_id, evidence = payload["code"], payload["arc_id"], payload["evidence"]
+    outcome = ["appended"]
+    matched: list[dict] = []
+
+    def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
+        site = [r for r in rows if r.get("producer") == code and r.get("location") == arc_id]
+        # BOTH the recall and the dedupe are scoped to THIS lane's lineages: C-HE-24
+        # adjudicates one finding_id and keeps lane_id immutable core (§5/§6), so lane
+        # A's disposed finding never stands in for lane B's attribution -- a new lane
+        # re-observing a recovered site appends its own row once (bounded by lane
+        # count) and is disposed on its own lineage.
+        mine = [
+            r
+            for r in site
+            if r.get("observed_evidence") == evidence and r.get("lane_id") == payload["lane_id"]
+        ]
+        # Last disposition per lineage, file-order (C-HE-29 "last disposition").
+        last_disposition: dict[str, str | None] = {}
+        for r in site:
+            if r.get("record_kind") == "finding_adjudication":
+                last_disposition[r["finding_id"]] = r.get("disposition")
+
+        # Suppression requires a FINDING row's lineage (a bare adjudication row --
+        # e.g. appended raw, bypassing the write-time unknown-id rejection -- is not
+        # a lineage), and both halves must pass fr.validate so a crude forgery
+        # (missing fields, self-disposition) cannot mute a hard detection.
+        #
+        # TRUST BOUNDARY (final, codex r9-r20): an adversary with local write access
+        # to the repo checkout or QUEUE_DIR is OUT OF SCOPE beyond loud refusal --
+        # such an adversary can rewrite the log, the store, or this code directly.
+        # In-boundary guarantees: the record layer's locked, O_NOFOLLOW,
+        # fd-consistent append + the C-HE-24 write invariants + adjudication-only
+        # suppression. Held under this boundary: whole-file rename/replace row loss,
+        # parent-directory symlink relocation, and any further single-syscall
+        # hardening against that same local adversary.
+        def _validated(r: dict) -> bool:
+            try:
+                fr.validate(r)
+            except Exception:
+                return False
+            return True
+
+        valid_findings_mine = [
+            r for r in mine if r.get("record_kind") == "finding" and _validated(r)
+        ]
+        for r in valid_findings_mine:
+            if last_disposition.get(r["finding_id"]) not in ("rejected", "suppressed"):
+                continue
+            adjs = [
+                a
+                for a in site
+                if a.get("record_kind") == "finding_adjudication"
+                and a.get("finding_id") == r["finding_id"]
+            ]
+            if not adjs:
+                continue
+            adj = adjs[-1]
+            # C-HE-24 §5 cross-row invariants re-checked at READ time (codex r12):
+            # an adjudication honored for suppression must carry the finding row's
+            # exact immutable core and a strictly later ts -- a raw append reusing a
+            # real finding_id with mutated lane/evidence passes fr.validate in
+            # isolation and must not mute the detection.
+            if (
+                _validated(adj)
+                and all(adj.get(k) == r.get(k) for k in fr._CORE_IMMUTABLE)
+                and adj.get("ts", "") > r.get("ts", "")
+            ):
+                outcome[0] = "adjudicated"
+                return []
+        # Dedupe counts only VALIDATED rows (codex r11): a schema-invalid but
+        # JSON-readable matching row must not stand in for the required valid
+        # C-HE-24 emission.
+        if valid_findings_mine:
+            outcome[0] = "recorded"
+            matched.append(valid_findings_mine[0])
+            return []
+        return [
+            (
+                {
+                    "location": arc_id,
+                    "observed_evidence": evidence,
+                    "expected_contract": "C-HE-12",
+                    "severity": payload["severity"],
+                    "finding_type": (
+                        f"{_FAIL_CLASS_BY_SEVERITY[payload['severity']]}{code.lower()}"
+                    ),
+                    "lineage_claim": "guard",
+                    "producer": code,
+                },
+                fr.Envelope(
+                    "finding",
+                    fr.now_iso(),
+                    arc_id,
+                    payload["lane_id"],
+                    None,
+                    None,
+                    None,
+                    None,
+                    cause_attribution=code.lower(),
+                ),
+            )
+        ]
+
+    written = fr.append_observations(build)
+    if written:
+        matched.append(written[0])
+    return outcome[0], (matched[0] if matched else None)
+
+
+def _detection(
+    code: str, evidence: str, *, lane_id: str, arc_id: str, severity: str = "hard"
+) -> list[Finding]:
+    """C-HE-12 §3: a detection EMITS a lane-attributed C-HE-24 row and returns the
+    3-field `Finding` projection for the CI surface -- [] when the operator's
+    adjudication recalls this exact observation (see `_record_detection`). The
+    projection's code/message shape (spec-named code, lane-prefixed evidence) is the
+    plan's own U-HE-33 projection sketch; row and projection are built from ONE
+    payload, and the round-trip test pins the stored row's §3 severity projection to
+    the returned severity. A record write failure surfaces BOTH the projection AND a
+    hard DETECTIONS_UNAVAILABLE -- a required C-HE-24 emission that did not land must
+    never leave the run exiting 0 (warn-severity detections would otherwise mask it).
+    (Venues whose interpreter cannot import the record/store layer never reach this
+    function in-process: `_emitting_detections_dispatch` routes the whole detection
+    block through `uv run` there.)"""
+    payload = {
+        "code": code,
+        "evidence": evidence,
+        "lane_id": lane_id,
+        "arc_id": arc_id,
+        "severity": severity,
+    }
+    try:
+        outcome, row = _record_detection(payload)
+    except Exception as exc:
+        print(f"guard: finding row not written ({exc})", file=sys.stderr)
+        # No row exists on this path -- the payload-shaped projection is the only
+        # honest carrier, and the hard finding says the durable half is missing.
+        return [
+            Finding(severity, code, f"[{lane_id}] {evidence}"),
+            _detections_unavailable(
+                lane_id, f"the C-HE-24 row for {code} at {arc_id} was not written ({exc})"
+            ),
+        ]
+    if outcome == "adjudicated":
+        return []
+    if row is not None:
+        return [_ci_finding(row)]
+    return [Finding(severity, code, f"[{lane_id}] {evidence}")]
+
+
+def _ci_finding(row: dict) -> Finding:
+    """The CI-surface projection DERIVED from the persisted C-HE-24 row (codex r5-r17
+    convergence): severity round-trips through finding_record.to_guard_finding (the
+    canonical §3 fail-class derivation); code is the row's own producer -- the C-HE-12
+    §2 spec-named detection code the CI surface requires; the message is the §2
+    lane-discriminating prefix over the row's observed evidence. This and
+    to_guard_finding are two projections of the ONE persisted row, sharing its
+    severity derivation -- nothing here is authored independently of the row."""
+    import finding_record as fr
+
+    base = fr.to_guard_finding(row)
+    return Finding(base.severity, row["producer"], f"[{row['lane_id']}] {row['observed_evidence']}")
+
+
+def check_split_brain(ledger: Path, *, lane_id: str) -> list[Finding]:
+    """§9 row 1: one arc row per `arc_id` in the metrics ledger (C-HE-25)."""
+    seen: set[str] = set()
+    dup: set[str] = set()
+    try:
+        lines = ledger.read_text().splitlines()
+    except FileNotFoundError:
+        return []  # no ledger yet genuinely means "no arcs recorded", not "could not look"
+    for line in lines:
+        if not line.strip():
+            continue
+        r = json.loads(line)  # a corrupt line fails the guard loud; never read as clean
+        # A kind-less row predates the record_kind field and IS an arc row (C-HE-25:
+        # the ledger carried only arc rows before round/gate kinds existed).
+        if r.get("record_kind", "arc") != "arc":
+            continue
+        a = r.get("arc_id")
+        if a is None:
+            # The invariant is keyed BY arc_id; a row without one belongs to the
+            # writer's validation, not this duplicate check.
+            continue
+        if a in seen:
+            dup.add(a)
+        seen.add(a)
+    out: list[Finding] = []
+    for a in sorted(dup):
+        out.extend(
+            _detection(
+                "SPLIT_BRAIN_LEDGER",
+                f"duplicate arc_id in arc-metrics.jsonl: {a}",
+                lane_id=lane_id,
+                arc_id=a,
+            )
+        )
+    return out
+
+
+def check_base_toctou(merges: list[tuple[str, str, str]], *, lane_id: str) -> list[Finding]:
+    """§9 row 7: a landing's first parent MUST equal the base the merge door verified --
+    a mismatch is positive proof the race window was hit (C-HE-12 §2), never silence."""
+    out: list[Finding] = []
+    for m, fp, vb in merges:
+        if fp == vb:
+            continue
+        out.extend(
+            _detection(
+                "BASE_TOCTOU",
+                f"merge {m[:12]} first parent {fp[:12]} != verified base {vb[:12]} -- "
+                "race window hit; re-validate",
+                lane_id=lane_id,
+                arc_id=f"merge-{m[:12]}",
+            )
+        )
+    return out
+
+
+def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Finding]:
+    """§9 row 4: an `open` head whose PR is MERGED/CLOSED without a terminal transition,
+    or a `blocked` lease older than its bound. `heads` is the suite's ONE store scan
+    (`_reservation_heads` via `_emitting_detections`)."""
+    out: list[Finding] = []
+    for h in heads:
+        # An open head with pr=None is LEGITIMATE pre-back-fill state (reserve mints
+        # pr null; ship-pr back-fills it) -- skipping the PR query for it is correct,
+        # not a corruption swallow (adjudicated against codex r9). `is not None`, not
+        # truthiness (codex r21): a malformed pr=0 must reach the query and fail loud,
+        # never silently bypass detection.
+        info = (
+            _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") is not None else None
+        )
+        pr_state = info.get("state") if info else None
+        if pr_state in ("MERGED", "CLOSED"):
+            if pr_state == "MERGED" and _door_continuation_live(h):
+                # An ORDINARY in-flight landing is discriminated by OWNED STATE, not
+                # a time window (codex r18 P2 falsified the r16 mergedAt bound: the
+                # door flips open->merged promptly after confirmation, so a lingering
+                # open head is only legitimate while the door's LIVE lease still
+                # names it -- a crash leaves no live lease and the orphan emits).
+                continue
+            # Revalidate against the CURRENT generation before the durable emission: the
+            # bounded GitHub query left a window in which a normal open->merged
+            # transition can land, and that ordinary completion must not be recorded as
+            # an orphan. The residual window between this re-read and the append is
+            # named and accepted -- the store has no cross-process read lock to hold.
+            fresh = _reservation_head_current(h["arc_id"])
+            if not fresh or fresh.get("state") != "open" or fresh.get("pr") != h["pr"]:
+                continue
+            out.extend(
+                _detection(
+                    "ORPHANED_RESERVATION",
+                    f"{h['arc_id']}: open reservation but PR #{h['pr']} is {pr_state}",
+                    lane_id=lane_id,
+                    arc_id=h["arc_id"],
+                    severity="warn",
+                )
+            )
+    lease = _blocked_lease_older_than_bound()
+    if lease:
+        out.extend(
+            _detection(
+                "ORPHANED_RESERVATION",
+                # lease_token + blocked_at_sha discriminate DISTINCT block events at
+                # one reservation: a successor lease blocked again must not recall a
+                # prior event's suppression through identical evidence.
+                f"blocked lease {str(lease.get('lease_token', '?'))[:8]} for pr "
+                f"#{lease['pr']} blocked_at {str(lease.get('blocked_at_sha', '?'))[:12]} "
+                "older than its bound",
+                lane_id=lane_id,
+                arc_id=lease["reservation_id"],
+                severity="warn",
+            )
+        )
+    return out
+
+
+def _reservation_heads() -> tuple[list[dict], list[str]]:
+    """One scan of the store. Returns (readable heads, unreadable entry names). A
+    store-level refusal MUST propagate (the dispatch converts it to a hard
+    DETECTIONS_UNAVAILABLE): reservations_root() deliberately rejects a symlinked
+    store as a containment breach, and swallowing that would disable orphan detection
+    and de-attribute every landing exactly when the store is suspect. Only a genuinely
+    absent store directory means "no reservations yet". Per-entry failures do not
+    discard the valid heads; the caller surfaces them as a hard partial-failure
+    finding (an stderr note alone is discarded on the uv fallback path)."""
+    import reservations as rs  # importability is the dispatch boundary's concern
+
+    root = rs.reservations_root()
+    if not root.exists():
+        return [], []  # genuinely absent store: no reservations yet
+    if not root.is_dir():
+        # A planted regular file at the store path must refuse (dispatch -> hard
+        # finding), never read as an empty store.
+        raise RuntimeError(f"reservations root {root} is not a directory -- refused")
+    heads: list[dict] = []
+    unreadable: list[str] = []
+    for d in sorted(root.iterdir()):
+        if d.name.startswith("."):
+            continue
+        if not d.is_dir():
+            # A regular file or non-directory symlink where an arc's directory
+            # belongs is malformed authoritative state -- surfaced, never skipped
+            # (the r7 store-level refusal, applied at entry level).
+            unreadable.append(d.name)
+            continue
+        try:
+            cur = rs.current(d.name)
+        except Exception:
+            unreadable.append(d.name)
+            continue
+        if cur is None:
+            continue
+        head = cur[1]
+        if not _valid_head(head, arc_id=d.name):
+            # Syntactically-valid but schema-corrupt (e.g. {}): downstream .get()
+            # consumers would silently drop the arc from orphan detection and
+            # verified-base attribution.
+            unreadable.append(d.name)
+            continue
+        heads.append(head)
+    return heads, unreadable
+
+
+def _valid_head(head, *, arc_id: str) -> bool:
+    """The two fields every downstream consumer keys on, bound to their authorities: a
+    state outside reservations.STATES (e.g. a typo'd "opne") would be silently skipped
+    by every `== "open"` comparison, and a head whose arc_id differs from its
+    containing directory would make revalidation consult ANOTHER reservation."""
+    import reservations as rs
+
+    return (
+        isinstance(head, dict) and head.get("arc_id") == arc_id and head.get("state") in rs.STATES
+    )
+
+
+def _door_continuation_live(h: dict) -> bool:
+    """True iff the door's lease names this head's arc or PR AND its holder process is
+    alive on this host -- the in-flight §4(vii)-(viii) continuation. State-based on
+    purpose (a wall-clock window would re-admit ambient temporal coupling), and
+    liveness-checked on purpose (codex r19 P1): the LEASE file is crash-durable, so a
+    dead holder's lease must not suppress the orphan indefinitely."""
+    import socket
+
+    import merge_door as md
+
+    lease = _door_lease_strict()
+    if not lease:
+        return False
+    # reservation_id ONLY (codex r21): two reservations can reference one PR, and a
+    # PR-keyed match would let one arc's lease suppress the OTHER arc's orphan.
+    if lease.get("reservation_id") != h.get("arc_id"):
+        return False
+    if lease.get("host") and lease["host"] != socket.gethostname():
+        return False  # not this store's writer; foreign liveness is not checkable here
+    pid = lease.get("pid")
+    return bool(pid) and md._process_is_alive(int(pid))
+
+
+def _reservation_head_current(arc_id: str) -> dict | None:
+    """None means the head genuinely no longer exists (arc gc'd); a READ failure or a
+    schema-corrupt head propagates to the dispatch boundary rather than reading as
+    absence (the sibling of _reservation_heads' _valid_head check)."""
+    import reservations as rs
+
+    cur = rs.current(arc_id)
+    if cur is None:
+        return None
+    if not _valid_head(cur[1], arc_id=arc_id):
+        raise RuntimeError(f"reservation head {arc_id!r} is schema-corrupt on revalidation")
+    return cur[1]
+
+
+def _gh_pr_state(pr: int) -> dict:
+    """Returns {"state": ..., "mergedAt": ...}. A failed query RAISES (dispatch -> hard
+    DETECTIONS_UNAVAILABLE): a missing or unauthenticated `gh` must not read as "PR not
+    merged/closed", which would let every open reservation evade ORPHANED_RESERVATION
+    while the suite exits green."""
+    try:
+        p = subprocess.run(
+            ["gh", "pr", "view", str(pr), "--json", "state,mergedAt"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError(f"gh pr view {pr} failed: {exc}") from exc
+    if p.returncode != 0 or not p.stdout.strip():
+        raise RuntimeError(f"gh pr view {pr} failed: {p.stderr.strip() or 'empty output'}")
+    info = json.loads(p.stdout)
+    if not isinstance(info, dict) or info.get("state") not in ("OPEN", "MERGED", "CLOSED"):
+        # Enum-bound like _valid_head's STATES check (codex r21, same class): an
+        # unknown state must fail loud, not silently skip orphan detection.
+        raise RuntimeError(f"gh pr view {pr} returned unknown state {info.get('state')!r}")
+    return info
+
+
+def _door_lease_strict() -> dict | None:
+    """None means genuinely no lease. read_lease() maps a PRESENT-but-corrupt LEASE
+    file to None too, so re-distinguish here and raise (dispatch -> hard finding):
+    corrupt live door state must not read as absence. The exists() re-check races
+    only with a legitimate concurrent lease transition, observed by the next run."""
+    import merge_door as md
+
+    # DOOR-level containment first: a symlinked door dir relocates LEASE and every
+    # sidecar to externally controlled state (each child check would then pass against
+    # the forged targets); a non-directory DOOR with lease state present is malformed.
+    if md.DOOR.is_symlink():
+        raise RuntimeError("merge-door dir is a symlink -- refused (containment)")
+    if md.DOOR.exists() and not md.DOOR.is_dir():
+        raise RuntimeError("merge-door dir is not a directory -- refused (containment)")
+    if md.LEASE.is_symlink():
+        # read_lease() follows the link; a forged target must not feed the checks.
+        raise RuntimeError("merge-door LEASE is a symlink -- refused (containment)")
+    if md.LEASE.exists() and not md.LEASE.is_file():
+        raise RuntimeError("merge-door LEASE is not a regular file -- refused (containment)")
+    # Early containment sweep (codex r9/r11) -- ADVISORY, for a clear pre-read
+    # error: the ENFORCER is read_lease's own `_read_regular` opens (O_NOFOLLOW +
+    # O_NONBLOCK + post-open fstat, added for the merge-gate concurrency lens on
+    # this PR), so a symlink or FIFO swapped in AFTER this sweep still refuses at
+    # the syscall instead of hanging or feeding forged state. The glob needs no
+    # lease token, so no chicken-and-egg read of the payload.
+    if md.DOOR.is_dir():
+        # ALL sidecars, not only *.blocked (codex r11): read_lease also opens
+        # attempted / refresh / refresh.attempted / refresh.intent.
+        for side in md.DOOR.glob("LEASE.*"):
+            if side.is_symlink() or not side.is_file():
+                raise RuntimeError(
+                    f"merge-door sidecar {side.name!r} is not a regular file "
+                    "-- refused (containment)"
+                )
+    lease = md.read_lease()
+    if lease is None and md.LEASE.exists():
+        raise RuntimeError("merge-door LEASE present but unreadable -- corrupt door state")
+    return lease
+
+
+def _blocked_lease_older_than_bound() -> dict | None:
+    """A malformed or unreadable lease/sidecar propagates to the dispatch boundary --
+    it must not suppress the stale-blocked-lease check by reading as absence."""
+    import merge_door as md
+
+    lease = _door_lease_strict()
+    if not lease or lease.get("state") != "blocked":
+        return None
+    blocked_at = lease.get("blocked_at")  # ISO sidecar value merged in by md.read_lease()
+    if blocked_at is None:
+        # A blocked lease ALWAYS carries blocked_at (merge_door.mark_blocked writes
+        # it); its absence is malformed authoritative state, never "not stale".
+        raise RuntimeError("blocked lease missing blocked_at -- malformed door state")
+    age_s = (
+        datetime.now(timezone.utc)  # noqa: UP017 - /usr/bin/python3 is pre-3.11 on macOS
+        - datetime.strptime(blocked_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc  # noqa: UP017 - same stdlib-runtime constraint
+        )
+    ).total_seconds()
+    if age_s < 0:
+        # mark_blocked stamps now_iso on this host; a future blocked_at is malformed
+        # or forged state that would otherwise mute the stale check until that time.
+        raise RuntimeError(f"blocked lease blocked_at {blocked_at!r} is in the future")
+    return lease if age_s > md.POST_MERGE_CI_BOUND_S + md.REFRESH_BOUND_S else None
+
+
+def _recent_main_merges(
+    root: Path, heads: list[dict]
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """The last TOCTOU_LOOKBACK first-parent landings, each joined to the reservation that
+    recorded it as `merge_sha` (U-HE-23). The door squash-merges, so landings have ONE
+    parent and `--merges` would inspect none of them. Returns (attributed
+    `(merge_sha, first_parent, verified_base)` tuples, unattributed landing shas).
+    Deliberately NO lease-derived suppression: r5-r7 proved every attestation carrier
+    (moved records, then the live lease via a symlinked LEASE) forgeable, so the ONE
+    suppressor of a mismatch is the operator's finding_adjudication (`_record_detection`
+    recall) -- a recovered race re-raises once (emit-once) until disposed."""
+    proc = _run(["git", "log", "--first-parent", f"-{TOCTOU_LOOKBACK}", "--format=%H %P"], cwd=root)
+    if proc.returncode != 0:
+        # An unreadable history must not read as a clean backstop -- the dispatch
+        # converts this raise into a hard DETECTIONS_UNAVAILABLE finding.
+        raise RuntimeError(f"git log --first-parent failed: {proc.stderr.strip() or proc.args}")
+    by_merge_sha: dict[str, dict] = {}
+    for hd in heads:
+        sha_claim = hd.get("merge_sha")
+        if not sha_claim:
+            continue
+        prior = by_merge_sha.get(sha_claim)
+        if prior is not None and prior.get("base_sha") != hd.get("base_sha"):
+            # Two heads claiming ONE landing with different verified bases is an
+            # authoritative-state conflict -- surfacing beats last-writer-wins, which
+            # could hide a real mismatch (codex r21).
+            raise RuntimeError(
+                f"reservations {prior.get('arc_id')!r} and {hd.get('arc_id')!r} both "
+                f"claim landing {sha_claim[:12]} with different verified bases"
+            )
+        by_merge_sha[sha_claim] = hd
+    merges: list[tuple[str, str, str]] = []
+    unattributed: list[str] = []
+    for line in proc.stdout.strip().splitlines():
+        parts = line.split()
+        sha, parents = parts[0], parts[1:]
+        head = by_merge_sha.get(sha)
+        if head is None or not head.get("base_sha"):
+            unattributed.append(sha)
+        elif parents:  # a parentless root commit has no first parent to compare
+            merges.append((sha, parents[0], head["base_sha"]))
+    return merges, unattributed
+
+
+def _emitting_detections_safe(root: Path, lane: str) -> list[Finding]:
+    """The suite with partial-result preservation: a raise in a later detector must not
+    discard findings (and their already-appended durable rows) from earlier ones -- the
+    abort becomes a hard DETECTIONS_UNAVAILABLE APPENDED to what completed, so the
+    report says "aborted after N findings", never "the suite did not run"."""
+    acc: list[Finding] = []
+    try:
+        _emitting_detections(root, lane, acc)
+    except Exception as exc:
+        acc.append(
+            _detections_unavailable(lane, f"suite aborted after {len(acc)} finding(s): {exc}")
+        )
+    return acc
+
+
+def _emitting_detections(root: Path, lane: str, findings: list[Finding]) -> None:
+    """The full C-HE-12 detection suite, accreting into the caller's list. Runs only
+    where the record/store layer imports (`_emitting_detections_dispatch` is the venue
+    boundary; `_emitting_detections_safe` is the abort-preserving wrapper)."""
+    findings.extend(check_split_brain(root / ARC_METRICS_JSONL, lane_id=lane))
+    heads, unreadable = _reservation_heads()
+    if unreadable:
+        findings.append(
+            _detections_unavailable(
+                lane,
+                "reservation heads unreadable: "
+                + ", ".join(sorted(unreadable))
+                + " (detections ran on the readable remainder)",
+            )
+        )
+    merges, unattributed = _recent_main_merges(root, heads)
+    findings.extend(check_base_toctou(merges, lane_id=lane))
+    if unattributed:
+        findings.append(
+            Finding(
+                "info",
+                "BASE_TOCTOU_UNATTRIBUTED",
+                f"[{lane}] {len(unattributed)} of the last {TOCTOU_LOOKBACK} "
+                "first-parent landings have no reservation recording a merge_sha; "
+                "first-parent check skipped for: " + ", ".join(s[:12] for s in unattributed),
+            )
+        )
+    findings.extend(check_orphaned_reservations(heads, lane_id=lane))
+
+
+def _record_layer_importable() -> bool:
+    try:
+        import finding_record  # noqa: F401
+        import merge_door  # noqa: F401
+        import reservations  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
+    """Venue boundary for the detection suite. The guard's documented runtime is
+    stdlib-only `/usr/bin/python3` (pre-3.11 on macOS, no third-party packages in CI),
+    but the record and store layers need the uv workspace env (`datetime.UTC`,
+    jsonschema). In-process where those import; otherwise the WHOLE suite runs once
+    through `uv run` (the CI guard job syncs the env before the runtime check, and the
+    child inherits HARNESS_LANE_ID / HARNESS_GATE_LOG). This function is the ONE
+    enforcement point for suite unavailability: any failure -- an in-process raise
+    (symlinked store, unreadable git history), a failed fallback, unparseable fallback
+    output -- becomes a HARD `DETECTIONS_UNAVAILABLE` finding, because the guard's
+    blocking CI context must go red when the whole C-HE-12 suite is unexecuted; a warn
+    would leave the gate green on UNLOOKED."""
+    if _record_layer_importable():
+        return _emitting_detections_safe(root, lane)
+    proc = _run(
+        ["uv", "run", "python", "-c", _UV_DRIVER, str(root), lane],
+        cwd=_REPO_ROOT,
+        timeout=300,
+    )
+    if proc.returncode != 0:
+        reason = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "no stderr"
+        return [
+            _detections_unavailable(
+                lane,
+                "this interpreter cannot import the record/store layer and the uv "
+                f"fallback failed ({reason})",
+            )
+        ]
+    try:
+        parsed = json.loads(proc.stdout.strip().splitlines()[-1])
+        if not isinstance(parsed, list):
+            raise ValueError(f"expected a JSON list, got {type(parsed).__name__}")
+        # No element filtering: a non-dict or key-missing element routes to the
+        # except arm as unparseable output -- silently skipping it would make
+        # malformed fallback output indistinguishable from a clean suite.
+        return [Finding(d["severity"], d["code"], d["message"]) for d in parsed]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        return [
+            _detections_unavailable(lane, f"the uv fallback produced unparseable output ({exc})")
+        ]
+
+
+def _detections_unavailable(lane: str, reason: str) -> Finding:
+    return Finding(
+        "hard",
+        "DETECTIONS_UNAVAILABLE",
+        f"[{lane}] the C-HE-12 detection suite did not run: {reason}. "
+        "An empty detection set here means UNLOOKED, not clean.",
+    )
+
+
 def validate(
     state: GuardState,
     *,
@@ -732,6 +1420,55 @@ def validate(
     require_fresh_checkpoint: bool = False,
 ) -> list[Finding]:
     findings: list[Finding] = []
+
+    if mode == "check" and state.branch == state.default_branch:
+        # U-HE-33: the emitting detections run where landings live -- `check` on the
+        # default branch (the CI push run and local main-audit venues). Feature-branch
+        # and preflight/closeout runs never walk the landing history. Isolation is
+        # enforced BEFORE any durable emission (codex r6): on a DIRTY root checkout
+        # (possibly a staged replacement or truncation of the gate log itself) the
+        # suite must not append into already-rejected state -- it is skipped with a
+        # hard finding, and ROOT_CHECKOUT_EDIT below reports the dirt itself. On a
+        # clean root checkout a fired detection's append then stands as a loud pending
+        # edit for the next arc (or the operator) to commit -- an earlier pathname
+        # exemption for that write was RETRACTED as an unprovenanced bypass surface.
+        if state.status_entries:
+            # ANY dirty default-branch checkout (codex r13): in a linked worktree an
+            # uncommitted gate-log edit would otherwise be trusted as the suppression
+            # authority -- the suite runs only against committed, clean state.
+            findings.append(
+                _detections_unavailable(
+                    _lane_id(),
+                    "checkout has pending edits; the suite must not run against "
+                    "uncommitted state -- commit or clean first",
+                )
+            )
+        else:
+            log = _gate_log_path(state.root)
+            size_before = log.stat().st_size if log.exists() else 0
+            findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
+            size_after = log.stat().st_size if log.exists() else 0
+            if size_after > size_before:
+                # Same-run disclosure (codex r9), keyed to an ACTUAL append (codex
+                # r10: a nonempty suite does not imply one -- unattributed-info and
+                # emit-once recalls write nothing): `state` was derived before the
+                # suite ran, so rows just appended are not in status_entries -- say
+                # so now rather than letting the next run discover its own
+                # predecessor's write as a hard isolation failure.
+                # HARD (codex r11): the run that observes the append goes red
+                # itself instead of deferring the red to a successor run. The
+                # message states the observed fact, not causal attribution -- a
+                # concurrent guard run's append is disclosed identically
+                # (merge-gate concurrency lens P3).
+                findings.append(
+                    Finding(
+                        "hard",
+                        "GATE_LOG_PENDING_COMMIT",
+                        "durable detection rows were appended to the tracked gate "
+                        "log during this run; commit them (the next arc's ship or "
+                        "a direct commit) before the next guard run.",
+                    )
+                )
 
     if state.status_entries and not state.is_linked_worktree:
         findings.append(
@@ -945,6 +1682,7 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
             "latest_retirement_batch": state.latest_retirement_batch,
             "lag_expected": state.lag_expected,
             "owed_lag": state.owed_lag,
+            "lane_id": _lane_id(),
             "findings": [f.__dict__ for f in findings],
         },
         indent=2,

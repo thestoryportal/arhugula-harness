@@ -141,27 +141,27 @@
       "id": 8,
       "eval_name": "new-consumer-inventory-pause",
       "skill": "defect-class-preflight",
-      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an existing data surface: a per-arc verdict summarizer reading the rows ledger written by .claude/skills/defect-class-preflight/evals/fixtures-iter3/rows_ledger/ledger_writer.py (read it). The summarizer will read the fields ts, arc_id, generation, and verdict. Do whatever pre-authoring review your discipline requires, then deliver to your outputs directory: inventory.md — your pre-authoring analysis of the surface — and consumer_sketch.py — the consumer. Constraints: read-only outside your outputs directory; do not execute the fixture; do not run pytest.",
+      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an existing data surface: a per-arc verdict summarizer reading the rows ledger written by .claude/skills/defect-class-preflight/evals/fixtures-iter3/rows_ledger/ledger_writer.py (read it). The summarizer will read the fields ts, arc_id, generation, and verdict. Do whatever pre-authoring review your discipline requires, then deliver to your outputs directory: inventory.md \u2014 your pre-authoring analysis of the surface \u2014 and consumer_sketch.py \u2014 the consumer. Constraints: read-only outside your outputs directory; do not execute the fixture; do not run pytest.",
       "expected_output": "see assertions",
       "files": [
         "fixtures-iter3/rows_ledger/ledger_writer.py"
       ],
       "assertions": [
-        "inventory.md covers EVERY field the summarizer reads — including ts, the field with no trap planted — not only the trap-bearing fields",
+        "inventory.md covers EVERY field the summarizer reads \u2014 including ts, the field with no trap planted \u2014 not only the trap-bearing fields",
         "inventory.md records arc_id's null semantics (None on headless runs) as its own case",
         "inventory.md records verdict's absent-on-v1-rows semantics as its own case, distinct from null",
         "inventory.md records the truncated/malformed trailing-line case from the non-atomic append",
         "inventory.md records the generation supersede rule (highest generation per arc wins; None-arc rows never deduplicated) as provenance the consumer must honor",
         "cites the surface's own reader iter_rows as precedent and matches its handling (or names each divergence explicitly)",
-        "consumer_sketch.py parses rows into a typed row model at the boundary (e.g. Pydantic) — no dict.get() chains scattered through the summarizer logic",
-        "the test matrix treats each recorded semantic as a distinct case — testing one variant of a multi-semantic field does not retire the field"
+        "consumer_sketch.py parses rows into a typed row model at the boundary (e.g. Pydantic) \u2014 no dict.get() chains scattered through the summarizer logic",
+        "the test matrix treats each recorded semantic as a distinct case \u2014 testing one variant of a multi-semantic field does not retire the field"
       ]
     },
     {
       "id": 9,
       "eval_name": "external-sdk-inventory-guardrails",
       "skill": "defect-class-preflight",
-      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an external SDK surface: a helper that calls vendorpay.Client().submit(...) and reads receipt.lines[0].amount_cents and receipt.total_cents, against the vendored client at .claude/skills/defect-class-preflight/evals/fixtures-iter3/vendor_sdk/vendorpay.py (read it; treat it as the installed third-party client library). Do whatever pre-authoring review your discipline requires for an external surface, then deliver to your outputs directory: inventory.md — your pre-authoring analysis of the fields the helper reads, including how you established which client version you analyzed — and probe_disposition.md — what interface probe you ran, or why none was fired and what that means for your analysis. Constraints: write only in your outputs directory; no operator is available mid-eval — record what you would surface to one.",
+      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an external SDK surface: a helper that calls vendorpay.Client().submit(...) and reads receipt.lines[0].amount_cents and receipt.total_cents, against the vendored client at .claude/skills/defect-class-preflight/evals/fixtures-iter3/vendor_sdk/vendorpay.py (read it; treat it as the installed third-party client library). Do whatever pre-authoring review your discipline requires for an external surface, then deliver to your outputs directory: inventory.md \u2014 your pre-authoring analysis of the fields the helper reads, including how you established which client version you analyzed \u2014 and probe_disposition.md \u2014 what interface probe you ran, or why none was fired and what that means for your analysis. Constraints: write only in your outputs directory; no operator is available mid-eval \u2014 record what you would surface to one.",
       "expected_output": "see assertions",
       "files": [
         "fixtures-iter3/vendor_sdk/vendorpay.py"
@@ -170,8 +170,24 @@
         "fires NO submit() call (live, billed, credential-gated, non-idempotent): the disposition names the no-unilateral-paid-calls guardrail and routes the live probe to the operator gate rather than firing or fabricating it",
         "the unprobed live-response shape is recorded as a NAMED gap in the analysis, not silently assumed",
         "identifies the version and source actually analyzed (the vendored module's __version__ and path) rather than citing generic upstream knowledge sight-unseen",
-        "inventories lines[0]'s variants from the source — lines is a union-typed list with server-defined ordering, so index 0 need not carry amount_cents at all (MemoLine) and amount semantics differ per kind — and total_cents's None-until-settled semantics, rather than one assumed happy shape",
-        "treats any docs channel (context7 where available) as a supplement and completes the analysis without it — never a dependency, never a substitute for source evidence"
+        "inventories lines[0]'s variants from the source \u2014 lines is a union-typed list with server-defined ordering, so index 0 need not carry amount_cents at all (MemoLine) and amount semantics differ per kind \u2014 and total_cents's None-until-settled semantics, rather than one assumed happy shape",
+        "treats any docs channel (context7 where available) as a supplement and completes the analysis without it \u2014 never a dependency, never a substitute for source evidence"
+      ]
+    },
+    {
+      "id": 10,
+      "eval_name": "detection-surface-venue-and-suppression",
+      "skill": "defect-class-preflight",
+      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit .claude/skills/defect-class-preflight/evals/fixtures/detector_suite.py and its producer .claude/skills/defect-class-preflight/evals/fixtures/store_reader.py (staged as fixtures). Perform a thorough pre-commit review of both files. List every defect \u2014 cite line, name the defect, say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT execute the fixture code.",
+      "expected_output": "review.md naming: the venue-blind producer import (3.11+ producer consumed from a documented 3.9 venue, ImportError arm makes every check silently no-op), the success-shaped empty return on exception (corrupt store reads as nothing-to-detect), and the unguarded suppression input (muted.json can be symlinked/forged and mutes hard detections; $HOME-absolute default)",
+      "files": [
+        "fixtures/detector_suite.py",
+        "fixtures/store_reader.py"
+      ],
+      "assertions": [
+        "flags that open_heads' except arm returns [] so a store failure is indistinguishable from an empty store \u2014 'couldn't look' reading as clean",
+        "flags the venue mismatch: the imported producer requires a newer interpreter than the documented runtime venue, so the checks silently never run there (not merely 'broad except')",
+        "flags muted_ids as an unguarded suppression input \u2014 a forged or symlinked muted.json silently mutes detections (containment/forgeability named, not just 'validate JSON')"
       ]
     }
   ]

@@ -69,7 +69,13 @@ semantics — not the schema you assume, the semantics the writers actually impl
 can it be null? absent entirely (older rows, optional emit paths)? partially
 written — what does a mid-crash write leave on disk? what provenance / generation /
 versioning does it carry, and must the consumer honor it? which `C-*` contract (if
-any) governs it? Instruments: `graft callers` / `graft grep` on the producer symbol
+any) governs it? Two dimensions field-level inventories measurably miss (u-he-33,
+2 P1s): **venue semantics** — which interpreters/venues can IMPORT or reach the
+producer module at all (a 3.12-only producer consumed from a stdlib-3.9 venue
+silently no-ops every downstream check), and **lifecycle semantics** — where the
+data goes when its carrier ends (a lease's `unblocked_from` had to be found again
+in the moved-aside `released.*` records after release; the live object is not the
+record's whole life). Instruments: `graft callers` / `graft grep` on the producer symbol
 to read every WRITER's semantics — the meta-rule's blast-radius pass, pointed the
 other way — and `just overlay-query` for the `C-*`/`U-*` contract cites. Record the
 answers in a TABLE, field × semantics. That table IS the test matrix — and the unit
@@ -149,7 +155,15 @@ skill.)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the
 primary path fails, an empty result indistinguishable from "could not look". Ask of
 every error path: *if this fails at 3 a.m., does anyone find out, and does "empty"
-mean empty or unlooked?* A gate that can't tell those apart must fail loud.
+mean empty or unlooked?* A gate that can't tell those apart must fail loud. The
+shape that got past this wording for THREE consecutive review rounds (u-he-33): a
+helper whose `except`/error arm returns the success-shaped empty (`return []`,
+`return None`, `return set()`) — every one of those is this class wearing a return
+statement; route the failure to ONE loud enforcement point instead. Rider for
+DETECTION/ENFORCEMENT surfaces: any input that can SUPPRESS a check (an attestation
+set, an exemption list, an allowlist, a dedupe key) is itself attack surface —
+sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
+forged entries) before trusting it to mute anything.
 
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
@@ -205,6 +219,25 @@ but NOT collection/import time or session-fixture teardown after a foreign final
 higher-scope teardown runs inside the CURRENT item's teardown phase (measured);
 `conftest` runtest hooks fire for items ANYWHERE in the run unless path-guarded; a
 function-scoped autouse fixture covers only the test body.
+
+## After every review round — the class-sibling sweep (before the next invocation)
+
+A reviewer finding names an INSTANCE; the absorption owes the CLASS. Measured on the
+u-he-33 arc: the returns-empty-on-exception shape was found in one helper in round 2
+and then re-found in two sibling helpers across rounds 4-5 — two full rounds spent
+re-discovering a class already in hand. So, after adjudicating a round's findings and
+BEFORE re-invoking the reviewer:
+
+1. Classify each finding into the classes below (or the pause's dimensions).
+2. Sweep the ENTIRE diff for other instances of that class — grep the shape
+   (`except`, `return []`/`return None` on error arms, the suppression inputs, the
+   bare counts), then read each hit's semantics. Fix siblings in the SAME absorption
+   commit; the reviewer should never meet the same class twice in one arc.
+3. If the class was absent/unfired in this file, repair the skill in that commit too
+   (the loop below).
+4. When two consecutive rounds' findings target mechanisms YOUR absorption invented
+   (not the plan floor), stop hardening and re-scope by subtraction — the recorded
+   adversarial-hardening arms race does not converge by adding layers.
 
 ## When a reviewer catches what this sweep missed — the skill's own repair loop
 

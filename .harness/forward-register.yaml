@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 213
+  total: 216
   open: 1
   design_substrate_gated: 3
-  registered_finding: 58
+  registered_finding: 61
   operator_gated: 0
   held: 2
   closed: 149
-  identity_digest: 718d1f2119dd596c
+  identity_digest: 69979982b0ae31b7
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10693,3 +10693,76 @@ items:
     suite (the U-HE-25 exact-shape pattern), landed as its own reviewed arc.'
   council: 'NO — single-surface guard-integration gap; no cross-axis tension.'
   heading: '### B-213 · /arc-lever-report is guard-denied in loop mode *(surfaced by codex r11 on the lever-observability arc, 2026-08-25; REGISTERED)*'
+- id: B-214
+  title: >-
+    the BASE_TOCTOU CI re-check has no CI-visible verified-base authority: the
+    reservation store is host-local, so Actions runners report every landing
+    unattributed
+  pr: 'u-he-33 arc'
+  status: registered_finding
+  summary: 'SURFACED by codex round 2 on the U-HE-33 arc: the guard''s first-parent
+    re-check joins main landings to the reservation store under the host-local queue
+    dir, which a fresh Actions runner neither restores nor populates — so on CI the
+    by_merge_sha map is empty, every landing is reported via the info
+    BASE_TOCTOU_UNATTRIBUTED finding, and no first-parent mismatch can become a hard
+    CI finding. The reporting is loud and honest (unattributed is named, never
+    silently skipped), and the operator-host main-audit venues DO run the real
+    comparison; what is missing is a CI-visible carrier of the verified base (e.g. a
+    committed attestation surface the door writes at landing). That is a new
+    mechanism — a design decision, not an impl slice of U-HE-33 (X-AL-3).'
+  close_out: 'OPEN — closure = a design-phase decision on where the verified-base
+    attestation lives CI-visibly (committed sidecar, PR annotation, or ledger row),
+    then a small impl arc wiring the guard''s join to that carrier. Until then the CI
+    backstop for hazard #7 is the door''s own at-landing detection (U-HE-23) plus the
+    operator-host re-check.'
+  council: 'NO — single-surface authority-placement question; route as Class 2/3
+    design note when picked up.'
+  heading: '### B-214 · BASE_TOCTOU CI re-check lacks a CI-visible verified-base authority *(surfaced by codex r2 on the u-he-33 arc, 2026-08-25; REGISTERED)*'
+- id: B-215
+  title: >-
+    the post-review-round class-sibling sweep is instruction-dependent; wire it as a
+    deterministic gate in the review loop
+  pr: 'u-he-33 arc'
+  status: registered_finding
+  summary: 'SURFACED by the operator during the u-he-33 arc (8 review rounds): the
+    empty-on-exception defect class recurred in sibling helpers across multiple rounds
+    despite being written in defect-class-preflight class 3 — instruction-following
+    measurably fails to fire the sweep, exactly the skill''s own "mechanical firing
+    beats instruction-following" clause. The finding CAPTURE is already deterministic
+    (the review wrapper writes C-HE-24 rows per round; refresh-classes.py re-derives
+    class counts), but the classify-then-sweep-the-diff-for-siblings step between
+    rounds runs only if the agent chooses to run it.'
+  close_out: 'OPEN — closure = a deterministic post-round step wired into the review
+    loop (the wrapper or a companion script): extract the round''s findings, grep the
+    branch diff for class-sibling shapes, and refuse the next review invocation until
+    each hit carries a named answer. The review wrapper is the workspace''s
+    highest-blast-radius shared-surface class, so this takes its own reviewed arc
+    (B-213 precedent).'
+  council: 'NO — single-surface loop-tooling gap; no cross-axis tension.'
+  heading: '### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*'
+- id: B-216
+  title: >-
+    u-he-33 review-loop tail: three bounded guard refinements deferred when the
+    loop was stopped on measured negative marginal value
+  pr: 'u-he-33 arc'
+  status: registered_finding
+  summary: 'SURFACED by codex r22 on the u-he-33 arc and DEFERRED by the operator''s
+    stop of the review loop after the r22 absorption broke 20 existing tests while
+    fixing 3 findings — the measured point where absorption added defects faster than
+    review retired them (the grounding evidence for B-215''s termination-predicate
+    requirement: the loop''s only exit was reviewer-finds-nothing, unreachable on a
+    guard-class file). The three deferred refinements: (1) _lane_id() falls back to
+    "ci" when HARNESS_LANE_ID is unset instead of reading the persisted
+    .harness/.lane-id marker (misattributes local main audits and cross-suppresses CI
+    dedupe); (2) detection rows carry head_sha=None so an adjudication recalls an
+    identical recurrence at a LATER head, contrary to C-HE-24 §4 head-bound ids; (3)
+    _door_continuation_live accepts a lease missing state/host as an active
+    continuation. All three are real, small, and bounded; none undermines the landed
+    contract (C-HE-12 acceptance was met at round 4).'
+  close_out: 'OPEN — closure = a small follow-up arc applying the three refinements
+    with their witnesses (a draft absorption existed and was reverted for breaking the
+    suite; re-derive from this row, not from that reverted diff), landing alongside or
+    after B-215''s deterministic review-loop gate.'
+  council: 'NO — single-surface refinements; the loop-termination question lives at
+    B-215.'
+  heading: '### B-216 · u-he-33 review-loop tail refinements *(deferred at the operator stop, 2026-08-25; REGISTERED)*'
