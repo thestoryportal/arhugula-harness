@@ -114,13 +114,18 @@ def _read_regular(path: Path) -> str:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as exc:
         if exc.errno == errno.ELOOP:
-            raise LeaseError(
+            # DoorBlocked (a LeaseError subclass) is the door's documented containment
+            # type: land()'s adoption path contracts pytest.raises(DoorBlocked,
+            # "containment"), and main() routes DoorBlocked to the HITL exit -- a bare
+            # LeaseError here escaped land()'s pre-try resume-validation read as the
+            # wrong type (merge-gate r2 spec P1).
+            raise DoorBlocked(
                 f"door file {path.name!r} is a symlink -- refused (containment)"
             ) from exc
         raise
     try:
         if not stat_module.S_ISREG(os.fstat(fd).st_mode):
-            raise LeaseError(
+            raise DoorBlocked(
                 f"door file {path.name!r} is not a regular file -- refused (containment)"
             )
         chunks = []

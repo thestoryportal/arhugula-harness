@@ -349,21 +349,23 @@ def test_append_observation_allocates_and_appends_in_one_critical_section(
     """Two concurrent emitters minting for the same (producer, head, location) get DISTINCT ids
     (`:1`, `:2`) -- never the same id twice. If allocation ran outside the lock (or the lock were
     gone) both would read an empty log, both would mint `:1`, and -- being identical same-kind
-    rows -- both would land: two rows, one id. The barrier inside the patched read_rows only
-    rendezvous when both callers are inside the section at once (merge-gate L3 finding)."""
+    rows -- both would land: two rows, one id. The barrier inside the patched _read_rows_fd
+    only rendezvous when both callers are inside the section at once (merge-gate L3
+    finding; re-pointed from read_rows when the locked body switched to fd reads --
+    the merge-gate r2 witness lens caught the old monkeypatch as dead code)."""
     p = tmp_path / "g.jsonl"
     gate = threading.Barrier(2, timeout=1.0)
-    real_read = fr.read_rows
+    real_read_fd = fr._read_rows_fd
 
-    def read_then_rendezvous(path=None):
-        rows = real_read(path)
+    def read_then_rendezvous(fd, path):
+        rows = real_read_fd(fd, path)
         try:
             gate.wait()
         except threading.BrokenBarrierError:
             pass
         return rows
 
-    monkeypatch.setattr(fr, "read_rows", read_then_rendezvous)
+    monkeypatch.setattr(fr, "_read_rows_fd", read_then_rendezvous)
     fields = dict(
         location=LOC,
         observed_evidence="lease acquired without pr",
@@ -387,7 +389,7 @@ def test_append_observation_allocates_and_appends_in_one_critical_section(
         th.start()
     for th in threads:
         th.join(timeout=30)
-    rows = real_read(p)
+    rows = fr.read_rows(p)
     assert errors == [] and len(rows) == 2, (errors, rows)
     assert sorted(r["finding_id"].rsplit(":", 1)[1] for r in rows) == ["1", "2"]
     assert len(set(minted)) == 2
@@ -715,3 +717,28 @@ def test_projection_round_trip_through_json_report_keeps_existing_codes_byte_ide
         },
     ]
     assert json.dumps(report["findings"][0]) == json.dumps(pre_existing.__dict__)
+
+
+def test_locked_body_reads_through_the_fd_not_the_pathname(tmp_path: Path, monkeypatch):
+    """merge-gate r2 witness lens: the positive witness that critical-section reads come
+    from the LOCKED fd (codex r15 P1 -- an in-boundary guarantee). Poison the pathname
+    reader: if any locked body still called read_rows(path), the append would blow up."""
+    p = tmp_path / "g.jsonl"
+
+    def poisoned(path=None):
+        raise AssertionError("locked body read via the pathname, not the fd")
+
+    monkeypatch.setattr(fr, "read_rows", poisoned)
+    fields = dict(
+        location=LOC,
+        observed_evidence="fd-read witness",
+        expected_contract="C-HE-24 §4",
+        severity="P2",
+        finding_type="terminal-block",
+        lineage_claim="fresh",
+        producer="merge-gate",
+    )
+    row = fr.append_observation(fields, _env(), p)
+    assert row["finding_id"].endswith(":1")
+    monkeypatch.undo()
+    assert len(fr.read_rows(p)) == 1
