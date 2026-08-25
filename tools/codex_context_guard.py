@@ -1023,13 +1023,12 @@ def check_orphaned_reservations(heads: list[dict], *, lane_id: str) -> list[Find
         info = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
         pr_state = info.get("state") if info else None
         if pr_state in ("MERGED", "CLOSED"):
-            if pr_state == "MERGED" and _within_continuation_window(info.get("mergedAt")):
-                # An ORDINARY in-flight landing (codex r16 P3): the door holds its
-                # lease through post-merge CI + the terminating refresh BEFORE
-                # flipping the reservation, so an open head with a freshly-merged PR
-                # is the normal continuation, not an orphan. The window is the
-                # door's own lease bounds -- past them, an unflipped head is genuinely
-                # orphaned and emits.
+            if pr_state == "MERGED" and _door_continuation_live(h):
+                # An ORDINARY in-flight landing is discriminated by OWNED STATE, not
+                # a time window (codex r18 P2 falsified the r16 mergedAt bound: the
+                # door flips open->merged promptly after confirmation, so a lingering
+                # open head is only legitimate while the door's LIVE lease still
+                # names it -- a crash leaves no live lease and the orphan emits).
                 continue
             # Revalidate against the CURRENT generation before the durable emission: the
             # bounded GitHub query left a window in which a normal open->merged
@@ -1126,20 +1125,15 @@ def _valid_head(head, *, arc_id: str) -> bool:
     )
 
 
-def _within_continuation_window(merged_at: str | None) -> bool:
-    """True while a merged PR is inside the door's lease bounds (its §4(vii)-(viii)
-    continuation): POST_MERGE_CI_BOUND_S + REFRESH_BOUND_S past mergedAt."""
-    if not merged_at:
+def _door_continuation_live(h: dict) -> bool:
+    """True iff the door's LIVE lease names this head's arc or PR -- the in-flight
+    §4(vii)-(viii) continuation. State-based on purpose: the lease is the owned
+    lifecycle authority; a wall-clock window would re-admit exactly the ambient
+    temporal coupling it replaced."""
+    lease = _door_lease_strict()
+    if not lease:
         return False
-    import merge_door as md
-
-    age_s = (
-        datetime.now(timezone.utc)  # noqa: UP017 - /usr/bin/python3 is pre-3.11 on macOS
-        - datetime.strptime(merged_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc  # noqa: UP017 - same stdlib-runtime constraint
-        )
-    ).total_seconds()
-    return age_s <= md.POST_MERGE_CI_BOUND_S + md.REFRESH_BOUND_S
+    return lease.get("reservation_id") == h.get("arc_id") or lease.get("pr") == h.get("pr")
 
 
 def _reservation_head_current(arc_id: str) -> dict | None:

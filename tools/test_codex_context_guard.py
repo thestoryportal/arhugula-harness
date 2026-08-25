@@ -2068,16 +2068,23 @@ def test_read_lease_open_site_refuses_fifo_lease(tmp_path, monkeypatch) -> None:
         raise AssertionError("a FIFO LEASE must refuse at the read, not hang")
 
 
-def test_freshly_merged_pr_is_continuation_not_orphan(tmp_path, monkeypatch) -> None:
-    """codex r16 P3: an open head whose PR merged moments ago is the door's ordinary
-    §4(vii)-(viii) continuation (lease held through post-merge CI + refresh), not an
-    orphan -- no durable row, no guard red, until the door's own lease bounds pass."""
-    from datetime import UTC, datetime
-
+def test_in_flight_landing_is_continuation_only_while_lease_lives(tmp_path, monkeypatch) -> None:
+    """codex r16 P3 as refined by r18 P2: an open head with a merged PR is the door's
+    continuation ONLY while the door's LIVE lease names it (owned state, not a time
+    window); with no live lease the same shape is a crash-orphan and emits."""
     log = _isolate_gate_log(monkeypatch, tmp_path)
-    fresh = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": fresh})
+    monkeypatch.setattr(
+        cg, "_gh_pr_state", lambda pr: {"state": "MERGED", "mergedAt": "2026-08-25T00:00:00Z"}
+    )
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+    monkeypatch.setattr(cg, "_reservation_head_current", lambda arc_id: dict(OPEN_HEAD))
 
+    monkeypatch.setattr(
+        cg, "_door_lease_strict", lambda: {"reservation_id": "pr-9", "pr": 9, "state": "held"}
+    )
     assert cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l") == []
-    assert not log.exists()
+    assert not log.exists()  # in-flight: no durable row
+
+    monkeypatch.setattr(cg, "_door_lease_strict", lambda: None)
+    fs = cg.check_orphaned_reservations([dict(OPEN_HEAD)], lane_id="l")
+    assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]  # crash-orphan: emits
