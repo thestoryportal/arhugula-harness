@@ -474,9 +474,28 @@ _phase_exact_shape() {
   [ "$1" = "uv" ] && [ "$2" = "run" ] && [ "$3" = "python" ] \
     && [ "$4" = "tools/reservations.py" ] && [ "$5" = "phase" ] \
     && [ "$6" = "--arc-id" ] && [ "$8" = "--phase" ] && [ "${10}" = "--edge" ] || return 1
-  case "$7" in -*|"") return 1 ;; esac
-  case "$9" in -*|"") return 1 ;; esac
+  # Positive charset, not just not-dash-led (codex U-HE-34 r2 P1): _bash_args_safe
+  # rejects only UPPERCASE expansions, so a lowercase `${victim:=other-arc}` would
+  # ride a looser check and expand AFTER the allow into an arbitrary reservation id.
+  printf '%s' "$7" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+  printf '%s' "$9" | grep -Eq '^[a-z_]+$' || return 1
   case "${11}" in start|end) ;; *) return 1 ;; esac
+}
+
+# U-HE-34 r2 P1: `just review-log-settle <file> [timeout]` — the result_capture_log_write
+# edge's trigger must not strand headless at ask→deny. Arity-bounded per the B-217
+# precedent (no surplus token can be parsed as a second recipe name): exactly 3 or 4
+# tokens, the file a positively-charset-bounded path (slashes allowed, no expansions,
+# no dash-led token), the optional timeout digits-only.
+_review_log_settle_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
+  [ "$1" = "just" ] && [ "$2" = "review-log-settle" ] || return 1
+  printf '%s' "$3" | grep -Eq '^[A-Za-z0-9._/-]+$' || return 1
+  if [ "$#" -eq 4 ]; then
+    printf '%s' "$4" | grep -Eq '^[0-9]+$' || return 1
+  fi
 }
 
 _transition_to_open_only() {
@@ -723,6 +742,11 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
        && _bash_args_safe "$CMD"; then
       # U-HE-34: the C-HE-27 span emitters (roadmap-continue / ship-pr) — positional
       # exact-shape only; see _phase_exact_shape for the duplicate-flag rationale.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-log-settle([[:space:]]|$)' \
+       && _review_log_settle_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-34 r2: the settle watch feeding result_capture_log_write — arity-bounded.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then

@@ -753,10 +753,18 @@ review-log-settle file timeout='130':
     f="{{file}}"
     [ -f "$f" ] || { echo "review-log-settle: no such file: $f" >&2; exit 1; }
     deadline=$(( $(date +%s) + {{timeout}} ))
-    prev=-1
+    # Three consecutive equal sizes (a 15 s stability window), not one: a writer that
+    # pauses for a single poll and flushes later would otherwise be stamped complete
+    # early (codex U-HE-34 r2).
+    prev=-1; stable=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
       cur=$(wc -c < "$f")
-      [ "$cur" -eq "$prev" ] && exit 0
+      if [ "$cur" -eq "$prev" ]; then
+        stable=$(( stable + 1 ))
+        [ "$stable" -ge 2 ] && exit 0
+      else
+        stable=0
+      fi
       prev=$cur
       sleep 5
     done

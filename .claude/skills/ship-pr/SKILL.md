@@ -101,11 +101,15 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
     (C-HE-27 §1 lists `capture`; the reservation cannot carry it post-terminal) is
     registered as forward work rather than wired to fail (codex U-HE-34 r1).
   - **`result_capture` split (C-HE-27 §1 — process exit and log write DIVERGE: the
-    reviewer's verdict can flush after its process exits).** When teeing a round's output
-    to its round log: immediately after the review process exits, record
-    `--phase result_capture_process_exit --edge end`; then `just review-log-settle
-    <round-log>` (bounded 130 s) and, ONLY on its exit 0, record
-    `--phase result_capture_log_write --edge end`. Invoke the settle with a Bash tool
+    reviewer's verdict can flush after its process exits).** Tee each round's output to
+    a round log under the gitignored in-worktree `.harness/tmp/<arc-id>-rounds/` (the
+    guard's settle allow is path-bounded to the worktree — a job-tmp path falls to ask
+    and, in a headless venue, strands the edge). Immediately after the review process
+    exits, record `--phase result_capture_process_exit --edge end`; then
+    `just review-log-settle <round-log>` (bounded 130 s; allowlisted in exactly the
+    2-arg/3-arg literal form) and, ONLY on its exit 0, record
+    `--phase result_capture_log_write --edge end`. A refused settle invocation
+    degrades to skipping the edge — say so in the PR body. Invoke the settle with a Bash tool
     timeout ABOVE its bound (e.g. 200000 ms) — the tool's 120 s default would kill the
     recipe before its own 130 s bound and misread a settling log as a failure. A log
     still growing at the bound records nothing — there is no true completion timestamp

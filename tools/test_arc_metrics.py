@@ -2798,10 +2798,10 @@ def test_n6_formula():
 
 
 def test_n6_buckets_explicit_verify_unavailable_span():
-    """C-HE-27 §4: primary-channel downtime recorded as an explicit `verify_unavailable`
-    span is bucketed into excluded seconds even when the failover succeeded and the
-    round's terminal folded to APPROVE -- and it never enters the denominator.
-    Mutation probe: add the span to denom_s -> hours grows to 1.5 and this reds."""
+    """C-HE-27 §4: failover downtime is recorded as a `verify_unavailable` span NESTED
+    inside verify, so it is SUBTRACTED from verify's denominator contribution and
+    bucketed into excluded seconds. Mutation probe: stop subtracting -> hours 0.5->1.0
+    and this reds."""
     rows = [
         {
             "arc_id": "a",
@@ -2816,5 +2816,67 @@ def test_n6_buckets_explicit_verify_unavailable_span():
         }
     ]
     n6, hours, excluded_s = am.n6(rows, [])
-    # 0.0 here is a MEASURED zero (an hour of verify, nothing accepted), not absence.
-    assert n6 == 0.0 and hours == 1.0 and excluded_s == 1800.0
+    # 0.0 here is a MEASURED zero (half an hour of review, nothing accepted), not absence.
+    assert n6 == 0.0 and hours == 0.5 and excluded_s == 1800.0
+
+
+def test_n6_round1_terminal_governs_verify_exclusion():
+    """verify is the ROUND-1 window, so only round 1's terminal can invalidate it: a
+    later round's REVIEWER_UNAVAILABLE must not erase valid round-1 review hours.
+    Mutation probe: revert to an any()-over-all-rounds scan -> hours 1.0->0.0, reds."""
+    rows = [
+        {
+            "arc_id": "a",
+            "phases": {"verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T01:00:00Z"}},
+            "round_outcomes": {
+                "1/codex": {"terminal": "APPROVE"},
+                "2/codex": {"terminal": "REVIEWER_UNAVAILABLE"},
+            },
+        }
+    ]
+    n6, hours, excluded_s = am.n6(rows, [])
+    assert n6 == 0.0 and hours == 1.0 and excluded_s == 0.0
+
+
+def test_n6_numerator_ignores_zero_hour_arcs():
+    """An accepted finding from an arc contributing NO measured verify/edit hours must
+    not enter the numerator -- it would divide by hours it never spent (codex r2).
+    Mutation probe: window on row presence instead of contribution -> n6 1.0->2.0."""
+    rows = [
+        {
+            "arc_id": "a",
+            "phases": {"verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T01:00:00Z"}},
+            "round_outcomes": {"1": {"terminal": "APPROVE"}},
+        },
+        {"arc_id": "spanless", "phases": {}, "round_outcomes": {}},
+    ]
+    gate = [
+        {
+            "finding_id": "fa",
+            "arc_id": "a",
+            "disposition": "accepted",
+            "ts": "t1",
+            "record_kind": "finding_adjudication",
+        },
+        {
+            "finding_id": "fs",
+            "arc_id": "spanless",
+            "disposition": "accepted",
+            "ts": "t1",
+            "record_kind": "finding_adjudication",
+        },
+    ]
+    n6, hours, _excluded_s = am.n6(rows, gate)
+    assert n6 == pytest.approx(1.0) and hours == 1.0
+
+
+def test_phase_spans_negative_span_fails_loud():
+    """A reversed pair (end before start) is corrupt phase state -- the edges are
+    recorded independently so the shape is representable; it must abort, never flow
+    a negative duration into N6."""
+    row = {
+        "arc_id": "a",
+        "phases": {"verify": {"start": "2026-08-18T02:00:00Z", "end": "2026-08-18T01:00:00Z"}},
+    }
+    with pytest.raises(am.AbortError, match="end precedes start"):
+        am.phase_spans(row)

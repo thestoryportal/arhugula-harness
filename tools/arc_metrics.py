@@ -1911,11 +1911,20 @@ def phase_spans(row: dict) -> dict[str, float]:
     neighbouring row (C-HE-27 §2: an intervening record can be dropped, reordered,
     or written by another lane, so an inter-record delta silently becomes a
     different quantity). An edge-only phase (e.g. the result_capture pair, which
-    records single completion timestamps) is recorded but yields no span."""
+    records single completion timestamps) is recorded but yields no span. A span
+    whose end precedes its start is corrupt phase state and fails LOUD -- the edges
+    are recorded independently, so a reversed pair is representable on disk, and a
+    negative duration flowing into N6 would publish a negative rate (codex r2)."""
     out = {}
     for name, span in (row.get("phases") or {}).items():
         if span.get("start") and span.get("end"):
-            out[name] = (parse_iso(span["end"]) - parse_iso(span["start"])).total_seconds()
+            secs = (parse_iso(span["end"]) - parse_iso(span["start"])).total_seconds()
+            if secs < 0:
+                raise AbortError(
+                    f"phase {name!r} on arc {row.get('arc_id')!r}: end precedes start "
+                    f"({span['end']} < {span['start']}) -- corrupt phase state"
+                )
+            out[name] = secs
     return out
 
 
@@ -1923,38 +1932,45 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
     """C-HE-27 §4: problems prevented per hour = COUNT(DISTINCT finding_id last-disposed
     accepted) / sum(verify + edit) hours, read from the durable phases map.
 
-    The window is `rows`: the numerator counts only findings whose `arc_id` belongs to a
-    measured arc -- accepted findings from arcs outside the window would divide by hours
-    they never spent and inflate N6 (codex U-HE-34 r1). Two downtime buckets feed the
-    third element and NEVER the denominator: verify spans of arcs whose round terminated
-    REVIEWER_UNAVAILABLE (both channels down -- the arc-level terminal), plus any explicit
-    `verify_unavailable` span (the ship-pr emitters record primary-channel downtime there
-    even when the failover then succeeds and the round's terminal folds to APPROVE/BLOCK).
-    Returns None, not 0, when no hours are measured -- an absent denominator is not a
-    measured zero."""
+    The numerator's window is the set of arcs that actually CONTRIBUTE denominator
+    hours -- an accepted finding from an arc with no measured verify/edit time would
+    divide by hours it never spent and inflate N6 (codex U-HE-34 r1/r2; C-HE-27 §4
+    "across the window's arcs"). Two downtime buckets feed the third element and NEVER
+    the denominator: the verify span of an arc whose ROUND-1 outcomes all terminated
+    REVIEWER_UNAVAILABLE (verify is the round-1 window, so only round 1's terminal can
+    invalidate it -- a later round's downtime must not erase valid round-1 review), and
+    any explicit `verify_unavailable` span, which the emitters record NESTED inside
+    verify (failover downtime), so it is subtracted from the verify contribution rather
+    than merely reported. Returns None, not 0, when no hours are measured -- an absent
+    denominator is not a measured zero."""
     import finding_record as fr
 
-    window_arcs = {r.get("arc_id") for r in rows}
+    denom_s = 0.0
+    excluded_s = 0.0
+    window_arcs = set()
+    for r in rows:
+        spans = phase_spans(r)
+        r1 = [
+            o for key, o in (r.get("round_outcomes") or {}).items() if str(key).split("/")[0] == "1"
+        ]
+        r1_unavailable = bool(r1) and all(o.get("terminal") == "REVIEWER_UNAVAILABLE" for o in r1)
+        vu = spans.get("verify_unavailable", 0.0)
+        contributed = 0.0
+        if r1_unavailable:
+            excluded_s += spans.get("verify", 0.0)
+        else:
+            contributed += max(spans.get("verify", 0.0) - vu, 0.0)
+        excluded_s += vu
+        contributed += spans.get("edit", 0.0)
+        denom_s += contributed
+        if contributed > 0:
+            window_arcs.add(r.get("arc_id"))
     last = fr.reduce_last_by_finding_id(gate_rows)
     accepted = {
         fid
         for fid, r in last.items()
         if r.get("disposition") == "accepted" and r.get("arc_id") in window_arcs
     }
-    denom_s = 0.0
-    excluded_s = 0.0
-    for r in rows:
-        spans = phase_spans(r)
-        unavailable = any(
-            o.get("terminal") == "REVIEWER_UNAVAILABLE"
-            for o in (r.get("round_outcomes") or {}).values()
-        )
-        if unavailable:
-            excluded_s += spans.get("verify", 0.0)
-        else:
-            denom_s += spans.get("verify", 0.0)
-        excluded_s += spans.get("verify_unavailable", 0.0)
-        denom_s += spans.get("edit", 0.0)
     hours = denom_s / 3600.0
     return (len(accepted) / hours if hours else None), hours, excluded_s
 

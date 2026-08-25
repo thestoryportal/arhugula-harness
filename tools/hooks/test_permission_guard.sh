@@ -511,9 +511,24 @@ for c in 'uv run python tools/reservations.py phase --arc-id a --phase execute -
          'uv run python tools/reservations.py phase --arc-id a --phase execute --edge start --ts 2026-01-01T00:00:00Z' \
          'uv run python tools/reservations.py phase --arc a --phase execute --edge start' \
          'uv run python tools/reservations.py phase --arc-id a --edge start --phase execute' \
-         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge nonsense'; do
+         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge nonsense' \
+         'uv run python tools/reservations.py phase --arc-id ${victim:=other} --phase execute --edge start' \
+         'uv run python tools/reservations.py phase --arc-id $victim --phase execute --edge start'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "phase hardening: '$c' → not allow" || bad "phase over-matched: $c"
+done
+# (a''''') U-HE-34 r2: the settle watch — arity-bounded 2/3-arg literal forms only.
+for c in 'just review-log-settle .harness/tmp/u-he-34-rounds/r1.log' \
+         'just review-log-settle .harness/tmp/u-he-34-rounds/r1.log 200'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "review-log-settle → allow: '$c'" || bad "review-log-settle not allowed: $c → $OUT"
+done
+for c in 'just review-log-settle .harness/tmp/r1.log review-attest-budget' \
+         'just review-log-settle ${victim:=x}.log' \
+         'just review-log-settle .harness/tmp/r1.log 200 extra' \
+         'just review-log-settle'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "review-log-settle hardening: '$c' → not allow" || bad "review-log-settle over-matched: $c"
 done
 # hardening: state-mutating / gh-backed / non-carrier verbs and the bare module prefix stay un-allowed
 for c in 'uv run python tools/reservations.py transition --arc-id x --to merged' \
