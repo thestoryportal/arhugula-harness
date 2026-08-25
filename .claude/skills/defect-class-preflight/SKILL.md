@@ -140,7 +140,11 @@ act, what can another lane, process, or signal do?* Shapes: absence-check then c
 mid-sequence leaves a half-state. This workspace's idioms: exclusive-create CAS
 (reservations), temp-then-`os.link` publication, single-writer leases. If your diff
 adds coordination, name which existing idiom it uses — a new hand-rolled one is a
-finding waiting to be filed.
+finding waiting to be filed. And any file a privileged or auto-allowed path READS or
+WRITES that another actor can pre-plant gets the containment idiom: open with
+`O_NOFOLLOW|O_NONBLOCK` + post-open `fstat` `S_ISREG`, refuse symlinks/special files
+loudly, publish via same-directory temp + `os.replace` (the finding_record/merge_door
+hardening; missed unfired on the B-215 gate's state file, codex r1).
 
 ### 2. Prose that will drift (151 findings)
 Docstrings, comments, and `.harness` prose containing checkable facts: counts, line

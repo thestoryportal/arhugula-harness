@@ -46,9 +46,17 @@ def _pf(head=HEAD, digest=DIGEST, arc=ARC) -> rlg.PreflightAttestation:
     )
 
 
-def _sw(round_n: int, ids: tuple[str, ...], head=HEAD, arc=ARC) -> rlg.SweepAttestation:
+def _sw(
+    round_n: int, ids: tuple[str, ...], head=HEAD, digest=DIGEST, arc=ARC
+) -> rlg.SweepAttestation:
     return rlg.SweepAttestation(
-        arc_id=arc, round_n=round_n, head_sha=head, finding_ids=ids, answers_digest="d", ts="t"
+        arc_id=arc,
+        round_n=round_n,
+        head_sha=head,
+        diff_digest=digest,
+        finding_ids=ids,
+        answers_digest="d",
+        ts="t",
     )
 
 
@@ -122,6 +130,14 @@ def test_sweep_missing_one_finding_names_it():
 def test_sweep_at_old_head_refuses_stale():
     rows = [_row(1, "finding", "cw:aa:11:1")]
     d = _decide(_state(sweeps=(_sw(1, ("cw:aa:11:1",), head="e" * 40),)), rows)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "SWEEP_STALE"
+
+
+def test_sweep_at_same_head_different_base_refuses_stale():
+    # codex r1 P2: head alone under-binds — a different --base is a different diff
+    rows = [_row(1, "finding", "cw:aa:11:1")]
+    d = _decide(_state(sweeps=(_sw(1, ("cw:aa:11:1",), digest="f" * 64),)), rows)
     assert isinstance(d, rlg.Refused)
     assert d.code == "SWEEP_STALE"
 
@@ -394,6 +410,34 @@ def test_attest_on_corrupt_state_reinits_loudly(
     assert len(rlg.load_state(repo).preflights) == 1
 
 
+def test_symlinked_state_file_is_containment_refusal(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r1 P1: a pre-planted symlink must refuse loudly — never followed on read,
+    # never "re-initialized" through on attest (the re-init license covers corrupt
+    # CONTENT only)
+    target = repo / "victim.json"
+    target.write_text("precious\n")
+    rlg.state_path(repo).symlink_to(target)
+    with pytest.raises(rlg.GateError, match="containment"):
+        rlg.load_state(repo)
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "STATE_UNREADABLE"
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    rc = _attest_preflight(repo)
+    assert rc != 0
+    assert target.read_text() == "precious\n"  # never written through
+
+
+def test_admit_binding_unavailable_defers_to_wrapper(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r1 P2: an unresolvable base is wrapper infrastructure, not an admission
+    # fact — defer to run_codex_review's classifier instead of crashing pre-terminal
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    d = rlg.admit(repo, "no-such-base", ARC)
+    assert isinstance(d, rlg.Inactive)
+    assert "binding unavailable" in d.reason
+
+
 # ── wiring: codex_review.main() gates before any reviewer ────────────────────
 
 
@@ -437,3 +481,36 @@ def test_wrapper_inactive_arc_warns_and_proceeds(wired, monkeypatch: pytest.Monk
     with pytest.raises(pytest.fail.Exception):
         wired.main(["--base", "main"])
     assert "review gate INACTIVE" in capsys.readouterr().err
+
+
+# ── wiring: agy_review.main() gates standalone gemini (codex r1 P1) ──────────
+
+
+@pytest.fixture()
+def agy_wired(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    import agy_review as agy
+
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.setenv("HARNESS_LANE_ID", "lane-t")
+    monkeypatch.delenv("HARNESS_FAILOVER_CHILD", raising=False)
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setattr(sys, "argv", ["agy_review.py", "--base", "main"])
+    return agy
+
+
+def test_agy_standalone_refuses_unattested(agy_wired, monkeypatch: pytest.MonkeyPatch, capsys):
+    # an ungated standalone gemini review would mint loop rounds that poison the
+    # guarded wrapper's round count (last > 0 skips the entry preflight)
+    monkeypatch.setattr(
+        agy_wired, "run_review", lambda repo, base: pytest.fail("reviewer ran despite refusal")
+    )
+    assert agy_wired.main() == 3
+    assert "gemini-review: GATE_REFUSED (PREFLIGHT_MISSING)" in capsys.readouterr().err
+
+
+def test_agy_failover_child_skips_gate(agy_wired, monkeypatch: pytest.MonkeyPatch):
+    # the parent admitted the round; the child must not re-gate (nor double-refuse)
+    monkeypatch.setenv("HARNESS_FAILOVER_CHILD", "1")
+    monkeypatch.setattr(agy_wired, "run_review", lambda repo, base: 0)
+    assert agy_wired.main() == 0

@@ -42,6 +42,10 @@ def _isolate_gate_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     log = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
     monkeypatch.setenv("HARNESS_GATE_LOG", str(log))
+    # B-215: keep the admission gate out of this battery deterministically — a loop
+    # session exports HARNESS_LOOP=1 to every child, which would flip the gate's
+    # unreserved-arc path from inactive to REFUSE for in-process AND subprocess runs
+    monkeypatch.delenv("HARNESS_LOOP", raising=False)
     return log
 
 

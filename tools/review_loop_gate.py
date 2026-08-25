@@ -32,7 +32,19 @@ corrupt file refuses (an unreadable state must never read as clean,
 [LAW:no-silent-failure]).
 
 Single-writer: the arc-serial holder discipline (one lane per arc) excludes
-concurrent writers of the state file; appends are read-rewrite, not CAS.
+concurrent writers of the state file; appends are read-rewrite, not CAS. The same
+discipline flow-excludes the admit-to-emission window (two concurrent wrapper
+invocations for one arc): round minting itself (`round_n_for`) carries the identical
+documented residual, registered to U-HE-19/21 — the gate adds no new window and
+holds no lock.
+
+Trust boundary (the u-he-33 `_record_detection` precedent, reaffirmed here): the
+gate enforces DISCIPLINE against drift, not security against an agent with local
+write access to this checkout — such an agent could edit this module, the gate log,
+or the guard itself; fabricating attestation state is out of scope beyond the loud
+containment refusals above. The `review-attest-budget` verb stays ask-gated so the
+sanctioned path to more rounds is operator-visible; the filesystem is not a
+sanctioned path.
 """
 
 from __future__ import annotations
@@ -42,6 +54,7 @@ import hashlib
 import json
 import os
 import re
+import stat as stat_module
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -86,6 +99,7 @@ class SweepAttestation:
     arc_id: str
     round_n: int
     head_sha: str
+    diff_digest: str  # full code binding, not head alone: a different --base is a different diff
     finding_ids: tuple[str, ...]
     answers_digest: str
     ts: str
@@ -144,14 +158,37 @@ def state_path(root: Path) -> Path:
     return root / STATE_REL
 
 
+def _read_state_bytes(path: Path) -> bytes | None:
+    """Containment read (the finding_record/merge_door idiom, codex r1 P1 on this arc):
+    O_NOFOLLOW + post-open fstat S_ISREG so a pre-planted symlink or special file at the
+    state path is a loud refusal, never a follow. None = no file (empty state)."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise GateError(f"{path} refused (containment): {exc}") from exc
+    try:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            raise GateError(f"{path} is not a regular file -- refused (containment)")
+        chunks = []
+        while chunk := os.read(fd, 65536):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
 def load_state(root: Path) -> GateState:
     """Parse the state file to typed attestations; raise GateError on any malformed
-    content — the caller decides direction (admit refuses; attest verbs re-init)."""
+    content — the caller decides direction (admit refuses; attest verbs re-init a
+    CORRUPT file, but never a containment refusal)."""
     path = state_path(root)
-    if not path.exists():
+    data = _read_state_bytes(path)
+    if data is None:
         return GateState()
     try:
-        raw = json.loads(path.read_text())
+        raw = json.loads(data)
         buckets: dict[str, list] = {attr: [] for _, attr in _KINDS.values()}
         for rec in raw["records"]:
             cls, attr = _KINDS[rec["kind"]]
@@ -167,10 +204,14 @@ def load_state(root: Path) -> GateState:
 
 def _append_record(root: Path, kind: str, record: object) -> None:
     """Read-rewrite append. A corrupt existing file is re-initialized LOUDLY —
-    licensed by the tightening-direction invariant (module docstring)."""
+    licensed by the tightening-direction invariant (module docstring). A containment
+    refusal (symlink/special file) is NOT corruption: it propagates as GateError, and
+    the publish goes through a same-directory temp + os.replace (replacing a symlink
+    path swaps the link itself, never writing through it)."""
     path = state_path(root)
+    data = _read_state_bytes(path)  # GateError on symlink/special -- never re-init those
     try:
-        existing = json.loads(path.read_text())["records"] if path.exists() else []
+        existing = json.loads(data)["records"] if data is not None else []
         if not isinstance(existing, list):
             raise ValueError("records is not a list")
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -181,7 +222,9 @@ def _append_record(root: Path, kind: str, record: object) -> None:
         existing = []
     existing.append({"kind": kind, **asdict(record)})
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"records": existing}, indent=1) + "\n")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps({"records": existing}, indent=1) + "\n")
+    os.replace(tmp, path)
 
 
 # ── pure core ([LAW:effects-at-boundaries]: no IO below this line) ───────────
@@ -255,12 +298,14 @@ def decide(
             (s for s in reversed(state.sweeps) if s.arc_id == arc_id and s.round_n == last), None
         )
         if sweep is not None:
-            if sweep.head_sha != head_sha:
+            if sweep.head_sha != head_sha or sweep.diff_digest != diff_digest:
                 return Refused(
                     code="SWEEP_STALE",
                     detail=(
-                        f"sweep for round {last} attested at {sweep.head_sha[:12]} but HEAD "
-                        f"is {head_sha[:12]} — the sweep must cover the fix's final form"
+                        f"sweep for round {last} attested {sweep.head_sha[:12]}/"
+                        f"{sweep.diff_digest[:12]} but the reviewable diff is "
+                        f"{head_sha[:12]}/{diff_digest[:12]} — the sweep must cover the "
+                        "fix's final form against the same base"
                     ),
                     recipe="re-run `just review-attest-sweep <answers-file>` after the last commit",
                 )
@@ -325,7 +370,15 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
                 ),
             )
         return Inactive(reason=f"arc {arc_id} unreserved — attestation gate not in force")
-    binding = rw.code_binding(repo, base)
+    try:
+        binding = rw.code_binding(repo, base)
+    except subprocess.CalledProcessError as exc:
+        # An unresolvable base / broken git is a WRAPPER-infrastructure failure, not an
+        # admission fact: defer to run_codex_review's own binding path, which classifies
+        # it REVIEWER_UNAVAILABLE under the existing terminal contract (codex r1 P2).
+        return Inactive(
+            reason=f"code binding unavailable ({exc}) — the wrapper's binding path classifies"
+        )
     return decide(
         state,
         fr.read_rows(),
@@ -444,6 +497,7 @@ def _attest_sweep(
             arc_id=arc_id,
             round_n=target,
             head_sha=b["head_sha"],
+            diff_digest=b["diff_digest"],
             finding_ids=tuple(ids),
             answers_digest=hashlib.sha256(answers.encode()).hexdigest(),
             ts=_now_iso(),
