@@ -586,6 +586,26 @@ def test_symlinked_answers_file_refused(repo: Path, monkeypatch: pytest.MonkeyPa
     assert rlg.load_state(repo).preflights == ()
 
 
+def test_finding_row_without_id_refuses_not_skips():
+    # codex r8 P2: valid-JSON log corruption (a finding row with no finding_id) must
+    # refuse — silently skipping it would erase an obligation
+    rows = [_row(1, "finding", None)]
+    d = _decide(_state(preflights=(_pf(),)), rows)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "STATE_UNREADABLE"
+
+
+def test_nested_import_error_is_not_absent_substrate(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r8 P1: a broken import INSIDE reservations must refuse, not inactivate
+    def broken(arc_id):
+        raise ImportError("No module named 'arc_metrics'", name="arc_metrics")
+
+    monkeypatch.setattr(rlg, "_reservation_exists", broken)
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "STATE_UNREADABLE"
+
+
 def test_admit_gate_log_unreadable_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch):
     # codex r7 P2: the gate log is the round/obligation authority — unreadable must
     # produce the typed refusal, never a traceback out of the wrapper

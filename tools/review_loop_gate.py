@@ -293,12 +293,19 @@ def unanswered_findings(state: GateState, rows: list[dict], arc_id: str) -> list
     """Findings are OBLIGATIONS, not round rows (codex r2 P1): round numbers are
     per-producer scales, so a standalone gemini finding minted at its own round 1
     while codex sits at round 5 must still block admission. The unit is the
-    finding_id; coverage is a set difference against every sweep ever attested."""
-    all_ids = {
-        r["finding_id"]
-        for r in _loop_rounds(rows, arc_id)
-        if r.get("record_kind") == "finding" and r.get("finding_id")
-    }
+    finding_id; coverage is a set difference against every sweep ever attested.
+    An IN-SCOPE finding row without a finding_id raises GateError (codex r8 P2):
+    silently skipping it would let valid-JSON log corruption erase an obligation."""
+    all_ids = set()
+    for r in _loop_rounds(rows, arc_id):
+        if r.get("record_kind") != "finding":
+            continue
+        if not r.get("finding_id"):
+            raise GateError(
+                f"gate log finding row for {arc_id} (producer {r.get('producer')}, "
+                f"round {r.get('round_n')}) has no finding_id — obligations underivable"
+            )
+        all_ids.add(r["finding_id"])
     answered: set[str] = set()
     for s in state.sweeps:
         if s.arc_id == arc_id:
@@ -336,7 +343,14 @@ def decide(
                 "exactly so that evidence is never silently lost."
             ),
         )
-    unanswered = unanswered_findings(state, rows, arc_id)
+    try:
+        unanswered = unanswered_findings(state, rows, arc_id)
+    except GateError as exc:
+        return Refused(
+            code="STATE_UNREADABLE",
+            detail=str(exc),
+            recipe="inspect the gate log row named above — an obligation cannot be skipped",
+        )
     if unanswered:
         return Refused(
             code="SWEEP_MISSING",
@@ -384,8 +398,13 @@ def decide(
 def _reservation_exists(arc_id: str) -> bool:
     try:
         import reservations as rs
-    except ImportError:
-        return False
+    except ImportError as exc:
+        # only the SUBSTRATE being absent reads as unreserved (pre-S4b venues); a
+        # broken import INSIDE reservations (renamed symbol, missing dependency) is
+        # unreadable state and must refuse upstream, not inactivate (codex r8 P1)
+        if exc.name == "reservations":
+            return False
+        raise
     return rs.current(arc_id) is not None
 
 

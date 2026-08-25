@@ -430,6 +430,10 @@ OUT=$(run_on "$(pl Bash 'just codex-loop-status review-attest-"budget" 2 ok' '')
 [ "$(dec "$OUT")" != "allow" ] && ok "quote-normalized budget chain → not auto-allowed" || bad "quote-normalized budget chain auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "single-quote-normalized budget chain → not auto-allowed" || bad "single-quote budget chain auto-allowed: $OUT"
+# codex r8 P1: the token grammar admits FULLY-quoted plain spans — the documented
+# quoted-evidence loop-record shape must stay allowed (r7's bare charset broke it).
+OUT=$(run_on "$(pl Bash 'just codex-loop-record --phase plan --status passed --command plan --evidence "expected assertion"' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "quoted-evidence codex-loop-record → allow" || bad "quoted-evidence loop-record not allowed: $OUT"
 # codex r7 P1: backslash normalization (review-attest-bud\get) — the positive
 # plain-charset constraint on just-first commands ends the whole normalization
 # ladder (quotes, backslashes, $VAR splices, globs) in one rule.

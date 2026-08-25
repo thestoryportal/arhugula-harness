@@ -602,6 +602,14 @@ esac
 # purpose: a safe-but-chained command costs one approval prompt; the alternative is a
 # silent bypass of the whole deny path.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
+  # The just-line token grammar (codex r7/r8 P1): each token is a plain bareword OR a
+  # FULLY-quoted plain span (documented shapes like codex-loop-record --evidence "two
+  # words" stay allowed). Splice attacks all require BREAKING a token's text (mixed
+  # bare+quote like review-attest-"budget", backslashes, $VAR, globs) — none of those
+  # forms parse under this grammar, and a fully-quoted "review-attest-budget" still
+  # contains the literal the budget grep above catches.
+  _JUST_TOKEN='[A-Za-z0-9._/:=@-]+|"[A-Za-z0-9._/:=@, -]*"|'"'"'[A-Za-z0-9._/:=@, -]*'"'"''
+  _JUST_PLAIN_LINE='^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]+('"$_JUST_TOKEN"'))*[[:space:]]*$'
   # Reject (→ ask) if the command (a) chains/nests/redirects, OR (b) uses a destructive
   # SUBMODE of an otherwise-allowlisted verb that the deny-list doesn't cover —
   # `find ... -delete/-exec`, `gh api -X DELETE/POST/...` (mutating), OR (c) is a `just`
@@ -619,7 +627,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
   if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
      || printf '%s' "$CMD" | grep -Eq 'just[[:space:]].*review-attest-budget' \
      || { printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]|$)' \
-          && ! printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]+[A-Za-z0-9._/:=@-]+)*[[:space:]]*$'; } \
+          && ! printf '%s' "$CMD" | grep -Eq "$_JUST_PLAIN_LINE"; } \
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge.*--admin' \
