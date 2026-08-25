@@ -2510,3 +2510,9 @@ same spec leg.
 
 
 
+
+### B-217 · permission-guard just-recipe chaining class *(surfaced by codex r3 on the b-215 arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** `just` executes multiple recipes from one command line, so any prefix-anchored allowlist entry for an argument-bearing `just` recipe can front a chained SECOND recipe that was never allowlisted — measured shape: `just review-gate-check main review-attest-budget 2 ok` rode the gate-check allow and would have run the deliberately ask-gated budget verb.
+- **Current state.** OPEN. The b-215 arc fixed its own three verbs with exact-anchored, arity-bounded shapes (no surplus token can be parsed as a recipe name) plus two chained-bypass witnesses in the guard suite; the CLASS remains for every other argument-taking recipe in the big `just` alternation.
+- **Closure shape.** A guard-wide audit converting the alternation's argument-bearing entries to arity-bounded anchors (or one structural token-count check against the named recipe's parameter count), with per-shape chained-bypass witnesses (U-HE-25 exact-shape precedent; guard edits take their own reviewed arc per B-213).

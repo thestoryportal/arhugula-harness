@@ -141,7 +141,7 @@ class Allowed:
 
 @dataclass(frozen=True)
 class Inactive:
-    """Gate not in force (unreserved arc outside loop mode) — allow, loudly."""
+    """Gate not in force (unreserved arc, any mode) — allow, loudly."""
 
     reason: str
 
@@ -149,7 +149,7 @@ class Inactive:
 @dataclass(frozen=True)
 class Refused:
     code: str  # PREFLIGHT_MISSING | PREFLIGHT_STALE | SWEEP_MISSING
-    #           | BUDGET_EXHAUSTED | ARC_UNRESERVED | STATE_UNREADABLE
+    #           | BUDGET_EXHAUSTED | STATE_UNREADABLE
     detail: str
     recipe: str
 
@@ -244,7 +244,10 @@ def _append_record(root: Path, kind: str, record: object) -> None:
         pass
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     try:
-        os.write(fd, (json.dumps({"records": existing}, indent=1) + "\n").encode())
+        payload = (json.dumps({"records": existing}, indent=1) + "\n").encode()
+        view = memoryview(payload)
+        while view:  # write-all (codex r3 P2): a permitted short write must not
+            view = view[os.write(fd, view) :]  # publish truncated JSON over valid state
     finally:
         os.close(fd)
     os.replace(tmp, path)
@@ -351,11 +354,6 @@ def decide(
 # ── edge: admit ──────────────────────────────────────────────────────────────
 
 
-def _loop_mode(root: Path) -> bool:
-    # mirror of tools/hooks/lib.sh loop_mode_active(): env OR workspace marker
-    return os.environ.get("HARNESS_LOOP") == "1" or (root / ".harness" / ".loop-active").exists()
-
-
 def _reservation_exists(arc_id: str) -> bool:
     try:
         import reservations as rs
@@ -374,15 +372,12 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         reserved = False
         print(f"review-gate: reservation store unreadable ({exc})", file=sys.stderr)
     if not reserved:
-        if _loop_mode(repo):
-            return Refused(
-                code="ARC_UNRESERVED",
-                detail=f"arc {arc_id} has no reservation and loop mode is active",
-                recipe=(
-                    "loop arcs are reserved at selection — open via roadmap-continue, or "
-                    "export the reserved arc's HARNESS_ARC_ID before invoking the wrapper"
-                ),
-            )
+        # Unreserved → Inactive in EVERY mode (codex r3 P1): the headless-degradation
+        # path is SANCTIONED — roadmap-continue proceeds unreserved when the permission
+        # layer refuses the reserve, and the C-HE-25 recording ladder already no-ops
+        # there; a loop-mode hard refusal would strand that flow with an unsatisfiable
+        # recipe. The forgotten-HARNESS_ARC_ID session this accepts stays visible: its
+        # rounds mint under the branch-*/-nolane fallback ids on every C-HE-24 row.
         return Inactive(reason=f"arc {arc_id} unreserved — attestation gate not in force")
     try:
         state = load_state(repo)

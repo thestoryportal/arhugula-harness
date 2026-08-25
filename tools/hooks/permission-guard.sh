@@ -653,6 +653,16 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # the script takes no arguments, and anything chained, redirected or substituted was
       # already rejected above. A different path after `source` does not match.
       emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-gate-check([[:space:]]+[A-Za-z0-9._/-]+)?$|^just[[:space:]]+review-attest-(preflight|sweep)[[:space:]]+[A-Za-z0-9._/-]+([[:space:]]+[A-Za-z0-9._/-]+)?$' \
+       && _bash_args_safe "$CMD"; then
+      # B-215 attest/check verbs, EXACT-ANCHORED and arity-bounded (codex r3 P1):
+      # `just` chains recipes, so a prefix-anchored allow (`just review-gate-check
+      # main review-attest-budget 2 ok`) would ride the allowlisted prefix and run
+      # the deliberately ask-gated budget verb as a chained second recipe. Each
+      # shape here admits at most as many tokens as the recipe's own parameters
+      # consume, so no token can ever be parsed by `just` as another recipe name.
+      # `review-attest-budget` is deliberately NOT allowlisted in any form.
+      emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+transition([[:space:]]|$)' \
        && _transition_to_open_only "$TRIM" \
        && _bash_args_safe "$CMD"; then
@@ -663,7 +673,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # prefix abbreviations, and last-occurrence-wins smuggling all reject), keeping the
       # U-HE-21 r6 rationale: terminal state changes + gc stay operator-visible.
       emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|review-attest-preflight|review-attest-sweep|review-gate-check|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi

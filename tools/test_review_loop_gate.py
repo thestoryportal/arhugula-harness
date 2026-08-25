@@ -285,24 +285,18 @@ def test_admit_out_of_scope_arc_ignores_unreadable_state(repo: Path):
     assert isinstance(d, rlg.Inactive)
 
 
-def test_admit_unreserved_loop_mode_refuses(repo: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("HARNESS_LOOP", "1")
-    d = rlg.admit(repo, "main", ARC)
-    assert isinstance(d, rlg.Refused)
-    assert d.code == "ARC_UNRESERVED"
-
-
-def test_admit_unreserved_interactive_is_inactive(repo: Path):
+def test_admit_unreserved_is_inactive_in_every_mode(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex r3 P1: the headless-degradation path (reserve REFUSED by the permission
+    # layer) is sanctioned and proceeds unreserved — a loop-mode hard refusal would
+    # strand it with an unsatisfiable recipe. Fallback-id visibility on every row is
+    # the accepted trade (named residual).
     d = rlg.admit(repo, "main", ARC)
     assert isinstance(d, rlg.Inactive)
     assert "unreserved" in d.reason
-
-
-def test_admit_loop_marker_file_refuses_unreserved(repo: Path):
+    monkeypatch.setenv("HARNESS_LOOP", "1")
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)
     (repo / ".harness" / ".loop-active").write_text("1")
-    d = rlg.admit(repo, "main", ARC)
-    assert isinstance(d, rlg.Refused)
-    assert d.code == "ARC_UNRESERVED"
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)
 
 
 # ── edges: attest CLI ────────────────────────────────────────────────────────

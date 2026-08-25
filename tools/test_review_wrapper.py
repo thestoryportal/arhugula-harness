@@ -31,7 +31,6 @@ def _no_live_reviewers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # behavior, not admission) — never a function of the ambient loop marker or the
     # real reservation store
     monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
-    monkeypatch.setattr(rlg, "_loop_mode", lambda root: False)
     # ...and off the REAL checkout's state file: joining root with an absolute
     # STATE_REL yields the absolute path, so cwd never reaches the live state
     monkeypatch.setattr(rlg, "STATE_REL", tmp_path / "review-gate-state.json")

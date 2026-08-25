@@ -412,6 +412,13 @@ OUT=$(run_on "$(pl Bash "just review-attest-budget 2 operator-approved" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "review-attest-budget → not auto-allowed (operator-visible)" || bad "review-attest-budget auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just review-attest-preflight /tmp/outside-answers.md" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "review-attest-preflight with out-of-worktree answers → not auto-allowed" || bad "out-of-worktree attest answers auto-allowed: $OUT"
+# codex r3 P1: `just` chains recipes — a prefix-anchored allow would let the
+# ask-gated budget verb ride as a chained SECOND recipe after an allowlisted one.
+# The exact-anchored shapes bound arity so no surplus token can name a recipe.
+OUT=$(run_on "$(pl Bash "just review-gate-check main review-attest-budget 2 operator-approved" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained review-attest-budget after review-gate-check → not auto-allowed" || bad "multi-recipe budget chain auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just review-attest-sweep .harness/tmp/a.md main review-attest-budget 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained budget after review-attest-sweep → not auto-allowed" || bad "attest-sweep budget chain auto-allowed: $OUT"
 SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"
