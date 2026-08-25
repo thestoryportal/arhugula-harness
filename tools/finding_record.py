@@ -225,7 +225,7 @@ _CORE_IMMUTABLE = (
 )
 
 
-def _check_against_prior_rows(row: dict, path: Path) -> None:
+def _check_against_prior_rows(row: dict, rows: list[dict]) -> None:
     """C-HE-24 §5 invariants at WRITE time, for EVERY row kind: two rows with one finding_id
     differ only by ts / record_kind / disposition / disposition_actor / unique_catch; the only
     kind transition is `finding` -> finding_adjudication (markers and proofs are never
@@ -237,7 +237,7 @@ def _check_against_prior_rows(row: dict, path: Path) -> None:
     `_check_finding_id_components` rejects the swap upstream (and `producer` is also listed
     core-immutable here); the ban itself has exactly one write-time enforcement point --
     ``validate()``."""
-    prior = [r for r in read_rows(path) if r["finding_id"] == row["finding_id"]]
+    prior = [r for r in rows if r["finding_id"] == row["finding_id"]]
     if not prior:
         if row["record_kind"] == "finding_adjudication":
             raise RecordError(f"adjudication for unknown finding_id {row['finding_id']!r}")
@@ -317,7 +317,7 @@ def _under_log_lock(path: Path, body) -> None:
     open()-on-FIFO from hanging; the post-open fstat then refuses any non-regular file
     the flags let through. A stat-then-open pre-check alone leaves a swap window."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
     fd = os.open(path, flags, 0o644)
     if not stat_module.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)
@@ -349,7 +349,7 @@ def append_row(row: dict, path: Path | None = None) -> None:
     data = _encode(row)
 
     def body(fd: int) -> None:
-        _check_against_prior_rows(row, path)
+        _check_against_prior_rows(row, _read_rows_fd(fd, path))
         _append_line(fd, data, path)
 
     _under_log_lock(path, body)
@@ -366,12 +366,11 @@ def append_observation(core_fields: dict, env: Envelope, path: Path | None = Non
     written: dict = {}
 
     def body(fd: int) -> None:
-        fid = next_finding_id(
-            core_fields["producer"], head, core_fields["location"], read_rows(path)
-        )
+        rows = _read_rows_fd(fd, path)
+        fid = next_finding_id(core_fields["producer"], head, core_fields["location"], rows)
         row = make_row(FindingCore(finding_id=fid, **core_fields), env)
         validate(row)
-        _check_against_prior_rows(row, path)  # a fresh id has no prior; kept for the invariant
+        _check_against_prior_rows(row, rows)  # a fresh id has no prior; kept for the invariant
         _append_line(fd, _encode(row), path)
         written.update(row)
 
@@ -392,13 +391,13 @@ def append_observations(
     written: list[dict] = []
 
     def body(fd: int) -> None:
-        rows = read_rows(path)
+        rows = _read_rows_fd(fd, path)
         for core_fields, env in build(rows):
             head = env.head_sha if env.head_sha is not None else "nohead"
             fid = next_finding_id(core_fields["producer"], head, core_fields["location"], rows)
             row = make_row(FindingCore(finding_id=fid, **core_fields), env)
             validate(row)
-            _check_against_prior_rows(row, path)
+            _check_against_prior_rows(row, rows)
             _append_line(fd, _encode(row), path)
             rows.append(row)
             written.append(row)
@@ -420,6 +419,32 @@ def _append_line(fd: int, data: bytes, path: Path) -> None:
     if n != len(data):
         os.ftruncate(fd, end)  # roll the partial line back; the log stays parseable
         raise RecordError(f"short write to {path}: {n} of {len(data)} bytes (rolled back)")
+
+
+def _read_rows_fd(fd: int, path: Path) -> list[dict]:
+    """Read the log through the LOCKED fd (os.pread; the append offset is untouched).
+    Reading by pathname inside the critical section reopens the file, so a concurrent
+    rename+symlink swap could feed the dedupe/recall forged rows while appends still
+    target the original inode (codex r15 P1 on PR #1454) -- the fd is the one identity
+    the lock actually protects."""
+    size = os.fstat(fd).st_size
+    chunks = []
+    off = 0
+    while off < size:
+        b = os.pread(fd, min(1 << 20, size - off), off)
+        if not b:
+            break
+        chunks.append(b)
+        off += len(b)
+    rows: list[dict] = []
+    for n, line in enumerate(b"".join(chunks).decode().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise RecordError(f"{path}:{n} is not valid JSON: {exc}") from exc
+    return rows
 
 
 def read_rows(path: Path | None = None) -> list[dict]:
