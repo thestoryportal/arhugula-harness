@@ -221,6 +221,28 @@ def test_foreign_rows_do_not_count():
     assert d == rlg.Allowed(round_n=1)
 
 
+def test_foreign_arc_attestations_never_satisfy(monkeypatch: pytest.MonkeyPatch):
+    # merge-gate witness lens P2: the three arc_id-scoping guards each need a
+    # discriminating witness — one arc's preflight, sweep, or budget extension
+    # must never satisfy/extend a DIFFERENT arc against the shared state file
+    foreign = "b-999-other"
+    # (1) currency: a foreign-arc preflight bound to the same head/digest does not admit
+    d = _decide(_state(preflights=(_pf(arc=foreign),)), [])
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "PREFLIGHT_MISSING"
+    # (2) obligations: a foreign-arc sweep naming the id does not answer it
+    rows = [_row(1, "finding", "cw:aa:11:1")]
+    d = _decide(_state(sweeps=(_sw(("cw:aa:11:1",), arc=foreign),)), rows)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "SWEEP_MISSING"
+    # (3) termination: a foreign-arc extension does not raise this arc's budget
+    rows = [_row(n, "no_finding") for n in range(1, 11)]
+    ext = rlg.BudgetExtension(arc_id=foreign, extra_rounds=5, reason="other arc", ts="t")
+    d = _decide(_state(preflights=(_pf(),), extensions=(ext,)), rows)
+    assert isinstance(d, rlg.Refused)
+    assert d.code == "BUDGET_EXHAUSTED"
+
+
 def test_state_loss_only_tightens():
     # the tightening-direction invariant: attestations/extensions live in state,
     # round counts live in the gate log — losing state can refuse what was

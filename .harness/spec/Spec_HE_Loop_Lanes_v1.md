@@ -4,7 +4,7 @@
 
 Clearance-folded draft (operator draft review ✓ → Codex gate 7/10 ✓ → harness council + adversarial + Codex cold review ✓ → consolidated reconcile + fold ✓ → E4 residual sweep → operator ratification → clearance marker).
 
-Path: `.harness/spec/Spec_HE_Loop_Lanes_v1.md` · Date: 2026-08-18 · **v1.4** (execution-correction change-notes X1 2026-08-18 + X2 2026-08-19 + X3 2026-08-19 + X4a–X4d 2026-08-20; marker `spec-he-loop-lanes-v1.4-cleared-2026-08-20.md`) · Repo at `17011f89c` (all `file:line` cites are pinned to this commit) · Namespace `C-HE-*` (H_E dev tooling; see §0.2)
+Path: `.harness/spec/Spec_HE_Loop_Lanes_v1.md` · Date: 2026-08-18 · **v1.5** (execution-correction change-notes X1 2026-08-18 + X2 2026-08-19 + X3 2026-08-19 + X4a–X4d 2026-08-20 + X5 2026-08-25; marker `spec-he-loop-lanes-v1.5-cleared-2026-08-25.md`) · Repo at `17011f89c` (all `file:line` cites are pinned to this commit) · Namespace `C-HE-*` (H_E dev tooling; see §0.2)
 
 Authority chain (earlier links govern where later links are silent — HE-1 §0):
 `BUILD-PLAN-operator-ratified-2026-08-17.md` (operator-ratified: D-A…D-D, Arcs 1–7) →
@@ -14,6 +14,14 @@ Authority chain (earlier links govern where later links are silent — HE-1 §0)
 **this specification** → implementation plan (next phase) → Phase-7-style implementation.
 
 Evidence tags: **[V]** re-verified at HEAD `17011f89c` in this authoring session (2026-08-18) · **[C]** council- or corpus-recorded, not independently re-verified here · **[R]** operator-ratified (BUILD-PLAN 2026-08-17 or the D5–D8 spec-phase decisions of 2026-08-18, §12).
+
+## Change-note (v1.5 — execution correction, 2026-08-25)
+
+**Trigger.** B-215 execution (PR #1456, the review-loop admission gate `tools/review_loop_gate.py`): the gate's termination constraint — review invocations spent beyond `DEFAULT_ROUND_BUDGET` (10) refuse admission until a RECORDED decision is made (register-and-hold via the loop's defer path, or an unbounded, auditable, deliberately ask-gated extension via `just review-attest-budget`; the refusal text itself cites the late-rounds-are-productive counter-evidence, `.harness/session-audit-2026-08-22-u-he-29.md` §4) — was BLOCKed by the 3-lens merge gate's spec-conformance lens against C-HE-21 §1's unqualified "No flat round cap anywhere" and C-HE-34's non-goal restatement. The operator resolved the conflict by ratifying a checkpoint carve-out (AskUserQuestion, 2026-08-25, this session): the newer U-HE-33 measurement (22 rounds run to measured negative marginal value — the r22 absorption broke 20 tests fixing 3 — with no mechanical terminal; operator-stopped by hand; register row B-216 records it as B-215's grounding evidence) showed the UNBOUNDED loop is its own pathology class, distinct from the shortening-of-review pathology C-HE-21 forecloses.
+
+- **X5 — the checkpoint carve-out (C-HE-21 §1 + C-HE-34 + §16 row 7).** What stays foreclosed: any cap that AUTO-stops or shortens review — a terminal the loop reaches by round count alone, a mechanized check cited as grounds for fewer rounds (the Part D K4 sentence is unchanged), or any discard of an in-flight review. What the carve-out admits: a **periodic recorded-decision checkpoint** — at every N spent rounds the loop REFUSES further review invocations until a human-auditable decision is recorded, with UNBOUNDED continuation available (the extension records who/why and is never grantable by the loop itself), and the refusal text carrying the counter-evidence for late-round productivity so the decider weighs it. Review is never shortened by the mechanism; it is punctuated by it. PR #1034's evidence (genuine findings through round 48 of 49) is honored — under the carve-out that arc would have paused four times and continued four times, each continuation a recorded decision rather than an unexamined default.
+
+**Scope + reversal.** One contract clause qualified (C-HE-21 §1), the C-HE-34 non-goal aligned, §16 traceability row 7 re-worded; no other `C-HE-*` guarantee, contract number, or store surface changes. Clearance is proportionate: the carve-out reconciles two operator-ratified evidence records (PR #1034 via R1 #11/#17/#20; U-HE-33 via B-216) and was operator-ratified explicitly at the decision point; the 3-lens merge gate on PR #1456 re-reviews the landed wording. **Operator may reverse** by a v1.6 note. Marker: `.harness/clearance/spec-he-loop-lanes-v1.5-cleared-2026-08-25.md`.
 
 ## Change-note (v1.4 — execution correction, 2026-08-20)
 
@@ -559,7 +567,7 @@ Closes X1 / loop-D1 (an absent verdict reads as clean: zero-byte output ~3× in 
 
 ### Contract
 
-1. **No flat round cap anywhere.** Mechanization removes defect classes; it never licenses shortening review (R1 #11/#17/#20; PR #1034 produced genuine findings through round 48 of 49; round-2 P1-rate 75% > round-1 62% **[C]**).
+1. **No auto-stopping round cap anywhere** (v1.5 X5). Mechanization removes defect classes; it never licenses shortening review (R1 #11/#17/#20; PR #1034 produced genuine findings through round 48 of 49; round-2 P1-rate 75% > round-1 62% **[C]**). A **periodic recorded-decision checkpoint** is NOT a cap and is admitted (v1.5 X5, operator-ratified 2026-08-25, U-HE-33/B-216 grounding): at every N spent rounds the loop MAY refuse further review invocations until a recorded decision continues (unbounded, auditable, never grantable by the loop itself) or holds; review is punctuated, never shortened, and the refusal MUST carry the late-round-productivity counter-evidence for the decider.
 2. Invariants are binding **by independent live carriage, not by source**: #5 binds (live at `merge-gate/SKILL.md:127`, `ship-pr/SKILL.md:199` **[V]**); #14 binds (C-HE-19); **#16 is void** (`U-WT-09` 0 matches **[V]**; no concurrent-reviewer cap carrier in `.claude/`, `tools/`, `justfile`, `CLAUDE.md` — only a lens name at `merge-gate/SKILL.md:81` and a council co-primary cap at `c2-context-engineering/SKILL.md:218` **[C]**). Any future appeal to a numbered invariant MUST cite its live carrier.
 3. #19: no workflow optimization becomes permanent merely because an evaluator emits GO. #4/#8/#13 as C-HE-15 §3.
 4. Standing workspace refusal: no eval-harness / model-judge **as a governance gate**.
@@ -784,7 +792,7 @@ The diagnosis this Part rests on (STAGE7 §3.1 **[C]**): P1 wall-clock CONFIRMED
 
 ## C-HE-34 - Non-goals of Part D (normative)
 
-- No flat round cap; no shortening of review generically (#11/#17/#20; PR #1034, #1338 **[C]**).
+- No auto-stopping round cap; no shortening of review generically (#11/#17/#20; PR #1034, #1338 **[C]**). A periodic recorded-decision checkpoint with unbounded auditable continuation is not a cap (v1.5 X5).
 - No best-of-N / parallel variant generation as a speed fix (measured null result at this model's temperature **[C]**).
 - No fast mode for throughput (6× price for 2.5× throughput fails the token-economics constraint; 98.0% cache-read must not be touched **[C]**).
 - No agent framework for mechanization (framework-pull discipline; candidates fail on `import litellm` / LangGraph-CrewAI-LlamaIndex dependence).
@@ -891,7 +899,7 @@ Carried at C-HE-30 (eight stores, one authority per fact). Owed as the first pla
 | 4 | §12.2.1 refresh fixed point preserved | C-HE-01 | one-file refresh shape unchanged |
 | 5 | Invariant #16 adjudicated | C-HE-21 | void (live-carrier rule) |
 | 6 | Decorrelation not weakened | C-HE-15, 17, 18 | both cross-vendor channels carry gate contracts |
-| 7 | No flat round cap | C-HE-21, 34 | grep witness: no numeric round cap in loop skills |
+| 7 | No auto-stopping round cap | C-HE-21, 34 | no mechanism ends review by round count alone; the B-215 checkpoint refuses-until-recorded-decision with unbounded continuation (v1.5 X5) |
 | 8 | Rebase tax addressed or priced | C-HE-01 §4 | priced as "well under N×", measured by AC#10 |
 | 9 | Failure-mode inventory with detections | C-HE-12, §9 | ≥ 4/19 emitting after S4d |
 | 10 | Value: cohort comparison of lane count | C-HE-25, 28 | `concurrent_lanes_at_open` × `arc_type` cohorts from the historical N=1 baseline (descriptive only until N≥2 cells populate) |

@@ -15,10 +15,12 @@ disciplines from instruction-following into refusals:
   round numbers are per-producer scales, so round arithmetic is incoherent across
   them, codex r2 P1) must be answered by some sweep attestation before the next
   round is admitted; refusals enumerate the unanswered ids.
-- TERMINATION: review invocations spent — distinct (producer, round) pairs —
-  beyond the budget (default 10, the merge-gate cap precedent) refuse with the
-  register-and-hold recipe. Extensions are auditable records, not env flags
-  ([LAW:no-mode-explosion]).
+- TERMINATION (the C-HE-21 §1 v1.5-X5 checkpoint, operator-ratified): review
+  invocations spent — distinct (producer, round) pairs — beyond the budget refuse
+  until a RECORDED decision continues or holds. Never an auto-stop: continuation is
+  unbounded via auditable ask-gated extensions, not env flags
+  ([LAW:no-mode-explosion]), and the refusal carries the late-round-productivity
+  counter-evidence for the decider.
 
 A refusal is NOT a review terminal: C-HE-16 §3 closes that enum at
 {APPROVE, BLOCK, REVIEWER_UNAVAILABLE}, and a refused invocation never begins —
@@ -80,7 +82,13 @@ PREFLIGHT_SCRIPT_REL = Path(".claude/skills/defect-class-preflight/scripts/prefl
 #: producers are excluded: lens rounds are per-producer and their numbers collide
 #: with loop rounds; detection rows carry round_n=None (same filter round_n_for uses).
 LOOP_PRODUCERS = ("codex_review_wrapper", "gemini_review_wrapper")
-DEFAULT_ROUND_BUDGET = 10  # merge-gate fix-and-re-gate cap precedent (2026-08-01)
+#: The checkpoint interval — NOT an auto-stopping cap: C-HE-21 §1 (v1.5 X5, the
+#: checkpoint carve-out this arc's spec leg landed) forecloses ending review by round
+#: count alone and admits refuse-until-recorded-decision with unbounded ask-gated
+#: continuation, which is exactly what BUDGET_EXHAUSTED implements. N=10 follows the
+#: merge-gate fix-and-re-gate cap (a different loop, but the workspace's one
+#: operator-ratified round-scale precedent, 2026-08-01).
+DEFAULT_ROUND_BUDGET = 10
 
 _HIT_LABEL = re.compile(r"^\[(.+)\]$", re.MULTILINE)
 
