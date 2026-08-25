@@ -136,6 +136,25 @@
         "the correction supersedes in place (the false absolute does not survive anywhere in the new text)",
         "includes the explanation sentence naming what was wrong with the original"
       ]
+    },
+    {
+      "id": 8,
+      "eval_name": "new-consumer-inventory-pause",
+      "skill": "defect-class-preflight",
+      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an existing data surface: a per-arc verdict summarizer reading the rows ledger written by .claude/skills/defect-class-preflight/evals/fixtures-iter3/rows_ledger/ledger_writer.py (read it). Before any consumer code, run the skill's new-consumer inventory pause. Deliver to your outputs directory: inventory.md — the field-by-semantics inventory table for every field the summarizer will read (ts, arc_id, generation, verdict), each recorded semantic a distinct test-matrix case, plus the precedent notes — and consumer_sketch.py — the consumer's parse boundary as a typed row model with the summarizer logic downstream of it. Constraints: read-only outside your outputs directory; do not execute the fixture; do not run pytest.",
+      "expected_output": "see assertions",
+      "files": [
+        "fixtures-iter3/rows_ledger/ledger_writer.py"
+      ],
+      "assertions": [
+        "inventory.md records arc_id's null semantics (None on headless runs) as its own case",
+        "inventory.md records verdict's absent-on-v1-rows semantics as its own case, distinct from null",
+        "inventory.md records the truncated/malformed trailing-line case from the non-atomic append",
+        "inventory.md records the generation supersede rule (highest generation per arc wins; None-arc rows never deduplicated) as provenance the consumer must honor",
+        "cites the surface's own reader iter_rows as precedent and matches its handling (or names each divergence explicitly)",
+        "consumer_sketch.py parses rows into a typed row model at the boundary (e.g. Pydantic) — no dict.get() chains scattered through the summarizer logic",
+        "the test matrix treats each recorded semantic as a distinct case — testing one variant of a multi-semantic field does not retire the field"
+      ]
     }
   ]
 }
