@@ -442,6 +442,25 @@ def test_attest_sweep_missing_id_refuses(repo: Path, monkeypatch: pytest.MonkeyP
     assert rlg.load_state(repo).sweeps == ()
 
 
+def test_attest_sweep_on_corrupt_state_treats_it_as_empty(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    # a corrupt (e.g. old-schema) state must not brick the repair verb: obligations
+    # compute against EMPTY state (maximal — tightening) and the write re-inits loudly
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    rlg.state_path(repo).parent.mkdir(parents=True, exist_ok=True)
+    rlg.state_path(repo).write_text('{"records": [{"kind": "sweep", "bogus_field": 1}]}')
+    fr.GATE_LOG_JSONL.write_text(json.dumps(_row(1, "finding", "cw:aa:11:1")) + "\n")
+    a = repo / "sweep.md"
+    a.write_text("cw:aa:11:1 fixed\n")
+    rc = rlg.main(["attest-sweep", "--answers", str(a), "--base", "main", "--repo", str(repo)])
+    assert rc == 0
+    assert "EMPTY state" in capsys.readouterr().err
+    (sw,) = rlg.load_state(repo).sweeps
+    assert sw.finding_ids == ("cw:aa:11:1",)
+
+
 def test_attest_budget_requires_reason_and_records(repo: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     rc = rlg.main(["attest-budget", "--extra", "2", "--reason", "", "--repo", str(repo)])

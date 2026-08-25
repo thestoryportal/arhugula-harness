@@ -480,11 +480,24 @@ def _attest_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) ->
     return 0
 
 
+def _load_state_for_attest(root: Path) -> GateState:
+    """Corrupt CONTENT reads as EMPTY state for attest verbs — the tightening
+    direction (obligations maximal, prior attestations void), matching the loud
+    re-init _append_record performs at write time. Containment refusals still raise:
+    a symlinked state is never 'repaired' through."""
+    _read_state_bytes(state_path(root))  # containment raises here
+    try:
+        return load_state(root)
+    except GateError as exc:
+        print(f"review-gate: {exc} — treating as EMPTY state (gate tightens only)", file=sys.stderr)
+        return GateState()
+
+
 def _attest_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:
     """Attest the OUTSTANDING obligations — every unanswered finding_id for the arc,
     any producer, any round (the finding-as-obligation model, codex r2 P1) — plus the
     class-sibling textual floor over the attested bytes."""
-    state = load_state(repo)  # GateError (containment/corrupt) propagates loud to main
+    state = _load_state_for_attest(repo)  # containment GateError propagates loud to main
     ids = unanswered_findings(state, fr.read_rows(), arc_id)
     if not ids:
         print(
