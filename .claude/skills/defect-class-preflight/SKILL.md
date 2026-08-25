@@ -1,6 +1,6 @@
 ---
 name: defect-class-preflight
-description: Pre-commit self-review sweep against the ten defect classes this workspace's reviewers actually catch, distilled from the workspace's merge-gate/codex finding corpus (1,084 findings at first distillation, 2026-08-24; the log only grows and scripts/refresh-classes.py rederives). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), and whenever a review round's fix is being committed (fixes introduce their own defects at a measured rate). Running this sweep is how a first draft survives review instead of generating BLOCK rounds — skipping it is how arcs run 9–17 review rounds.
+description: Pre-commit self-review sweep against the ten defect classes this workspace's reviewers actually catch, distilled from the merge-gate/codex finding corpus (the corpus only grows; scripts/refresh-classes.py rederives counts). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), whenever a review round's fix is being committed (fixes introduce their own defects), and whenever a diff introduces a new consumer of an existing data surface — another tool's log/ledger/store/output, an env variable, or an external SDK — which fires the new-consumer inventory pause at authoring time, BEFORE the consumer is written. One pass here is how a first draft survives review — skipping it is how arcs run 9–17 BLOCK rounds.
 ---
 
 # defect-class-preflight — sweep the diff before the reviewers do
@@ -37,6 +37,90 @@ Two meta-rules that outrank the list:
   for every consumer, then read each consumer's *semantics*, not just its existence.
   The costliest P1 in the corpus was a variable that named TWO authorities — the
   change was correct for one consumer class and destructive for the other.
+
+## The new-consumer inventory pause (authoring-time — fires BEFORE the sweep)
+
+Everything else in this file runs at pre-commit. This section runs earlier: the
+moment you are ABOUT to write code that reads a data surface some other code owns.
+Trigger: the diff introduces a NEW consumer of an EXISTING data surface — another
+tool's log, ledger, store, or output file (`.harness/merge-gate-log.jsonl`,
+`.harness/substitutions.yaml`, reservation records), an env variable someone else
+writes, a JSON/YAML schema owned elsewhere, or an external library/SDK's API. When
+that trigger fires: STOP. Do not author the consumer yet.
+
+Why the pause pays: in one recent arc, roughly 13 of the first 20 reviewer findings
+were serially-discovered producer contracts — "that field can be null," "absent on
+legacy rows," "the writer can die mid-record" — each surfaced one at a time, each
+costing the same full serial cycle "Why this exists" prices at 15–30 minutes. One
+up-front inventory table would have converted all of them into pre-commit edits.
+Letting reviewers read the producer to you, one field per round, is the most
+expensive possible way to read it.
+
+The rationalization you will hear yourself think, mid-arc, is: *"the field obviously
+exists — I'll just read it."* Treat that exact sentence as the tripwire, not a
+waiver. Every one of those ~13 findings was a field that obviously existed; what did
+not obviously exist was its null case, its absent-on-old-rows case, its
+half-written-at-crash case, its provenance. The field name is the visible tenth of
+the contract — the pause exists to surface the other nine tenths before a reviewer
+does.
+
+**The inventory.** For EVERY field the consumer will read, establish the producer's
+semantics — not the schema you assume, the semantics the writers actually implement:
+can it be null? absent entirely (older rows, optional emit paths)? partially
+written — what does a mid-crash write leave on disk? what provenance / generation /
+versioning does it carry, and must the consumer honor it? which `C-*` contract (if
+any) governs it? Instruments: `graft callers` / `graft grep` on the producer symbol
+to read every WRITER's semantics — the meta-rule's blast-radius pass, pointed the
+other way — and `just overlay-query` for the `C-*`/`U-*` contract cites. Record the
+answers in a TABLE, field × semantics. That table IS the test matrix — and the unit
+is the recorded SEMANTIC, not the row: each field × each recorded semantic (null,
+absent, partial, provenance, …) is its own case the consumer must survive, and
+testing one variant does not retire the field's others. A recorded semantic without
+a test is a reviewer finding on layaway.
+
+**Parse, don't validate.** A data-surface consumer gets a typed row model — Pydantic
+v2 in this workspace — at the boundary; illegal shapes are rejected ONCE, at parse
+time, and everything downstream handles only legal ones. The shape to refuse:
+`dict.get()` chains scattered through the logic, each one a private, unreviewed
+theory of the producer's contract. Ten `get()` sites are ten places the theory can
+be wrong; one row model is one.
+
+**Precedent search.** Before writing the new consumer, read how the surface's OWN
+tooling already handles these fields — its existing consumers, the producer's own
+reader. The precedent usually already answers the null/absent/partial questions
+(someone paid for those answers in review rounds once). Match it, or name in the
+diff why you diverge — a silent divergence from the surface's own reader is a
+finding either way.
+
+**External-SDK half.** When the consumed surface is an external library/SDK rather
+than an in-repo file, the same pause applies, with a three-rung ladder:
+
+1. **Run the interface** — actually call the API/CLI and look at REAL output.
+   MANDATORY wherever a read-only, free probe exists, and never replaced by any
+   rung below: every `resp["items"][0]` written unprobed is a checkable claim
+   about a shape you have not seen. When the only available probe would be paid,
+   credential-gated, or mutating, do NOT fire it — the standing
+   no-unilateral-paid-calls rule wins: complete the pause on the remaining rungs
+   plus the producer-source read, record the unprobed shape as a NAMED gap in the
+   inventory table, and surface the probe itself to the operator gate.
+2. **Read the resolved installed source** — the zero-cost middle option. FIRST
+   resolve what actually runs — the real import path/executable and its version
+   (`python -c "import x; print(x.__file__, x.__version__)"`, `which <cli>` plus
+   `--version`, or the environment's own metadata) — THEN read that source. The
+   repository `.venv` is the common landing spot, never an assumption: a stale
+   `.venv` beside a `uv run --with` environment, a system package, a Node SDK, or
+   a global CLI all read fine and inventory the wrong producer — source read at
+   the wrong version is a wrong-contract inventory wearing the right one's
+   clothes.
+3. **context7 MCP** for current upstream docs — configured in the workspace
+   `.mcp.json`; its tools are deferred, so load them via ToolSearch before
+   calling. In a runner without context7 (the Codex bridge, say) the pause
+   completes on rungs 1–2 — this rung is an accelerator, never a dependency.
+   context7 supplements the probe, never substitutes for it: a probe witnesses
+   ONE instance, so it falsifies a doc claim only for the shape it actually
+   received — a doc- or source-derived variant the probe did not witness STAYS
+   in the inventory table as a case to handle; the probe narrows nothing it did
+   not see.
 
 ## The ten classes, ranked by finding count
 
@@ -158,6 +242,9 @@ corpus named above them).
 
 The sweep is done when every applicable class has a named answer for the diff — not
 "checked, fine" but "class 7: the only env write is X at line N, restored by the
-stashed MonkeyPatch at M, sole consumer verified via grep". Findings you choose not to
+stashed MonkeyPatch at M, sole consumer verified via grep". If the diff introduced a
+new data-surface consumer, the inventory table (field × semantics) is part of the
+named-answer set — every recorded semantic either tested, or carried as an explicit
+deferred finding per the next sentence (sitting in the table is not "named"). Findings you choose not to
 fix now must be named in the commit message or register, never silently carried. Then
 commit and invoke the reviewers — they should be confirming, not discovering.

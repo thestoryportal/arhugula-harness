@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `6995a45b3848` |
-| `last_refreshed` | 2026-08-24T00:00:00Z |
-| `git_head` | `f073281a` —  |
+| `workspace_state_hash` | `22450e31905f` |
+| `last_refreshed` | 2026-08-25T00:00:00Z |
+| `git_head` | `c8b58f09` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1447).** The next implementable unit is `U-HE-33` (S4d — emitting detections `SPLIT_BRAIN_LEDGER`, `ORPHANED_RESERVATION`, `BASE_TOCTOU` plus a lane-discriminating field and the CI split-brain job, per C-HE-12) per `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`; U-HE-01..32 have landed, 13 units remain (U-HE-33..45). PR #1447 (arc `preflight-flush-residuals`, applying) closed the review backlog that flushed after #1445's merge — the recorded verdict-flushes-after-exit trap: the five round-4/5 codex finding rows landed verbatim in the gate log, and the two defects still live at merged main were fixed with probe-verified witnesses (the queue-default test now reaches arc_metrics' import-time production default through an isolated child interpreter with both queue variables unset, and the Docker teardown test's production-registry claim block is extracted to claim_production_lane_indices() with three hermetic daemon-free witnesses). The arc's own LEAN single-lens merge-gate then caught an empirical non-kill in one new witness (session-belt cross-test leakage faking the taken-index refusal) — fixed by having each witness own both resolver inputs and pinning the refusal to the seeded claim's content; codex r2 + witness-adequacy r2 both clean APPROVE. The third flushed finding (preflight-grep silent git failure) was confirmed already fixed by #1445's round-4 absorb commit. Then U-HE-33.
+**Current next action (post-#1450).** The consumer-pattern-inventory amendment + locked-local context7 MCP landed at #1450, so the operator hold's precondition is met: RESUME the HELD arc on branch feat/lever-observability per the resume protocol at checkpoint 20260824-182500-lever-observability-held.md — re-enter the branch (9 commits through the r12 record; reservation lever-observability pending, lane d56be5f6), apply the new-consumer inventory pause retroactively as the resume's first act, read round 12's recorded verdict in .harness/merge-gate-log.jsonl (bound to head 89d94b643), run ONE codex round with the new machinery active and compare its findings profile against rounds 1-11 (that comparison is the features' live test), then the LEAN witness-adequacy lens and the merge door; queue arc metrics with --arc-id lever-observability and levers B-211+B-212 iff the skills genuinely ran. After that the next implementable unit is `U-HE-33` (S4d detections per C-HE-12).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1450 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1448 | 2026-08-25 | operator hold at cap gate: lever-observability parked; next build = consumer-pattern-inventory skill + context7 |
 | PR #1447 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1445 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1443 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1441 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| 1440 | 2026-08-24 | next-action re-derivation landed |
 
 ---
 
