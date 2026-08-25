@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `43a28702d1d8` |
+| `workspace_state_hash` | `1632e5c717f9` |
 | `last_refreshed` | 2026-08-25T00:00:00Z |
-| `git_head` | `c6811ffa` —  |
+| `git_head` | `c677456f` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1452).** The HELD lever-observability arc resumed and landed at #1452: 13 codex rounds total (r12 absorbed at resume under the retroactive new-consumer inventory pass; r13 was the single post-machinery live-test round — 2 findings, zero new producer-contract discoveries on the pre-existing surface, one strict-boundary hardening of r12's own fix), LEAN witness-adequacy merge-gate lens per the operator's resume protocol, arc metrics queued with levers B-211+B-212 (both skills genuinely ran at resume). B-213 (loop-guard allowlist case for the report invocation, incl. a permission-guard witness) stays its own registered arc. The queued metrics rows (this arc plus the held backlog, incl. pr-1424's bad round-log glob needing its glob fixed) drain inside the NEXT arc's PR; then the next implementable unit is `U-HE-33` (S4d detections per C-HE-12).
+**Current next action (post-#1454).** U-HE-33 landed at #1454: the three C-HE-12 emitting detections (SPLIT_BRAIN_LEDGER / ORPHANED_RESERVATION / BASE_TOCTOU) with lane-attributed C-HE-24 emission, hard-UNLOOKED venue dispatch, the blocking split-brain CI job, and detection count 4/19 — after 22 codex rounds (operator-stopped at measured negative marginal value) and 6 merge-gate rounds ending ALL-APPROVE, with the gate catching two real door regressions codex missed. The arc doubled as an operator-flagged PARTIAL test of the self-improvement levers: defect-class-preflight repaired in-commit (venue/lifecycle inventory dimensions, post-round sibling sweep, honest eval fixture); the deterministic trigger gap is registered as B-215 and the deferred guard refinements as B-216 (B-214 carries the CI-visible verified-base authority question). Metrics: 3 queued rows drained in-PR; 6 held in the drain's HITL class (5 dead-lane fdb755a8, u-he-26 unrecoverable logs) — operator disposition owed. Then the next implementable unit is U-HE-34 (S5 phase spans per C-HE-27).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1454 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1452 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1450 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1448 | 2026-08-25 | operator hold at cap gate: lever-observability parked; next build = consumer-pattern-inventory skill + context7 |
 | PR #1447 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1445 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
