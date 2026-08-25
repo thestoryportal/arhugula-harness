@@ -182,14 +182,7 @@ def _read_state_bytes(path: Path) -> bytes | None:
         os.close(fd)
 
 
-def load_state(root: Path) -> GateState:
-    """Parse the state file to typed attestations; raise GateError on any malformed
-    content — the caller decides direction (admit refuses; attest verbs re-init a
-    CORRUPT file, but never a containment refusal)."""
-    path = state_path(root)
-    data = _read_state_bytes(path)
-    if data is None:
-        return GateState()
+def _parse_state(data: bytes, path: Path) -> GateState:
     try:
         raw = json.loads(data)
         buckets: dict[str, list] = {attr: [] for _, attr in _KINDS.values()}
@@ -205,6 +198,17 @@ def load_state(root: Path) -> GateState:
         raise GateError(f"{path} is unreadable as gate state: {exc}") from exc
 
 
+def load_state(root: Path) -> GateState:
+    """Parse the state file to typed attestations; raise GateError on any malformed
+    content — the caller decides direction (admit refuses; attest verbs re-init a
+    CORRUPT file, but never a containment refusal)."""
+    path = state_path(root)
+    data = _read_state_bytes(path)
+    if data is None:
+        return GateState()
+    return _parse_state(data, path)
+
+
 def _append_record(root: Path, kind: str, record: object) -> None:
     """Read-rewrite append. A corrupt existing file is re-initialized LOUDLY —
     licensed by the tightening-direction invariant (module docstring). A containment
@@ -213,16 +217,21 @@ def _append_record(root: Path, kind: str, record: object) -> None:
     path swaps the link itself, never writing through it)."""
     path = state_path(root)
     data = _read_state_bytes(path)  # GateError on symlink/special -- never re-init those
-    try:
-        existing = json.loads(data)["records"] if data is not None else []
-        if not isinstance(existing, list):
-            raise ValueError("records is not a list")
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        print(
-            f"review-gate: corrupt {path} — re-init (attestations lost, gate tightens only)",
-            file=sys.stderr,
-        )
-        existing = []
+    state = GateState()
+    if data is not None:
+        try:
+            # the TYPED parse is the one validity authority ([LAW:one-source-of-truth]):
+            # a JSON-shaped file carrying schema-invalid records is just as corrupt,
+            # and preserving its records would leave the state forever unreadable
+            state = _parse_state(data, path)
+        except GateError:
+            print(
+                f"review-gate: corrupt {path} — re-init (attestations lost, gate tightens only)",
+                file=sys.stderr,
+            )
+    existing = [
+        {"kind": k, **asdict(a)} for k, (_, attr) in _KINDS.items() for a in getattr(state, attr)
+    ]
     existing.append({"kind": kind, **asdict(record)})
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
