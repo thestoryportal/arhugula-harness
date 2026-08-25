@@ -147,6 +147,7 @@
         "fixtures-iter3/rows_ledger/ledger_writer.py"
       ],
       "assertions": [
+        "inventory.md covers EVERY field the summarizer reads — including ts, the field with no trap planted — not only the trap-bearing fields",
         "inventory.md records arc_id's null semantics (None on headless runs) as its own case",
         "inventory.md records verdict's absent-on-v1-rows semantics as its own case, distinct from null",
         "inventory.md records the truncated/malformed trailing-line case from the non-atomic append",
