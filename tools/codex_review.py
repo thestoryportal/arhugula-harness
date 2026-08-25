@@ -8,9 +8,11 @@ it reads the channel's own session artifact (the PR #1386 mode: log frozen at
 313 bytes for 130 s after process exit while the real verdict sat only in
 ~/.codex/sessions/) -- and still requires a positive schema parse from it.
 
-Exit 0 APPROVE / 1 BLOCK / 2 REVIEWER_UNAVAILABLE. The terminal line on stderr
-(`codex-review: <TERMINAL>`) is the completion signal callers read; the exit
-code is a convenience, never a verdict (C-HE-15 §1).
+Exit 0 APPROVE / 1 BLOCK / 2 REVIEWER_UNAVAILABLE / 3 GATE_REFUSED. The terminal
+line on stderr (`codex-review: <TERMINAL>`) is the completion signal callers
+read; the exit code is a convenience, never a verdict (C-HE-15 §1). GATE_REFUSED
+(B-215 admission gate) is NOT a review terminal — the review never began: no
+C-HE-24 row, no round outcome, C-HE-16 §3's terminal enum untouched.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+import review_loop_gate as rlg
 import review_wrapper_common as rw
 from agy_review import GEMINI_PROMPT_VERSION, gemini_config_hash, run_bounded
 
@@ -578,6 +581,18 @@ def main(argv: list[str] | None = None) -> int:
     )  # test seam: zero-byte channel
     args = p.parse_args(argv)
     invoke = (lambda timeout: rw.Attempt("", "", 0, False)) if args.invoke_test_empty else None
+
+    # B-215 admission gate — BEFORE any reviewer subprocess and before round minting.
+    # No HARNESS_ROUND_N skip: the failover child is `just gemini-review` (agy_review),
+    # which never re-enters this main(), so nothing legitimate needs a bypass here.
+    decision = rlg.admit(Path.cwd(), args.base, rw.env_arc_and_lane()[0])
+    if isinstance(decision, rlg.Inactive):
+        print(f"codex-review: review gate INACTIVE — {decision.reason}", file=sys.stderr)
+    elif isinstance(decision, rlg.Refused):
+        print(f"review gate: {decision.detail}", file=sys.stderr)
+        print(f"  recipe: {decision.recipe}", file=sys.stderr)
+        print(f"codex-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
+        return 3
 
     chain: dict[str, int] = {}
 

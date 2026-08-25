@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import finding_record as fr
+import review_loop_gate as rlg
 import review_wrapper_common as rw
 
 
@@ -26,6 +27,11 @@ def _no_live_reviewers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         cr, "run_bounded", lambda *a, **k: pytest.fail(f"real reviewer subprocess: {a[0][:3]}")
     )
     monkeypatch.setattr(cr, "_route_to_hitl", lambda arc_id, reason, **kw: None)
+    # B-215 gate: hermetically INACTIVE for this battery (it targets C-HE-15/16/17
+    # behavior, not admission) — never a function of the ambient loop marker or the
+    # real reservation store
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
+    monkeypatch.setattr(rlg, "_loop_mode", lambda root: False)
     # in-process runs are not git checkouts at EXPECTED's head: pin HEAD and the tree export
     monkeypatch.setattr(cr, "_head", lambda repo: EXPECTED["head_sha"])
     monkeypatch.setattr(

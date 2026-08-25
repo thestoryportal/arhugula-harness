@@ -37,6 +37,17 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **The non-mechanical residue is a habit, not a script:** *when you write a sentence about
   what the code does, open the file in the same action.* Both P1s on the `B-71` leg were
   sentences written from a narrative instead of from a call site.
+- **Admission attestation (B-215) — the wrapper REFUSES unattested rounds.** For a
+  reserved arc, `review-with-failover` exits 3 (`GATE_REFUSED`, not a review terminal)
+  unless the round is admitted: round 1 needs a preflight attestation bound to the
+  committed diff — run the defect-class-preflight sweep, write the named answers to an
+  in-worktree file, COMMIT the work, then `just review-attest-preflight <answers-file>`
+  (attest AFTER the final commit; the attestation binds head+digest and goes stale on
+  any later commit). After every BLOCK round: absorb, classify each finding, commit,
+  then `just review-attest-sweep <answers-file>` — the answers file must name every
+  finding_id (the refusal enumerates any it is missing). The round budget is 10;
+  exhaustion is the register-and-hold point (`defer.sh` + register row), and only an
+  operator extends it (`just review-attest-budget`, deliberately ask-gated).
 - **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`
   (branch-vs-`main`; the C-HE-18 fail-closed `codex-review` wrapper with the C-HE-17
   `gemini-review` failover) to convergence — the inline `HARNESS_*` prefix is REQUIRED

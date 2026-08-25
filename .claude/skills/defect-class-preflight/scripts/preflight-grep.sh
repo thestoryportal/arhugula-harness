@@ -6,22 +6,37 @@
 # code: this is a collection aid for the agent's judgment, never a gate. Silence
 # proves nothing; each hit demands a named answer in the preflight.
 set -u
-# `git diff HEAD` already covers staged + unstaged changes to tracked files —
-# concatenating `--cached` on top duplicated staged hits and let them eat the
-# per-class head cap (codex round 1). Untracked NEW files are outside any diff,
-# so their content is appended as +lines to honor the SKILL's "plus any new
-# files" scope.
-if ! diff_text=$(git diff HEAD 2>&1); then
-  echo "preflight-grep: SWEEP DID NOT RUN — git diff HEAD failed: $diff_text" >&2
-  exit 2
+# Diff scope is a VALUE, not a mode fork: default is the authoring-time working-tree
+# sweep (`git diff HEAD` + untracked files); an optional $1 names a committed range
+# (`<base>..<head>`, the B-215 attest verbs) and sweeps exactly those bytes — the
+# same bytes the attestation digest binds, so the sweep can never read a different
+# diff than it attests. Range mode has no untracked half: content outside the range
+# is outside the reviewed tree too.
+range="${1:-}"
+if [ -n "$range" ]; then
+  if ! diff_text=$(git diff "$range" 2>&1); then
+    echo "preflight-grep: SWEEP DID NOT RUN — git diff $range failed: $diff_text" >&2
+    exit 2
+  fi
+  untracked=""
+else
+  # `git diff HEAD` already covers staged + unstaged changes to tracked files —
+  # concatenating `--cached` on top duplicated staged hits and let them eat the
+  # per-class head cap (codex round 1). Untracked NEW files are outside any diff,
+  # so their content is appended as +lines to honor the SKILL's "plus any new
+  # files" scope.
+  if ! diff_text=$(git diff HEAD 2>&1); then
+    echo "preflight-grep: SWEEP DID NOT RUN — git diff HEAD failed: $diff_text" >&2
+    exit 2
+  fi
+  if ! untracked_list=$(git ls-files --others --exclude-standard 2>&1); then
+    echo "preflight-grep: SWEEP DID NOT RUN — git ls-files failed: $untracked_list" >&2
+    exit 2
+  fi
+  untracked=$(printf '%s\n' "$untracked_list" | while IFS= read -r f; do
+    [ -f "$f" ] && sed 's/^/+/' "$f"
+  done) || untracked=""
 fi
-if ! untracked_list=$(git ls-files --others --exclude-standard 2>&1); then
-  echo "preflight-grep: SWEEP DID NOT RUN — git ls-files failed: $untracked_list" >&2
-  exit 2
-fi
-untracked=$(printf '%s\n' "$untracked_list" | while IFS= read -r f; do
-  [ -f "$f" ] && sed 's/^/+/' "$f"
-done) || untracked=""
 added=$(printf '%s\n%s\n' "$diff_text" "$untracked" | grep '^+' | grep -v '^+++') || true
 [ -z "$added" ] && { echo "preflight-grep: swept — no added lines in diff or new files"; exit 0; }
 

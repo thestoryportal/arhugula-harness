@@ -151,6 +151,7 @@ tools/dashboard/public/
 .harness/.loop-iter
 .harness/.loop-halt
 .harness/codex_loop_state.json
+.harness/review_loop_gate_state.json
 
 # Reference docs (vendored clones + agent-knowledge corpora, third-party licenses) —
 # read-only learning material, not tracked in harness history (also keeps them out of lint).

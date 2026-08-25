@@ -281,3 +281,10 @@ named-answer set — every recorded semantic either tested, or carried as an exp
 deferred finding per the next sentence (sitting in the table is not "named"). Findings you choose not to
 fix now must be named in the commit message or register, never silently carried. Then
 commit and invoke the reviewers — they should be confirming, not discovering.
+
+Since B-215, the named-answer set is ATTESTED, not merely written: after the final
+commit, `just review-attest-preflight <answers-file>` — the review wrapper refuses
+round 1 of a reserved arc without a live attestation (`tools/review_loop_gate.py`;
+the attestation binds head+diff, so attest after the last commit). The
+"after every review round" sweep ends the same way: absorb, commit, then
+`just review-attest-sweep <answers-file>` naming every finding_id of the round.
