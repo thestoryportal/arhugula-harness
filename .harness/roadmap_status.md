@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1632e5c717f9` |
+| `workspace_state_hash` | `44ad3f9080b9` |
 | `last_refreshed` | 2026-08-25T00:00:00Z |
-| `git_head` | `c677456f` —  |
+| `git_head` | `9055532d` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1454).** U-HE-33 landed at #1454: the three C-HE-12 emitting detections (SPLIT_BRAIN_LEDGER / ORPHANED_RESERVATION / BASE_TOCTOU) with lane-attributed C-HE-24 emission, hard-UNLOOKED venue dispatch, the blocking split-brain CI job, and detection count 4/19 — after 22 codex rounds (operator-stopped at measured negative marginal value) and 6 merge-gate rounds ending ALL-APPROVE, with the gate catching two real door regressions codex missed. The arc doubled as an operator-flagged PARTIAL test of the self-improvement levers: defect-class-preflight repaired in-commit (venue/lifecycle inventory dimensions, post-round sibling sweep, honest eval fixture); the deterministic trigger gap is registered as B-215 and the deferred guard refinements as B-216 (B-214 carries the CI-visible verified-base authority question). Metrics: 3 queued rows drained in-PR; 6 held in the drain's HITL class (5 dead-lane fdb755a8, u-he-26 unrecoverable logs) — operator disposition owed. Then the next implementable unit is `U-HE-34` (S5 phase spans per C-HE-27).
+**Current next action (post-#1456).** B-215 landed at #1456: the review-loop admission gate (`tools/review_loop_gate.py`) — CURRENCY (every admission needs a preflight-or-sweep attestation bound head+digest to the exact reviewable diff), OBLIGATIONS (every finding_id across both loop producers answered token-exactly), and the C-HE-21 §1 v1.5-X5 CHECKPOINT (refuse-until-recorded-decision at 10 spent rounds, unbounded ask-gated extension; the spec leg was operator-ratified after the merge-gate spec lens surfaced the no-cap conflict, marker `spec-he-loop-lanes-v1.5-cleared-2026-08-25.md`) — wired into both loop channels with 46 gate-battery + 12 guard witnesses. The arc self-applied end-to-end: 10 codex rounds each attested through its own gate, terminating in its own live BUDGET_EXHAUSTED refusal; 3-lens merge gate ran 3 rounds to ALL-APPROVE (r1 caught the spec conflict — the reconciliation IS the v1.5 leg). B-217 registered (guard `just`-chaining class, arity-aware closure). Then the next implementable unit is `U-HE-34` (S5 phase spans per C-HE-27).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1456 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1454 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1452 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1450 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1448 | 2026-08-25 | operator hold at cap gate: lever-observability parked; next build = consumer-pattern-inventory skill + context7 |
-| PR #1447 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
