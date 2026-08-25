@@ -2782,6 +2782,39 @@ def test_n6_formula():
             "ts": "t1",
             "record_kind": "finding_adjudication",
         },
+        # OUT-OF-WINDOW accepted finding (codex U-HE-34 r1): its arc has no measured
+        # phases, so counting it would divide historical acceptances by only the
+        # window's hours. Mutation probe: drop the window filter -> n6 doubles, reds.
+        {
+            "finding_id": "f3",
+            "arc_id": "z-historical",
+            "disposition": "accepted",
+            "ts": "t3",
+            "record_kind": "finding_adjudication",
+        },
     ]
     n6, hours, excluded_s = am.n6(rows, gate)
     assert n6 == pytest.approx(0.5) and hours == 2.0 and excluded_s == 7200.0
+
+
+def test_n6_buckets_explicit_verify_unavailable_span():
+    """C-HE-27 §4: primary-channel downtime recorded as an explicit `verify_unavailable`
+    span is bucketed into excluded seconds even when the failover succeeded and the
+    round's terminal folded to APPROVE -- and it never enters the denominator.
+    Mutation probe: add the span to denom_s -> hours grows to 1.5 and this reds."""
+    rows = [
+        {
+            "arc_id": "a",
+            "phases": {
+                "verify": {"start": "2026-08-18T00:00:00Z", "end": "2026-08-18T01:00:00Z"},
+                "verify_unavailable": {
+                    "start": "2026-08-18T00:10:00Z",
+                    "end": "2026-08-18T00:40:00Z",
+                },
+            },
+            "round_outcomes": {"1": {"terminal": "APPROVE"}},
+        }
+    ]
+    n6, hours, excluded_s = am.n6(rows, [])
+    # 0.0 here is a MEASURED zero (an hour of verify, nothing accepted), not absence.
+    assert n6 == 0.0 and hours == 1.0 and excluded_s == 1800.0

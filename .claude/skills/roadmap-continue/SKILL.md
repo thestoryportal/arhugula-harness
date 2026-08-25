@@ -84,15 +84,18 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    (allowlisted; writes the pre-U-HE-21 fallback ids — witnessed as guard-ALLOW), and
    the ship-pr back-fills are skipped per its unreserved-arc clause.*
 
-   **Execute-span start (U-HE-34; C-HE-27 §1/§3).** Immediately after the reserve (or the
-   same-lane resume) succeeds, record the arc's execute-phase start edge on the
-   reservation — a LITERAL arc id, its own single command (guard-allowlisted; legal on the
-   still-`pending` head — accretion refuses only terminal states — and replay-idempotent,
-   so a crash/compaction re-entry may safely re-run it):
+   **Queue + execute span edges (U-HE-34; C-HE-27 §1/§3).** Immediately after the reserve
+   (or the same-lane resume) succeeds, record the queue-phase start edge; when grounding
+   ends and implementation work actually begins, close queue and open execute — each a
+   LITERAL arc id, its own single command in exactly this flag order (guard-allowlisted;
+   legal on the still-`pending` head — accretion refuses only terminal states — and
+   replay-idempotent, so a crash/compaction re-entry may safely re-run any of them):
    ```bash
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge start
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge end
    uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge start
    ```
-   An unreserved arc (degradation above) skips this: there is no head to accrete on, and
+   An unreserved arc (degradation above) skips these: there is no head to accrete on, and
    an absent span reads as null downstream, never as a measured zero.
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a

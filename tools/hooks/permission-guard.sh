@@ -460,6 +460,25 @@ fi
 # a regex pair ("has --to open" + "lacks --to merged") is bypassable via `--to open
 # --to=merged`. 0 iff the command carries EXACTLY ONE --to option, in the two-token
 # literal form, with target exactly `open`; any =-form or --t… abbreviation rejects.
+# U-HE-34 codex r1 P1: the `phase` carrier must not ride the generic prefix allowlist —
+# argparse is last-value-wins and `record_phase` has no holder check, so a duplicated
+# `--arc-id` smuggled after the expected one (`phase --arc-id mine ... --arc-id victim`)
+# would auto-allow a first-write-wins write onto another lane's reservation. Positional
+# exact-shape: exactly the eleven tokens of the canonical form, flags in canonical order,
+# values never dash-led, edge from the C-HE-27 pair. Anything else — duplicates, =-forms,
+# abbreviations, extra flags — falls through to the normal ask.
+_phase_exact_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  [ "$#" -eq 11 ] || return 1
+  [ "$1" = "uv" ] && [ "$2" = "run" ] && [ "$3" = "python" ] \
+    && [ "$4" = "tools/reservations.py" ] && [ "$5" = "phase" ] \
+    && [ "$6" = "--arc-id" ] && [ "$8" = "--phase" ] && [ "${10}" = "--edge" ] || return 1
+  case "$7" in -*|"") return 1 ;; esac
+  case "$9" in -*|"") return 1 ;; esac
+  case "${11}" in start|end) ;; *) return 1 ;; esac
+}
+
 _transition_to_open_only() {
   local cmd="$1" tok prev="" target="" count=0
   set -f; set -- $cmd; set +f
@@ -699,7 +718,13 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # prefix abbreviations, and last-occurrence-wins smuggling all reject), keeping the
       # U-HE-21 r6 rationale: terminal state changes + gc stay operator-visible.
       emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id|phase)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+phase([[:space:]]|$)' \
+       && _phase_exact_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-34: the C-HE-27 span emitters (roadmap-continue / ship-pr) — positional
+      # exact-shape only; see _phase_exact_shape for the duplicate-flag rationale.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi

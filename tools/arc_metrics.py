@@ -1921,14 +1921,26 @@ def phase_spans(row: dict) -> dict[str, float]:
 
 def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, float]:
     """C-HE-27 §4: problems prevented per hour = COUNT(DISTINCT finding_id last-disposed
-    accepted) / sum(verify + edit) hours, read from the durable phases map. verify spans
-    of rounds that terminated REVIEWER_UNAVAILABLE are excluded (returned as the third
-    element) so reviewer downtime cannot deflate N6. Returns None, not 0, when no hours
-    are measured -- an absent denominator is not a measured zero."""
+    accepted) / sum(verify + edit) hours, read from the durable phases map.
+
+    The window is `rows`: the numerator counts only findings whose `arc_id` belongs to a
+    measured arc -- accepted findings from arcs outside the window would divide by hours
+    they never spent and inflate N6 (codex U-HE-34 r1). Two downtime buckets feed the
+    third element and NEVER the denominator: verify spans of arcs whose round terminated
+    REVIEWER_UNAVAILABLE (both channels down -- the arc-level terminal), plus any explicit
+    `verify_unavailable` span (the ship-pr emitters record primary-channel downtime there
+    even when the failover then succeeds and the round's terminal folds to APPROVE/BLOCK).
+    Returns None, not 0, when no hours are measured -- an absent denominator is not a
+    measured zero."""
     import finding_record as fr
 
+    window_arcs = {r.get("arc_id") for r in rows}
     last = fr.reduce_last_by_finding_id(gate_rows)
-    accepted = {fid for fid, r in last.items() if r.get("disposition") == "accepted"}
+    accepted = {
+        fid
+        for fid, r in last.items()
+        if r.get("disposition") == "accepted" and r.get("arc_id") in window_arcs
+    }
     denom_s = 0.0
     excluded_s = 0.0
     for r in rows:
@@ -1941,6 +1953,7 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
             excluded_s += spans.get("verify", 0.0)
         else:
             denom_s += spans.get("verify", 0.0)
+        excluded_s += spans.get("verify_unavailable", 0.0)
         denom_s += spans.get("edit", 0.0)
     hours = denom_s / 3600.0
     return (len(accepted) / hours if hours else None), hours, excluded_s

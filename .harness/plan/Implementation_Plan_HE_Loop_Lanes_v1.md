@@ -6361,9 +6361,32 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > edges at the tee site. **(iv) Guard carrier verb `phase` (outside the Files list,
 > execution-correction-H_E-tooling).** The emitters this unit wires call
 > `reservations.py phase`; the U-HE-25 allowlist did not carry that verb, so every
-> emitter would strand headless at ask→deny — the wired-but-unreachable class. The
-> alternation gains `|phase` (accretion-only, replay-idempotent, terminal-refused) with
-> an exact-shape witness in `test_permission_guard.sh`.
+> emitter would strand headless at ask→deny — the wired-but-unreachable class. As built
+> after codex r1 (P1: argparse is last-value-wins and `record_phase` has no holder
+> check, so a duplicated `--arc-id` riding a prefix allow would write onto another
+> lane's reservation), the verb gets a dedicated POSITIONAL exact-shape branch
+> (`_phase_exact_shape`: eleven tokens, canonical flag order, dash-led values and
+> non-`start|end` edges reject) rather than a spot in the generic alternation, with
+> allow + six hardening witnesses in `test_permission_guard.sh`. **(v) Emitter carve
+> (codex r1).** The drafted §6339 emitter sketch nests edit inside a loop-spanning
+> verify pair, double-counting every fix interval in the N6 denominator, and omits
+> queue/absorb. As built: verify = the round-1 window, absorb = the classification
+> window, edit = the fix window (disjoint by construction; the named bound —
+> interleaved re-review rounds land inside edit and the final confirming round is
+> uncovered — is stated in ship-pr SKILL.md), and roadmap-continue records queue
+> start/end around grounding. The sketch's capture pair is NOT wired: the queue step
+> runs post-`merged` and accretion refuses terminal states (C-HE-03 §3) — the
+> C-HE-27 §1 conflict is registered as `B-218` rather than wired to fail. **(vi) n6
+> window + downtime buckets (codex r1).** The drafted body counts accepted findings
+> from the ENTIRE gate log against only the measured arcs' hours; as built the
+> numerator is filtered to the window's `arc_id`s (C-HE-27 §4 "across the window's
+> arcs"), and the explicit `verify_unavailable` span is bucketed into excluded seconds
+> alongside unavailable-terminated verify spans, so failover-masked primary downtime
+> is not counted as review work. **(vii) Queue declarations (codex r1).** ship-pr's
+> queue step now passes `--arc-id` explicitly (a `pr-<N>` default breaks the ledger ↔
+> reservation ↔ gate-log join) and `--levers` as separate arguments (a comma-joined
+> token forges a synthetic single lever in exact-set cohorts); the two rows drained on
+> this arc were corrected and refolded via `_refold_local_row`.
 
 ---
 

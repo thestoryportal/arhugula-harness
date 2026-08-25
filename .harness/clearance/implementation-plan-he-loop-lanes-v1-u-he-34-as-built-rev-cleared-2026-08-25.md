@@ -1,6 +1,6 @@
 ---
 artifact: .harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md
-version: v1.0 + rev 2026-08-25 (U-HE-34 execution corrections, as-built — rev-note items (i)-(iv))
+version: v1.0 + rev 2026-08-25 (U-HE-34 execution corrections, as-built — rev-note items (i)-(vii))
 cleared_at: 2026-08-25T21:30:00-06:00
 clearance_type: execution-correction-H_E-tooling
 back_reference:
@@ -34,6 +34,19 @@ mutation-probed both ways.
 `review-log-settle` justfile recipe (130 s bound, fail-loud) + ship-pr SKILL.md edges at
 the session tee site — no `tools/hooks` round-log writer exists to instrument.
 
-**(iv)** The permission guard's reservations carrier alternation gains `phase`
-(exact-shape, accretion-only, replay-idempotent, terminal-refused) so the emitters this
-unit wires do not strand headless; witnessed in `tools/hooks/test_permission_guard.sh`.
+**(iv)** The permission guard gains a dedicated POSITIONAL exact-shape branch for the
+`phase` carrier verb (codex r1 P1: a duplicated `--arc-id` riding a prefix allow would
+write onto another lane's reservation — argparse is last-value-wins and `record_phase`
+has no holder check); allow + six hardening witnesses in
+`tools/hooks/test_permission_guard.sh`.
+
+**(v)** The emitter carve is disjoint by construction (verify = round-1 window, absorb =
+classification, edit = fix window; queue wired in roadmap-continue); the drafted capture
+pair is structurally unrecordable post-`merged` (C-HE-03 §3) and is registered as
+`B-218` instead of wired to fail.
+
+**(vi)** n6's numerator is window-filtered to the measured arcs' `arc_id`s and the
+explicit `verify_unavailable` span is bucketed out of the denominator.
+
+**(vii)** ship-pr's queue step passes `--arc-id` explicitly and `--levers` as separate
+arguments; the two rows drained on this arc were corrected and refolded.

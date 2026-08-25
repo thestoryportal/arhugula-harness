@@ -492,17 +492,28 @@ OUT=$(run_on "$(pl Bash 'gh pr merge 5 --admin' '')")
 [ "$(dec "$OUT")" = "deny" ] && ok "--admin merge stays denied" || bad "--admin merge not denied: $OUT"
 
 # U-HE-25 registered allowlist additions (from U-HE-21 codex r1-r6; EXACT-SHAPE only).
-# (a) reservations.py carrier verbs — selectable|show|reserve|update|mint-lane-id|phase ONLY
-# (`phase` added at U-HE-34: the C-HE-27 span emitters in roadmap-continue/ship-pr must not
-# strand headless at ask→deny — record_phase is accretion-only and replay-idempotent).
+# (a) reservations.py carrier verbs — selectable|show|reserve|update|mint-lane-id ONLY.
 for c in 'uv run python tools/reservations.py selectable --arc-id u-he-25' \
          'uv run python tools/reservations.py show --arc-id u-he-25' \
          'uv run python tools/reservations.py reserve --arc-id u-he-25 --lane-id lane-1 --branch feat/x --arc-type applying' \
          'uv run python tools/reservations.py update --arc-id u-he-25 --pr 1' \
-         'uv run python tools/reservations.py phase --arc-id u-he-34 --phase execute --edge start' \
          'uv run python tools/reservations.py mint-lane-id'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "reservations carrier verb → allow: '$c'" || bad "reservations carrier not allowed: $c → $OUT"
+done
+# (a'''') U-HE-34: the `phase` span emitter — POSITIONAL exact shape only (codex r1 P1:
+# argparse is last-value-wins and record_phase has no holder check, so a duplicated
+# --arc-id riding a prefix allowlist would write onto another lane's reservation).
+OUT=$(run_on "$(pl Bash 'uv run python tools/reservations.py phase --arc-id u-he-34 --phase execute --edge start' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "phase exact shape → allow" || bad "phase exact shape not allowed → $OUT"
+for c in 'uv run python tools/reservations.py phase --arc-id a --phase execute --edge start --arc-id victim' \
+         'uv run python tools/reservations.py phase --arc-id=a --phase execute --edge start' \
+         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge start --ts 2026-01-01T00:00:00Z' \
+         'uv run python tools/reservations.py phase --arc a --phase execute --edge start' \
+         'uv run python tools/reservations.py phase --arc-id a --edge start --phase execute' \
+         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge nonsense'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "phase hardening: '$c' → not allow" || bad "phase over-matched: $c"
 done
 # hardening: state-mutating / gh-backed / non-carrier verbs and the bare module prefix stay un-allowed
 for c in 'uv run python tools/reservations.py transition --arc-id x --to merged' \

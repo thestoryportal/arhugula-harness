@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 217
+  total: 218
   open: 1
   design_substrate_gated: 3
-  registered_finding: 61
+  registered_finding: 62
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 3731443599a2e116
+  identity_digest: e60ace46a16f2b62
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10805,7 +10805,33 @@ items:
     just-first lines oscillated twice against documented free-form evidence shapes
     (quotes r8, parens r10) — normalization-proof chain prevention WITHOUT arity
     knowledge degrades into an inner-charset ladder, which is this row''s whole
-    argument: the closure must know each recipe''s parameter count.'
+    argument: the closure must know each recipe''s parameter count. Scope extended
+    at u-he-34 codex r1: the same last-value-wins class lives on the reservations.py
+    side of the alternation — `update` (payload-mutating, holder-unchecked) admits a
+    duplicated `--arc-id`; u-he-34 fixed its own new `phase` verb with a positional
+    exact-shape branch (`_phase_exact_shape`), and the guard-wide audit here owes
+    `update` the same treatment.'
   council: 'NO — single-surface guard hardening; no cross-axis tension.'
   heading: '### B-217 · permission-guard just-recipe chaining class *(surfaced by
     codex r3 on the b-215 arc, 2026-08-25; REGISTERED)*'
+- id: B-218
+  title: >-
+    capture-phase span cannot accrete post-terminal (C-HE-27 §1 vs C-HE-03 §3)
+  pr: 'u-he-34 arc'
+  status: registered_finding
+  summary: 'SURFACED by codex r1 on the u-he-34 arc: C-HE-27 §1 lists `capture` among
+    the phases recorded as explicit {start,end} pairs, but the arc-metrics capture
+    (queue step) runs after the merge door transitions the reservation to `merged`,
+    and `record_phase` refuses ALL terminal-state accretion (C-HE-03 §3) — so a
+    capture pair on the reservation is structurally unrecordable, not merely unwired.
+    The u-he-34 landing wires queue/execute/absorb/edit/verify/verify_unavailable
+    plus the result_capture split and deliberately records NO capture pair (ship-pr
+    SKILL.md names the conflict at the queue step).'
+  close_out: 'OPEN — closure shape: either a spec leg narrowing C-HE-27 §1 (capture
+    is recorded on the ARC ROW at drain rather than accreted on the reservation, the
+    drain being the one actor that already writes the row), or a drain-side fold that
+    stamps the capture pair from the queue-entry timestamps. Requires a small
+    spec/plan reconciliation before wiring — not implementable-as-specced.'
+  council: 'NO — single-contract timing reconciliation; no cross-axis tension.'
+  heading: '### B-218 · capture-phase span vs terminal-accretion refusal *(surfaced
+    by codex r1 on the u-he-34 arc, 2026-08-25; REGISTERED)*'

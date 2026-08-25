@@ -74,18 +74,32 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   pre-commit review in a CLEAN tree only.
 - **Phase-span edges (U-HE-34; C-HE-27).** Durable review/edit wall-clock accretes on the
   reservation as explicit `{start, end}` pairs — N6 reads ONLY these spans, never a gap
-  between two records. Each command is a single literal-id invocation (guard-allowlisted,
+  between two records. Each command is a single literal-id invocation (guard-allowlisted
+  in exactly the canonical flag order `--arc-id <v> --phase <v> --edge <v>`,
   replay-idempotent; skip all of them when the arc is unreserved — an absent span reads
-  null downstream, never zero):
-  - Before the FIRST review invocation: `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start`;
-    after the loop converges (terminal APPROVE): the same command with `--edge end`.
+  null downstream, never zero). The durable map holds ONE pair per phase and the loop
+  alternates review/fix rounds, so the pairs below are DISJOINT by construction — N6
+  sums verify + edit, and nested spans would double-count (codex U-HE-34 r1):
+  - **verify = the round-1 window.** Before the FIRST review invocation:
+    `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start`;
+    at that round's verdict (APPROVE or BLOCK): the same command with `--edge end`.
+  - **absorb = classification.** On a BLOCK: `--phase absorb --edge start` when finding
+    classification begins, `--edge end` when fixing starts.
+  - **edit = the fix window.** `--phase edit --edge start` at the first fix edit,
+    `--edge end` after the FINAL fix commit. Named measurement bound: re-review rounds
+    2..n interleave inside this pair and the final confirming round falls after it —
+    with one pair per phase the alternation is not exactly representable; the recorded
+    denominator is round-1 review + the fix window, never a double count.
   - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): `--phase verify_unavailable
     --edge start` at the failed invocation and `--edge end` when the arc resumes or is
-    held — C-HE-27 §4 excludes unavailable-terminated verify wall-clock from N6's
-    denominator so reviewer downtime cannot deflate it.
-  - Around fix rounds: `--phase edit --edge start` at the first BLOCK absorption,
-    `--edge end` after the final fix commit. The durable map holds ONE pair per phase;
-    later re-runs of an already-recorded edge are no-ops (first edge wins).
+    held. n6() buckets this span (and unavailable-terminated verify spans) OUT of the
+    denominator so reviewer downtime cannot deflate N6 — record it even when a later
+    failover succeeds and the round's terminal folds to APPROVE/BLOCK.
+  - **No `capture` pair.** The arc-metrics queue step runs after the merge door has
+    transitioned the reservation to `merged`, and accretion refuses terminal states
+    (C-HE-03 §3) — a capture edge there necessarily fails. The structural conflict
+    (C-HE-27 §1 lists `capture`; the reservation cannot carry it post-terminal) is
+    registered as forward work rather than wired to fail (codex U-HE-34 r1).
   - **`result_capture` split (C-HE-27 §1 — process exit and log write DIVERGE: the
     reviewer's verdict can flush after its process exits).** When teeing a round's output
     to its round log: immediately after the review process exits, record
@@ -500,15 +514,19 @@ inputs, the next arc *folds* them into the ledger. Skip both on a terminating
 roadmap-status refresh (§12.2.1) — a refresh is not an arc.
 
 **Step 1 — queue, at closure (writes NOTHING to the repo).** After the exit report above,
-because `merged_at` and the merge SHA do not exist before merge. Bracket it with the
-capture-phase edges (U-HE-34; same literal-id, replay-idempotent, skip-if-unreserved
-rules as the other phase edges): `uv run python tools/reservations.py phase --arc-id
-<arc-id> --phase capture --edge start` before the queue command, `--edge end` after it
-succeeds:
+because `merged_at` and the merge SHA do not exist before merge. Do NOT record capture
+phase edges here — the reservation is already `merged` and accretion refuses terminal
+states (C-HE-03 §3); see the phase-span bullet's "No `capture` pair" note. Pass
+`--arc-id <arc-id>` explicitly (the ARC id from the reservation, e.g. `u-he-34` — never
+the PR number: a `pr-<N>` default breaks the `arc_id` join between the ledger row, the
+reservation, and the gate log), and `--levers` as SEPARATE arguments, one per lever
+(`--levers B-211 B-212`, never one comma-joined token — cohort grouping is by exact
+set):
 
 ```
-just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
-  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
+just arc-metrics queue --pr <NNN> --arc-id <arc-id> --arc-type <inventing|applying> \
+  --decisions <N> --round-logs '<glob for THIS arc's round logs>' \
+  --levers <lever-id> <lever-id> <...-or-omit>
 ```
 
 This writes one file per arc into a queue directory **outside** the repo. That placement is
