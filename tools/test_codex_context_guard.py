@@ -1202,6 +1202,9 @@ def test_orphaned_reservation(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
     )
+    monkeypatch.setattr(
+        cg, "_reservation_head_current", lambda arc_id: {"arc_id": "pr-9", "state": "open", "pr": 9}
+    )
     monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
 
@@ -1298,6 +1301,9 @@ def test_detection_new_evidence_mints_new_ordinal(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(
         cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
     )
+    monkeypatch.setattr(
+        cg, "_reservation_head_current", lambda arc_id: {"arc_id": "pr-9", "state": "open", "pr": 9}
+    )
     monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
 
     monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
@@ -1381,27 +1387,123 @@ def test_reservation_heads_survive_one_corrupt_entry(tmp_path, monkeypatch, caps
     assert "bad-arc" in capsys.readouterr().err
 
 
-def test_detection_uv_fallback_dispatch_on_import_error(monkeypatch) -> None:
-    """Round-2 absorption: a record layer that cannot import in-process (the stdlib-only
-    /usr/bin/python3 venues) dispatches the SAME payload to the uv fallback, and the
-    projection still surfaces."""
-    calls: list[dict] = []
+def test_dispatch_runs_whole_suite_via_uv_when_layer_unimportable(monkeypatch) -> None:
+    """Round-3 absorption: reservations.py / merge_door.py themselves need the uv env
+    (datetime.UTC is 3.11+), so a stdlib venue must not silently no-op the store-reading
+    detections -- the WHOLE suite dispatches through `uv run` and the child's findings
+    come back as this process's Findings."""
+    monkeypatch.setattr(cg, "_record_layer_importable", lambda: False)
+    calls: list[list[str]] = []
 
-    def raise_import(payload):
-        raise ImportError("no jsonschema on the system interpreter")
+    def fake_run(args, *, cwd, timeout=20):
+        calls.append(args)
+        payload = json.dumps([{"severity": "hard", "code": "BASE_TOCTOU", "message": "[l] ev"}])
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=payload, stderr="")
 
-    monkeypatch.setattr(cg, "_record_detection", raise_import)
-    monkeypatch.setattr(cg, "_record_detection_via_uv", lambda p: calls.append(p) or "appended")
+    monkeypatch.setattr(cg, "_run", fake_run)
 
-    f = cg._detection("BASE_TOCTOU", "ev", lane_id="l", arc_id="merge-abc")
+    findings = cg._emitting_detections_dispatch(Path("/repo"), "l")
 
-    assert f == cg.Finding("hard", "BASE_TOCTOU", "[l] ev")
-    assert calls == [
+    assert findings == [cg.Finding("hard", "BASE_TOCTOU", "[l] ev")]
+    assert calls[0][:4] == ["uv", "run", "python", "-c"]
+    assert calls[0][-2:] == ["/repo", "l"]
+
+
+def test_dispatch_failure_is_unlooked_not_clean(monkeypatch) -> None:
+    """Round-3 absorption: when neither the in-process layer nor the uv fallback can run,
+    the guard says so with a warn Finding -- an empty detection set must never be
+    indistinguishable from "could not look"."""
+    monkeypatch.setattr(cg, "_record_layer_importable", lambda: False)
+    monkeypatch.setattr(
+        cg,
+        "_run",
+        lambda args, *, cwd, timeout=20: subprocess.CompletedProcess(
+            args=args, returncode=1, stdout="", stderr="uv: not found"
+        ),
+    )
+
+    findings = cg._emitting_detections_dispatch(Path("/repo"), "l")
+
+    assert [f.code for f in findings] == ["DETECTIONS_UNAVAILABLE"]
+    assert findings[0].severity == "warn"
+    assert "uv: not found" in findings[0].message
+
+
+def test_same_evidence_from_another_lane_gets_its_own_row(tmp_path, monkeypatch) -> None:
+    """Round-3 absorption: lane_id is immutable core (C-HE-24 §6) -- one lane's row must
+    not stand in for another lane's attribution of the identical observation."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-a")] == ["BASE_TOCTOU"]
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="lane-b")] == ["BASE_TOCTOU"]
+
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [r["lane_id"] for r in rows] == ["lane-a", "lane-b"]
+    assert rows[0]["finding_id"] != rows[1]["finding_id"]
+
+
+def test_adjudication_does_not_suppress_new_evidence(tmp_path, monkeypatch) -> None:
+    """Round-3 absorption: C-HE-24 §5 adjudicates ONE finding_id -- an old disposition at
+    a site must not swallow a NEW observation with different evidence there."""
+    _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
+    )
+    monkeypatch.setattr(
+        cg, "_reservation_head_current", lambda arc_id: {"arc_id": "pr-9", "state": "open", "pr": 9}
+    )
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    assert len(cg.check_orphaned_reservations(lane_id="l")) == 1
+    merged_row = fr.read_rows()[0]
+    fr.append_row(
         {
-            "code": "BASE_TOCTOU",
-            "evidence": "ev",
-            "lane_id": "l",
-            "arc_id": "merge-abc",
-            "severity": "hard",
+            **merged_row,
+            "record_kind": "finding_adjudication",
+            "ts": "2099-01-01T00:00:00Z",
+            "disposition": "accepted",
+            "disposition_actor": "operator",
         }
-    ]
+    )
+
+    assert cg.check_orphaned_reservations(lane_id="l") == []  # same evidence: recalled
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "CLOSED")
+    assert len(cg.check_orphaned_reservations(lane_id="l")) == 1  # new evidence: emits
+
+
+def test_orphan_emission_revalidates_current_generation(tmp_path, monkeypatch) -> None:
+    """Round-3 absorption: a normal open->merged transition landing between the snapshot
+    and the GitHub answer must not be recorded as an orphan."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
+    )
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+    monkeypatch.setattr(
+        cg,
+        "_reservation_head_current",
+        lambda arc_id: {"arc_id": "pr-9", "state": "merged", "pr": 9},
+    )
+
+    assert cg.check_orphaned_reservations(lane_id="l") == []
+    assert not log.exists()  # no durable row for the ordinary completion
+
+
+def test_unblock_attestation_survives_lease_release(tmp_path, monkeypatch) -> None:
+    """Round-3 absorption: release() moves the lease aside; the moved-aside record still
+    carries unblocked_from, so the recovery outlives the lease's tenure."""
+    import merge_door as md
+
+    door = tmp_path / "merge-door"
+    door.mkdir()
+    (door / "released.tok1").write_text(
+        json.dumps({"state": "released", "unblocked_from": "f" * 40}), encoding="utf-8"
+    )
+    (door / "reclaimed.tok2").write_text("{broken", encoding="utf-8")  # named + skipped
+    monkeypatch.setattr(md, "DOOR", door)
+    monkeypatch.setattr(md, "read_lease", lambda: None)
+
+    assert cg._unblock_attested_shas() == {"f" * 40}

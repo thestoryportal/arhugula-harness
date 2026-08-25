@@ -2489,3 +2489,10 @@ same spec leg.
 - **What it is.** The new read-only cohort report cannot run in autonomous (loop-mode) sessions: no allowlist case matches its invocation, so the guard's ask becomes a headless denial. Loud and fail-closed — nothing is misreported; interactive sessions are unaffected.
 - **Current state.** OPEN. Registered instead of fix-looped at codex r11 because permission-guard edits are the workspace's highest-blast-radius shared-surface class and take their own reviewed arc (the U-HE-25 exact-shape precedent).
 - **Closure shape.** An argument-safe allowlist case in `tools/hooks/permission-guard.sh` for the report's invocation plus a witness in the guard's shell suite.
+
+### B-214 · BASE_TOCTOU CI re-check lacks a CI-visible verified-base authority *(surfaced by codex r2 on the u-he-33 arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** The U-HE-33 guard re-check joins main landings to the reservation store under the host-local queue dir; a fresh Actions runner has no such store, so on CI every landing is reported through the info `BASE_TOCTOU_UNATTRIBUTED` finding and no first-parent mismatch can become a hard CI finding. Loud and honest — unattributed is named, never silently skipped — and the operator-host main-audit venues run the real comparison.
+- **Current state.** OPEN. Registered instead of built in-arc: a CI-visible carrier of the verified base (committed sidecar, PR annotation, or ledger row) is a new mechanism — a design decision (X-AL-3), not an impl slice of U-HE-33. Until then the CI backstop for hazard #7 is the door's own at-landing detection (U-HE-23) plus the operator-host re-check.
+- **Closure shape.** A design-phase decision on where the verified-base attestation lives CI-visibly, then a small impl arc re-pointing the guard's join at that carrier.
+

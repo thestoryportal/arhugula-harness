@@ -746,82 +746,72 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _record_detection(payload: dict) -> str:
-    """Emit-once against the C-HE-24 log, with the log's own adjudication lineage as the
-    durable recovery attestation. Returns the outcome token:
+    """Emit-once against the C-HE-24 log, under ONE locked critical section (the
+    dedupe read, the id mint, and the append share `append_observations`' lock -- two
+    concurrent checks cannot both miss the prior row and append twins). Outcome tokens:
 
-    - ``adjudicated`` -- the site (producer x location) carries a `finding_adjudication`
-      row: the operator already disposed this detection (C-HE-24 §5), so the guard must
-      not re-raise it on every later check (the merge-door `unblocked_from` lease
-      attestation is transient; the adjudication row is the durable half).
-    - ``recorded`` -- an identical observation already sits in the log; no duplicate
-      append, the projection still surfaces.
-    - ``appended`` -- a new observation was appended, id minted under the log lock by
-      `append_observation` (never a hand-built ordinal: a rerun re-minting the same id
-      with drifted evidence would be rejected as a core mutation, C-HE-24 §4).
-
-    The pre-append read is deliberately outside the append lock: the worst race outcome
-    is two distinct-id rows with identical content, which the reducer collapses; the
-    append itself stays a single locked critical section."""
+    - ``adjudicated`` -- some prior observation with this exact (producer, location,
+      evidence) belongs to a finding_id lineage that carries a `finding_adjudication`
+      row: the operator disposed that finding (C-HE-24 §5 adjudicates ONE finding_id),
+      and re-raising the identical observation would undo the disposition. Different
+      evidence at the same site is a NEW event and is never suppressed by an old
+      adjudication.
+    - ``recorded`` -- this lane already has an identical observation in the log; no
+      duplicate append, the projection still surfaces. The same evidence seen by a
+      DIFFERENT lane appends its own row -- lane_id is immutable core (C-HE-24 §6),
+      so one lane's row cannot stand in for another's attribution.
+    - ``appended`` -- a new observation, id minted under the same lock (never a
+      hand-built ordinal: a rerun re-minting an id with drifted evidence would be
+      rejected as a core mutation, C-HE-24 §4)."""
     import finding_record as fr
 
     code, arc_id, evidence = payload["code"], payload["arc_id"], payload["evidence"]
-    prior = [r for r in fr.read_rows() if r.get("producer") == code and r.get("location") == arc_id]
-    if any(r.get("record_kind") == "finding_adjudication" for r in prior):
-        return "adjudicated"
-    if any(r.get("observed_evidence") == evidence for r in prior):
-        return "recorded"
-    fr.append_observation(
-        {
-            "location": arc_id,
-            "observed_evidence": evidence,
-            "expected_contract": "C-HE-12",
-            "severity": payload["severity"],
-            "finding_type": f"{_FAIL_CLASS_BY_SEVERITY[payload['severity']]}{code.lower()}",
-            "lineage_claim": "guard",
-            "producer": code,
-        },
-        fr.Envelope(
-            "finding",
-            fr.now_iso(),
-            arc_id,
-            payload["lane_id"],
-            None,
-            None,
-            None,
-            None,
-            cause_attribution=code.lower(),
-        ),
-    )
-    return "appended"
+    outcome = ["appended"]
 
+    def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
+        site = [r for r in rows if r.get("producer") == code and r.get("location") == arc_id]
+        same_evidence = [r for r in site if r.get("observed_evidence") == evidence]
+        adjudicated_ids = {
+            r["finding_id"] for r in site if r.get("record_kind") == "finding_adjudication"
+        }
+        if any(r["finding_id"] in adjudicated_ids for r in same_evidence):
+            outcome[0] = "adjudicated"
+            return []
+        if any(
+            r.get("record_kind") == "finding" and r.get("lane_id") == payload["lane_id"]
+            for r in same_evidence
+        ):
+            outcome[0] = "recorded"
+            return []
+        return [
+            (
+                {
+                    "location": arc_id,
+                    "observed_evidence": evidence,
+                    "expected_contract": "C-HE-12",
+                    "severity": payload["severity"],
+                    "finding_type": (
+                        f"{_FAIL_CLASS_BY_SEVERITY[payload['severity']]}{code.lower()}"
+                    ),
+                    "lineage_claim": "guard",
+                    "producer": code,
+                },
+                fr.Envelope(
+                    "finding",
+                    fr.now_iso(),
+                    arc_id,
+                    payload["lane_id"],
+                    None,
+                    None,
+                    None,
+                    None,
+                    cause_attribution=code.lower(),
+                ),
+            )
+        ]
 
-def _record_detection_via_uv(payload: dict) -> str:
-    """The stdlib-only venues (the justfile's `/usr/bin/python3` recipes, the CI runtime
-    step) cannot import the record layer's third-party deps in-process; `uv run` reaches
-    the workspace env that can (the CI guard job syncs it before the runtime check). The
-    child inherits HARNESS_GATE_LOG, so the redirect seam holds across the boundary."""
-    driver = (
-        "import json, sys; sys.path.insert(0, 'tools'); "
-        "import codex_context_guard as cg; "
-        "print(cg._record_detection(json.load(sys.stdin)))"
-    )
-    try:
-        p = subprocess.run(
-            ["uv", "run", "python", "-c", driver],
-            input=json.dumps(payload),
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=_REPO_ROOT,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(f"guard: finding row not written (uv fallback: {exc})", file=sys.stderr)
-        return "unrecorded"
-    if p.returncode != 0:
-        err = p.stderr.strip().splitlines()[-1] if p.stderr.strip() else f"rc={p.returncode}"
-        print(f"guard: finding row not written (uv fallback: {err})", file=sys.stderr)
-        return "unrecorded"
-    return p.stdout.strip() or "unrecorded"
+    fr.append_observations(build)
+    return outcome[0]
 
 
 def _detection(
@@ -829,10 +819,12 @@ def _detection(
 ) -> Finding | None:
     """C-HE-12 §3: a detection EMITS a lane-attributed C-HE-24 row and returns the 3-field
     `Finding` projection for the CI surface -- or None when the operator has already
-    adjudicated the site (the durable recovery path; see `_record_detection`). A record
-    layer that cannot import in-process falls over to `uv run`; any other record failure
-    degrades to a loud stderr note with the projection still surfacing -- the detection
-    is never swallowed with the write."""
+    adjudicated this exact observation (the durable recovery path; see
+    `_record_detection`). A record failure degrades to a loud stderr note with the
+    projection still surfacing -- the detection is never swallowed with the write.
+    (Venues whose interpreter cannot import the record/store layer never reach this
+    function in-process: `_emitting_detections_dispatch` routes the whole detection
+    block through `uv run` there.)"""
     payload = {
         "code": code,
         "evidence": evidence,
@@ -842,8 +834,6 @@ def _detection(
     }
     try:
         outcome = _record_detection(payload)
-    except ImportError:
-        outcome = _record_detection_via_uv(payload)
     except Exception as exc:  # the Finding must still surface on a failed write
         print(f"guard: finding row not written ({exc})", file=sys.stderr)
         outcome = "unrecorded"
@@ -912,6 +902,14 @@ def check_orphaned_reservations(*, lane_id: str) -> list[Finding]:
     for h in _reservation_heads():
         pr_state = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
         if pr_state in ("MERGED", "CLOSED"):
+            # Revalidate against the CURRENT generation before the durable emission: the
+            # bounded GitHub query left a window in which a normal open->merged
+            # transition can land, and that ordinary completion must not be recorded as
+            # an orphan. The residual window between this re-read and the append is
+            # named and accepted -- the store has no cross-process read lock to hold.
+            fresh = _reservation_head_current(h["arc_id"])
+            if not fresh or fresh.get("state") != "open" or fresh.get("pr") != h["pr"]:
+                continue
             out.append(
                 _detection(
                     "ORPHANED_RESERVATION",
@@ -958,6 +956,17 @@ def _reservation_heads() -> list[dict]:
         if cur:
             heads.append(cur[1])
     return heads
+
+
+def _reservation_head_current(arc_id: str) -> dict | None:
+    try:
+        import reservations as rs
+
+        cur = rs.current(arc_id)
+    except Exception as exc:
+        print(f"guard: head {arc_id!r} unreadable on revalidation ({exc})", file=sys.stderr)
+        return None
+    return cur[1] if cur else None
 
 
 def _gh_pr_state(pr: int) -> str | None:
@@ -1010,10 +1019,10 @@ def _recent_main_merges(root: Path) -> tuple[list[tuple[str, str, str]], list[st
         parts = line.split()
         sha, parents = parts[0], parts[1:]
         if sha in attested:
-            # The live lease's `unblocked_from` is the operator-keyed re-validation of
-            # exactly this landing (merge_door.unblock) -- re-raising it would wedge the
-            # recovery the operator just approved. The durable half of the same
-            # attestation is the adjudication-recall in `_record_detection`.
+            # `unblocked_from` is the operator-keyed re-validation of exactly this
+            # landing (merge_door.unblock) -- re-raising it would wedge the recovery
+            # the operator just approved. See `_unblock_attested_shas` for the
+            # attestation carriers and their retention horizon.
             continue
         head = by_merge_sha.get(sha)
         if head is None or not head.get("base_sha"):
@@ -1024,18 +1033,116 @@ def _recent_main_merges(root: Path) -> tuple[list[tuple[str, str, str]], list[st
 
 
 def _unblock_attested_shas() -> set[str]:
-    """Merge shas the operator re-validated through `merge_door.unblock` on the LIVE lease
-    (`unblocked_from` == the sha the door blocked at, which for a BASE_TOCTOU block is the
-    landed merge sha -- merge_door.mark_blocked at the first-parent check)."""
+    """Merge shas the operator re-validated through `merge_door.unblock`
+    (`unblocked_from` == the sha the door blocked at, which for a BASE_TOCTOU block is
+    the landed merge sha -- merge_door.mark_blocked at the first-parent check). Carriers:
+    the LIVE lease, and the moved-aside lease records (`released.*` / `reclaimed.*` in
+    the door dir) that `_move_lease` leaves behind after release -- the attestation must
+    outlive the lease's tenure, or the next main check re-raises the recovered race as
+    hard. Retention arithmetic: the door's gc prunes moved-aside records on a ~30-day
+    horizon, far beyond the TOCTOU_LOOKBACK landing window at this repo's cadence; a
+    landing that somehow outlasts both is re-raised once and the operator's
+    finding_adjudication (`_record_detection`) retires it permanently."""
     try:
         import merge_door as md
 
+        records: list[dict] = []
         lease = md.read_lease()
+        if lease:
+            records.append(lease)
+        for prefix in ("released", "reclaimed"):
+            for p in md.DOOR.glob(f"{prefix}.*"):
+                try:
+                    rec = json.loads(p.read_text())
+                except (OSError, ValueError) as exc:
+                    print(f"guard: door record {p.name!r} unreadable ({exc})", file=sys.stderr)
+                    continue
+                if isinstance(rec, dict):
+                    records.append(rec)
     except Exception:  # no door state on this host attests nothing
         return set()
-    if lease and lease.get("unblocked_from"):
-        return {lease["unblocked_from"]}
-    return set()
+    return {r["unblocked_from"] for r in records if r.get("unblocked_from")}
+
+
+def _emitting_detections(root: Path, lane: str) -> list[Finding]:
+    """The full C-HE-12 detection suite. Runs only where the record/store layer imports
+    (`_emitting_detections_dispatch` is the venue boundary)."""
+    findings: list[Finding] = []
+    findings.extend(check_split_brain(root / ARC_METRICS_JSONL, lane_id=lane))
+    merges, unattributed = _recent_main_merges(root)
+    findings.extend(check_base_toctou(merges, lane_id=lane))
+    if unattributed:
+        findings.append(
+            Finding(
+                "info",
+                "BASE_TOCTOU_UNATTRIBUTED",
+                f"[{lane}] {len(unattributed)} of the last {TOCTOU_LOOKBACK} "
+                "first-parent landings have no reservation recording a merge_sha; "
+                "first-parent check skipped for: " + ", ".join(s[:12] for s in unattributed),
+            )
+        )
+    findings.extend(check_orphaned_reservations(lane_id=lane))
+    return findings
+
+
+def _record_layer_importable() -> bool:
+    try:
+        import finding_record  # noqa: F401
+        import merge_door  # noqa: F401
+        import reservations  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
+    """Venue boundary for the detection suite. The guard's documented runtime is
+    stdlib-only `/usr/bin/python3` (pre-3.11 on macOS, no third-party packages in CI),
+    but the record and store layers need the uv workspace env (`datetime.UTC`,
+    jsonschema). In-process where those import; otherwise the WHOLE suite runs once
+    through `uv run` (the CI guard job syncs the env before the runtime check, and the
+    child inherits HARNESS_LANE_ID / HARNESS_GATE_LOG). When even the fallback cannot
+    run, a warn Finding says so -- an empty result must never be indistinguishable from
+    "could not look"."""
+    if _record_layer_importable():
+        return _emitting_detections(root, lane)
+    driver = (
+        "import json, sys; sys.path.insert(0, 'tools'); "
+        "import codex_context_guard as cg; "
+        "from pathlib import Path; "
+        "fs = cg._emitting_detections(Path(sys.argv[1]), sys.argv[2]); "
+        "print(json.dumps([f.__dict__ for f in fs]))"
+    )
+    proc = _run(
+        ["uv", "run", "python", "-c", driver, str(root), lane],
+        cwd=_REPO_ROOT,
+        timeout=300,
+    )
+    if proc.returncode != 0:
+        reason = proc.stderr.strip().splitlines()[-1] if proc.stderr.strip() else "no stderr"
+        return [
+            Finding(
+                "warn",
+                "DETECTIONS_UNAVAILABLE",
+                f"[{lane}] the C-HE-12 detections could not run: this interpreter "
+                f"cannot import the record/store layer and the uv fallback failed "
+                f"({reason}). An empty detection set here means UNLOOKED, not clean.",
+            )
+        ]
+    try:
+        parsed = json.loads(proc.stdout.strip().splitlines()[-1])
+        return [
+            Finding(d["severity"], d["code"], d["message"]) for d in parsed if isinstance(d, dict)
+        ]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        return [
+            Finding(
+                "warn",
+                "DETECTIONS_UNAVAILABLE",
+                f"[{lane}] the uv fallback produced unparseable detection output "
+                f"({exc}); treating the suite as UNLOOKED, not clean.",
+            )
+        ]
 
 
 def validate(
@@ -1051,21 +1158,7 @@ def validate(
         # U-HE-33: the emitting detections run where landings live -- `check` on the
         # default branch (the CI push run and local main-audit venues). Feature-branch
         # and preflight/closeout runs never walk the landing history.
-        lane = _lane_id()
-        findings.extend(check_split_brain(state.root / ARC_METRICS_JSONL, lane_id=lane))
-        merges, unattributed = _recent_main_merges(state.root)
-        findings.extend(check_base_toctou(merges, lane_id=lane))
-        if unattributed:
-            findings.append(
-                Finding(
-                    "info",
-                    "BASE_TOCTOU_UNATTRIBUTED",
-                    f"[{lane}] {len(unattributed)} of the last {TOCTOU_LOOKBACK} "
-                    "first-parent landings have no reservation recording a merge_sha; "
-                    "first-parent check skipped for: " + ", ".join(s[:12] for s in unattributed),
-                )
-            )
-        findings.extend(check_orphaned_reservations(lane_id=lane))
+        findings.extend(_emitting_detections_dispatch(state.root, _lane_id()))
 
     if state.status_entries and not state.is_linked_worktree:
         findings.append(
