@@ -2496,11 +2496,11 @@ same spec leg.
 - **Current state.** OPEN. Registered instead of built in-arc: a CI-visible carrier of the verified base (committed sidecar, PR annotation, or ledger row) is a new mechanism — a design decision (X-AL-3), not an impl slice of U-HE-33. Until then the CI backstop for hazard #7 is the door's own at-landing detection (U-HE-23) plus the operator-host re-check.
 - **Closure shape.** A design-phase decision on where the verified-base attestation lives CI-visibly, then a small impl arc re-pointing the guard's join at that carrier.
 
-### B-215 · deterministic post-round class-sibling sweep gate *(surfaced by the operator on the u-he-33 arc, 2026-08-25; REGISTERED)*
+### B-215 · deterministic post-round class-sibling sweep gate *(surfaced on the u-he-33 arc; CLOSED at #1456, 2026-08-25)*
 
 - **What it is.** The u-he-33 arc measured that the between-rounds classify-then-sweep step is instruction-dependent and fails under load: the empty-on-exception class recurred in sibling helpers across multiple review rounds despite being written in defect-class-preflight class 3. Finding capture is already deterministic (per-round C-HE-24 rows; refresh-classes.py); the sweep is not.
-- **Current state.** OPEN. The interim mitigation is the skill's new "after every review round" section (instruction-tier).
-- **Closure shape.** A deterministic post-round step in the review loop: extract the round's findings, grep the branch diff for class-sibling shapes, refuse the next review invocation until each hit carries a named answer. Review-wrapper surface — own reviewed arc (B-213 precedent).
+- **Current state.** CLOSED at PR #1456 (b-215 arc): the admission gate `tools/review_loop_gate.py` wired into both loop channels — CURRENCY (attestation bound head+digest to the exact reviewable diff), OBLIGATIONS (every finding_id across both producers, token-exact answers), TERMINATION (10-round budget + ask-gated auditable extensions, refusal citing the u-he-29 counter-evidence). 10 codex rounds ending in the arc's own live BUDGET_EXHAUSTED refusal — the predicate demonstrated on its own construction. Residuals named in the register close_out; guard chaining class spun out as B-217.
+- **Closure shape (as registered).** A deterministic post-round step in the review loop: extract the round's findings, grep the branch diff for class-sibling shapes, refuse the next review invocation until each hit carries a named answer. Review-wrapper surface — own reviewed arc (B-213 precedent).
 
 ### B-216 · u-he-33 review-loop tail refinements *(deferred at the operator stop, 2026-08-25; REGISTERED)*
 
@@ -2510,3 +2510,10 @@ same spec leg.
 
 
 
+
+### B-217 · permission-guard just-recipe chaining class *(surfaced by codex r3 on the b-215 arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** `just` executes multiple recipes from one command line, so any prefix-anchored allowlist entry for an argument-bearing `just` recipe can front a chained SECOND recipe that was never allowlisted — measured shape: `just review-gate-check main review-attest-budget 2 ok` rode the gate-check allow and would have run the deliberately ask-gated budget verb.
+- **Current state.** OPEN. The b-215 arc fixed its own three verbs with exact-anchored, arity-bounded shapes (no surplus token can be parsed as a recipe name) plus two chained-bypass witnesses in the guard suite; the CLASS remains for every other argument-taking recipe in the big `just` alternation.
+- **Closure shape.** A guard-wide audit converting the alternation's argument-bearing entries to arity-bounded anchors (or one structural token-count check against the named recipe's parameter count), with per-shape chained-bypass witnesses (U-HE-25 exact-shape precedent; guard edits take their own reviewed arc per B-213).
+- **Scope note (b-215 codex r7–r10).** The interim positive token grammar on just-first lines oscillated twice against documented free-form evidence shapes (quotes r8, parens r10): normalization-proof chain prevention WITHOUT arity knowledge degrades into an inner-charset ladder — which is this row's whole argument.

@@ -451,6 +451,9 @@ jobs:
       - name: Codex loop tests (kept out of the parity gate on latency)
         run: uv run python -m pytest tools/test_codex_loop.py -q
 
+      - name: Review-loop admission gate tests (B-215)
+        run: uv run python -m pytest tools/test_review_loop_gate.py -q
+
   q1-review-gate:
     # R-CL-Q1 — provider-free structured review artifact gate. This tool lives
     # outside pytest's 7 package testpaths, so CI pins its tests explicitly.

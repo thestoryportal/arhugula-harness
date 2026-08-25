@@ -388,6 +388,9 @@ for c in \
   "just codex-worktree-gc --reap" \
   "just review-with-failover" \
   "just review-with-failover main" \
+  "just review-attest-preflight .harness/tmp/preflight-answers.md" \
+  "just review-attest-sweep .harness/tmp/sweep-answers.md main" \
+  "just review-gate-check" \
   "just merge-gate-binding merge-gate-concurrency" \
   "just merge-gate-binding merge-gate-spec-conformance main" \
   "just merge-gate-emit --pr 1397 --lens merge-gate-concurrency --verdict-json .harness/tmp/merge-gate-lens-concurrency.txt --base main" \
@@ -402,6 +405,45 @@ for c in \
 done
 OUT=$(run_on "$(pl Bash "just merge-gate-emit --pr 1 --lens merge-gate-concurrency --verdict-json /tmp/outside.txt" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit reading a verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit auto-allowed: $OUT"
+# B-215: the budget-extension verb is deliberately ask-gated — the loop must never
+# silently extend its own review budget; and an out-of-worktree answers path fails
+# _bash_args_safe containment even on an allowlisted attest verb.
+OUT=$(run_on "$(pl Bash "just review-attest-budget 2 operator-approved" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "review-attest-budget → not auto-allowed (operator-visible)" || bad "review-attest-budget auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just review-attest-preflight /tmp/outside-answers.md" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "review-attest-preflight with out-of-worktree answers → not auto-allowed" || bad "out-of-worktree attest answers auto-allowed: $OUT"
+# codex r3 P1: `just` chains recipes — a prefix-anchored allow would let the
+# ask-gated budget verb ride as a chained SECOND recipe after an allowlisted one.
+# The exact-anchored shapes bound arity so no surplus token can name a recipe.
+OUT=$(run_on "$(pl Bash "just review-gate-check main review-attest-budget 2 operator-approved" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained review-attest-budget after review-gate-check → not auto-allowed" || bad "multi-recipe budget chain auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just review-attest-sweep .harness/tmp/a.md main review-attest-budget 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained budget after review-attest-sweep → not auto-allowed" || bad "attest-sweep budget chain auto-allowed: $OUT"
+# codex r5 P1: the budget verb chained after ANY generic-prefix allowlisted recipe
+# (the B-217 class) — the load-bearing ask-gate is pinned by a pre-allowlist reject
+# on every `just` line mentioning it, regardless of which prefix fronts the chain.
+OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-budget 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained budget after generic-prefix recipe → not auto-allowed" || bad "generic-prefix budget chain auto-allowed: $OUT"
+# codex r6 P1: shell quote-normalization (review-attest-"budget") defeats the raw
+# grep — any just-first command containing a quote character falls through to ask.
+OUT=$(run_on "$(pl Bash 'just codex-loop-status review-attest-"budget" 2 ok' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "quote-normalized budget chain → not auto-allowed" || bad "quote-normalized budget chain auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "single-quote-normalized budget chain → not auto-allowed" || bad "single-quote budget chain auto-allowed: $OUT"
+# codex r8 P1: the token grammar admits FULLY-quoted plain spans — the documented
+# quoted-evidence loop-record shape must stay allowed (r7's bare charset broke it).
+OUT=$(run_on "$(pl Bash 'just codex-loop-record --phase plan --status passed --command plan --evidence "expected assertion"' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "quoted-evidence codex-loop-record → allow" || bad "quoted-evidence loop-record not allowed: $OUT"
+# codex r10 P1: real evidence prose carries parens — "2 passed (0.1s)" must allow.
+OUT=$(run_on "$(pl Bash 'just codex-loop-record --phase red --status passed --command pytest --evidence "2 passed (0.1s)"' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "paren-evidence codex-loop-record → allow" || bad "paren-evidence loop-record not allowed: $OUT"
+# codex r7 P1: backslash normalization (review-attest-bud\get) — the positive
+# plain-charset constraint on just-first commands ends the whole normalization
+# ladder (quotes, backslashes, $VAR splices, globs) in one rule.
+OUT=$(run_on "$(pl Bash 'just check review-attest-bud\get 2 ok' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "backslash-normalized budget chain → not auto-allowed" || bad "backslash budget chain auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash 'just check review-attest-bud[g]et 2 ok' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "glob-normalized budget chain → not auto-allowed" || bad "glob budget chain auto-allowed: $OUT"
 SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"

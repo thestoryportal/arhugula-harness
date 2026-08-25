@@ -22,6 +22,7 @@ _REVIEWER_START_TIMEOUT_SECONDS = 60.0
 sys.path.insert(0, str(ROOT / "tools"))
 
 import finding_record as fr  # noqa: E402
+import review_loop_gate as rlg  # noqa: E402
 
 #: A fixed six-field binding for in-process tests (the subprocess harness derives the real one
 #: from the fake `git`; see `_fake_commands`).
@@ -42,6 +43,17 @@ def _isolate_gate_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     log = tmp_path / "gate-log.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
     monkeypatch.setenv("HARNESS_GATE_LOG", str(log))
+    # B-215 hermetic hygiene: never let a loop session's exported HARNESS_LOOP —
+    # or an actively-reserved arc's HARNESS_ARC_ID/LANE_ID (merge-gate witness
+    # lens P2: env_arc_and_lane() prefers the ambient id and _reservation_exists()
+    # reads the REAL checkout's store, flipping subprocess runs Inactive→refusal) —
+    # reach this battery's in-process or subprocess runs
+    monkeypatch.delenv("HARNESS_LOOP", raising=False)
+    monkeypatch.delenv("HARNESS_ARC_ID", raising=False)
+    monkeypatch.delenv("HARNESS_LANE_ID", raising=False)
+    # ...and isolate the gate state file from the real checkout for in-process runs
+    # (root / absolute-STATE_REL resolves to the absolute path)
+    monkeypatch.setattr(rlg, "STATE_REL", tmp_path / "review-gate-state.json")
     return log
 
 

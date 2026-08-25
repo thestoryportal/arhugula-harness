@@ -203,12 +203,10 @@ def bound_diff(repo: Path, base_sha: str, head_sha: str) -> bytes:
     ).stdout
 
 
-def compute_binding(
-    repo: Path, base: str, *, channel: str, prompt_version: str, config_hash: str
-) -> dict[str, str]:
-    """The wrapper's OWN values for the six binding fields (C-HE-15 §4). Never read from the
-    channel. `diff_digest` covers the committed diff merge-base(base, HEAD)..HEAD -- the state
-    the review is bound to (the loop commits before it reviews)."""
+def code_binding(repo: Path, base: str) -> dict[str, str]:
+    """The three code-state binding fields shared by every consumer that must name the
+    reviewed bytes (`compute_binding`, the B-215 admission gate): ONE digest formula, so an
+    attestation and a verdict can never disagree about what "this diff" means."""
     head_sha = _git(repo, "rev-parse", "HEAD")
     # merge-base against the CAPTURED head, not "HEAD" again: a commit landing between the two
     # git calls must not bind a base computed for a head other than head_sha (merge-gate L1)
@@ -217,6 +215,17 @@ def compute_binding(
         "head_sha": head_sha,
         "base_sha": base_sha,
         "diff_digest": hashlib.sha256(bound_diff(repo, base_sha, head_sha)).hexdigest(),
+    }
+
+
+def compute_binding(
+    repo: Path, base: str, *, channel: str, prompt_version: str, config_hash: str
+) -> dict[str, str]:
+    """The wrapper's OWN values for the six binding fields (C-HE-15 §4). Never read from the
+    channel. `diff_digest` covers the committed diff merge-base(base, HEAD)..HEAD -- the state
+    the review is bound to (the loop commits before it reviews)."""
+    return {
+        **code_binding(repo, base),
         "reviewer_identity": channel if channel.endswith("-review") else f"{channel}-review",
         "prompt_version": prompt_version,
         "config_hash": config_hash,

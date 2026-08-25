@@ -602,11 +602,37 @@ esac
 # purpose: a safe-but-chained command costs one approval prompt; the alternative is a
 # silent bypass of the whole deny path.
 if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
+  # The just-line token grammar (codex r7/r8 P1): each token is a plain bareword OR a
+  # FULLY-quoted plain span (documented shapes like codex-loop-record --evidence "two
+  # words" stay allowed). Splice attacks all require BREAKING a token's text (mixed
+  # bare+quote like review-attest-"budget", backslashes, $VAR, globs) — none of those
+  # forms parse under this grammar, and a fully-quoted "review-attest-budget" still
+  # contains the literal the budget grep above catches.
+  # quoted-span inner charset: printable prose incl. parens (codex r10 P1: real
+  # evidence strings like "2 passed (0.1s)") but NEVER the splice-enabling chars
+  # (\\ $ \` or a mixed bare/quote boundary — those stay structurally unparseable).
+  # Residual prose chars beyond this set fall to ask; widening further is B-217's
+  # arity-aware closure, not another inner-charset rung.
+  _JUST_TOKEN='[A-Za-z0-9._/:=@-]+|"[A-Za-z0-9._/:=@,() -]*"|'"'"'[A-Za-z0-9._/:=@,() -]*'"'"''
+  _JUST_PLAIN_LINE='^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]+('"$_JUST_TOKEN"'))*[[:space:]]*$'
   # Reject (→ ask) if the command (a) chains/nests/redirects, OR (b) uses a destructive
   # SUBMODE of an otherwise-allowlisted verb that the deny-list doesn't cover —
-  # `find ... -delete/-exec`, `gh api -X DELETE/POST/...` (mutating). Allowlisted verbs
-  # are auto-allowed only in their read-only forms.
+  # `find ... -delete/-exec`, `gh api -X DELETE/POST/...` (mutating), OR (c) is a `just`
+  # line mentioning review-attest-budget ANYWHERE (codex r5 P1: `just` chains recipes,
+  # so the ask-gated budget verb could ride as a chained second recipe behind ANY
+  # allowlisted prefix — B-217 tracks the general class; this pins the one verb whose
+  # ask-gate is load-bearing), OR (d) is a `just`-first command that is NOT composed
+  # solely of plain-charset words (codex r6/r7 P1: shell tokenization normalizes
+  # review-attest-"budget", review-attest-bud\get, $VAR splices, and glob forms to
+  # the bare verb AFTER any raw-text grep ran — rung-by-rung pattern rejection is a
+  # non-convergent ladder, so the POSITIVE structural constraint replaces it: every
+  # token must match [A-Za-z0-9._/:=@-]+ or the command falls to ask. No allowlisted
+  # `just` shape needs any other character). Allowlisted verbs are auto-allowed only
+  # in their read-only forms.
   if printf '%s' "$CMD" | grep -q '[;&|<>`]' || [[ "$CMD" == *'$('* ]] || [[ "$CMD" == *$'\n'* ]] \
+     || printf '%s' "$CMD" | grep -Eq 'just[[:space:]].*review-attest-budget' \
+     || { printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_[A-Z0-9_]+=[A-Za-z0-9._-]+[[:space:]]+)*just([[:space:]]|$)' \
+          && ! printf '%s' "$CMD" | grep -Eq "$_JUST_PLAIN_LINE"; } \
      || printf '%s' "$CMD" | grep -Eq 'find[[:space:]].*-(delete|exec|execdir|ok|okdir|fprint|fprintf|fls)\b' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+api[[:space:]].*(-X|--method|--field|--raw-field|--input|-f[[:space:]]|-F[[:space:]])' \
      || printf '%s' "$CMD" | grep -Eq 'gh[[:space:]]+pr[[:space:]]+merge.*--admin' \
@@ -652,6 +678,16 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # get its id or index. Anchored EXACT shape with no argument surface at all (`$`-end):
       # the script takes no arguments, and anything chained, redirected or substituted was
       # already rejected above. A different path after `source` does not match.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-gate-check([[:space:]]+[A-Za-z0-9._/-]+)?$|^just[[:space:]]+review-attest-(preflight|sweep)[[:space:]]+[A-Za-z0-9._/-]+([[:space:]]+[A-Za-z0-9._/-]+)?$' \
+       && _bash_args_safe "$CMD"; then
+      # B-215 attest/check verbs, EXACT-ANCHORED and arity-bounded (codex r3 P1):
+      # `just` chains recipes, so a prefix-anchored allow (`just review-gate-check
+      # main review-attest-budget 2 ok`) would ride the allowlisted prefix and run
+      # the deliberately ask-gated budget verb as a chained second recipe. Each
+      # shape here admits at most as many tokens as the recipe's own parameters
+      # consume, so no token can ever be parsed by `just` as another recipe name.
+      # `review-attest-budget` is deliberately NOT allowlisted in any form.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+transition([[:space:]]|$)' \
        && _transition_to_open_only "$TRIM" \

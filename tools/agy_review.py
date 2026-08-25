@@ -822,6 +822,23 @@ def main() -> int:
     )
     args = parser.parse_args()
     OUTCOME_SINK = Path(args.outcome_json) if args.outcome_json else None
+    # B-215 admission gate (codex r1 P1 on the gate arc): an UNGATED standalone
+    # gemini review would mint loop rounds that poison the guarded wrapper's round
+    # count (last > 0 skips the entry preflight). The failover CHILD skips — its
+    # parent already admitted the round — marked by the same env the reservation-
+    # outcome split keys on; in loop mode a hand-set marker cannot ride the guard's
+    # exact-shape allowlist (only HARNESS_ARC_ID/LANE_ID prefixes are stripped).
+    if os.environ.get("HARNESS_FAILOVER_CHILD") != "1":
+        import review_loop_gate as rlg
+
+        decision = rlg.admit(Path.cwd(), args.base, rw.env_arc_and_lane()[0])
+        if isinstance(decision, rlg.Inactive):
+            print(f"gemini-review: review gate INACTIVE — {decision.reason}", file=sys.stderr)
+        elif isinstance(decision, rlg.Refused):
+            print(f"review gate: {decision.detail}", file=sys.stderr)
+            print(f"  recipe: {decision.recipe}", file=sys.stderr)
+            print(f"gemini-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
+            return 3
     previous_sigterm = signal.signal(signal.SIGTERM, handle_termination_signal)
     try:
         return run_review(Path.cwd(), args.base)

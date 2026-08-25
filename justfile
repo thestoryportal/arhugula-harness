@@ -724,6 +724,22 @@ _require-antigravity:
 review-with-failover base='main':
     uv run python tools/codex_review.py --base {{base}} --failover
 
+# B-215 admission-gate attest verbs (tools/review_loop_gate.py): deterministic
+# entry/sweep attestations the wrapper enforces before any review round.
+# `review-attest-budget` is deliberately NOT guard-allowlisted — extending the
+# round budget stays operator-visible (the loop must never self-extend it).
+review-attest-preflight answers base='main':
+    uv run python tools/review_loop_gate.py attest-preflight --answers {{answers}} --base {{base}}
+
+review-attest-sweep answers base='main':
+    uv run python tools/review_loop_gate.py attest-sweep --answers {{answers}} --base {{base}}
+
+review-attest-budget extra reason:
+    uv run python tools/review_loop_gate.py attest-budget --extra {{extra}} --reason {{quote(reason)}}
+
+review-gate-check base='main':
+    uv run python tools/review_loop_gate.py check --base {{base}}
+
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.
 _require-coderabbit:
