@@ -57,6 +57,11 @@ def split_cohorts(
     out: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for r in rows:
         arc_type = r.get("arc_type") or "unclassified"
+        # C-HE-26: a close-time arc-type label is outcome-contaminated and cannot
+        # support arc-type discrimination (codex r3). Close-declared rows group
+        # under an explicitly contaminated key, never beside open-declared ones.
+        if arc_type != "unclassified" and r.get("arc_type_declared_at") != "open":
+            arc_type = f"{arc_type} (close-declared — outcome-contaminated, C-HE-26)"
         buckets = out.setdefault(arc_type, {b: [] for b in _BUCKETS})
         declared = r.get("levers_active") or []
         bucket = (
@@ -102,10 +107,19 @@ def summarize_type(
     """Pure summary for one arc type — one JSON-able value."""
     treated = [_metrics(r, levers) for r in buckets["treated"]]
     baseline = [_metrics(r, levers) for r in buckets["baseline"]]
+    base_p1 = [m["p1_rounds"] for m in baseline if m["p1_rounds"] is not None]
+    base_span = [m["arc_span_h"] for m in baseline if m["arc_span_h"] is not None]
     base_median = {
         "review_rounds": _median([m["review_rounds"] for m in baseline]),
-        "p1_rounds": _median([m["p1_rounds"] for m in baseline if m["p1_rounds"] is not None]),
-        "arc_span_h": _median([m["arc_span_h"] for m in baseline if m["arc_span_h"] is not None]),
+        "p1_rounds": _median(base_p1),
+        "arc_span_h": _median(base_span),
+        # A P1 median over fewer rows than the cohort must say so, or the n>=5
+        # bar can look satisfied by rows the P1 metric never measured (codex r3).
+        "measured_n": {
+            "review_rounds": len(baseline),
+            "p1_rounds": len(base_p1),
+            "arc_span_h": len(base_span),
+        },
     }
     for m in treated:
         m["delta_rounds_vs_baseline_median"] = (
@@ -113,11 +127,11 @@ def summarize_type(
             if base_median["review_rounds"] is not None
             else None
         )
-    # Per-skill attribution needs a CONTRAST, not merely divergent lever lists
-    # (codex r1+r2): lever L is separable iff two evaluable target-patterns differ
-    # in exactly {L} — the baseline's empty pattern counts, so {} vs {211,212}
-    # separates nothing while {} vs {211} isolates B-211.
-    patterns = {tuple(m["target_levers_declared"]) for m in treated}
+    # Per-skill attribution needs a CONTRAST on the FULL lever sets (codex r1-r3):
+    # lever L is separable iff two evaluable rows' complete declarations differ in
+    # exactly {L}. {} vs {211,212} separates nothing; {} vs {211,999} is confounded
+    # by the non-target lever; only {} vs {211} (or {211} vs {211,212}) isolates.
+    patterns = {tuple(sorted(m["levers"])) for m in treated}
     patterns |= {()} if baseline else set()
     separable = sorted(
         {
@@ -126,6 +140,7 @@ def summarize_type(
             for b in patterns
             if len(set(a) ^ set(b)) == 1
             for lv in set(a) ^ set(b)
+            if lv in levers
         }
     )
     # An excluded row keeps its treatment identity: "no evaluable treated arcs"
@@ -144,6 +159,8 @@ def summarize_type(
         "treated_median_p1": _median(
             [m["p1_rounds"] for m in treated if m["p1_rounds"] is not None]
         ),
+        "treated_p1_measured_n": sum(1 for m in treated if m["p1_rounds"] is not None),
+        "p1_unmapped": sorted(m["arc_id"] for m in treated + baseline if m["p1_rounds"] is None),
         "separable_levers": separable,
         "per_skill_separable": bool(separable),
         "excluded_treated_count": excluded_treated,
@@ -170,10 +187,17 @@ def render(summary: dict[str, Any]) -> str:
         bm = s["baseline_median"]
         lines.append(
             f"[{arc_type}] {sizes['treated']} treated / {sizes['baseline']} baseline — "
-            f"baseline median: rounds={bm['review_rounds']} p1={bm['p1_rounds']} "
-            f"span_h>={bm['arc_span_h']} (span is a lower bound: derived excludes "
-            f"first-round duration)"
+            f"baseline median: rounds={bm['review_rounds']} "
+            f"(n={bm['measured_n']['review_rounds']}) "
+            f"p1={bm['p1_rounds']} (n={bm['measured_n']['p1_rounds']}) "
+            f"span_h>={bm['arc_span_h']} (n={bm['measured_n']['arc_span_h']}; span is a "
+            f"lower bound: derived excludes first-round duration)"
         )
+        if s["p1_unmapped"]:
+            lines.append(
+                "  p1-unmapped rows (in cohorts, excluded from P1 medians only): "
+                + ", ".join(str(a) for a in s["p1_unmapped"])
+            )
         if not s["treated_arcs"]:
             # "declare the levers" would be a false repair when treated rows exist
             # but none is evaluable (codex r2, P3) — the states are different.
@@ -192,7 +216,7 @@ def render(summary: dict[str, Any]) -> str:
             )
         lines.append(
             f"  treated median: rounds={s['treated_median_rounds']} "
-            f"p1={s['treated_median_p1']}"
+            f"p1={s['treated_median_p1']} (p1 n={s['treated_p1_measured_n']})"
             f" | per-skill separation: "
             + (
                 f"available for {', '.join(s['separable_levers'])} (single-lever contrast exists)"

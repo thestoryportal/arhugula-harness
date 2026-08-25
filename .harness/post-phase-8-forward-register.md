@@ -2473,8 +2473,8 @@ same spec leg.
 ### B-211 · Lever id: defect-class-preflight treated cohort *(minted 2026-08-24; OPEN)*
 
 - **What it is.** Not a defect — a treated-cohort marker. An arc that ran the `defect-class-preflight` sweep on its diffs before each commit declares `B-211` in its arc-metrics `levers_active`, so cohort splits can price the skill against the untreated baseline on review rounds and P1 rounds (per-arc reviewer-finding counts share B-212's named residual — no committed pr-to-gate-log join key).
-- **Current state.** OPEN as a measurement lever: one treated arc (pr-1447) is in the committed ledger; the n>=5 same-arc_type evaluation bar is not yet reached, so no keep/retire judgment exists.
-- **First treated arc.** pr-1447: 2 codex rounds with 0 codex findings and 1 merge-gate lens finding (at `562fd965f`), against a recent untreated range of 10–22 rounds — a directional signal only; the cohorts decide.
+- **Current state.** OPEN as a measurement lever: one treated arc (pr-1447) is in the committed ledger; the n>=5 same-arc_type evaluation bar is not yet reached, so no keep/retire judgment exists. NAMED RESIDUAL (codex r3): every ledger row's arc_type is close-declared — outcome-contaminated per C-HE-26 — because the drain does not join the reservation's open-time declaration; until it does, the report labels these cohorts contaminated and the evaluation cannot use uncontaminated type discrimination.
+- **First treated arc.** pr-1447: 2 codex rounds with 0 codex findings and 1 merge-gate lens finding (at `562fd965f`), against the single evaluable applying baseline row (pr-1434, 22 rounds) — a directional signal only; the cohorts decide. Mixed-type ranges are not quoted here: the evaluation contract is same-arc_type.
 - **Evaluation.** `tools/arc_lever_report.py` (the `/arc-lever-report` skill) after ≥5 treated arcs, same-arc_type medians; retire the id if treated and baseline are indistinguishable.
 
 ### B-212 · Lever id: register-pr-prose treated cohort *(minted 2026-08-24; OPEN)*

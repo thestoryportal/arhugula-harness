@@ -34,6 +34,7 @@ def _row(arc_id: str, rounds, levers: list[str], **kw) -> dict:
         "arc_span_s": kw.get("span", 3600.0),
         "levers_active": levers,
         "round_completeness": kw.get("completeness", "complete"),
+        "arc_type_declared_at": kw.get("declared_at", "open"),
     }
 
 
@@ -96,6 +97,47 @@ def test_per_skill_separation_ignores_non_target_levers(tmp_path: Path) -> None:
     assert s2["separable_levers"] == ["B-211", "B-212"], (
         "{}<->{211} isolates B-211; {211}<->{211,212} isolates B-212"
     )
+
+
+# mutation-probe(tools/arc_lever_report.py): group close-declared rows by bare arc_type
+def test_close_declared_arc_types_group_as_contaminated(tmp_path: Path) -> None:
+    """C-HE-26: a close-time label is outcome-contaminated — never beside open-declared."""
+    rows = [
+        _row("pr-a", 10, [], p1=[1]),
+        _row("pr-b", 22, [], p1=[2], declared_at="close"),
+    ]
+    s = _summary(tmp_path, rows)
+    assert set(s["arc_types"]) == {
+        "applying",
+        "applying (close-declared — outcome-contaminated, C-HE-26)",
+    }
+    assert s["arc_types"]["applying"]["baseline_median"]["review_rounds"] == 10
+
+
+# mutation-probe(tools/arc_lever_report.py): judge the contrast on target-lever intersections
+def test_a_non_target_lever_changing_simultaneously_confounds(tmp_path: Path) -> None:
+    """{} vs {B-211,B-999}: B-999 changes with B-211 — no clean B-211 contrast."""
+    rows = [_row("pr-a", 10, [], p1=[1]), _row("pr-b", 2, ["B-211", "B-999"])]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["separable_levers"] == [], "the non-target lever is a simultaneous change"
+
+
+# mutation-probe(tools/arc_lever_report.py): report cohort size as the P1 sample size
+def test_p1_medians_carry_their_own_sample_counts(tmp_path: Path) -> None:
+    """A P1 median over fewer rows than the cohort must say so (n>=5 honesty)."""
+    rows = [
+        _row("pr-a", 10, [], p1=[1, 2]),
+        _row("pr-b", 12, [], p1=None),
+        _row("pr-c", 2, ["B-211", "B-212"], p1=[1]),
+    ]
+    s = _summary(tmp_path, rows)["arc_types"]["applying"]
+    assert s["baseline_median"]["measured_n"] == {
+        "review_rounds": 2,
+        "p1_rounds": 1,
+        "arc_span_h": 2,
+    }
+    assert s["treated_p1_measured_n"] == 1
+    assert s["p1_unmapped"] == ["pr-b"]
 
 
 # mutation-probe(tools/arc_lever_report.py): mark separable on any pattern divergence
