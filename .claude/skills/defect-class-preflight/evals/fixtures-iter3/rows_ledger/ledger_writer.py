@@ -1,7 +1,6 @@
 """rows_ledger — a small append-only JSONL ledger and its own reader.
 
-Fixture data surface for the new-consumer inventory pause eval. Schema
-history: v1 rows carried {"ts", "arc_id", "generation"}; v2 added
+Schema history: v1 rows carried {"ts", "arc_id", "generation"}; v2 added
 "verdict". Real ledgers hold a mix of both shapes.
 """
 
@@ -19,8 +18,7 @@ def append_row(ts: str, arc_id: str | None, generation: int, verdict: str | None
 
     arc_id is None when no reservation context exists (headless runs).
     verdict is omitted from the row (not written as null) for pre-v2
-    callers. The append is a plain buffered write — a crash mid-write can
-    leave a truncated trailing line on disk.
+    callers.
     """
     row: dict[str, Any] = {"ts": ts, "arc_id": arc_id, "generation": generation}
     if verdict is not None:

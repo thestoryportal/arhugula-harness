@@ -103,8 +103,15 @@ than an in-repo file, the same pause applies, with a three-rung ladder:
    no-unilateral-paid-calls rule wins: complete the pause on the remaining rungs
    plus the producer-source read, record the unprobed shape as a NAMED gap in the
    inventory table, and surface the probe itself to the operator gate.
-2. **Read the installed source in `.venv`** — the zero-cost middle option, and it is
-   exactly the version you run.
+2. **Read the resolved installed source** — the zero-cost middle option. FIRST
+   resolve what actually runs — the real import path/executable and its version
+   (`python -c "import x; print(x.__file__, x.__version__)"`, `which <cli>` plus
+   `--version`, or the environment's own metadata) — THEN read that source. The
+   repository `.venv` is the common landing spot, never an assumption: a stale
+   `.venv` beside a `uv run --with` environment, a system package, a Node SDK, or
+   a global CLI all read fine and inventory the wrong producer — source read at
+   the wrong version is a wrong-contract inventory wearing the right one's
+   clothes.
 3. **context7 MCP** for current upstream docs — configured in the workspace
    `.mcp.json`; its tools are deferred, so load them via ToolSearch before
    calling. In a runner without context7 (the Codex bridge, say) the pause
@@ -237,6 +244,7 @@ The sweep is done when every applicable class has a named answer for the diff �
 "checked, fine" but "class 7: the only env write is X at line N, restored by the
 stashed MonkeyPatch at M, sole consumer verified via grep". If the diff introduced a
 new data-surface consumer, the inventory table (field × semantics) is part of the
-named-answer set — every recorded semantic either tested or named. Findings you choose not to
+named-answer set — every recorded semantic either tested, or carried as an explicit
+deferred finding per the next sentence (sitting in the table is not "named"). Findings you choose not to
 fix now must be named in the commit message or register, never silently carried. Then
 commit and invoke the reviewers — they should be confirming, not discovering.

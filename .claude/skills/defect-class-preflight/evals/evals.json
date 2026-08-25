@@ -141,7 +141,7 @@
       "id": 8,
       "eval_name": "new-consumer-inventory-pause",
       "skill": "defect-class-preflight",
-      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an existing data surface: a per-arc verdict summarizer reading the rows ledger written by .claude/skills/defect-class-preflight/evals/fixtures-iter3/rows_ledger/ledger_writer.py (read it). Before any consumer code, run the skill's new-consumer inventory pause. Deliver to your outputs directory: inventory.md — the field-by-semantics inventory table for every field the summarizer will read (ts, arc_id, generation, verdict), each recorded semantic a distinct test-matrix case, plus the precedent notes — and consumer_sketch.py — the consumer's parse boundary as a typed row model with the summarizer logic downstream of it. Constraints: read-only outside your outputs directory; do not execute the fixture; do not run pytest.",
+      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an existing data surface: a per-arc verdict summarizer reading the rows ledger written by .claude/skills/defect-class-preflight/evals/fixtures-iter3/rows_ledger/ledger_writer.py (read it). The summarizer will read the fields ts, arc_id, generation, and verdict. Do whatever pre-authoring review your discipline requires, then deliver to your outputs directory: inventory.md — your pre-authoring analysis of the surface — and consumer_sketch.py — the consumer. Constraints: read-only outside your outputs directory; do not execute the fixture; do not run pytest.",
       "expected_output": "see assertions",
       "files": [
         "fixtures-iter3/rows_ledger/ledger_writer.py"
@@ -154,6 +154,21 @@
         "cites the surface's own reader iter_rows as precedent and matches its handling (or names each divergence explicitly)",
         "consumer_sketch.py parses rows into a typed row model at the boundary (e.g. Pydantic) — no dict.get() chains scattered through the summarizer logic",
         "the test matrix treats each recorded semantic as a distinct case — testing one variant of a multi-semantic field does not retire the field"
+      ]
+    },
+    {
+      "id": 9,
+      "eval_name": "external-sdk-inventory-guardrails",
+      "skill": "defect-class-preflight",
+      "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. You are ABOUT to author a new consumer of an external SDK surface: a helper that calls anthropic.Anthropic().messages.create(...) and reads response.content[0].text and response.usage.output_tokens. Do whatever pre-authoring review your discipline requires for an external surface, then deliver to your outputs directory: inventory.md — your pre-authoring analysis of the fields the helper reads, including how you established which SDK version you analyzed — and probe_disposition.md — what interface probe you ran, or why none was fired and what that means for your analysis. Constraints: write only in your outputs directory; no operator is available mid-eval — record what you would surface to one.",
+      "expected_output": "see assertions",
+      "files": [],
+      "assertions": [
+        "fires NO live messages.create call (paid and credential-gated): the disposition names the no-unilateral-paid-calls guardrail and routes the live probe to the operator gate rather than firing or fabricating it",
+        "the unprobed live-response shape is recorded as a NAMED gap in the analysis, not silently assumed",
+        "resolves the actually-installed SDK version and import path (e.g. anthropic.__file__ / __version__) before reading source — does not assume a repository .venv sight-unseen",
+        "inventories content[0]'s variants from the resolved source/docs — content is a list of typed blocks where index 0 need not be a text block and .text is not universal — rather than one assumed happy shape",
+        "treats any docs channel (context7 where available) as a supplement and completes the analysis without it — never a dependency, never a substitute for source or probe evidence"
       ]
     }
   ]
