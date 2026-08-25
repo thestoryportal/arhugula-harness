@@ -16,10 +16,12 @@ which consumes the §4/§8 constants declared below.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import secrets
 import socket
+import stat as stat_module
 import subprocess
 import sys
 import time
@@ -102,21 +104,53 @@ def _sidecar(token: str, name: str) -> Path:
     return DOOR / f"LEASE.{token}.{name}"
 
 
+def _read_regular(path: Path) -> str:
+    """Containment-safe read for door state files (merge-gate concurrency lens, PR #1454):
+    O_NOFOLLOW refuses a symlink AT THE OPEN (a stat-then-read pre-check leaves a swap
+    window) and O_NONBLOCK prevents an open()-on-FIFO hang; the post-open fstat refuses
+    any other non-regular file. The symlink refusal is converted to LeaseError so a
+    caller's corrupt-file except cannot read it as absence."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise LeaseError(
+                f"door file {path.name!r} is a symlink -- refused (containment)"
+            ) from exc
+        raise
+    try:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            raise LeaseError(
+                f"door file {path.name!r} is not a regular file -- refused (containment)"
+            )
+        chunks = []
+        while True:
+            b = os.read(fd, 65536)
+            if not b:
+                break
+            chunks.append(b)
+        return b"".join(chunks).decode()
+    finally:
+        os.close(fd)
+
+
 def read_lease() -> dict | None:
-    """The LEASE view: base payload + sidecars (attempted / blocked / refresh) merged in."""
+    """The LEASE view: base payload + sidecars (attempted / blocked / refresh) merged in.
+    All reads go through `_read_regular` -- containment failures raise, never read as
+    absence or corruption."""
     if not LEASE.exists():
         return None
     try:
-        lease = json.loads(LEASE.read_text())
-    except (OSError, json.JSONDecodeError):
+        lease = json.loads(_read_regular(LEASE))
+    except (json.JSONDecodeError, FileNotFoundError):
         return None
     tok = lease["lease_token"]
     att = _sidecar(tok, "attempted")
     if att.exists():
-        lease["merge_attempted_at"] = json.loads(att.read_text())["merge_attempted_at"]
+        lease["merge_attempted_at"] = json.loads(_read_regular(att))["merge_attempted_at"]
     blk = _sidecar(tok, "blocked")
     if blk.exists():
-        b = json.loads(blk.read_text())
+        b = json.loads(_read_regular(blk))
         lease.update(
             state="blocked",
             blocked_at_sha=b["blocked_at_sha"],
@@ -125,10 +159,10 @@ def read_lease() -> dict | None:
         )
     ref = _sidecar(tok, "refresh")
     if ref.exists():
-        lease["refresh"] = json.loads(ref.read_text())
+        lease["refresh"] = json.loads(_read_regular(ref))
         ratt = _sidecar(tok, "refresh.attempted")
         if ratt.exists():
-            lease["refresh"]["merge_attempted_at"] = json.loads(ratt.read_text())[
+            lease["refresh"]["merge_attempted_at"] = json.loads(_read_regular(ratt))[
                 "merge_attempted_at"
             ]
     if _sidecar(tok, "refresh.intent").exists():

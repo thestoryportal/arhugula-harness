@@ -750,6 +750,16 @@ def _lane_id() -> str:
 
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+#: The uv-fallback driver, module-level so the test suite EXECUTES the same string the
+#: dispatch passes to `uv run python -c` (merge-gate witness lens: an argv-shape test
+#: alone would let a typo in this string ship).
+_UV_DRIVER = (
+    "import json, sys; sys.path.insert(0, 'tools'); "
+    "import codex_context_guard as cg; "
+    "from pathlib import Path; "
+    "fs = cg._emitting_detections_safe(Path(sys.argv[1]), sys.argv[2]); "
+    "print(json.dumps([f.__dict__ for f in fs]))"
+)
 
 
 def _record_detection(payload: dict) -> str:
@@ -779,6 +789,10 @@ def _record_detection(payload: dict) -> str:
     # a symlinked or non-regular file at its path would let append_observations
     # write outside the repository and let an externally mutable target supply
     # adjudications -- and a linked worktree's root-checkout guard never sees it.
+    # This stat-based check is the EARLY, clear error; the ENFORCER is the record
+    # layer's own open (O_NOFOLLOW + O_NONBLOCK + post-open fstat in
+    # finding_record._under_log_lock -- merge-gate concurrency lens on this PR), so
+    # a swap in the stat-to-open window still fails at the syscall, never silently.
     log = fr.GATE_LOG_JSONL
     if log.is_symlink() or (log.exists() and not log.is_file()):
         raise RuntimeError(f"gate log {log} is not a regular file -- refused (containment)")
@@ -1140,10 +1154,12 @@ def _door_lease_strict() -> dict | None:
         raise RuntimeError("merge-door LEASE is a symlink -- refused (containment)")
     if md.LEASE.exists() and not md.LEASE.is_file():
         raise RuntimeError("merge-door LEASE is not a regular file -- refused (containment)")
-    # Containment BEFORE read_lease() (codex r9): read_lease itself follows and READS
-    # the sidecars, so a symlinked or non-regular (e.g. FIFO) blocked sidecar must be
-    # refused before anything opens it -- an open() on a FIFO hangs the guard. The
-    # glob needs no lease token, so no chicken-and-egg read of the payload.
+    # Early containment sweep (codex r9/r11) -- ADVISORY, for a clear pre-read
+    # error: the ENFORCER is read_lease's own `_read_regular` opens (O_NOFOLLOW +
+    # O_NONBLOCK + post-open fstat, added for the merge-gate concurrency lens on
+    # this PR), so a symlink or FIFO swapped in AFTER this sweep still refuses at
+    # the syscall instead of hanging or feeding forged state. The glob needs no
+    # lease token, so no chicken-and-egg read of the payload.
     if md.DOOR.is_dir():
         # ALL sidecars, not only *.blocked (codex r11): read_lease also opens
         # attempted / refresh / refresh.attempted / refresh.intent.
@@ -1284,15 +1300,8 @@ def _emitting_detections_dispatch(root: Path, lane: str) -> list[Finding]:
     would leave the gate green on UNLOOKED."""
     if _record_layer_importable():
         return _emitting_detections_safe(root, lane)
-    driver = (
-        "import json, sys; sys.path.insert(0, 'tools'); "
-        "import codex_context_guard as cg; "
-        "from pathlib import Path; "
-        "fs = cg._emitting_detections_safe(Path(sys.argv[1]), sys.argv[2]); "
-        "print(json.dumps([f.__dict__ for f in fs]))"
-    )
     proc = _run(
-        ["uv", "run", "python", "-c", driver, str(root), lane],
+        ["uv", "run", "python", "-c", _UV_DRIVER, str(root), lane],
         cwd=_REPO_ROOT,
         timeout=300,
     )
@@ -1371,17 +1380,18 @@ def validate(
                 # suite ran, so rows just appended are not in status_entries -- say
                 # so now rather than letting the next run discover its own
                 # predecessor's write as a hard isolation failure.
-                # HARD (codex r11): this run created exactly the state the next
-                # run hard-fails as ROOT_CHECKOUT_EDIT -- exiting 0 here would
-                # silently dirty the shared checkout and defer the red to a run
-                # that did not cause it.
+                # HARD (codex r11): the run that observes the append goes red
+                # itself instead of deferring the red to a successor run. The
+                # message states the observed fact, not causal attribution -- a
+                # concurrent guard run's append is disclosed identically
+                # (merge-gate concurrency lens P3).
                 findings.append(
                     Finding(
                         "hard",
                         "GATE_LOG_PENDING_COMMIT",
-                        "detections appended durable rows to the tracked gate log in "
-                        "this root checkout; commit them (the next arc's ship or a "
-                        "direct commit) before the next guard run.",
+                        "durable detection rows were appended to the tracked gate "
+                        "log during this run; commit them (the next arc's ship or "
+                        "a direct commit) before the next guard run.",
                     )
                 )
 

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import stat as stat_module
 import sys
 import time
 from collections.abc import Callable
@@ -307,9 +308,20 @@ def _lock_exclusive(fd: int, path: Path, timeout_s: float = LOCK_TIMEOUT_S) -> N
 
 
 def _under_log_lock(path: Path, body) -> None:
-    """Open the log O_APPEND, hold its exclusive lock across `body(fd)`, release, close."""
+    """Open the log O_APPEND, hold its exclusive lock across `body(fd)`, release, close.
+
+    The open itself is the containment enforcement point (merge-gate concurrency lens on
+    PR #1454): the log is a suppression authority for the U-HE-33 detections, so a
+    symlink or FIFO swapped in between any caller's pre-check and this open must fail at
+    THIS syscall -- O_NOFOLLOW refuses the symlink (ELOOP) and O_NONBLOCK prevents an
+    open()-on-FIFO from hanging; the post-open fstat then refuses any non-regular file
+    the flags let through. A stat-then-open pre-check alone leaves a swap window."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open(path, flags, 0o644)
+    if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise RecordError(f"gate log {path} is not a regular file -- refused (containment)")
     try:
         _lock_exclusive(fd, path)
         try:

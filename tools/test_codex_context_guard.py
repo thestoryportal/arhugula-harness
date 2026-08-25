@@ -1882,3 +1882,179 @@ def test_blocked_lease_age_arithmetic_uses_real_bounds(monkeypatch) -> None:
     recent = (datetime.now(UTC) - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     monkeypatch.setattr(cg, "_door_lease_strict", lambda: lease_at(recent))
     assert cg._blocked_lease_older_than_bound() is None  # within the bound
+
+
+# --- merge-gate round-1 absorption (PR #1454) --------------------------------
+
+
+def test_gate_log_pending_commit_fires_only_on_actual_append(tmp_path, monkeypatch) -> None:
+    """Merge-gate witness P1: the disclosure block itself, witnessed both ways -- log
+    growth during the suite -> hard GATE_LOG_PENDING_COMMIT; no growth -> absent."""
+    log = tmp_path / "merge-gate-log.jsonl"
+    monkeypatch.setattr(cg, "_gate_log_path", lambda root: log)
+
+    def grow(root, lane):
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write('{"row":"x"}\n')
+        return [cg.Finding("warn", "ORPHANED_RESERVATION", "[l] ev")]
+
+    monkeypatch.setattr(cg, "_emitting_detections_dispatch", grow)
+    findings = cg.validate(_state(branch="main"), mode="check")
+    pending = [f for f in findings if f.code == "GATE_LOG_PENDING_COMMIT"]
+    assert len(pending) == 1 and pending[0].severity == "hard"
+
+    monkeypatch.setattr(
+        cg,
+        "_emitting_detections_dispatch",
+        lambda root, lane: [cg.Finding("info", "BASE_TOCTOU_UNATTRIBUTED", "[l] ev")],
+    )
+    findings = cg.validate(_state(branch="main"), mode="check")
+    assert not any(f.code == "GATE_LOG_PENDING_COMMIT" for f in findings)
+
+
+def test_recall_requires_finding_kind_not_just_lineage_shape(tmp_path, monkeypatch) -> None:
+    """Merge-gate witness P2: the discriminating fixture for the record_kind=='finding'
+    filter -- TWO bare forged adjudications sharing one id (T2 > T1, core-equal, both
+    schema-valid). Current code: no suppression (no finding row). With the kind filter
+    deleted, the T1 row becomes a recall candidate and the T2 adjudication suppresses."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    evidence = (
+        f"merge {'m' * 12} first parent {'b' * 12} != verified base {'c' * 12} -- "
+        "race window hit; re-validate"
+    )
+    base = {
+        "finding_id": f"BASE_TOCTOU:nohead:{fr.location_hash('merge-' + 'm' * 12)}:1",
+        "record_kind": "finding_adjudication",
+        "arc_id": "merge-" + "m" * 12,
+        "lane_id": "l",
+        "location": "merge-" + "m" * 12,
+        "observed_evidence": evidence,
+        "expected_contract": "C-HE-12",
+        "severity": "hard",
+        "finding_type": "terminal-base_toctou",
+        "lineage_claim": "guard",
+        "producer": "BASE_TOCTOU",
+        "head_sha": None,
+        "base_sha": None,
+        "diff_digest": None,
+        "round_n": None,
+        "cause_attribution": "base_toctou",
+        "disposition": "suppressed",
+        "disposition_actor": "operator",
+        "unique_catch": None,
+    }
+    with log.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({**base, "ts": "2098-01-01T00:00:00Z"}) + "\n")
+        fh.write(json.dumps({**base, "ts": "2099-01-01T00:00:00Z"}) + "\n")
+
+    fs = cg.check_base_toctou([("m" * 40, "b" * 40, "c" * 40)], lane_id="l")
+
+    assert [f.code for f in fs] == ["BASE_TOCTOU"]  # no finding-kind lineage: no recall
+
+
+def test_rejected_disposition_recalls(tmp_path, monkeypatch) -> None:
+    """Merge-gate witness P2: `rejected` (false positive) recalls, not only
+    `suppressed` -- a mutation narrowing the tuple would slip every other test."""
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    mismatch = [("m" * 40, "b" * 40, "c" * 40)]
+
+    assert [f.code for f in cg.check_base_toctou(mismatch, lane_id="l")] == ["BASE_TOCTOU"]
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    _adjudicate(rows[0], "rejected")
+
+    assert cg.check_base_toctou(mismatch, lane_id="l") == []
+
+
+def test_symlinked_attempted_sidecar_refused(tmp_path, monkeypatch) -> None:
+    """Merge-gate witness P2: the containment covers non-.blocked sidecars too (the
+    code globs LEASE.*) -- a narrowing regression to *.blocked would slip the
+    .blocked-only test."""
+    import merge_door as md
+
+    door = tmp_path / "door"
+    door.mkdir()
+    lease_file = door / "LEASE"
+    lease_file.write_text(json.dumps({"lease_token": "tok", "state": "held"}), encoding="utf-8")
+    forged = door / "forged.json"
+    forged.write_text(json.dumps({"merge_attempted_at": "2099-01-01T00:00:00Z"}), encoding="utf-8")
+    (door / "LEASE.tok.attempted").symlink_to(forged)
+    monkeypatch.setattr(md, "DOOR", door)
+    monkeypatch.setattr(md, "LEASE", lease_file)
+
+    try:
+        cg._door_lease_strict()
+    except RuntimeError as exc:
+        assert "sidecar" in str(exc)
+    else:
+        raise AssertionError("a symlinked attempted sidecar must refuse")
+
+
+def test_uv_driver_string_actually_executes(tmp_path, monkeypatch) -> None:
+    """Merge-gate witness P2: EXECUTE the exact driver string the dispatch passes to
+    `uv run python -c` (same interpreter class via sys.executable) against a real tmp
+    git repo, proving the string's imports, argv indexing, and JSON shape end-to-end."""
+    repo = _init_repo(tmp_path)
+    env = dict(**__import__("os").environ)
+    env["HARNESS_GATE_LOG"] = str(tmp_path / "child-gate-log.jsonl")
+    proc = subprocess.run(
+        [sys.executable, "-c", cg._UV_DRIVER, str(repo), "driver-test-lane"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=cg._REPO_ROOT,
+        env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    parsed = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert isinstance(parsed, list)
+    for d in parsed:
+        assert set(d) == {"severity", "code", "message"}
+
+
+def test_gate_log_open_site_refuses_symlink_and_fifo(tmp_path, monkeypatch) -> None:
+    """Merge-gate concurrency P2: the record layer's OWN open is the containment
+    enforcer -- a symlinked log refuses (ELOOP under O_NOFOLLOW) and a FIFO refuses
+    via the post-open fstat instead of hanging."""
+    import os as os_module
+
+    target = tmp_path / "target.jsonl"
+    target.write_text("", encoding="utf-8")
+    link = tmp_path / "log-link.jsonl"
+    link.symlink_to(target)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", link)
+    try:
+        fr._under_log_lock(link, lambda fd: None)
+    except OSError:
+        pass
+    else:
+        raise AssertionError("a symlinked gate log must refuse at the open")
+
+    fifo = tmp_path / "log-fifo.jsonl"
+    os_module.mkfifo(fifo)
+    try:
+        fr._under_log_lock(fifo, lambda fd: None)
+    except fr.RecordError as exc:  # post-open fstat refusal (Linux O_WRONLY|O_NONBLOCK opens)
+        assert "not a regular file" in str(exc)
+    except OSError:  # macOS refuses a reader-less FIFO at the open itself (ENXIO) -- also loud
+        pass
+    else:
+        raise AssertionError("a FIFO gate log must refuse, not hang")
+
+
+def test_read_lease_open_site_refuses_fifo_lease(tmp_path, monkeypatch) -> None:
+    """Merge-gate concurrency P2: read_lease's own read is the enforcer -- a FIFO at
+    LEASE refuses via LeaseError instead of hanging, even with no pre-check run."""
+    import os as os_module
+
+    import merge_door as md
+
+    fifo = tmp_path / "LEASE"
+    os_module.mkfifo(fifo)
+    monkeypatch.setattr(md, "LEASE", fifo)
+
+    try:
+        md.read_lease()
+    except md.LeaseError as exc:
+        assert "not a regular file" in str(exc)
+    else:
+        raise AssertionError("a FIFO LEASE must refuse at the read, not hang")
