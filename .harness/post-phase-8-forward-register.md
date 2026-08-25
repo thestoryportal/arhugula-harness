@@ -2482,4 +2482,4 @@ same spec leg.
 - **What it is.** Treated-cohort marker for the `register-pr-prose` authoring discipline. Declared when the arc's PR body, register rows and close_outs were written under the skill's six binding rules; its target class is prose findings (145 of 1,084 at the 2026-08-24 distillation).
 - **Current state.** OPEN as a measurement lever: one treated arc (pr-1447, zero prose-located findings); not separable from B-211 until a treated arc declares only one of the two ids.
 - **First treated arc.** pr-1447: zero prose-located findings across 2 codex + 2 lens rounds.
-- **Evaluation.** Same instrument and bar as B-211; the prose-specific signal is prose-located reviewer findings per arc.
+- **Evaluation.** Same instrument and bar as B-211, on the shared review-round / P1 cohort medians. The prose-specific signal (prose-located reviewer findings per arc) is a NAMED RESIDUAL: the gate log keys findings by reservation arc_id, the metrics ledger by pr-N, and no committed join key exists — the instrument says so rather than fabricating the split (codex r1 on the report tool).

@@ -1,8 +1,9 @@
 """Witnesses for the lever cohort report (B-211/B-212 observability).
 
-The load-bearing property is FAIL-CLOSED bucketing: an unmapped row must never
-enter a median, an other-lever row must never contaminate either cohort, and a
-malformed ledger line must abort loudly rather than shrink the data silently.
+The load-bearing property is FAIL-CLOSED bucketing: an unmapped or partial row
+must never enter a median, an other-lever row must never contaminate either
+cohort, arc types must never pool into one median, and a malformed ledger line
+must abort loudly rather than shrink the data silently.
 """
 
 from __future__ import annotations
@@ -23,99 +24,84 @@ def _write(ledger: Path, rows: list[dict]) -> Path:
     return ledger
 
 
+def _row(arc_id: str, rounds, levers: list[str], **kw) -> dict:
+    return {
+        "arc_id": arc_id,
+        "arc_type": kw.get("arc_type", "applying"),
+        "review_rounds": rounds,
+        "p1_rounds": kw.get("p1", []),
+        "arc_span_s": kw.get("span", 3600.0),
+        "levers_active": levers,
+        "round_completeness": kw.get("completeness", "complete"),
+    }
+
+
 ROWS = [
-    {
-        "arc_id": "pr-1",
-        "arc_type": "applying",
-        "review_rounds": 10,
-        "p1_rounds": [2],
-        "arc_span_s": 7200.0,
-        "levers_active": [],
-    },
-    {
-        "arc_id": "pr-2",
-        "arc_type": "applying",
-        "review_rounds": 22,
-        "p1_rounds": [1, 2, 3],
-        "arc_span_s": 36000.0,
-        "levers_active": [],
-    },
-    {
-        "arc_id": "pr-3",
-        "arc_type": "applying",
-        "review_rounds": 2,
-        "p1_rounds": [],
-        "arc_span_s": 3600.0,
-        "levers_active": ["B-211", "B-212"],
-    },
-    {
-        "arc_id": "pr-4",
-        "arc_type": "applying",
-        "review_rounds": None,
-        "p1_rounds": None,
-        "arc_span_s": None,
-        "levers_active": ["B-211", "B-212"],
-    },
-    {
-        "arc_id": "pr-5",
-        "arc_type": "applying",
-        "review_rounds": 7,
-        "p1_rounds": [],
-        "arc_span_s": 7200.0,
-        "levers_active": ["B-171"],
-    },
+    _row("pr-1", 10, [], p1=[2], span=7200.0),
+    _row("pr-2", 22, [], p1=[1, 2, 3], span=36000.0),
+    _row("pr-3", 2, ["B-211", "B-212"]),
+    _row("pr-4", None, ["B-211", "B-212"], span=None),
+    _row("pr-5", 7, ["B-171"], span=7200.0),
+    _row("pr-6", 7, [], completeness="partial-suffix"),
 ]
 
 
-def _summary(tmp_path: Path, rows: list[dict], **kw) -> dict:
+def _summary(tmp_path: Path, rows: list[dict], levers=("B-211", "B-212")) -> dict:
     ledger = _write(tmp_path / "ledger.jsonl", rows)
-    cohorts = alr.split_cohorts(
-        alr.load_rows(ledger), kw.get("levers", ("B-211", "B-212")), kw.get("arc_type")
-    )
-    return alr.summarize(cohorts, kw.get("levers", ("B-211", "B-212")))
+    return alr.summarize(alr.split_cohorts(alr.load_rows(ledger), levers), levers)
 
 
 # mutation-probe(tools/arc_lever_report.py): treat review_rounds=None rows as measured
 def test_unmapped_rows_are_excluded_from_medians_and_listed(tmp_path: Path) -> None:
     """B-170: an honest null is not a measurement; it must be visible, never averaged."""
-    s = _summary(tmp_path, ROWS)
+    s = _summary(tmp_path, ROWS)["arc_types"]["applying"]
     assert s["excluded_unmapped"] == ["pr-4"]
     assert s["cohort_sizes"]["treated"] == 1, "the unmapped treated row must not count"
     assert s["treated_median_rounds"] == 2
 
 
+# mutation-probe(tools/arc_lever_report.py): let non-complete rounds into the medians
+def test_partial_round_data_is_excluded_from_medians_and_listed(tmp_path: Path) -> None:
+    """A partial suffix is a lower bound with an unknown P1 count — never a score."""
+    s = _summary(tmp_path, ROWS)["arc_types"]["applying"]
+    assert s["excluded_partial"] == ["pr-6"]
+    assert s["baseline_median"]["review_rounds"] == 16.0, "pr-6 must not shift the median"
+
+
 # mutation-probe(tools/arc_lever_report.py): put other-lever rows in the baseline bucket
 def test_other_lever_rows_contaminate_neither_cohort(tmp_path: Path) -> None:
     """A row treated by a DIFFERENT lever is neither baseline nor this treated set."""
-    s = _summary(tmp_path, ROWS)
+    s = _summary(tmp_path, ROWS)["arc_types"]["applying"]
     assert s["excluded_other_levers"] == ["pr-5"]
     assert s["baseline_median"]["review_rounds"] == 16.0, "baseline is pr-1/pr-2 only"
 
 
 # mutation-probe(tools/arc_lever_report.py): drop the delta computation
 def test_delta_is_against_the_baseline_median(tmp_path: Path) -> None:
-    s = _summary(tmp_path, ROWS)
+    s = _summary(tmp_path, ROWS)["arc_types"]["applying"]
     (treated,) = s["treated_arcs"]
     assert treated["delta_rounds_vs_baseline_median"] == -14.0
 
 
-# mutation-probe(tools/arc_lever_report.py): report per_skill_separable as always True
-def test_per_skill_separation_requires_divergent_lever_sets(tmp_path: Path) -> None:
-    """Identical treated lever sets cannot attribute an effect to one skill."""
-    s = _summary(tmp_path, ROWS)
-    assert s["per_skill_separable"] is False
-    diverged = [
-        *ROWS,
-        {
-            "arc_id": "pr-6",
-            "arc_type": "applying",
-            "review_rounds": 3,
-            "p1_rounds": [],
-            "arc_span_s": 3600.0,
-            "levers_active": ["B-211"],
-        },
-    ]
-    assert _summary(tmp_path, diverged)["per_skill_separable"] is True
+# mutation-probe(tools/arc_lever_report.py): judge separability on whole lever lists
+def test_per_skill_separation_ignores_non_target_levers(tmp_path: Path) -> None:
+    """A stray extra lever on an identical target pattern is NOT separation."""
+    contaminated = [*ROWS, _row("pr-7", 3, ["B-211", "B-212", "B-999"])]
+    s = _summary(tmp_path, contaminated)["arc_types"]["applying"]
+    assert s["per_skill_separable"] is False, "target patterns are identical"
+    diverged = [*contaminated, _row("pr-8", 3, ["B-211"])]
+    s2 = _summary(tmp_path, diverged)["arc_types"]["applying"]
+    assert s2["per_skill_separable"] is True
+
+
+# mutation-probe(tools/arc_lever_report.py): pool arc types into one summary
+def test_arc_types_are_reported_separately_never_pooled(tmp_path: Path) -> None:
+    """Mixing inventing and applying compares arcs that were never comparable."""
+    mixed = [*ROWS, _row("pr-9", 19, [], arc_type="inventing", p1=[1])]
+    s = _summary(tmp_path, mixed)
+    assert set(s["arc_types"]) == {"applying", "inventing"}
+    assert s["arc_types"]["applying"]["baseline_median"]["review_rounds"] == 16.0
+    assert s["arc_types"]["inventing"]["baseline_median"]["review_rounds"] == 19
 
 
 # mutation-probe(tools/arc_lever_report.py): skip malformed ledger lines instead of aborting
@@ -131,27 +117,22 @@ def test_a_missing_ledger_aborts_loudly(tmp_path: Path) -> None:
         alr.load_rows(tmp_path / "absent.jsonl")
 
 
-# mutation-probe(tools/arc_lever_report.py): ignore the arc_type filter
-def test_arc_type_filter_excludes_other_types(tmp_path: Path) -> None:
-    mixed = [
-        *ROWS,
-        {
-            "arc_id": "pr-7",
-            "arc_type": "inventing",
-            "review_rounds": 19,
-            "p1_rounds": [1],
-            "arc_span_s": 3600.0,
-            "levers_active": [],
-        },
-    ]
-    s = _summary(tmp_path, mixed, arc_type="applying")
-    assert s["baseline_median"]["review_rounds"] == 16.0, "the inventing row must not shift it"
+# mutation-probe(tools/arc_lever_report.py): ignore the --arc-type restriction in main
+def test_cli_arc_type_flag_restricts_to_one_type(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mixed = [*ROWS, _row("pr-9", 19, [], arc_type="inventing", p1=[1])]
+    ledger = _write(tmp_path / "ledger.jsonl", mixed)
+    assert alr.main(["--ledger", str(ledger), "--arc-type", "applying", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert set(out["arc_types"]) == {"applying"}
 
 
 def test_cli_renders_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     ledger = _write(tmp_path / "ledger.jsonl", ROWS)
     assert alr.main(["--ledger", str(ledger)]) == 0
     out = capsys.readouterr().out
-    assert "1 treated / 2 baseline" in out
+    assert "[applying] 1 treated / 2 baseline" in out
     assert "NOT separable" in out
     assert "pr-4" in out, "the excluded unmapped arc must be visible in the human view"
+    assert "pr-6" in out, "the excluded partial arc must be visible in the human view"

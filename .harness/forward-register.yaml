@@ -10660,11 +10660,15 @@ items:
   summary: 'Cohort lever, not a defect. Arcs whose PR bodies, register rows and close_outs
     were authored under the register-pr-prose skill (shipped at PR #1445) declare this id
     in levers_active. The skill targets the prose defect class (145 of 1,084 findings at
-    the 2026-08-24 distillation); its cohort signal is prose-located reviewer findings per
-    arc. First treated arc: pr-1447 (zero prose findings across 2 codex + 2 lens rounds).'
-  close_out: 'OPEN — evaluate after >=5 treated arcs via tools/arc_lever_report.py; keep
-    if treated arcs show fewer prose-class findings than baseline, retire if
-    indistinguishable. Declared only when the skill''s six rules were actually applied to
-    the arc''s durable prose.'
+    the 2026-08-24 distillation). NAMED RESIDUAL (codex r1 on the report tool): the
+    prose-located-findings-per-arc signal is not computable today — the gate log keys
+    findings by reservation arc_id and the metrics ledger by pr-N, with no committed join
+    key — so until one exists the computable cohort signal is the shared review-round /
+    P1 medians. First treated arc: pr-1447 (zero prose findings across 2 codex + 2 lens
+    rounds, read manually from the gate log).'
+  close_out: 'OPEN — evaluate after >=5 treated arcs via tools/arc_lever_report.py on the
+    shared review-round / P1 cohort medians (the prose-findings split stays a named
+    residual until a pr-to-gate-log join key is committed). Declared only when the
+    skill''s six rules were actually applied to the arc''s durable prose.'
   council: 'NO — measurement bookkeeping; no cross-axis tension.'
   heading: '### B-212 · Lever id: register-pr-prose treated cohort *(minted 2026-08-24; OPEN)*'
