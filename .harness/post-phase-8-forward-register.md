@@ -2458,12 +2458,34 @@ same spec leg.
 
 - **Deliberately not done.** The 6288 rows already in the ledger are not removed. It is append-only by contract and is operator state outside this repo, so truncating it is the operator's call, not this arc's; the pending synthetic gate was cleared the contract-sanctioned way, with a `RESOLVED-HIL` row.
 
-### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*
+### B-209 · the B-208 session belt shadows the production-default probe *(surfaced by codex round 3 on PR #1445, 2026-08-24; CLOSED at #1447)*
 
 - **What it is.** `tools/conftest.py` installs `ARC_METRICS_QUEUE_DIR` at `pytest_configure`, before collection imports `arc_metrics`, so the module-level `QUEUE_DIR` always resolves the temporary belt. `tools/test_arc_metrics.py::test_queue_lives_outside_the_repo` therefore no longer exercises the UNSET production default: a regression moving the fallback to a repo-resident path stays green because the environment value wins.
 - **Closure shape.** Test the default in an isolated import — a child process with the variable stripped, the same idiom the isolation module already uses for process-boundary claims.
+- **Closed.** PR #1447 (2026-08-24): `test_queue_lives_outside_the_repo` rewritten exactly to that shape — child interpreter, both queue variables stripped, default asserted outside the repo — and probe-verified (a repo-resident default reds it).
 
-### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; REGISTERED)*
+### B-210 · production_queue_dir() lacks a callsite pin at the Docker lane test *(surfaced by codex round 3 on PR #1445, 2026-08-24; CLOSED at #1447)*
 
 - **What it is.** Case 7d proves `production_queue_dir()` never returns the belt, but no witness proves `test_two_lanes_disjoint_names_and_ports` still resolves its `lanes_dir` THROUGH that helper. Reverting `test_compose_lanes.py` to the ambient `ARC_METRICS_QUEUE_DIR` lookup leaves 7d green while the Docker test's collision claims go back to the throwaway registry — and the docker test is skipif-gated, so CI cannot see the regression.
 - **Closure shape.** Pin the callsite with a source-shape witness on the `lanes_dir` assignment, or factor claim-path selection into directly tested code.
+- **Closed.** PR #1447 (2026-08-24): closed by the second shape — claim-path selection factored into `claim_production_lane_indices()`, hermetically witnessed without a daemon; the lens round hardened the taken-index witness at `562fd965f`.
+
+### B-211 · Lever id: defect-class-preflight treated cohort *(minted 2026-08-24; OPEN)*
+
+- **What it is.** Not a defect — a treated-cohort marker. An arc that ran the `defect-class-preflight` sweep on its diffs before each commit declares `B-211` in its arc-metrics `levers_active`, so cohort splits can price the skill against the untreated baseline on review rounds and P1 rounds (per-arc reviewer-finding counts share B-212's named residual — no committed pr-to-gate-log join key).
+- **Current state.** OPEN as a measurement lever: one treated arc (pr-1447) is in the committed ledger; the n>=5 same-arc_type evaluation bar is not yet reached, so no keep/retire judgment exists. NAMED RESIDUAL (codex r3, corrected r9): the drain DOES join the reservation's open-time declaration (`_fold_head_onto`, tools/arc_metrics.py — the C-HE-26 §1 fold), but the join keys on the reservation arc_id, so a queue entry captured without `--arc-id` (as pr-1447 was) folds close-declared, and 12 committed rows are untyped legacy. Until rows exist that were queued with their reservation arc_id, typed cohorts render contaminated and the evaluation cannot use uncontaminated type discrimination. Practice: always `just arc-metrics queue --arc-id <reservation-arc-id> --pr N ...`.
+- **First treated arc.** pr-1447: 2 codex rounds with 0 codex findings and 1 merge-gate lens finding (at `562fd965f`), beside the close-declared applying row pr-1434 (22 rounds) — a STRICTLY DESCRIPTIVE comparison, unusable for the lever decision: both rows are close-declared and that cohort is non-evaluable under C-HE-26. Mixed-type ranges are not quoted here: the evaluation contract is same-arc_type.
+- **Evaluation.** `tools/arc_lever_report.py` (the `/arc-lever-report` skill) after ≥5 evaluable arcs of the same exact lever pattern (or a clean matched contrast) within one arc_type; retire the id if treated and baseline are indistinguishable.
+
+### B-212 · Lever id: register-pr-prose treated cohort *(minted 2026-08-24; OPEN)*
+
+- **What it is.** Treated-cohort marker for the `register-pr-prose` authoring discipline. Declared when the arc's PR body, register rows and close_outs were written under the skill's six binding rules; its target class is prose findings (145 of 1,084 at the 2026-08-24 distillation).
+- **Current state.** OPEN as a measurement lever: one treated arc (pr-1447, zero prose-located findings); not separable from B-211 until a treated arc declares only one of the two ids.
+- **First treated arc.** pr-1447: zero prose-located findings across 2 codex + 2 lens rounds.
+- **Evaluation.** Same instrument and bar as B-211, on the shared review-round / P1 cohort medians. The prose-specific signal (prose-located reviewer findings per arc) is a NAMED RESIDUAL: the gate log keys findings by reservation arc_id, the metrics ledger by pr-N, and no committed join key exists — the instrument says so rather than fabricating the split (codex r1 on the report tool).
+
+### B-213 · /arc-lever-report is guard-denied in loop mode *(surfaced by codex r11 on the lever-observability arc, 2026-08-25; REGISTERED)*
+
+- **What it is.** The new read-only cohort report cannot run in autonomous (loop-mode) sessions: no allowlist case matches its invocation, so the guard's ask becomes a headless denial. Loud and fail-closed — nothing is misreported; interactive sessions are unaffected.
+- **Current state.** OPEN. Registered instead of fix-looped at codex r11 because permission-guard edits are the workspace's highest-blast-radius shared-surface class and take their own reviewed arc (the U-HE-25 exact-shape precedent).
+- **Closure shape.** An argument-safe allowlist case in `tools/hooks/permission-guard.sh` for the report's invocation plus a witness in the guard's shell suite.

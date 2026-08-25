@@ -238,6 +238,15 @@ roadmap-status-check:
 arc-metrics *ARGS:
     uv run python tools/arc_metrics.py "$@"
 
+# ─── arc LEVER REPORT — skill-lever cohorts vs untreated baseline (B-211/B-212) ─────
+# Read-only observability: treated arcs (levers_active declares a target lever id)
+# against the empty-lever baseline, medians + per-arc deltas. Reading rules live at
+# .claude/skills/arc-lever-report/SKILL.md — a bare number dump is not a report.
+#   just arc-lever-report --arc-type applying
+#   just arc-lever-report --json
+arc-lever-report *ARGS:
+    uv run python tools/arc_lever_report.py "$@"
+
 # ─── arc EXIT REPORT — machine-readable arc-closure record (U-WT-03) ────────
 # Run as the FINAL ship-pr step, AFTER the reflect / context-save block: only there do
 # the merge SHA, post-merge main-CI conclusion, terminating-refresh commit and the
