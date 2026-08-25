@@ -675,3 +675,7 @@ B-206) rather than unaddressed defects.
 | 2026-08-25T12:57:26Z | #1454 | c78dacd0efdf | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |
 | 2026-08-25T13:23:12Z | #1454 | ef396c3cf765 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r4 |
 | 2026-08-25T13:23:13Z | #1454 | ef396c3cf765 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r4 |
+| 2026-08-25T13:33:55Z | #1454 | c652da3f9587 | merge-gate-concurrency | APPROVE | 0 finding(s) | r4 |
+| 2026-08-25T13:33:56Z | #1454 | c652da3f9587 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r5 |
+| 2026-08-25T13:33:56Z | #1454 | c652da3f9587 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r5 |
+| 2026-08-25 | PR #1454 | feat/u-he-33-emitting-detections | 6 gate rounds: r1 conc-BLOCK/spec-APPROVE/wit-BLOCK; r2 conc-APPROVE/spec-BLOCK/wit-BLOCK; r3 spec-APPROVE/conc-BLOCK/wit-BLOCK; r4 spec-BLOCK/wit-APPROVE/conc-superseded; r5 all-BLOCK (missing-wrap tree state; verdicts unrecorded, files overwritten by r6); r6 ALL-APPROVE | outcome: MERGE | blast-radius: 10 production consumers enumerated (graft + grep; validate-name ambiguous in graph, floor not ceiling) |
