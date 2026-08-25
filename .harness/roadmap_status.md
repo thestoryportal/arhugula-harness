@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `22450e31905f` |
+| `workspace_state_hash` | `43a28702d1d8` |
 | `last_refreshed` | 2026-08-25T00:00:00Z |
-| `git_head` | `c8b58f09` —  |
+| `git_head` | `c6811ffa` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1450).** The consumer-pattern-inventory amendment + locked-local context7 MCP landed at #1450, so the operator hold's precondition is met: RESUME the HELD arc on branch feat/lever-observability per the resume protocol at checkpoint 20260824-182500-lever-observability-held.md — re-enter the branch (9 commits through the r12 record; reservation lever-observability pending, lane d56be5f6), apply the new-consumer inventory pause retroactively as the resume's first act, read round 12's recorded verdict in .harness/merge-gate-log.jsonl (bound to head 89d94b643), run ONE codex round with the new machinery active and compare its findings profile against rounds 1-11 (that comparison is the features' live test), then the LEAN witness-adequacy lens and the merge door; queue arc metrics with --arc-id lever-observability and levers B-211+B-212 iff the skills genuinely ran. After that the next implementable unit is `U-HE-33` (S4d detections per C-HE-12).
+**Current next action (post-#1452).** The HELD lever-observability arc resumed and landed at #1452: 13 codex rounds total (r12 absorbed at resume under the retroactive new-consumer inventory pass; r13 was the single post-machinery live-test round — 2 findings, zero new producer-contract discoveries on the pre-existing surface, one strict-boundary hardening of r12's own fix), LEAN witness-adequacy merge-gate lens per the operator's resume protocol, arc metrics queued with levers B-211+B-212 (both skills genuinely ran at resume). B-213 (loop-guard allowlist case for the report invocation, incl. a permission-guard witness) stays its own registered arc. The queued metrics rows (this arc plus the held backlog, incl. pr-1424's bad round-log glob needing its glob fixed) drain inside the NEXT arc's PR; then the next implementable unit is `U-HE-33` (S4d detections per C-HE-12).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1452 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1450 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1448 | 2026-08-25 | operator hold at cap gate: lever-observability parked; next build = consumer-pattern-inventory skill + context7 |
 | PR #1447 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1445 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1443 | 2026-08-24 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
