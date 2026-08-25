@@ -271,6 +271,21 @@ MANIFEST: list[Row] = [
         False,
         ("docker-daemon-absent",),
     ),
+    # C-HE-12 (U-HE-33): emitting detections — split-brain ledger + base TOCTOU
+    Row(
+        "C-HE-12",
+        "pytest:tools/test_codex_context_guard.py::test_split_brain_ledger_duplicate_arc_id",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    Row(
+        "C-HE-12",
+        "pytest:tools/test_codex_context_guard.py::test_base_toctou",
+        "phase0",
+        "local + CI",
+        False,
+    ),
     # C-HE-15/16/18 (U-HE-02/03/04); C-HE-17 (U-HE-06/07)
     Row("C-HE-15/16/18", "pytest:tools/test_review_wrapper.py", "phase0", "local + CI", True),
     Row(

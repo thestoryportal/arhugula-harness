@@ -1141,3 +1141,124 @@ def test_unavailable_open_prs_are_explicit_warning() -> None:
     findings = cg.validate(state, mode="preflight")
 
     assert any(f.code == "OPEN_PRS_UNAVAILABLE" and f.severity == "warn" for f in findings)
+
+
+# --- U-HE-33: emitting detections (C-HE-12) ---------------------------------
+
+import finding_record as fr  # noqa: E402  -- shares the tools/ sys.path insert above
+
+
+def _isolate_gate_log(monkeypatch, tmp_path: Path) -> Path:
+    """Redirect the C-HE-24 record so detection tests never write the tracked log."""
+    log = tmp_path / "merge-gate-log.jsonl"
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
+    return log
+
+
+def test_split_brain_ledger_duplicate_arc_id(tmp_path, monkeypatch) -> None:
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+    ledger = tmp_path / "arc-metrics.jsonl"
+    ledger.write_text(
+        '{"arc_id":"pr-1","record_kind":"arc"}\n{"arc_id":"pr-1","record_kind":"arc"}\n'
+    )
+
+    fs = cg.check_split_brain(ledger, lane_id="lane-x")
+
+    assert [f.code for f in fs] == ["SPLIT_BRAIN_LEDGER"]
+    assert fs[0].severity == "hard"
+    assert "lane-x" in fs[0].message
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [r["producer"] for r in rows] == ["SPLIT_BRAIN_LEDGER"]
+    assert rows[0]["lane_id"] == "lane-x"
+    assert rows[0]["arc_id"] == "pr-1"
+    assert rows[0]["record_kind"] == "finding"
+
+
+def test_split_brain_ignores_non_arc_rows_and_clean(tmp_path, monkeypatch) -> None:
+    _isolate_gate_log(monkeypatch, tmp_path)
+    ledger = tmp_path / "arc-metrics.jsonl"
+    ledger.write_text(
+        '{"arc_id":"pr-1","record_kind":"arc"}\n{"arc_id":"pr-1","record_kind":"round"}\n'
+    )
+
+    assert cg.check_split_brain(ledger, lane_id="l") == []
+    assert cg.check_split_brain(tmp_path / "absent.jsonl", lane_id="l") == []
+
+
+def test_base_toctou(tmp_path, monkeypatch) -> None:
+    log = _isolate_gate_log(monkeypatch, tmp_path)
+
+    fs = cg.check_base_toctou([("m" * 40, "b" * 40, "c" * 40)], lane_id="l")
+
+    assert [f.code for f in fs] == ["BASE_TOCTOU"]
+    assert fs[0].severity == "hard"
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert [r["producer"] for r in rows] == ["BASE_TOCTOU"]
+    assert cg.check_base_toctou([("m" * 40, "b" * 40, "b" * 40)], lane_id="l") == []
+
+
+def test_orphaned_reservation(tmp_path, monkeypatch) -> None:
+    _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cg, "_reservation_heads", lambda: [{"arc_id": "pr-9", "state": "open", "pr": 9}]
+    )
+    monkeypatch.setattr(cg, "_gh_pr_state", lambda pr: "MERGED")
+    monkeypatch.setattr(cg, "_blocked_lease_older_than_bound", lambda: None)
+
+    fs = cg.check_orphaned_reservations(lane_id="l")
+
+    assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
+    assert fs[0].severity == "warn"
+
+
+def test_orphaned_reservation_blocked_lease_past_bound(tmp_path, monkeypatch) -> None:
+    _isolate_gate_log(monkeypatch, tmp_path)
+    monkeypatch.setattr(cg, "_reservation_heads", lambda: [])
+    monkeypatch.setattr(
+        cg,
+        "_blocked_lease_older_than_bound",
+        lambda: {"pr": 5, "reservation_id": "u-x", "state": "blocked"},
+    )
+
+    fs = cg.check_orphaned_reservations(lane_id="l")
+
+    assert [f.code for f in fs] == ["ORPHANED_RESERVATION"]
+    assert "blocked lease" in fs[0].message
+
+
+def test_json_report_carries_lane_id(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_LANE_ID", "lane-7")
+
+    report = json.loads(cg._json_report(_state(), []))
+
+    assert report["lane_id"] == "lane-7"
+
+
+def test_check_mode_on_default_branch_runs_detections(monkeypatch) -> None:
+    """The wiring witness: `check` on the default branch invokes all three detections;
+    any other branch/mode combination invokes none."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        cg,
+        "check_split_brain",
+        lambda ledger, *, lane_id: calls.append("split") or [],
+    )
+    monkeypatch.setattr(
+        cg,
+        "check_base_toctou",
+        lambda merges, *, lane_id: calls.append("toctou") or [],
+    )
+    monkeypatch.setattr(
+        cg,
+        "check_orphaned_reservations",
+        lambda *, lane_id: calls.append("orphan") or [],
+    )
+    monkeypatch.setattr(cg, "_recent_main_merges", lambda root: ([], []))
+
+    cg.validate(_state(branch="main"), mode="check")
+    assert calls == ["split", "toctou", "orphan"]
+
+    calls.clear()
+    cg.validate(_state(branch="feature"), mode="check")
+    cg.validate(_state(branch="main"), mode="preflight")
+    assert calls == []

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -724,6 +725,219 @@ def _codex_loop_issues(state: GuardState) -> list[str]:
     return issues
 
 
+# --- U-HE-33: emitting detections (C-HE-12 §1-§3; §9 rows 1, 4, 7) -----------------------
+
+ARC_METRICS_JSONL = Path(".harness/arc-metrics.jsonl")
+#: How many first-parent landings on the default branch the BASE_TOCTOU re-check walks.
+TOCTOU_LOOKBACK = 10
+#: C-HE-24 §3: `to_guard_finding` derives severity from the fail-class prefix, so the
+#: prefix MUST be chosen from the severity — two representations of one fact would
+#: otherwise drift the first time a warn-severity code carried a `terminal-` class.
+_FAIL_CLASS_BY_SEVERITY = {"hard": "terminal-", "warn": "HITL-recoverable-"}
+
+
+def _lane_id() -> str:
+    """C-HE-12 §2: the lane-discriminating field, so new codes do not inherit the drift
+    check's lane-attribution gap (R-3). `ci` attributes lane-less venues (the CI runner)."""
+    return os.environ.get("HARNESS_LANE_ID") or "ci"
+
+
+def _detection(
+    code: str, evidence: str, *, lane_id: str, arc_id: str, severity: str = "hard"
+) -> Finding:
+    """C-HE-12 §3: a detection EMITS a lane-attributed C-HE-24 row and returns the 3-field
+    `Finding` projection for the CI surface. The runtime check stays runnable under
+    stdlib-only python3 (the CI job's `/usr/bin/python3` invocation), so the record layer
+    is imported lazily; an unavailable or refusing record layer degrades to a loud stderr
+    note and the projection still surfaces -- the detection is never swallowed with it."""
+    try:
+        import finding_record as fr
+
+        core = fr.FindingCore(
+            fr.make_finding_id(code, "nohead", arc_id, 0),
+            arc_id,
+            evidence,
+            "C-HE-12",
+            severity,
+            f"{_FAIL_CLASS_BY_SEVERITY[severity]}{code.lower()}",
+            "guard",
+            code,
+        )
+        row = fr.make_row(
+            core,
+            fr.Envelope(
+                "finding",
+                fr.now_iso(),
+                arc_id,
+                lane_id,
+                None,
+                None,
+                None,
+                None,
+                cause_attribution=code.lower(),
+            ),
+        )
+        fr.append_row(row)
+    except Exception as exc:  # the Finding must still surface on a failed write
+        print(f"guard: finding row not written ({exc})", file=sys.stderr)
+    return Finding(severity, code, f"[{lane_id}] {evidence}")
+
+
+def check_split_brain(ledger: Path, *, lane_id: str) -> list[Finding]:
+    """§9 row 1: one arc row per `arc_id` in the metrics ledger (C-HE-25)."""
+    seen: set[str] = set()
+    dup: set[str] = set()
+    try:
+        lines = ledger.read_text().splitlines()
+    except FileNotFoundError:
+        return []  # no ledger yet genuinely means "no arcs recorded", not "could not look"
+    for line in lines:
+        if not line.strip():
+            continue
+        r = json.loads(line)  # a corrupt line fails the guard loud; never read as clean
+        # A kind-less row predates the record_kind field and IS an arc row (C-HE-25:
+        # the ledger carried only arc rows before round/gate kinds existed).
+        if r.get("record_kind", "arc") != "arc":
+            continue
+        a = r.get("arc_id")
+        if a is None:
+            # The invariant is keyed BY arc_id; a row without one belongs to the
+            # writer's validation, not this duplicate check.
+            continue
+        if a in seen:
+            dup.add(a)
+        seen.add(a)
+    return [
+        _detection(
+            "SPLIT_BRAIN_LEDGER",
+            f"duplicate arc_id in arc-metrics.jsonl: {a}",
+            lane_id=lane_id,
+            arc_id=a,
+        )
+        for a in sorted(dup)
+    ]
+
+
+def check_base_toctou(merges: list[tuple[str, str, str]], *, lane_id: str) -> list[Finding]:
+    """§9 row 7: a landing's first parent MUST equal the base the merge door verified --
+    a mismatch is positive proof the race window was hit (C-HE-12 §2), never silence."""
+    return [
+        _detection(
+            "BASE_TOCTOU",
+            f"merge {m[:12]} first parent {fp[:12]} != verified base {vb[:12]} -- "
+            "race window hit; re-validate",
+            lane_id=lane_id,
+            arc_id=f"merge-{m[:12]}",
+        )
+        for m, fp, vb in merges
+        if fp != vb
+    ]
+
+
+def check_orphaned_reservations(*, lane_id: str) -> list[Finding]:
+    """§9 row 4: an `open` head whose PR is MERGED/CLOSED without a terminal transition,
+    or a `blocked` lease older than its bound."""
+    out: list[Finding] = []
+    for h in _reservation_heads():
+        pr_state = _gh_pr_state(h["pr"]) if h.get("state") == "open" and h.get("pr") else None
+        if pr_state in ("MERGED", "CLOSED"):
+            out.append(
+                _detection(
+                    "ORPHANED_RESERVATION",
+                    f"{h['arc_id']}: open reservation but PR #{h['pr']} is {pr_state}",
+                    lane_id=lane_id,
+                    arc_id=h["arc_id"],
+                    severity="warn",
+                )
+            )
+    lease = _blocked_lease_older_than_bound()
+    if lease:
+        out.append(
+            _detection(
+                "ORPHANED_RESERVATION",
+                f"blocked lease for pr #{lease['pr']} older than its bound",
+                lane_id=lane_id,
+                arc_id=lease["reservation_id"],
+                severity="warn",
+            )
+        )
+    return out
+
+
+def _reservation_heads() -> list[dict]:
+    try:
+        import reservations as rs
+
+        root = rs.reservations_root()
+        if not root.is_dir():
+            return []
+        heads = []
+        for d in root.iterdir():
+            if d.is_dir() and not d.name.startswith("."):
+                cur = rs.current(d.name)
+                if cur:
+                    heads.append(cur[1])
+        return heads
+    except Exception:  # a missing/unreadable store is "nothing to detect", never a guard crash
+        return []
+
+
+def _gh_pr_state(pr: int) -> str | None:
+    try:
+        p = subprocess.run(
+            ["gh", "pr", "view", str(pr), "--json", "state", "--jq", ".state"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (p.stdout.strip() or None) if p.returncode == 0 else None
+
+
+def _blocked_lease_older_than_bound() -> dict | None:
+    try:
+        import merge_door as md
+
+        lease = md.read_lease()
+    except Exception:  # no door state on this host is "nothing to detect"
+        return None
+    if not lease or lease.get("state") != "blocked":
+        return None
+    blocked_at = lease.get("blocked_at")  # ISO sidecar value merged in by md.read_lease()
+    if blocked_at is None:
+        return None
+    age_s = (
+        datetime.now(timezone.utc)  # noqa: UP017 - /usr/bin/python3 is pre-3.11 on macOS
+        - datetime.strptime(blocked_at, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc  # noqa: UP017 - same stdlib-runtime constraint
+        )
+    ).total_seconds()
+    return lease if age_s > md.POST_MERGE_CI_BOUND_S + md.REFRESH_BOUND_S else None
+
+
+def _recent_main_merges(root: Path) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """The last TOCTOU_LOOKBACK first-parent landings, each joined to the reservation that
+    recorded it as `merge_sha` (U-HE-23). The door squash-merges, so landings have ONE
+    parent and `--merges` would inspect none of them. Returns (attributed
+    `(merge_sha, first_parent, verified_base)` tuples, unattributed landing shas)."""
+    proc = _run(["git", "log", "--first-parent", f"-{TOCTOU_LOOKBACK}", "--format=%H %P"], cwd=root)
+    if proc.returncode != 0:
+        return [], []
+    by_merge_sha = {h["merge_sha"]: h for h in _reservation_heads() if h.get("merge_sha")}
+    merges: list[tuple[str, str, str]] = []
+    unattributed: list[str] = []
+    for line in proc.stdout.strip().splitlines():
+        parts = line.split()
+        sha, parents = parts[0], parts[1:]
+        head = by_merge_sha.get(sha)
+        if head is None or not head.get("base_sha"):
+            unattributed.append(sha)
+        elif parents:  # a parentless root commit has no first parent to compare
+            merges.append((sha, parents[0], head["base_sha"]))
+    return merges, unattributed
+
+
 def validate(
     state: GuardState,
     *,
@@ -732,6 +946,26 @@ def validate(
     require_fresh_checkpoint: bool = False,
 ) -> list[Finding]:
     findings: list[Finding] = []
+
+    if mode == "check" and state.branch == state.default_branch:
+        # U-HE-33: the emitting detections run where landings live -- `check` on the
+        # default branch (the CI push run and local main-audit venues). Feature-branch
+        # and preflight/closeout runs never walk the landing history.
+        lane = _lane_id()
+        findings.extend(check_split_brain(state.root / ARC_METRICS_JSONL, lane_id=lane))
+        merges, unattributed = _recent_main_merges(state.root)
+        findings.extend(check_base_toctou(merges, lane_id=lane))
+        if unattributed:
+            findings.append(
+                Finding(
+                    "info",
+                    "BASE_TOCTOU_UNATTRIBUTED",
+                    f"[{lane}] {len(unattributed)} of the last {TOCTOU_LOOKBACK} "
+                    "first-parent landings have no reservation recording a merge_sha; "
+                    "first-parent check skipped for: " + ", ".join(s[:12] for s in unattributed),
+                )
+            )
+        findings.extend(check_orphaned_reservations(lane_id=lane))
 
     if state.status_entries and not state.is_linked_worktree:
         findings.append(
@@ -945,6 +1179,7 @@ def _json_report(state: GuardState, findings: list[Finding]) -> str:
             "latest_retirement_batch": state.latest_retirement_batch,
             "lag_expected": state.lag_expected,
             "owed_lag": state.owed_lag,
+            "lane_id": _lane_id(),
             "findings": [f.__dict__ for f in findings],
         },
         indent=2,
