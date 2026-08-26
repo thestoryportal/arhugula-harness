@@ -700,3 +700,8 @@ B-206) rather than unaddressed defects.
 | 2026-08-26T03:00:32Z | #1458 | 66d7bf59624d | merge-gate-spec-conformance | BLOCK | 2 finding(s) | r2 |
 
 **PR #1458 · 2026-08-26 · feat/u-he-34-phase-spans · gate round 2 (head 66d7bf5962).** concurrency APPROVE · witness-adequacy APPROVE · spec-conformance BLOCK (2× P3: the guard comment's "eleven tokens" vs the 13-token check; the rev-note preamble's "Four corrections" vs ten items — both one-word count drifts). Outcome: fix (counts de-numeralized/re-anchored; plus the r2 witness lens's named residual closed — a CLI-level holder-fence mismatch witness) + re-gate. blast-radius: unchanged from round 1.
+| 2026-08-26T03:07:27Z | #1458 | 39c4ef010ec2 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+| 2026-08-26T03:08:00Z | #1458 | 39c4ef010ec2 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-08-26T03:12:43Z | #1458 | 39c4ef010ec2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+
+**PR #1458 · 2026-08-26 · feat/u-he-34-phase-spans · gate round 3 (head 39c4ef010e) — ALL-APPROVE.** concurrency APPROVE · spec-conformance APPROVE (both r2 count fixes verified at the lines; full counted-claim sweep resolves) · witness-adequacy APPROVE (the new CLI fence witness mutation-probed live: kwarg deletion → unfenced write lands → assert reds; restored clean). Outcome: merge. blast-radius: unchanged from round 1.
