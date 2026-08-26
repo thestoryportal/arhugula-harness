@@ -241,12 +241,18 @@ def test_run_green_emits_one_row_per_call(tmp_path: Path, _fixed_binding: str, c
 
 
 def test_run_red_exit_and_rows_still_recorded(tmp_path: Path, _fixed_binding: str, capsys):
-    rc = rcp.run("main", channel="codex", reps=5, ns=(1,), one=lambda c, b, e, s: (60.0, False))
+    # the FULL required series, so this RED depends on the invalid samples alone
+    # (codex r5 P3: with ns=(1,) the missing-series rule fired first and the validity
+    # propagation had no witness)
+    rc = rcp.run(
+        "main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s: (60.0, False)
+    )
     assert rc == 1
-    assert "RED" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "RED" in out and "validity" in out
     # invalid samples are still evidence: every call has its row, plus the RED result row
     rows = fr.read_rows()
-    assert len([r for r in rows if r["finding_type"] == "probe-sample"]) == 5
+    assert len([r for r in rows if r["finding_type"] == "probe-sample"]) == 35
     [result] = [r for r in rows if r["finding_type"] == "probe-result"]
     assert json.loads(result["observed_evidence"])["verdict"] == "RED"
 
@@ -320,3 +326,43 @@ def test_run_batch_calls_actually_overlap(tmp_path: Path, _fixed_binding: str, c
     assert rc == 1  # N=2 alone misses required series -> RED insufficient; overlap still proven
     assert "insufficient" in capsys.readouterr().out
     assert len([r for r in fr.read_rows() if r["finding_type"] == "probe-sample"]) == 10
+
+
+# ── LIVE_GROUPS: no orphaned reviewer trees on termination (codex r5 P2) ─────
+
+
+def test_live_groups_kill_all_kills_registered_pgids(monkeypatch: pytest.MonkeyPatch):
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    groups = rcp._LiveGroups()
+    groups.add(111)
+    groups.add(222)
+    groups.discard(222)  # a completed call deregisters — only live groups die
+    groups.kill_all()
+    assert killed == [(111, rcp.signal.SIGKILL)]
+    groups.kill_all()  # idempotent: the set was drained
+    assert killed == [(111, rcp.signal.SIGKILL)]
+
+
+def test_one_registers_and_deregisters_its_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    seen: list[set[int]] = []
+
+    class SnoopPopen(FakePopen):
+        def communicate(self, timeout=None):
+            seen.append(set(rcp.LIVE_GROUPS._pgids))  # live DURING the call
+            return "", "codex-review: APPROVE\n"
+
+    monkeypatch.setattr(rcp.subprocess, "Popen", lambda argv, **k: SnoopPopen(argv, **k))
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    assert ok is True
+    assert seen == [{4242}]  # registered while running...
+    assert 4242 not in rcp.LIVE_GROUPS._pgids  # ...deregistered after
+
+
+def test_run_restores_signal_handlers(tmp_path: Path, _fixed_binding: str, capsys):
+    import signal as _signal
+
+    before = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
+    rcp.run("main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s: (60.0, True))
+    after = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
+    assert after == before  # the probe's handlers never outlive the run

@@ -26,6 +26,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -55,6 +56,38 @@ _CODEX_TERMINAL_RE = re.compile(r"^codex-review: (?:APPROVE|BLOCK)(?: \[source: 
 
 #: A sample is (wall_s, valid): valid == the call ended with a schema-parsed verdict.
 Sample = tuple[float, bool]
+
+
+class _LiveGroups:
+    """The single owner of the live reviewer process-group ids
+    ([LAW:no-shared-mutable-globals] worker threads register/deregister, the run edge and
+    its signal handlers kill — nothing else touches the set). Exists so a SIGTERM/SIGINT
+    cannot orphan paid reviewer trees, and so killing them unblocks any worker still
+    parked in communicate() instead of waiting out the per-call timeout (codex r5 P2)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pgids: set[int] = set()
+
+    def add(self, pgid: int) -> None:
+        with self._lock:
+            self._pgids.add(pgid)
+
+    def discard(self, pgid: int) -> None:
+        with self._lock:
+            self._pgids.discard(pgid)
+
+    def kill_all(self) -> None:
+        with self._lock:
+            pgids, self._pgids = tuple(self._pgids), set()
+        for pgid in pgids:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # already gone — the kill is idempotent
+
+
+LIVE_GROUPS = _LiveGroups()
 
 
 def decide(
@@ -134,6 +167,7 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
             text=True,
             start_new_session=True,
         )
+        LIVE_GROUPS.add(proc.pid)
         try:
             _out, err = proc.communicate(timeout=CALL_TIMEOUT_S)
             valid = _codex_valid(err) if channel == "codex" else _gemini_valid(sink)
@@ -144,6 +178,8 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
                 pass  # the group exited between the timeout and the kill — already gone
             proc.communicate()  # reap; the group is dead, this cannot block
             valid = False
+        finally:
+            LIVE_GROUPS.discard(proc.pid)
     except OSError:
         # the SPAWN failed (fork/exec resource exhaustion under the very concurrency
         # being probed) — exactly a validity failure, not a probe crash (codex r3 P2):
@@ -169,50 +205,69 @@ def run(
     env = probe_env()
     samples: dict[int, list[Sample]] = {n: [] for n in ns}
     drifted_from: dict[str, str] | None = None
-    # outside the repo: agy's --outcome-json sink refuses in-repo paths; envelopes are
-    # parsed per call, so the whole dir is disposable once sampling ends
-    with tempfile.TemporaryDirectory(prefix="reviewer-concurrency-probe-") as scratch_dir:
-        scratch = Path(scratch_dir)
-        for n in ns:
-            for rep in range(reps):
-                if drifted_from is not None:
-                    break
-                with ThreadPoolExecutor(max_workers=n) as ex:
-                    results = list(ex.map(lambda _: one(channel, base, env, scratch), range(n)))
-                # the one-fixed-diff premise is verified around EVERY batch, and a batch's
-                # rows are appended only when the binding held across its calls: a drifted
-                # batch must not persist rows stamped with the stale binding and
-                # valid=true (codex r3 P2 — the later RED cannot repair a durable false
-                # record). This per-batch gate IS the drift check ([LAW:single-enforcer];
-                # its last iteration covers the end of the run).
-                if rw.code_binding(REPO, base) != binding:
-                    drifted_from = binding
-                    break
-                for wall, valid in results:
-                    samples[n].append((wall, valid))
-                    fr.append_observation(
-                        {
-                            "location": f"{channel}@N={n}",
-                            "observed_evidence": json.dumps(
-                                {"wall_s": round(wall, 1), "valid": valid, "n": n, "rep": rep}
+
+    # a SIGTERM/SIGINT mid-run must not orphan paid reviewer trees (codex r5 P2): the
+    # handler kills every live group FIRST — which also unblocks any worker parked in
+    # communicate() so executor shutdown does not wait out the per-call timeout — then
+    # terminates; the finally covers the non-signal exits.
+    def _terminate(signum: int, frame: object) -> None:
+        LIVE_GROUPS.kill_all()
+        raise SystemExit(128 + signum)
+
+    previous = {s: signal.signal(s, _terminate) for s in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        # outside the repo: agy's --outcome-json sink refuses in-repo paths; envelopes are
+        # parsed per call, so the whole dir is disposable once sampling ends
+        with tempfile.TemporaryDirectory(prefix="reviewer-concurrency-probe-") as scratch_dir:
+            scratch = Path(scratch_dir)
+            for n in ns:
+                for rep in range(reps):
+                    if drifted_from is not None:
+                        break
+                    with ThreadPoolExecutor(max_workers=n) as ex:
+                        results = list(ex.map(lambda _: one(channel, base, env, scratch), range(n)))
+                    # the one-fixed-diff premise is verified around EVERY batch, and a
+                    # batch's rows are appended only when the binding held across its
+                    # calls: a drifted batch must not persist rows stamped with the stale
+                    # binding and valid=true (codex r3 P2 — the later RED cannot repair a
+                    # durable false record). This per-batch gate IS the drift check
+                    # ([LAW:single-enforcer]; its last iteration covers the end of
+                    # SAMPLING — no reviewer call happens after it, so a ref move during
+                    # the later append/report window cannot mislabel any measurement).
+                    if rw.code_binding(REPO, base) != binding:
+                        drifted_from = binding
+                        break
+                    for wall, valid in results:
+                        samples[n].append((wall, valid))
+                        fr.append_observation(
+                            {
+                                "location": f"{channel}@N={n}",
+                                "observed_evidence": json.dumps(
+                                    {"wall_s": round(wall, 1), "valid": valid, "n": n, "rep": rep}
+                                ),
+                                "expected_contract": "C-HE-22",
+                                "severity": "info",
+                                "finding_type": "probe-sample",
+                                "lineage_claim": "measured",
+                                "producer": PRODUCER,
+                            },
+                            fr.Envelope(
+                                record_kind="finding",
+                                ts=fr.now_iso(),
+                                arc_id=arc_id,
+                                lane_id=lane_id,
+                                head_sha=binding["head_sha"],
+                                base_sha=binding["base_sha"],
+                                diff_digest=binding["diff_digest"],
+                                round_n=rep,
                             ),
-                            "expected_contract": "C-HE-22",
-                            "severity": "info",
-                            "finding_type": "probe-sample",
-                            "lineage_claim": "measured",
-                            "producer": PRODUCER,
-                        },
-                        fr.Envelope(
-                            record_kind="finding",
-                            ts=fr.now_iso(),
-                            arc_id=arc_id,
-                            lane_id=lane_id,
-                            head_sha=binding["head_sha"],
-                            base_sha=binding["base_sha"],
-                            diff_digest=binding["diff_digest"],
-                            round_n=rep,
-                        ),
-                    )
+                        )
+    finally:
+        # non-signal exits (normal completion, an exception): reap anything still
+        # registered, then restore the inherited handlers
+        LIVE_GROUPS.kill_all()
+        for s, h in previous.items():
+            signal.signal(s, h)
     medians = {n: statistics.median(w for w, _ in samples[n]) for n in ns if samples[n]}
     for n, med in medians.items():
         all_valid = all(ok for _, ok in samples[n])
