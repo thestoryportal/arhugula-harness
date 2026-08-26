@@ -68,13 +68,15 @@ def main(argv: list[str] | None = None) -> int:
                 return _refuse(f"refused component {comp!r} in {rel!r}: {exc}")
             os.close(fd)
             fd = nxt
-        # Exclusively-created temp inode + atomic rename (codex r8 P1): O_NOFOLLOW
-        # stops symlinks but not HARD links -- O_TRUNC on a pre-planted leaf
-        # hard-linked to a tracked file would destroy that file's content. O_EXCL
-        # guarantees a fresh inode nothing else links; rename() then replaces the
-        # directory ENTRY, leaving any pre-planted inode untouched. Concurrent
-        # publishers each write their own temp inode and the last rename installs a
-        # whole log, never an interleaved one.
+        # Exclusively-created temp inode + atomic LINK install (codex r8/r9 P1/P2):
+        # O_NOFOLLOW stops symlinks but not HARD links -- O_TRUNC on a pre-planted
+        # leaf hard-linked to a tracked file would destroy that file's content, and a
+        # rename over an existing round log would silently discard a transcript the
+        # gate log still counts (last-writer-wins on replay). O_EXCL guarantees a
+        # fresh inode nothing else links; link() then installs the directory entry
+        # ONLY if the name is free -- EEXIST is an atomic refusal, so round logs are
+        # write-once evidence and any pre-planted entry (symlink, hard link, file)
+        # is left untouched.
         tmp_name = f".{parts[-1]}.{os.getpid()}.tmp"
         try:
             out = os.open(
@@ -91,7 +93,15 @@ def main(argv: list[str] | None = None) -> int:
                     sink.write(chunk)
                     sys.stdout.buffer.write(chunk)
                     sys.stdout.buffer.flush()
-            os.replace(tmp_name, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
+            try:
+                os.link(tmp_name, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
+            except FileExistsError:
+                os.unlink(tmp_name, dir_fd=fd)
+                return _refuse(
+                    f"refused {rel!r}: destination already exists -- round logs are "
+                    "write-once evidence; use a fresh per-round name"
+                )
+            os.unlink(tmp_name, dir_fd=fd)
         except OSError as exc:
             try:
                 os.unlink(tmp_name, dir_fd=fd)

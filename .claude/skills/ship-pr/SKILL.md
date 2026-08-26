@@ -61,7 +61,10 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `gemini-review` failover; the logged variant is CANONICAL — its in-recipe log publisher is the
   only way a guarded venue produces the round log that `arc-metrics queue
   --round-logs` later reads, and the bare `just review-with-failover` remains only for
-  a venue that cannot take the log path) to convergence — the inline `HARNESS_*` prefix is REQUIRED
+  a venue that cannot take the log path) to convergence. Run it in background mode, or
+  with a Bash tool timeout ABOVE the wrapper's own shared deadline (1260 s primary +
+  bounded failover — e.g. ≥ 3000000 ms): a shorter tool timeout kills a valid required
+  review mid-flight. The inline `HARNESS_*` prefix is REQUIRED
   even when ship-pr is invoked standalone: shell exports do not survive across Bash tool
   calls, and a bare invocation writes the wrapper's `branch-*`/`-nolane` fallback ids
   into the C-HE-24/25 rows instead of joining the arc's real reservation (`<arc-id>` from
@@ -118,12 +121,8 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
     returns only after the log is flushed — two session timestamps around it would
     measure one event, not the divergence. Record neither edge; the split's recorder
     is wrapper-internal work carried on B-218 (the phases stay reserved in the
-    reservations domain for it). Invoke the settle with a Bash tool
-    timeout ABOVE its bound (e.g. 200000 ms) — the tool's 120 s default would kill the
-    recipe before its own 130 s bound and misread a settling log as a failure. A log
-    still growing at the bound records nothing — there is no true completion timestamp
-    to record. A divergence
-    between the two timestamps is recorded, not audit-worthy (v1 decision, plan §11 #5).
+    reservations domain for it). A divergence between the two timestamps, once
+    recordable, is recorded, not audit-worthy (v1 decision, plan §11 #5).
 - **Posture check (§11).** Confirm the edit scope matches one posture (design-phase /
   Phase 7 / mode-agnostic). A `design-substrate/**` + `harness-*/src/**` mix MUST carry
   back-flow documentation (§11.4) or it is silent absorption — halt + ask.

@@ -6422,7 +6422,12 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > the entry alone is replaced, and concurrent publishers cannot interleave one
 > inode; a publish failure is its own recipe terminal (exit 4) for EVERY reviewer
 > outcome, since exits 1/2/3 would let a caller treat a round with a missing
-> canonical log as valid.
+> canonical log as valid. Refined at r9: the install is link(2), not rename — EEXIST
+> is an atomic refusal, so round logs are write-once evidence (a replay cannot
+> silently discard a transcript the gate log still counts) and ANY pre-planted
+> entry is left untouched; the stale settle-timeout prose was deleted and the
+> review invocation's own bound named (1260 s shared deadline + bounded failover —
+> background mode or a tool timeout above it).
 
 ---
 

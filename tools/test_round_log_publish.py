@@ -53,21 +53,20 @@ def test_refuses_destinations_outside_harness_tmp(tmp_path):
     assert not (tmp_path / "tools" / "x.py").exists()
 
 
-def test_symlink_leaf_entry_replaced_target_untouched(tmp_path):
-    """A pre-planted leaf symlink is REPLACED as a directory entry by the rename-based
-    publish (codex r8) -- the write goes to a fresh O_EXCL inode, so the symlink's
-    target is never opened, let alone truncated. Mutation probe: write the leaf with
-    O_TRUNC through the pathname -> the target reads 'verdict' and this reds."""
+def test_symlink_leaf_refused_target_untouched(tmp_path):
+    """A pre-planted leaf symlink is an EXISTING entry: the link() install refuses it
+    atomically (write-once), the target is never opened, and the entry is untouched.
+    Mutation probe: install with rename instead of link -> returncode 0, reds."""
     d = tmp_path / ".harness/tmp/rounds"
     d.mkdir(parents=True)
     outside = tmp_path / "outside-target"
     outside.write_bytes(b"precious")
     (d / "r1.log").symlink_to(outside)
     proc = run(".harness/tmp/rounds/r1.log", tmp_path)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode == 4
+    assert proc.stdout == b"verdict\n", "refusal must still mirror the transcript"
     assert outside.read_bytes() == b"precious", "symlink target must never be written"
-    assert not (d / "r1.log").is_symlink(), "entry must be replaced by a regular file"
-    assert (d / "r1.log").read_bytes() == b"verdict\n"
+    assert (d / "r1.log").is_symlink(), "pre-planted entry must be left untouched"
 
 
 def test_refuses_symlink_parent_component(tmp_path):
@@ -83,21 +82,33 @@ def test_refuses_symlink_parent_component(tmp_path):
     assert not (outside / "r1.log").exists(), "write escaped through a symlink parent"
 
 
-def test_pre_planted_hard_link_inode_survives(tmp_path):
+def test_pre_planted_hard_link_refused_inode_survives(tmp_path):
     """codex r8 P1: O_NOFOLLOW does not stop a HARD link -- an O_TRUNC open through a
     pre-planted leaf hard-linked to a tracked file would destroy that file's content.
-    The publisher writes a fresh O_EXCL inode and rename() replaces only the directory
-    ENTRY, so the linked inode keeps its bytes. Mutation probe: revert to O_TRUNC on
-    the leaf -> 'precious' is destroyed and this reds."""
+    The link() install refuses the existing entry atomically; the inode keeps its
+    bytes. Mutation probe: revert to O_TRUNC on the leaf -> 'precious' destroyed."""
     d = tmp_path / ".harness/tmp/rounds"
     d.mkdir(parents=True)
     tracked = tmp_path / "tracked-file"
     tracked.write_bytes(b"precious")
     (d / "r1.log").hardlink_to(tracked)
     proc = run(".harness/tmp/rounds/r1.log", tmp_path)
-    assert proc.returncode == 0, proc.stderr
+    assert proc.returncode == 4
     assert tracked.read_bytes() == b"precious", "hard-linked inode was truncated"
-    assert (d / "r1.log").read_bytes() == b"verdict\n"
+
+
+def test_replay_refused_first_transcript_survives(tmp_path):
+    """codex r9 P2: round logs are write-once evidence -- a replayed invocation must
+    not silently discard the first transcript while the gate log still counts both
+    outcomes. Mutation probe: install with rename -> second run wins and this reds."""
+    proc1 = run(".harness/tmp/rounds/r1.log", tmp_path, payload=b"first\n")
+    assert proc1.returncode == 0
+    proc2 = run(".harness/tmp/rounds/r1.log", tmp_path, payload=b"second\n")
+    assert proc2.returncode == 4
+    assert proc2.stdout == b"second\n", "refusal must still mirror the transcript"
+    assert (tmp_path / ".harness/tmp/rounds/r1.log").read_bytes() == b"first\n"
+    # no temp litter after a refused replay
+    assert [p.name for p in (tmp_path / ".harness/tmp/rounds").iterdir()] == ["r1.log"]
 
 
 def test_creates_missing_intermediate_dirs(tmp_path):
