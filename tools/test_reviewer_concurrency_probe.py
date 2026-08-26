@@ -604,3 +604,24 @@ def test_begin_termination_reentrant_under_held_lock():
     with groups._lock:  # simulate SIGTERM landing while main holds the lock
         groups.begin_termination()
     assert groups.add(1) is False  # the flag committed despite the held lock
+
+
+def test_pin_prewarm_failure_raises_typed_and_removes_worktree(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """merge-gate concurrency r2 P2: the venv pre-warm's failure must surface as the
+    SAME typed PinError the add uses (so run() records the durable RED row), and the
+    finally must still remove the already-created worktree."""
+    ran: list[list[str]] = []
+
+    def fake_run(argv, **k):
+        ran.append(list(argv))
+        if argv[:2] == ["uv", "run"]:
+            raise subprocess.CalledProcessError(1, argv, stderr="uv lock contention")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(rcp.subprocess, "run", fake_run)
+    with pytest.raises(rcp.PinError, match="pre-warm"):
+        with rcp._pinned_worktree("f" * 40):
+            pass  # pragma: no cover
+    assert ran[-1][3:5] == ["worktree", "remove"]  # the finally still cleaned up

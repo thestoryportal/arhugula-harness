@@ -254,9 +254,20 @@ def _pinned_worktree(head_sha: str):
             subprocess.run(["git", "-C", str(REPO), "worktree", "prune"], capture_output=True)
             raise PinError(f"git worktree add failed: {exc.stderr.strip()}") from exc
         try:
-            subprocess.run(
-                ["uv", "run", "python", "-c", ""], cwd=workdir, check=True, capture_output=True
-            )
+            # the pre-warm joins the SAME typed conversion as the add (merge-gate
+            # concurrency r2 P2): its CalledProcessError would otherwise escape run()'s
+            # `except PinError` and crash recordless — the exact failure PinError closes.
+            # Scoped to the pre-warm alone, so a with-body exception is never mislabeled.
+            try:
+                subprocess.run(
+                    ["uv", "run", "python", "-c", ""],
+                    cwd=workdir,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise PinError(f"worktree venv pre-warm failed: {exc.stderr.strip()}") from exc
             yield workdir
         finally:
             rm = subprocess.run(
