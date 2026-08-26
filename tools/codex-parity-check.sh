@@ -33,6 +33,7 @@ uv run pytest -q \
   tools/test_merge_door.py \
   tools/test_merge_gate_log.py \
   tools/test_review_wrapper.py \
+  tools/test_reviewer_concurrency_probe.py \
   tools/test_reservations.py \
   tools/test_store_audit.py \
   tools/test_closure_certification.py \

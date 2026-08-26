@@ -769,6 +769,14 @@ review-attest-budget extra reason:
 review-gate-check base='main':
     uv run python tools/review_loop_gate.py check --base {{base}}
 
+# C-HE-22 reviewer-concurrency probe (U-HE-35): >=5 samples at each of N in {1,2,4}
+# concurrent reviewer invocations on one fixed committed diff. GREEN iff median
+# wall-clock at N <= 2x the N=1 median AND zero validity failures; RED => throttling
+# assumed, pilots do not start (C-HE-13 §2). Live + provider-login-gated; samples
+# land as C-HE-24 rows (producer=reviewer_concurrency_probe).
+reviewer-concurrency-probe channel='codex' reps='5' base='main':
+    uv run python tools/reviewer_concurrency_probe.py --channel {{channel}} --reps {{reps}} --base {{base}}
+
 # U-HE-34 r4 NOTE: no session-layer result_capture recorder exists. The C-HE-27 §1
 # process-exit vs log-write divergence is internal to the reviewer process — a
 # synchronous in-recipe tee returns only after the log is flushed, so two session

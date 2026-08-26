@@ -296,6 +296,24 @@ MANIFEST: list[Row] = [
         False,
     ),
     Row("C-HE-17", "pytest:tools/test_agy_review.py", "phase0", "local + CI", False),
+    # C-HE-22 (U-HE-35): the live probe gates pilots (C-HE-13 §2); the pytest row pins
+    # the pass rule on synthetic samples
+    Row(
+        "C-HE-22",
+        "pytest:tools/test_reviewer_concurrency_probe.py",
+        "phase1",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-22",
+        "live:tools/reviewer_concurrency_probe.py "
+        "(provider-login-gated; result row required before pilots)",
+        "phase1",
+        "operator/loop, live",
+        False,
+        ("provider-login-absent",),
+    ),
     # C-HE-19/20 (U-HE-08)
     Row(
         "C-HE-19/20",
