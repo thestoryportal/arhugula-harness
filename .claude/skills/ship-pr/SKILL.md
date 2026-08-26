@@ -69,8 +69,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   calls, and a bare invocation writes the wrapper's `branch-*`/`-nolane` fallback ids
   into the C-HE-24/25 rows instead of joining the arc's real reservation (`<arc-id>` from
   the arc-open step; `<lane-id>` from `.harness/.lane-id`) — fix real findings, hermetically regression-test each (§13.1). Exit 0
-  APPROVE / 1 BLOCK / 2 `REVIEWER_UNAVAILABLE`; the terminal line on stderr is the verdict,
-  never the exit code or the absence of output. *Invariant #3 (restated, C-HE-17 §3):
+  APPROVE / 1 BLOCK / 2 `REVIEWER_UNAVAILABLE` / 4 publish-failed; the terminal
+  `codex-review:` line is the verdict, never the exit code or the absence of output —
+  through the LOGGED variant it arrives on the merged stdout transcript (and in the
+  round log), since the recipe folds the wrapper's stderr into the publisher pipe; the
+  schema-parsed C-HE-15 rows remain the durable verdict authority either way. *Invariant #3 (restated, C-HE-17 §3):
   out-of-family review covers Codex-authored work as before, AND serves as the D-C failover
   for Claude-authored diffs at the identical bar. Exit 2 (`REVIEWER_UNAVAILABLE` on both
   channels) blocks the arc; record both reasons.* Use `--base` here, NOT

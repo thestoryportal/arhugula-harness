@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         # ONLY if the name is free -- EEXIST is an atomic refusal, so round logs are
         # write-once evidence and any pre-planted entry (symlink, hard link, file)
         # is left untouched.
-        tmp_name = f".{parts[-1]}.{os.getpid()}.tmp"
+        tmp_name = f".{parts[-1]}.{os.getpid()}.{os.urandom(8).hex()}.tmp"
         try:
             out = os.open(
                 tmp_name,
@@ -93,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
                     sink.write(chunk)
                     sys.stdout.buffer.write(chunk)
                     sys.stdout.buffer.flush()
+                sink.flush()
+                written = os.fstat(sink.fileno())
             try:
                 os.link(tmp_name, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
             except FileExistsError:
@@ -102,6 +104,22 @@ def main(argv: list[str] | None = None) -> int:
                     "write-once evidence; use a fresh per-round name"
                 )
             os.unlink(tmp_name, dir_fd=fd)
+            # link(2) resolves the temp NAME, not the inode we wrote (codex r10): a
+            # concurrent unlink+replace of the (already unpredictable) temp name
+            # between write and link would install a foreign inode under our name.
+            # Verify the installed entry IS the written inode; on mismatch, remove
+            # the entry we just created and refuse loud.
+            check = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fd)
+            try:
+                installed = os.fstat(check)
+            finally:
+                os.close(check)
+            if (installed.st_dev, installed.st_ino) != (written.st_dev, written.st_ino):
+                os.unlink(parts[-1], dir_fd=fd)
+                return _refuse(
+                    f"refused {rel!r}: installed inode is not the written one -- "
+                    "temp name was swapped mid-publish"
+                )
         except OSError as exc:
             try:
                 os.unlink(tmp_name, dir_fd=fd)
