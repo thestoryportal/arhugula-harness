@@ -7596,7 +7596,7 @@ def main(argv=None) -> int:
 ---
 ## §3 Dependency graph
 
-Direct dependencies only (transitive closure computed by the sort). All 45 v1.0 units; the graph is acyclic. (The §8 rev units add no cycle: U-HE-46…50 and U-SR-01…09 are roots; U-HE-51 depends only on U-HE-46…49 — see §8.6.)
+Direct dependencies only (transitive closure computed by the sort). All 45 v1.0 units; the graph is acyclic. (The §8 rev units add no cycle: U-HE-46…49 and U-SR-01…09 are roots; U-HE-50 and U-HE-51 depend only on U-HE-46…49 — see §8.6.)
 
 | Unit | Depends on | Unit | Depends on |
 |---|---|---|---|
@@ -7751,7 +7751,7 @@ The self-improvement circuit is broken at both ends: nothing flows in (0 skill r
 - **R2 — mechanical sweep:** U-SR-09.
 - **R3 — eval arc:** U-HE-51 riding the next code arc (see open decision #2), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), 25.5M IET grand total (21.0M main / 4.52M subagents), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
 
-Units within a round are mutually independent and may land in any order or together; a round's units need not all land before the next round *starts*, except that U-HE-51 (R3) hard-depends on all of R0.
+Units within a round are mutually independent and may land in any order or together. The instruments-before-levers rule binds as dependency edges wherever a lever touches a measured surface: U-HE-50 (R1, a lever on the C-HE-27 surface R0 repairs) and U-HE-51 (R3) both hard-depend on all four R0 units. The U-SR-* levers touch no instrument surface and may land alongside R0.
 
 ### §8.2 Item-coverage table (audit id → unit or disposition)
 
@@ -7782,8 +7782,8 @@ Every recommendation id from [A]/[B], so nothing silently drops:
 | d1 (arc-cost ledger) | U-HE-48 |
 | d2 (cache-warmth note) | U-SR-07 |
 | d3 (read-before-grep) | U-SR-07 |
-| [A] repairs (i)(ii)(iii) + eval cases (v of the [A] list = item 5) | U-SR-01 |
-| [A] repairs (iv)(v) + hold-policy promotion | U-SR-02 |
+| [A] repair 1 (classes (i)(ii)(iii) + grep shapes) + repair 5 (planted-defect evals) | U-SR-01 |
+| [A] repairs 2 (fix-sweep), 3 (bound-derivation), 4 (hold-policy) | U-SR-02 |
 | laws:prompt durable wiring (memory plan) | U-SR-03 |
 
 The [B] §6 keep-as-is list (charter §4) binds every unit below: a diff that "improves" a keep-as-is surface is out of scope for its unit.
@@ -7796,13 +7796,13 @@ The [B] §6 keep-as-is list (charter §4) binds every unit below: a diff that "i
 
 - [ ] Derive per-round records from round-log content (the wrapper's `codex-review:` terminal lines), never file position; exclude `GATE_REFUSED` transcripts (refused launches, not rounds); key rounds by round id parsed from the log name/content.
 - [ ] **Acceptance witness ([B] F15, shape-asserted):** the landed U-HE-35 directory `.harness/tmp/u-he-35-rounds/` (12 files: `r1..r11.log` + `r9-verdict.log`) reduces to **10 rounds with P1s at r1 and r10** — not the corrupted `review_rounds: 12`, `p1_rounds: [1, 11]`. Fixture test pins both the count and the P1 round ids; **mutation-probe**: revert to file-position numbering → red.
-- [ ] Re-derive the u-he-35 arc row in `.harness/arc-metrics.jsonl` (single-row correction via the existing queue/drain path, never a second arc row — C-HE-25 `SPLIT_BRAIN_LEDGER` rule) so the B-211 lever cohort is not seeded with the corrupted baseline.
+- [ ] Re-derive the u-he-35 arc row in `.harness/arc-metrics.jsonl` (single-row correction via the existing queue/drain path, never a second arc row — C-HE-25 `SPLIT_BRAIN_LEDGER` rule) so the B-211 lever cohort is not seeded with the corrupted baseline. *(Plan-level operational follow-through: X6c's contract obligation is the derivation rule + fixture witness; this bullet applies the repaired rule to the one already-landed corrupted row.)*
 
 #### U-HE-47: attribution writers
 
 **Contract.** C-HE-24 §2/§5 (v1.6 X6d). **Depends on.** (none — the merge-gate emit path landed at U-HE-13). **Round.** R0.
 
-- [ ] `merge-gate-emit` populates `cause_attribution` and `unique_catch` at emission on lens rows (the emitter knows which codex rounds preceded it; `unique_catch` per the C-HE-24 §4 same-`head_sha` join against prior rounds' findings).
+- [ ] `merge-gate-emit` populates `cause_attribution` and `unique_catch` at emission on lens rows, with the X6d match predicate: `unique_catch = true` iff no same-arc finding row from a codex round matches on `(location, finding_type)` — an intra-arc heuristic join keyed on location+type, never `finding_id` (cross-`head_sha` same-defect *identity* stays out of scope per C-HE-24 §4, and C-HE-29 §2's shadow-vs-blocking definition is untouched).
 - [ ] The absorption step appends the §5 `finding_adjudication` rows (`disposition`, `disposition_actor` ≠ producer — the write-time check already exists).
 - [ ] **Acceptance:** a fixture arc emits gate rows after two codex rounds → non-null `cause_attribution`/`unique_catch` on every lens row; the [B] F16 state (44/44 null) is unrepresentable for new rows. **Mutation-probe:** drop the emit-time population → red.
 
@@ -7824,7 +7824,7 @@ The [B] §6 keep-as-is list (charter §4) binds every unit below: a diff that "i
 
 #### U-HE-50: C-HE-27 span emission from the wrapper
 
-**Contract.** C-HE-27 §5 (v1.6 X6a). **Depends on.** (none — `review-with-failover-logged` + the `reservations.py phase` CLI landed at U-HE-34). **Round.** R1 (it is a lever: it changes where discipline lives, and R0's instruments measure whether it worked).
+**Contract.** C-HE-27 §5 (v1.6 X6a). **Depends on.** U-HE-46, U-HE-47, U-HE-48, U-HE-49 (all of R0 — this unit is a lever on the very C-HE-27/C-HE-25 measurement surface R0 repairs, so the §8.1 rule binds as an edge, not only as narrative; the mechanical prerequisites `review-with-failover-logged` + the `reservations.py phase` CLI landed at U-HE-34). **Round.** R1.
 
 - [ ] `review-with-failover-logged` emits verify start/end at its own process boundaries; absorb/edit edges keyed off the first fix edit and the absorption commit per the ship-pr block's semantics (`ship-pr/SKILL.md:95-108` stays the definition; the wrapper becomes the emitter).
 - [ ] Interim carrier: the emission block copied into `roadmap-continue/SKILL.md` (the skill in context during rounds) until the wrapper path fully lands; the copy is deleted in the same PR that completes wrapper emission.
@@ -7916,7 +7916,7 @@ Acceptance mechanism per charter §3: eval-backed units close on "case added to 
 
 ### §8.6 Coverage note
 
-The §4 coverage matrix is unchanged for the v1.0 contract×unit set: the X6 clauses are v1.6 additions to already-covered contracts (C-HE-21/24/25/27/28), and §8.2 is the coverage table for the rev's own source set (every [A]/[B] recommendation id and charter WR-id maps to exactly one unit or an explicit no-unit disposition). The dependency graph gains no cycle: U-HE-46…50 and U-SR-01…09 are roots; U-HE-51 depends only on R0 units.
+The §4 coverage matrix is unchanged for the v1.0 contract×unit set: the X6 clauses are v1.6 additions to already-covered contracts (C-HE-21/24/25/27/28), and §8.2 is the coverage table for the rev's own source set (every [A]/[B] recommendation id and charter WR-id maps to exactly one unit or an explicit no-unit disposition). The dependency graph gains no cycle: U-HE-46…49 and U-SR-01…09 are roots; U-HE-50 and U-HE-51 depend only on the four R0 units.
 
 ## Execution handoff
 
