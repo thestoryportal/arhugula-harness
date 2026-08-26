@@ -107,10 +107,20 @@ class _LiveGroups:
             self._terminating = False
 
     def kill_all(self) -> None:
+        """TERM every live group (cooperative — each wrapper tears down its own nested
+        vendor group), then SIGKILL whatever outlives the grace."""
         with self._lock:
             pgids, self._pgids = tuple(self._pgids), set()
         for pgid in pgids:
-            _kill_group(pgid)
+            _signal_group(pgid, signal.SIGTERM)
+        deadline = time.monotonic() + TERM_GRACE_S
+        live = set(pgids)
+        while live and time.monotonic() < deadline:
+            live = {p for p in live if _group_alive(p)}
+            if live:
+                time.sleep(0.05)
+        for pgid in live:
+            _signal_group(pgid, signal.SIGKILL)
 
 
 LIVE_GROUPS = _LiveGroups()
@@ -167,12 +177,41 @@ def _gemini_valid(sink: Path) -> bool:
         return False
 
 
-def _kill_group(pgid: int) -> None:
-    """Idempotent whole-tree kill: the group already being gone is the goal state."""
+#: Cooperative-stop grace: how long a TERMed wrapper gets to tear down its NESTED vendor
+#: group (run_bounded spawns the vendor CLI in its own session, so only the wrapper can
+#: kill it — codex r8 P2) before the probe SIGKILLs the wrapper group anyway.
+TERM_GRACE_S = 10.0
+
+
+def _signal_group(pgid: int, sig: int) -> None:
+    """Idempotent group signal: the group already being gone is the goal state."""
     try:
-        os.killpg(pgid, signal.SIGKILL)
+        os.killpg(pgid, sig)
     except ProcessLookupError:
         pass
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _stop_tree(proc: subprocess.Popen[str]) -> None:
+    """Cooperative-then-forced stop of a wrapper tree (codex r8 P2): SIGTERM first, so
+    the wrapper's own TerminationRequested path (both wrappers install it) unwinds
+    through run_bounded and terminates the nested vendor group only IT can see; SIGKILL
+    after the grace covers a wrapper too hung to clean up (and only then can the vendor
+    be orphaned — a corner no outside kill can close, since the vendor's group id lives
+    solely in the hung wrapper)."""
+    _signal_group(proc.pid, signal.SIGTERM)
+    try:
+        proc.communicate(timeout=TERM_GRACE_S)
+    except subprocess.TimeoutExpired:
+        _signal_group(proc.pid, signal.SIGKILL)
+        proc.communicate()  # reap; the group is dead, this cannot block
 
 
 @contextlib.contextmanager
@@ -262,8 +301,7 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path, workdir: P
                 pass  # the finally kills the tree; the sample stays invalid
     finally:
         if proc.poll() is None:  # ANY escape path with the child alive: no orphan
-            _kill_group(proc.pid)
-            proc.communicate()  # reap; the group is dead, this cannot block
+            _stop_tree(proc)
         LIVE_GROUPS.discard(proc.pid)
     return time.monotonic() - t0, valid
 

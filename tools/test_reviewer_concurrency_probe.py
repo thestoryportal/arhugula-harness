@@ -189,25 +189,44 @@ def test_one_gemini_validity_is_the_outcome_envelope(
     assert ok is False
 
 
-def test_one_timeout_kills_process_group_and_is_invalid(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    """A timed-out reviewer must not keep running into later concurrency levels
-    (codex r4 P2): the whole process group is killed, and the call reads invalid."""
+def test_one_timeout_cooperative_term_is_invalid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A timed-out reviewer is TERMed first (codex r8 P2: the wrapper's own termination
+    path is the only holder of the nested vendor group id) and the call reads invalid."""
     killed: list[tuple[int, int]] = []
 
     class TimeoutPopen(FakePopen):
         def communicate(self, timeout=None):
-            if timeout is not None:
+            if timeout == rcp.CALL_TIMEOUT_S:  # the bounded wait expires...
                 raise subprocess.TimeoutExpired(cmd="codex-review", timeout=timeout)
-            self._returncode = -9  # the post-kill reap
+            self._returncode = -15  # ...and the wrapper obeys the TERM within the grace
             return "", ""
 
     monkeypatch.setattr(rcp.subprocess, "Popen", lambda argv, **k: TimeoutPopen(argv, **k))
     monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
     _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert ok is False  # a hung reviewer is a validity-failure SAMPLE, not a probe crash
-    assert killed == [(4242, rcp.signal.SIGKILL)]  # the TREE died, not just the launcher
+    assert killed == [(4242, rcp.signal.SIGTERM)]  # cooperative — no blind SIGKILL
+
+
+def test_one_timeout_escalates_to_kill_on_hung_wrapper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A wrapper too hung to honor the TERM is SIGKILLed after the grace (codex r4/r8)."""
+    killed: list[tuple[int, int]] = []
+
+    class HungPopen(FakePopen):
+        def communicate(self, timeout=None):
+            if timeout is not None:  # BOTH the bounded wait and the TERM grace expire
+                raise subprocess.TimeoutExpired(cmd="codex-review", timeout=timeout)
+            self._returncode = -9  # the post-kill reap
+            return "", ""
+
+    monkeypatch.setattr(rcp.subprocess, "Popen", lambda argv, **k: HungPopen(argv, **k))
+    monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    monkeypatch.setattr(rcp, "TERM_GRACE_S", 0.01)
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
+    assert ok is False
+    assert killed == [(4242, rcp.signal.SIGTERM), (4242, rcp.signal.SIGKILL)]
 
 
 def test_reps_cli_boundary_refuses_nonpositive():
@@ -365,17 +384,30 @@ def test_run_batch_calls_actually_overlap(tmp_path: Path, _fixed_binding: str, c
 # ── LIVE_GROUPS: no orphaned reviewer trees on termination (codex r5 P2) ─────
 
 
-def test_live_groups_kill_all_kills_registered_pgids(monkeypatch: pytest.MonkeyPatch):
+def test_live_groups_kill_all_terms_cooperatively(monkeypatch: pytest.MonkeyPatch):
     killed: list[tuple[int, int]] = []
     monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    monkeypatch.setattr(rcp, "_group_alive", lambda pgid: False)  # wrapper obeyed the TERM
     groups = rcp._LiveGroups()
     groups.add(111)
     groups.add(222)
     groups.discard(222)  # a completed call deregisters — only live groups die
     groups.kill_all()
-    assert killed == [(111, rcp.signal.SIGKILL)]
+    # cooperative: TERM lets the wrapper tear down its NESTED vendor group (codex r8 P2)
+    assert killed == [(111, rcp.signal.SIGTERM)]
     groups.kill_all()  # idempotent: the set was drained
-    assert killed == [(111, rcp.signal.SIGKILL)]
+    assert killed == [(111, rcp.signal.SIGTERM)]
+
+
+def test_live_groups_kill_all_escalates_on_hung_wrapper(monkeypatch: pytest.MonkeyPatch):
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    monkeypatch.setattr(rcp, "_group_alive", lambda pgid: True)  # wrapper ignored the TERM
+    monkeypatch.setattr(rcp, "TERM_GRACE_S", 0.01)
+    groups = rcp._LiveGroups()
+    groups.add(111)
+    groups.kill_all()
+    assert killed == [(111, rcp.signal.SIGTERM), (111, rcp.signal.SIGKILL)]
 
 
 def test_one_registers_and_deregisters_its_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -406,10 +438,11 @@ def test_run_restores_signal_handlers(tmp_path: Path, _fixed_binding: str, capsy
 def test_add_refused_once_terminating(monkeypatch: pytest.MonkeyPatch):
     killed: list[tuple[int, int]] = []
     monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    monkeypatch.setattr(rcp, "_group_alive", lambda pgid: False)
     groups = rcp._LiveGroups()
     groups.add(111)
     groups.begin_termination()
-    assert killed == [(111, rcp.signal.SIGKILL)]  # the snapshot died
+    assert killed == [(111, rcp.signal.SIGTERM)]  # the snapshot was stopped
     assert groups.add(333) is False  # ...and no later registration is accepted
     groups.reset()
     assert groups.add(444) is True  # re-armed for the next run
@@ -440,5 +473,5 @@ def test_one_kills_own_group_when_registration_refused(
 
     monkeypatch.setattr(rcp.subprocess, "Popen", spawn_then_terminate)
     _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
-    assert ok is False  # a call whose group was killed at registration is not a verdict
-    assert killed == [(4242, rcp.signal.SIGKILL)]  # the just-spawned group died
+    assert ok is False  # a call whose group was stopped at registration is not a verdict
+    assert killed == [(4242, rcp.signal.SIGTERM)]  # the just-spawned group was stopped
