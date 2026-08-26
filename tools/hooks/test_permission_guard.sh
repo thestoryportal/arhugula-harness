@@ -399,6 +399,8 @@ for c in \
   "just lanes-verify" \
   "just lanes-phase0-check" \
   "just mutation-probe-coverage-check" \
+  "just reviewer-concurrency-probe" \
+  "just reviewer-concurrency-probe gemini 5 main" \
   "just overlay-check"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"
@@ -428,6 +430,10 @@ OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-budget 2 ok" '')")
 # grep — any just-first command containing a quote character falls through to ask.
 OUT=$(run_on "$(pl Bash 'just codex-loop-status review-attest-"budget" 2 ok' '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "quote-normalized budget chain → not auto-allowed" || bad "quote-normalized budget chain auto-allowed: $OUT"
+# U-HE-35: the probe allow is arity-bounded to its 3 recipe parameters — a 4th token
+# would be parsed by `just` as a chained second recipe and must fall through to ask.
+OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 5 main review-attest-budget 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained recipe after reviewer-concurrency-probe → not auto-allowed" || bad "probe chain auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "single-quote-normalized budget chain → not auto-allowed" || bad "single-quote budget chain auto-allowed: $OUT"
 # codex r8 P1: the token grammar admits FULLY-quoted plain spans — the documented

@@ -759,6 +759,14 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # headless venue can produce the round log without a pipe on the command line.
       # (TRIM already has the exact-shape HARNESS id prefix stripped above.)
       emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+reviewer-concurrency-probe([[:space:]]+[A-Za-z0-9._/-]+){0,3}$' \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-35 (codex r2 P2): the C-HE-22 live probe is declared `operator/loop, live`
+      # (§8.1) — a headless loop must be able to fire it, and an unmatched command in
+      # loop mode becomes ask -> denial. EXACT-ANCHORED and arity-bounded to the
+      # recipe's own three parameters (channel reps base), so no surplus token can be
+      # parsed by `just` as a chained second recipe (the B-215 budget-chain class).
+      emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow

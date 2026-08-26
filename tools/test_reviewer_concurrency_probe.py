@@ -215,12 +215,30 @@ def test_run_red_exit_and_rows_still_recorded(tmp_path: Path, _fixed_binding: st
     assert len(fr.read_rows()) == 5
 
 
-def test_run_red_when_head_moves_mid_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
-    """A moved HEAD voids the one-fixed-diff premise: GREEN arithmetic must not survive it."""
-    heads = iter(["a" * 40, "b" * 40])
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        # a moved HEAD
+        (("a" * 40, "c" * 40, "d" * 64), ("b" * 40, "c" * 40, "d" * 64)),
+        # a moved base ref under an UNMOVED HEAD (codex r2 P2): different merge-base,
+        # different reviewed bytes — head_sha alone would miss it
+        (("a" * 40, "c" * 40, "d" * 64), ("a" * 40, "e" * 40, "f" * 64)),
+    ],
+)
+def test_run_red_when_binding_drifts_mid_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+    start: tuple[str, str, str],
+    end: tuple[str, str, str],
+):
+    """Any changed binding component voids the one-fixed-diff premise: GREEN arithmetic
+    must not survive it."""
+    bindings = iter([start, end])
 
     def drifting_binding(repo, base):
-        return {"head_sha": next(heads), "base_sha": "c" * 40, "diff_digest": "d" * 64}
+        head, base_sha, digest = next(bindings)
+        return {"head_sha": head, "base_sha": base_sha, "diff_digest": digest}
 
     monkeypatch.setattr(rcp.rw, "code_binding", drifting_binding)
     monkeypatch.setenv("HARNESS_ARC_ID", "u-he-35")

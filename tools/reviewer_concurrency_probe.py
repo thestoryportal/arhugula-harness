@@ -179,17 +179,20 @@ def run(
         all_valid = all(ok for _, ok in samples[n])
         print(f"N={n}: median {med:.0f}s over {len(samples[n])} calls, valid={all_valid}")
     ok, why = decide(samples)
-    # the "one fixed diff" premise is a world fact `decide` cannot see: a HEAD that moved
-    # mid-run mislabels cross-diff timings as one experiment, so the whole run is void —
-    # RED regardless of the sample arithmetic (codex r1 P2; agy's own moved-HEAD refusal
-    # is the same rule at single-review scope)
-    end_head = rw.code_binding(REPO, base)["head_sha"]
-    if end_head != binding["head_sha"]:
+    # the "one fixed diff" premise is a world fact `decide` cannot see: a binding that
+    # changed mid-run — HEAD, the base ref's merge-base, or the diff bytes themselves —
+    # mislabels cross-diff timings as one experiment, so the whole run is void — RED
+    # regardless of the sample arithmetic (codex r1/r2 P2; agy's own moved-HEAD refusal
+    # is the same rule at single-review scope). Whole-binding compare: head_sha alone
+    # misses a moved base ref under an unmoved HEAD.
+    end = rw.code_binding(REPO, base)
+    if end != binding:
         ok, why = (
             False,
             (
-                f"fixed-diff violated: HEAD moved {binding['head_sha'][:12]} -> "
-                f"{end_head[:12]} during the probe"
+                f"fixed-diff violated: code binding changed during the probe "
+                f"({binding['head_sha'][:12]}/{binding['diff_digest'][:12]} -> "
+                f"{end['head_sha'][:12]}/{end['diff_digest'][:12]})"
             ),
         )
     print(f"{'GREEN' if ok else 'RED'}: {why}")
