@@ -21,6 +21,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import statistics
 import subprocess
 import sys
@@ -56,12 +57,16 @@ _CODEX_TERMINAL_RE = re.compile(r"^codex-review: (?:APPROVE|BLOCK)(?: \[source: 
 Sample = tuple[float, bool]
 
 
-def decide(samples: dict[int, list[Sample]], *, min_reps: int = 5) -> tuple[bool, str]:
+def decide(
+    samples: dict[int, list[Sample]], *, min_reps: int = 5, required: tuple[int, ...] = (1, 2, 4)
+) -> tuple[bool, str]:
     """The C-HE-22 pass rule, pure ([LAW:effects-at-boundaries] the verdict is computed
     from samples alone; measuring and recording live in `run`). RED wins on any of:
-    missing N=1 baseline, a short series, any invalid call, a median blowup."""
-    if 1 not in samples:
-        return False, "insufficient: no N=1 baseline series"
+    a missing required series (the contract names {1,2,4} — five N=1 samples alone
+    certify nothing, codex r4 P3), a short series, any invalid call, a median blowup."""
+    for n in required:
+        if n not in samples:
+            return False, f"insufficient: no N={n} series (contract requires N in {required})"
     for n in sorted(samples):
         if len(samples[n]) < min_reps:
             return False, f"insufficient reps at N={n} ({len(samples[n])} < {min_reps})"
@@ -86,9 +91,9 @@ def probe_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in ("HARNESS_ARC_ID", "HARNESS_LANE_ID")}
 
 
-def _codex_valid(proc: subprocess.CompletedProcess[str]) -> bool:
+def _codex_valid(stderr: str) -> bool:
     """codex has no envelope sink; its machine seam is the stderr completion line."""
-    return _CODEX_TERMINAL_RE.search(proc.stderr) is not None
+    return _CODEX_TERMINAL_RE.search(stderr) is not None
 
 
 def _gemini_valid(sink: Path) -> bool:
@@ -116,15 +121,33 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
         argv += ["--outcome-json", str(sink)]
     t0 = time.monotonic()
     try:
-        proc = subprocess.run(
-            argv, cwd=REPO, env=env, capture_output=True, text=True, timeout=CALL_TIMEOUT_S
+        # its own session => the pid IS the process-group id, so a timeout can kill the
+        # WHOLE reviewer tree (uv -> python -> vendor CLI descendants). subprocess.run's
+        # timeout kills only the immediate launcher and would leave a live reviewer
+        # running into later concurrency levels, contaminating them (codex r4 P2).
+        proc = subprocess.Popen(
+            argv,
+            cwd=REPO,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
         )
-        valid = _codex_valid(proc) if channel == "codex" else _gemini_valid(sink)
-    except (subprocess.TimeoutExpired, OSError):
-        # OSError = the SPAWN failed (fork/exec resource exhaustion under the very
-        # concurrency being probed) — exactly a validity failure, not a probe crash
-        # (codex r3 P2): letting it escape the executor would abort the run with no
-        # RED and no record.
+        try:
+            _out, err = proc.communicate(timeout=CALL_TIMEOUT_S)
+            valid = _codex_valid(err) if channel == "codex" else _gemini_valid(sink)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # the group exited between the timeout and the kill — already gone
+            proc.communicate()  # reap; the group is dead, this cannot block
+            valid = False
+    except OSError:
+        # the SPAWN failed (fork/exec resource exhaustion under the very concurrency
+        # being probed) — exactly a validity failure, not a probe crash (codex r3 P2):
+        # letting it escape the executor would abort the run with no RED and no record.
         valid = False
     return time.monotonic() - t0, valid
 
@@ -190,8 +213,8 @@ def run(
                             round_n=rep,
                         ),
                     )
-    for n in (k for k in ns if samples[k]):
-        med = statistics.median(w for w, _ in samples[n])
+    medians = {n: statistics.median(w for w, _ in samples[n]) for n in ns if samples[n]}
+    for n, med in medians.items():
         all_valid = all(ok for _, ok in samples[n])
         print(f"N={n}: median {med:.0f}s over {len(samples[n])} calls, valid={all_valid}")
     if drifted_from is not None:
@@ -207,6 +230,39 @@ def run(
         )
     else:
         ok, why = decide(samples)
+    # the durable TERMINAL record (codex r4 P2): §8.1's "result row required before
+    # pilots" needs a row that exists only when a run actually completed — undelimited
+    # probe-sample rows cannot carry that fact, and a process killed mid-sampling
+    # leaves no result row (absence = not-run). Location differs from the per-sample
+    # `<channel>@N=<n>` locations, so its finding_id lineage is its own.
+    fr.append_observation(
+        {
+            "location": channel,
+            "observed_evidence": json.dumps(
+                {
+                    "verdict": "GREEN" if ok else "RED",
+                    "why": why,
+                    "medians_s": {str(n): round(m, 1) for n, m in medians.items()},
+                    "counts": {str(n): len(samples[n]) for n in ns},
+                }
+            ),
+            "expected_contract": "C-HE-22",
+            "severity": "info",
+            "finding_type": "probe-result",
+            "lineage_claim": "measured",
+            "producer": PRODUCER,
+        },
+        fr.Envelope(
+            record_kind="finding",
+            ts=fr.now_iso(),
+            arc_id=arc_id,
+            lane_id=lane_id,
+            head_sha=binding["head_sha"],
+            base_sha=binding["base_sha"],
+            diff_digest=binding["diff_digest"],
+            round_n=None,
+        ),
+    )
     print(f"{'GREEN' if ok else 'RED'}: {why}")
     return 0 if ok else 1
 

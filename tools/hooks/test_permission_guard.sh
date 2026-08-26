@@ -434,10 +434,13 @@ OUT=$(run_on "$(pl Bash 'just codex-loop-status review-attest-"budget" 2 ok' '')
 # would be parsed by `just` as a chained second recipe and must fall through to ask.
 OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 5 main review-attest-budget 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "chained recipe after reviewer-concurrency-probe → not auto-allowed" || bad "probe chain auto-allowed: $OUT"
-# U-HE-35 codex r3: reps is TYPED and bounded (1-99) in the auto-allow — an unbounded
-# count would spend billions of live reviewer calls; larger runs stay operator-visible.
+# U-HE-35 codex r3/r4: reps is TYPED and bounded to a single digit (order-of-contract;
+# the C-HE-22 bar is 5) — 99 reps = ~700 live calls outside any arc round budget, and an
+# unbounded count would spend billions; anything past 9 stays operator-visible.
 OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 1000000000 main" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "unbounded probe reps → not auto-allowed" || bad "unbounded probe reps auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 99 main" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "two-digit probe reps → not auto-allowed" || bad "two-digit probe reps auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe evilchannel 5 main" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "unknown probe channel → not auto-allowed" || bad "unknown probe channel auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")

@@ -759,15 +759,16 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # headless venue can produce the round log without a pipe on the command line.
       # (TRIM already has the exact-shape HARNESS id prefix stripped above.)
       emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+reviewer-concurrency-probe([[:space:]]+(codex|gemini)([[:space:]]+[1-9][0-9]?([[:space:]]+[A-Za-z0-9._/-]+)?)?)?$' \
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+reviewer-concurrency-probe([[:space:]]+(codex|gemini)([[:space:]]+[1-9]([[:space:]]+[A-Za-z0-9._/-]+)?)?)?$' \
        && _bash_args_safe "$CMD"; then
-      # U-HE-35 (codex r2/r3 P2): the C-HE-22 live probe is declared `operator/loop,
+      # U-HE-35 (codex r2/r3/r4 P2): the C-HE-22 live probe is declared `operator/loop,
       # live` (§8.1) — a headless loop must be able to fire it, and an unmatched command
       # in loop mode becomes ask -> denial. EXACT-ANCHORED with each positional token
-      # TYPED in recipe order: channel is one of the two wrapper channels, reps is
-      # bounded 1-99 (an unbounded bareword auto-allowed `reps=1000000000` would spend
-      # billions of live reviewer calls — larger runs stay operator-visible), base is a
-      # bareword ref. Arity is bounded to the recipe's own three parameters, so no
+      # TYPED in recipe order: channel is one of the two wrapper channels, reps is a
+      # SINGLE digit 1-9 — order-of-contract (the C-HE-22 bar is 5; each rep spawns
+      # 1+2+4 calls, so even 99 reps would silently authorize ~700 live reviewer calls
+      # outside any arc round budget; anything past 9 stays operator-visible), base is
+      # a bareword ref. Arity is bounded to the recipe's own three parameters, so no
       # surplus token can be parsed by `just` as a chained second recipe (the B-215
       # budget-chain class).
       emit_allow
