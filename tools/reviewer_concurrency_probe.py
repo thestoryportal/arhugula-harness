@@ -73,7 +73,11 @@ class _LiveGroups:
     just-spawned group, so no group can slip past `begin_termination`'s snapshot."""
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        # RLock, not Lock (codex r10 P2): the signal handler runs ON the main thread and
+        # may interrupt it INSIDE a locked section (kill_all/reset/add) — a non-reentrant
+        # lock would self-deadlock before SystemExit and defeat the cleanup guarantee.
+        # Same-thread reentrancy is exactly the signal-interrupts-critical-section case.
+        self._lock = threading.RLock()
         self._pgids: set[int] = set()
         self._terminating = False
 

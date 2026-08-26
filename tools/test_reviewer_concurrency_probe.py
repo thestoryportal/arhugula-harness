@@ -493,3 +493,13 @@ def test_run_records_completed_samples_before_a_worker_crash(
     # the completed call's sample is durable; the crash prevented the terminal result
     # row, so the run reads as not-run (absence), never as a clean verdict
     assert [r["finding_type"] for r in rows] == ["probe-sample"]
+
+
+def test_begin_termination_reentrant_under_held_lock():
+    """codex r10 P2: the signal handler runs ON the main thread and can interrupt a
+    locked section — begin_termination must re-enter the SAME thread's held lock (RLock)
+    instead of self-deadlocking. A plain-Lock regression manifests as this test hanging."""
+    groups = rcp._LiveGroups()
+    with groups._lock:  # simulate SIGTERM landing while main holds the lock
+        groups.begin_termination()
+    assert groups.add(1) is False  # the flag committed despite the held lock

@@ -370,3 +370,29 @@ def test_live_rows_are_reported_never_counted_as_pass(mode, monkeypatch, capsys)
     out = capsys.readouterr().out
     assert "LIVE " in out and "PASS " in out
     assert rc == (1 if mode == "phase0" else 0)
+
+
+def test_probe_result_verdict_fail_closed(tmp_path):
+    """C-HE-22 pilot gate (U-HE-35 codex r10 P1): absent and RED refuse; only the LATEST
+    probe-result row's GREEN admits (an old GREEN superseded by a RED must not)."""
+    import json as _json
+
+    log = tmp_path / "gate-log.jsonl"
+    # absent: the probe never completed a run
+    verdict, why = lv.probe_result_verdict(log)
+    assert verdict == "absent" and "not run" in why
+
+    def row(kind: str, verdict_value: str) -> str:
+        return _json.dumps(
+            {
+                "finding_type": kind,
+                "observed_evidence": _json.dumps({"verdict": verdict_value, "why": "w"}),
+            }
+        )
+
+    # sample rows never satisfy the gate; the latest RESULT row decides
+    log.write_text("\n".join([row("probe-sample", "GREEN"), row("probe-result", "GREEN")]) + "\n")
+    assert lv.probe_result_verdict(log)[0] == "GREEN"
+    with log.open("a") as fh:
+        fh.write(row("probe-result", "RED") + "\n")
+    assert lv.probe_result_verdict(log)[0] == "RED"  # the newer RED supersedes
