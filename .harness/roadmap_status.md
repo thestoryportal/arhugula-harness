@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `cd2b2638718f` |
+| `workspace_state_hash` | `19d3fd867266` |
 | `last_refreshed` | 2026-08-26T00:00:00Z |
-| `git_head` | `387c8fa2` —  |
+| `git_head` | `b6146ce9` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1458).** U-HE-34 landed at #1458: durable phase spans + N6 (C-HE-27) — `phase_spans`/`n6` in `tools/arc_metrics.py` (numerator windowed to contributing arcs, interval-arithmetic downtime exclusion, fail-loud reversed pairs), the queue/execute/absorb/edit/verify/verify_unavailable emitters wired through `reservations.py phase` with a holder fence at the store's write funnel, the guard's positional exact-shape allows, and the `review-with-failover-logged` + `tools/round_log_publish.py` round-log producer (O_NOFOLLOW dir-fd walk, write-once link install, destination pinned under `.harness/tmp/`). C-HE-27 §1's `capture` pair and `result_capture` split are registered on `B-218` (structurally session-unrecordable — spec reconciliation owed) with the per-round-record representation limit; `B-217` gained the reservations-verb `update` sibling. The arc ran 10 codex rounds to its own live BUDGET_EXHAUSTED refusal and a 3-round merge-gate to ALL-APPROVE. Then the next implementable unit is `U-HE-35` (`tools/reviewer_concurrency_probe.py`, plan S6).
+**Current next action (post-#1460).** U-HE-35 landed at #1460: the C-HE-22 reviewer-concurrency probe (`tools/reviewer_concurrency_probe.py`) — pinned-worktree fixed-diff isolation, per-channel machine-seam validity, durable probe-sample/probe-result C-HE-24 rows, cooperative TERM→grace→KILL teardown with a live-group registry, the fail-closed `just pilot-gate-check` reducer, guard allows (channel-typed, contract-sized reps 5–9), and codex_review SIGTERM parity — plus the LIVE run: GREEN, no throttling signal at N≤4 (medians 562/506/466 s, 35/35 valid), so the C-HE-13 §2 pilot precondition is measured and recorded. The arc ran 10 codex rounds to the B-215 budget terminal and a 3-round merge-gate to ALL-APPROVE (round-3 lens prompts authored by a delegated laws:prompt agent). Owed follow-ups registered in-session: the skill-suite repair PR (five audit repairs + the laws:prompt durable wiring per `.harness/session-audit-2026-08-26-u-he-35-preflight-suite.md`), and the C-HE-27 verify/absorb/edit span emitters went unused this arc (named residual). Then the next implementable unit is `U-HE-36` (`tools/arc_disjoint_check.py`, plan S6).
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1460 | 2026-08-26 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1458 | 2026-08-26 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1456 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1454 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1452 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1450 | 2026-08-25 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
