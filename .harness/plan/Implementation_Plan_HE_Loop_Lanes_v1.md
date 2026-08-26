@@ -35,7 +35,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | Field | Value |
 |---|---|
 | Status | **Accepted on merge of PR #1393, with the review record in §7 items 4–8** — exit gate = five out-of-family `just codex-review` rounds on the PR (40 P1 / 22 P2 in total, every finding absorbed in-plan before the next round; one spec-internal tension registered, not absorbed); item 8 is the terminal record and states the residual classes honestly (yield did NOT converge to zero — it is carried by unit execution's RED-first + per-PR codex + merge-gate). The spec's clearance marker (same PR) admits the plan only under this recorded gate. |
-| Version | v1.0 + **rev 2026-08-19 (spec v1.3 X3 absorption, U-HE-14 only)**: the U-HE-14 audit template's family table is re-headed "Derived families + new-fact carriers" with a `Relation` column (`derived` / `part of store N` / `sole carrier (new fact)`) and the `.seq` allocator, transition-marker `fresh_lease`, and LEASE sidecars are classified per the as-landed audit — the S4 units (U-HE-17/22/23/30) land against that classification, not the v1.0 "no new authority" template. No other unit changed. + **rev 2026-08-19 (S4a execution correction, U-HE-15 Step 4b only)**: no-upstream teardown residue clause replaced by spec-exact `@{u}..HEAD` scope with the no-upstream composition registered as a residual (rationale at Step 4b). |
+| Version | v1.0 + **rev 2026-08-19 (spec v1.3 X3 absorption, U-HE-14 only)**: the U-HE-14 audit template's family table is re-headed "Derived families + new-fact carriers" with a `Relation` column (`derived` / `part of store N` / `sole carrier (new fact)`) and the `.seq` allocator, transition-marker `fresh_lease`, and LEASE sidecars are classified per the as-landed audit — the S4 units (U-HE-17/22/23/30) land against that classification, not the v1.0 "no new authority" template. No other unit changed. + **rev 2026-08-19 (S4a execution correction, U-HE-15 Step 4b only)**: no-upstream teardown residue clause replaced by spec-exact `@{u}..HEAD` scope with the no-upstream composition registered as a residual (rationale at Step 4b). + **rev 2026-08-26 (workflow-repair program — spec v1.6 X6a–X6f + `Workflow_Repair_Charter_v1` absorption)**: new §8 with units U-HE-46…51 (bucket 1: contract surfaces, citing the X6-tagged clauses) and U-SR-01…09 (bucket 2: skill-suite + governance, citing charter WR-ids — a new small family, minted because these units' surfaces are skill bodies, hooks, and eval cases the spec deliberately does not own), R0→R3 sequencing (instruments before levers), an item-coverage table over the two U-HE-35 audits' recommendation ids, and two open operator decisions surfaced (not decided). No pre-existing unit changed; §§1–7 preserved verbatim except the §1 unit-index rows appended. |
 | Date | 2026-08-18 |
 | Repo | `17011f89c` (every `file:line` below is pinned there, matching the spec's `[V]` set; re-verified in this authoring session) |
 | Path | `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` |
@@ -53,7 +53,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 
 ## §1 Plan summary
 
-45 atomic units realise all 35 contracts. Foundational anchors: `U-HE-01` finding record (C-HE-24), `U-HE-05` verification manifest scaffold (§8.1), `U-HE-17` reservation record (C-HE-03), `U-HE-22` merge-door lease primitive (C-HE-06), `U-HE-29` loop-status venue (C-HE-09). Every unit cites its contract by ID **and section**; the coverage matrix (§4) shows every contract row marked and every unit column marked. New files created: `tools/{finding_record,reservations,merge_door,review_wrapper_common,codex_review,arc_disjoint_check,reviewer_concurrency_probe,shadow_trial,lanes_verify,main_protection}.py`, `tools/mechanized_checks/`, `tools/review_schemas/*.schema.json`, `tools/hooks/{safe-merge.sh,lane-init.sh}`, `.harness/spec/store-audit-he-loop-lanes.md`, `.harness/merge-gate-log.jsonl`, `.harness/mechanized-checks-state.json`, and their tests. Every path is exact (this workspace's execution posture resolves nothing lazily).
+45 atomic units realise all 35 contracts (the v1.0 set; the rev-2026-08-26 workflow-repair program at §8 adds U-HE-46…51 + U-SR-01…09 against the spec v1.6 X6 clauses and the repair charter — 60 units total). Foundational anchors: `U-HE-01` finding record (C-HE-24), `U-HE-05` verification manifest scaffold (§8.1), `U-HE-17` reservation record (C-HE-03), `U-HE-22` merge-door lease primitive (C-HE-06), `U-HE-29` loop-status venue (C-HE-09). Every unit cites its contract by ID **and section**; the coverage matrix (§4) shows every contract row marked and every unit column marked. New files created: `tools/{finding_record,reservations,merge_door,review_wrapper_common,codex_review,arc_disjoint_check,reviewer_concurrency_probe,shadow_trial,lanes_verify,main_protection}.py`, `tools/mechanized_checks/`, `tools/review_schemas/*.schema.json`, `tools/hooks/{safe-merge.sh,lane-init.sh}`, `.harness/spec/store-audit-he-loop-lanes.md`, `.harness/merge-gate-log.jsonl`, `.harness/mechanized-checks-state.json`, and their tests. Every path is exact (this workspace's execution posture resolves nothing lazily).
 
 **Honest aggregate (spec §6).** Phase 0 = S1–S4 = `U-HE-01`…`U-HE-33`, roughly double v1's Phase 0. It is unconditional; nothing in it is deferrable.
 
@@ -106,6 +106,21 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | U-HE-43 | S8 | `tools/shadow_trial.py`: scoring reducer, `no_finding` markers, kill rule n=30/<2, OC table, HITL delivery | C-HE-29 |
 | U-HE-44 | close | Forward-register rows for spec §11 items #3, #4, #9, #10, #11, #12; plan evidence log | §11 |
 | U-HE-45 | close | Roadmap wiring: register the S1–S8 arcs as `B-*` rows and the pilot bar in `.harness/roadmap_status.md` | CLAUDE.md §12 |
+| U-HE-46 | §8 R0 | Arc-metrics round derivation from round-log content; `GATE_REFUSED` excluded; round-id keyed | C-HE-25 (v1.6 X6c) |
+| U-HE-47 | §8 R0 | Attribution writers: emit-time `cause_attribution`/`unique_catch` on merge-gate rows + adjudication append at absorption | C-HE-24 §2/§5 (v1.6 X6d) |
+| U-HE-48 | §8 R0 | `tools/arc_cost.py` + `just arc-cost <transcript>` per-arc cost extractor | C-HE-25 (v1.6 X6e) |
+| U-HE-49 | §8 R0 | Launch-admission guard + per-attempt round-log names (refused launch consumes no round identity) | C-HE-21 §1 (v1.6 X6b) |
+| U-HE-50 | §8 R1 | C-HE-27 span emission from `review-with-failover-logged`; interim block in `roadmap-continue` | C-HE-27 §5 (v1.6 X6a) |
+| U-HE-51 | §8 R3 | Mid-budget lens-trial instrumentation on the eval arc | C-HE-28 §4 (v1.6 X6f) |
+| U-SR-01 | §8 R1 | Preflight: three new classes + four grep shapes + planted-defect evals for both P1 shapes | Charter WR-01/02/03/07 |
+| U-SR-02 | §8 R1 | Preflight meta-rules: fix-sweep sharpening, contract-derived bounds, hold-policy promotion | Charter WR-04/05/06 |
+| U-SR-03 | §8 R1 | laws:prompt durable wiring + binding values by file | Charter WR-08/09 |
+| U-SR-04 | §8 R1 | Attest labels-before-answers + mechanism-precedent search into preflight grounding | Charter WR-10/11 |
+| U-SR-05 | §8 R1 | codex-check background shape + attestation-artifact handling in the stop-gate | Charter WR-12 |
+| U-SR-06 | §8 R1 | `advisor()` reconciliation (gated on open decision #1) | Charter WR-13 |
+| U-SR-07 | §8 R1 | Session-shape codification: facts-brief handoff, cache-warmth note, read-before-grep | Charter WR-14 |
+| U-SR-08 | §8 R1 | Context-noise deletions: context-save preamble trim + Bash-hook emit policy | Charter WR-15/16 |
+| U-SR-09 | §8 R2 | Mechanical sweep: pin scope, rtk rewrite shapes, edit-hook timing | Charter §2 ("deliberately absent") + [B] b1/b4/b5 |
 
 ### Conventions used in every unit below
 
@@ -7581,7 +7596,7 @@ def main(argv=None) -> int:
 ---
 ## §3 Dependency graph
 
-Direct dependencies only (transitive closure computed by the sort). All 45 units; the graph is acyclic.
+Direct dependencies only (transitive closure computed by the sort). All 45 v1.0 units; the graph is acyclic. (The §8 rev units add no cycle: U-HE-46…49 and U-SR-01…09 are roots; U-HE-50 and U-HE-51 depend only on U-HE-46…49 — see §8.6.)
 
 | Unit | Depends on | Unit | Depends on |
 |---|---|---|---|
@@ -7723,6 +7738,186 @@ Every row marked **mutation-probe** in §8.1 has a named `--lines` target in its
 6. **Codex round 3 on PR #1393 — 11 P1 / 4 P2, all absorbed (three were consequences of round-2 edits — the tiebreaker's tautological first-parent compare, the reclaim publish window, and the status block's "round 2 clean" wording, which was false the moment round 2 returned findings and is now replaced by this record).** P1: holder-only terminal transitions (U-HE-17); reclaim verifies the published lease is its own token, never adopts a foreign lease (U-HE-22); tiebreaker runs in a throwaway worktree, compares the stale landing with the pre-merge main SHA, and `apply` is provisional with automatic rollback on FAIL (U-HE-27); `unique_catch` gets a production writer — `shadow_trial.py adjudicate` (U-HE-43); probe coverage matches every annotation's exact node id (U-HE-05); `unrun_cli` never shells out (U-HE-40); pilot report joins `BASE_TOCTOU` by the landing `merge_sha` now persisted on the reservation, and scopes HIL rows to the pilot's lanes + window with last-write-wins (U-HE-37/23); status block no longer asserts a clean round in advance (§ status). P2: envelope fields immutable on adjudication (U-HE-01); `BASE_TOCTOU` backstop walks first-parent commits (U-HE-33); failover emits when the gemini recipe died at preflight (U-HE-07); `loop_log_structured` returns 1 on write failure and `emit_loop_row` raises `LoopStatusWriteError` (U-HE-29/17).
 7. **Codex round 4 on PR #1393 — 7 P1 / 1 P2, all absorbed.** P1: the AC#2(c) crash-resume test body is real code (a `gh`/`git` shim on PATH, four parametrized kill points, rc 137 → resume rc 0, `merge-calls.log` == 1) instead of a `...` stand-in (U-HE-23); `emit_refresh_pr` is idempotent by branch name so a crash between PR creation and the sidecar publish resumes the existing PR (U-HE-28); refresh-CI failure emits the gate finding + `DEFERRED-HIL` before blocking (U-HE-23); `_push_targets_main` strips quotes so `'HEAD:main'` is fenced (U-HE-26); `main-protection-apply` is a dry run (exit 3) and `apply-confirm` is the mutation, so the operator approves the printed payload (U-HE-27); rollback restores a normalized PUT payload and verifies it, else fails loud "main UNPROTECTED" (U-HE-27); this record itself (the exit gate's terminal item was owed before merge). P2: the lease rate counter ignores `.tmp` remnants and sweeps them (U-HE-22). **Terminal round: item 8.**
 8. **Codex round 5 on PR #1393 (terminal) — 7 P1 / 10 P2, all absorbed; stopping rule applied.** P1: rollback preserves user/team/app `restrictions` and the PUT payload carries the required nullable `restrictions` key (U-HE-27); `shadow_trial.adjudicate` persists on the production path (U-HE-43); commit-before-probe is now a plan-wide convention (the probe tool refuses untracked/dirty targets) and U-HE-01's steps are reordered accordingly; `append_row`/`read_rows` resolve the ledger path at call time so tests never write the real ledger (U-HE-01, every emitter); `lanes_verify` tokenizes `just` args and treats placeholder rows as live, and probe coverage recognises `bash <script>` probes (U-HE-05). P2: door GC skips `.tmp` attempt remnants (U-HE-22); the stack recipe calls `lane_stack_allowed` (U-HE-31); the two-lane compose test is a real body (U-HE-31); `unswept_consumers` diffs the working tree and no longer excludes whole changed files (U-HE-40); `unrun_cli` reads the PR body and warns when it cannot (U-HE-40); the deliverer clamps the window like the grouper, legacy rows are singleton groups, `loop_notify_summary` enforces its 24 h horizon (U-HE-29/30); lane-init fails on index exhaustion (U-HE-31). **Verdict + stopping rule.** P1 yield across rounds was 7 / 8 / 11 / 7 / 7 — flat, not converging: a cold out-of-family reviewer finds real defects in ~7 k lines of *invented, not-yet-executed* code at a steady rate, and each round's fixes open a few new surfaces (rounds 3–5 each contained 2–3 findings against round-(n−1) edits). Continuing to review the plan text is therefore not the cheapest path to correctness; **executing** it is — every unit lands RED-first with its own tests, then `just codex-review` on the PR diff, then the 3-lens `merge-gate` (code PRs). **Residual classes** (what the five rounds kept finding, and what unit-execution review must watch for): (a) crash-window idempotency in multi-step filesystem protocols (marker → move → publish; sidecar → PR create); (b) test bodies that are stand-ins (`...`) or that pass vacuously; (c) payload-shape mismatches against a live API (GET vs PUT shapes; required nullable fields); (d) string-parsing edge cases in the permission guard (quotes, options anywhere); (e) default-argument capture vs call-time resolution; (f) invariant statements that hold at one time (acquisition) but not across a window (continuation). These six are registered by U-HE-44 as forward-register rows *and* as candidate classes for U-HE-40's mechanized checks (each is deterministic or hybrid-checkable). No finding from rounds 1–5 remains unaddressed in the plan text.
+## §8 Workflow-repair program (rev 2026-08-26; spec v1.6 X6a–X6f + `Workflow_Repair_Charter_v1`)
+
+Decomposes the U-HE-35 workflow-repair program into atomic units. Two source authorities, one per bucket: bucket-1 units cite the spec v1.6 X6-tagged clauses (contract surfaces the HE spec owns); bucket-2 units cite `.harness/spec/Workflow_Repair_Charter_v1.md` WR-ids (skill bodies, hooks, and eval cases the spec deliberately does not own — the `U-SR-*` family is minted for them so a `U-HE-*` id never implies a `C-HE-*` cite that does not exist). Evidence ids `[A]`/`[B]` are the two audits named in the charter §"Sources"; every number below is theirs.
+
+### §8.1 Sequencing — instruments before levers (normative for these units)
+
+The self-improvement circuit is broken at both ends: nothing flows in (0 skill repairs across 10 absorption commits [A §4]) and the measurement out is corrupted ([B] F15 round miscount, F16 null attribution). A lever landed before the instruments would be unmeasurable — so the rounds are strictly ordered:
+
+- **R0 — instruments:** U-HE-46, U-HE-47, U-HE-48, U-HE-49. Fix what measures before touching what is measured.
+- **R1 — skill/governance levers:** U-HE-50, U-SR-01…U-SR-08.
+- **R2 — mechanical sweep:** U-SR-09.
+- **R3 — eval arc:** U-HE-51 riding the next code arc (see open decision #2), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), 25.5M IET grand total (21.0M main / 4.52M subagents), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
+
+Units within a round are mutually independent and may land in any order or together. The instruments-before-levers rule binds as dependency edges wherever a lever touches a measured surface: U-HE-50 (R1, a lever on the C-HE-27 surface R0 repairs) and U-HE-51 (R3) both hard-depend on all four R0 units. The U-SR-* levers touch no instrument surface and may land alongside R0.
+
+### §8.2 Item-coverage table (audit id → unit or disposition)
+
+Every recommendation id from [A]/[B], so nothing silently drops:
+
+| Audit id | Unit / disposition |
+|---|---|
+| a1 (spans from wrapper) | U-HE-50 |
+| a2 (labels before answers) | U-SR-04 |
+| a3 (relaunch guard) | U-HE-49 |
+| a4 (bindings by file) | U-SR-03 |
+| a5 (precedent-search rule) | U-SR-04 |
+| b1 (pin scope) | U-SR-09 |
+| b2 (round derivation) | U-HE-46 |
+| b3 (attribution) | U-HE-47 |
+| b4 (rtk shapes) | U-SR-09 |
+| b5 (edit-hook timing) | U-SR-09 |
+| b6 (codex-check shape) | U-SR-05 |
+| b7 (worktree hygiene) | NO UNIT — operator one-off (guard-blocked for the agent; [B] §4 item 6); hand the operator the `git worktree prune` + removal commands |
+| b8 (advisor) | U-SR-06 (open decision #1) |
+| b9 (lens trial) | U-HE-51 |
+| b10 (audit session shape) | U-SR-07 |
+| c1 (re-pin commits) | subsumed by b1 → U-SR-09 ([B] c1: they disappear with the pin-scope fix) |
+| c2 (context-save trim) | U-SR-08 |
+| c3 (Bash-hook notices) | U-SR-08 |
+| c4 (task nags) | NO ACTION — [B] c4: cost negligible, no workspace knob |
+| c5 (r11 launch step) | subsumed by a3 → U-HE-49 ([B] c5) |
+| d1 (arc-cost ledger) | U-HE-48 |
+| d2 (cache-warmth note) | U-SR-07 |
+| d3 (read-before-grep) | U-SR-07 |
+| [A] repair 1 (classes (i)(ii)(iii) + grep shapes) + repair 5 (planted-defect evals) | U-SR-01 |
+| [A] repairs 2 (fix-sweep), 3 (bound-derivation), 4 (hold-policy) | U-SR-02 |
+| laws:prompt durable wiring (memory plan) | U-SR-03 |
+
+The [B] §6 keep-as-is list (charter §4) binds every unit below: a diff that "improves" a keep-as-is surface is out of scope for its unit.
+
+### §8.3 Bucket-1 units (contract surfaces)
+
+#### U-HE-46: arc-metrics round derivation from round-log content
+
+**Contract.** C-HE-25 (v1.6 X6c). **Depends on.** (none — `tools/arc_metrics.py` round snapshot exists at HEAD). **Round.** R0.
+
+- [ ] Derive per-round records from round-log content (the wrapper's `codex-review:` terminal lines), never file position; exclude `GATE_REFUSED` transcripts (refused launches, not rounds); key rounds by round id parsed from the log name/content.
+- [ ] **Acceptance witness ([B] F15, shape-asserted):** the landed U-HE-35 directory `.harness/tmp/u-he-35-rounds/` (12 files: `r1..r11.log` + `r9-verdict.log`) reduces to **10 rounds with P1s at r1 and r10** — not the corrupted `review_rounds: 12`, `p1_rounds: [1, 11]`. Fixture test pins both the count and the P1 round ids; **mutation-probe**: revert to file-position numbering → red.
+- [ ] Re-derive the u-he-35 arc row in `.harness/arc-metrics.jsonl` (single-row correction via the existing queue/drain path, never a second arc row — C-HE-25 `SPLIT_BRAIN_LEDGER` rule) so the B-211 lever cohort is not seeded with the corrupted baseline. *(Plan-level operational follow-through: X6c's contract obligation is the derivation rule + fixture witness; this bullet applies the repaired rule to the one already-landed corrupted row.)*
+
+#### U-HE-47: attribution writers
+
+**Contract.** C-HE-24 §2/§5 (v1.6 X6d). **Depends on.** (none — the merge-gate emit path landed at U-HE-13). **Round.** R0.
+
+- [ ] `merge-gate-emit` populates `cause_attribution` and `unique_catch` at emission on lens rows, with the X6d match predicate: `unique_catch = true` iff no same-arc finding row from a codex round matches on `(location, finding_type)` — an intra-arc heuristic join keyed on location+type, never `finding_id` (cross-`head_sha` same-defect *identity* stays out of scope per C-HE-24 §4, and C-HE-29 §2's shadow-vs-blocking definition is untouched).
+- [ ] The absorption step appends the §5 `finding_adjudication` rows (`disposition`, `disposition_actor` ≠ producer — the write-time check already exists).
+- [ ] **Acceptance:** a fixture arc emits gate rows after two codex rounds → non-null `cause_attribution`/`unique_catch` on every lens row; the [B] F16 state (44/44 null) is unrepresentable for new rows. **Mutation-probe:** drop the emit-time population → red.
+
+#### U-HE-48: `tools/arc_cost.py` + `just arc-cost <transcript>`
+
+**Contract.** C-HE-25 (v1.6 X6e). **Depends on.** (none). **Round.** R0.
+
+- [ ] ~100-line extractor per [B] "Evidence and method": deduplicate usage by `requestId` (naive sums double-count 1.9×), IET = input + 1.25×cache-write + 0.1×cache-read + 5×output, stage windows cut at transcript event timestamps; subagent transcripts under `<transcript-dir>/subagents/` included.
+- [ ] Additive-nullable cost fields onto the arc row; B-211/B-212 lever report (`arc-lever-report`) renders cost per arc when present.
+- [ ] **Acceptance witness:** run against the archived U-HE-35 transcript reproduces [B]'s headline within rounding — 418 main calls / ≈20.99M IET main / ≈4.52M subagents. (If the transcript has been GC'd, the witness is a synthetic fixture with duplicated `requestId`s asserting the 1.9× dedupe delta.)
+
+#### U-HE-49: launch-admission guard + per-attempt round-log names
+
+**Contract.** C-HE-21 §1 (v1.6 X6b). **Depends on.** (none — `tools/review_loop_gate.py` + `tools/round_log_publish.py` landed at B-215/U-HE-34). **Round.** R0.
+
+- [ ] The launch step (loop recipe / `roadmap-continue` carrier) evaluates the admission state — spent-round budget and sweep attestation — BEFORE launching; a launch that would be refused is not made ([B] F13: r11 launched into `BUDGET_EXHAUSTED`; r9 launched into `SWEEP_MISSING`).
+- [ ] Round-log destinations named per attempt, so a refused/failed attempt never claims the write-once round name ([B] F13: r9's relaunch reused `r9.log` → `PUBLISH FAILED (exit 4)`).
+- [ ] **Acceptance:** fixture reproducing both F13 shapes — a refused launch consumes no round identity and the retry publishes cleanly; **mutation-probe**: remove the pre-launch admission check → red.
+
+#### U-HE-50: C-HE-27 span emission from the wrapper
+
+**Contract.** C-HE-27 §5 (v1.6 X6a). **Depends on.** U-HE-46, U-HE-47, U-HE-48, U-HE-49 (all of R0 — this unit is a lever on the very C-HE-27/C-HE-25 measurement surface R0 repairs, so the §8.1 rule binds as an edge, not only as narrative; the mechanical prerequisites `review-with-failover-logged` + the `reservations.py phase` CLI landed at U-HE-34). **Round.** R1.
+
+- [ ] `review-with-failover-logged` emits verify start/end at its own process boundaries; absorb/edit edges keyed off the first fix edit and the absorption commit per the ship-pr block's semantics (`ship-pr/SKILL.md:95-108` stays the definition; the wrapper becomes the emitter).
+- [ ] Interim carrier: the emission block copied into `roadmap-continue/SKILL.md` (the skill in context during rounds) until the wrapper path fully lands; the copy is deleted in the same PR that completes wrapper emission.
+- [ ] **Acceptance:** a fixture round through the wrapper writes the verify span pair with zero skill-prose involvement; the next real code arc's reservation shows non-null verify/absorb/edit spans (U-HE-35 baseline: 0 of 60 expected edges [B] §3 item 4). SKILL.md edits owe the wiring suite per workspace discipline.
+
+#### U-HE-51: mid-budget lens trial (rides the R3 eval arc)
+
+**Contract.** C-HE-28 §4 (v1.6 X6f). **Depends on.** U-HE-46, U-HE-47, U-HE-48, U-HE-49 (all of R0 — the trial is only readable through repaired instruments). **Round.** R3.
+
+- [ ] On the eval arc: concurrency + witness-adequacy lenses once after codex round 4; spec-conformance at ship only, findings-per-IET recorded (baseline 0 per 1.34M IET [B] F3).
+- [ ] Record rounds-to-all-approve against the 13-round baseline; result labeled correlational (C-HE-28 §3). Lens prompts authored per U-SR-03's wiring (delegated laws:prompt agent; bindings by file).
+- [ ] **Acceptance:** the trial's numbers land as C-HE-24/C-HE-25 rows via the R0 instruments; a one-paragraph comparison lands in the arc's close-out.
+
+### §8.4 Bucket-2 units (charter surfaces)
+
+Acceptance mechanism per charter §3: eval-backed units close on "case added to `.claude/skills/defect-class-preflight/evals/evals.json` and passing"; the rest name a mechanical witness. All R1 except U-SR-09 (R2).
+
+#### U-SR-01: preflight — three new classes + grep shapes + P1 planted-defect evals
+
+**Charter.** WR-01, WR-02, WR-03, WR-07. **Depends on.** (none.)
+
+- [ ] Add the spec-phrase-to-code completeness class, the new-command-surface class (fires on any new justfile recipe whose `runs_in` includes "loop"), and the signal/lock safety class to `defect-class-preflight/SKILL.md`; add the four shapes (`returncode in (`, `except subprocess.TimeoutExpired` without `OSError`, argparse `type=int` counts, guard `elif` without witness) to `preflight-grep.sh`.
+- [ ] Planted-defect eval cases for both U-HE-35 P1 shapes (exit-code-as-verdict; declared-but-unenforced gate). **Acceptance:** eval cases added and passing; grep shapes each catch a planted fixture.
+
+#### U-SR-02: preflight meta-rules — fix-sweep, bounds, hold-policy
+
+**Charter.** WR-04, WR-05, WR-06. **Depends on.** (none.)
+
+- [ ] Fix-sweep sharpening verbatim: "a commit that adds a mechanism can never answer 'no new mechanism'" ([A] §2: 8 of 29 findings were on the arc's own absorption fixes). Contract-derived-bounds rule ([A] §3: the reps token took 4 paid touches). Hold-policy promotion: a held finding is accompanied in the SAME round by the minimal fail-closed probe ([A] §1: the un-promoted memory cost 4 rounds).
+- [ ] **Acceptance:** eval cases for each rule added and passing.
+
+#### U-SR-03: laws:prompt durable wiring + bindings by file
+
+**Charter.** WR-08, WR-09. **Depends on.** (none — `just merge-gate-binding` exists.)
+
+- [ ] The three wiring parts from the memory plan: hard skill-text step in `merge-gate`/`fan-out`/`council-workflow`; PreToolUse Agent-tool advisory hook (advisory-inject, never deny); freehand-prompt regression eval case.
+- [ ] `just merge-gate-binding` writes the six binding values to a file; the lens prompt names the path and the lens agent reads it — no hand-copied values (both r3 corruptions were transcription errors, 0.38M IET + ≈5 min [B] F3).
+- [ ] **Acceptance:** eval case passing; a lens round on a fixture arc runs with zero inline binding values; wiring suite green after the SKILL.md edits.
+
+#### U-SR-04: attest labels-first + mechanism-precedent search
+
+**Charter.** WR-10, WR-11. **Depends on.** (none.)
+
+- [ ] Attest recipe runs `preflight-grep.sh` first and writes its labels into the answers template (3 attest-by-trial failures [B] F14 → 0).
+- [ ] Precedent-search rule into the preflight grounding step, per the `mechanism-precedent-search-before-authoring` memory: reviewed sibling first, gate-log corpus query, plan skeleton is unreviewed input (≥7 of 29 findings re-derived sibling disciplines [A]).
+- [ ] **Acceptance:** the attest recipe's template carries pre-filled labels on a fixture run; grounding-step text landed + eval case where applicable.
+
+#### U-SR-05: codex-check shape
+
+**Charter.** WR-12. **Depends on.** (none.)
+
+- [ ] `just codex-check` invocations in the loop skills always `run_in_background` (run 3's 600 s foreground timeout cost a 10-min dead gap [B] F6).
+- [ ] Stop-gate tree-dirty test ignores — or re-homes/gitignores — `.harness/.preflight-answers-*` / `.harness/.sweep-answers-*` (2 of 3 runs red on environment only, ≈20 min [B] F6/item 14).
+- [ ] **Acceptance:** a tree carrying only attestation artifacts passes the stop-gate; witness test for the chosen mechanism (ignore vs re-home vs gitignore — implementer's call, recorded in the commit).
+
+#### U-SR-06: `advisor()` reconciliation — GATED on open decision #1
+
+**Charter.** WR-13. **Depends on.** Open decision #1 (§8.5).
+
+- [ ] If REWRITE: conform `CLAUDE.md` §13.1, `roadmap-continue/SKILL.md:106`, `merge-gate/SKILL.md:9,17`, `resolve/SKILL.md:35` to the instrument that exists (fresh-context Agent on the transcript summary, or `just codex-review` alone) — the [B] §3 item 1 carrier list. If PROVISION: expose the tool and leave the prose. **Acceptance:** zero governance carriers name an instrument the environment does not expose (grep witness), or the tool answers a live call.
+
+#### U-SR-07: session-shape codification
+
+**Charter.** WR-14. **Depends on.** (none.)
+
+- [ ] Three habit lines into the loop skills (`roadmap-continue` / `ship-pr` close-out): facts-brief → fresh-session for heavy audits/documents ([B] F10: 0.93M vs ≈0.3M IET); cache-warmth handoff before >TTL background waits at >400k context ([B] F4: ≈0.7M IET per re-warm); read-before-grep ([B] d3: 33 `sed -n` + 101 grep-shaped calls, one API call each).
+- [ ] **Acceptance:** the lines exist at their carriers (grep witness); wiring suite green.
+
+#### U-SR-08: context-noise deletions
+
+**Charter.** WR-15, WR-16. **Depends on.** (none.)
+
+- [ ] `context-save` preamble trimmed to the workspace-relevant subset ([B] F11: 53.8 KB per invocation; the only sink used is the local checkpoint directory).
+- [ ] PreToolUse:Bash hook emits only on an actual rewrite or guard decision ([B] F12: 143 attachments ≈ 108 KB, mostly "rewrote nothing").
+- [ ] **Acceptance:** byte measurement before/after on one invocation of each; no-rewrite Bash call produces zero attachment bytes.
+
+#### U-SR-09: mechanical sweep (R2)
+
+**Charter.** §2 "deliberately absent" + [B] b1/b4/b5 (+ c1 subsumed). **Depends on.** (none.)
+
+- [ ] **b1 pin scope:** bind the mutation pin to the probed block's digest (`--lines` range + test body), or pin once at ship — implementer picks the arm and records why. Witness per [B]: edit an unrelated line, assert the pin is still fresh (baseline: 12 re-pins, 13 of 29 commits, 1.07M IET [B] F7; re-pin commits disappear — c1).
+- [ ] **b4 rtk shapes:** fix or pass-through the three deterministic failures — `\|` alternation → rg parse error, `--glob` landing on BSD grep, `(`/`)` in fixed-string greps ([B] F5: 29 wasted calls ≈ 1.2M IET). Witness: each shape round-trips.
+- [ ] **b5 edit-hook timing:** time `postedit-lint.sh` and `graft-hooks.cjs post-edit` separately on one `.py` edit; if `uv run ruff` is the path taken, put `ruff` on hook-shell PATH ([B] F8: 945 s across 100 edits, 8.9 s median). Witness: the measured numbers land in the commit message; post-fix median asserted < the measured baseline.
+
+### §8.5 Open operator decisions (surfaced, NOT decided — per the authoring handoff's explicit constraint)
+
+1. **`advisor()` — provision or rewrite?** The governance prose names a tool no environment exposes ([B] §3 item 1: 0 calls, 65 mentions, not in any settings/MCP surface). Arms: (a) REWRITE the four carriers to the instrument that exists — [B] b8's own framing ("a discipline that cannot be followed trains the agent to skip disciplines") leans this way, and it is reversible if the tool is provisioned later; (b) PROVISION a transcript-aware advisor tool. U-SR-06 executes whichever arm is chosen.
+2. **U-HE-36 ordering.** The roadmap's next implementable unit is U-HE-36 (`arc_disjoint_check`). Arms: (a) **R0 → R1 → R2 → U-HE-36-as-R3** — U-HE-36 rides as the program's eval arc with U-HE-51's trial, so the first post-repair code arc is measured by repaired instruments (recommended: it costs nothing — U-HE-36 is unblocked either way — and makes the A/B read clean); (b) U-HE-36 lands first, and a later code arc serves as R3. Recommendation (a), presented rather than assumed.
+
+### §8.6 Coverage note
+
+The §4 coverage matrix is unchanged for the v1.0 contract×unit set: the X6 clauses are v1.6 additions to already-covered contracts (C-HE-21/24/25/27/28), and §8.2 is the coverage table for the rev's own source set (every [A]/[B] recommendation id and charter WR-id maps to exactly one unit or an explicit no-unit disposition). The dependency graph gains no cycle: U-HE-46…49 and U-SR-01…09 are roots; U-HE-50 and U-HE-51 depend only on the four R0 units.
+
 ## Execution handoff
 
 Plan complete and saved to `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`. Two execution options:
