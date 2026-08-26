@@ -33,7 +33,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import finding_record as fr
@@ -339,38 +339,56 @@ def run(
             scratch = workdir.parent
             for n in ns:
                 for rep in range(reps):
+                    # each completed call is recorded AS IT FINISHES (codex r9 P2): a
+                    # worker that raises, or a signal landing mid-batch, must not
+                    # discard the paid samples that already completed — as_completed
+                    # narrows the loss window to results not yet iterated. A worker
+                    # exception is collected and re-raised AFTER the batch's completed
+                    # samples are durable ([LAW:no-silent-failure] the bug still
+                    # surfaces; the terminal result row is then absent = not-run).
+                    errors: list[BaseException] = []
                     with ThreadPoolExecutor(max_workers=n) as ex:
-                        results = list(
-                            ex.map(
-                                lambda _: one(channel, binding["base_sha"], env, scratch, workdir),
-                                range(n),
-                            )
-                        )
-                    for wall, valid in results:
-                        samples[n].append((wall, valid))
-                        fr.append_observation(
-                            {
-                                "location": f"{channel}@N={n}",
-                                "observed_evidence": json.dumps(
-                                    {"wall_s": round(wall, 1), "valid": valid, "n": n, "rep": rep}
+                        futures = [
+                            ex.submit(one, channel, binding["base_sha"], env, scratch, workdir)
+                            for _ in range(n)
+                        ]
+                        for fut in as_completed(futures):
+                            try:
+                                wall, valid = fut.result()
+                            except Exception as exc:
+                                errors.append(exc)
+                                continue
+                            samples[n].append((wall, valid))
+                            fr.append_observation(
+                                {
+                                    "location": f"{channel}@N={n}",
+                                    "observed_evidence": json.dumps(
+                                        {
+                                            "wall_s": round(wall, 1),
+                                            "valid": valid,
+                                            "n": n,
+                                            "rep": rep,
+                                        }
+                                    ),
+                                    "expected_contract": "C-HE-22",
+                                    "severity": "info",
+                                    "finding_type": "probe-sample",
+                                    "lineage_claim": "measured",
+                                    "producer": PRODUCER,
+                                },
+                                fr.Envelope(
+                                    record_kind="finding",
+                                    ts=fr.now_iso(),
+                                    arc_id=arc_id,
+                                    lane_id=lane_id,
+                                    head_sha=binding["head_sha"],
+                                    base_sha=binding["base_sha"],
+                                    diff_digest=binding["diff_digest"],
+                                    round_n=rep,
                                 ),
-                                "expected_contract": "C-HE-22",
-                                "severity": "info",
-                                "finding_type": "probe-sample",
-                                "lineage_claim": "measured",
-                                "producer": PRODUCER,
-                            },
-                            fr.Envelope(
-                                record_kind="finding",
-                                ts=fr.now_iso(),
-                                arc_id=arc_id,
-                                lane_id=lane_id,
-                                head_sha=binding["head_sha"],
-                                base_sha=binding["base_sha"],
-                                diff_digest=binding["diff_digest"],
-                                round_n=rep,
-                            ),
-                        )
+                            )
+                    if errors:
+                        raise errors[0]
     finally:
         # non-signal exits (normal completion, an exception): reap anything still
         # registered, re-arm the flag for a later run in this process, then restore

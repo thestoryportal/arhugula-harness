@@ -475,3 +475,21 @@ def test_one_kills_own_group_when_registration_refused(
     _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert ok is False  # a call whose group was stopped at registration is not a verdict
     assert killed == [(4242, rcp.signal.SIGTERM)]  # the just-spawned group was stopped
+
+
+def test_run_records_completed_samples_before_a_worker_crash(
+    tmp_path: Path, _fixed_binding: str, capsys
+):
+    """codex r9 P2: a worker that raises must not discard the batch's already-completed
+    paid samples — they are recorded as they finish, THEN the bug surfaces loudly."""
+    calls = iter([lambda: (60.0, True), lambda: (_ for _ in ()).throw(RuntimeError("boom"))])
+
+    def one_then_boom(c, b, e, s, w):
+        return next(calls)()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        rcp.run("main", channel="codex", reps=1, ns=(2,), one=one_then_boom)
+    rows = fr.read_rows()
+    # the completed call's sample is durable; the crash prevented the terminal result
+    # row, so the run reads as not-run (absence), never as a clean verdict
+    assert [r["finding_type"] for r in rows] == ["probe-sample"]

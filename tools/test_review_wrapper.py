@@ -1683,3 +1683,23 @@ def test_compute_binding_merge_base_uses_the_captured_head(monkeypatch):
     rw.compute_binding(Path("."), "main", channel="codex", prompt_version="p", config_hash="c")
     mb = next(c for c in seen if "merge-base" in c)
     assert mb[-2:] == ["main", "e" * 40]  # never a second "HEAD" read (merge-gate L1)
+
+
+def test_main_sigterm_machinery_installs_translates_and_restores(monkeypatch):
+    """U-HE-35 codex r8/r9: run_bounded spawns the vendor CLI in its OWN session, so only
+    this process's TerminationRequested unwind can tear that group down — the handler must
+    be live for the whole review body, translate to the POSIX signal exit, and never
+    outlive main. Reverting the main() install (the r8 fix) fails this test."""
+    import signal as _signal
+
+    before = _signal.getsignal(_signal.SIGTERM)
+    seen = {}
+
+    def fake_reviewed(args, invoke):
+        seen["handler"] = _signal.getsignal(_signal.SIGTERM)
+        raise cr.TerminationRequested(15)
+
+    monkeypatch.setattr(cr, "_reviewed_main", fake_reviewed)
+    assert cr.main(["--base", "main"]) == 143  # 128 + SIGTERM
+    assert seen["handler"] is cr.handle_termination_signal  # live during the review body
+    assert _signal.getsignal(_signal.SIGTERM) is before  # restored after
