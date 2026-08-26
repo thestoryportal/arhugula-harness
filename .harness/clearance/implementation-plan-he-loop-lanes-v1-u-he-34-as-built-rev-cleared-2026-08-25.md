@@ -9,7 +9,7 @@ back_reference:
   - "tools/arc_metrics.py + tools/test_arc_metrics.py + tools/lanes_verify.py + justfile `review-log-settle` + tools/hooks/permission-guard.sh + .claude/skills/{roadmap-continue,ship-pr}/SKILL.md (same PR)"
 reviewer_chain:
   - "out-of-family review chain (codex-review with gemini failover) on the U-HE-34 PR covers the bundled rev note"
-  - "author grounding: item (i) verified against tools/finding_record.py reduce_last_by_finding_id (file-order authority) and test_retry_after_adjudication_is_rejected; item (ii) mutation-probed both ways at landing (plant `prev` in n6 → red; restore → 132/132 green); item (iii) verified by grep — no tools/hooks writer of round logs exists, `round_log_source` history shows session-tee'd files; item (iv) witnessed by the guard shell suite (323/323 with the verb, deny without)"
+  - "author grounding: item (i) verified against tools/finding_record.py reduce_last_by_finding_id (file-order authority) and test_retry_after_adjudication_is_rejected; item (ii) mutation-probed both ways at landing (plant `prev` in n6 → red; restore → 132/132 green); item (iii) verified by grep — no tools/hooks writer of round logs exists, `round_log_source` history shows session-tee'd files; item (iv) witnessed by the guard shell suite (green at each round's HEAD with the verb's allow + hardening cases; deny without)"
   - "council NOT convened (proportionality: execution-time corrections to one unit's drafted sketch; every C-HE-* contract cited is unchanged and no design surface is extended — the guard verb is an H_E carrier of the unit's own emitters, the settle recipe is the plan's own named alternative branch)"
 supersedes: null
 superseded_by: null
@@ -17,8 +17,13 @@ superseded_by: null
 
 # Clearance — `Implementation_Plan_HE_Loop_Lanes_v1` (U-HE-34 as-built rev, 2026-08-25)
 
-U-HE-34 landed C-HE-27 phase spans + N6 with its scope intact. This marker records the
-execution-time corrections the landing folded back into the plan (rev-note items (i)–(iv)
+U-HE-34 landed the session-recordable surface of C-HE-27: the §2 no-delta discipline,
+the §3 durable accretion + fold, the §4 N6 formula with its downtime buckets, and the
+queue/execute/absorb/edit/verify/verify_unavailable emitters. Two §1 obligations are
+NOT landed and are registered on `B-218` with the reconciliation they require: the
+`capture` pair (structurally unrecordable post-terminal, C-HE-03 §3) and the
+`result_capture` split (observable only wrapper-internally). This marker records the
+execution-time corrections the landing folded back into the plan (rev-note items (i)–(ix)
 at the unit's Step 4), and ratifies the plan-rev + tooling mix in one PR as a
 bundled-absorption arc (workspace `CLAUDE.md` §11.4) rather than silent absorption.
 

@@ -155,7 +155,10 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
 - **Record each lens verdict through the structured sibling (C-HE-23 §2).** Write the lens's
   full response to `.harness/tmp/merge-gate-lens-<id>.txt` (in-worktree, gitignored — the
   permission guard auto-allows the wrapper only on in-worktree paths) and run
-  `just merge-gate-emit --pr <PR#> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`.
+  `just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+  (`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's
+  `arc_id` to `pr-<N>`, which breaks the join N6 and the reservation phase rows key on;
+  U-HE-34 r6).
   It parses the fenced JSON against the schema, holds it to the binding, requires the final
   `VERDICT:` line to agree with it (exact-line match), and writes the
   `.harness/merge-gate-log.jsonl` rows FIRST and a structured `.harness/merge-gate-log.md`

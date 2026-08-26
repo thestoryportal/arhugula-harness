@@ -95,11 +95,13 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
     2..n interleave inside this pair and the final confirming round falls after it —
     with one pair per phase the alternation is not exactly representable; the recorded
     denominator is round-1 review + the fix window, never a double count.
-  - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): `--phase verify_unavailable
-    --edge start` immediately on OBSERVING the exit, `--edge end` when review attempts
-    resume (or the arc is held) — the phase CLI stamps now(), so the span is the
-    observable outage window, detection → resume, not the wrapper-internal failure
-    instant. n6() buckets this span (and round-1-unavailable verify spans) OUT of the
+  - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): first CLOSE the round-1
+    window — `--phase verify --edge end` (the round ended when the wrapper exited; an
+    unclosed pair yields no span and the arc's review time would silently vanish) —
+    then `--phase verify_unavailable --edge start` immediately on OBSERVING the exit,
+    `--edge end` when review attempts resume (or the arc is held) — the phase CLI
+    stamps now(), so the span is the observable outage window, detection → resume,
+    not the wrapper-internal failure instant. n6() buckets this span (and round-1-unavailable verify spans) OUT of the
     denominator so reviewer downtime cannot deflate N6. Named bound: a SUCCESSFUL
     failover's primary-channel downtime is internal to the wrapper — this session-layer
     emitter cannot observe it, so that downtime stays inside verify until a

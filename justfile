@@ -336,7 +336,9 @@ merge-gate-binding lens base='main':
 
 # Record one lens verdict: JSONL first, markdown second (C-HE-23 §2, U-HE-13). Exit 0 APPROVE
 # recorded / 1 BLOCK recorded / 2 NOT recorded (does not count; re-run the lens).
-#   just merge-gate-emit --pr <N> --lens merge-gate-<id> --verdict-json .harness/tmp/<file>
+#   just merge-gate-emit --pr <N> --arc-id <arc-id> --lens merge-gate-<id> --verdict-json .harness/tmp/<file>
+#   (--arc-id is the RESERVATION id, e.g. u-he-34 -- omitting it defaults the row to
+#   pr-<N>, which breaks the arc_id join N6 and the phase rows key on; U-HE-34 r6)
 merge-gate-emit *ARGS:
     uv run python tools/merge_gate_log.py emit "$@"
 
@@ -748,13 +750,24 @@ review-with-failover-logged log base='main':
     mkdir -p "$dir"
     phys="$(cd "$dir" && pwd -P)" || exit 4
     case "$phys/" in "$(pwd -P)/"*) ;; *) echo "review-with-failover-logged: $log resolves outside the worktree ($phys) -- refused (containment)" >&2; exit 4 ;; esac
+    # Write-then-RENAME (codex r6 P1): tee writes only a mktemp-created private file
+    # (O_EXCL, random name), and rename(2) replaces the destination PATH ENTRY --
+    # a symlink swapped in after the checks above is replaced, never written through,
+    # so the check-to-open window cannot truncate a file outside the worktree.
     # `--` stops tee option-parsing a dash-led name; PIPESTATUS[0] preserves the
     # wrapper's verdict exit (0/1/2/3) -- pipefail would let a failing tee (rightmost
-    # nonzero) overwrite REVIEWER_UNAVAILABLE/GATE_REFUSED semantics (codex r5). A
-    # tee failure is loud but never rewrites the verdict.
-    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee -- "$log"
+    # nonzero) overwrite REVIEWER_UNAVAILABLE/GATE_REFUSED semantics (codex r5).
+    tmp="$(mktemp "$dir/.rlog.XXXXXX")" || exit 4
+    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee -- "$tmp"
     rc=("${PIPESTATUS[@]}")
-    [ "${rc[1]}" -ne 0 ] && echo "review-with-failover-logged: WARNING tee exited ${rc[1]} -- round log $log is unreliable" >&2
+    mv -f -- "$tmp" "$log" || { echo "review-with-failover-logged: publish to $log failed" >&2; exit 4; }
+    if [ "${rc[1]}" -ne 0 ]; then
+      # The partial log is published as evidence, but a clean APPROVE must not ride a
+      # broken canonical log (codex r6): automation reading exit 0 would trust a round
+      # record the tee did not finish. A non-zero verdict keeps its own semantics.
+      echo "review-with-failover-logged: WARNING tee exited ${rc[1]} -- round log $log is partial" >&2
+      [ "${rc[0]}" -eq 0 ] && exit 4
+    fi
     exit "${rc[0]}"
 
 # B-215 admission-gate attest verbs (tools/review_loop_gate.py): deterministic
