@@ -26,3 +26,11 @@ code unit with the X6f lens trial — judged against the recorded [B] baseline
 (13 rounds, 25.5M IET, 418 calls). Authoring-only: no repair executed in the
 landing PR; the two operator forks (advisor() provision-vs-rewrite; U-HE-36
 ordering) are surfaced at §8.5 with recommendations, undecided.
+
+**§8.5 ratification (2026-08-26, U-HE-46 arc).** The operator ratified both
+decisions via the `/roadmap-continue` invocation opening the U-HE-46 arc:
+decision 1 = **REWRITE** (arm (a) — conform the four advisor() carriers to the
+instrument that exists; U-SR-06 executes this arm), decision 2 = **arm (a)**
+(R0→R1→R2, with U-HE-36 riding as the R3 eval arc carrying U-HE-51's trial).
+Recorded at plan §8.5 in the same PR; the "surfaced, not decided" constraint
+above is discharged.
