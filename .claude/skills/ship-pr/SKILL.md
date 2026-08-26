@@ -56,15 +56,24 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `DEFAULT_ROUND_BUDGET` in `tools/review_loop_gate.py` (the one authority on the
   number); exhaustion is the register-and-hold point (`defer.sh` + register row), and
   only an operator extends it (`just review-attest-budget`, deliberately ask-gated).
-- **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`
+- **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log`
   (branch-vs-`main`; the C-HE-18 fail-closed `codex-review` wrapper with the C-HE-17
-  `gemini-review` failover) to convergence — the inline `HARNESS_*` prefix is REQUIRED
+  `gemini-review` failover; the logged variant is CANONICAL — its in-recipe log publisher is the
+  only way a guarded venue produces the round log that `arc-metrics queue
+  --round-logs` later reads, and the bare `just review-with-failover` remains only for
+  a venue that cannot take the log path) to convergence. Run it in background mode, or
+  with a Bash tool timeout ABOVE the wrapper's own shared deadline (1260 s primary +
+  bounded failover — e.g. ≥ 3000000 ms): a shorter tool timeout kills a valid required
+  review mid-flight. The inline `HARNESS_*` prefix is REQUIRED
   even when ship-pr is invoked standalone: shell exports do not survive across Bash tool
   calls, and a bare invocation writes the wrapper's `branch-*`/`-nolane` fallback ids
   into the C-HE-24/25 rows instead of joining the arc's real reservation (`<arc-id>` from
   the arc-open step; `<lane-id>` from `.harness/.lane-id`) — fix real findings, hermetically regression-test each (§13.1). Exit 0
-  APPROVE / 1 BLOCK / 2 `REVIEWER_UNAVAILABLE`; the terminal line on stderr is the verdict,
-  never the exit code or the absence of output. *Invariant #3 (restated, C-HE-17 §3):
+  APPROVE / 1 BLOCK / 2 `REVIEWER_UNAVAILABLE` / 4 publish-failed; the terminal
+  `codex-review:` line is the verdict, never the exit code or the absence of output —
+  through the LOGGED variant it arrives on the merged stdout transcript (and in the
+  round log), since the recipe folds the wrapper's stderr into the publisher pipe; the
+  schema-parsed C-HE-15 rows remain the durable verdict authority either way. *Invariant #3 (restated, C-HE-17 §3):
   out-of-family review covers Codex-authored work as before, AND serves as the D-C failover
   for Claude-authored diffs at the identical bar. Exit 2 (`REVIEWER_UNAVAILABLE` on both
   channels) blocks the arc; record both reasons.* Use `--base` here, NOT
@@ -72,6 +81,51 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   working tree pollutes + dilutes the review of the actual diff (the 2026-06-26 finding at
   `.harness/uncommitted-review-flaw-verification-arc.md`). `-uncommitted` is for genuine
   pre-commit review in a CLEAN tree only.
+- **Phase-span edges (U-HE-34; C-HE-27).** Durable review/edit wall-clock accretes on the
+  reservation as explicit `{start, end}` pairs — N6 reads ONLY these spans, never a gap
+  between two records. Each command is a single literal-id invocation (guard-allowlisted
+  in exactly the canonical flag order `--arc-id <v> --phase <v> --edge <v> --lane-id <v>`
+  — the mandatory trailing lane is the authority half: record_phase refuses a lane that
+  is not the head's holder, since the guard can validate only the command's FORM;
+  replay-idempotent; skip all of them when the arc is unreserved — an absent span reads
+  null downstream, never zero). The durable map holds ONE pair per phase and the loop
+  alternates review/fix rounds, so the pairs below are DISJOINT by construction — N6
+  sums verify + edit, and nested spans would double-count (codex U-HE-34 r1):
+  - **verify = the round-1 window.** Before the FIRST review invocation:
+    `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start --lane-id <lane-id>`;
+    at that round's verdict (APPROVE or BLOCK): the same command with `--edge end`.
+  - **absorb = classification.** On a BLOCK: `--phase absorb --edge start` when finding
+    classification begins, `--edge end` when fixing starts.
+  - **edit = the fix window.** `--phase edit --edge start` at the first fix edit,
+    `--edge end` after the FINAL fix commit. Named measurement bound: re-review rounds
+    2..n interleave inside this pair and the final confirming round falls after it —
+    with one pair per phase the alternation is not exactly representable; the recorded
+    denominator is round-1 review + the fix window, never a double count.
+  - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): first CLOSE the round-1
+    window — `--phase verify --edge end` (the round ended when the wrapper exited; an
+    unclosed pair yields no span and the arc's review time would silently vanish) —
+    then `--phase verify_unavailable --edge start` immediately on OBSERVING the exit,
+    `--edge end` when review attempts resume (or the arc is held) — the phase CLI
+    stamps now(), so the span is the observable outage window, detection → resume,
+    not the wrapper-internal failure instant. n6() buckets this span (and round-1-unavailable verify spans) OUT of the
+    denominator so reviewer downtime cannot deflate N6. Named bound: a SUCCESSFUL
+    failover's primary-channel downtime is internal to the wrapper — this session-layer
+    emitter cannot observe it, so that downtime stays inside verify until a
+    wrapper-internal emitter exists (B-218; n6's nested-span subtraction already
+    handles the day one records it).
+  - **No `capture` pair.** The arc-metrics queue step runs after the merge door has
+    transitioned the reservation to `merged`, and accretion refuses terminal states
+    (C-HE-03 §3) — a capture edge there necessarily fails. The structural conflict
+    (C-HE-27 §1 lists `capture`; the reservation cannot carry it post-terminal) is
+    registered as forward work rather than wired to fail (codex U-HE-34 r1).
+  - **`result_capture` split — session-unrecordable (named bound, B-218).** C-HE-27 §1
+    requires process-exit and log-write-completion recorded separately because they
+    diverge inside the reviewer process; the logged recipe's publisher pipe is SYNCHRONOUS, so it
+    returns only after the log is flushed — two session timestamps around it would
+    measure one event, not the divergence. Record neither edge; the split's recorder
+    is wrapper-internal work carried on B-218 (the phases stay reserved in the
+    reservations domain for it). A divergence between the two timestamps, once
+    recordable, is recorded, not audit-worthy (v1 decision, plan §11 #5).
 - **Posture check (§11).** Confirm the edit scope matches one posture (design-phase /
   Phase 7 / mode-agnostic). A `design-substrate/**` + `harness-*/src/**` mix MUST carry
   back-flow documentation (§11.4) or it is silent absorption — halt + ask.
@@ -475,11 +529,19 @@ inputs, the next arc *folds* them into the ledger. Skip both on a terminating
 roadmap-status refresh (§12.2.1) — a refresh is not an arc.
 
 **Step 1 — queue, at closure (writes NOTHING to the repo).** After the exit report above,
-because `merged_at` and the merge SHA do not exist before merge:
+because `merged_at` and the merge SHA do not exist before merge. Do NOT record capture
+phase edges here — the reservation is already `merged` and accretion refuses terminal
+states (C-HE-03 §3); see the phase-span bullet's "No `capture` pair" note. Pass
+`--arc-id <arc-id>` explicitly (the ARC id from the reservation, e.g. `u-he-34` — never
+the PR number: a `pr-<N>` default breaks the `arc_id` join between the ledger row, the
+reservation, and the gate log), and `--levers` as SEPARATE arguments, one per lever
+(`--levers B-211 B-212`, never one comma-joined token — cohort grouping is by exact
+set):
 
 ```
-just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
-  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
+just arc-metrics queue --pr <NNN> --arc-id <arc-id> --arc-type <inventing|applying> \
+  --decisions <N> --round-logs '<glob for THIS arc's round logs>' \
+  --levers <lever-id> <lever-id> <...-or-omit>
 ```
 
 This writes one file per arc into a queue directory **outside** the repo. That placement is

@@ -23,6 +23,7 @@ uv run pytest -q \
   tools/test_arc_exit_report.py \
   tools/test_mutation_probe.py \
   tools/test_arc_metrics.py \
+  tools/test_round_log_publish.py \
   tools/test_arc_metrics_lanes.py \
   tools/test_arc_lever_report.py \
   tools/test_ci_yml_concurrency.py \

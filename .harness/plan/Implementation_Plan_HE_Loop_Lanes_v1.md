@@ -6339,6 +6339,98 @@ def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, fl
 Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/reservations.py phase --arc-id "$HARNESS_ARC_ID" --phase execute --edge start`; before ship-pr: `--phase execute --edge end`; `ship-pr/SKILL.md` — around the review gate: `--phase verify --edge start|end` (and on `REVIEWER_UNAVAILABLE`: `--phase verify_unavailable --edge start|end`), around fix rounds: `--phase edit --edge start|end`, at capture: `--phase capture --edge start|end`; the review-log writer hook records `result_capture_process_exit` at process exit and `result_capture_log_write` when the log file's size stops changing (bounded 130 s), both as phase edges. `summary` prints N6 with the excluded seconds.
 - [ ] **Step 4: GREEN**, register `Row("C-HE-27/28", "pytest:tools/test_arc_metrics.py::test_phase_spans_no_deltas", "measurement", "local + CI", False)` and `Row("C-HE-27", "pytest:tools/test_arc_metrics.py::test_n6_formula", "measurement", "local + CI", False)`. Commit `feat(he-lanes): U-HE-34 durable phase spans + N6 (C-HE-27)`.
 
+> **As-built rev (2026-08-25, U-HE-34 landing; marker
+> `implementation-plan-he-loop-lanes-v1-u-he-34-as-built-rev-cleared-2026-08-25.md`).**
+> Execution-time corrections (enumerated (i)-(x) below; later review rounds appended items), stated in place so the drafted bodies above are
+> superseded rather than silently contradicted. **(i) Step-1 `test_n6_formula` fixture
+> order.** The drafted gate fixture lists f1's adjudication BEFORE its finding row — a
+> shape the emitter itself refuses (`test_retry_after_adjudication_is_rejected`) and one
+> the C-HE-24 §5 file-order reducer resolves to `disposition=None`, so the drafted test
+> fails against the drafted implementation. As built, the fixture uses the legal append
+> order (finding, then adjudication); the formula and expected values are unchanged.
+> **(ii) Step-1 static witness strengthened.** The drafted first assertion
+> (`"phases[" not in src or "prev" not in <n6 body>`) is vacuously green while no reader
+> indexes `phases` at all. As built, the witness inspects n6's body unconditionally
+> (`\bprev\b`, word-bounded so the docstring's "prevented" cannot trip it) —
+> mutation-probed both ways at landing. **(iii) `result_capture` observation site.** The
+> Files-list primary (`tools/hooks/stop-gate.sh` / a `REVIEW-*.log` writer hook) does not
+> exist — no hook in `tools/hooks/` writes round logs (they are session-tee'd files, per
+> the ledger's `round_log_source` history). *(Superseded at item (ix): the interim
+> `review-log-settle` watch was removed — a synchronous tee cannot observe the
+> wrapper-internal divergence; the split's recorder is registered on `B-218`.)* **(iv) Guard carrier verb `phase` (outside the Files list,
+> execution-correction-H_E-tooling).** The emitters this unit wires call
+> `reservations.py phase`; the U-HE-25 allowlist did not carry that verb, so every
+> emitter would strand headless at ask→deny — the wired-but-unreachable class. As built
+> after codex r1 (P1: argparse is last-value-wins and `record_phase` has no holder
+> check, so a duplicated `--arc-id` riding a prefix allow would write onto another
+> lane's reservation), the verb gets a dedicated POSITIONAL exact-shape branch
+> (`_phase_exact_shape`: positional exact shape, canonical flag order, dash-led values
+> and non-`start|end` edges reject; 13 tokens as-built after the r3 `--lane-id`) rather
+> than a spot in the generic alternation, with an allow witness + a hardening deny set
+> in `test_permission_guard.sh` (the suite is the authority on its count -- later
+> rounds extended it). **(v) Emitter carve
+> (codex r1).** The drafted §6339 emitter sketch nests edit inside a loop-spanning
+> verify pair, double-counting every fix interval in the N6 denominator, and omits
+> queue/absorb. As built: verify = the round-1 window, absorb = the classification
+> window, edit = the fix window (disjoint by construction; the named bound —
+> interleaved re-review rounds land inside edit and the final confirming round is
+> uncovered — is stated in ship-pr SKILL.md), and roadmap-continue records queue
+> start/end around grounding. The sketch's capture pair is NOT wired: the queue step
+> runs post-`merged` and accretion refuses terminal states (C-HE-03 §3) — the
+> C-HE-27 §1 conflict is registered as `B-218` rather than wired to fail. **(vi) n6
+> window + downtime buckets (codex r1).** The drafted body counts accepted findings
+> from the ENTIRE gate log against only the measured arcs' hours; as built the
+> numerator is filtered to the window's `arc_id`s (C-HE-27 §4 "across the window's
+> arcs"), and the explicit `verify_unavailable` span is bucketed into excluded seconds
+> alongside unavailable-terminated verify spans, so failover-masked primary downtime
+> is not counted as review work. **(vii) Queue declarations (codex r1).** ship-pr's
+> queue step now passes `--arc-id` explicitly (a `pr-<N>` default breaks the ledger ↔
+> reservation ↔ gate-log join) and `--levers` as separate arguments (a comma-joined
+> token forges a synthetic single lever in exact-set cohorts); the two rows drained on
+> this arc were corrected and refolded via `_refold_local_row`. **(viii) Holder fence +
+> reachability (codex r2/r3).** `record_phase` gains the holder fence (a named lane
+> must BE the head's holder — authority at the store's write funnel, the guard
+> validates only form; `--lane-id` is CLI-mandatory and trails the canonical shape);
+> guard values are positively charset-bounded (a lowercase `${victim:=…}` expansion
+> would ride a dash-check); the round-log tee moves inside the allowlisted
+> `review-with-failover-logged` recipe (the guard rejects pipes pre-allowlist) with
+> logs under gitignored `.harness/tmp/`; the settle watch requires four equal samples
+> (15 s) and n6 no longer double-counts nested downtime under a round-1-unavailable
+> exclusion; coverage rows are §-granular (no whole-C-HE-27 green claim while
+> `capture` is unrecordable — B-218, whose scope now also carries the per-round-record
+> and wrapper-internal-emitter reconciliation). **(ix) result_capture subtraction +
+> containment (codex r4).** The §1 result_capture split is session-unrecordable — the
+> logged recipe's synchronous tee flushes before it returns, so the r2 settle recipe
+> measured nothing and was REMOVED (recorder folded into B-218); the logged recipe is
+> now the CANONICAL review invocation (its tee is the only headless round-log
+> producer) and refuses symlinked / outside-worktree log paths (containment — it
+> writes through an auto-allowed path); the `verify_unavailable` span is defined as
+> the observable outage window (detection → resume; the phase CLI stamps now()); the
+> no-deltas row drops its draft C-HE-28 half (the witness exercises no cohort
+> reporting). **(x) Publisher-owned containment (codex r7).** The recipe's bash
+> containment checks are DELETED — pathname-based check-then-act cannot close the
+> parent-swap window — and all filesystem safety moves to one enforcer,
+> `tools/round_log_publish.py`: an `O_NOFOLLOW` dir-fd walk from the repo root
+> (every component refuses a symlink at its own openat, atomically) with the
+> destination policy pinned to relative paths under `.harness/tmp/`, so an
+> auto-allowed invocation can never overwrite a tracked file or ledger; the guard's
+> grammar mirrors the pin as the form half, with allow + hardening witnesses, and
+> the publisher carries its own hermetic suite (`tools/test_round_log_publish.py`,
+> CI-wired in codex-parity-check.sh); on exit 2 the workflow closes the verify pair
+> before opening verify_unavailable, and merge-gate-emit invocations pass
+> `--arc-id` so the gate rows join the reservation ids N6 keys on. Refined at r8:
+> the publisher writes a fresh `O_EXCL` temp inode and installs it by rename — a
+> pre-planted HARD link (which `O_NOFOLLOW` cannot stop) keeps its inode's bytes,
+> the entry alone is replaced, and concurrent publishers cannot interleave one
+> inode; a publish failure is its own recipe terminal (exit 4) for EVERY reviewer
+> outcome, since exits 1/2/3 would let a caller treat a round with a missing
+> canonical log as valid. Refined at r9: the install is link(2), not rename — EEXIST
+> is an atomic refusal, so round logs are write-once evidence (a replay cannot
+> silently discard a transcript the gate log still counts) and ANY pre-planted
+> entry is left untouched; the stale settle-timeout prose was deleted and the
+> review invocation's own bound named (1260 s shared deadline + bounded failover —
+> background mode or a tool timeout above it).
+
 ---
 
 # S6 — Reviewer-concurrency probe → coalescing live → pilot gate + pilots + O1 + O3 / `arc_disjoint_check` + cohort report

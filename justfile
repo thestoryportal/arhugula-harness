@@ -336,7 +336,9 @@ merge-gate-binding lens base='main':
 
 # Record one lens verdict: JSONL first, markdown second (C-HE-23 §2, U-HE-13). Exit 0 APPROVE
 # recorded / 1 BLOCK recorded / 2 NOT recorded (does not count; re-run the lens).
-#   just merge-gate-emit --pr <N> --lens merge-gate-<id> --verdict-json .harness/tmp/<file>
+#   just merge-gate-emit --pr <N> --arc-id <arc-id> --lens merge-gate-<id> --verdict-json .harness/tmp/<file>
+#   (--arc-id is the RESERVATION id, e.g. u-he-34 -- omitting it defaults the row to
+#   pr-<N>, which breaks the arc_id join N6 and the phase rows key on; U-HE-34 r6)
 merge-gate-emit *ARGS:
     uv run python tools/merge_gate_log.py emit "$@"
 
@@ -724,6 +726,33 @@ _require-antigravity:
 review-with-failover base='main':
     uv run python tools/codex_review.py --base {{base}} --failover
 
+# U-HE-34 r3/r7: the logged variant for guarded/headless venues — the guard rejects
+# `|` in Bash commands before its allowlist, so a session-level `... | tee round.log`
+# can never run there; this recipe pipes the wrapper through the containment-owning
+# publisher instead. ALL filesystem safety lives in tools/round_log_publish.py (one
+# enforcer): an O_NOFOLLOW dir-fd walk from the repo root refuses a symlink at every
+# component atomically — closing the parent-swap TOCTOU no pathname-based bash check
+# can (codex r5-r7) — and its destination policy admits only relative paths under
+# .harness/tmp/, so an auto-allowed invocation can never overwrite a tracked file or
+# ledger. PIPESTATUS[0] preserves the wrapper's verdict exit (0 APPROVE / 1 BLOCK /
+# 2 UNAVAILABLE / 3 GATE_REFUSED); a failed publish still shows the transcript, warns
+# loud, and refuses to report a clean APPROVE over a missing/partial canonical log.
+review-with-failover-logged log base='main':
+    #!/usr/bin/env bash
+    set -u
+    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "{{log}}"
+    rc=("${PIPESTATUS[@]}")
+    if [ "${rc[1]}" -ne 0 ]; then
+      # Publish failure is its OWN terminal for EVERY reviewer outcome (codex r8):
+      # exiting 1/2/3 here would let callers treat the round as valid while its
+      # canonical log is missing, and round_metrics cannot detect an absent
+      # intermediate round. The verdict itself is never lost -- the wrapper already
+      # recorded its C-HE-24 rows and the transcript above carries the terminal line.
+      echo "review-with-failover-logged: PUBLISH FAILED (exit ${rc[1]}) -- round log {{log}} missing/partial; wrapper verdict exit was ${rc[0]} (see transcript + gate rows)" >&2
+      exit 4
+    fi
+    exit "${rc[0]}"
+
 # B-215 admission-gate attest verbs (tools/review_loop_gate.py): deterministic
 # entry/sweep attestations the wrapper enforces before any review round.
 # `review-attest-budget` is deliberately NOT guard-allowlisted — extending the
@@ -739,6 +768,13 @@ review-attest-budget extra reason:
 
 review-gate-check base='main':
     uv run python tools/review_loop_gate.py check --base {{base}}
+
+# U-HE-34 r4 NOTE: no session-layer result_capture recorder exists. The C-HE-27 §1
+# process-exit vs log-write divergence is internal to the reviewer process — a
+# synchronous in-recipe tee returns only after the log is flushed, so two session
+# timestamps around it would measure one event. The split's recorder is registered
+# as wrapper-internal work on B-218 (an earlier `review-log-settle` polling recipe
+# was removed for exactly this reason).
 
 # Advisory CodeRabbit review. This is optional and complements, not replaces,
 # `just codex-review` and CI. Run after a meaningful diff exists.

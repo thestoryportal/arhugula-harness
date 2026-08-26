@@ -501,6 +501,48 @@ for c in 'uv run python tools/reservations.py selectable --arc-id u-he-25' \
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "reservations carrier verb → allow: '$c'" || bad "reservations carrier not allowed: $c → $OUT"
 done
+# (a'''') U-HE-34: the `phase` span emitter — POSITIONAL exact shape only (codex r1 P1:
+# argparse is last-value-wins and record_phase has no holder check, so a duplicated
+# --arc-id riding a prefix allowlist would write onto another lane's reservation).
+OUT=$(run_on "$(pl Bash 'uv run python tools/reservations.py phase --arc-id u-he-34 --phase execute --edge start --lane-id lane-1' '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "phase exact shape → allow" || bad "phase exact shape not allowed → $OUT"
+for c in 'uv run python tools/reservations.py phase --arc-id a --phase execute --edge start --lane-id l --arc-id victim' \
+         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge start' \
+         'uv run python tools/reservations.py phase --arc-id=a --phase execute --edge start --lane-id l' \
+         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge start --lane-id l --ts 2026-01-01T00:00:00Z' \
+         'uv run python tools/reservations.py phase --arc a --phase execute --edge start --lane-id l' \
+         'uv run python tools/reservations.py phase --arc-id a --edge start --phase execute --lane-id l' \
+         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge nonsense --lane-id l' \
+         'uv run python tools/reservations.py phase --arc-id ${victim:=other} --phase execute --edge start --lane-id l' \
+         'uv run python tools/reservations.py phase --arc-id a --phase execute --edge start --lane-id $victim'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "phase hardening: '$c' → not allow" || bad "phase over-matched: $c"
+done
+# (a''''') U-HE-34 r4: the settle recipe was REMOVED (a synchronous in-recipe tee
+# cannot observe the reviewer-internal log-write divergence; B-218 carries the
+# wrapper-internal recorder) — its former allow shape must no longer match anything.
+OUT=$(run_on "$(pl Bash 'just review-log-settle .harness/tmp/r1.log' '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "removed review-log-settle → not allow" || bad "review-log-settle still allowlisted"
+# (a'''''') U-HE-34 r3: the logged review variant — tee inside the recipe; bare and
+# HARNESS-prefixed forms allow, chained/expansion forms fall through.
+for c in 'just review-with-failover-logged .harness/tmp/u-he-34-rounds/r1.log' \
+         'just review-with-failover-logged .harness/tmp/u-he-34-rounds/r1.log main' \
+         'HARNESS_ARC_ID=u-he-34 HARNESS_LANE_ID=lane-1 just review-with-failover-logged .harness/tmp/u-he-34-rounds/r1.log'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "review-logged → allow: '$c'" || bad "review-logged not allowed: $c → $OUT"
+done
+for c in 'just review-with-failover-logged .harness/tmp/r1.log main review-attest-budget' \
+         'just review-with-failover-logged ${victim:=x}.log' \
+         'just review-with-failover-logged -a' \
+         'just review-with-failover-logged .harness/tmp/r1.log -b' \
+         'just review-with-failover-logged tools/reservations.py' \
+         'just review-with-failover-logged .harness/merge-gate-log.jsonl' \
+         'just review-with-failover-logged .harness/tmp/../../etc/x.log' \
+         'just review-with-failover-logged /etc/x.log' \
+         'just review-with-failover-logged'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "review-logged hardening: '$c' → not allow" || bad "review-logged over-matched: $c"
+done
 # hardening: state-mutating / gh-backed / non-carrier verbs and the bare module prefix stay un-allowed
 for c in 'uv run python tools/reservations.py transition --arc-id x --to merged' \
          'uv run python tools/reservations.py gc' \

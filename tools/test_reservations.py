@@ -125,7 +125,14 @@ def test_cli_dispatch_round_trip(qdir, capsys):
         )
         == 0
     )
-    assert rs.main(["phase", "--arc-id", "a1", "--phase", "execute", "--edge", "start"]) == 0
+    # --lane-id is CLI-mandatory since U-HE-34 r3 (the holder fence): the shell surface
+    # must always name its lane, and the named lane must hold the head.
+    assert (
+        rs.main(
+            ["phase", "--arc-id", "a1", "--phase", "execute", "--edge", "start", "--lane-id", "L"]
+        )
+        == 0
+    )
     assert (
         rs.main(
             [
@@ -489,6 +496,30 @@ def test_round_n_and_ts_domains(qdir):
         rs.record_phase("pr-30", "execute", "start", ts="t0")
     with pytest.raises(rs.ReservationError, match="ISO-8601"):
         rs.record_phase("pr-30", "execute", "start", ts="2026-08-19 00:00:00")
+
+
+def test_record_phase_holder_fence(qdir):
+    """codex U-HE-34 r3 P1: the guard's exact-shape allow validates only the command's
+    FORM, so any literal arc id passes it -- authority lives at the store's write
+    funnel. A caller naming a lane must BE the head's holder; the matching lane and
+    the in-process no-lane call (fold/refold hold other fences) both accrete.
+    Mutation probe: drop the fence -> the mismatched write lands and this reds."""
+    rs.reserve("pr-31", lane_id="A", branch="b", arc_type="inventing")
+    with pytest.raises(rs.IllegalTransition, match="holder-only"):
+        rs.record_phase("pr-31", "execute", "start", lane_id="B")
+    head = rs.record_phase("pr-31", "execute", "start", lane_id="A")
+    assert head["phases"]["execute"]["start"]
+    head = rs.record_phase("pr-31", "execute", "end")
+    assert head["phases"]["execute"]["end"]
+    # CLI-level mismatch witness (merge-gate r2 residual): deleting the lane_id= kwarg
+    # in main()'s dispatch would leave the fence unreachable from the shell surface.
+    # main() converts the IllegalTransition into its fail-closed ABORT/exit-2.
+    assert (
+        rs.main(
+            ["phase", "--arc-id", "pr-31", "--phase", "verify", "--edge", "start", "--lane-id", "B"]
+        )
+        == 2
+    )
 
 
 def test_transfer_holder_only_from_named_lane(qdir):

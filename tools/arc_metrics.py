@@ -49,6 +49,9 @@ from pathlib import Path
 #: are the checkout root and its tracked ledger -- production behaviour is unchanged when unset.
 REPO = Path(os.environ.get("ARC_METRICS_REPO", Path(__file__).resolve().parent.parent))
 LEDGER = Path(os.environ.get("ARC_METRICS_LEDGER", REPO / ".harness" / "arc-metrics.jsonl"))
+#: N6's numerator source (C-HE-27 §4): finding/adjudication rows. Same override
+#: pattern as LEDGER so a test or a second lane can point at its own log.
+GATE_LOG = Path(os.environ.get("ARC_METRICS_GATE_LOG", REPO / ".harness" / "merge-gate-log.jsonl"))
 
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
 #: disposed at loop completion, so anything queued inside one is lost with it --
@@ -1903,6 +1906,97 @@ def arc_duration(row: dict) -> float | None:
     return span if span is not None else row.get("total_arc_wall_s")
 
 
+def phase_spans(row: dict) -> dict[str, float]:
+    """Per-phase seconds from the row's OWN {start,end} pairs -- never from a
+    neighbouring row (C-HE-27 §2: an intervening record can be dropped, reordered,
+    or written by another lane, so an inter-record delta silently becomes a
+    different quantity). An edge-only phase (e.g. the result_capture pair, which
+    records single completion timestamps) is recorded but yields no span. A span
+    whose end precedes its start is corrupt phase state and fails LOUD -- the edges
+    are recorded independently, so a reversed pair is representable on disk, and a
+    negative duration flowing into N6 would publish a negative rate (codex r2)."""
+    out = {}
+    for name, span in (row.get("phases") or {}).items():
+        if span.get("start") and span.get("end"):
+            secs = (parse_iso(span["end"]) - parse_iso(span["start"])).total_seconds()
+            if secs < 0:
+                raise AbortError(
+                    f"phase {name!r} on arc {row.get('arc_id')!r}: end precedes start "
+                    f"({span['end']} < {span['start']}) -- corrupt phase state"
+                )
+            out[name] = secs
+    return out
+
+
+def n6(rows: list[dict], gate_rows: list[dict]) -> tuple[float | None, float, float]:
+    """C-HE-27 §4: problems prevented per hour = COUNT(DISTINCT finding_id last-disposed
+    accepted) / sum(verify + edit) hours, read from the durable phases map.
+
+    The numerator's window is the set of arcs that actually CONTRIBUTE denominator
+    hours -- an accepted finding from an arc with no measured verify/edit time would
+    divide by hours it never spent and inflate N6 (codex U-HE-34 r1/r2; C-HE-27 §4
+    "across the window's arcs"). Two downtime buckets feed the third element and NEVER
+    the denominator: the verify span of an arc whose ROUND-1 outcomes all terminated
+    REVIEWER_UNAVAILABLE (verify is the round-1 window, so only round 1's terminal can
+    invalidate it -- a later round's downtime must not erase valid round-1 review), and
+    any explicit `verify_unavailable` span. The downtime span carries its own
+    timestamps, so the subtraction is INTERVAL arithmetic, not scalar (codex r5): each
+    counted phase loses exactly its measured OVERLAP with the downtime window -- an
+    outage overlapping edit is removed from edit, one overlapping neither phase
+    removes nothing -- and the excluded bucket is the UNION of the excluded-verify
+    window and the downtime window, never their sum (codex r3: summing a nested pair
+    overstated downtime). Returns None, not 0, when no hours are measured -- an
+    absent denominator is not a measured zero."""
+    import finding_record as fr
+
+    def interval(r: dict, name: str) -> tuple[datetime, datetime] | None:
+        span = (r.get("phases") or {}).get(name) or {}
+        if span.get("start") and span.get("end"):
+            return (parse_iso(span["start"]), parse_iso(span["end"]))
+        return None
+
+    def overlap_s(
+        a: tuple[datetime, datetime] | None, b: tuple[datetime, datetime] | None
+    ) -> float:
+        if a is None or b is None:
+            return 0.0
+        return max(0.0, (min(a[1], b[1]) - max(a[0], b[0])).total_seconds())
+
+    denom_s = 0.0
+    excluded_s = 0.0
+    window_arcs = set()
+    for r in rows:
+        spans = phase_spans(r)
+        r1 = [
+            o for key, o in (r.get("round_outcomes") or {}).items() if str(key).split("/")[0] == "1"
+        ]
+        r1_unavailable = bool(r1) and all(o.get("terminal") == "REVIEWER_UNAVAILABLE" for o in r1)
+        vu_iv = interval(r, "verify_unavailable")
+        vu = spans.get("verify_unavailable", 0.0)
+        verify_iv = interval(r, "verify")
+        edit_iv = interval(r, "edit")
+        contributed = 0.0
+        if r1_unavailable:
+            # union, not sum: a downtime window nested in the excluded verify span is
+            # already inside it
+            excluded_s += spans.get("verify", 0.0) + vu - overlap_s(verify_iv, vu_iv)
+        else:
+            contributed += spans.get("verify", 0.0) - overlap_s(verify_iv, vu_iv)
+            excluded_s += vu
+        contributed += spans.get("edit", 0.0) - overlap_s(edit_iv, vu_iv)
+        denom_s += contributed
+        if contributed > 0:
+            window_arcs.add(r.get("arc_id"))
+    last = fr.reduce_last_by_finding_id(gate_rows)
+    accepted = {
+        fid
+        for fid, r in last.items()
+        if r.get("disposition") == "accepted" and r.get("arc_id") in window_arcs
+    }
+    hours = denom_s / 3600.0
+    return (len(accepted) / hours if hours else None), hours, excluded_s
+
+
 def summary(_args: argparse.Namespace) -> int:
     rows = read_ledger()
     if not rows:
@@ -2017,6 +2111,23 @@ def summary(_args: argparse.Namespace) -> int:
             else "  review rounds    --"
         )
         print()
+
+    # C-HE-27 §4: N6 from the durable phases map + the gate log's dispositions.
+    # An absent gate log or an unmeasured denominator prints as "--", never as a
+    # zero -- "could not look" must stay distinguishable from "looked, found none".
+    if GATE_LOG.exists():
+        import finding_record as fr
+
+        n6_val, n6_hours, n6_excluded_s = n6(rows, fr.read_rows(GATE_LOG))
+        n6_txt = "-- (no verify/edit spans measured)" if n6_val is None else f"{n6_val:.2f}"
+        print(
+            f"N6 problems-prevented/hour  {n6_txt}  "
+            f"[{n6_hours:.2f}h verify+edit; {n6_excluded_s:.0f}s verify excluded as "
+            "REVIEWER_UNAVAILABLE]"
+        )
+    else:
+        print(f"N6 problems-prevented/hour  -- (gate log absent: {GATE_LOG})")
+    print()
 
     allgaps = [g for r in rows for g in (r.get("round_wall_s") or [])]
     if allgaps:

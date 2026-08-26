@@ -460,6 +460,53 @@ fi
 # a regex pair ("has --to open" + "lacks --to merged") is bypassable via `--to open
 # --to=merged`. 0 iff the command carries EXACTLY ONE --to option, in the two-token
 # literal form, with target exactly `open`; any =-form or --t… abbreviation rejects.
+# U-HE-34 codex r1 P1: the `phase` carrier must not ride the generic prefix allowlist —
+# argparse is last-value-wins and `record_phase` has no holder check, so a duplicated
+# `--arc-id` smuggled after the expected one (`phase --arc-id mine ... --arc-id victim`)
+# would auto-allow a first-write-wins write onto another lane's reservation. Positional
+# exact-shape: exactly the canonical form's tokens (the arity check below is the authority), flags in canonical order,
+# values never dash-led, edge from the C-HE-27 pair. Anything else — duplicates, =-forms,
+# abbreviations, extra flags — falls through to the normal ask.
+_phase_exact_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  [ "$#" -eq 13 ] || return 1
+  [ "$1" = "uv" ] && [ "$2" = "run" ] && [ "$3" = "python" ] \
+    && [ "$4" = "tools/reservations.py" ] && [ "$5" = "phase" ] \
+    && [ "$6" = "--arc-id" ] && [ "$8" = "--phase" ] && [ "${10}" = "--edge" ] \
+    && [ "${12}" = "--lane-id" ] || return 1
+  # Positive charset, not just not-dash-led (codex U-HE-34 r2 P1): _bash_args_safe
+  # rejects only UPPERCASE expansions, so a lowercase `${victim:=other-arc}` would
+  # ride a looser check and expand AFTER the allow into an arbitrary reservation id.
+  # The mandatory --lane-id (r3 P1) is the authority half: the guard validates only
+  # FORM — record_phase itself refuses a lane that is not the head's holder.
+  printf '%s' "$7" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+  printf '%s' "$9" | grep -Eq '^[a-z_]+$' || return 1
+  case "${11}" in start|end) ;; *) return 1 ;; esac
+  printf '%s' "${13}" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+}
+
+# U-HE-34 r3 P2: `just review-with-failover-logged <log> [base]` — the guard rejects
+# `|` in Bash commands before this allowlist, so the round-log tee must live INSIDE
+# an allowlisted recipe. Same arity-bounded discipline: 3 or 4 tokens, charset path,
+# charset base ref.
+_review_logged_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
+  [ "$1" = "just" ] && [ "$2" = "review-with-failover-logged" ] || return 1
+  # Destination PINNED to the gitignored .harness/tmp/ tree (codex r7 P1: any other
+  # charset-safe relative path — `tools/reservations.py`, a ledger — would let an
+  # auto-allowed invocation overwrite tracked state). No `..` segments; the publisher
+  # (tools/round_log_publish.py) enforces the same policy as the authority — this is
+  # the form mirror.
+  printf '%s' "$3" | grep -Eq '^\.harness/tmp/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || return 1
+  case "/$3/" in */../*) return 1 ;; esac
+  if [ "$#" -eq 4 ]; then
+    printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
+  fi
+}
+
 _transition_to_open_only() {
   local cmd="$1" tok prev="" target="" count=0
   set -f; set -- $cmd; set +f
@@ -698,6 +745,19 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # _transition_to_open_only token-parses the target (codex r2 P1: =-forms, argparse
       # prefix abbreviations, and last-occurrence-wins smuggling all reject), keeping the
       # U-HE-21 r6 rationale: terminal state changes + gc stay operator-visible.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+phase([[:space:]]|$)' \
+       && _phase_exact_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-34: the C-HE-27 span emitters (roadmap-continue / ship-pr) — positional
+      # exact-shape only; see _phase_exact_shape for the duplicate-flag rationale.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-with-failover-logged([[:space:]]|$)' \
+       && _review_logged_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-34 r3: the logged review variant — the tee lives inside the recipe, so a
+      # headless venue can produce the round log without a pipe on the command line.
+      # (TRIM already has the exact-shape HARNESS id prefix stripped above.)
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then

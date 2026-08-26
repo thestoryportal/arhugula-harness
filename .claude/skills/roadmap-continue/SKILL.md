@@ -69,7 +69,7 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover`.
    *Gap CLOSED at U-HE-25 (the reviewed permission-guard unit): the guard now
    auto-allows (loop mode) the reservations.py carrier verbs
-   `selectable|show|reserve|update|mint-lane-id` exact-shape, the sourced
+   `selectable|show|reserve|update|mint-lane-id|phase` exact-shape, the sourced
    `source tools/hooks/lane-init.sh` (U-HE-31, exact shape, no arguments), `transition` ONLY in the
    two-token `--to open` form (token-parsed — `=`-forms/abbreviations reject; terminal
    transitions and `gc` still surface to the operator), the leading
@@ -83,6 +83,22 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    a refused PREFIXED review invocation degrades to the bare `just review-with-failover`
    (allowlisted; writes the pre-U-HE-21 fallback ids — witnessed as guard-ALLOW), and
    the ship-pr back-fills are skipped per its unreserved-arc clause.*
+
+   **Queue + execute span edges (U-HE-34; C-HE-27 §1/§3).** Immediately after the reserve
+   (or the same-lane resume) succeeds, record the queue-phase start edge; when grounding
+   ends and implementation work actually begins, close queue and open execute — each a
+   LITERAL arc id, its own single command in exactly this flag order (guard-allowlisted;
+   legal on the still-`pending` head — accretion refuses only terminal states — and
+   replay-idempotent, so a crash/compaction re-entry may safely re-run any of them):
+   ```bash
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge start --lane-id <lane-id>
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase queue --edge end --lane-id <lane-id>
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge start --lane-id <lane-id>
+   ```
+   The trailing `--lane-id` is mandatory (record_phase refuses a lane that is not the
+   head's holder — the guard validates only the command's form). An unreserved arc
+   (degradation above) skips these: there is no head to accrete on, and an absent span
+   reads as null downstream, never as a measured zero.
 3. **Ground first.** Before authoring, empirically verify the item's premise at HEAD
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
@@ -101,8 +117,10 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    file:line cite at the now-current HEAD, recompute every count, verify every #NNN,
    confirm `just codex-check` ran at the *current* HEAD, state the pass in the PR body — per
    ship-pr U-WT-01) then out-of-family
-   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover` to
-   convergence (§13.1; the inline prefix is the step-2 arc-open ids — a bare invocation
+   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` to
+   convergence (§13.1; the LOGGED variant is canonical — U-HE-34: its in-recipe log publisher is
+   how a guarded venue produces the round log arc-metrics later reads; the inline
+   prefix is the step-2 arc-open ids — a bare invocation
    writes `branch-*`/`-nolane` fallback ids into the C-HE-24/25 rows) —
    the fail-closed `codex-review` wrapper (C-HE-18) with the `gemini-review` D-C failover
    (C-HE-17); a verdict counts only on its schema parse (C-HE-15), never on exit code or
@@ -114,7 +132,12 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    `AskUserQuestion` (§14.2). Never fire a paid call / relocate a secret unilaterally
    (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`). Otherwise
    default to doing + reporting.
-6. **Ship.** Hand off to the `ship-pr` skill (the PR + fixed-point-refresh half) — including its
+6. **Ship.** First close the execute span opened at step 2 (U-HE-34; same literal-id,
+   replay-idempotent, skip-if-unreserved rules as the start edge):
+   ```bash
+   uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge end --lane-id <lane-id>
+   ```
+   Then hand off to the `ship-pr` skill (the PR + fixed-point-refresh half) — including its
    mandatory reflect + `/context-save` step at arc close. Do not hand off to the next arc
    (`ScheduleWakeup`, `/loop-stop`, or ending the turn) before that step has run.
 

@@ -155,7 +155,10 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
 - **Record each lens verdict through the structured sibling (C-HE-23 §2).** Write the lens's
   full response to `.harness/tmp/merge-gate-lens-<id>.txt` (in-worktree, gitignored — the
   permission guard auto-allows the wrapper only on in-worktree paths) and run
-  `just merge-gate-emit --pr <PR#> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`.
+  `just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+  (`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's
+  `arc_id` to `pr-<N>`, which breaks the join N6 and the reservation phase rows key on;
+  U-HE-34 r6).
   It parses the fenced JSON against the schema, holds it to the binding, requires the final
   `VERDICT:` line to agree with it (exact-line match), and writes the
   `.harness/merge-gate-log.jsonl` rows FIRST and a structured `.harness/merge-gate-log.md`
@@ -170,7 +173,7 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   `[[feedback-merge-without-hil-once-ci-green]]` directive — CI-green is a precondition, this
   gate is now an additional one for code-touching PRs).
 - **Any `BLOCK`, or a split verdict** → do **not** merge. If the block names a concrete,
-  narrow, fixable defect: fix it, then re-run `just review-with-failover` to convergence and re-run
+  narrow, fixable defect: fix it, then re-run the logged review invocation (`just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` -- the U-HE-34 canonical form; the bare recipe produces no round log) to convergence and re-run
   this gate. **Cap this at ten rounds total** (operator decision, 2026-08-01) — an eleventh
   substantive disagreement is a genuine decision point,
   not a bug to keep iterating on; auto-fix-and-re-gate without a cap is an infinite loop in
@@ -201,6 +204,6 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
 ## Wiring into `ship-pr` / the loop
 
 `ship-pr/SKILL.md` invokes this skill in its pre-merge section — after CI green is confirmed
-and `just review-with-failover` has converged, before the actual `gh pr merge`. `roadmap-continue` →
+and the logged review invocation (`review-with-failover-logged`, U-HE-34 canonical) has converged, before the actual `gh pr merge`. `roadmap-continue` →
 `ship-pr` is the loop path this composes into; no changes needed to `loop-start`/`loop-stop`
 (the gate is a step inside `ship-pr`, not a separate autonomy tier).
