@@ -445,12 +445,23 @@ def test_round_derivation_from_content_not_file_position(tmp_path: Path):
 
 
 def test_reviewer_unavailable_is_a_round_and_any_wrapper_label_counts(tmp_path: Path):
-    """The C-HE-25 per-round terminal enum includes REVIEWER_UNAVAILABLE; the
-    failover chain can leave a gemini/agy-labelled terminal as the one that stands."""
+    """The C-HE-25 per-round terminal enum includes REVIEWER_UNAVAILABLE.
+
+    A failover transcript carries the primary's REVIEWER_UNAVAILABLE terminal
+    and then the verdict that stands under the ``gemini-review (failover)``
+    label (codex_review._report); both shapes classify as rounds, and the
+    failover line — the LAST matching terminal — is the one read.
+    """
     _round_log(
         tmp_path, "r1.log", "codex-review: REVIEWER_UNAVAILABLE (transient: timeout)\n", 1_000_000
     )
-    _round_log(tmp_path, "r2.log", "gemini-review: BLOCK\n", 1_000_600)
+    _round_log(
+        tmp_path,
+        "r2.log",
+        "codex-review: REVIEWER_UNAVAILABLE (permanent: no binary)\n"
+        "gemini-review (failover): BLOCK\n",
+        1_000_600,
+    )
     logs, _, _ = am.round_metrics([str(tmp_path / "r*.log")])
     assert len(logs) == 2
 

@@ -235,12 +235,15 @@ def gh_pr(pr: int) -> dict:
 
 
 # The wrapper's terminal line ends every published round log (`_report` in
-# codex_review.py / agy_review.py, stderr merged by the logged recipe). The LAST
-# such line is the transcript's verdict: a failover transcript can carry an
-# earlier channel's terminal before the verdict that stands, and publish-failure
-# noise can FOLLOW it, so neither "first" nor "only" is the right read.
+# codex_review.py, stderr merged by the logged recipe; the failover verdict is
+# labelled `gemini-review (failover)`, and agy_review's own gate can print a
+# `gemini-review: GATE_REFUSED`). The LAST such line is the transcript's
+# verdict: a failover transcript carries the primary's REVIEWER_UNAVAILABLE
+# before the failover verdict that stands, and publish-failure noise can FOLLOW
+# it, so neither "first" nor "only" is the right read.
 ROUND_TERMINAL_RE = re.compile(
-    r"^(?:codex|gemini|agy)-review: (APPROVE|BLOCK|REVIEWER_UNAVAILABLE|GATE_REFUSED)\b",
+    r"^(?:codex|gemini|agy)-review(?: \(failover\))?: "
+    r"(APPROVE|BLOCK|REVIEWER_UNAVAILABLE|GATE_REFUSED)\b",
     re.MULTILINE,
 )
 # Round identity lives in the log NAME the publisher wrote (`r9-verdict.log` is
