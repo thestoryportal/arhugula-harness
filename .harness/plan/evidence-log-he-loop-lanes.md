@@ -98,3 +98,24 @@ Operator approved via one AskUserQuestion ("Apply now"). Record of the live sequ
 **C-HE-08 §2–§5 fully discharged. B-190's bound is IN FORCE** (supersedes the
 PENDING-APPLY status above): the server fence is live and verified; `just
 main-protection-verify` GREEN is the standing observable. Residuals remain B-191.
+
+## U-HE-35 — C-HE-22 reviewer-concurrency probe (live run, 2026-08-26)
+
+`just reviewer-concurrency-probe codex 5 main` on the converged arc head (pinned
+detached worktree, frozen base sha; run alone — no concurrent review rounds to
+contaminate the baseline). Verdict lines, verbatim:
+
+```
+N=1: median 562s over 5 calls, valid=True
+N=2: median 506s over 10 calls, valid=True
+N=4: median 466s over 20 calls, valid=True
+GREEN: no throttling signal at N<=4
+```
+
+All 35 calls returned schema-parsed verdicts (zero validity failures); the medians
+DECREASE slightly with concurrency, so the single-identity subscription login shows
+no throttling signal at N<=4 (C-HE-22 §1's hypothesized cause is retired; per §2 a
+shared vendor outage still trips the identical contamination, so coalescing C-HE-10
+stays required). Durable record: 35 `probe-sample` rows + 1 GREEN `probe-result` row
+(`producer=reviewer_concurrency_probe`, arc u-he-35) on `.harness/merge-gate-log.jsonl`;
+`just pilot-gate-check` reads GREEN.
