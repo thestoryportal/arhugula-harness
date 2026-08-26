@@ -511,6 +511,15 @@ def test_record_phase_holder_fence(qdir):
     assert head["phases"]["execute"]["start"]
     head = rs.record_phase("pr-31", "execute", "end")
     assert head["phases"]["execute"]["end"]
+    # CLI-level mismatch witness (merge-gate r2 residual): deleting the lane_id= kwarg
+    # in main()'s dispatch would leave the fence unreachable from the shell surface.
+    # main() converts the IllegalTransition into its fail-closed ABORT/exit-2.
+    assert (
+        rs.main(
+            ["phase", "--arc-id", "pr-31", "--phase", "verify", "--edge", "start", "--lane-id", "B"]
+        )
+        == 2
+    )
 
 
 def test_transfer_holder_only_from_named_lane(qdir):

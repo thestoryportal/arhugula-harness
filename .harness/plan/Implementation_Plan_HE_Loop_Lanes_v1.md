@@ -6341,7 +6341,7 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 
 > **As-built rev (2026-08-25, U-HE-34 landing; marker
 > `implementation-plan-he-loop-lanes-v1-u-he-34-as-built-rev-cleared-2026-08-25.md`).**
-> Four execution-time corrections, stated in place so the drafted bodies above are
+> Execution-time corrections (enumerated (i)-(x) below; later review rounds appended items), stated in place so the drafted bodies above are
 > superseded rather than silently contradicted. **(i) Step-1 `test_n6_formula` fixture
 > order.** The drafted gate fixture lists f1's adjudication BEFORE its finding row — a
 > shape the emitter itself refuses (`test_retry_after_adjudication_is_rejected`) and one

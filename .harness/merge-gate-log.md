@@ -695,3 +695,8 @@ B-206) rather than unaddressed defects.
 | 2026-08-26T02:49:12Z | #1458 | 1ed6349c98a6 | merge-gate-spec-conformance | BLOCK | 3 finding(s) | r1 |
 
 **PR #1458 · 2026-08-26 · feat/u-he-34-phase-spans · gate round 1 (head 1ed6349c98a6).** concurrency APPROVE · witness-adequacy APPROVE · spec-conformance BLOCK (3× P3 prose-record drift: marker "(i)–(ix)" vs ten rev-note items; "six hardening witnesses" vs the shipped deny set; merge-gate/SKILL.md still prescribing the bare review form this arc demoted). Outcome: fix + re-gate at the new head. blast-radius: 8 production consumers enumerated via graft (n6←summary; phase_spans←n6; record_phase←CLI+skill commands; _refold_local_row←drain; GATE_LOG←summary; round_log_publish←logged recipe; guard branches←hook runtime; merge_door imports unchanged helpers) — floor, not ceiling.
+| 2026-08-26T02:58:44Z | #1458 | 66d7bf59624d | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-26T03:00:09Z | #1458 | 66d7bf59624d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-26T03:00:32Z | #1458 | 66d7bf59624d | merge-gate-spec-conformance | BLOCK | 2 finding(s) | r2 |
+
+**PR #1458 · 2026-08-26 · feat/u-he-34-phase-spans · gate round 2 (head 66d7bf5962).** concurrency APPROVE · witness-adequacy APPROVE · spec-conformance BLOCK (2× P3: the guard comment's "eleven tokens" vs the 13-token check; the rev-note preamble's "Four corrections" vs ten items — both one-word count drifts). Outcome: fix (counts de-numeralized/re-anchored; plus the r2 witness lens's named residual closed — a CLI-level holder-fence mismatch witness) + re-gate. blast-radius: unchanged from round 1.

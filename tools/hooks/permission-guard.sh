@@ -464,7 +464,7 @@ fi
 # argparse is last-value-wins and `record_phase` has no holder check, so a duplicated
 # `--arc-id` smuggled after the expected one (`phase --arc-id mine ... --arc-id victim`)
 # would auto-allow a first-write-wins write onto another lane's reservation. Positional
-# exact-shape: exactly the eleven tokens of the canonical form, flags in canonical order,
+# exact-shape: exactly the canonical form's tokens (the arity check below is the authority), flags in canonical order,
 # values never dash-led, edge from the C-HE-27 pair. Anything else — duplicates, =-forms,
 # abbreviations, extra flags — falls through to the normal ask.
 _phase_exact_shape() {
