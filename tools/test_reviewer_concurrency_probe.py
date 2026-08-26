@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -233,16 +234,50 @@ def test_run_red_when_binding_drifts_mid_probe(
     end: tuple[str, str, str],
 ):
     """Any changed binding component voids the one-fixed-diff premise: GREEN arithmetic
-    must not survive it."""
-    bindings = iter([start, end])
+    must not survive it, and the drifted batch's rows must never be recorded (codex r3
+    P2: a later RED cannot repair a durable false measurement record)."""
 
-    def drifting_binding(repo, base):
-        head, base_sha, digest = next(bindings)
-        return {"head_sha": head, "base_sha": base_sha, "diff_digest": digest}
+    def make(t: tuple[str, str, str]) -> dict[str, str]:
+        return {"head_sha": t[0], "base_sha": t[1], "diff_digest": t[2]}
 
-    monkeypatch.setattr(rcp.rw, "code_binding", drifting_binding)
+    # initial capture -> batch-1 gate (drifted) -> the report's end re-read
+    bindings = iter([make(start), make(end), make(end)])
+    monkeypatch.setattr(rcp.rw, "code_binding", lambda repo, base: next(bindings))
     monkeypatch.setenv("HARNESS_ARC_ID", "u-he-35")
     monkeypatch.setenv("HARNESS_LANE_ID", "lane-x")
-    rc = rcp.run("main", channel="codex", reps=5, ns=(1,), one=lambda c, b, e, s: (60.0, True))
+    calls: list[int] = []
+
+    def fake_one(c, b, e, s):
+        calls.append(1)
+        return 60.0, True
+
+    rc = rcp.run("main", channel="codex", reps=5, ns=(1, 2), one=fake_one)
     assert rc == 1
     assert "fixed-diff violated" in capsys.readouterr().out
+    assert fr.read_rows() == []  # the drifted batch persisted NO row
+    assert len(calls) == 1  # sampling aborted at the first drifted batch — no further spend
+
+
+def test_one_spawn_oserror_is_invalid_sample(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def _spawn_fail(*a, **k):
+        raise OSError("Resource temporarily unavailable")
+
+    monkeypatch.setattr(rcp.subprocess, "run", _spawn_fail)
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    assert ok is False  # a failed spawn under load is a validity-failure SAMPLE
+
+
+def test_run_batch_calls_actually_overlap(tmp_path: Path, _fixed_binding: str, capsys):
+    """The probe's whole point is N OVERLAPPING calls: a serialized executor would
+    deadlock this barrier (BrokenBarrierError after the timeout), so a green run is a
+    witness that both calls in every N=2 batch were in flight simultaneously."""
+    barrier = threading.Barrier(2)
+
+    def overlapping_one(c, b, e, s):
+        barrier.wait(timeout=10)
+        return 60.0, True
+
+    rc = rcp.run("main", channel="codex", reps=5, ns=(2,), one=overlapping_one)
+    assert rc == 1  # N=2 alone has no N=1 baseline -> RED insufficient; overlap still proven
+    assert "insufficient" in capsys.readouterr().out
+    assert len(fr.read_rows()) == 10

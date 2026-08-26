@@ -434,6 +434,12 @@ OUT=$(run_on "$(pl Bash 'just codex-loop-status review-attest-"budget" 2 ok' '')
 # would be parsed by `just` as a chained second recipe and must fall through to ask.
 OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 5 main review-attest-budget 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "chained recipe after reviewer-concurrency-probe → not auto-allowed" || bad "probe chain auto-allowed: $OUT"
+# U-HE-35 codex r3: reps is TYPED and bounded (1-99) in the auto-allow — an unbounded
+# count would spend billions of live reviewer calls; larger runs stay operator-visible.
+OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 1000000000 main" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "unbounded probe reps → not auto-allowed" || bad "unbounded probe reps auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe evilchannel 5 main" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "unknown probe channel → not auto-allowed" || bad "unknown probe channel auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "single-quote-normalized budget chain → not auto-allowed" || bad "single-quote budget chain auto-allowed: $OUT"
 # codex r8 P1: the token grammar admits FULLY-quoted plain spans — the documented

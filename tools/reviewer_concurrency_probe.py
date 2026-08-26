@@ -120,7 +120,11 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
             argv, cwd=REPO, env=env, capture_output=True, text=True, timeout=CALL_TIMEOUT_S
         )
         valid = _codex_valid(proc) if channel == "codex" else _gemini_valid(sink)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, OSError):
+        # OSError = the SPAWN failed (fork/exec resource exhaustion under the very
+        # concurrency being probed) — exactly a validity failure, not a probe crash
+        # (codex r3 P2): letting it escape the executor would abort the run with no
+        # RED and no record.
         valid = False
     return time.monotonic() - t0, valid
 
@@ -141,14 +145,26 @@ def run(
     binding = rw.code_binding(REPO, base)  # the ONE fixed-diff identity every row carries
     env = probe_env()
     samples: dict[int, list[Sample]] = {n: [] for n in ns}
+    drifted_from: dict[str, str] | None = None
     # outside the repo: agy's --outcome-json sink refuses in-repo paths; envelopes are
     # parsed per call, so the whole dir is disposable once sampling ends
     with tempfile.TemporaryDirectory(prefix="reviewer-concurrency-probe-") as scratch_dir:
         scratch = Path(scratch_dir)
         for n in ns:
             for rep in range(reps):
+                if drifted_from is not None:
+                    break
                 with ThreadPoolExecutor(max_workers=n) as ex:
                     results = list(ex.map(lambda _: one(channel, base, env, scratch), range(n)))
+                # the one-fixed-diff premise is verified around EVERY batch, and a batch's
+                # rows are appended only when the binding held across its calls: a drifted
+                # batch must not persist rows stamped with the stale binding and
+                # valid=true (codex r3 P2 — the later RED cannot repair a durable false
+                # record). This per-batch gate IS the drift check ([LAW:single-enforcer];
+                # its last iteration covers the end of the run).
+                if rw.code_binding(REPO, base) != binding:
+                    drifted_from = binding
+                    break
                 for wall, valid in results:
                     samples[n].append((wall, valid))
                     fr.append_observation(
@@ -174,27 +190,23 @@ def run(
                             round_n=rep,
                         ),
                     )
-    for n in ns:
+    for n in (k for k in ns if samples[k]):
         med = statistics.median(w for w, _ in samples[n])
         all_valid = all(ok for _, ok in samples[n])
         print(f"N={n}: median {med:.0f}s over {len(samples[n])} calls, valid={all_valid}")
-    ok, why = decide(samples)
-    # the "one fixed diff" premise is a world fact `decide` cannot see: a binding that
-    # changed mid-run — HEAD, the base ref's merge-base, or the diff bytes themselves —
-    # mislabels cross-diff timings as one experiment, so the whole run is void — RED
-    # regardless of the sample arithmetic (codex r1/r2 P2; agy's own moved-HEAD refusal
-    # is the same rule at single-review scope). Whole-binding compare: head_sha alone
-    # misses a moved base ref under an unmoved HEAD.
-    end = rw.code_binding(REPO, base)
-    if end != binding:
+    if drifted_from is not None:
+        end = rw.code_binding(REPO, base)
         ok, why = (
             False,
             (
                 f"fixed-diff violated: code binding changed during the probe "
-                f"({binding['head_sha'][:12]}/{binding['diff_digest'][:12]} -> "
-                f"{end['head_sha'][:12]}/{end['diff_digest'][:12]})"
+                f"({drifted_from['head_sha'][:12]}/{drifted_from['diff_digest'][:12]} -> "
+                f"{end['head_sha'][:12]}/{end['diff_digest'][:12]}); sampling aborted, "
+                "the drifted batch was not recorded"
             ),
         )
+    else:
+        ok, why = decide(samples)
     print(f"{'GREEN' if ok else 'RED'}: {why}")
     return 0 if ok else 1
 
