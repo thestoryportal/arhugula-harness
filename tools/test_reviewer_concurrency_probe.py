@@ -91,6 +91,16 @@ def test_decide_red_insufficient():
     assert "insufficient" in why
 
 
+# mutation-probe: commenting out decide()'s required-series loop must red this (N=1 alone
+def test_decide_red_n1_alone_never_certifies():
+    """merge-gate witness P2: five valid N=1 samples ALONE must read RED (the codex r4
+    P3 regression shape — a check narrowed back to `if 1 not in samples` passes only
+    if no test supplies N=1 present with N=2/N=4 absent; this test is that shape)."""
+    ok, why = rcp.decide({1: _series(5, 60)})
+    assert not ok
+    assert "insufficient" in why and "N=2" in why
+
+
 def test_decide_red_no_baseline():
     # Wall-clock GREEN is RELATIVE to the N=1 median; without it there is no rule to apply
     ok, why = rcp.decide({2: _series(5, 100), 4: _series(5, 110)})
@@ -229,6 +239,18 @@ def test_one_timeout_escalates_to_kill_on_hung_wrapper(
     assert killed == [(4242, rcp.signal.SIGTERM), (4242, rcp.signal.SIGKILL)]
 
 
+def test_main_threads_argv_to_run(monkeypatch: pytest.MonkeyPatch):
+    recorded = {}
+
+    def fake_run(base, *, channel, reps, ns=(1, 2, 4), one=None):
+        recorded.update(base=base, channel=channel, reps=reps)
+        return 7
+
+    monkeypatch.setattr(rcp, "run", fake_run)
+    assert rcp.main(["--base", "dev", "--channel", "gemini", "--reps", "6"]) == 7
+    assert recorded == {"base": "dev", "channel": "gemini", "reps": 6}
+
+
 def test_reps_cli_boundary_refuses_nonpositive():
     with pytest.raises(SystemExit):  # argparse rejects at the checkpoint, pre-run
         rcp.main(["--reps", "0"])
@@ -334,13 +356,66 @@ def test_pinned_worktree_add_prewarm_remove(tmp_path: Path, monkeypatch: pytest.
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(rcp.subprocess, "run", fake_run)
+    names = []
     with rcp._pinned_worktree("f" * 40) as workdir:
-        assert workdir.name == "pinned"
-    add, prewarm, remove = ran
+        names.append(workdir.name)
+    with rcp._pinned_worktree("f" * 40) as workdir:
+        names.append(workdir.name)
+    # merge-gate concurrency P2: the basename rides the tempdir's unique suffix — a
+    # fixed literal would race git's .git/worktrees/<id> collision-avoidance across
+    # CONCURRENT probe processes in the shared repo
+    assert names[0] != names[1] and all(n.startswith("pin-") for n in names)
+    add, prewarm, remove = ran[:3]
     assert add[:5] == ["git", "-C", str(rcp.REPO), "worktree", "add"]
     assert "--detach" in add and add[-1] == "f" * 40
     assert prewarm[:2] == ["uv", "run"]
     assert remove[3:5] == ["worktree", "remove"] and "--force" in remove
+
+
+def test_pin_failure_records_red_result_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    """merge-gate concurrency P2: a failed worktree add must not crash recordless —
+    the run records a durable RED probe-result row (pilot-gate stays fail-closed)."""
+    monkeypatch.setattr(
+        rcp.rw,
+        "code_binding",
+        lambda repo, base: {"head_sha": "a" * 40, "base_sha": "b" * 40, "diff_digest": "c" * 64},
+    )
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-he-35")
+    monkeypatch.setenv("HARNESS_LANE_ID", "lane-x")
+
+    @contextlib.contextmanager
+    def failing_pin(head_sha):
+        raise rcp.PinError("git worktree add failed: fatal: collision")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(rcp, "_pinned_worktree", failing_pin)
+    rc = rcp.run(
+        "main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s, w: (60.0, True)
+    )
+    assert rc == 1
+    assert "pinned worktree unavailable" in capsys.readouterr().out
+    rows = fr.read_rows()
+    assert [r["finding_type"] for r in rows] == ["probe-result"]  # no samples, ONE terminal row
+    result = json.loads(rows[0]["observed_evidence"])
+    assert result["verdict"] == "RED" and "worktree" in result["why"]
+
+
+def test_pin_add_failure_raises_typed_after_prune(monkeypatch: pytest.MonkeyPatch):
+    ran = []
+
+    def fake_run(argv, **k):
+        ran.append(list(argv))
+        if "add" in argv:
+            raise subprocess.CalledProcessError(128, argv, stderr="fatal: collision")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(rcp.subprocess, "run", fake_run)
+    with pytest.raises(rcp.PinError, match="collision"):
+        with rcp._pinned_worktree("f" * 40):
+            pass  # pragma: no cover
+    assert ran[-1][3:] == ["worktree", "prune"]  # partial admin state pruned best-effort
 
 
 def test_pinned_worktree_remove_failure_warns(
@@ -426,13 +501,32 @@ def test_one_registers_and_deregisters_its_group(tmp_path: Path, monkeypatch: py
     assert 4242 not in rcp.LIVE_GROUPS._pgids  # ...deregistered after
 
 
-def test_run_restores_signal_handlers(tmp_path: Path, _fixed_binding: str, capsys):
+def test_run_installs_armed_handlers_and_restores(
+    tmp_path: Path, _fixed_binding: str, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    """merge-gate witness P2: before/after symmetry alone passes a capture-without-
+    install mutation — so capture the handler DURING the run and prove it is ARMED
+    (invoking it terminates the registry and raises SystemExit 128+signum)."""
     import signal as _signal
 
+    monkeypatch.setattr(rcp, "LIVE_GROUPS", rcp._LiveGroups())
     before = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
-    rcp.run("main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s, w: (60.0, True))
+    seen = {}
+
+    def capture_one(c, b, e, s, w):
+        seen["term"] = _signal.getsignal(_signal.SIGTERM)
+        seen["int"] = _signal.getsignal(_signal.SIGINT)
+        return 60.0, True
+
+    rcp.run("main", channel="codex", reps=5, ns=(1, 2, 4), one=capture_one)
     after = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
     assert after == before  # the probe's handlers never outlive the run
+    assert seen["term"] is seen["int"] and seen["term"] not in before  # INSTALLED mid-run
+    with pytest.raises(SystemExit) as exc:  # and ARMED: the real termination behavior
+        seen["term"](_signal.SIGTERM, None)
+    assert exc.value.code == 128 + _signal.SIGTERM
+    assert rcp.LIVE_GROUPS.terminating  # the handler drove the registry
+    rcp.LIVE_GROUPS.reset()
 
 
 def test_add_refused_once_terminating(monkeypatch: pytest.MonkeyPatch):
@@ -500,6 +594,13 @@ def test_begin_termination_reentrant_under_held_lock():
     locked section — begin_termination must re-enter the SAME thread's held lock (RLock)
     instead of self-deadlocking. A plain-Lock regression manifests as this test hanging."""
     groups = rcp._LiveGroups()
+    # fast discriminator FIRST (merge-gate witness P3): same-thread double-acquire
+    # succeeds only on an RLock — a plain-Lock regression fails HERE in milliseconds
+    # instead of hanging the reentry call below until an external job-timeout
+    assert groups._lock.acquire(blocking=False)
+    assert groups._lock.acquire(blocking=False), "lock is not reentrant (RLock regressed)"
+    groups._lock.release()
+    groups._lock.release()
     with groups._lock:  # simulate SIGTERM landing while main holds the lock
         groups.begin_termination()
     assert groups.add(1) is False  # the flag committed despite the held lock

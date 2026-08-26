@@ -218,6 +218,12 @@ def _stop_tree(proc: subprocess.Popen[str]) -> None:
         proc.communicate()  # reap; the group is dead, this cannot block
 
 
+class PinError(RuntimeError):
+    """The pinned worktree could not be created — the probe cannot measure anything.
+    `run` converts this into a durable RED probe-result row (a crash with no record
+    would leave `pilot-gate-check` reading absent-or-stale — merge-gate concurrency P2)."""
+
+
 @contextlib.contextmanager
 def _pinned_worktree(head_sha: str):
     """A detached worktree at the probed commit — the one-fixed-diff premise made
@@ -229,12 +235,24 @@ def _pinned_worktree(head_sha: str):
     the first sample does not pay the sync ([[ephemeral-worktree-for-git-automation]]:
     detached ephemeral worktrees are the sanctioned automation shape)."""
     with tempfile.TemporaryDirectory(prefix="reviewer-concurrency-probe-") as td:
-        workdir = Path(td) / "pinned"
-        subprocess.run(
-            ["git", "-C", str(REPO), "worktree", "add", "--detach", str(workdir), head_sha],
-            check=True,
-            capture_output=True,
-        )
+        # the basename rides the tempdir's OWN unique suffix (merge-gate concurrency
+        # P2): git derives the shared `.git/worktrees/<id>/` admin dir from the
+        # basename, and a fixed literal ("pinned") lets two CONCURRENT probe runs race
+        # git's sequential collision-avoidance — one loses fatally and leaves partial
+        # admin state in the shared repo
+        workdir = Path(td) / f"pin-{Path(td).name.removeprefix('reviewer-concurrency-probe-')}"
+        try:
+            subprocess.run(
+                ["git", "-C", str(REPO), "worktree", "add", "--detach", str(workdir), head_sha],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            # best-effort prune of any partial admin state the failed add left behind,
+            # then surface typed — run() records the durable RED result row
+            subprocess.run(["git", "-C", str(REPO), "worktree", "prune"], capture_output=True)
+            raise PinError(f"git worktree add failed: {exc.stderr.strip()}") from exc
         try:
             subprocess.run(
                 ["uv", "run", "python", "-c", ""], cwd=workdir, check=True, capture_output=True
@@ -336,6 +354,7 @@ def run(
         raise SystemExit(128 + signum)
 
     previous = {s: signal.signal(s, _terminate) for s in (signal.SIGTERM, signal.SIGINT)}
+    pin_failure: PinError | None = None
     try:
         with _pinned_worktree(binding["head_sha"]) as workdir:
             # sinks live beside (not inside) the pinned worktree: agy refuses an
@@ -393,6 +412,11 @@ def run(
                             )
                     if errors:
                         raise errors[0]
+    except PinError as exc:
+        # no worktree, no measurement — but a crash with NO durable record would leave
+        # pilot-gate-check reading absent-or-stale (merge-gate concurrency P2): fall
+        # through to the terminal result row with a RED verdict instead
+        pin_failure = exc
     finally:
         # non-signal exits (normal completion, an exception): reap anything still
         # registered, re-arm the flag for a later run in this process, then restore
@@ -405,7 +429,10 @@ def run(
     for n, med in medians.items():
         all_valid = all(ok for _, ok in samples[n])
         print(f"N={n}: median {med:.0f}s over {len(samples[n])} calls, valid={all_valid}")
-    ok, why = decide(samples)
+    if pin_failure is not None:
+        ok, why = False, f"pinned worktree unavailable ({pin_failure}); no calls were made"
+    else:
+        ok, why = decide(samples)
     # the durable TERMINAL record (codex r4 P2): §8.1's "result row required before
     # pilots" needs a row that exists only when a run actually completed — undelimited
     # probe-sample rows cannot carry that fact, and a process killed mid-sampling

@@ -396,3 +396,16 @@ def test_probe_result_verdict_fail_closed(tmp_path):
     with log.open("a") as fh:
         fh.write(row("probe-result", "RED") + "\n")
     assert lv.probe_result_verdict(log)[0] == "RED"  # the newer RED supersedes
+
+
+def test_pilot_gate_cli_dispatch(monkeypatch):
+    """merge-gate witness P2: the REAL consumer path is `just pilot-gate-check` ->
+    main(["pilot-gate"]) — exercise the dispatch itself: exit 0 only on GREEN, and the
+    branch RETURNS (a dropped return would fall through to the MANIFEST runner, which
+    now contains the just:pilot-gate-check row itself — recursion)."""
+    ran = []
+    monkeypatch.setattr(lv, "run_row", lambda row, **k: ran.append(row) or lv.Result(row, "pass"))
+    for verdict, rc in (("GREEN", 0), ("RED", 1), ("absent", 1)):
+        monkeypatch.setattr(lv, "probe_result_verdict", lambda log_path=None, v=verdict: (v, "w"))
+        assert lv.main(["pilot-gate"]) == rc
+    assert ran == []  # dispatch returned — never fell through to the manifest runner
