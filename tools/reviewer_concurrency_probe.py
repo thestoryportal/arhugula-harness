@@ -12,12 +12,16 @@ order: probe -> coalescing -> pilots). Every sample lands as a C-HE-24 row
 The probe measures the reviewer channel, not the review loop: its child invocations
 run under an env stripped of the arc/lane ids (see `probe_env`), so the B-215
 admission gate reads them as unreserved (Inactive — its sanctioned path) and no
-reserved arc's round budget is spent on measurements.
+reserved arc's round budget is spent on measurements. The one-fixed-diff premise is
+structural, not checked: children run inside a detached worktree pinned at the
+captured head with a frozen base sha (see `_pinned_worktree`), so the reviewed bytes
+cannot change while the probe runs.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -106,10 +110,7 @@ class _LiveGroups:
         with self._lock:
             pgids, self._pgids = tuple(self._pgids), set()
         for pgid in pgids:
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass  # already gone — the kill is idempotent
+            _kill_group(pgid)
 
 
 LIVE_GROUPS = _LiveGroups()
@@ -160,18 +161,67 @@ def _gemini_valid(sink: Path) -> bool:
     unparseable envelope — the wrapper crashed, or refused the sink — is invalid."""
     try:
         return json.loads(sink.read_text())["terminal"] in ("APPROVE", "BLOCK")
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError):
+        # TypeError: a syntactically valid but wrong-shaped body (`null`, `[]`) has no
+        # ["terminal"] to subscript — the same invalid-envelope fact (codex r7 P3)
         return False
 
 
-def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
-    """One reviewer call: wall-clock + verdict validity. Validity is read from the
-    channel's own machine seam (never the exit code, which an uncaught wrapper exception
-    can alias to a BLOCK — codex r1 P1): codex's stderr completion line, gemini's
-    outcome envelope. A timeout, crash, REVIEWER_UNAVAILABLE, or GATE_REFUSED all read
-    invalid. [LAW:no-silent-failure] the failure IS the datum: it is recorded as an
-    invalid sample (=> RED via `decide`), never raised, so one bad call cannot discard
-    the run's other live samples."""
+def _kill_group(pgid: int) -> None:
+    """Idempotent whole-tree kill: the group already being gone is the goal state."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+@contextlib.contextmanager
+def _pinned_worktree(head_sha: str):
+    """A detached worktree at the probed commit — the one-fixed-diff premise made
+    STRUCTURAL ([LAW:types-are-the-program] at process level, codex r7 P2): children
+    review a checkout whose HEAD cannot move, so no ref-snapshot arithmetic exists to
+    race (the r2/r3/r5/r7 escalation on drift windows ends by subtraction, per the
+    defect-class-preflight arms-race rule — every window came from checking a mutable
+    ref this pin makes immutable). The venv is pre-warmed OUTSIDE any measured call so
+    the first sample does not pay the sync ([[ephemeral-worktree-for-git-automation]]:
+    detached ephemeral worktrees are the sanctioned automation shape)."""
+    with tempfile.TemporaryDirectory(prefix="reviewer-concurrency-probe-") as td:
+        workdir = Path(td) / "pinned"
+        subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "add", "--detach", str(workdir), head_sha],
+            check=True,
+            capture_output=True,
+        )
+        try:
+            subprocess.run(
+                ["uv", "run", "python", "-c", ""], cwd=workdir, check=True, capture_output=True
+            )
+            yield workdir
+        finally:
+            rm = subprocess.run(
+                ["git", "-C", str(REPO), "worktree", "remove", "--force", str(workdir)],
+                capture_output=True,
+                text=True,
+            )
+            if rm.returncode != 0:
+                # loud, never silent: the tempdir still deletes the files, but git keeps
+                # a stale registration until pruned
+                print(
+                    f"warning: pinned worktree not removed ({rm.stderr.strip()}); "
+                    "run `git worktree prune`",
+                    file=sys.stderr,
+                )
+
+
+def _one(channel: str, base: str, env: dict[str, str], scratch: Path, workdir: Path) -> Sample:
+    """One reviewer call, run inside the pinned worktree (`workdir`) against the frozen
+    `base` sha. Validity is read from the channel's own machine seam (never the exit
+    code, which an uncaught wrapper exception can alias to a BLOCK — codex r1 P1):
+    codex's stderr completion line, gemini's outcome envelope. A timeout, crash, spawn
+    failure, REVIEWER_UNAVAILABLE, or GATE_REFUSED all read invalid.
+    [LAW:no-silent-failure] the failure IS the datum: it is recorded as an invalid
+    sample (=> RED via `decide`), never raised, so one bad call cannot discard the
+    run's other live samples."""
     with tempfile.NamedTemporaryFile(dir=scratch, suffix=".json", delete=True) as tf:
         sink = Path(tf.name)  # a fresh non-existent path: agy's O_EXCL sink refuses reuse
     argv = [*CMD[channel], base]
@@ -181,45 +231,40 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
         return 0.0, False  # termination began before this worker spawned: no new spend
     t0 = time.monotonic()
     try:
-        # its own session => the pid IS the process-group id, so a timeout can kill the
-        # WHOLE reviewer tree (uv -> python -> vendor CLI descendants). subprocess.run's
-        # timeout kills only the immediate launcher and would leave a live reviewer
-        # running into later concurrency levels, contaminating them (codex r4 P2).
+        # its own session => the pid IS the process-group id, so any escape path can
+        # kill the WHOLE reviewer tree (uv -> python -> vendor CLI descendants), not
+        # just the immediate launcher (codex r4 P2).
         proc = subprocess.Popen(
             argv,
-            cwd=REPO,
+            cwd=workdir,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             start_new_session=True,
         )
-        if not LIVE_GROUPS.add(proc.pid):
-            # termination began between Popen and registration: the handler's snapshot
-            # cannot see this group, so ITS kill is ours (codex r6 P2)
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.communicate()  # reap; the group is dead
-            return time.monotonic() - t0, False
-        try:
-            _out, err = proc.communicate(timeout=CALL_TIMEOUT_S)
-            valid = _codex_valid(err) if channel == "codex" else _gemini_valid(sink)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass  # the group exited between the timeout and the kill — already gone
-            proc.communicate()  # reap; the group is dead, this cannot block
-            valid = False
-        finally:
-            LIVE_GROUPS.discard(proc.pid)
     except OSError:
         # the SPAWN failed (fork/exec resource exhaustion under the very concurrency
         # being probed) — exactly a validity failure, not a probe crash (codex r3 P2):
         # letting it escape the executor would abort the run with no RED and no record.
-        valid = False
+        return time.monotonic() - t0, False
+    valid = False
+    try:
+        # registration refused = termination began between Popen and add: this group is
+        # OURS to kill (the handler's snapshot cannot see it, codex r6 P2) — handled by
+        # the finally below, the ONE place a live child can never escape (codex r7 P2:
+        # a communicate()/killpg failure must not discard a still-running group).
+        if LIVE_GROUPS.add(proc.pid):
+            try:
+                _out, err = proc.communicate(timeout=CALL_TIMEOUT_S)
+                valid = _codex_valid(err) if channel == "codex" else _gemini_valid(sink)
+            except subprocess.TimeoutExpired:
+                pass  # the finally kills the tree; the sample stays invalid
+    finally:
+        if proc.poll() is None:  # ANY escape path with the child alive: no orphan
+            _kill_group(proc.pid)
+            proc.communicate()  # reap; the group is dead, this cannot block
+        LIVE_GROUPS.discard(proc.pid)
     return time.monotonic() - t0, valid
 
 
@@ -229,7 +274,7 @@ def run(
     channel: str = "codex",
     reps: int = 5,
     ns: tuple[int, ...] = (1, 2, 4),
-    one: Callable[[str, str, dict[str, str], Path], Sample] = _one,
+    one: Callable[[str, str, dict[str, str], Path, Path], Sample] = _one,
 ) -> int:
     """Collect reps x N samples per concurrency level (reps >= 1; the CLI boundary refuses
     less), record each as a C-HE-24 row, print the per-N table + verdict. Exit 0 GREEN /
@@ -239,7 +284,6 @@ def run(
     binding = rw.code_binding(REPO, base)  # the ONE fixed-diff identity every row carries
     env = probe_env()
     samples: dict[int, list[Sample]] = {n: [] for n in ns}
-    drifted_from: dict[str, str] | None = None
 
     # a SIGTERM/SIGINT mid-run must not orphan paid reviewer trees (codex r5 P2): the
     # handler kills every live group FIRST — which also unblocks any worker parked in
@@ -251,27 +295,19 @@ def run(
 
     previous = {s: signal.signal(s, _terminate) for s in (signal.SIGTERM, signal.SIGINT)}
     try:
-        # outside the repo: agy's --outcome-json sink refuses in-repo paths; envelopes are
-        # parsed per call, so the whole dir is disposable once sampling ends
-        with tempfile.TemporaryDirectory(prefix="reviewer-concurrency-probe-") as scratch_dir:
-            scratch = Path(scratch_dir)
+        with _pinned_worktree(binding["head_sha"]) as workdir:
+            # sinks live beside (not inside) the pinned worktree: agy refuses an
+            # --outcome-json path inside its own repo
+            scratch = workdir.parent
             for n in ns:
                 for rep in range(reps):
-                    if drifted_from is not None:
-                        break
                     with ThreadPoolExecutor(max_workers=n) as ex:
-                        results = list(ex.map(lambda _: one(channel, base, env, scratch), range(n)))
-                    # the one-fixed-diff premise is verified around EVERY batch, and a
-                    # batch's rows are appended only when the binding held across its
-                    # calls: a drifted batch must not persist rows stamped with the stale
-                    # binding and valid=true (codex r3 P2 — the later RED cannot repair a
-                    # durable false record). This per-batch gate IS the drift check
-                    # ([LAW:single-enforcer]; its last iteration covers the end of
-                    # SAMPLING — no reviewer call happens after it, so a ref move during
-                    # the later append/report window cannot mislabel any measurement).
-                    if rw.code_binding(REPO, base) != binding:
-                        drifted_from = binding
-                        break
+                        results = list(
+                            ex.map(
+                                lambda _: one(channel, binding["base_sha"], env, scratch, workdir),
+                                range(n),
+                            )
+                        )
                     for wall, valid in results:
                         samples[n].append((wall, valid))
                         fr.append_observation(
@@ -309,19 +345,7 @@ def run(
     for n, med in medians.items():
         all_valid = all(ok for _, ok in samples[n])
         print(f"N={n}: median {med:.0f}s over {len(samples[n])} calls, valid={all_valid}")
-    if drifted_from is not None:
-        end = rw.code_binding(REPO, base)
-        ok, why = (
-            False,
-            (
-                f"fixed-diff violated: code binding changed during the probe "
-                f"({drifted_from['head_sha'][:12]}/{drifted_from['diff_digest'][:12]} -> "
-                f"{end['head_sha'][:12]}/{end['diff_digest'][:12]}); sampling aborted, "
-                "the drifted batch was not recorded"
-            ),
-        )
-    else:
-        ok, why = decide(samples)
+    ok, why = decide(samples)
     # the durable TERMINAL record (codex r4 P2): §8.1's "result row required before
     # pilots" needs a row that exists only when a run actually completed — undelimited
     # probe-sample rows cannot carry that fact, and a process killed mid-sampling

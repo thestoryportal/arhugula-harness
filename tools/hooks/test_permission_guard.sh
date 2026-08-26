@@ -441,6 +441,10 @@ OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 1000000000 main" 
 [ "$(dec "$OUT")" != "allow" ] && ok "unbounded probe reps → not auto-allowed" || bad "unbounded probe reps auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 99 main" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "two-digit probe reps → not auto-allowed" || bad "two-digit probe reps auto-allowed: $OUT"
+# codex r7: reps below the C-HE-22 bar of 5 are guaranteed RED-insufficient yet would
+# still spawn live budget-exempt calls — not auto-allowed either.
+OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe codex 1 main" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "below-contract probe reps → not auto-allowed" || bad "below-contract probe reps auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just reviewer-concurrency-probe evilchannel 5 main" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "unknown probe channel → not auto-allowed" || bad "unknown probe channel auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just codex-loop-status review-attest-bud'get' 2 ok" '')")

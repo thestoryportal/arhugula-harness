@@ -5,6 +5,7 @@ verdict, reason class, rows written)."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -29,20 +30,30 @@ def _hermetic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "Popen",
         lambda *a, **k: pytest.fail(f"real reviewer subprocess: {a[0][:4]}"),
     )
+    monkeypatch.setattr(
+        rcp.subprocess,
+        "run",
+        lambda *a, **k: pytest.fail(f"real subprocess.run: {a[0][:4]}"),
+    )
 
 
 class FakePopen:
-    """A completed reviewer child: `communicate` returns the canned streams."""
+    """A reviewer child: alive (`poll()` None) until `communicate` reaps it."""
 
     def __init__(self, argv, stderr_text: str = "", on_spawn=None, **kwargs):
         self.pid = 4242
         self.argv = argv
         self.kwargs = kwargs
         self._stderr = stderr_text
+        self._returncode = None
         if on_spawn is not None:
             on_spawn(argv)
 
+    def poll(self):
+        return self._returncode
+
     def communicate(self, timeout=None):
+        self._returncode = 0
         return "", self._stderr
 
 
@@ -136,7 +147,7 @@ def test_one_codex_validity_is_the_terminal_line(
         return p
 
     monkeypatch.setattr(rcp.subprocess, "Popen", fake_popen)
-    wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert ok is valid
     assert wall >= 0
     # own process group, so a timeout can kill the whole reviewer tree (codex r4 P2)
@@ -154,15 +165,27 @@ def test_one_gemini_validity_is_the_outcome_envelope(
         return lambda argv, **k: FakePopen(argv, on_spawn=on_spawn, **k)
 
     monkeypatch.setattr(rcp.subprocess, "Popen", write_envelope("APPROVE"))
-    _wall, ok = rcp._one("gemini", "main", {}, tmp_path)
+    _wall, ok = rcp._one("gemini", "main", {}, tmp_path, tmp_path)
     assert ok is True
     # no envelope written (wrapper crashed / refused the sink) -> invalid
     monkeypatch.setattr(rcp.subprocess, "Popen", lambda argv, **k: FakePopen(argv, **k))
-    _wall, ok = rcp._one("gemini", "main", {}, tmp_path)
+    _wall, ok = rcp._one("gemini", "main", {}, tmp_path, tmp_path)
     assert ok is False
     # an envelope whose terminal is not a verdict -> invalid
     monkeypatch.setattr(rcp.subprocess, "Popen", write_envelope("REVIEWER_UNAVAILABLE"))
-    _wall, ok = rcp._one("gemini", "main", {}, tmp_path)
+    _wall, ok = rcp._one("gemini", "main", {}, tmp_path, tmp_path)
+    assert ok is False
+
+    # a syntactically valid but wrong-SHAPED body (codex r7 P3): `null` has no
+    # ["terminal"] to subscript — invalid sample, never an escaping TypeError
+    def write_null(argv, **k):
+        def on_spawn(a):
+            Path(a[a.index("--outcome-json") + 1]).write_text("null")
+
+        return FakePopen(argv, on_spawn=on_spawn, **k)
+
+    monkeypatch.setattr(rcp.subprocess, "Popen", write_null)
+    _wall, ok = rcp._one("gemini", "main", {}, tmp_path, tmp_path)
     assert ok is False
 
 
@@ -177,11 +200,12 @@ def test_one_timeout_kills_process_group_and_is_invalid(
         def communicate(self, timeout=None):
             if timeout is not None:
                 raise subprocess.TimeoutExpired(cmd="codex-review", timeout=timeout)
-            return "", ""  # the post-kill reap
+            self._returncode = -9  # the post-kill reap
+            return "", ""
 
     monkeypatch.setattr(rcp.subprocess, "Popen", lambda argv, **k: TimeoutPopen(argv, **k))
     monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
-    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert ok is False  # a hung reviewer is a validity-failure SAMPLE, not a probe crash
     assert killed == [(4242, rcp.signal.SIGKILL)]  # the TREE died, not just the launcher
 
@@ -197,13 +221,21 @@ def test_reps_cli_boundary_refuses_nonpositive():
 
 
 @pytest.fixture()
-def _fixed_binding(monkeypatch: pytest.MonkeyPatch):
+def _fixed_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     head = "a" * 40
     monkeypatch.setattr(
         rcp.rw,
         "code_binding",
         lambda repo, base: {"head_sha": head, "base_sha": "b" * 40, "diff_digest": "c" * 64},
     )
+
+    @contextlib.contextmanager
+    def fake_pin(head_sha):
+        workdir = tmp_path / "pinned"
+        workdir.mkdir(exist_ok=True)
+        yield workdir
+
+    monkeypatch.setattr(rcp, "_pinned_worktree", fake_pin)
     monkeypatch.setenv("HARNESS_ARC_ID", "u-he-35")
     monkeypatch.setenv("HARNESS_LANE_ID", "lane-x")
     return head
@@ -212,7 +244,7 @@ def _fixed_binding(monkeypatch: pytest.MonkeyPatch):
 def test_run_green_emits_one_row_per_call(tmp_path: Path, _fixed_binding: str, capsys):
     calls: list[dict[str, str]] = []
 
-    def fake_one(channel: str, base: str, env: dict[str, str], scratch: Path) -> tuple[float, bool]:
+    def fake_one(channel, base, env, scratch, workdir) -> tuple[float, bool]:
         calls.append(env)
         return 60.0, True
 
@@ -245,7 +277,7 @@ def test_run_red_exit_and_rows_still_recorded(tmp_path: Path, _fixed_binding: st
     # (codex r5 P3: with ns=(1,) the missing-series rule fired first and the validity
     # propagation had no witness)
     rc = rcp.run(
-        "main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s: (60.0, False)
+        "main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s, w: (60.0, False)
     )
     assert rc == 1
     out = capsys.readouterr().out
@@ -257,50 +289,52 @@ def test_run_red_exit_and_rows_still_recorded(tmp_path: Path, _fixed_binding: st
     assert json.loads(result["observed_evidence"])["verdict"] == "RED"
 
 
-@pytest.mark.parametrize(
-    ("start", "end"),
-    [
-        # a moved HEAD
-        (("a" * 40, "c" * 40, "d" * 64), ("b" * 40, "c" * 40, "d" * 64)),
-        # a moved base ref under an UNMOVED HEAD (codex r2 P2): different merge-base,
-        # different reviewed bytes — head_sha alone would miss it
-        (("a" * 40, "c" * 40, "d" * 64), ("a" * 40, "e" * 40, "f" * 64)),
-    ],
-)
-def test_run_red_when_binding_drifts_mid_probe(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys,
-    start: tuple[str, str, str],
-    end: tuple[str, str, str],
-):
-    """Any changed binding component voids the one-fixed-diff premise: GREEN arithmetic
-    must not survive it, and the drifted batch's rows must never be recorded (codex r3
-    P2: a later RED cannot repair a durable false measurement record)."""
+def test_run_freezes_base_and_pins_workdir(tmp_path: Path, _fixed_binding: str, capsys):
+    """The one-fixed-diff premise is structural (codex r7 P2): every child call gets the
+    FROZEN base sha (never the mutable ref) and runs inside the pinned worktree, so no
+    ref move — including an A->B->A wiggle — can change what any child reviews."""
+    seen: list[tuple[str, Path]] = []
 
-    def make(t: tuple[str, str, str]) -> dict[str, str]:
-        return {"head_sha": t[0], "base_sha": t[1], "diff_digest": t[2]}
-
-    # initial capture -> batch-1 gate (drifted) -> the report's end re-read
-    bindings = iter([make(start), make(end), make(end)])
-    # (the result-row append reads no binding: it reuses the initial capture)
-    monkeypatch.setattr(rcp.rw, "code_binding", lambda repo, base: next(bindings))
-    monkeypatch.setenv("HARNESS_ARC_ID", "u-he-35")
-    monkeypatch.setenv("HARNESS_LANE_ID", "lane-x")
-    calls: list[int] = []
-
-    def fake_one(c, b, e, s):
-        calls.append(1)
+    def fake_one(channel, base, env, scratch, workdir):
+        seen.append((base, workdir))
         return 60.0, True
 
-    rc = rcp.run("main", channel="codex", reps=5, ns=(1, 2), one=fake_one)
-    assert rc == 1
-    assert "fixed-diff violated" in capsys.readouterr().out
-    rows = fr.read_rows()
-    # the drifted batch persisted NO sample row; the RED terminal record still lands
-    assert [r["finding_type"] for r in rows] == ["probe-result"]
-    assert json.loads(rows[0]["observed_evidence"])["verdict"] == "RED"
-    assert len(calls) == 1  # sampling aborted at the first drifted batch — no further spend
+    rc = rcp.run("main", channel="codex", reps=5, ns=(1, 2, 4), one=fake_one)
+    assert rc == 0
+    assert {b for b, _ in seen} == {"b" * 40}  # the captured base_sha, not "main"
+    assert {w.name for _, w in seen} == {"pinned"}  # every call inside the pinned tree
+
+
+def test_pinned_worktree_add_prewarm_remove(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The pin's lifecycle: detached add at the exact sha, venv pre-warm OUTSIDE any
+    measured call, forced remove on exit — remove failure warns loudly, never silently."""
+    ran: list[list[str]] = []
+
+    def fake_run(argv, **k):
+        ran.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(rcp.subprocess, "run", fake_run)
+    with rcp._pinned_worktree("f" * 40) as workdir:
+        assert workdir.name == "pinned"
+    add, prewarm, remove = ran
+    assert add[:5] == ["git", "-C", str(rcp.REPO), "worktree", "add"]
+    assert "--detach" in add and add[-1] == "f" * 40
+    assert prewarm[:2] == ["uv", "run"]
+    assert remove[3:5] == ["worktree", "remove"] and "--force" in remove
+
+
+def test_pinned_worktree_remove_failure_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+):
+    def fake_run(argv, **k):
+        rc = 1 if "remove" in argv else 0
+        return subprocess.CompletedProcess(argv, rc, "", "locked")
+
+    monkeypatch.setattr(rcp.subprocess, "run", fake_run)
+    with rcp._pinned_worktree("f" * 40):
+        pass
+    assert "pinned worktree not removed" in capsys.readouterr().err
 
 
 def test_one_spawn_oserror_is_invalid_sample(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -308,7 +342,7 @@ def test_one_spawn_oserror_is_invalid_sample(tmp_path: Path, monkeypatch: pytest
         raise OSError("Resource temporarily unavailable")
 
     monkeypatch.setattr(rcp.subprocess, "Popen", _spawn_fail)
-    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert ok is False  # a failed spawn under load is a validity-failure SAMPLE
 
 
@@ -318,7 +352,7 @@ def test_run_batch_calls_actually_overlap(tmp_path: Path, _fixed_binding: str, c
     witness that both calls in every N=2 batch were in flight simultaneously."""
     barrier = threading.Barrier(2)
 
-    def overlapping_one(c, b, e, s):
+    def overlapping_one(c, b, e, s, w):
         barrier.wait(timeout=10)
         return 60.0, True
 
@@ -350,10 +384,11 @@ def test_one_registers_and_deregisters_its_group(tmp_path: Path, monkeypatch: py
     class SnoopPopen(FakePopen):
         def communicate(self, timeout=None):
             seen.append(set(rcp.LIVE_GROUPS._pgids))  # live DURING the call
+            self._returncode = 0
             return "", "codex-review: APPROVE\n"
 
     monkeypatch.setattr(rcp.subprocess, "Popen", lambda argv, **k: SnoopPopen(argv, **k))
-    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert ok is True
     assert seen == [{4242}]  # registered while running...
     assert 4242 not in rcp.LIVE_GROUPS._pgids  # ...deregistered after
@@ -363,7 +398,7 @@ def test_run_restores_signal_handlers(tmp_path: Path, _fixed_binding: str, capsy
     import signal as _signal
 
     before = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
-    rcp.run("main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s: (60.0, True))
+    rcp.run("main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s, w: (60.0, True))
     after = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
     assert after == before  # the probe's handlers never outlive the run
 
@@ -385,7 +420,7 @@ def test_one_skips_spawn_once_terminating(tmp_path: Path, monkeypatch: pytest.Mo
     # WITHOUT tripping it proves no reviewer was spawned after termination began
     monkeypatch.setattr(rcp, "LIVE_GROUPS", rcp._LiveGroups())
     rcp.LIVE_GROUPS.begin_termination()
-    wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert (wall, ok) == (0.0, False)
 
 
@@ -404,6 +439,6 @@ def test_one_kills_own_group_when_registration_refused(
         return p
 
     monkeypatch.setattr(rcp.subprocess, "Popen", spawn_then_terminate)
-    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path, tmp_path)
     assert ok is False  # a call whose group was killed at registration is not a verdict
     assert killed == [(4242, rcp.signal.SIGKILL)]  # the just-spawned group died
