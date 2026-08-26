@@ -6364,9 +6364,11 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > after codex r1 (P1: argparse is last-value-wins and `record_phase` has no holder
 > check, so a duplicated `--arc-id` riding a prefix allow would write onto another
 > lane's reservation), the verb gets a dedicated POSITIONAL exact-shape branch
-> (`_phase_exact_shape`: eleven tokens, canonical flag order, dash-led values and
-> non-`start|end` edges reject) rather than a spot in the generic alternation, with
-> allow + six hardening witnesses in `test_permission_guard.sh`. **(v) Emitter carve
+> (`_phase_exact_shape`: positional exact shape, canonical flag order, dash-led values
+> and non-`start|end` edges reject; 13 tokens as-built after the r3 `--lane-id`) rather
+> than a spot in the generic alternation, with an allow witness + a hardening deny set
+> in `test_permission_guard.sh` (the suite is the authority on its count -- later
+> rounds extended it). **(v) Emitter carve
 > (codex r1).** The drafted §6339 emitter sketch nests edit inside a loop-spanning
 > verify pair, double-counting every fix interval in the N6 denominator, and omits
 > queue/absorb. As built: verify = the round-1 window, absorb = the classification

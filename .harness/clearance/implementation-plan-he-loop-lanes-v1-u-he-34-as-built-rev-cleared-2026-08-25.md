@@ -23,7 +23,7 @@ queue/execute/absorb/edit/verify/verify_unavailable emitters. Two §1 obligation
 NOT landed and are registered on `B-218` with the reconciliation they require: the
 `capture` pair (structurally unrecordable post-terminal, C-HE-03 §3) and the
 `result_capture` split (observable only wrapper-internally). This marker records the
-execution-time corrections the landing folded back into the plan (rev-note items (i)–(ix)
+execution-time corrections the landing folded back into the plan (rev-note items (i)–(x)
 at the unit's Step 4), and ratifies the plan-rev + tooling mix in one PR as a
 bundled-absorption arc (workspace `CLAUDE.md` §11.4) rather than silent absorption.
 
@@ -46,8 +46,9 @@ logs themselves are produced headless by the `review-with-failover-logged` recip
 **(iv)** The permission guard gains a dedicated POSITIONAL exact-shape branch for the
 `phase` carrier verb (codex r1 P1: a duplicated `--arc-id` riding a prefix allow would
 write onto another lane's reservation — argparse is last-value-wins and `record_phase`
-has no holder check); allow + six hardening witnesses in
-`tools/hooks/test_permission_guard.sh`.
+has no holder check); allow + hardening deny witnesses in
+`tools/hooks/test_permission_guard.sh` (the suite's deny set is the authority on the
+count -- later rounds extended it).
 
 **(v)** The emitter carve is disjoint by construction (verify = round-1 window, absorb =
 classification, edit = fix window; queue wired in roadmap-continue); the drafted capture
