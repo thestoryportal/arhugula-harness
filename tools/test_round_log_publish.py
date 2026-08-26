@@ -53,16 +53,21 @@ def test_refuses_destinations_outside_harness_tmp(tmp_path):
     assert not (tmp_path / "tools" / "x.py").exists()
 
 
-def test_refuses_symlink_leaf(tmp_path):
-    """Mutation probe: drop O_NOFOLLOW on the leaf open -> /tmp target truncated."""
+def test_symlink_leaf_entry_replaced_target_untouched(tmp_path):
+    """A pre-planted leaf symlink is REPLACED as a directory entry by the rename-based
+    publish (codex r8) -- the write goes to a fresh O_EXCL inode, so the symlink's
+    target is never opened, let alone truncated. Mutation probe: write the leaf with
+    O_TRUNC through the pathname -> the target reads 'verdict' and this reds."""
     d = tmp_path / ".harness/tmp/rounds"
     d.mkdir(parents=True)
     outside = tmp_path / "outside-target"
     outside.write_bytes(b"precious")
     (d / "r1.log").symlink_to(outside)
     proc = run(".harness/tmp/rounds/r1.log", tmp_path)
-    assert proc.returncode == 4
+    assert proc.returncode == 0, proc.stderr
     assert outside.read_bytes() == b"precious", "symlink target must never be written"
+    assert not (d / "r1.log").is_symlink(), "entry must be replaced by a regular file"
+    assert (d / "r1.log").read_bytes() == b"verdict\n"
 
 
 def test_refuses_symlink_parent_component(tmp_path):
@@ -76,6 +81,23 @@ def test_refuses_symlink_parent_component(tmp_path):
     proc = run(".harness/tmp/link/r1.log", tmp_path)
     assert proc.returncode == 4
     assert not (outside / "r1.log").exists(), "write escaped through a symlink parent"
+
+
+def test_pre_planted_hard_link_inode_survives(tmp_path):
+    """codex r8 P1: O_NOFOLLOW does not stop a HARD link -- an O_TRUNC open through a
+    pre-planted leaf hard-linked to a tracked file would destroy that file's content.
+    The publisher writes a fresh O_EXCL inode and rename() replaces only the directory
+    ENTRY, so the linked inode keeps its bytes. Mutation probe: revert to O_TRUNC on
+    the leaf -> 'precious' is destroyed and this reds."""
+    d = tmp_path / ".harness/tmp/rounds"
+    d.mkdir(parents=True)
+    tracked = tmp_path / "tracked-file"
+    tracked.write_bytes(b"precious")
+    (d / "r1.log").hardlink_to(tracked)
+    proc = run(".harness/tmp/rounds/r1.log", tmp_path)
+    assert proc.returncode == 0, proc.stderr
+    assert tracked.read_bytes() == b"precious", "hard-linked inode was truncated"
+    assert (d / "r1.log").read_bytes() == b"verdict\n"
 
 
 def test_creates_missing_intermediate_dirs(tmp_path):

@@ -6416,7 +6416,13 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > the publisher carries its own hermetic suite (`tools/test_round_log_publish.py`,
 > CI-wired in codex-parity-check.sh); on exit 2 the workflow closes the verify pair
 > before opening verify_unavailable, and merge-gate-emit invocations pass
-> `--arc-id` so the gate rows join the reservation ids N6 keys on.
+> `--arc-id` so the gate rows join the reservation ids N6 keys on. Refined at r8:
+> the publisher writes a fresh `O_EXCL` temp inode and installs it by rename — a
+> pre-planted HARD link (which `O_NOFOLLOW` cannot stop) keeps its inode's bytes,
+> the entry alone is replaced, and concurrent publishers cannot interleave one
+> inode; a publish failure is its own recipe terminal (exit 4) for EVERY reviewer
+> outcome, since exits 1/2/3 would let a caller treat a round with a missing
+> canonical log as valid.
 
 ---
 

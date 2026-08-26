@@ -68,20 +68,38 @@ def main(argv: list[str] | None = None) -> int:
                 return _refuse(f"refused component {comp!r} in {rel!r}: {exc}")
             os.close(fd)
             fd = nxt
+        # Exclusively-created temp inode + atomic rename (codex r8 P1): O_NOFOLLOW
+        # stops symlinks but not HARD links -- O_TRUNC on a pre-planted leaf
+        # hard-linked to a tracked file would destroy that file's content. O_EXCL
+        # guarantees a fresh inode nothing else links; rename() then replaces the
+        # directory ENTRY, leaving any pre-planted inode untouched. Concurrent
+        # publishers each write their own temp inode and the last rename installs a
+        # whole log, never an interleaved one.
+        tmp_name = f".{parts[-1]}.{os.getpid()}.tmp"
         try:
             out = os.open(
-                parts[-1],
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                tmp_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                 0o644,
                 dir_fd=fd,
             )
-        except OSError as exc:  # ELOOP: pre-planted leaf symlink
-            return _refuse(f"refused leaf {parts[-1]!r} in {rel!r}: {exc}")
-        with os.fdopen(out, "wb") as sink:
-            for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
-                sink.write(chunk)
-                sys.stdout.buffer.write(chunk)
-                sys.stdout.buffer.flush()
+        except OSError as exc:
+            return _refuse(f"refused temp {tmp_name!r} in {rel!r}: {exc}")
+        try:
+            with os.fdopen(out, "wb") as sink:
+                for chunk in iter(lambda: sys.stdin.buffer.read(65536), b""):
+                    sink.write(chunk)
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.buffer.flush()
+            os.replace(tmp_name, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
+        except OSError as exc:
+            try:
+                os.unlink(tmp_name, dir_fd=fd)
+            except OSError:
+                print(f"round_log_publish: temp {tmp_name!r} left behind", file=sys.stderr)
+            # _refuse also drains the remaining transcript to stdout -- a mid-copy
+            # disk failure must not eat the verdict tail either
+            return _refuse(f"publish of {rel!r} failed: {exc}")
     finally:
         os.close(fd)
     return 0

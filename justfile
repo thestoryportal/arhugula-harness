@@ -743,8 +743,13 @@ review-with-failover-logged log base='main':
     uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "{{log}}"
     rc=("${PIPESTATUS[@]}")
     if [ "${rc[1]}" -ne 0 ]; then
-      echo "review-with-failover-logged: WARNING log publish exited ${rc[1]} -- round log {{log}} is missing or partial" >&2
-      [ "${rc[0]}" -eq 0 ] && exit 4
+      # Publish failure is its OWN terminal for EVERY reviewer outcome (codex r8):
+      # exiting 1/2/3 here would let callers treat the round as valid while its
+      # canonical log is missing, and round_metrics cannot detect an absent
+      # intermediate round. The verdict itself is never lost -- the wrapper already
+      # recorded its C-HE-24 rows and the transcript above carries the terminal line.
+      echo "review-with-failover-logged: PUBLISH FAILED (exit ${rc[1]}) -- round log {{log}} missing/partial; wrapper verdict exit was ${rc[0]} (see transcript + gate rows)" >&2
+      exit 4
     fi
     exit "${rc[0]}"
 
