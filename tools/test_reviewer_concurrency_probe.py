@@ -366,3 +366,44 @@ def test_run_restores_signal_handlers(tmp_path: Path, _fixed_binding: str, capsy
     rcp.run("main", channel="codex", reps=5, ns=(1, 2, 4), one=lambda c, b, e, s: (60.0, True))
     after = (_signal.getsignal(_signal.SIGTERM), _signal.getsignal(_signal.SIGINT))
     assert after == before  # the probe's handlers never outlive the run
+
+
+def test_add_refused_once_terminating(monkeypatch: pytest.MonkeyPatch):
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+    groups = rcp._LiveGroups()
+    groups.add(111)
+    groups.begin_termination()
+    assert killed == [(111, rcp.signal.SIGKILL)]  # the snapshot died
+    assert groups.add(333) is False  # ...and no later registration is accepted
+    groups.reset()
+    assert groups.add(444) is True  # re-armed for the next run
+
+
+def test_one_skips_spawn_once_terminating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    # the autouse fixture makes any real spawn a failure, so reaching the return
+    # WITHOUT tripping it proves no reviewer was spawned after termination began
+    monkeypatch.setattr(rcp, "LIVE_GROUPS", rcp._LiveGroups())
+    rcp.LIVE_GROUPS.begin_termination()
+    wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    assert (wall, ok) == (0.0, False)
+
+
+def test_one_kills_own_group_when_registration_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The Popen->add window (codex r6 P2): termination beginning mid-spawn means the
+    handler's snapshot cannot see this group — the worker must kill it itself."""
+    monkeypatch.setattr(rcp, "LIVE_GROUPS", rcp._LiveGroups())
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(rcp.os, "killpg", lambda pgid, sig: killed.append((pgid, sig)))
+
+    def spawn_then_terminate(argv, **k):
+        p = FakePopen(argv, stderr_text="codex-review: APPROVE\n", **k)
+        rcp.LIVE_GROUPS.begin_termination()  # the signal lands between Popen and add
+        return p
+
+    monkeypatch.setattr(rcp.subprocess, "Popen", spawn_then_terminate)
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
+    assert ok is False  # a call whose group was killed at registration is not a verdict
+    assert killed == [(4242, rcp.signal.SIGKILL)]  # the just-spawned group died

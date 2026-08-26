@@ -59,23 +59,48 @@ Sample = tuple[float, bool]
 
 
 class _LiveGroups:
-    """The single owner of the live reviewer process-group ids
-    ([LAW:no-shared-mutable-globals] worker threads register/deregister, the run edge and
-    its signal handlers kill — nothing else touches the set). Exists so a SIGTERM/SIGINT
-    cannot orphan paid reviewer trees, and so killing them unblocks any worker still
-    parked in communicate() instead of waiting out the per-call timeout (codex r5 P2)."""
+    """The single owner of the live reviewer process-group ids AND of the terminating
+    flag ([LAW:no-shared-mutable-globals] worker threads register/deregister, the run
+    edge and its signal handlers terminate — nothing else touches either). Exists so a
+    SIGTERM/SIGINT cannot orphan paid reviewer trees, and so killing them unblocks any
+    worker still parked in communicate() instead of waiting out the per-call timeout
+    (codex r5 P2). Termination and registration share ONE lock (codex r6 P2): a worker
+    between Popen and `add` observes the flag inside `add` and owns the kill of its own
+    just-spawned group, so no group can slip past `begin_termination`'s snapshot."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pgids: set[int] = set()
+        self._terminating = False
 
-    def add(self, pgid: int) -> None:
+    @property
+    def terminating(self) -> bool:
         with self._lock:
+            return self._terminating
+
+    def add(self, pgid: int) -> bool:
+        """Register a live group. False once termination began — the refused caller
+        must kill the group it just spawned (the handler's snapshot cannot see it)."""
+        with self._lock:
+            if self._terminating:
+                return False
             self._pgids.add(pgid)
+            return True
 
     def discard(self, pgid: int) -> None:
         with self._lock:
             self._pgids.discard(pgid)
+
+    def begin_termination(self) -> None:
+        """Refuse all future registrations, then kill everything registered so far."""
+        with self._lock:
+            self._terminating = True
+        self.kill_all()
+
+    def reset(self) -> None:
+        """Re-arm for the next run (the flag must not poison a later run in-process)."""
+        with self._lock:
+            self._terminating = False
 
     def kill_all(self) -> None:
         with self._lock:
@@ -152,6 +177,8 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
     argv = [*CMD[channel], base]
     if channel == "gemini":
         argv += ["--outcome-json", str(sink)]
+    if LIVE_GROUPS.terminating:
+        return 0.0, False  # termination began before this worker spawned: no new spend
     t0 = time.monotonic()
     try:
         # its own session => the pid IS the process-group id, so a timeout can kill the
@@ -167,7 +194,15 @@ def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
             text=True,
             start_new_session=True,
         )
-        LIVE_GROUPS.add(proc.pid)
+        if not LIVE_GROUPS.add(proc.pid):
+            # termination began between Popen and registration: the handler's snapshot
+            # cannot see this group, so ITS kill is ours (codex r6 P2)
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.communicate()  # reap; the group is dead
+            return time.monotonic() - t0, False
         try:
             _out, err = proc.communicate(timeout=CALL_TIMEOUT_S)
             valid = _codex_valid(err) if channel == "codex" else _gemini_valid(sink)
@@ -211,7 +246,7 @@ def run(
     # communicate() so executor shutdown does not wait out the per-call timeout — then
     # terminates; the finally covers the non-signal exits.
     def _terminate(signum: int, frame: object) -> None:
-        LIVE_GROUPS.kill_all()
+        LIVE_GROUPS.begin_termination()  # refuse new registrations, then kill the live
         raise SystemExit(128 + signum)
 
     previous = {s: signal.signal(s, _terminate) for s in (signal.SIGTERM, signal.SIGINT)}
@@ -264,8 +299,10 @@ def run(
                         )
     finally:
         # non-signal exits (normal completion, an exception): reap anything still
-        # registered, then restore the inherited handlers
+        # registered, re-arm the flag for a later run in this process, then restore
+        # the inherited handlers
         LIVE_GROUPS.kill_all()
+        LIVE_GROUPS.reset()
         for s, h in previous.items():
             signal.signal(s, h)
     medians = {n: statistics.median(w for w, _ in samples[n]) for n in ns if samples[n]}
