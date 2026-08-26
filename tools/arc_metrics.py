@@ -234,8 +234,32 @@ def gh_pr(pr: int) -> dict:
     return data
 
 
+# The wrapper's terminal line ends every published round log (`_report` in
+# codex_review.py / agy_review.py, stderr merged by the logged recipe). The LAST
+# such line is the transcript's verdict: a failover transcript can carry an
+# earlier channel's terminal before the verdict that stands, and publish-failure
+# noise can FOLLOW it, so neither "first" nor "only" is the right read.
+ROUND_TERMINAL_RE = re.compile(
+    r"^(?:codex|gemini|agy)-review: (APPROVE|BLOCK|REVIEWER_UNAVAILABLE|GATE_REFUSED)\b",
+    re.MULTILINE,
+)
+# Round identity lives in the log NAME the publisher wrote (`r9-verdict.log` is
+# round 9's verdict; U-HE-49's per-attempt names keep this prefix), never in the
+# file's position within a listing.
+ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
+
+
 def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]:
-    """Derive per-round wall clock from log mtimes, and P1 arrival by round."""
+    """Derive per-round records from round-log CONTENT, never file position.
+
+    C-HE-25 (v1.6 X6c): a round is a log whose wrapper terminal line is a review
+    verdict; a `GATE_REFUSED` transcript is a refused LAUNCH -- the review never
+    began -- and recording it as a round both inflates the count and shifts every
+    later P1 index ([B] F15: the u-he-35 dir read as 12 rounds with P1s at 1 and
+    11; the true content is 10 rounds with P1s at r1 and r10). Rounds key by the
+    round id parsed from the log name, so `p1_rounds` carries ROUND IDS, and a
+    refused attempt plus its retry under a fresh name collapse to one round.
+    """
     # Resolve before de-duplicating: two overlapping globs matching one file
     # would otherwise count it twice, inventing an extra round, a spurious
     # zero-second gap, and an off-by-one in every later P1 round index.
@@ -246,25 +270,65 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]
         for m in matched:
             if m.is_file():
                 seen[m.resolve()] = None
-    logs: list[Path] = list(seen)
-    if not logs:
+    if not seen:
         raise AbortError(
             f"round logs: zero files matched {globs} -- refusing to record "
             "'0 rounds' for what may be an unlooked path"
         )
 
-    logs.sort(key=lambda f: f.stat().st_mtime)
-    mtimes = [f.stat().st_mtime for f in logs]
-    gaps = [round(b - a, 1) for a, b in itertools.pairwise(mtimes)]
-
-    p1_rounds: list[int] = []
-    for idx, f in enumerate(logs, start=1):
+    # [LAW:parse-dont-validate] every matched file is parsed into (round id,
+    # terminal) or refused loudly -- an unclassifiable log silently counted (or
+    # silently dropped) is exactly the position-derived corruption X6c removes.
+    rounds: dict[int, tuple[Path, str]] = {}
+    for f in seen:
         try:
             text = f.read_text(errors="replace")
         except OSError as exc:
             raise AbortError(f"round logs: cannot read {f}: {exc}") from exc
-        if count_p1(text) >= 1:
-            p1_rounds.append(idx)
+        m = ROUND_ID_RE.match(f.stem)
+        if not m:
+            raise AbortError(
+                f"round logs: cannot parse a round id from {f.name!r} -- round "
+                "identity comes from the log name (r<N>...), never file position"
+            )
+        rid = int(m.group(1))
+        terminals = ROUND_TERMINAL_RE.findall(text)
+        if not terminals:
+            raise AbortError(
+                f"round logs: {f.name!r} carries no wrapper terminal line -- a "
+                "partial or foreign transcript cannot be classified as a round"
+            )
+        if terminals[-1] == "GATE_REFUSED":
+            continue  # a refused launch, not a round (C-HE-25 X6c)
+        if rid in rounds:
+            raise AbortError(
+                f"round logs: two review transcripts claim round {rid} "
+                f"({rounds[rid][0].name!r} and {f.name!r}) -- write-once round "
+                "evidence is ambiguous; fix the log set"
+            )
+        rounds[rid] = (f, text)
+    if not rounds:
+        raise AbortError(
+            f"round logs: every file matching {globs} is a refused launch "
+            "(GATE_REFUSED) -- no review round ever ran; fix the glob rather "
+            "than record an empty arc"
+        )
+
+    logs = [rounds[rid][0] for rid in sorted(rounds)]
+    mtimes = [f.stat().st_mtime for f in logs]
+    # Rounds are published sequentially, so round-id order IS time order; an
+    # mtime regression means a copied or re-touched log, and a negative gap
+    # would enter cohort medians as a measurement. Refuse rather than record.
+    for a, b in itertools.pairwise(zip(logs, mtimes, strict=True)):
+        if b[1] < a[1]:
+            raise AbortError(
+                f"round logs: {b[0].name!r} predates {a[0].name!r} on disk but "
+                "follows it by round id -- a copied or re-touched log is in the "
+                "set; fix the logs rather than record a negative round gap"
+            )
+    gaps = [round(b - a, 1) for a, b in itertools.pairwise(mtimes)]
+
+    p1_rounds = [rid for rid in sorted(rounds) if count_p1(rounds[rid][1]) >= 1]
     return logs, gaps, p1_rounds
 
 

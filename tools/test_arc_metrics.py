@@ -387,13 +387,105 @@ def test_transient_ci_failure_aborts_rather_than_persisting_an_unmapped_row(monk
 def test_overlapping_globs_do_not_double_count_a_round(tmp_path: Path):
     a = tmp_path / "r1.log"
     b = tmp_path / "r2.log"
-    a.write_text("x\n")
-    b.write_text("y\n")
+    a.write_text("x\ncodex-review: BLOCK\n")
+    b.write_text("y\ncodex-review: APPROVE\n")
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
     logs, gaps, _ = am.round_metrics([str(tmp_path / "r*.log"), str(tmp_path / "r1*.log")])
     assert len(logs) == 2, "the same file matched twice is still one round"
     assert gaps == [600.0], "and introduces no spurious zero-second gap"
+
+
+def _round_log(tmp_path: Path, name: str, text: str, mtime: int) -> Path:
+    f = tmp_path / name
+    f.write_text(text)
+    os.utime(f, (mtime, mtime))
+    return f
+
+
+# ── C-HE-25 v1.6 X6c: rounds derive from log CONTENT, never file position (U-HE-46) ─────
+# mutation-probe: number rounds by file position (mtime order + positional indices),
+# or count GATE_REFUSED transcripts as rounds -> red
+def test_round_derivation_from_content_not_file_position(tmp_path: Path):
+    """[B] F15 witness: the landed u-he-35 round-dir shape is 10 rounds, P1s at r1+r10.
+
+    The 12-file directory (r1..r11.log + r9-verdict.log) carries two GATE_REFUSED
+    transcripts (r9: SWEEP_MISSING; r11: BUDGET_EXHAUSTED) and r9's retry under the
+    fresh per-attempt name. File-position derivation read it as the corrupted
+    ``review_rounds: 12`` with ``p1_rounds: [1, 11]``.
+    """
+    block = "codex-review: BLOCK\n"
+    p1 = "- [P1] tools/x.py:1: a real finding\n"
+    t = 1_000_000
+    for n in range(1, 9):  # r1..r8 real rounds; only r1 carries a P1
+        _round_log(tmp_path, f"r{n}.log", (p1 if n == 1 else "") + block, t)
+        t += 600
+    _round_log(
+        tmp_path, "r9.log", "review gate: ...\ncodex-review: GATE_REFUSED (SWEEP_MISSING)\n", t
+    )
+    # r9's retry publishes under a fresh name; publish-failure noise FOLLOWS the verdict
+    _round_log(
+        tmp_path,
+        "r9-verdict.log",
+        block + "round_log_publish: refused 'r9.log': destination already exists\n",
+        t + 600,
+    )
+    _round_log(tmp_path, "r10.log", p1 + block, t + 1200)
+    _round_log(tmp_path, "r11.log", "codex-review: GATE_REFUSED (BUDGET_EXHAUSTED)\n", t + 1800)
+
+    logs, gaps, p1_rounds = am.round_metrics([str(tmp_path / "r*.log")])
+    assert len(logs) == 10, "refused launches are not rounds"
+    assert p1_rounds == [1, 10], "P1s key by ROUND ID, not by position in a listing"
+    assert [f.name for f in logs] == [
+        *(f"r{n}.log" for n in range(1, 9)),
+        "r9-verdict.log",
+        "r10.log",
+    ], "the retry's fresh-named log IS round 9; both refused transcripts are excluded"
+    assert len(gaps) == 9, "gaps pair the 10 real rounds only"
+
+
+def test_reviewer_unavailable_is_a_round_and_any_wrapper_label_counts(tmp_path: Path):
+    """The C-HE-25 per-round terminal enum includes REVIEWER_UNAVAILABLE; the
+    failover chain can leave a gemini/agy-labelled terminal as the one that stands."""
+    _round_log(
+        tmp_path, "r1.log", "codex-review: REVIEWER_UNAVAILABLE (transient: timeout)\n", 1_000_000
+    )
+    _round_log(tmp_path, "r2.log", "gemini-review: BLOCK\n", 1_000_600)
+    logs, _, _ = am.round_metrics([str(tmp_path / "r*.log")])
+    assert len(logs) == 2
+
+
+def test_two_real_transcripts_claiming_one_round_abort(tmp_path: Path):
+    _round_log(tmp_path, "r3.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r3-verdict.log", "codex-review: APPROVE\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="claim round 3"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_terminal_less_transcript_aborts_rather_than_classifying(tmp_path: Path):
+    _round_log(tmp_path, "r1.log", "some partial output with no verdict\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="no wrapper terminal line"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_unparseable_round_name_aborts(tmp_path: Path):
+    _round_log(tmp_path, "final.log", "codex-review: APPROVE\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="cannot parse a round id"):
+        am.round_metrics([str(tmp_path / "*.log")])
+
+
+def test_all_refused_launches_abort_rather_than_recording_an_empty_arc(tmp_path: Path):
+    _round_log(tmp_path, "r1.log", "codex-review: GATE_REFUSED (SWEEP_MISSING)\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="refused launch"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_mtime_regression_against_round_id_order_aborts(tmp_path: Path):
+    """A copied/re-touched log would otherwise enter round_wall_s as a negative gap."""
+    _round_log(tmp_path, "r1.log", "codex-review: BLOCK\n", 1_000_600)
+    _round_log(tmp_path, "r2.log", "codex-review: APPROVE\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="predates"):
+        am.round_metrics([str(tmp_path / "r*.log")])
 
 
 # mutation-probe: change the review-rounds median format back to :.0f
@@ -618,8 +710,8 @@ def test_queue_snapshots_derived_metrics_not_a_live_glob(monkeypatch, tmp_path: 
     logs = tmp_path / "logs"
     logs.mkdir()
     a, b = logs / "round1.log", logs / "round2.log"
-    a.write_text("[P1] a real finding\n")
-    b.write_text("clean\n")
+    a.write_text("[P1] a real finding\ncodex-review: BLOCK\n")
+    b.write_text("clean\ncodex-review: APPROVE\n")
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
@@ -977,8 +1069,9 @@ def test_p1_count_collapses_the_codex_duplicate_printing(tmp_path: Path):
     """The codex CLI prints each finding twice; a single [P1] pair is ONE finding."""
     a = tmp_path / "r1.log"
     b = tmp_path / "r2.log"
-    a.write_text("[P1] a real finding\n[P1] a real finding\n")  # 2 raw -> 1 true
-    b.write_text("no findings here\n")  # 0
+    # 2 raw -> 1 true
+    a.write_text("[P1] a real finding\n[P1] a real finding\ncodex-review: BLOCK\n")
+    b.write_text("no findings here\ncodex-review: APPROVE\n")  # 0
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
     logs, gaps, p1 = am.round_metrics([str(tmp_path / "r*.log")])
