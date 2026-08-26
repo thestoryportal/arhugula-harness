@@ -58,7 +58,7 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   only an operator extends it (`just review-attest-budget`, deliberately ask-gated).
 - **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log`
   (branch-vs-`main`; the C-HE-18 fail-closed `codex-review` wrapper with the C-HE-17
-  `gemini-review` failover; the logged variant is CANONICAL — its in-recipe tee is the
+  `gemini-review` failover; the logged variant is CANONICAL — its in-recipe log publisher is the
   only way a guarded venue produces the round log that `arc-metrics queue
   --round-logs` later reads, and the bare `just review-with-failover` remains only for
   a venue that cannot take the log path) to convergence — the inline `HARNESS_*` prefix is REQUIRED
@@ -114,7 +114,7 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
     registered as forward work rather than wired to fail (codex U-HE-34 r1).
   - **`result_capture` split — session-unrecordable (named bound, B-218).** C-HE-27 §1
     requires process-exit and log-write-completion recorded separately because they
-    diverge inside the reviewer process; the logged recipe's tee is SYNCHRONOUS, so it
+    diverge inside the reviewer process; the logged recipe's publisher pipe is SYNCHRONOUS, so it
     returns only after the log is flushed — two session timestamps around it would
     measure one event, not the divergence. Record neither edge; the split's recorder
     is wrapper-internal work carried on B-218 (the phases stay reserved in the

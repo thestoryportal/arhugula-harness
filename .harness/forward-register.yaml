@@ -10824,9 +10824,10 @@ items:
     (queue step) runs after the merge door transitions the reservation to `merged`,
     and `record_phase` refuses ALL terminal-state accretion (C-HE-03 §3) — so a
     capture pair on the reservation is structurally unrecordable, not merely unwired.
-    The u-he-34 landing wires queue/execute/absorb/edit/verify/verify_unavailable
-    plus the result_capture split and deliberately records NO capture pair (ship-pr
-    SKILL.md names the conflict at the queue step).'
+    The u-he-34 landing wires the queue/execute/absorb/edit/verify/verify_unavailable
+    emitters and records NEITHER the capture pair NOR the result_capture split — both
+    §1 obligations live on this row (ship-pr SKILL.md names the conflict at the queue
+    step and the split''s session-unobservability at the review loop).'
   close_out: 'OPEN — closure shape: either a spec leg narrowing C-HE-27 §1 (capture
     is recorded on the ARC ROW at drain rather than accreted on the reservation, the
     drain being the one actor that already writes the row), or a drain-side fold that

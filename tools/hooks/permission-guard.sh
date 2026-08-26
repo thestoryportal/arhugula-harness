@@ -495,9 +495,13 @@ _review_logged_shape() {
   set -f; set -- $cmd; set +f
   { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
   [ "$1" = "just" ] && [ "$2" = "review-with-failover-logged" ] || return 1
-  # First char never a dash (codex r5 P2): `-a` would reach `tee` as an option and
-  # silently produce no log; the recipe also passes `--`, this is the second wall.
-  printf '%s' "$3" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
+  # Destination PINNED to the gitignored .harness/tmp/ tree (codex r7 P1: any other
+  # charset-safe relative path — `tools/reservations.py`, a ledger — would let an
+  # auto-allowed invocation overwrite tracked state). No `..` segments; the publisher
+  # (tools/round_log_publish.py) enforces the same policy as the authority — this is
+  # the form mirror.
+  printf '%s' "$3" | grep -Eq '^\.harness/tmp/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || return 1
+  case "/$3/" in */../*) return 1 ;; esac
   if [ "$#" -eq 4 ]; then
     printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
   fi

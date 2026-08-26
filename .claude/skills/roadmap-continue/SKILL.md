@@ -118,7 +118,7 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    confirm `just codex-check` ran at the *current* HEAD, state the pass in the PR body — per
    ship-pr U-WT-01) then out-of-family
    `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` to
-   convergence (§13.1; the LOGGED variant is canonical — U-HE-34: its in-recipe tee is
+   convergence (§13.1; the LOGGED variant is canonical — U-HE-34: its in-recipe log publisher is
    how a guarded venue produces the round log arc-metrics later reads; the inline
    prefix is the step-2 arc-open ids — a bare invocation
    writes `branch-*`/`-nolane` fallback ids into the C-HE-24/25 rows) —

@@ -6405,7 +6405,18 @@ Emitters: `roadmap-continue/SKILL.md` — after arc open: `uv run python tools/r
 > writes through an auto-allowed path); the `verify_unavailable` span is defined as
 > the observable outage window (detection → resume; the phase CLI stamps now()); the
 > no-deltas row drops its draft C-HE-28 half (the witness exercises no cohort
-> reporting).
+> reporting). **(x) Publisher-owned containment (codex r7).** The recipe's bash
+> containment checks are DELETED — pathname-based check-then-act cannot close the
+> parent-swap window — and all filesystem safety moves to one enforcer,
+> `tools/round_log_publish.py`: an `O_NOFOLLOW` dir-fd walk from the repo root
+> (every component refuses a symlink at its own openat, atomically) with the
+> destination policy pinned to relative paths under `.harness/tmp/`, so an
+> auto-allowed invocation can never overwrite a tracked file or ledger; the guard's
+> grammar mirrors the pin as the form half, with allow + hardening witnesses, and
+> the publisher carries its own hermetic suite (`tools/test_round_log_publish.py`,
+> CI-wired in codex-parity-check.sh); on exit 2 the workflow closes the verify pair
+> before opening verify_unavailable, and merge-gate-emit invocations pass
+> `--arc-id` so the gate rows join the reservation ids N6 keys on.
 
 ---
 

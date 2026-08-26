@@ -726,46 +726,24 @@ _require-antigravity:
 review-with-failover base='main':
     uv run python tools/codex_review.py --base {{base}} --failover
 
-# U-HE-34 r3: the logged variant for guarded/headless venues — the guard rejects `|`
-# in Bash commands before its allowlist, so a session-level `... | tee round.log`
-# can never run there; this recipe carries the tee INSIDE an allowlisted invocation.
-# pipefail keeps the wrapper's exit code (0 APPROVE / 1 BLOCK / 2 UNAVAILABLE /
-# 3 GATE_REFUSED) as the recipe's own. Containment (r4 P1): the recipe WRITES through
-# an auto-allowed path, so a pre-planted symlink — the leaf or a parent dir — must not
-# route the tee outside the worktree; refuse loudly, never truncate the target.
+# U-HE-34 r3/r7: the logged variant for guarded/headless venues — the guard rejects
+# `|` in Bash commands before its allowlist, so a session-level `... | tee round.log`
+# can never run there; this recipe pipes the wrapper through the containment-owning
+# publisher instead. ALL filesystem safety lives in tools/round_log_publish.py (one
+# enforcer): an O_NOFOLLOW dir-fd walk from the repo root refuses a symlink at every
+# component atomically — closing the parent-swap TOCTOU no pathname-based bash check
+# can (codex r5-r7) — and its destination policy admits only relative paths under
+# .harness/tmp/, so an auto-allowed invocation can never overwrite a tracked file or
+# ledger. PIPESTATUS[0] preserves the wrapper's verdict exit (0 APPROVE / 1 BLOCK /
+# 2 UNAVAILABLE / 3 GATE_REFUSED); a failed publish still shows the transcript, warns
+# loud, and refuses to report a clean APPROVE over a missing/partial canonical log.
 review-with-failover-logged log base='main':
     #!/usr/bin/env bash
     set -u
-    log="{{log}}"
-    [ -L "$log" ] && { echo "review-with-failover-logged: $log is a symlink -- refused (containment)" >&2; exit 4; }
-    if [ -e "$log" ] && [ ! -f "$log" ]; then echo "review-with-failover-logged: $log is not a regular file -- refused" >&2; exit 4; fi
-    # Containment BEFORE mkdir (codex r5 P1): resolve the deepest EXISTING ancestor
-    # first -- `mkdir -p link/new` through a pre-planted symlink would create dirs
-    # outside the worktree before any post-mkdir check could refuse.
-    dir="$(dirname "$log")"
-    probe="$dir"
-    while [ ! -d "$probe" ]; do probe="$(dirname "$probe")"; done
-    phys="$(cd "$probe" && pwd -P)" || exit 4
-    case "$phys/" in "$(pwd -P)/"*) ;; *) echo "review-with-failover-logged: $log's existing ancestor resolves outside the worktree ($phys) -- refused (containment)" >&2; exit 4 ;; esac
-    mkdir -p "$dir"
-    phys="$(cd "$dir" && pwd -P)" || exit 4
-    case "$phys/" in "$(pwd -P)/"*) ;; *) echo "review-with-failover-logged: $log resolves outside the worktree ($phys) -- refused (containment)" >&2; exit 4 ;; esac
-    # Write-then-RENAME (codex r6 P1): tee writes only a mktemp-created private file
-    # (O_EXCL, random name), and rename(2) replaces the destination PATH ENTRY --
-    # a symlink swapped in after the checks above is replaced, never written through,
-    # so the check-to-open window cannot truncate a file outside the worktree.
-    # `--` stops tee option-parsing a dash-led name; PIPESTATUS[0] preserves the
-    # wrapper's verdict exit (0/1/2/3) -- pipefail would let a failing tee (rightmost
-    # nonzero) overwrite REVIEWER_UNAVAILABLE/GATE_REFUSED semantics (codex r5).
-    tmp="$(mktemp "$dir/.rlog.XXXXXX")" || exit 4
-    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | tee -- "$tmp"
+    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "{{log}}"
     rc=("${PIPESTATUS[@]}")
-    mv -f -- "$tmp" "$log" || { echo "review-with-failover-logged: publish to $log failed" >&2; exit 4; }
     if [ "${rc[1]}" -ne 0 ]; then
-      # The partial log is published as evidence, but a clean APPROVE must not ride a
-      # broken canonical log (codex r6): automation reading exit 0 would trust a round
-      # record the tee did not finish. A non-zero verdict keeps its own semantics.
-      echo "review-with-failover-logged: WARNING tee exited ${rc[1]} -- round log $log is partial" >&2
+      echo "review-with-failover-logged: WARNING log publish exited ${rc[1]} -- round log {{log}} is missing or partial" >&2
       [ "${rc[0]}" -eq 0 ] && exit 4
     fi
     exit "${rc[0]}"

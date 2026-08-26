@@ -535,6 +535,10 @@ for c in 'just review-with-failover-logged .harness/tmp/r1.log main review-attes
          'just review-with-failover-logged ${victim:=x}.log' \
          'just review-with-failover-logged -a' \
          'just review-with-failover-logged .harness/tmp/r1.log -b' \
+         'just review-with-failover-logged tools/reservations.py' \
+         'just review-with-failover-logged .harness/merge-gate-log.jsonl' \
+         'just review-with-failover-logged .harness/tmp/../../etc/x.log' \
+         'just review-with-failover-logged /etc/x.log' \
          'just review-with-failover-logged'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "review-logged hardening: '$c' → not allow" || bad "review-logged over-matched: $c"
