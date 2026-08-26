@@ -370,3 +370,42 @@ def test_live_rows_are_reported_never_counted_as_pass(mode, monkeypatch, capsys)
     out = capsys.readouterr().out
     assert "LIVE " in out and "PASS " in out
     assert rc == (1 if mode == "phase0" else 0)
+
+
+def test_probe_result_verdict_fail_closed(tmp_path):
+    """C-HE-22 pilot gate (U-HE-35 codex r10 P1): absent and RED refuse; only the LATEST
+    probe-result row's GREEN admits (an old GREEN superseded by a RED must not)."""
+    import json as _json
+
+    log = tmp_path / "gate-log.jsonl"
+    # absent: the probe never completed a run
+    verdict, why = lv.probe_result_verdict(log)
+    assert verdict == "absent" and "not run" in why
+
+    def row(kind: str, verdict_value: str) -> str:
+        return _json.dumps(
+            {
+                "finding_type": kind,
+                "observed_evidence": _json.dumps({"verdict": verdict_value, "why": "w"}),
+            }
+        )
+
+    # sample rows never satisfy the gate; the latest RESULT row decides
+    log.write_text("\n".join([row("probe-sample", "GREEN"), row("probe-result", "GREEN")]) + "\n")
+    assert lv.probe_result_verdict(log)[0] == "GREEN"
+    with log.open("a") as fh:
+        fh.write(row("probe-result", "RED") + "\n")
+    assert lv.probe_result_verdict(log)[0] == "RED"  # the newer RED supersedes
+
+
+def test_pilot_gate_cli_dispatch(monkeypatch):
+    """merge-gate witness P2: the REAL consumer path is `just pilot-gate-check` ->
+    main(["pilot-gate"]) — exercise the dispatch itself: exit 0 only on GREEN, and the
+    branch RETURNS (a dropped return would fall through to the MANIFEST runner, which
+    now contains the just:pilot-gate-check row itself — recursion)."""
+    ran = []
+    monkeypatch.setattr(lv, "run_row", lambda row, **k: ran.append(row) or lv.Result(row, "pass"))
+    for verdict, rc in (("GREEN", 0), ("RED", 1), ("absent", 1)):
+        monkeypatch.setattr(lv, "probe_result_verdict", lambda log_path=None, v=verdict: (v, "w"))
+        assert lv.main(["pilot-gate"]) == rc
+    assert ran == []  # dispatch returned — never fell through to the manifest runner

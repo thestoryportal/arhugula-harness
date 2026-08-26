@@ -22,6 +22,7 @@ import hashlib
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -32,7 +33,13 @@ from pathlib import Path
 
 import review_loop_gate as rlg
 import review_wrapper_common as rw
-from agy_review import GEMINI_PROMPT_VERSION, gemini_config_hash, run_bounded
+from agy_review import (
+    GEMINI_PROMPT_VERSION,
+    TerminationRequested,
+    gemini_config_hash,
+    handle_termination_signal,
+    run_bounded,
+)
 
 #: Codex's home (`CODEX_HOME` when set -- the child inherits it through reviewer_env, so the
 #: config the binding hashes and the session tree the fallback reads must follow it; codex round 9).
@@ -594,6 +601,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"codex-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
         return 3
 
+    # Mirror agy_review's SIGTERM discipline (U-HE-35 codex r8 P2): run_bounded spawns
+    # the vendor CLI in ITS OWN session, so only this process can tear that group down —
+    # TerminationRequested unwinds through run_bounded's BaseException arm, which calls
+    # terminate_bounded on the vendor group. Without this handler a SIGTERM killed the
+    # wrapper by default disposition and orphaned the paid vendor process.
+    previous_sigterm = signal.signal(signal.SIGTERM, handle_termination_signal)
+    try:
+        return _reviewed_main(args, invoke)
+    except TerminationRequested as exc:
+        return exc.exit_code
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
+
+
+def _reviewed_main(args: argparse.Namespace, invoke) -> int:
     chain: dict[str, int] = {}
 
     def primary() -> rw.ReviewOutcome:

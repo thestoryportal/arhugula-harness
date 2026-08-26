@@ -284,6 +284,12 @@ lanes-phase0-check:
 mutation-probe-coverage-check:
     uv run python tools/lanes_verify.py coverage
 
+# C-HE-22 / C-HE-13 §2 (U-HE-35 codex r10): fail-closed pilot admission — pilots may
+# start only when the gate log carries a GREEN probe-result row from the live
+# reviewer-concurrency probe. Absent (never run) and RED both refuse.
+pilot-gate-check:
+    uv run python tools/lanes_verify.py pilot-gate
+
 # ─── C-HE-08 branch protection for main (server-side X9 fence; operator-gated apply) ──────
 # `apply` shows the diff and MUTATES NOTHING; the operator approves the actual payload
 # (AskUserQuestion), then `apply-confirm` performs the provisional apply + tiebreaker
@@ -768,6 +774,14 @@ review-attest-budget extra reason:
 
 review-gate-check base='main':
     uv run python tools/review_loop_gate.py check --base {{base}}
+
+# C-HE-22 reviewer-concurrency probe (U-HE-35): >=5 samples at each of N in {1,2,4}
+# concurrent reviewer invocations on one fixed committed diff. GREEN iff median
+# wall-clock at N <= 2x the N=1 median AND zero validity failures; RED => throttling
+# assumed, pilots do not start (C-HE-13 §2). Live + provider-login-gated; samples
+# land as C-HE-24 rows (producer=reviewer_concurrency_probe).
+reviewer-concurrency-probe channel='codex' reps='5' base='main':
+    uv run python tools/reviewer_concurrency_probe.py --channel {{channel}} --reps {{reps}} --base {{base}}
 
 # U-HE-34 r4 NOTE: no session-layer result_capture recorder exists. The C-HE-27 §1
 # process-exit vs log-write divergence is internal to the reviewer process — a

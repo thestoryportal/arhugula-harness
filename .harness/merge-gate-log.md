@@ -705,3 +705,14 @@ B-206) rather than unaddressed defects.
 | 2026-08-26T03:12:43Z | #1458 | 39c4ef010ec2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
 
 **PR #1458 · 2026-08-26 · feat/u-he-34-phase-spans · gate round 3 (head 39c4ef010e) — ALL-APPROVE.** concurrency APPROVE · spec-conformance APPROVE (both r2 count fixes verified at the lines; full counted-claim sweep resolves) · witness-adequacy APPROVE (the new CLI fence witness mutation-probed live: kwarg deletion → unfenced write lands → assert reds; restored clean). Outcome: merge. blast-radius: unchanged from round 1.
+| 2026-08-26T19:42:24Z | #1460 | ecc2509c3f5e | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-26T19:43:59Z | #1460 | ecc2509c3f5e | merge-gate-concurrency | BLOCK | 2 finding(s) | r1 |
+| 2026-08-26T19:46:42Z | #1460 | ecc2509c3f5e | merge-gate-witness-adequacy | BLOCK | 5 finding(s) | r1 |
+| 2026-08-26T19:56:43Z | #1460 | faa519358f4a | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-08-26T19:57:13Z | #1460 | faa519358f4a | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-08-26T19:58:46Z | #1460 | faa519358f4a | merge-gate-concurrency | BLOCK | 2 finding(s) | r2 |
+| 2026-08-26T20:04:56Z | #1460 | 2e7541e1f06d | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-08-26T20:06:01Z | #1460 | 2e7541e1f06d | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-08-26T20:14:43Z | #1460 | 2e7541e1f06d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+
+**PR #1460** (2026-08-26, `feat/u-he-35-reviewer-concurrency-probe`, reviewed head `2e7541e1f`): 3-round gate. r1 (head `ecc2509c3`): concurrency BLOCK (P2 fixed-basename worktree race, empirically reproduced; P3 fut.result->append window, named residual), spec APPROVE, witness BLOCK (3 P2 + 2 P3 witness gaps). r2 (head `faa519358`): concurrency BLOCK (P2 pre-warm CalledProcessError escaping the PinError conversion; P3 prune-vs-sibling residual named), spec + witness APPROVE. r3 (head `2e7541e1f`, lens prompts authored by a delegated laws:prompt agent): ALL THREE APPROVE — outcome MERGE. blast-radius: 2 changed production symbols traced (`probe_result_verdict`, `_reviewed_main`), single in-file consumers + CLI-level recipe consumption named to reviewers; floor-not-ceiling limits stated. Fix review after the B-215 codex budget terminal ran gate-only per operator decision. One r3 witness verdict was re-run after the orchestrator corrupted a binding value in the pasted prompt — the reviewer refused the mid-flight correction and the rerun carried the faithful prompt (binding discipline held).

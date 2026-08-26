@@ -296,6 +296,27 @@ MANIFEST: list[Row] = [
         False,
     ),
     Row("C-HE-17", "pytest:tools/test_agy_review.py", "phase0", "local + CI", False),
+    # C-HE-22 (U-HE-35): the live probe gates pilots (C-HE-13 §2); the pytest row pins
+    # the pass rule on synthetic samples
+    Row(
+        "C-HE-22",
+        "pytest:tools/test_reviewer_concurrency_probe.py",
+        "phase1",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-22",
+        "live:tools/reviewer_concurrency_probe.py "
+        "(provider-login-gated; result row required before pilots)",
+        "phase1",
+        "operator/loop, live",
+        False,
+        ("provider-login-absent",),
+    ),
+    # C-HE-22 / C-HE-13 §2 (codex r10 P1): the "result row required before pilots" bound,
+    # made fail-closed and mechanical — absent (probe never run) and RED both refuse.
+    Row("C-HE-22", "just:pilot-gate-check", "phase1", "local", False),
     # C-HE-19/20 (U-HE-08)
     Row(
         "C-HE-19/20",
@@ -588,12 +609,31 @@ def coverage_gaps(log_path: Path | None = None) -> list[tuple[Row, str]]:
     return gaps
 
 
+def probe_result_verdict(log_path: Path | None = None) -> tuple[str, str]:
+    """C-HE-22 §8.1 "result row required before pilots", made machine-checkable (U-HE-35
+    codex r10 P1): the LATEST `probe-result` row's verdict on the gate log, or
+    ("absent", ...) when the live probe has never completed a run. Consumed fail-closed
+    by `just pilot-gate-check` — absent and RED both refuse; only GREEN admits pilots
+    (C-HE-13 §2 order: probe -> coalescing -> pilots)."""
+    import finding_record as fr
+
+    rows = [r for r in fr.read_rows(log_path) if r.get("finding_type") == "probe-result"]
+    if not rows:
+        return "absent", "no probe-result row on the gate log (C-HE-22: probe not run)"
+    evidence = json.loads(rows[-1]["observed_evidence"])
+    return evidence.get("verdict", "absent"), evidence.get("why", "")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     mode = args[0] if args else "verify"
-    if mode not in ("verify", "phase0", "coverage"):
-        print("usage: lanes_verify.py [verify|phase0|coverage]", file=sys.stderr)
+    if mode not in ("verify", "phase0", "coverage", "pilot-gate"):
+        print("usage: lanes_verify.py [verify|phase0|coverage|pilot-gate]", file=sys.stderr)
         return 2
+    if mode == "pilot-gate":
+        verdict, why = probe_result_verdict()
+        print(f"pilot-gate: probe-result {verdict} — {why}")
+        return 0 if verdict == "GREEN" else 1
     if mode == "coverage":
         gaps = coverage_gaps()
         for row, node in gaps:
