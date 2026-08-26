@@ -1,6 +1,6 @@
 """U-HE-35 hermetic suite: the C-HE-22 pass rule on synthetic samples, the arc-id-stripped
-child env, exit-code -> validity mapping, and `run`'s row emission — no live reviewer, no
-tracked gate log ([LAW:behavior-not-structure] every test asserts the probe's contract:
+child env, per-channel machine-seam validity, and `run`'s row emission — no live reviewer,
+no tracked gate log ([LAW:behavior-not-structure] every test asserts the probe's contract:
 verdict, reason class, rows written)."""
 
 from __future__ import annotations
@@ -92,28 +92,79 @@ def test_probe_env_strips_arc_and_lane_ids(monkeypatch: pytest.MonkeyPatch):
     assert env["HARNESS_GATE_LOG"] == "/tmp/keep-me"
 
 
-# ── _one: exit code -> validity mapping (C-HE-15: 0/1 = parsed verdict) ──────
+# ── _one: validity comes from the channel's machine seam, never the exit code ─
 
 
-@pytest.mark.parametrize(("rc", "valid"), [(0, True), (1, True), (2, False), (3, False)])
-def test_one_exit_code_validity(monkeypatch: pytest.MonkeyPatch, rc: int, valid: bool):
+@pytest.mark.parametrize(
+    ("stderr", "valid"),
+    [
+        ("codex-review: APPROVE\n", True),
+        ("- [P1] tools/x.py:1: msg\ncodex-review: BLOCK\n", True),
+        ("codex-review: BLOCK [source: log]\n", True),
+        ("codex-review: REVIEWER_UNAVAILABLE (transient: rate limit)\n", False),
+        ("codex-review: GATE_REFUSED (NO_PREFLIGHT)\n", False),
+        ("Traceback (most recent call last):\n  boom\n", False),
+        ("", False),
+    ],
+)
+def test_one_codex_validity_is_the_terminal_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str, valid: bool
+):
+    # exit code deliberately 1 for the VALID cases too: an uncaught wrapper exception
+    # also exits 1, so the exit code must never be the verdict (codex r1 P1)
     monkeypatch.setattr(
         rcp.subprocess,
         "run",
-        lambda *a, **k: subprocess.CompletedProcess(a[0], rc, "", ""),
+        lambda *a, **k: subprocess.CompletedProcess(a[0], 1, "", stderr),
     )
-    wall, ok = rcp._one("codex", "main", {})
+    wall, ok = rcp._one("codex", "main", {}, tmp_path)
     assert ok is valid
     assert wall >= 0
 
 
-def test_one_timeout_is_invalid_sample(monkeypatch: pytest.MonkeyPatch):
+def test_one_gemini_validity_is_the_outcome_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def fake_run(argv, **k):
+        sink = Path(argv[argv.index("--outcome-json") + 1])
+        sink.write_text(json.dumps({"terminal": "APPROVE"}))
+        return subprocess.CompletedProcess(argv, 1, "", "")
+
+    monkeypatch.setattr(rcp.subprocess, "run", fake_run)
+    _wall, ok = rcp._one("gemini", "main", {}, tmp_path)
+    assert ok is True
+    # no envelope written (wrapper crashed / refused the sink) -> invalid
+    monkeypatch.setattr(
+        rcp.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", "")
+    )
+    _wall, ok = rcp._one("gemini", "main", {}, tmp_path)
+    assert ok is False
+
+    # an envelope whose terminal is not a verdict -> invalid
+    def unavailable_run(argv, **k):
+        sink = Path(argv[argv.index("--outcome-json") + 1])
+        sink.write_text(json.dumps({"terminal": "REVIEWER_UNAVAILABLE"}))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(rcp.subprocess, "run", unavailable_run)
+    _wall, ok = rcp._one("gemini", "main", {}, tmp_path)
+    assert ok is False
+
+
+def test_one_timeout_is_invalid_sample(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def _boom(*a, **k):
         raise subprocess.TimeoutExpired(cmd=a[0], timeout=k["timeout"])
 
     monkeypatch.setattr(rcp.subprocess, "run", _boom)
-    _wall, ok = rcp._one("codex", "main", {})
+    _wall, ok = rcp._one("codex", "main", {}, tmp_path)
     assert ok is False  # a hung reviewer is a validity-failure SAMPLE, not a probe crash
+
+
+def test_reps_cli_boundary_refuses_nonpositive():
+    with pytest.raises(SystemExit):  # argparse rejects at the checkpoint, pre-run
+        rcp.main(["--reps", "0"])
+    with pytest.raises(SystemExit):
+        rcp.main(["--reps", "-3"])
 
 
 # ── run: emission + verdict wiring ───────────────────────────────────────────
@@ -135,7 +186,7 @@ def _fixed_binding(monkeypatch: pytest.MonkeyPatch):
 def test_run_green_emits_one_row_per_call(tmp_path: Path, _fixed_binding: str, capsys):
     calls: list[dict[str, str]] = []
 
-    def fake_one(channel: str, base: str, env: dict[str, str]) -> tuple[float, bool]:
+    def fake_one(channel: str, base: str, env: dict[str, str], scratch: Path) -> tuple[float, bool]:
         calls.append(env)
         return 60.0, True
 
@@ -157,8 +208,23 @@ def test_run_green_emits_one_row_per_call(tmp_path: Path, _fixed_binding: str, c
 
 
 def test_run_red_exit_and_rows_still_recorded(tmp_path: Path, _fixed_binding: str, capsys):
-    rc = rcp.run("main", channel="codex", reps=5, ns=(1,), one=lambda c, b, e: (60.0, False))
+    rc = rcp.run("main", channel="codex", reps=5, ns=(1,), one=lambda c, b, e, s: (60.0, False))
     assert rc == 1
     assert "RED" in capsys.readouterr().out
     # invalid samples are still evidence: every call has its row
     assert len(fr.read_rows()) == 5
+
+
+def test_run_red_when_head_moves_mid_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    """A moved HEAD voids the one-fixed-diff premise: GREEN arithmetic must not survive it."""
+    heads = iter(["a" * 40, "b" * 40])
+
+    def drifting_binding(repo, base):
+        return {"head_sha": next(heads), "base_sha": "c" * 40, "diff_digest": "d" * 64}
+
+    monkeypatch.setattr(rcp.rw, "code_binding", drifting_binding)
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-he-35")
+    monkeypatch.setenv("HARNESS_LANE_ID", "lane-x")
+    rc = rcp.run("main", channel="codex", reps=5, ns=(1,), one=lambda c, b, e, s: (60.0, True))
+    assert rc == 1
+    assert "fixed-diff violated" in capsys.readouterr().out

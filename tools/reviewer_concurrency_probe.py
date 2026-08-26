@@ -20,9 +20,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -42,6 +44,13 @@ CMD = {
 #: Per-call ceiling: the wrapper's own shared deadline plus scheduling slack. A call that
 #: outlives it is a validity-failure SAMPLE, never a probe crash (`_one`).
 CALL_TIMEOUT_S = rw.TOTAL_BUDGET_S + 60
+
+#: codex_review's documented completion signal: the stderr line `codex-review: <TERMINAL>`.
+#: Only a schema-parsed verdict prints a bare APPROVE/BLOCK (REVIEWER_UNAVAILABLE and
+#: GATE_REFUSED carry a parenthesized tail; an uncaught crash prints no such line), so this
+#: match — never the exit code, which an uncaught exception can also produce as 1 — is the
+#: C-HE-15 validity fact (codex r1 P1).
+_CODEX_TERMINAL_RE = re.compile(r"^codex-review: (?:APPROVE|BLOCK)(?: \[source: [^]]+\])?$", re.M)
 
 #: A sample is (wall_s, valid): valid == the call ended with a schema-parsed verdict.
 Sample = tuple[float, bool]
@@ -77,23 +86,40 @@ def probe_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in ("HARNESS_ARC_ID", "HARNESS_LANE_ID")}
 
 
-def _one(channel: str, base: str, env: dict[str, str]) -> Sample:
-    """One reviewer call: wall-clock + verdict validity. Exit 0/1 is a schema-parsed
-    verdict (C-HE-15); anything else — 2 REVIEWER_UNAVAILABLE, 3 GATE_REFUSED, a timeout —
-    is a validity failure. [LAW:no-silent-failure] the failure IS the datum: it is
-    recorded as an invalid sample (=> RED via `decide`), never raised, so one bad call
-    cannot discard the run's other live samples."""
+def _codex_valid(proc: subprocess.CompletedProcess[str]) -> bool:
+    """codex has no envelope sink; its machine seam is the stderr completion line."""
+    return _CODEX_TERMINAL_RE.search(proc.stderr) is not None
+
+
+def _gemini_valid(sink: Path) -> bool:
+    """gemini's machine seam is its `--outcome-json` terminal envelope (the same file the
+    D-C failover consumes): valid iff it parses and names a verdict terminal. A missing or
+    unparseable envelope — the wrapper crashed, or refused the sink — is invalid."""
+    try:
+        return json.loads(sink.read_text())["terminal"] in ("APPROVE", "BLOCK")
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def _one(channel: str, base: str, env: dict[str, str], scratch: Path) -> Sample:
+    """One reviewer call: wall-clock + verdict validity. Validity is read from the
+    channel's own machine seam (never the exit code, which an uncaught wrapper exception
+    can alias to a BLOCK — codex r1 P1): codex's stderr completion line, gemini's
+    outcome envelope. A timeout, crash, REVIEWER_UNAVAILABLE, or GATE_REFUSED all read
+    invalid. [LAW:no-silent-failure] the failure IS the datum: it is recorded as an
+    invalid sample (=> RED via `decide`), never raised, so one bad call cannot discard
+    the run's other live samples."""
+    with tempfile.NamedTemporaryFile(dir=scratch, suffix=".json", delete=True) as tf:
+        sink = Path(tf.name)  # a fresh non-existent path: agy's O_EXCL sink refuses reuse
+    argv = [*CMD[channel], base]
+    if channel == "gemini":
+        argv += ["--outcome-json", str(sink)]
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
-            [*CMD[channel], base],
-            cwd=REPO,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=CALL_TIMEOUT_S,
+            argv, cwd=REPO, env=env, capture_output=True, text=True, timeout=CALL_TIMEOUT_S
         )
-        valid = proc.returncode in (0, 1)
+        valid = _codex_valid(proc) if channel == "codex" else _gemini_valid(sink)
     except subprocess.TimeoutExpired:
         valid = False
     return time.monotonic() - t0, valid
@@ -105,58 +131,85 @@ def run(
     channel: str = "codex",
     reps: int = 5,
     ns: tuple[int, ...] = (1, 2, 4),
-    one: Callable[[str, str, dict[str, str]], Sample] = _one,
+    one: Callable[[str, str, dict[str, str], Path], Sample] = _one,
 ) -> int:
-    """Collect reps x N samples per concurrency level, record each as a C-HE-24 row, print
-    the per-N table + verdict. Exit 0 GREEN / 1 RED (the CLI contract; the durable record
-    is the rows + the §8.1 evidence-log paste)."""
+    """Collect reps x N samples per concurrency level (reps >= 1; the CLI boundary refuses
+    less), record each as a C-HE-24 row, print the per-N table + verdict. Exit 0 GREEN /
+    1 RED (the CLI contract; the durable record is the rows + the §8.1 evidence-log
+    paste)."""
     arc_id, lane_id = rw.env_arc_and_lane()
     binding = rw.code_binding(REPO, base)  # the ONE fixed-diff identity every row carries
     env = probe_env()
     samples: dict[int, list[Sample]] = {n: [] for n in ns}
-    for n in ns:
-        for rep in range(reps):
-            with ThreadPoolExecutor(max_workers=n) as ex:
-                results = list(ex.map(lambda _: one(channel, base, env), range(n)))
-            for wall, valid in results:
-                samples[n].append((wall, valid))
-                fr.append_observation(
-                    {
-                        "location": f"{channel}@N={n}",
-                        "observed_evidence": json.dumps(
-                            {"wall_s": round(wall, 1), "valid": valid, "n": n, "rep": rep}
+    # outside the repo: agy's --outcome-json sink refuses in-repo paths; envelopes are
+    # parsed per call, so the whole dir is disposable once sampling ends
+    with tempfile.TemporaryDirectory(prefix="reviewer-concurrency-probe-") as scratch_dir:
+        scratch = Path(scratch_dir)
+        for n in ns:
+            for rep in range(reps):
+                with ThreadPoolExecutor(max_workers=n) as ex:
+                    results = list(ex.map(lambda _: one(channel, base, env, scratch), range(n)))
+                for wall, valid in results:
+                    samples[n].append((wall, valid))
+                    fr.append_observation(
+                        {
+                            "location": f"{channel}@N={n}",
+                            "observed_evidence": json.dumps(
+                                {"wall_s": round(wall, 1), "valid": valid, "n": n, "rep": rep}
+                            ),
+                            "expected_contract": "C-HE-22",
+                            "severity": "info",
+                            "finding_type": "probe-sample",
+                            "lineage_claim": "measured",
+                            "producer": PRODUCER,
+                        },
+                        fr.Envelope(
+                            record_kind="finding",
+                            ts=fr.now_iso(),
+                            arc_id=arc_id,
+                            lane_id=lane_id,
+                            head_sha=binding["head_sha"],
+                            base_sha=binding["base_sha"],
+                            diff_digest=binding["diff_digest"],
+                            round_n=rep,
                         ),
-                        "expected_contract": "C-HE-22",
-                        "severity": "info",
-                        "finding_type": "probe-sample",
-                        "lineage_claim": "measured",
-                        "producer": PRODUCER,
-                    },
-                    fr.Envelope(
-                        record_kind="finding",
-                        ts=fr.now_iso(),
-                        arc_id=arc_id,
-                        lane_id=lane_id,
-                        head_sha=binding["head_sha"],
-                        base_sha=binding["base_sha"],
-                        diff_digest=binding["diff_digest"],
-                        round_n=rep,
-                    ),
-                )
+                    )
     for n in ns:
         med = statistics.median(w for w, _ in samples[n])
         all_valid = all(ok for _, ok in samples[n])
         print(f"N={n}: median {med:.0f}s over {len(samples[n])} calls, valid={all_valid}")
     ok, why = decide(samples)
+    # the "one fixed diff" premise is a world fact `decide` cannot see: a HEAD that moved
+    # mid-run mislabels cross-diff timings as one experiment, so the whole run is void —
+    # RED regardless of the sample arithmetic (codex r1 P2; agy's own moved-HEAD refusal
+    # is the same rule at single-review scope)
+    end_head = rw.code_binding(REPO, base)["head_sha"]
+    if end_head != binding["head_sha"]:
+        ok, why = (
+            False,
+            (
+                f"fixed-diff violated: HEAD moved {binding['head_sha'][:12]} -> "
+                f"{end_head[:12]} during the probe"
+            ),
+        )
     print(f"{'GREEN' if ok else 'RED'}: {why}")
     return 0 if ok else 1
+
+
+def _at_least_one(text: str) -> int:
+    """CLI checkpoint for --reps ([LAW:parse-dont-validate]): a zero/negative count would
+    leave every series empty and crash the median print before decide could report RED."""
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"--reps must be >= 1, got {value}")
+    return value
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--base", default="main")
     p.add_argument("--channel", choices=tuple(CMD), default="codex")
-    p.add_argument("--reps", type=int, default=5)
+    p.add_argument("--reps", type=_at_least_one, default=5)
     a = p.parse_args(argv)
     return run(a.base, channel=a.channel, reps=a.reps)
 
