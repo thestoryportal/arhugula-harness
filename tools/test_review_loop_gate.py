@@ -850,15 +850,17 @@ def test_launch_inactive_arc_proceeds_with_attempt_name(launch_env, monkeypatch,
 
 def test_launch_retry_after_refused_attempt_publishes_cleanly(launch_env: Path, capsys):
     # [B] F13 shape 2 (r9's relaunch reused `r9.log` → PUBLISH FAILED exit 4):
-    # a wrapper-level refused attempt occupies r9-a1.log; the retry mints r9-a2.log
-    # and the REAL publisher accepts it — no write-once collision
+    # a wrapper-level refused attempt occupies the round's -a1 name (a refused
+    # attempt minted no gate-log row, so the round identity has NOT advanced);
+    # the retry re-requests the SAME round, mints -a2, and the REAL publisher
+    # accepts it — no write-once collision
     _seed_current_preflight(launch_env)
     rounds = launch_env / ".harness/tmp/x-rounds"
     rounds.mkdir(parents=True)
-    (rounds / "r9-a1.log").write_text("codex-review: GATE_REFUSED (SWEEP_MISSING)\n")
-    assert _launch(launch_env, ".harness/tmp/x-rounds/r9.log") == 0
+    (rounds / "r1-a1.log").write_text("codex-review: GATE_REFUSED (SWEEP_MISSING)\n")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r1.log") == 0
     dest = capsys.readouterr().out.strip()
-    assert dest == ".harness/tmp/x-rounds/r9-a2.log"
+    assert dest == ".harness/tmp/x-rounds/r1-a2.log"
     publisher = Path(__file__).resolve().parent / "round_log_publish.py"
     done = subprocess.run(
         [sys.executable, str(publisher), dest],
@@ -867,16 +869,45 @@ def test_launch_retry_after_refused_attempt_publishes_cleanly(launch_env: Path, 
         capture_output=True,
     )
     assert done.returncode == 0, done.stderr
-    assert (rounds / "r9-a2.log").read_text() == "codex-review: BLOCK\n"
+    assert (rounds / "r1-a2.log").read_text() == "codex-review: BLOCK\n"
     # the OLD shape stays refused: re-publishing an existing attempt name is still
     # the publisher's write-once refusal — per-attempt naming is what avoids it
     again = subprocess.run(
-        [sys.executable, str(publisher), ".harness/tmp/x-rounds/r9-a1.log"],
+        [sys.executable, str(publisher), ".harness/tmp/x-rounds/r1-a1.log"],
         cwd=launch_env,
         input=b"x\n",
         capture_output=True,
     )
     assert again.returncode == 4
+
+
+def test_launch_refuses_round_name_not_matching_recorded_rounds(launch_env: Path, capsys):
+    # codex r1 P2: after a RECORDED round 1, re-requesting `r1.log` would mint
+    # r1-a2 while the wrapper records round 2 — two review transcripts claiming
+    # round 1, which arc_metrics refuses. The launch binds the requested name to
+    # round_n_for (the same mint the wrapper records) BEFORE the reviewer call.
+    _seed_current_preflight(launch_env)
+    (launch_env / "gate-log.jsonl").write_text(json.dumps(_row(1, "no_finding")) + "\n")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r1.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (ROUND_NAME_MISMATCH)" in err
+    assert "next primary round is 2" in err
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
+    # the round the mint names IS accepted
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r2.log") == 0
+    assert capsys.readouterr().out.strip() == ".harness/tmp/x-rounds/r2-a1.log"
+
+
+def test_launch_refuses_unparseable_round_name(launch_env: Path, capsys):
+    # a name arc_metrics cannot key to a round would poison the evidence set at
+    # queue time — refuse it BEFORE the reviewer call, not after
+    _seed_current_preflight(launch_env)
+    assert _launch(launch_env, ".harness/tmp/x-rounds/final.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (ROUND_NAME_UNPARSEABLE)" in err
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
 
 
 def test_logged_recipe_evaluates_admission_before_launch():

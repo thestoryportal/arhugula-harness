@@ -2551,6 +2551,11 @@ same spec leg.
 
 - **What it is.** A named cost-cohort gap: `tools/arc_cost.py` (U-HE-48, C-HE-25 X6e) reads Claude session-transcript JSONL, but Codex sessions store date-partitioned rollout JSONL under `~/.codex/sessions` in a different shape, so the Codex ship-pr carrier deliberately OMITS `--transcript` (pinned by `test_codex_workflow_parity`) and Codex-shipped arcs record null cost fields — honest, but a systematic cost-baseline under-coverage for that runner.
 - **Current state.** OPEN. Closure = a rollout-shaped usage extractor (or shared normalizer) feeding the same `cost_snapshot` fields, plus the carrier flipped to pass its transcript.
+### B-225 · loop-venue root checkout permanently dirty — local stop-gate never green *(surfaced by u-he-49 preflight, 2026-08-27; REGISTERED)*
+
+- **What it is.** A venue defect in the local gate: `test_stop_gate_emits_valid_stop_hook_json` runs the real `.codex/hooks/stop_gate.py` against the live checkout and requires exit 0, but `codex_context_guard` fires the HARD `ROOT_CHECKOUT_EDIT` on ANY git-status entry in a non-linked-worktree checkout — and the loop ritual itself keeps the root checkout permanently dirty (untracked `.harness/.preflight-answers-*` / `.sweep-answers-*` attestation files accumulate per arc), so `just codex-check` cannot go fully green locally on this venue.
+- **Current state.** REGISTERED as a named environmental red; CI's clean checkout is where the test actually adjudicates (u-he-46..48 shipped under the identical local red; the guard shape landed at U-HE-33). Closure = a policy decision on the attestation answer files (gitignore, commit, or a guard exemption for the pattern) OR a hermetic venue for the stop-gate battery.
+
 ### B-224 · subagent-sidecar completeness has no verifying authority *(surfaced by codex r5–r8 on u-he-48, 2026-08-27; REGISTERED)*
 
 - **What it is.** A held bounded measurement residual: `tools/arc_cost.py` cannot verify subagent-sidecar COMPLETENESS — no manifest enumerates the expected `agent-*.jsonl` set, so a whole stem-dir GC is indistinguishable from a session that spawned no subagents.

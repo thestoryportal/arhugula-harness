@@ -543,6 +543,47 @@ def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
         print(f"review-launch: gate INACTIVE — {decision.reason}", file=sys.stderr)
     else:
         print(f"review-launch: ALLOWED (next round {decision.round_n})", file=sys.stderr)
+    # Round identity in the requested NAME must be the primary channel's next round
+    # (codex r1 P2): after a recorded round 1, a caller re-requesting `r1.log` would
+    # mint r1-a2 while the wrapper records round 2 — two review transcripts claiming
+    # round 1, which arc_metrics refuses. [LAW:one-source-of-truth] the round the
+    # wrapper will record is `round_n_for` (env-forced or per-producer mint) and the
+    # name parser is arc_metrics.ROUND_ID_RE — both read here, neither re-derived; a
+    # genuinely refused attempt minted no row, so its retry re-passes the same check.
+    import arc_metrics as am
+
+    match = am.ROUND_ID_RE.match(Path(requested).stem)
+    if not match:
+        print(
+            f"review-launch: cannot parse a round id from {Path(requested).name!r} — "
+            "round-log names carry round identity (r<N>.log; arc_metrics refuses others)",
+            file=sys.stderr,
+        )
+        print(
+            "review-launch: GATE_REFUSED (ROUND_NAME_UNPARSEABLE) — launch not made",
+            file=sys.stderr,
+        )
+        return 3
+    try:
+        expected = rw.round_n_for(arc_id, LOOP_PRODUCERS[0])
+    except Exception as exc:
+        print(
+            f"review-launch: gate log unreadable ({exc}) — cannot bind a round identity",
+            file=sys.stderr,
+        )
+        print("review-launch: GATE_REFUSED (STATE_UNREADABLE) — launch not made", file=sys.stderr)
+        return 3
+    if int(match.group(1)) != expected:
+        print(
+            f"review-launch: requested {Path(requested).name!r} names round "
+            f"{int(match.group(1))} but the next primary round is {expected} — "
+            f"request r{expected}.log (a refused attempt never advances the round)",
+            file=sys.stderr,
+        )
+        print(
+            "review-launch: GATE_REFUSED (ROUND_NAME_MISMATCH) — launch not made", file=sys.stderr
+        )
+        return 3
     parent = repo / Path(requested).parent
     try:
         existing = [entry.name for entry in parent.iterdir()]
