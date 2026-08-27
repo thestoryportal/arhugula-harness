@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 224
+  total: 225
   open: 1
   design_substrate_gated: 3
-  registered_finding: 68
+  registered_finding: 69
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 519c95b3292a7e4f
+  identity_digest: 62853ad544381a7d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10987,3 +10987,28 @@ items:
   council: 'NO — held-as-bounded residual; closure is a producer-surface change.'
   heading: '### B-224 · subagent-sidecar completeness has no verifying authority
     *(surfaced by codex r5–r8 on u-he-48, 2026-08-27; REGISTERED)*'
+
+- id: B-225
+  title: >-
+    Loop-venue root checkout is permanently dirty — local stop-gate battery can
+    never be fully green
+  pr: 'PR pending (u-he-49 preflight)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-49: test_stop_gate_emits_valid_stop_hook_json runs
+    the real .codex/hooks/stop_gate.py against the live checkout and requires
+    exit 0, but codex_context_guard fires the HARD ROOT_CHECKOUT_EDIT on ANY
+    git-status entry in a non-linked-worktree checkout — and the loop ritual
+    itself keeps the root checkout permanently dirty (untracked
+    .harness/.preflight-answers-* / .sweep-answers-* attestation files
+    accumulate per arc), so `just codex-check` cannot go fully green locally on
+    this venue; CI''s clean checkout is where the test actually adjudicates.
+    Pre-existing: the guard shape landed at U-HE-33 and u-he-46..48 shipped
+    under the identical local red.'
+  close_out: 'OPEN — closure = a policy decision on the attestation answer
+    files (gitignore them, commit them, or exempt the pattern in the guard) OR
+    a hermetic venue for the stop-gate battery; until then the local red is
+    named-environmental, adjudicated by CI.'
+  council: 'NO — venue/policy decision plus a small mechanical change.'
+  heading: '### B-225 · loop-venue root checkout permanently dirty — local
+    stop-gate never green *(surfaced by u-he-49 preflight, 2026-08-27;
+    REGISTERED)*'

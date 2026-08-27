@@ -26,6 +26,10 @@ A refusal is NOT a review terminal: C-HE-16 §3 closes that enum at
 {APPROVE, BLOCK, REVIEWER_UNAVAILABLE}, and a refused invocation never begins —
 no C-HE-24 row is written, no round outcome is recorded, the wrapper exits 3
 behind its own distinct stderr line (`codex-review: GATE_REFUSED (<code>)`).
+Since U-HE-49 (C-HE-21 §1 X6b) the logged launch step (`launch` verb, invoked by
+`just review-with-failover-logged` before the wrapper process is created) reads
+the same decision at the launch seam and mints per-attempt round-log names, so a
+refused launch spends no reviewer call and claims no write-once round name.
 
 State lives at `.harness/review_loop_gate_state.json` — local and gitignored,
 same class as codex_loop's state: transient loop progress, never a tracked
@@ -483,6 +487,185 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
     )
 
 
+# ── edge: launch (U-HE-49; C-HE-21 §1 X6b) ───────────────────────────────────
+
+#: A trailing per-attempt suffix on a round-log stem (`r9-a2` → `-a2`).
+#: Canonical minted attempt suffix: positive decimal, no leading zero (codex r5 —
+#: `-a0`/`-a01` are never minted and must read as foreign, not as attempts).
+_ATTEMPT_SUFFIX = re.compile(r"-a[1-9]\d*$")
+
+
+def attempt_destination(requested: str, existing_names: list[str]) -> str:
+    """Mint the per-attempt destination for a requested round-log name.
+
+    [LAW:one-source-of-truth] this function is the one place attempt names come
+    from. Every launch attempt gets a fresh name unconditionally — `r9.log` →
+    `r9-a1.log`, then `r9-a2.log` while `r9-a1.log` exists —
+    [LAW:dataflow-not-control-flow] the name is f(request, prior attempts), never
+    "reuse the bare name if free", so a refused or failed attempt can never claim
+    the write-once name a retry needs (C-HE-21 §1 X6b; [B] F13: r9's relaunch
+    reused `r9.log` → PUBLISH FAILED exit 4). The `r<N>` prefix survives the
+    suffix, so arc_metrics.ROUND_ID_RE keys every attempt to its round and
+    round_metrics collapses a refused attempt plus its retry into one round.
+    """
+    parent, _, base = requested.rpartition("/")
+    stem, dot, ext = base.rpartition(".")
+    if not dot:  # no extension: the whole basename is the stem
+        stem, ext = base, ""
+    suffix = f".{ext}" if dot else ""
+    # idempotent on its own output: a requested `r9-a1.log` mints round 9's NEXT
+    # attempt, never a nested `r9-a1-a1.log`
+    stem = _ATTEMPT_SUFFIX.sub("", stem)
+    attempt_of = re.compile(rf"^{re.escape(stem)}-a([1-9]\d*){re.escape(suffix)}$")
+    taken = [int(m.group(1)) for name in existing_names if (m := attempt_of.match(name))]
+    out = f"{stem}-a{max(taken, default=0) + 1}{suffix}"
+    return f"{parent}/{out}" if parent else out
+
+
+_O_DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _attempt_dir_names(repo: Path, components: list[str]) -> list[str]:
+    """Enumerate the rounds directory through an O_NOFOLLOW dir-fd walk (the
+    round_log_publish idiom, codex r3 P2): every component opens relative to the
+    previous component's fd and refuses a symlink at its own openat, so a
+    pre-planted link under .harness/tmp cannot route even this read-only listing
+    outside the worktree. A missing component is zero prior attempts — the
+    publisher creates the directory at first write."""
+    fd = os.open(str(repo), _O_DIR_NOFOLLOW)
+    try:
+        for comp in components:
+            try:
+                nxt = os.open(comp, _O_DIR_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                return []
+            except OSError as exc:  # ELOOP (symlink) / ENOTDIR (file) / perms
+                raise GateError(
+                    f"refused component {comp!r} in the rounds path (containment): {exc}"
+                ) from exc
+            os.close(fd)
+            fd = nxt
+        return os.listdir(fd)
+    finally:
+        os.close(fd)
+
+
+def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
+    """Pre-launch admission: evaluate the SAME `admit()` the wrapper enforces,
+    BEFORE any reviewer subprocess exists — a launch the gate would refuse is not
+    made ([B] F13: r11 launched into BUDGET_EXHAUSTED, r9 into SWEEP_MISSING), so
+    a refusal here spends no reviewer call, writes no file, and consumes no round
+    identity. [LAW:single-enforcer] the wrapper's own `admit()` stays the
+    enforcer of record; this edge reads the same decision at the launch seam,
+    where refusing still costs nothing. On admission the per-attempt destination
+    goes to stdout (the recipe's dataflow seam); all status goes to stderr.
+    """
+    decision = admit(repo, base, arc_id)
+    if isinstance(decision, Refused):
+        print(f"review-launch: {decision.detail}\n  recipe: {decision.recipe}", file=sys.stderr)
+        print(
+            f"review-launch: GATE_REFUSED ({decision.code}) — launch not made; "
+            "no reviewer call, no round log written",
+            file=sys.stderr,
+        )
+        return 3
+    if isinstance(decision, Inactive):
+        print(f"review-launch: gate INACTIVE — {decision.reason}", file=sys.stderr)
+    else:
+        print(f"review-launch: ALLOWED (next round {decision.round_n})", file=sys.stderr)
+    # Round identity in the requested NAME must be the primary channel's next round
+    # (codex r1 P2): after a recorded round 1, a caller re-requesting `r1.log` would
+    # mint r1-a2 while the wrapper records round 2 — two review transcripts claiming
+    # round 1, which arc_metrics refuses. [LAW:one-source-of-truth] the round the
+    # wrapper will record is `round_n_for` (env-forced or per-producer mint) and the
+    # name parser is arc_metrics.ROUND_ID_RE — both read here, neither re-derived; a
+    # genuinely refused attempt minted no row, so its retry re-passes the same check.
+    import arc_metrics as am
+
+    match = am.ROUND_ID_RE.match(Path(requested).stem)
+    if not match:
+        print(
+            f"review-launch: cannot parse a round id from {Path(requested).name!r} — "
+            "round-log names carry round identity (r<N>.log; arc_metrics refuses others)",
+            file=sys.stderr,
+        )
+        print(
+            "review-launch: GATE_REFUSED (ROUND_NAME_UNPARSEABLE) — launch not made",
+            file=sys.stderr,
+        )
+        return 3
+    try:
+        expected = rw.next_round_from_rows(arc_id, LOOP_PRODUCERS[0])
+    except Exception as exc:
+        print(
+            f"review-launch: gate log unreadable ({exc}) — cannot bind a round identity",
+            file=sys.stderr,
+        )
+        print("review-launch: GATE_REFUSED (STATE_UNREADABLE) — launch not made", file=sys.stderr)
+        return 3
+    # A leaked HARNESS_ROUND_N would force the WRAPPER (which honors it) onto a
+    # round that already has a primary outcome — a duplicate transcript
+    # arc_metrics must refuse (codex r5). The forcing var belongs to the failover
+    # child only; refuse any forced value that is not the next unused round.
+    forced = os.environ.get("HARNESS_ROUND_N")
+    if forced is not None and forced != str(expected):
+        print(
+            f"review-launch: HARNESS_ROUND_N={forced!r} would force the wrapper to a "
+            f"round that is not the next unused primary round ({expected}) — unset it "
+            "(the forcing var is for the failover child only)",
+            file=sys.stderr,
+        )
+        print("review-launch: GATE_REFUSED (FORCED_ROUND_STALE) — launch not made", file=sys.stderr)
+        return 3
+    if Path(requested).name != f"r{expected}.log":
+        # canonical-BASENAME equality, not just parsed-number equality (codex
+        # r5/r6): aliases like `r01.log` / `round-1.log` / `r1-notes.log` parse
+        # to the right number but would mint a SECOND attempt family for one
+        # round, and `r1` / `r1.txt` would publish evidence the documented
+        # `r*.log` round-log glob omits
+        print(
+            f"review-launch: requested {Path(requested).name!r} is not the canonical "
+            f"name for this launch — the next primary round is {expected}; "
+            f"request r{expected}.log (a refused attempt never advances the round)",
+            file=sys.stderr,
+        )
+        print(
+            "review-launch: GATE_REFUSED (ROUND_NAME_MISMATCH) — launch not made", file=sys.stderr
+        )
+        return 3
+    # Destination containment BEFORE the paid call (codex r3 P2): the recipe is
+    # guard-auto-allowed, so its one caller-derived filesystem input gets the same
+    # discipline as the attest verbs' answers file (codex r4 P2 precedent above) —
+    # a pre-planted symlink under .harness/tmp must not route even a read-only
+    # listing outside the worktree, and a destination the publisher would refuse
+    # must refuse HERE, before the reviewer call is spent, not after. The shape
+    # rule and the O_NOFOLLOW dir-fd walk are form mirrors of
+    # tools/round_log_publish.py — the publisher stays the write-time authority.
+    parts = requested.split("/")
+    if (
+        requested.startswith("/")
+        or ".." in parts
+        or "" in parts
+        or parts[:2] != [".harness", "tmp"]
+        or len(parts) < 3
+    ):
+        print(
+            f"review-launch: refused destination {requested!r} — must be a relative "
+            "path under .harness/tmp/ (the publisher's own policy, mirrored pre-launch)",
+            file=sys.stderr,
+        )
+        print("review-launch: GATE_REFUSED (DEST_REFUSED) — launch not made", file=sys.stderr)
+        return 3
+    try:
+        existing = _attempt_dir_names(repo, parts[:-1])
+    except GateError as exc:
+        print(f"review-launch: {exc}", file=sys.stderr)
+        print("review-launch: GATE_REFUSED (DEST_REFUSED) — launch not made", file=sys.stderr)
+        return 3
+    print(attempt_destination(requested, existing))
+    return 0
+
+
 # ── edge: attest verbs ───────────────────────────────────────────────────────
 
 
@@ -654,6 +837,10 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("check")
     sp.add_argument("--base", default="main")
     sp.add_argument("--repo", default=".")
+    sp = sub.add_parser("launch")
+    sp.add_argument("--log", required=True, help="requested round-log destination (r<N>.log)")
+    sp.add_argument("--base", default="main")
+    sp.add_argument("--repo", default=".")
     args = p.parse_args(argv)
     repo = Path(args.repo).resolve()
     arc_id, _ = rw.env_arc_and_lane()
@@ -667,6 +854,8 @@ def main(argv: list[str] | None = None) -> int:
     except GateError as exc:
         print(f"review-gate: {exc}", file=sys.stderr)
         return 1
+    if args.cmd == "launch":
+        return launch(repo, args.base, arc_id, args.log)
     decision = admit(repo, args.base, arc_id)
     if isinstance(decision, Refused):
         print(f"review-gate: {decision.detail}\n  recipe: {decision.recipe}", file=sys.stderr)

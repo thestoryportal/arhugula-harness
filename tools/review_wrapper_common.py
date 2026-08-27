@@ -379,6 +379,14 @@ def round_n_for(arc_id: str, producer: str, rows: list[dict] | None = None) -> i
     env = os.environ.get("HARNESS_ROUND_N")
     if env is not None:
         return int(env)
+    return next_round_from_rows(arc_id, producer, rows)
+
+
+def next_round_from_rows(arc_id: str, producer: str, rows: list[dict] | None = None) -> int:
+    """The row-derived arm of `round_n_for`, exposed so the U-HE-49 launch guard
+    can bind a round-log name to the next UNUSED primary round even when
+    HARNESS_ROUND_N is (illegitimately) present in its venue — the forcing var
+    belongs to the failover child only."""
     prior = [
         r["round_n"]
         for r in (rows if rows is not None else fr.read_rows())

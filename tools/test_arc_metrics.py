@@ -587,6 +587,88 @@ def test_terminal_less_transcript_aborts_rather_than_classifying(tmp_path: Path)
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
+def test_refused_attempt_beside_real_retry_collapses_to_one_round(tmp_path: Path):
+    """merge-gate witness lens (PR #1471): the headline X6b claim — a
+    GATE_REFUSED-terminal attempt beside its real-terminal retry is ONE round,
+    keyed to the retry's transcript — exercised directly through round_metrics
+    (the GATE_REFUSED filter is a different branch than the terminal-less one)."""
+    _round_log(tmp_path, "r1-a1.log", "codex-review: GATE_REFUSED (SWEEP_MISSING)\n", 1_000_000)
+    _round_log(tmp_path, "r1-a2.log", "codex-review: BLOCK\n", 1_000_600)
+    logs, _, _, ids = am.round_metrics([str(tmp_path / "r*.log")])
+    assert [f.name for f in logs] == ["r1-a2.log"]
+    assert ids == [1]
+
+
+def test_terminal_less_attempt_beside_terminal_bearing_retry_is_excluded(tmp_path: Path):
+    """U-HE-49 codex r2: the wrapper crashed/was killed mid-attempt, so the
+    write-once r1-a1.log carries no terminal; the retry published r1-a2.log.
+    The partial file is a FAILED attempt of a classifiable round — excluded like
+    a refused launch, never a poisoned evidence set."""
+    _round_log(tmp_path, "r1-a1.log", "partial transcript, wrapper killed\n", 1_000_000)
+    _round_log(tmp_path, "r1-a2.log", "codex-review: BLOCK\n", 1_000_600)
+    logs, _, _, ids = am.round_metrics([str(tmp_path / "r*.log")])
+    assert [f.name for f in logs] == ["r1-a2.log"]
+    assert ids == [1]
+
+
+def test_lone_terminal_less_attempt_still_aborts(tmp_path: Path):
+    """Without a terminal-bearing sibling, a crashed attempt and a truncated
+    REAL round read identically — refuse rather than undercount."""
+    _round_log(tmp_path, "r1-a1.log", "partial transcript, wrapper killed\n", 1_000_000)
+    _round_log(tmp_path, "r2-a1.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="no wrapper terminal line"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_foreign_terminal_less_name_beside_real_attempt_aborts(tmp_path: Path):
+    """codex r3: a terminal-less file OUTSIDE the minted r<N>-a<K> sequence
+    (`r1-notes.log`) is foreign evidence, never a suppressible failed attempt."""
+    _round_log(tmp_path, "r1-notes.log", "scratch notes, no verdict\n", 1_000_000)
+    _round_log(tmp_path, "r1-a1.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_foreign_attempt_suffixed_name_beside_real_attempt_aborts(tmp_path: Path):
+    """codex r4: a foreign name that HAPPENS to end in -a<K> (`r1-notes-a1.log`)
+    is not in the real attempt's minted family (stem minus suffix differs) —
+    the K-ordering check alone must not suppress it."""
+    _round_log(tmp_path, "r1-notes-a1.log", "scratch notes, no verdict\n", 1_000_000)
+    _round_log(tmp_path, "r1-a2.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_all_foreign_attempt_family_aborts_not_self_suppresses(tmp_path: Path):
+    """codex r7: a foreign family can be internally consistent — terminal-less
+    `r1-notes-a1.log` beside terminal-bearing `r1-notes-a2.log` — but launch()
+    only mints the canonical `r<rid>-a<K>.log`, so suppression requires the
+    canonical base on BOTH sides."""
+    _round_log(tmp_path, "r1-notes-a1.log", "partial, foreign family\n", 1_000_000)
+    _round_log(tmp_path, "r1-notes-a2.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_non_minted_attempt_suffix_is_foreign_not_an_earlier_attempt(tmp_path: Path):
+    """codex r5: attempt_destination only mints positive canonical decimals, so a
+    terminal-less `r1-a0.log` (or `-a01`) is foreign evidence — it must not pass
+    the same-family ordering check as an 'earlier attempt'."""
+    _round_log(tmp_path, "r1-a0.log", "partial, non-minted suffix\n", 1_000_000)
+    _round_log(tmp_path, "r1-a1.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_terminal_less_attempt_minted_after_completed_round_aborts(tmp_path: Path):
+    """codex r3: a crashed r1-a2 AFTER r1-a1 completed is contradictory (the
+    launch guard refuses retrying a recorded round) — expose it, don't suppress."""
+    _round_log(tmp_path, "r1-a1.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r1-a2.log", "partial transcript, wrapper killed\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
 def test_unparseable_round_name_aborts(tmp_path: Path):
     _round_log(tmp_path, "final.log", "codex-review: APPROVE\n", 1_000_000)
     with pytest.raises(am.AbortError, match="cannot parse a round id"):

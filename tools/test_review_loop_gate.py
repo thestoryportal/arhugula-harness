@@ -724,3 +724,373 @@ def test_agy_failover_child_skips_gate(agy_wired, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("HARNESS_FAILOVER_CHILD", "1")
     monkeypatch.setattr(agy_wired, "run_review", lambda repo, base: 0)
     assert agy_wired.main() == 0
+
+
+# ── launch verb: per-attempt names (U-HE-49; C-HE-21 §1 X6b) ─────────────────
+
+
+def test_attempt_destination_first_attempt():
+    assert (
+        rlg.attempt_destination(".harness/tmp/x-rounds/r9.log", [])
+        == ".harness/tmp/x-rounds/r9-a1.log"
+    )
+
+
+def test_attempt_destination_retry_increments():
+    assert (
+        rlg.attempt_destination(".harness/tmp/x-rounds/r9.log", ["r9-a1.log"])
+        == ".harness/tmp/x-rounds/r9-a2.log"
+    )
+
+
+def test_attempt_destination_is_max_plus_one_not_count():
+    # a deleted intermediate attempt must never resurrect a taken write-once name
+    assert rlg.attempt_destination("d/r9.log", ["r9-a1.log", "r9-a3.log"]) == "d/r9-a4.log"
+
+
+def test_attempt_destination_sibling_rounds_do_not_interfere():
+    # the r1 prefix trap: r10/r11 attempts are not r1 attempts
+    names = ["r1-a1.log", "r10-a2.log", "r11-a5.log", "r9-verdict-a1.log"]
+    assert rlg.attempt_destination("d/r1.log", names) == "d/r1-a2.log"
+
+
+def test_attempt_destination_bare_legacy_name_never_reused():
+    # a pre-U-HE-49 bare `r9.log` on disk: attempts mint beside it, never claim it
+    assert rlg.attempt_destination("d/r9.log", ["r9.log"]) == "d/r9-a1.log"
+
+
+def test_attempt_destination_idempotent_on_own_output():
+    # requesting a prior attempt's name mints the round's NEXT attempt, not a nested one
+    assert rlg.attempt_destination("d/r9-a1.log", ["r9-a1.log"]) == "d/r9-a2.log"
+
+
+def test_attempt_destination_extensionless_basename():
+    assert rlg.attempt_destination("r9", []) == "r9-a1"
+
+
+def test_attempt_names_key_to_their_round_for_arc_metrics():
+    # seam contract with U-HE-46 round derivation: the r<N> prefix survives the
+    # attempt suffix, so every attempt keys to its round and a refused attempt
+    # plus its retry collapse to one round
+    import arc_metrics as am
+
+    stem = Path(rlg.attempt_destination("d/r9.log", ["r9-a1.log"])).stem
+    m = am.ROUND_ID_RE.match(stem)
+    assert m is not None and m.group(1) == "9"
+
+
+# ── launch verb: admission before launch (U-HE-49; C-HE-21 §1 X6b) ───────────
+
+
+def _seed_current_preflight(repo: Path) -> None:
+    binding = rw.code_binding(repo, "main")
+    rec = {
+        "kind": "preflight",
+        "arc_id": ARC,
+        "head_sha": binding["head_sha"],
+        "diff_digest": binding["diff_digest"],
+        "hit_labels": [],
+        "answers_digest": "d",
+        "ts": "t",
+    }
+    rlg.state_path(repo).write_text(json.dumps({"records": [rec]}))
+
+
+def _launch(repo: Path, log: str = ".harness/tmp/x-rounds/r1.log") -> int:
+    return rlg.main(["launch", "--log", log, "--repo", str(repo)])
+
+
+@pytest.fixture()
+def launch_env(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    return repo
+
+
+def test_launch_refused_consumes_no_round_identity(launch_env: Path, capsys):
+    # [B] F13 shape 1 (r11 launched into BUDGET_EXHAUSTED / r9 into SWEEP_MISSING):
+    # the refusal now lands BEFORE the launch — exit 3, no destination minted,
+    # no file, not even the rounds directory
+    assert _launch(launch_env) == 3
+    out, err = capsys.readouterr()
+    assert out == ""  # nothing on the dataflow seam — no round identity consumed
+    assert "review-launch: GATE_REFUSED (PREFLIGHT_MISSING)" in err
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
+
+
+def test_launch_refused_on_spent_budget_before_launch(launch_env: Path, capsys):
+    # the literal F13 r11 shape: budget spent → the launch is not made
+    _seed_current_preflight(launch_env)
+    rows = [_row(n, "no_finding") for n in range(1, rlg.DEFAULT_ROUND_BUDGET + 1)]
+    (launch_env / "gate-log.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r11.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "review-launch: GATE_REFUSED (BUDGET_EXHAUSTED)" in err
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
+
+
+def test_launch_allowed_prints_first_attempt_destination(launch_env: Path, capsys):
+    _seed_current_preflight(launch_env)
+    assert _launch(launch_env) == 0
+    out, err = capsys.readouterr()
+    assert out.strip() == ".harness/tmp/x-rounds/r1-a1.log"
+    assert "review-launch: ALLOWED (next round 1)" in err
+
+
+def test_launch_inactive_arc_proceeds_with_attempt_name(launch_env, monkeypatch, capsys):
+    # unreserved degradation path (sanctioned): the gate is not in force, but the
+    # per-attempt naming still applies — naming is identity discipline, not admission
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
+    assert _launch(launch_env) == 0
+    out, err = capsys.readouterr()
+    assert out.strip() == ".harness/tmp/x-rounds/r1-a1.log"
+    assert "review-launch: gate INACTIVE" in err
+
+
+def test_launch_retry_after_refused_attempt_publishes_cleanly(launch_env: Path, capsys):
+    # [B] F13 shape 2 (r9's relaunch reused `r9.log` → PUBLISH FAILED exit 4):
+    # a wrapper-level refused attempt occupies the round's -a1 name (a refused
+    # attempt minted no gate-log row, so the round identity has NOT advanced);
+    # the retry re-requests the SAME round, mints -a2, and the REAL publisher
+    # accepts it — no write-once collision
+    _seed_current_preflight(launch_env)
+    rounds = launch_env / ".harness/tmp/x-rounds"
+    rounds.mkdir(parents=True)
+    (rounds / "r1-a1.log").write_text("codex-review: GATE_REFUSED (SWEEP_MISSING)\n")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r1.log") == 0
+    dest = capsys.readouterr().out.strip()
+    assert dest == ".harness/tmp/x-rounds/r1-a2.log"
+    publisher = Path(__file__).resolve().parent / "round_log_publish.py"
+    done = subprocess.run(
+        [sys.executable, str(publisher), dest],
+        cwd=launch_env,
+        input=b"codex-review: BLOCK\n",
+        capture_output=True,
+    )
+    assert done.returncode == 0, done.stderr
+    assert (rounds / "r1-a2.log").read_text() == "codex-review: BLOCK\n"
+    # the OLD shape stays refused: re-publishing an existing attempt name is still
+    # the publisher's write-once refusal — per-attempt naming is what avoids it
+    again = subprocess.run(
+        [sys.executable, str(publisher), ".harness/tmp/x-rounds/r1-a1.log"],
+        cwd=launch_env,
+        input=b"x\n",
+        capture_output=True,
+    )
+    assert again.returncode == 4
+
+
+def test_launch_refuses_round_name_not_matching_recorded_rounds(launch_env: Path, capsys):
+    # codex r1 P2: after a RECORDED round 1, re-requesting `r1.log` would mint
+    # r1-a2 while the wrapper records round 2 — two review transcripts claiming
+    # round 1, which arc_metrics refuses. The launch binds the requested name to
+    # round_n_for (the same mint the wrapper records) BEFORE the reviewer call.
+    _seed_current_preflight(launch_env)
+    (launch_env / "gate-log.jsonl").write_text(json.dumps(_row(1, "no_finding")) + "\n")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r1.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (ROUND_NAME_MISMATCH)" in err
+    assert "next primary round is 2" in err
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
+    # the round the mint names IS accepted
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r2.log") == 0
+    assert capsys.readouterr().out.strip() == ".harness/tmp/x-rounds/r2-a1.log"
+
+
+def test_crashed_publisher_temp_neither_blocks_attempt_reuse_nor_its_publish(
+    launch_env: Path, capsys
+):
+    # codex r3/r4 rejection, promoted to a fail-closed witness: a hard-killed
+    # publisher leaves only its private `.r<N>-a<K>.log.<pid>.<hex>.tmp` — the
+    # FINAL name was never installed, so it is legitimately free. The next
+    # launch mints that same attempt name (the anchored matcher ignores the
+    # temp) and the REAL publisher installs it cleanly; the orphan temp's bytes
+    # survive untouched. No evidence is lost and no collision exists.
+    _seed_current_preflight(launch_env)
+    rounds = launch_env / ".harness/tmp/x-rounds"
+    rounds.mkdir(parents=True)
+    temp = rounds / ".r1-a1.log.12345.deadbeef.tmp"
+    temp.write_text("partial transcript, publisher killed\n")
+    assert _launch(launch_env) == 0
+    dest = capsys.readouterr().out.strip()
+    assert dest == ".harness/tmp/x-rounds/r1-a1.log"
+    publisher = Path(__file__).resolve().parent / "round_log_publish.py"
+    done = subprocess.run(
+        [sys.executable, str(publisher), dest],
+        cwd=launch_env,
+        input=b"codex-review: BLOCK\n",
+        capture_output=True,
+    )
+    assert done.returncode == 0, done.stderr
+    assert (rounds / "r1-a1.log").read_text() == "codex-review: BLOCK\n"
+    assert temp.read_text() == "partial transcript, publisher killed\n"
+
+
+def test_launch_refuses_destination_outside_harness_tmp(launch_env: Path, capsys):
+    # codex r3 P2 (form mirror of the publisher's policy, checked BEFORE the paid
+    # call): a destination the publisher would refuse must refuse at launch
+    _seed_current_preflight(launch_env)
+    assert _launch(launch_env, "tools/r1.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (DEST_REFUSED)" in err
+
+
+def test_launch_refuses_symlinked_rounds_dir(launch_env: Path, tmp_path_factory, capsys):
+    # codex r3 P2: a pre-planted symlink under .harness/tmp must not route even
+    # the read-only attempt listing outside the worktree — O_NOFOLLOW dir-fd walk
+    _seed_current_preflight(launch_env)
+    outside = tmp_path_factory.mktemp("outside")
+    (outside / "r1-a1.log").write_text("planted\n")
+    (launch_env / ".harness/tmp").mkdir(parents=True)
+    (launch_env / ".harness/tmp/x-rounds").symlink_to(outside)
+    assert _launch(launch_env) == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (DEST_REFUSED)" in err
+    assert "containment" in err
+
+
+def test_launch_refuses_stale_forced_round_env(launch_env: Path, monkeypatch, capsys):
+    # codex r5: a leaked HARNESS_ROUND_N would force the WRAPPER (which honors
+    # it) onto an already-recorded round — refuse pre-launch unless the forced
+    # value IS the next unused primary round
+    _seed_current_preflight(launch_env)
+    (launch_env / "gate-log.jsonl").write_text(json.dumps(_row(1, "no_finding")) + "\n")
+    monkeypatch.setenv("HARNESS_ROUND_N", "1")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r2.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (FORCED_ROUND_STALE)" in err
+    # a forced value equal to the next unused round is the failover-child shape
+    # and passes
+    monkeypatch.setenv("HARNESS_ROUND_N", "2")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r2.log") == 0
+    assert capsys.readouterr().out.strip() == ".harness/tmp/x-rounds/r2-a1.log"
+
+
+def test_launch_refuses_alias_round_names(launch_env: Path, capsys):
+    # codex r5/r6: r01/round-1/r1-notes parse to the right NUMBER but would mint
+    # a second attempt family for one round, and r1/r1.txt would publish outside
+    # the documented r*.log glob — only the canonical r<N>.log basename launches
+    _seed_current_preflight(launch_env)
+    for alias in ("r01.log", "round-1.log", "r1-notes.log", "r1", "r1.txt"):
+        assert _launch(launch_env, f".harness/tmp/x-rounds/{alias}") == 3
+        out, err = capsys.readouterr()
+        assert out == "", alias
+        assert "GATE_REFUSED (ROUND_NAME_MISMATCH)" in err, alias
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
+
+
+def test_launch_refuses_unparseable_round_name(launch_env: Path, capsys):
+    # a name arc_metrics cannot key to a round would poison the evidence set at
+    # queue time — refuse it BEFORE the reviewer call, not after
+    _seed_current_preflight(launch_env)
+    assert _launch(launch_env, ".harness/tmp/x-rounds/final.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (ROUND_NAME_UNPARSEABLE)" in err
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
+
+
+def _recipe_body(log: str, base: str = "main") -> str:
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    body = justfile.split("review-with-failover-logged log base='main':", 1)[1].split("\n\n", 1)[0]
+    lines = [ln[4:] if ln.startswith("    ") else ln for ln in body.splitlines()]
+    return "\n".join(lines).replace("{{log}}", log).replace("{{base}}", base) + "\n"
+
+
+@pytest.fixture()
+def recipe_env(tmp_path: Path):
+    """Execute the REAL recipe body under a PATH-shimmed `uv` (merge-gate witness
+    lens, PR #1471): the shim refuses/allows the launch verb per REC_MODE, marks
+    any wrapper invocation, and execs the REAL publisher — so the bash
+    control-flow binding (`|| exit`, the empty-dest arm, PIPESTATUS folding) is
+    witnessed by execution, not by substring presence."""
+    repo = tmp_path / "repo"
+    (repo / ".harness").mkdir(parents=True)
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    real_publisher = Path(__file__).resolve().parent / "round_log_publish.py"
+    (shim / "uv").write_text(
+        "#!/usr/bin/env bash\n"
+        "# args: run python tools/<script> ...\n"
+        'script="$3"; shift 3\n'
+        'case "$script" in\n'
+        "  tools/review_loop_gate.py)\n"
+        '    case "$REC_MODE" in\n'
+        "      refuse) echo 'review-launch: GATE_REFUSED (TEST)' >&2; exit 3 ;;\n"
+        "      empty) exit 0 ;;\n"
+        # allow: echo a MINTED name distinguishable from the raw --log value, as the
+        # real verb always does — witness-lens r2: an echo of the input cannot
+        # discriminate `publish "$dest"` from `publish "{{log}}"`
+        '      allow) shift; echo "${2%.log}-a1.log" ;;\n'
+        "    esac ;;\n"
+        "  tools/codex_review.py)\n"
+        '    touch "$REC_MARKER"; printf "codex-review: BLOCK\\n"; exit 1 ;;\n'
+        "  tools/round_log_publish.py)\n"
+        f'    exec "{sys.executable}" "{real_publisher}" "$@" ;;\n'
+        "esac\n"
+    )
+    (shim / "uv").chmod(0o755)
+
+    def run(mode: str, log: str = ".harness/tmp/x-rounds/r1.log"):
+        script = tmp_path / "recipe.sh"
+        script.write_text(_recipe_body(log))
+        env = dict(
+            os.environ,
+            PATH=f"{shim}:{os.environ['PATH']}",
+            REC_MODE=mode,
+            REC_MARKER=str(tmp_path / "wrapper-ran"),
+        )
+        return subprocess.run(
+            ["bash", str(script)], cwd=repo, env=env, capture_output=True, text=True
+        )
+
+    return repo, tmp_path, run
+
+
+def test_recipe_execution_refused_launch_never_reaches_wrapper(recipe_env):
+    repo, tmp, run = recipe_env
+    done = run("refuse")
+    assert done.returncode == 3
+    assert not (tmp / "wrapper-ran").exists()  # the reviewer call was NOT made
+    assert not (repo / ".harness/tmp").exists()  # and no log was written
+
+
+def test_recipe_execution_empty_dest_aborts_before_wrapper(recipe_env):
+    _repo, tmp, run = recipe_env
+    done = run("empty")
+    assert done.returncode == 4
+    assert "printed no destination" in done.stderr
+    assert not (tmp / "wrapper-ran").exists()
+
+
+def test_recipe_execution_allowed_pipes_wrapper_through_real_publisher(recipe_env):
+    repo, tmp, run = recipe_env
+    done = run("allow")
+    assert done.returncode == 1  # the stub wrapper's BLOCK exit survives PIPESTATUS folding
+    assert (tmp / "wrapper-ran").exists()
+    # the publish lands at the MINTED destination, never the caller's raw name —
+    # execution-discriminates `publish "$dest"` from `publish "{{log}}"` (lens r2)
+    assert (repo / ".harness/tmp/x-rounds/r1-a1.log").read_text() == "codex-review: BLOCK\n"
+    assert not (repo / ".harness/tmp/x-rounds/r1.log").exists()
+
+
+def test_logged_recipe_evaluates_admission_before_launch():
+    # the launch step composition ([LAW:verifiable-goals] on the bash seam): the
+    # launch verb runs BEFORE the wrapper, short-circuits on refusal, and the
+    # publisher receives the minted per-attempt destination, never the caller's name.
+    # Mutation-probe carrier: removing the pre-launch admission line reds this test.
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    recipe = justfile.split("review-with-failover-logged log base='main':", 1)[1].split("\n\n", 1)[
+        0
+    ]
+    assert recipe.index("review_loop_gate.py launch") < recipe.index("codex_review.py")
+    launch_line = next(ln for ln in recipe.splitlines() if "review_loop_gate.py launch" in ln)
+    assert '|| exit "$?"' in launch_line  # a refused launch is not made
+    assert 'round_log_publish.py "$dest"' in recipe
+    assert 'round_log_publish.py "{{log}}"' not in recipe

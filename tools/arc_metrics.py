@@ -267,6 +267,11 @@ ROUND_TERMINAL_RE = re.compile(
 # round 9's verdict; U-HE-49's per-attempt names keep this prefix), never in the
 # file's position within a listing.
 ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
+# The minted per-attempt suffix (U-HE-49 launch verb): `r1-a2` → attempt 2. Only
+# names in this minted sequence can be classified as failed attempts — canonical
+# positive decimals only (codex r5: `-a0`/`-a01` are never minted; they must read
+# as foreign evidence, not as earlier attempts).
+_ATTEMPT_K_RE = re.compile(r"-a([1-9]\d*)$")
 
 
 def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], list[int]]:
@@ -305,7 +310,7 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
     # [LAW:parse-dont-validate] every matched file is parsed into (round id,
     # terminal) or refused loudly -- an unclassifiable log silently counted (or
     # silently dropped) is exactly the position-derived corruption X6c removes.
-    rounds: dict[int, tuple[Path, str]] = {}
+    attempts: dict[int, list[tuple[Path, str, str | None]]] = {}
     for f in seen:
         try:
             text = f.read_text(errors="replace")
@@ -317,22 +322,60 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
                 f"round logs: cannot parse a round id from {f.name!r} -- round "
                 "identity comes from the log name (r<N>...), never file position"
             )
-        rid = int(m.group(1))
         terminals = [t.group(1) or t.group(2) for t in ROUND_TERMINAL_RE.finditer(text)]
-        if not terminals:
-            raise AbortError(
-                f"round logs: {f.name!r} carries no wrapper terminal line -- a "
-                "partial or foreign transcript cannot be classified as a round"
-            )
-        if terminals[-1] == "GATE_REFUSED":
-            continue  # a refused launch, not a round (C-HE-25 X6c)
-        if rid in rounds:
+        last = terminals[-1] if terminals else None
+        attempts.setdefault(int(m.group(1)), []).append((f, text, last))
+
+    rounds: dict[int, tuple[Path, str]] = {}
+    for rid, files in attempts.items():
+        real = [(f, text) for f, text, last in files if last is not None and last != "GATE_REFUSED"]
+        if len(real) > 1:
+            a, b = sorted(f.name for f, _ in real)[:2]
             raise AbortError(
                 f"round logs: two review transcripts claim round {rid} "
-                f"({rounds[rid][0].name!r} and {f.name!r}) -- write-once round "
+                f"({a!r} and {b!r}) -- write-once round "
                 "evidence is ambiguous; fix the log set"
             )
-        rounds[rid] = (f, text)
+        # A terminal-less file is a FAILED attempt -- the wrapper crashed or was
+        # killed before emitting its terminal (U-HE-49 codex r2) -- and is
+        # excludable ONLY as an EARLIER minted r<N>-a<K> attempt superseded by a
+        # terminal-bearing LATER attempt of the same round (codex r3: a foreign
+        # `r1-notes.log`, or a crashed attempt minted AFTER the round completed,
+        # is not a failed attempt -- it is foreign or contradictory evidence,
+        # and a crashed attempt and a truncated REAL round read identically, so
+        # everything outside the minted-and-superseded shape refuses rather
+        # than undercounts).
+        real_k = _ATTEMPT_K_RE.search(real[0][0].stem) if real else None
+        # The CANONICAL minted family only (codex r4/r7): launch() can only mint
+        # `r<rid>-a<K>.log`, so both the partial and the terminal-bearing sibling
+        # must strip to exactly `r<rid>` — family self-equality alone would let
+        # an all-foreign pair (`r1-notes-a1` beside `r1-notes-a2`) suppress
+        # itself, and any-tail matching let `r1-notes-a1` ride `r1-a2`.
+        canonical_base = f"r{rid}"
+        real_is_canonical = (
+            bool(real_k) and _ATTEMPT_K_RE.sub("", real[0][0].stem) == canonical_base
+        )
+        for f, _, last in files:
+            if last is not None:
+                continue
+            partial_k = _ATTEMPT_K_RE.search(f.stem)
+            superseded = bool(
+                partial_k
+                and real_is_canonical
+                and _ATTEMPT_K_RE.sub("", f.stem) == canonical_base
+                and int(partial_k.group(1)) < int(real_k.group(1))
+            )
+            if not superseded:
+                raise AbortError(
+                    f"round logs: {f.name!r} carries no wrapper terminal line -- only an "
+                    "earlier r<N>-a<K> attempt superseded by a terminal-bearing later "
+                    "attempt is a failed attempt; anything else is foreign or "
+                    f"contradictory evidence for round {rid}"
+                )
+        if real:
+            rounds[rid] = real[0]
+        # a rid whose attempts are all GATE_REFUSED contributes no round
+        # (refused launches, C-HE-25 X6c)
     if not rounds:
         raise AbortError(
             f"round logs: every file matching {globs} is a refused launch "
