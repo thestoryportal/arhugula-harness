@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `504c7da18507` |
+| `workspace_state_hash` | `c68d1d266f2e` |
 | `last_refreshed` | 2026-08-27T00:00:00Z |
-| `git_head` | `c03e05a5` —  |
+| `git_head` | `1b949d97` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1469).** U-HE-48 (R0 instrument 3 of 4: per-arc cost extractor, C-HE-25 X6e) landed at #1469 — `tools/arc_cost.py` + `just arc-cost` (requestId-deduplicated IET over the arc's pooled transcript set, per-field-max copy merge, reservation-bounded arc window, a fail-closed refusal surface grounded in per-round measurements), additive-nullable `cost_*` arc-row fields entering at `arc-metrics queue --transcript`, cost rendered per arc on every lever-report cohort side, and the plan/charter-ratified [B] subagent-baseline correction (4,636,541 IET; marker filed). The codex loop ran its full 10-round budget (30 findings: 24 absorbed, 6 rejected with measurement grounds, all disposed); residuals registered as B-223 (Codex rollout-transcript extractor) and B-224 (sidecar-completeness authority, held). The workflow-repair program continues per plan §8.1: next implementable unit is `U-HE-49` (R0: launch-admission guard + per-attempt round-log names, C-HE-21 §1 X6b), then the R1 levers (U-HE-50 + U-SR-01…08), then U-HE-36-as-R3.
+**Current next action (post-#1471).** The next implementable unit is `U-HE-50` (R1: C-HE-27 span emission from `review-with-failover-logged` + interim block in `roadmap-continue`, v1.6 X6a) — its four R0 dependencies are now all landed: U-HE-49 (R0 instrument 4 of 4: launch-admission guard + per-attempt round-log names, C-HE-21 §1 X6b) landed at #1471 — the logged launch step evaluates gate admission BEFORE any reviewer process (a refused launch exits 3 spending nothing and claiming no round name), destinations mint per attempt as `r<N>-a<K>.log` bound to the canonical next primary round with publisher-mirrored containment, and `round_metrics` classifies terminal-less logs as failed attempts only in the canonical minted-and-superseded shape. The arc dogfooded its own unit (8 logged rounds through the new gate: 7 BLOCK + 1 APPROVE; 14 findings — 11 absorbed, 3 rejected with witnessed grounds; all adjudicated). B-225 registered (loop-venue root checkout permanently dirty — local stop-gate red is environmental, CI adjudicates). The U-SR-01…08 charter levers remain landable alongside; then U-SR-09 (R2) and U-HE-36-as-R3 with U-HE-51 riding it, then U-HE-50's own next arc per plan §8.1.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1471 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1469 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1467 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1465 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1463 | 2026-08-26 | U-HE-35 workflow-repair program doc set: #1462 (Spec_HE_Loop_Lanes v1.6 X6a–X6f + Workflow_Repair_Charter_v1 WR-01…16 + plan §8 U-HE-46…51/U-SR-01…09 R0→R3 + both clearance markers + artifact-heads + cost audit [B]) and #1463 (LEAN-round C-HE-24 rows + next-action archive rotation). Adversarial pass LOOP-BACK absorbed in-PR; LEAN codex round absorbed (B-219 registered). Two open operator decisions at plan §8.5. |
-| PR #1460 | 2026-08-26 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
