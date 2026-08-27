@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 222
+  total: 223
   open: 1
   design_substrate_gated: 3
-  registered_finding: 66
+  registered_finding: 67
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 27181a2eb2e07e6e
+  identity_digest: d21155e1d05055f2
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10948,3 +10948,22 @@ items:
   council: 'NO — held-as-bounded residual; closure is a design-phase accept-or-lock call.'
   heading: '### B-222 · holder-check-to-append window on adjudication *(surfaced
     by codex r6/r7 on u-he-47, 2026-08-27; REGISTERED)*'
+
+- id: B-223
+  title: >-
+    Codex-runner cost-cohort gap — rollout transcripts need their own extractor
+  pr: 'PR pending (u-he-48 codex r2)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-48: tools/arc_cost.py reads Claude session-transcript
+    JSONL, but Codex sessions store date-partitioned rollout JSONL under
+    ~/.codex/sessions in a different shape, so the Codex ship-pr carrier
+    deliberately OMITS --transcript and every Codex-shipped arc records null
+    C-HE-25 X6e cost fields — an honest could-not-look, but a systematic
+    under-coverage of the cost baseline for that runner (named in the carrier
+    text and pinned by test_codex_workflow_parity).'
+  close_out: 'OPEN — closure = a rollout-shaped usage extractor (or a shared
+    normalizer) feeding the same cost_snapshot fields, plus the Codex carrier
+    flipped to pass its transcript.'
+  council: 'NO — mechanical extractor work once the rollout usage shape is inventoried.'
+  heading: '### B-223 · Codex-runner cost-cohort gap *(surfaced by codex r2 on
+    u-he-48, 2026-08-27; REGISTERED)*'

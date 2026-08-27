@@ -7812,7 +7812,7 @@ The [B] §6 keep-as-is list (charter §4) binds every unit below: a diff that "i
 
 - [ ] ~100-line extractor per [B] "Evidence and method": deduplicate usage by `requestId` (naive sums double-count 1.9×), IET = input + 1.25×cache-write + 0.1×cache-read + 5×output, stage windows cut at transcript event timestamps; subagent transcripts under `<transcript-dir>/subagents/` included.
 - [ ] Additive-nullable cost fields onto the arc row; B-211/B-212 lever report (`arc-lever-report`) renders cost per arc when present.
-- [ ] **Acceptance witness:** run against the archived U-HE-35 transcript reproduces [B]'s headline within rounding — 418 main calls / ≈20.99M IET main / ≈4.52M subagents. (If the transcript has been GC'd, the witness is a synthetic fixture with duplicated `requestId`s asserting the 1.9× dedupe delta.)
+- [ ] **Acceptance witness:** run against the archived U-HE-35 transcript reproduces [B]'s headline within rounding — 418 main calls / ≈20.99M IET main / ≈4.52M subagents. (If the transcript has been GC'd, the witness is a synthetic fixture with duplicated `requestId`s asserting the 1.9× dedupe delta.) *Execution-time correction (u-he-48 codex r1, measured on the witness): subagent transcripts stamp an early partial `output_tokens` copy before the final one (42 of 291 requestIds; main 0 of 428), so [B]'s first-copy read undercounted subagent output — the extractor merges copies by per-field max and the ratified subagent witness value is the corrected 4,636,541 IET (≈4.64M; main unchanged at 20,996,434). R3 comparisons read against the corrected value.*
 
 #### U-HE-49: launch-admission guard + per-attempt round-log names
 

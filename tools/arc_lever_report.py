@@ -279,6 +279,11 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
             "median_rounds": _median([m["review_rounds"] for m in ms]),
             "median_p1": _median([m["p1_rounds"] for m in ms if m["p1_rounds"] is not None]),
             "p1_measured_n": sum(1 for m in ms if m["p1_rounds"] is not None),
+            # every recognized contrast side needs control-side cost, not only
+            # the empty-lever baseline (codex u-he-48 r2: {999} vs {B-211,999}
+            # is a valid single-lever contrast with no cost otherwise)
+            "median_cost_miet": _median([m["cost_miet"] for m in ms if m["cost_miet"] is not None]),
+            "cost_measured_n": sum(1 for m in ms if m["cost_miet"] is not None),
         }
         for k, ms in by_pattern.items()
     }
@@ -337,9 +342,14 @@ def render(summary: dict[str, Any]) -> str:
                 f"{s['non_evaluable_reason']} — numbers are descriptive only"
             )
         for pat, ps in sorted(s["pattern_metrics"].items()):
+            cost = (
+                f" median_cost={ps['median_cost_miet']}M IET (cost n={ps['cost_measured_n']})"
+                if ps["cost_measured_n"]
+                else ""
+            )
             lines.append(
                 f"  pattern[{pat}]: n={ps['n']} median_rounds={ps['median_rounds']} "
-                f"median_p1={ps['median_p1']} (p1 n={ps['p1_measured_n']})"
+                f"median_p1={ps['median_p1']} (p1 n={ps['p1_measured_n']}){cost}"
             )
         if s["p1_unmapped"]:
             lines.append(

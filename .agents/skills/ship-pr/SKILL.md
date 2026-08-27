@@ -202,14 +202,16 @@ Step 1 -- queue, at closure, after the exit report above (writes NOTHING to the 
 
 ```
 just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
-  --round-logs '<glob for THIS arc's round logs>' \
-  --transcript <this-session's-transcript.jsonl-or-omit> --levers <lever-ids-or-omit>
+  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
 ```
 
-Pass `--transcript` with THIS session's transcript (under
-`~/.claude/projects/<munged-cwd>/`, the newest-mtime `.jsonl` mentioning this arc's id)
-so the row carries the C-HE-25 X6e cost fields; omit it when no transcript matches
-unambiguously -- the fields read as null, never a guessed transcript's numbers.
+OMIT `--transcript` on this runner: Codex session transcripts are date-partitioned
+rollout JSONL under `~/.codex/sessions`, a shape `tools/arc_cost.py` does not parse
+(it reads Claude session transcripts), so there is no truthful cost input to pass --
+the C-HE-25 X6e cost fields read as null on Codex-shipped arcs, an honest
+could-not-look, never a guessed transcript's numbers. This is a NAMED cohort gap
+(the cost baseline under-covers the Codex runner) until a rollout-shaped extractor
+exists; the Claude carrier passes the flag.
 
 One file per arc, in a queue directory OUTSIDE the repo. That placement is load-bearing:
 writing the tracked ledger from inside a topic worktree leaves a dirty file that both

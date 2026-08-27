@@ -185,7 +185,13 @@ def subagent_files(transcript: Path) -> list[Path]:
 
 
 def cost_report(transcript: Path, cuts: list[datetime]) -> dict:
-    main = dedupe_calls(read_records(transcript), source=transcript.name)
+    # Sidechain records are subagent turns inlined into the main transcript;
+    # their cost is additive and separately sourced from the subagents/ files,
+    # so counting them in main would double-count. Same exclusion as the
+    # repo's existing transcript instrument (tools/context_budget.py).
+    # [LAW:one-source-of-truth] main = non-sidechain records only.
+    main_records = [r for r in read_records(transcript) if not r.get("isSidechain")]
+    main = dedupe_calls(main_records, source=transcript.name)
     if not main:
         # [LAW:no-silent-failure] zero usage records is a wrong input (not this
         # harness's transcript shape), never a measured zero-cost arc

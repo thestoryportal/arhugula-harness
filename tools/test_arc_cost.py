@@ -94,15 +94,23 @@ def test_iet_formula() -> None:
 
 
 def test_subagent_transcripts_included_and_counted_separately(tmp_path: Path) -> None:
-    t = _write(tmp_path / "sess.jsonl", DUPED)
+    # the sidechain copy of the subagent call, inlined in the MAIN transcript,
+    # must not be double-counted (codex u-he-48 r2; context_budget.py precedent) —
+    # subagent-file records carry isSidechain themselves, so the exclusion is
+    # main-only, never applied to the subagents/ files
+    inlined = _rec("req_s1", "2026-08-26T04:10:00.000Z", out=7)
+    inlined["isSidechain"] = True
+    t = _write(tmp_path / "sess.jsonl", [*DUPED, inlined])
     subdir = tmp_path / "sess" / "subagents"
     subdir.mkdir(parents=True)
-    _write(subdir / "agent-a.jsonl", [_rec("req_s1", "2026-08-26T04:10:00.000Z", out=7)])
+    sub_rec = _rec("req_s1", "2026-08-26T04:10:00.000Z", out=7)
+    sub_rec["isSidechain"] = True
+    _write(subdir / "agent-a.jsonl", [sub_rec])
     report = ac.cost_report(t, cuts=[])
     assert report["subagents"]["files"] == 1
     assert report["subagents"]["calls"] == 1
     assert report["subagents"]["output"] == 7
-    assert report["main"]["calls"] == 2  # subagent usage never pools into main
+    assert report["main"]["calls"] == 2  # the inlined sidechain record stays out of main
     assert report["total_iet"] == report["main"]["iet"] + report["subagents"]["iet"]
 
 
@@ -216,6 +224,52 @@ def test_extract_derives_live_when_only_a_transcript_is_given(_gh_stub, tmp_path
     row = am.extract(_extract_args(transcript=str(t)))
     assert row.cost_main_calls == 2
     assert row.cost_source == str(t)
+
+
+# mutation-probe(tools/arc_metrics.py): drop the queue-time _cost_snapshot call, or
+# drop cost_snapshot from _drain_one's Namespace — either leaves this red
+def test_production_queue_to_drain_path_carries_the_cost_snapshot(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """codex u-he-48 r2: the extract-level tests stay green with the closure-time
+    snapshot or its drain forwarding deleted; this witness walks the real path —
+    queue_capture writes the snapshot, drain's Namespace forwards it."""
+    import reservations as rs
+
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    # isolate the reservations store the drain's bootstrap reserve writes into
+    monkeypatch.setattr(rs, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a, **k: None)
+    t = _write(tmp_path / "t.jsonl", DUPED)
+    am.queue_capture(
+        argparse.Namespace(
+            pr=1,
+            arc_id="u-qc",
+            arc_type="inventing",
+            arc_type_declared_at="close",
+            decisions=0,
+            round_logs=None,
+            transcript=str(t),
+            levers=[],
+            notes="",
+        )
+    )
+    entries = am.read_queue()
+    assert len(entries) == 1
+    snap = entries[0][1]["cost_snapshot"]
+    assert snap["main_calls"] == 2 and snap["source"] == str(t)
+
+    captured: dict = {}
+
+    def capture(args: argparse.Namespace):
+        captured["cost_snapshot"] = args.cost_snapshot
+        raise am.AbortError("stop after capture")  # keep the entry queued, skip append
+
+    monkeypatch.setattr(am, "extract", capture)
+    monkeypatch.setattr(am, "committed_arc_ids", set)
+    am.drain(argparse.Namespace())
+    assert captured["cost_snapshot"] == snap
 
 
 # -- live witness: the [B] audit headline ------------------------------------

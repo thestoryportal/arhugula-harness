@@ -289,6 +289,8 @@ def test_treated_sub_cohorts_split_by_exact_lever_set(tmp_path: Path) -> None:
         "median_rounds": 1,
         "median_p1": 0,
         "p1_measured_n": 5,
+        "median_cost_miet": None,
+        "cost_measured_n": 0,
     }
     assert s["pattern_metrics"]["B-212"]["median_rounds"] == 19
     assert "treated_median_rounds" not in s, "pooled treated aggregates evaluate neither lever"
@@ -391,6 +393,10 @@ def test_cost_renders_per_arc_when_present_and_never_as_a_partial_sum(
     assert by_id["pr-p"]["cost_miet"] is None
     assert s["baseline_median"]["cost_miet"] == 4.0
     assert s["baseline_median"]["measured_n"]["cost_miet"] == 1
+    # every recognized pattern carries cost, not only the empty baseline (r2)
+    assert s["pattern_metrics"]["B-211+B-212"]["median_cost_miet"] == 2.5
+    assert s["pattern_metrics"]["B-211+B-212"]["cost_measured_n"] == 1
+    assert s["pattern_metrics"]["(none)"]["median_cost_miet"] == 4.0
     ledger = _write(tmp_path / "ledger.jsonl", [base, costed, partial])
     assert alr.main(["--ledger", str(ledger)]) == 0
     out = capsys.readouterr().out

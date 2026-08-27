@@ -2546,3 +2546,14 @@ same spec leg.
 
 - **What it is.** A held bounded race: the holder authority check (inside `adjudicate()`, immediately before the append) and the gate-log append are not one atomic step — the reservation store and the gate log share no lock.
 - **Current state.** HELD as bounded, stated in code: a §6 holder transfer is dead-claim recovery of a crashed/idle lane, and the landing row is exactly the one the then-authorized caller composed. Closure = a design-phase call: accept-as-bounded in C-HE-24 §5, or a common coordination point for reservation-authorized log writes.
+
+### B-223 · Codex-runner cost-cohort gap *(surfaced by codex r2 on u-he-48, 2026-08-27; REGISTERED)*
+
+`tools/arc_cost.py` (U-HE-48, C-HE-25 X6e) reads Claude session-transcript JSONL;
+Codex sessions store date-partitioned rollout JSONL under `~/.codex/sessions` in a
+different shape. The Codex ship-pr carrier therefore deliberately OMITS
+`--transcript` (pinned by `test_codex_workflow_parity`), so Codex-shipped arcs
+record null cost fields — honest, but a systematic cost-baseline under-coverage
+for that runner. Closure: a rollout-shaped usage extractor (or shared normalizer)
+feeding the same `cost_snapshot` fields, plus the carrier flipped to pass its
+transcript.
