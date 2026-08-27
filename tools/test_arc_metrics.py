@@ -617,6 +617,16 @@ def test_foreign_terminal_less_name_beside_real_attempt_aborts(tmp_path: Path):
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
+def test_foreign_attempt_suffixed_name_beside_real_attempt_aborts(tmp_path: Path):
+    """codex r4: a foreign name that HAPPENS to end in -a<K> (`r1-notes-a1.log`)
+    is not in the real attempt's minted family (stem minus suffix differs) —
+    the K-ordering check alone must not suppress it."""
+    _round_log(tmp_path, "r1-notes-a1.log", "scratch notes, no verdict\n", 1_000_000)
+    _round_log(tmp_path, "r1-a2.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
 def test_terminal_less_attempt_minted_after_completed_round_aborts(tmp_path: Path):
     """codex r3: a crashed r1-a2 AFTER r1-a1 completed is contradictory (the
     launch guard refuses retrying a recorded round) — expose it, don't suppress."""

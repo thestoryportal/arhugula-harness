@@ -899,6 +899,35 @@ def test_launch_refuses_round_name_not_matching_recorded_rounds(launch_env: Path
     assert capsys.readouterr().out.strip() == ".harness/tmp/x-rounds/r2-a1.log"
 
 
+def test_crashed_publisher_temp_neither_blocks_attempt_reuse_nor_its_publish(
+    launch_env: Path, capsys
+):
+    # codex r3/r4 rejection, promoted to a fail-closed witness: a hard-killed
+    # publisher leaves only its private `.r<N>-a<K>.log.<pid>.<hex>.tmp` — the
+    # FINAL name was never installed, so it is legitimately free. The next
+    # launch mints that same attempt name (the anchored matcher ignores the
+    # temp) and the REAL publisher installs it cleanly; the orphan temp's bytes
+    # survive untouched. No evidence is lost and no collision exists.
+    _seed_current_preflight(launch_env)
+    rounds = launch_env / ".harness/tmp/x-rounds"
+    rounds.mkdir(parents=True)
+    temp = rounds / ".r1-a1.log.12345.deadbeef.tmp"
+    temp.write_text("partial transcript, publisher killed\n")
+    assert _launch(launch_env) == 0
+    dest = capsys.readouterr().out.strip()
+    assert dest == ".harness/tmp/x-rounds/r1-a1.log"
+    publisher = Path(__file__).resolve().parent / "round_log_publish.py"
+    done = subprocess.run(
+        [sys.executable, str(publisher), dest],
+        cwd=launch_env,
+        input=b"codex-review: BLOCK\n",
+        capture_output=True,
+    )
+    assert done.returncode == 0, done.stderr
+    assert (rounds / "r1-a1.log").read_text() == "codex-review: BLOCK\n"
+    assert temp.read_text() == "partial transcript, publisher killed\n"
+
+
 def test_launch_refuses_destination_outside_harness_tmp(launch_env: Path, capsys):
     # codex r3 P2 (form mirror of the publisher's policy, checked BEFORE the paid
     # call): a destination the publisher would refuse must refuse at launch
