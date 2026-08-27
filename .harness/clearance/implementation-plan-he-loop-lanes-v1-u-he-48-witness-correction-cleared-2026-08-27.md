@@ -1,3 +1,4 @@
+---
 artifact: .harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md
 version: v1.0 + rev 2026-08-27 (U-HE-48 baseline correction — the acceptance-witness bullet AND the §8.1 R3-baseline narrative, plus the same stamp on Workflow_Repair_Charter_v1.md §3)
 cleared_at: 2026-08-27T12:30:00Z
@@ -8,6 +9,7 @@ back_reference:
   - ".harness/spec/Workflow_Repair_Charter_v1.md (§3 baseline paragraph: the assert-the-shape numbers corrected with the same dated cite — the charter and the plan agree)"
   - "tools/arc_cost.py dedupe_calls (per-field-max merge, mutation-probe PINNED; same PR)"
   - "tools/test_arc_cost.py test_b_audit_headline_reproduced_on_the_archived_transcript (the witness asserting the corrected value)"
+---
 
 What changed and why it is a correction, not an extension:
 
