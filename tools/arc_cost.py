@@ -146,7 +146,18 @@ def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
                 output=max(seen.output, cur.output),
             )
         )
-    return sorted(calls.values(), key=lambda c: c.ts)
+    # An all-zero merged call is an aborted/truncated request, not work done
+    # (codex u-he-48 r6; 0 such calls on the [B] witness, so the ratified
+    # headline is unaffected) — kept, it would let a truncated transcript
+    # persist as a measured 0-IET arc.
+    return sorted(
+        (
+            c
+            for c in calls.values()
+            if (c.input, c.cache_write, c.cache_read, c.output) != (0, 0, 0, 0)
+        ),
+        key=lambda c: c.ts,
+    )
 
 
 def totals(calls: list[Call]) -> Totals:
@@ -229,8 +240,8 @@ def cost_report(transcripts: list[Path], cuts: list[datetime]) -> dict:
         # [LAW:no-silent-failure] zero usage records is a wrong input (not this
         # harness's transcript shape), never a measured zero-cost arc
         raise CostError(
-            f"{';'.join(map(str, transcripts))}: no assistant usage records -- "
-            "not session transcripts?"
+            f"{';'.join(map(str, transcripts))}: no assistant usage with non-zero tokens -- "
+            "not session transcripts, or truncated?"
         )
     sub_paths = [p for t in transcripts for p in subagent_files(t)]
     # [LAW:no-silent-failure] visible sidechain work with NO subagent files is a

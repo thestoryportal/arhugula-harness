@@ -311,6 +311,18 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
         "separable_levers": separable,
         "per_skill_separable": bool(separable),
         "excluded_treated_count": excluded_treated,
+        # Cost is measured independently of round measurability (X6e; codex
+        # u-he-48 r6): a round-excluded row's cost stays DESCRIPTIVE data —
+        # visible per arc, never entering any evaluation median here.
+        "excluded_arc_costs": [
+            {
+                "arc_id": r.arc_id,
+                "cost_miet": round((r.cost_main_iet + r.cost_subagent_iet) / 1e6, 2),
+            }
+            for b in ("unmapped", "partial", "undeclared")
+            for r in buckets[b]
+            if r.cost_main_iet is not None and r.cost_subagent_iet is not None
+        ],
         "excluded_unmapped": [r.arc_id for r in buckets["unmapped"]],
         "excluded_undeclared": [r.arc_id for r in buckets["undeclared"]],
         "excluded_partial": [r.arc_id for r in buckets["partial"]],
@@ -393,6 +405,9 @@ def render(summary: dict[str, Any]) -> str:
                 else "NOT separable — no two evaluable patterns differ in exactly one target lever"
             )
         )
+        if s["excluded_arc_costs"]:
+            per = ", ".join(f"{a['arc_id']}={a['cost_miet']}M" for a in s["excluded_arc_costs"])
+            lines.append(f"  cost of round-excluded arcs (descriptive only): {per}")
         for key, label in (
             ("excluded_unmapped", "unmapped rounds, B-170 — never evaluated"),
             ("excluded_partial", "partial round data — lower bounds, never evaluated"),

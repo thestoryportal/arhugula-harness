@@ -574,7 +574,8 @@ def extract(args: argparse.Namespace) -> ArcRow:
         row.cost_source = cost["source"]
         prov["cost_fields"] = "derived"
     else:
-        prov["cost_fields"] = "unmapped:no-transcript-supplied"
+        skip = getattr(args, "cost_skip_reason", None)
+        prov["cost_fields"] = f"unmapped:{skip or 'no-transcript-supplied'}"
 
     if row.merge_sha:
         # Deliberately NOT wrapped in a try/except. A transient gh failure
@@ -1028,6 +1029,12 @@ def queue_capture(args: argparse.Namespace) -> int:
     cost_snapshot = (
         _cost_snapshot(args.transcript, arc_id) if getattr(args, "transcript", None) else None
     )
+    # A supplied transcript that could not be bounded is NOT "no transcript
+    # supplied" (codex u-he-48 r6 P3): the only None-with-input path is the
+    # missing reservation boundary, and the ledger provenance must say so.
+    cost_skip_reason = (
+        "no-arc-boundary" if cost_snapshot is None and getattr(args, "transcript", None) else None
+    )
 
     entry = {
         "pr": args.pr,
@@ -1036,6 +1043,7 @@ def queue_capture(args: argparse.Namespace) -> int:
         "arc_type_declared_at": getattr(args, "arc_type_declared_at", None) or "close",
         "decisions": args.decisions,
         "cost_snapshot": cost_snapshot,
+        "cost_skip_reason": cost_skip_reason,
         "round_snapshot": snapshot,
         "round_logs_globs": args.round_logs or [],
         "levers": args.levers or [],
@@ -1742,6 +1750,7 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             round_snapshot=entry.get("round_snapshot"),
             round_logs=None,
             cost_snapshot=entry.get("cost_snapshot"),
+            cost_skip_reason=entry.get("cost_skip_reason"),
             levers=entry.get("levers"),
             notes=entry.get("notes", ""),
         )

@@ -174,8 +174,19 @@ def test_usage_without_request_id_refused_not_guessed(tmp_path: Path) -> None:
 
 
 def test_transcript_with_no_usage_refused_never_a_zero_cost_arc(tmp_path: Path) -> None:
-    with pytest.raises(ac.CostError, match="no assistant usage"):
+    with pytest.raises(ac.CostError, match="no assistant usage with non-zero"):
         ac.cost_report([_write(tmp_path / "t.jsonl", [{"type": "user"}])], cuts=[])
+
+
+# mutation-probe(tools/arc_cost.py): keep all-zero merged calls in the return
+def test_all_zero_calls_dropped_and_zero_only_transcript_refused(tmp_path: Path) -> None:
+    """codex u-he-48 r6: an all-zero merged call is an aborted request, not work
+    -- kept, a truncated transcript would persist as a measured 0-IET arc."""
+    zero = _rec("req_z", "2026-08-26T04:20:00.000Z", out=0, inp=0, cw=0, cr=0)
+    report = ac.cost_report([_write(tmp_path / "a.jsonl", [*DUPED, zero])], cuts=[])
+    assert report["main"]["calls"] == 2  # req_z dropped
+    with pytest.raises(ac.CostError, match="no assistant usage with non-zero"):
+        ac.cost_report([_write(tmp_path / "b.jsonl", [zero])], cuts=[])
 
 
 def test_sidechain_work_with_missing_subagent_files_refused(tmp_path: Path) -> None:
@@ -289,6 +300,7 @@ def _extract_args(**kw) -> argparse.Namespace:
         round_snapshot=None,
         round_logs=None,
         cost_snapshot=kw.get("cost_snapshot"),
+        cost_skip_reason=kw.get("cost_skip_reason"),
         levers=[],
         notes="",
     )
@@ -329,6 +341,42 @@ def test_extract_without_transcript_reads_null_never_zero(_gh_stub) -> None:
     assert row.cost_main_calls is None
     assert row.cost_main_iet is None
     assert row.provenance["cost_fields"] == "unmapped:no-transcript-supplied"
+
+
+def test_unbounded_transcript_records_no_arc_boundary_provenance(
+    _gh_stub, monkeypatch, tmp_path: Path
+) -> None:
+    """codex u-he-48 r6 P3: a supplied-but-unboundable transcript is not
+    "no transcript supplied" -- the ledger provenance carries the real reason."""
+    import reservations as rs
+
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(rs, "current", lambda arc_id: None)
+    t = _write(tmp_path / "t.jsonl", DUPED)
+    assert (
+        am.main(
+            [
+                "queue",
+                "--pr",
+                "1",
+                "--arc-id",
+                "u-nb",
+                "--arc-type",
+                "inventing",
+                "--decisions",
+                "0",
+                "--transcript",
+                str(t),
+            ]
+        )
+        == 0
+    )
+    entry = am.read_queue()[0][1]
+    assert entry["cost_snapshot"] is None
+    assert entry["cost_skip_reason"] == "no-arc-boundary"
+    row = am.extract(_extract_args(cost_skip_reason="no-arc-boundary"))
+    assert row.provenance["cost_fields"] == "unmapped:no-arc-boundary"
 
 
 # mutation-probe(tools/arc_metrics.py): drop the queue-time _cost_snapshot call, or
