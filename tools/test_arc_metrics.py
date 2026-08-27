@@ -433,7 +433,7 @@ def test_round_derivation_from_content_not_file_position(tmp_path: Path):
     _round_log(tmp_path, "r10.log", p1 + block, t + 1200)
     _round_log(tmp_path, "r11.log", "codex-review: GATE_REFUSED (BUDGET_EXHAUSTED)\n", t + 1800)
 
-    logs, gaps, p1_rounds, id_span = am.round_metrics([str(tmp_path / "r*.log")])
+    logs, gaps, p1_rounds, round_ids = am.round_metrics([str(tmp_path / "r*.log")])
     assert len(logs) == 10, "refused launches are not rounds"
     assert p1_rounds == [1, 10], "P1s key by ROUND ID, not by position in a listing"
     assert [f.name for f in logs] == [
@@ -442,7 +442,9 @@ def test_round_derivation_from_content_not_file_position(tmp_path: Path):
         "r10.log",
     ], "the retry's fresh-named log IS round 9; both refused transcripts are excluded"
     assert len(gaps) == 9, "gaps pair the 10 real rounds only"
-    assert id_span == (1, 10), "the span is the set's own testimony; labels are the classifier's"
+    assert round_ids == list(range(1, 11)), (
+        "the id list is the set's own testimony; labels are the classifier's"
+    )
 
 
 # mutation-probe: classify a suffix-only set as "complete", or grant "complete"
@@ -451,16 +453,24 @@ def test_completeness_labels_are_evidence_gated(monkeypatch):
     """One classifier: min>1 is the set's own proof of a missing prefix;
     "complete" needs the reservation authority to confirm the tail; anything
     the evidence cannot back is "unknown" (a lower bound, never a guess)."""
-    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 10)
-    assert am._completeness_for("x", (1, 10)) == "complete"
-    assert am._completeness_for("x", (8, 10)) == "partial-suffix"
-    with pytest.raises(am.AbortError, match="missing its tail"):
-        am._completeness_for("x", (1, 3))
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    assert am._completeness_for("x", list(range(1, 11))) == "complete"
+    assert am._completeness_for("x", [4, 5, 6, 7, 8, 9, 10]) == "partial-suffix", (
+        "recorded rounds missing BEFORE the observed start are a lost prefix, not corruption"
+    )
+    with pytest.raises(am.AbortError, match=r"round\(s\) \[4, 5, 6, 7, 8, 9, 10\]"):
+        am._completeness_for("x", [1, 2, 3])  # a surviving prefix hides a recorded tail
+    with pytest.raises(am.AbortError, match=r"round\(s\) \[10\]"):
+        # round 10 is recorded, so a transcript that reads refused for it is
+        # forged or mangled -- the round cannot be silently discarded
+        am._completeness_for("x", list(range(1, 10)))
 
-    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: None)
-    assert am._completeness_for("x", (1, 10)) == "unknown", "no authority is never 'complete'"
-    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 7)
-    assert am._completeness_for("x", (1, 10)) == "unknown", (
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set())
+    assert am._completeness_for("x", list(range(1, 11))) == "unknown", (
+        "no authority is never 'complete'"
+    )
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 8)))
+    assert am._completeness_for("x", list(range(1, 11))) == "unknown", (
         "an under-recording authority (fallback-id rounds) cannot confirm the tail"
     )
 
@@ -475,12 +485,12 @@ def test_suffix_only_set_is_classified_partial_and_reaches_the_snapshot(
     _round_log(logs, "r8.log", "codex-review: BLOCK\n", 1_000_000)
     _round_log(logs, "r9.log", "codex-review: BLOCK\n", 1_000_600)
     _round_log(logs, "r10.log", "codex-review: APPROVE\n", 1_001_200)
-    _, _, _, id_span = am.round_metrics([str(logs / "r*.log")])
-    assert id_span == (8, 10)
+    _, _, _, round_ids = am.round_metrics([str(logs / "r*.log")])
+    assert round_ids == [8, 9, 10]
 
     qdir = tmp_path / "queue"
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
-    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 10)
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 11)))
     am.queue_capture(
         am.argparse.Namespace(
             pr=1999,
@@ -605,7 +615,7 @@ def test_gap_detection_never_materializes_the_id_range(tmp_path: Path):
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
-# mutation-probe: drop the recorded_max > observed_max refusal in _completeness_for -> red
+# mutation-probe: drop the recorded-but-unclassified refusal in _completeness_for -> red
 def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
     monkeypatch, tmp_path: Path
 ):
@@ -626,29 +636,29 @@ def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
         levers=None,
         notes="",
     )
-    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 10)
-    with pytest.raises(am.AbortError, match="missing its tail"):
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    with pytest.raises(am.AbortError, match="no surviving log classifies"):
         am.queue_capture(am.argparse.Namespace(**ns))
 
     # Authority-confirmed tail (recorded == observed) passes as "complete".
-    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 3)
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: {1, 2, 3})
     assert am.queue_capture(am.argparse.Namespace(**ns)) == 0
     snap = json.loads((qdir / "pr-1998.json").read_text())["round_snapshot"]
     assert snap["round_completeness"] == "complete"
 
 
-def test_reservation_recorded_max_round_reads_the_head_outcomes(monkeypatch):
+def test_reservation_recorded_rounds_reads_the_head_outcomes(monkeypatch):
     """Keys carry the writer's real "<round>/<channel>" shape (verified live:
     record_round_outcome_if_reserved writes {"1/codex": {...}})."""
     import reservations as rs
 
     outcomes = {"1/codex": {}, "10/codex": {}, "2/gemini": {}}
     monkeypatch.setattr(rs, "current", lambda arc_id: (3, {"round_outcomes": outcomes}))
-    assert am._reservation_recorded_max_round("x") == 10
+    assert am._reservation_recorded_rounds("x") == {1, 2, 10}
     monkeypatch.setattr(rs, "current", lambda arc_id: None)
-    assert am._reservation_recorded_max_round("x") is None
+    assert am._reservation_recorded_rounds("x") == set()
     monkeypatch.setattr(rs, "current", lambda arc_id: (1, {"round_outcomes": {}}))
-    assert am._reservation_recorded_max_round("x") is None
+    assert am._reservation_recorded_rounds("x") == set()
 
 
 def test_all_refused_launches_abort_rather_than_recording_an_empty_arc(tmp_path: Path):

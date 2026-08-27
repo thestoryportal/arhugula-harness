@@ -262,7 +262,7 @@ ROUND_TERMINAL_RE = re.compile(
 ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
 
 
-def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], tuple[int, int]]:
+def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], list[int]]:
     """Derive per-round records from round-log CONTENT, never file position.
 
     C-HE-25 (v1.6 X6c): a round is a log whose wrapper terminal line is a review
@@ -273,7 +273,7 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
     round id parsed from the log name, so `p1_rounds` carries ROUND IDS, and a
     refused attempt plus its retry under a fresh name collapse to one round.
 
-    Returns ``(logs, gaps, p1_rounds, (min_id, max_id))``. The id span is the
+    Returns ``(logs, gaps, p1_rounds, round_ids)``. The sorted id list is the
     log set's own testimony about its coverage; the completeness LABEL is a
     claim above that testimony and has exactly one classifier,
     `_completeness_for`, which grounds "complete" in the reservation authority
@@ -368,7 +368,7 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
     gaps = [round(b - a, 1) for a, b in itertools.pairwise(mtimes)]
 
     p1_rounds = [rid for rid in sorted(rounds) if count_p1(rounds[rid][1]) >= 1]
-    return logs, gaps, p1_rounds, (ids[0], ids[-1])
+    return logs, gaps, p1_rounds, ids
 
 
 def count_p1(text: str) -> int:
@@ -499,11 +499,11 @@ def extract(args: argparse.Namespace) -> ArcRow:
             row.first_round_at = snapshot["first_round_at"]
             row.last_round_at = snapshot["last_round_at"]
         else:
-            logs, gaps, p1, id_span = round_metrics(args.round_logs)
+            logs, gaps, p1, round_ids = round_metrics(args.round_logs)
             row.review_rounds = len(logs)
             row.round_wall_s = gaps
             row.p1_rounds = p1
-            row.round_completeness = _completeness_for(row.arc_id, id_span)
+            row.round_completeness = _completeness_for(row.arc_id, round_ids)
             row.round_log_source = str(Path(args.round_logs[0]).parent)
             first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
             last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
@@ -804,15 +804,16 @@ def cmd_relabel(args: argparse.Namespace) -> int:
     return 0
 
 
-def _reservation_recorded_max_round(arc_id: str) -> int | None:
-    """Highest round the C-HE-25 recorder accreted on this arc's reservation.
+def _reservation_recorded_rounds(arc_id: str) -> set[int]:
+    """Round ids the C-HE-25 recorder accreted on this arc's reservation.
 
-    None when no head or no outcomes exist. ONE-DIRECTIONAL authority: the
+    Empty when no head or no outcomes exist. ONE-DIRECTIONAL authority: the
     outcomes can legitimately UNDERCOUNT the logs (a round run without the
-    HARNESS_ARC_ID prefix records on a fallback arc id), so only
-    recorded > observed is ever a claim -- observed rounds absent from the
-    outcomes are not. (`reservations` imports this module at load; import it
-    inside the function, as _require_reservation_holder does.)"""
+    HARNESS_ARC_ID prefix records on a fallback arc id), so only a recorded
+    round MISSING from the observed set is ever a claim -- observed rounds
+    absent from the outcomes are not. (`reservations` imports this module at
+    load; import it inside the function, as _require_reservation_holder
+    does.)"""
     import reservations as rs
 
     cur = rs.current(arc_id)
@@ -820,32 +821,44 @@ def _reservation_recorded_max_round(arc_id: str) -> int | None:
     # Keys are "<round>/<channel>" (record_round_outcome_if_reserved; verified
     # live: {"1/codex": ...}). int() raising on a foreign key is the loud path:
     # an unparseable authority must never be silently skipped into "no claim".
-    return max((int(k.split("/", 1)[0]) for k in outcomes), default=None)
+    return {int(k.split("/", 1)[0]) for k in outcomes}
 
 
-def _completeness_for(arc_id: str, id_span: tuple[int, int]) -> str:
+def _completeness_for(arc_id: str, observed_ids: list[int]) -> str:
     """The ONE classifier of a live log set's `round_completeness` label.
 
     The set's own testimony covers only its start: an observed min above 1
     proves a missing prefix (`partial-suffix`). "complete" is a CLAIM about the
-    tail, and only the reservation authority can back it -- recorded_max equal
-    to the observed max. More recorded rounds than logged ones is a broken
-    evidence set (refuse); no authority, or an under-recording one (unprefixed
-    rounds land on fallback arc ids), leaves `unknown` -- a label every
-    consumer treats as a lower bound excluded from exact aggregates, never a
-    guess of wholeness."""
-    observed_min, observed_max = id_span
-    recorded_max = _reservation_recorded_max_round(arc_id)
-    if recorded_max is not None and recorded_max > observed_max:
+    tail, and only the reservation authority can back it -- the recorded set's
+    maximum equal to the observed maximum. Any RECORDED round at or after the
+    observed start with no surviving classified log is a broken evidence set
+    (refuse) -- this covers both a deleted tail AND a real round whose
+    transcript reads refused (a refused launch never yields an outcome, so a
+    recorded round that parses GATE_REFUSED means a forged or mangled
+    transcript); recorded rounds missing BEFORE the start are the ordinary
+    partial-suffix archive. No authority, or an
+    under-recording one (unprefixed rounds land on fallback arc ids), leaves
+    `unknown` -- a label every consumer treats as a lower bound excluded from
+    exact aggregates, never a guess of wholeness."""
+    recorded = _reservation_recorded_rounds(arc_id)
+    observed = set(observed_ids)
+    start = min(observed)
+    # Recorded rounds missing BEFORE the observed start are the ordinary
+    # partial-suffix archive (early logs lost); recorded rounds missing AT or
+    # AFTER it mean a deleted tail or a real round whose transcript reads
+    # refused (a refused launch never yields an outcome, so that is a forged
+    # or mangled transcript) -- refuse those.
+    missing = sorted(r for r in recorded if r >= start and r not in observed)
+    if missing:
         raise AbortError(
-            f"round logs: the reservation records rounds through {recorded_max} "
-            f"but the log set ends at r{observed_max} -- the evidence set is "
-            "missing its tail; fix the log set rather than record a "
-            "surviving prefix as the whole arc"
+            f"round logs: the reservation records round(s) {missing} but no "
+            "surviving log classifies as those rounds -- a deleted, forged, or "
+            "mangled transcript is in the evidence set; fix the log set rather "
+            "than record it as the whole arc"
         )
-    if observed_min > 1:
+    if start > 1:
         return "partial-suffix"
-    return "complete" if recorded_max == observed_max else "unknown"
+    return "complete" if recorded and max(recorded) == max(observed) else "unknown"
 
 
 def queue_capture(args: argparse.Namespace) -> int:
@@ -910,8 +923,8 @@ def queue_capture(args: argparse.Namespace) -> int:
     # no recomputation at all and cannot be affected by later edits.
     snapshot: dict | None = None
     if args.round_logs:
-        logs, gaps, p1, id_span = round_metrics(args.round_logs)
-        completeness = _completeness_for(arc_id, id_span)
+        logs, gaps, p1, round_ids = round_metrics(args.round_logs)
+        completeness = _completeness_for(arc_id, round_ids)
         first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
         last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
         snapshot = {
@@ -2214,7 +2227,17 @@ def summary(_args: argparse.Namespace) -> int:
         # Averaging a surviving fragment in as if it were a whole arc is how a
         # baseline quietly understates itself.
         exact = [r for r in cohort if r.get("round_completeness", "complete") == "complete"]
-        partial = [r for r in cohort if r.get("round_completeness", "complete") != "complete"]
+        # Two distinct non-exact classes, rendered apart: a `partial-suffix`
+        # row's counts and gaps are TRUE measurements of its surviving suffix
+        # (a lower bound); an `unknown` row's round-derived numbers may be
+        # position-era corruption (refused logs counted, gaps spanning them),
+        # so they enter NO round-derived aggregate at all.
+        suffix = [r for r in cohort if r.get("round_completeness", "complete") == "partial-suffix"]
+        unknown = [
+            r
+            for r in cohort
+            if r.get("round_completeness", "complete") not in ("complete", "partial-suffix")
+        ]
         # TWO different quantities, reported separately and never pooled. An
         # arc span (first review activity -> merge) and a PR-open window measure
         # different things -- #1337 is 269.2m against 6.1m, #1060 44.4m against
@@ -2231,7 +2254,7 @@ def summary(_args: argparse.Namespace) -> int:
             if r.get("arc_span_s") is None and r.get("total_arc_wall_s") is not None
         ]
         rounds = [r["review_rounds"] for r in exact if r.get("review_rounds") is not None]
-        allgaps = [g for r in cohort for g in (r.get("round_wall_s") or [])]
+        allgaps = [g for r in exact + suffix for g in (r.get("round_wall_s") or [])]
         adds = [r["additions"] for r in cohort if r.get("additions") is not None]
         print(f"  arc span         {fmt_span(arcs)}          [stochastic, LOWER BOUND]")
         print(
@@ -2255,13 +2278,20 @@ def summary(_args: argparse.Namespace) -> int:
             if rounds
             else "  review rounds    --"
         )
-        if partial:
+        if suffix:
             bound = ", ".join(
-                f"{r['arc_id']}>={r['review_rounds']}" for r in partial if r.get("review_rounds")
+                f"{r['arc_id']}>={r['review_rounds']}" for r in suffix if r.get("review_rounds")
             )
             print(
-                f"  {len(partial)} row(s) EXCLUDED from the two exact lines above -- only a "
+                f"  {len(suffix)} row(s) EXCLUDED from the two exact lines above -- only a "
                 f"suffix of their logs survives, so their counts are lower bounds ({bound})"
+            )
+        if unknown:
+            names = ", ".join(sorted(r["arc_id"] for r in unknown))
+            print(
+                f"  {len(unknown)} row(s) of UNKNOWN completeness excluded from ALL "
+                f"round-derived aggregates -- their round metrics may be position-era "
+                f"corruption, not lower bounds ({names})"
             )
         print(f"  additions        {fmt_span(adds, 1.0, '')}")
         unmapped = sum(
