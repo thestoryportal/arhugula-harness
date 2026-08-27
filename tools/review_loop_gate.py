@@ -520,6 +520,34 @@ def attempt_destination(requested: str, existing_names: list[str]) -> str:
     return f"{parent}/{out}" if parent else out
 
 
+_O_DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _attempt_dir_names(repo: Path, components: list[str]) -> list[str]:
+    """Enumerate the rounds directory through an O_NOFOLLOW dir-fd walk (the
+    round_log_publish idiom, codex r3 P2): every component opens relative to the
+    previous component's fd and refuses a symlink at its own openat, so a
+    pre-planted link under .harness/tmp cannot route even this read-only listing
+    outside the worktree. A missing component is zero prior attempts — the
+    publisher creates the directory at first write."""
+    fd = os.open(str(repo), _O_DIR_NOFOLLOW)
+    try:
+        for comp in components:
+            try:
+                nxt = os.open(comp, _O_DIR_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                return []
+            except OSError as exc:  # ELOOP (symlink) / ENOTDIR (file) / perms
+                raise GateError(
+                    f"refused component {comp!r} in the rounds path (containment): {exc}"
+                ) from exc
+            os.close(fd)
+            fd = nxt
+        return os.listdir(fd)
+    finally:
+        os.close(fd)
+
+
 def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
     """Pre-launch admission: evaluate the SAME `admit()` the wrapper enforces,
     BEFORE any reviewer subprocess exists — a launch the gate would refuse is not
@@ -584,11 +612,35 @@ def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
             "review-launch: GATE_REFUSED (ROUND_NAME_MISMATCH) — launch not made", file=sys.stderr
         )
         return 3
-    parent = repo / Path(requested).parent
+    # Destination containment BEFORE the paid call (codex r3 P2): the recipe is
+    # guard-auto-allowed, so its one caller-derived filesystem input gets the same
+    # discipline as the attest verbs' answers file (codex r4 P2 precedent above) —
+    # a pre-planted symlink under .harness/tmp must not route even a read-only
+    # listing outside the worktree, and a destination the publisher would refuse
+    # must refuse HERE, before the reviewer call is spent, not after. The shape
+    # rule and the O_NOFOLLOW dir-fd walk are form mirrors of
+    # tools/round_log_publish.py — the publisher stays the write-time authority.
+    parts = requested.split("/")
+    if (
+        requested.startswith("/")
+        or ".." in parts
+        or "" in parts
+        or parts[:2] != [".harness", "tmp"]
+        or len(parts) < 3
+    ):
+        print(
+            f"review-launch: refused destination {requested!r} — must be a relative "
+            "path under .harness/tmp/ (the publisher's own policy, mirrored pre-launch)",
+            file=sys.stderr,
+        )
+        print("review-launch: GATE_REFUSED (DEST_REFUSED) — launch not made", file=sys.stderr)
+        return 3
     try:
-        existing = [entry.name for entry in parent.iterdir()]
-    except FileNotFoundError:
-        existing = []  # no rounds dir yet = zero prior attempts; the publisher creates it
+        existing = _attempt_dir_names(repo, parts[:-1])
+    except GateError as exc:
+        print(f"review-launch: {exc}", file=sys.stderr)
+        print("review-launch: GATE_REFUSED (DEST_REFUSED) — launch not made", file=sys.stderr)
+        return 3
     print(attempt_destination(requested, existing))
     return 0
 

@@ -608,6 +608,24 @@ def test_lone_terminal_less_attempt_still_aborts(tmp_path: Path):
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
+def test_foreign_terminal_less_name_beside_real_attempt_aborts(tmp_path: Path):
+    """codex r3: a terminal-less file OUTSIDE the minted r<N>-a<K> sequence
+    (`r1-notes.log`) is foreign evidence, never a suppressible failed attempt."""
+    _round_log(tmp_path, "r1-notes.log", "scratch notes, no verdict\n", 1_000_000)
+    _round_log(tmp_path, "r1-a1.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_terminal_less_attempt_minted_after_completed_round_aborts(tmp_path: Path):
+    """codex r3: a crashed r1-a2 AFTER r1-a1 completed is contradictory (the
+    launch guard refuses retrying a recorded round) — expose it, don't suppress."""
+    _round_log(tmp_path, "r1-a1.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r1-a2.log", "partial transcript, wrapper killed\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
 def test_unparseable_round_name_aborts(tmp_path: Path):
     _round_log(tmp_path, "final.log", "codex-review: APPROVE\n", 1_000_000)
     with pytest.raises(am.AbortError, match="cannot parse a round id"):

@@ -899,6 +899,31 @@ def test_launch_refuses_round_name_not_matching_recorded_rounds(launch_env: Path
     assert capsys.readouterr().out.strip() == ".harness/tmp/x-rounds/r2-a1.log"
 
 
+def test_launch_refuses_destination_outside_harness_tmp(launch_env: Path, capsys):
+    # codex r3 P2 (form mirror of the publisher's policy, checked BEFORE the paid
+    # call): a destination the publisher would refuse must refuse at launch
+    _seed_current_preflight(launch_env)
+    assert _launch(launch_env, "tools/r1.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (DEST_REFUSED)" in err
+
+
+def test_launch_refuses_symlinked_rounds_dir(launch_env: Path, tmp_path_factory, capsys):
+    # codex r3 P2: a pre-planted symlink under .harness/tmp must not route even
+    # the read-only attempt listing outside the worktree — O_NOFOLLOW dir-fd walk
+    _seed_current_preflight(launch_env)
+    outside = tmp_path_factory.mktemp("outside")
+    (outside / "r1-a1.log").write_text("planted\n")
+    (launch_env / ".harness/tmp").mkdir(parents=True)
+    (launch_env / ".harness/tmp/x-rounds").symlink_to(outside)
+    assert _launch(launch_env) == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (DEST_REFUSED)" in err
+    assert "containment" in err
+
+
 def test_launch_refuses_unparseable_round_name(launch_env: Path, capsys):
     # a name arc_metrics cannot key to a round would poison the evidence set at
     # queue time — refuse it BEFORE the reviewer call, not after

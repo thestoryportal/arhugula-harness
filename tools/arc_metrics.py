@@ -267,6 +267,9 @@ ROUND_TERMINAL_RE = re.compile(
 # round 9's verdict; U-HE-49's per-attempt names keep this prefix), never in the
 # file's position within a listing.
 ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
+# The minted per-attempt suffix (U-HE-49 launch verb): `r1-a2` → attempt 2. Only
+# names in this minted sequence can be classified as failed attempts.
+_ATTEMPT_K_RE = re.compile(r"-a(\d+)$")
 
 
 def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], list[int]]:
@@ -333,17 +336,28 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
             )
         # A terminal-less file is a FAILED attempt -- the wrapper crashed or was
         # killed before emitting its terminal (U-HE-49 codex r2) -- and is
-        # excludable ONLY when a sibling attempt carries this round's review
-        # terminal (the retry that succeeded). Without one, a crashed attempt
-        # and a truncated REAL round read identically, so the set refuses
-        # rather than undercounts.
-        partial = [f for f, _, last in files if last is None]
-        if partial and not real:
-            raise AbortError(
-                f"round logs: {partial[0].name!r} carries no wrapper terminal line -- a "
-                "partial or foreign transcript cannot be classified as a round, and no "
-                f"sibling attempt carries round {rid}'s terminal"
+        # excludable ONLY as an EARLIER minted r<N>-a<K> attempt superseded by a
+        # terminal-bearing LATER attempt of the same round (codex r3: a foreign
+        # `r1-notes.log`, or a crashed attempt minted AFTER the round completed,
+        # is not a failed attempt -- it is foreign or contradictory evidence,
+        # and a crashed attempt and a truncated REAL round read identically, so
+        # everything outside the minted-and-superseded shape refuses rather
+        # than undercounts).
+        real_k = _ATTEMPT_K_RE.search(real[0][0].stem) if real else None
+        for f, _, last in files:
+            if last is not None:
+                continue
+            partial_k = _ATTEMPT_K_RE.search(f.stem)
+            superseded = bool(
+                partial_k and real_k and int(partial_k.group(1)) < int(real_k.group(1))
             )
+            if not superseded:
+                raise AbortError(
+                    f"round logs: {f.name!r} carries no wrapper terminal line -- only an "
+                    "earlier r<N>-a<K> attempt superseded by a terminal-bearing later "
+                    "attempt is a failed attempt; anything else is foreign or "
+                    f"contradictory evidence for round {rid}"
+                )
         if real:
             rounds[rid] = real[0]
         # a rid whose attempts are all GATE_REFUSED contributes no round
