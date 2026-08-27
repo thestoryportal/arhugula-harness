@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c68d1d266f2e` |
+| `workspace_state_hash` | `92a3f5d022aa` |
 | `last_refreshed` | 2026-08-27T00:00:00Z |
-| `git_head` | `1b949d97` —  |
+| `git_head` | `9b08633b` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1471).** The next implementable unit is `U-HE-50` (R1: C-HE-27 span emission from `review-with-failover-logged` + interim block in `roadmap-continue`, v1.6 X6a) — its four R0 dependencies are now all landed: U-HE-49 (R0 instrument 4 of 4: launch-admission guard + per-attempt round-log names, C-HE-21 §1 X6b) landed at #1471 — the logged launch step evaluates gate admission BEFORE any reviewer process (a refused launch exits 3 spending nothing and claiming no round name), destinations mint per attempt as `r<N>-a<K>.log` bound to the canonical next primary round with publisher-mirrored containment, and `round_metrics` classifies terminal-less logs as failed attempts only in the canonical minted-and-superseded shape. The arc dogfooded its own unit (8 logged rounds through the new gate: 7 BLOCK + 1 APPROVE; 14 findings — 11 absorbed, 3 rejected with witnessed grounds; all adjudicated). B-225 registered (loop-venue root checkout permanently dirty — local stop-gate red is environmental, CI adjudicates). The U-SR-01…08 charter levers remain landable alongside; then U-SR-09 (R2) and U-HE-36-as-R3 with U-HE-51 riding it, then U-HE-50's own next arc per plan §8.1.
+**Current next action (post-#1473).** **Current next action (post-#1473).** U-HE-50 (R1: C-HE-27 §5 X6a span emission) landed at #1473 — the logged review wrapper now emits the verify start/end edges at its own process boundaries (first-write-wins keeps the durable pair the round-1 window; a refused launch or in-process GATE_REFUSED opens/completes no pair; partial-write arms tested fail-start/fail-end/crash), and the interim absorb/edit emission block rides BOTH roadmap-continue carriers (Claude + Codex bridge, executable commands inline, deletion trigger = the B-218 wrapper-internal emitter, which also owes the in-process-refusal TOCTOU close). The arc dogfooded its own unit: the u-he-50 reservation carries all five span pairs (U-HE-35 baseline was 0 of 60 expected edges). Ten codex rounds (20 findings: 10 absorbed, 10 rejected with witnessed grounds, all adjudicated) + 3-lens merge-gate all-APPROVE round 1. The next implementable unit is `U-SR-01` (R1: preflight — three new classes + four grep shapes + planted-defect evals for both P1 shapes, Charter WR-01/02/03/07); the remaining §8 sequence after it: U-SR-02…08 (R1, order-free), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1473 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1471 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1469 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1467 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1465 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1463 | 2026-08-26 | U-HE-35 workflow-repair program doc set: #1462 (Spec_HE_Loop_Lanes v1.6 X6a–X6f + Workflow_Repair_Charter_v1 WR-01…16 + plan §8 U-HE-46…51/U-SR-01…09 R0→R3 + both clearance markers + artifact-heads + cost audit [B]) and #1463 (LEAN-round C-HE-24 rows + next-action archive rotation). Adversarial pass LOOP-BACK absorbed in-PR; LEAN codex round absorbed (B-219 registered). Two open operator decisions at plan §8.5. |
 
 ---
 
