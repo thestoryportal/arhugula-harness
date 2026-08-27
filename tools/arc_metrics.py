@@ -561,12 +561,11 @@ def extract(args: argparse.Namespace) -> ArcRow:
     else:
         prov["round_fields"] = "unmapped:no-round-logs-supplied"
 
-    # Cost fields (C-HE-25 X6e): a closure-time snapshot wins over a live
-    # transcript read, for the same reason the round snapshot wins -- the
-    # transcript may have grown or been GC'd since the arc closed.
+    # Cost fields (C-HE-25 X6e). Queue-time is the ONE cost entry point: a
+    # reservation-less backfill via `extract` has no truthful arc boundary to
+    # bound a live derivation (codex u-he-48 r5), so extract folds the queued
+    # closure-time snapshot or records an honest null.
     cost = getattr(args, "cost_snapshot", None)
-    if cost is None and getattr(args, "transcript", None):
-        cost = _cost_snapshot(args.transcript, row.arc_id)
     if cost:
         row.cost_main_calls = cost["main_calls"]
         row.cost_main_iet = cost["main_iet"]
@@ -1743,7 +1742,6 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             round_snapshot=entry.get("round_snapshot"),
             round_logs=None,
             cost_snapshot=entry.get("cost_snapshot"),
-            transcript=None,
             levers=entry.get("levers"),
             notes=entry.get("notes", ""),
         )
@@ -2600,11 +2598,9 @@ def main(argv: list[str] | None = None) -> int:
     ex.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     ex.add_argument("--decisions", type=int, help="independent decision count")
     ex.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
-    ex.add_argument(
-        "--transcript",
-        nargs="+",
-        help="the arc's session transcript(s) .jsonl for cost fields (X6e)",
-    )
+    # NO --transcript here (codex u-he-48 r5): cmd_extract's backfill runs before
+    # its race-fence reservation exists, so there is no truthful arc boundary to
+    # bound a live cost derivation -- cost enters at `queue` time only.
     ex.add_argument("--levers", nargs="*", help="levers live during this arc")
     ex.add_argument("--notes", default="")
     ex.add_argument("--dry-run", action="store_true")

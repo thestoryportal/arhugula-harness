@@ -178,6 +178,41 @@ def test_transcript_with_no_usage_refused_never_a_zero_cost_arc(tmp_path: Path) 
         ac.cost_report([_write(tmp_path / "t.jsonl", [{"type": "user"}])], cuts=[])
 
 
+def test_sidechain_work_with_missing_subagent_files_refused(tmp_path: Path) -> None:
+    """codex u-he-48 r5: visible sidechain records with NO subagents/ files is a
+    GC'd store, not a measured zero -- a zero would read as an artificially
+    cheap arc in every cost median."""
+    inlined = _rec("req_s1", "2026-08-26T04:10:00.000Z", out=7)
+    inlined["isSidechain"] = True
+    t = _write(tmp_path / "sess.jsonl", [*DUPED, inlined])  # no subagents/ dir
+    with pytest.raises(ac.CostError, match="subagent transcripts are missing"):
+        ac.cost_report([t], cuts=[])
+
+
+def test_non_object_record_message_and_usage_refused(tmp_path: Path) -> None:
+    """codex u-he-48 r5 P3: JSON-valid non-object shapes land on the exit-2
+    CostError contract, never an AttributeError."""
+    t = tmp_path / "a.jsonl"
+    t.write_text('"just a string"\n')
+    with pytest.raises(ac.CostError, match="not a transcript record object"):
+        ac.cost_report([t], cuts=[])
+    bad_msg = {"type": "assistant", "requestId": "r1", "message": "nope"}
+    with pytest.raises(ac.CostError, match="message is not an object"):
+        ac.cost_report([_write(tmp_path / "b.jsonl", [bad_msg])], cuts=[])
+    bad_usage = {"type": "assistant", "requestId": "r1", "message": {"usage": [1]}}
+    with pytest.raises(ac.CostError, match="usage is not an object"):
+        ac.cost_report([_write(tmp_path / "c.jsonl", [bad_usage])], cuts=[])
+
+
+# mutation-probe(justfile): delete the arc-cost recipe
+def test_justfile_carries_the_arc_cost_recipe() -> None:
+    """codex u-he-48 r5 P3: the spec's public command is `just arc-cost` -- the
+    module tests stay green if the recipe is deleted, so pin it statically."""
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    recipe = justfile[justfile.index("arc-cost *ARGS:") :].split("\n\n")[0]
+    assert "tools/arc_cost.py" in recipe
+
+
 def test_missing_transcript_is_exit_2(tmp_path: Path, capsys) -> None:
     assert ac.main([str(tmp_path / "absent.jsonl")]) == 2
     assert "ERROR" in capsys.readouterr().err
@@ -254,7 +289,6 @@ def _extract_args(**kw) -> argparse.Namespace:
         round_snapshot=None,
         round_logs=None,
         cost_snapshot=kw.get("cost_snapshot"),
-        transcript=kw.get("transcript"),
         levers=[],
         notes="",
     )
@@ -297,16 +331,6 @@ def test_extract_without_transcript_reads_null_never_zero(_gh_stub) -> None:
     assert row.provenance["cost_fields"] == "unmapped:no-transcript-supplied"
 
 
-def test_extract_derives_live_when_only_a_transcript_is_given(
-    _gh_stub, monkeypatch, tmp_path: Path
-) -> None:
-    _stub_reservation(monkeypatch)
-    t = _write(tmp_path / "t.jsonl", DUPED)
-    row = am.extract(_extract_args(transcript=[str(t)]))
-    assert row.cost_main_calls == 2
-    assert row.cost_source == str(t)
-
-
 # mutation-probe(tools/arc_metrics.py): drop the queue-time _cost_snapshot call, or
 # drop cost_snapshot from _drain_one's Namespace — either leaves this red
 def test_production_queue_to_drain_path_carries_the_cost_snapshot(
@@ -329,18 +353,25 @@ def test_production_queue_to_drain_path_carries_the_cost_snapshot(
     qp = pytest.MonkeyPatch()
     qp.setattr(rs, "current", lambda arc_id: ("head", {"reserved_at": "2026-08-26T00:00:00Z"}))
     try:
-        am.queue_capture(
-            argparse.Namespace(
-                pr=1,
-                arc_id="u-qc",
-                arc_type="inventing",
-                arc_type_declared_at="close",
-                decisions=0,
-                round_logs=None,
-                transcript=[str(t)],
-                levers=[],
-                notes="",
+        # through the REAL parser (codex u-he-48 r5): reverting the queue
+        # subcommand's --transcript option must red this, not only a Namespace
+        assert (
+            am.main(
+                [
+                    "queue",
+                    "--pr",
+                    "1",
+                    "--arc-id",
+                    "u-qc",
+                    "--arc-type",
+                    "inventing",
+                    "--decisions",
+                    "0",
+                    "--transcript",
+                    str(t),
+                ]
             )
+            == 0
         )
     finally:
         qp.undo()

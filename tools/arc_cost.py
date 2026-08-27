@@ -105,9 +105,16 @@ def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
     for i, r in enumerate(records):
         if r.get("type") != "assistant":
             continue
-        usage = (r.get("message") or {}).get("usage")
+        msg = r.get("message")
+        if msg is None:
+            continue
+        if not isinstance(msg, dict):
+            raise CostError(f"{source}: assistant record {i} message is not an object")
+        usage = msg.get("usage")
         if not usage:
             continue
+        if not isinstance(usage, dict):
+            raise CostError(f"{source}: assistant record {i} usage is not an object")
         rid = r.get("requestId")
         # [LAW:no-silent-failure] a usage block with no requestId cannot be
         # deduplicated; a fallback key would silently change the count's meaning
@@ -185,9 +192,14 @@ def read_records(path: Path) -> list[dict]:
         if not line.strip():
             continue
         try:
-            records.append(json.loads(line))
+            rec = json.loads(line)
         except json.JSONDecodeError as exc:
             raise CostError(f"{path.name}:{n}: not JSON: {exc}") from exc
+        # [LAW:parse-dont-validate] a JSON-valid non-object line ("5", a string)
+        # would AttributeError downstream instead of the exit-2 contract (r5 P3)
+        if not isinstance(rec, dict):
+            raise CostError(f"{path.name}:{n}: not a transcript record object")
+        records.append(rec)
     return records
 
 
@@ -210,7 +222,8 @@ def cost_report(transcripts: list[Path], cuts: list[datetime]) -> dict:
     existing transcript instrument (tools/context_budget.py).
     [LAW:one-source-of-truth] main = pooled non-sidechain records only.
     """
-    main_records = [r for t in transcripts for r in read_records(t) if not r.get("isSidechain")]
+    pooled = [r for t in transcripts for r in read_records(t)]
+    main_records = [r for r in pooled if not r.get("isSidechain")]
     main = dedupe_calls(main_records, source=";".join(t.name for t in transcripts))
     if not main:
         # [LAW:no-silent-failure] zero usage records is a wrong input (not this
@@ -220,6 +233,15 @@ def cost_report(transcripts: list[Path], cuts: list[datetime]) -> dict:
             "not session transcripts?"
         )
     sub_paths = [p for t in transcripts for p in subagent_files(t)]
+    # [LAW:no-silent-failure] visible sidechain work with NO subagent files is a
+    # GC'd/missing store, not a measured zero — a zero here would enter cost
+    # medians as an artificially cheap arc (codex u-he-48 r5)
+    if not sub_paths and any(r.get("isSidechain") for r in pooled):
+        raise CostError(
+            f"{';'.join(map(str, transcripts))}: sidechain records present but no "
+            "subagents/ files found -- the subagent transcripts are missing, so the "
+            "subagent cost cannot be measured"
+        )
     subs = dedupe_calls(
         [r for p in sub_paths for r in read_records(p)],
         source=";".join(p.name for p in sub_paths) or "subagents",
