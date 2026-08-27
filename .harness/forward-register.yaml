@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 223
+  total: 224
   open: 1
   design_substrate_gated: 3
-  registered_finding: 67
+  registered_finding: 68
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: d21155e1d05055f2
+  identity_digest: 519c95b3292a7e4f
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10967,3 +10967,23 @@ items:
   council: 'NO — mechanical extractor work once the rollout usage shape is inventoried.'
   heading: '### B-223 · Codex-runner cost-cohort gap *(surfaced by codex r2 on
     u-he-48, 2026-08-27; REGISTERED)*'
+
+- id: B-224
+  title: >-
+    Subagent-sidecar completeness has no verifying authority — held as bounded
+  pr: 'PR pending (u-he-48 codex r5–r8)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-48 and HELD after four review rounds re-flagged the
+    same class: tools/arc_cost.py cannot verify subagent-sidecar COMPLETENESS —
+    no manifest enumerates the expected agent-*.jsonl set, so a whole stem-dir
+    GC is indistinguishable from a session that spawned no subagents. The
+    detectable cases refuse (sidechain records with zero files, r5; an existing
+    subagents/ dir with zero agent files, r7 — 0 of 67 occur naturally); the
+    absent-dir case is a measured genuine zero on 59 of 126 project
+    transcripts. Closing the residual needs a producer-side manifest or
+    retention guarantee — an authority this consumer cannot mint.'
+  close_out: 'OPEN — closure = a producer-side subagent manifest (or retention
+    guarantee) the extractor can check completeness against.'
+  council: 'NO — held-as-bounded residual; closure is a producer-surface change.'
+  heading: '### B-224 · subagent-sidecar completeness has no verifying authority
+    *(surfaced by codex r5–r8 on u-he-48, 2026-08-27; REGISTERED)*'

@@ -227,8 +227,13 @@ def test_non_object_record_message_and_usage_refused(tmp_path: Path) -> None:
     with pytest.raises(ac.CostError, match="message is not an object"):
         ac.cost_report([_write(tmp_path / "b.jsonl", [bad_msg])], cuts=[])
     bad_usage = {"type": "assistant", "requestId": "r1", "message": {"usage": [1]}}
-    with pytest.raises(ac.CostError, match="usage is not an object"):
+    with pytest.raises(ac.CostError, match="usage is not a non-empty object"):
         ac.cost_report([_write(tmp_path / "c.jsonl", [bad_usage])], cuts=[])
+    # r8 P3: a PRESENT empty usage is malformed (0 of 30,595 measured records)
+    # -- silently skipping it would understate the arc; absent usage still skips
+    empty_usage = {"type": "assistant", "requestId": "r1", "message": {"usage": {}}}
+    with pytest.raises(ac.CostError, match="usage is not a non-empty object"):
+        ac.cost_report([_write(tmp_path / "d2.jsonl", [*DUPED, empty_usage])], cuts=[])
 
 
 # mutation-probe(justfile): delete the arc-cost recipe

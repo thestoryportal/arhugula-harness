@@ -2557,3 +2557,15 @@ record null cost fields — honest, but a systematic cost-baseline under-coverag
 for that runner. Closure: a rollout-shaped usage extractor (or shared normalizer)
 feeding the same `cost_snapshot` fields, plus the carrier flipped to pass its
 transcript.
+
+### B-224 · subagent-sidecar completeness has no verifying authority *(surfaced by codex r5–r8 on u-he-48, 2026-08-27; REGISTERED)*
+
+`tools/arc_cost.py` cannot verify subagent-sidecar COMPLETENESS: no manifest
+enumerates the expected `agent-*.jsonl` set, so a whole stem-dir GC is
+indistinguishable from a session that spawned no subagents. Detectable cases
+refuse (sidechain records with zero files; an existing `subagents/` dir with
+zero agent files — 0 of 67 occur naturally); the absent-dir case is a measured
+genuine zero on 59 of 126 project transcripts. Closure: a producer-side
+subagent manifest or retention guarantee the extractor can check against — an
+authority this consumer cannot mint. Held after four codex rounds re-flagged
+the class (r5–r8).

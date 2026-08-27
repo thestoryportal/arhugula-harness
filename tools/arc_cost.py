@@ -119,10 +119,14 @@ def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
         if not isinstance(msg, dict):
             raise CostError(f"{source}: assistant record {i} message is not an object")
         usage = msg.get("usage")
-        if not usage:
+        # absent/None usage is a non-call block record (skip); a PRESENT empty
+        # or non-object usage is a malformed producer and silently skipping it
+        # would understate the arc (codex u-he-48 r8 P3; {} occurs on 0 of
+        # 30,595 measured records, so the refusal is safe)
+        if usage is None:
             continue
-        if not isinstance(usage, dict):
-            raise CostError(f"{source}: assistant record {i} usage is not an object")
+        if not isinstance(usage, dict) or not usage:
+            raise CostError(f"{source}: assistant record {i} usage is not a non-empty object")
         rid = r.get("requestId")
         # [LAW:no-silent-failure] a usage block with no requestId cannot be
         # deduplicated; a fallback key would silently change the count's meaning
