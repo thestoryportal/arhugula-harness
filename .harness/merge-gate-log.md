@@ -745,3 +745,7 @@ B-206) rather than unaddressed defects.
 | 2026-08-27T20:43:22Z | #1471 | 5bdd3a8fc561 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
 | 2026-08-27T20:44:53Z | #1471 | 5bdd3a8fc561 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
 | #1471 | 2026-08-27 | feat/u-he-49-launch-admission | 3-lens verdicts r3 @5bdd3a8f: concurrency APPROVE / spec-conformance APPROVE / witness-adequacy APPROVE (r2 @15e0fe0b was 2 APPROVE + witness BLOCK P2 shim-echo-indistinguishable — absorbed: minted -a1 echo + minted-path/raw-name-absent assertions, both hypothesized mutations traced red through execution; r1 @b1b85da2 recorded above) | outcome: all-approve — MERGE | blast-radius: 7 production consumers (unchanged from r1 row; graft, floor-not-ceiling) |
+| 2026-08-27T23:22:53Z | #1473 | 2054bf67ff4d | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-27T23:22:59Z | #1473 | 2054bf67ff4d | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-27T23:24:37Z | #1473 | 2054bf67ff4d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+- PR #1473 | 2026-08-27 | feat/he-lanes-u-he-50 | concurrency: APPROVE · spec-conformance: APPROVE · witness-adequacy: APPROVE | outcome: merge (all-approve, round 1) | blast-radius: 10 consumers (grep on the recipe name + record_phase callee; guard outer shape unchanged) | arc u-he-50; 10 codex rounds precede (20 findings: 10 absorbed / 10 rejected, all adjudicated); witness lens ran the 14 arc tests green at the reviewed head
