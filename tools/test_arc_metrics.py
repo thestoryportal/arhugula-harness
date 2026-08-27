@@ -508,11 +508,20 @@ def test_extract_carries_snapshot_completeness_and_defaults_legacy(monkeypatch):
     row = am.extract(am.argparse.Namespace(**args, round_snapshot=snapshot))
     assert row.round_completeness == "partial-suffix"
 
+    # Pre-X6c snapshots carry no classification; the captured filenames still
+    # testify. A suffix-only legacy capture must never default to "complete".
     legacy = {k: v for k, v in snapshot.items() if k != "round_completeness"}
+    legacy["matched"] = ["/x/r8.log", "/x/r9.log", "/x/r10.log"]
     row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
-    assert row.round_completeness == "complete", (
-        "pre-X6c snapshots all derive from sets starting at round 1"
-    )
+    assert row.round_completeness == "partial-suffix"
+
+    legacy["matched"] = ["/x/r1.log", "/x/r2.log", "/x/r3.log"]
+    row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
+    assert row.round_completeness == "complete"
+
+    del legacy["matched"]
+    row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
+    assert row.round_completeness == "unknown", "no evidence is never a claim of completeness"
 
 
 def test_reviewer_unavailable_is_a_round_and_any_wrapper_label_counts(tmp_path: Path):

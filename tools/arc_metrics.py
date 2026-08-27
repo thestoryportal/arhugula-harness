@@ -170,7 +170,7 @@ class ArcRow:
     # bounds, not measurements -- pr-1060 kept round 10 alone out of >=10, and
     # a note saying so is not enough: `summary` reads fields, not prose, and
     # would average a 1-round 44-minute fragment in as if it were the arc.
-    round_completeness: str = "complete"  # complete | partial-suffix
+    round_completeness: str = "complete"  # complete | partial-suffix | unknown
     # -- derived from gh run --
     ci_runs: int | None = None
     ci_wall_s: list[float] = field(default_factory=list)
@@ -481,9 +481,14 @@ def extract(args: argparse.Namespace) -> ArcRow:
             row.round_wall_s = snapshot["round_wall_s"]
             row.p1_rounds = snapshot["p1_rounds"]
             row.round_log_source = snapshot["round_log_source"]
-            # Absent on snapshots queued before the X6c rev; those all derive
-            # from sets starting at round 1, so the schema default is truthful.
-            row.round_completeness = snapshot.get("round_completeness", row.round_completeness)
+            # Absent on snapshots queued before the X6c rev. The old queue
+            # accepted arbitrary surviving log subsets, so absence must never
+            # default to "complete" -- derive from the captured filenames when
+            # they parse, and otherwise label the row unknown (consumers treat
+            # anything != "complete" as a lower bound, never an exact arc).
+            row.round_completeness = snapshot.get(
+                "round_completeness"
+            ) or _legacy_snapshot_completeness(snapshot.get("matched"))
             first = parse_iso(snapshot["first_round_at"])
             row.first_round_at = snapshot["first_round_at"]
             row.last_round_at = snapshot["last_round_at"]
@@ -575,6 +580,24 @@ def extract(args: argparse.Namespace) -> ArcRow:
     row.captured_at = datetime.now(tz=UTC).isoformat()
     row.notes = args.notes or ""
     return row
+
+
+def _legacy_snapshot_completeness(matched: list[str] | None) -> str:
+    """Classify a pre-X6c snapshot from the filenames it captured.
+
+    The old queue stored `matched` paths but no classification; the names carry
+    the round ids, so a missing prefix is still readable. Anything that cannot
+    testify -- no matched list, or a name the id parser refuses -- is `unknown`:
+    a label that keeps the row out of exact aggregates rather than a guess."""
+    if not matched:
+        return "unknown"
+    ids = []
+    for name in matched:
+        m = ROUND_ID_RE.match(Path(name).stem)
+        if not m:
+            return "unknown"
+        ids.append(int(m.group(1)))
+    return "complete" if min(ids) == 1 else "partial-suffix"
 
 
 def _ledger_claim_path(ledger: Path) -> Path:
