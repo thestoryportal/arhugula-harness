@@ -699,6 +699,15 @@ def main(argv: list[str] | None = None) -> int:
         except (GateLogError, fr.RecordError) as exc:
             print(f"merge-gate-log: NOT ADJUDICATED ({exc})", file=sys.stderr)
             return 2
+        except Exception as exc:  # OSError etc.: "not recorded" is exit 2, never exit 1
+            # Same rule as `emit` (codex R2 P2 there; codex r1 P3 here): an unreadable or
+            # unwritable log is NOT a recorded disposition -- the skill's exit-2 retry
+            # handling must see it, and exit 1 is not part of this verb's contract.
+            print(
+                f"merge-gate-log: NOT ADJUDICATED ({type(exc).__name__}: {exc})",
+                file=sys.stderr,
+            )
+            return 2
         print(
             f"merge-gate-log: {row['finding_id']} disposed {row['disposition']} "
             f"by {row['disposition_actor']}"

@@ -70,7 +70,10 @@ and include the six printed values in that lens's prompt; require, immediately b
 `VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
 (`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
 the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored) and record it:
-`just merge-gate-emit --pr <N> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+`just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+(`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's `arc_id`
+to `pr-<N>`, which breaks the N6/phase joins AND the U-HE-47 unique-catch join against the
+preceding codex rounds, whose rows carry the reservation arc id)
 (JSONL row first, structured markdown line second, C-HE-23 §2; the final `VERDICT:` line must
 agree with the block, exact-line match). Exit 0 = APPROVE recorded, 1 = BLOCK recorded,
 2 = NOT recorded — that lens verdict does not count; treat as `BLOCK` and re-run the lens.

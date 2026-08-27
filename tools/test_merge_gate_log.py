@@ -957,3 +957,12 @@ def test_reviewer_unavailable_lens_row_is_attributed_non_null(tmp_path: Path):
     assert rows[0]["record_kind"] == "reviewer_unavailable"
     assert rows[0]["cause_attribution"] == "reviewer_unavailable_transient"
     assert rows[0]["unique_catch"] is False
+
+
+def test_cli_adjudicate_oserror_is_exit_2_not_1(tmp_path, monkeypatch, capsys):
+    # r1 P3: an unreadable log (here: the path is a directory) is "not recorded" -> exit 2,
+    # never the uncaught-exception exit 1 the skill would misread as a recorded failure
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path)
+    args = ["adjudicate", "--finding-id", "x:y:000000000000:1", "--disposition", "accepted"]
+    assert mgl.main([*args, "--actor", "op"]) == 2
+    assert "NOT ADJUDICATED" in capsys.readouterr().err
