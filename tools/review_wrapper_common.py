@@ -469,6 +469,7 @@ def outcome_rows(
                 producer=producer,
                 record_kind="reviewer_unavailable",
                 cause_attribution=f"reviewer_unavailable_{outcome.failure_class}",
+                unique_catch=None,
                 **env_common,
             )
         ]
@@ -486,6 +487,7 @@ def outcome_rows(
                 producer=producer,
                 record_kind="no_finding",
                 cause_attribution=None,
+                unique_catch=None,
                 **env_common,
             )
         ]
@@ -502,6 +504,7 @@ def outcome_rows(
                 producer=producer,
                 record_kind="finding",
                 cause_attribution=None,
+                unique_catch=None,
                 **env_common,
             )
         )
@@ -518,6 +521,7 @@ _ENV_KEYS = (
     "diff_digest",
     "round_n",
     "cause_attribution",
+    "unique_catch",
 )
 
 
@@ -529,13 +533,19 @@ def emit_outcome(
     lane_id: str,
     round_n: int | None,
     path: Path | None = None,
+    attributor: Callable[[dict, list[dict]], dict] | None = None,
 ) -> list[dict]:
     """Append every observation of `outcome` to the gate log in ONE critical section: when
     `round_n` is None the round is minted there (`round_n_for` against the log as it stands
     under the lock -- two concurrent wrappers on one arc cannot both take the same round; codex
     round 7), and each `finding_id` is minted against the same snapshot. Returns the rows as
     written (their `round_n` is the allocated one). A `RecordError` propagates: the record is
-    part of the contract (C-HE-18 §3), so a failed write must not be silent."""
+    part of the contract (C-HE-18 §3), so a failed write must not be silent.
+
+    `attributor(obs, log_rows) -> obs` maps each observation against the log as it stands
+    under the SAME lock (C-HE-24 §2 X6d: the merge-gate emitter derives `cause_attribution` /
+    `unique_catch` from the codex rounds already on the log -- join and append are one atomic
+    step). Default is identity: channel wrappers emit unattributed rows unchanged."""
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
         # minted INSIDE this critical section (codex round-16 P1: a pre-lock allocation
@@ -545,6 +555,8 @@ def emit_outcome(
         for obs in outcome_rows(
             outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=n
         ):
+            if attributor is not None:
+                obs = attributor(obs, rows)
             env = fr.Envelope(**{k: obs[k] for k in _ENV_KEYS})
             core = {k: v for k, v in obs.items() if k not in _ENV_KEYS}
             pairs.append((core, env))

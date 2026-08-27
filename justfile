@@ -348,6 +348,13 @@ merge-gate-binding lens base='main':
 merge-gate-emit *ARGS:
     uv run python tools/merge_gate_log.py emit "$@"
 
+# Absorption-step disposition write (C-HE-24 §5, U-HE-47): append ONE finding_adjudication
+# row. Exit 0 recorded / 2 NOT recorded (unknown finding_id, actor == producer, same-second
+# ts, or an already-adjudicated lineage violation).
+#   just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected|suppressed --actor <actor_id>
+merge-gate-adjudicate *ARGS:
+    uv run python tools/merge_gate_log.py adjudicate "$@"
+
 # Landing predicate: the head about to merge may differ from the head the lenses approved
 # ONLY by the two gate-log files. Exit 1 (re-gate) otherwise.
 merge-gate-landing-delta reviewed final='HEAD':

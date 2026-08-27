@@ -819,3 +819,141 @@ def test_cli_check_is_red_only_on_missing_jsonl(tmp_path: Path, monkeypatch, cap
     md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 8, "e" * 40, LENS, "BLOCK", 1, 1))
     assert mgl.main(["check"]) == 1
     assert "MISSING-JSONL pr=8" in capsys.readouterr().out
+
+
+# ---- U-HE-47: emit-time attribution (C-HE-24 §2 X6d) + absorption adjudication (§5) ------
+
+
+def _codex_round(tmp_path: Path, arc_id: str, findings: list[dict], round_n: int) -> list[dict]:
+    """One preceding codex review round on the fixture arc (producer=codex_review_wrapper)."""
+    out = rw.ReviewOutcome("BLOCK", "codex", None, "", findings, _binding())
+    return rw.emit_outcome(
+        out,
+        producer="codex_review_wrapper",
+        arc_id=arc_id,
+        lane_id="h-w-1",
+        round_n=round_n,
+        path=tmp_path / "log.jsonl",
+    )
+
+
+# mutation-probe(tools/merge_gate_log.py): drop the `attributor=attribute_lens_row` wiring in
+# `_emit_gate_row_locked` -> gate rows revert to the [B] F16 null-attribution state -> red
+def test_gate_rows_after_two_codex_rounds_carry_non_null_attribution_on_every_row(tmp_path):
+    _codex_round(tmp_path, "u-t-1", [{"severity": "P1", "location": "a.py:10", "message": "m"}], 1)
+    _codex_round(tmp_path, "u-t-1", [{"severity": "P2", "location": "b.py:20", "message": "m"}], 2)
+    fs = [
+        {"severity": "P1", "location": "a.py:10", "message": "same place, same type"},
+        {"severity": "P2", "location": "c.py:30", "message": "gate-only catch"},
+    ]
+    rows = _emit(tmp_path, pr=9, verdict="BLOCK", findings=fs, arc_id="u-t-1")
+    assert all(r["cause_attribution"] is not None for r in rows)  # F16 unrepresentable
+    assert all(r["unique_catch"] is not None for r in rows)
+    by_loc = {r["location"]: r for r in rows}
+    assert by_loc["a.py:10"]["unique_catch"] is False
+    assert by_loc["a.py:10"]["cause_attribution"] == "codex_round_overlap"
+    assert by_loc["c.py:30"]["unique_catch"] is True
+    assert by_loc["c.py:30"]["cause_attribution"] == "gate_unique_catch"
+
+
+def test_clean_approve_lens_row_is_attributed_non_null(tmp_path: Path):
+    rows = _emit(tmp_path, pr=9, verdict="APPROVE", arc_id="u-t-1")
+    assert rows[0]["record_kind"] == "no_finding"
+    assert rows[0]["cause_attribution"] == "clean_approve"
+    assert rows[0]["unique_catch"] is False
+
+
+def test_unique_catch_join_is_intra_arc_never_cross_arc(tmp_path: Path):
+    f = {"severity": "P1", "location": "a.py:10", "message": "m"}
+    _codex_round(tmp_path, "u-other", [f], 1)
+    rows = _emit(
+        tmp_path,
+        pr=9,
+        verdict="BLOCK",
+        findings=[{"severity": "P1", "location": "a.py:10", "message": "m"}],
+        arc_id="u-t-1",
+    )
+    assert rows[0]["unique_catch"] is True  # the match lives on another arc: out of scope
+
+
+def test_codex_wrapper_rows_stay_unattributed(tmp_path: Path):
+    rows = _codex_round(
+        tmp_path, "u-t-1", [{"severity": "P1", "location": "a.py:10", "message": "m"}], 1
+    )
+    assert rows[0]["cause_attribution"] is None and rows[0]["unique_catch"] is None
+
+
+def test_adjudicate_appends_the_disposition_row_and_the_reducer_returns_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = _emit(
+        tmp_path,
+        pr=9,
+        verdict="BLOCK",
+        findings=[{"severity": "P1", "location": "c.py:30", "message": "m"}],
+        arc_id="u-t-1",
+    )
+    fid = rows[0]["finding_id"]
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    adj = mgl.adjudicate(fid, "accepted", "claude_absorber", tmp_path / "log.jsonl")
+    assert adj["record_kind"] == "finding_adjudication" and adj["disposition"] == "accepted"
+    assert adj["disposition_actor"] == "claude_absorber"
+    assert adj["unique_catch"] is rows[0]["unique_catch"]  # emit-time attribution carried
+    reduced = fr.reduce_last_by_finding_id(fr.read_rows(tmp_path / "log.jsonl"))
+    assert reduced[fid]["disposition"] == "accepted"
+
+
+def test_adjudicate_rejects_actor_equal_to_producer(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = _emit(
+        tmp_path,
+        pr=9,
+        verdict="BLOCK",
+        findings=[{"severity": "P1", "location": "c.py:30", "message": "m"}],
+        arc_id="u-t-1",
+    )
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    with pytest.raises(fr.RecordError, match="never disposes its own finding"):
+        mgl.adjudicate(rows[0]["finding_id"], "accepted", LENS, tmp_path / "log.jsonl")
+
+
+def test_adjudicate_unknown_finding_id_is_a_gate_log_error(tmp_path: Path):
+    (tmp_path / "log.jsonl").write_text("")
+    with pytest.raises(mgl.GateLogError, match="no row with finding_id"):
+        mgl.adjudicate("x:y:000000000000:1", "accepted", "claude_absorber", tmp_path / "log.jsonl")
+
+
+def test_cli_adjudicate_exit_0_recorded_2_not_recorded(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "log.md")
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "log.jsonl")
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=_outcome("BLOCK", [{"severity": "P1", "location": "c.py:30", "message": "m"}]),
+        lane_id="h-w-1",
+    )
+    fid = rows[0]["finding_id"]
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    args = ["adjudicate", "--finding-id", fid, "--disposition", "rejected", "--actor", "op"]
+    assert mgl.main(args) == 0
+    assert f"{fid} disposed rejected by op" in capsys.readouterr().out
+    # a second disposition write on the adjudicated lineage needs a later ts; same-second -> 2
+    assert mgl.main(args) == 2
+    assert "NOT ADJUDICATED" in capsys.readouterr().err
+
+
+def test_reviewer_unavailable_lens_row_is_attributed_non_null(tmp_path: Path):
+    out = rw.ReviewOutcome(
+        "REVIEWER_UNAVAILABLE", mgl.CHANNEL, "transient", "lens died", [], _binding()
+    )
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=out,
+        lane_id="h-w-1",
+        md_path=tmp_path / "log.md",
+        jsonl_path=tmp_path / "log.jsonl",
+    )
+    assert rows[0]["record_kind"] == "reviewer_unavailable"
+    assert rows[0]["cause_attribution"] == "reviewer_unavailable_transient"
+    assert rows[0]["unique_catch"] is False

@@ -15,8 +15,14 @@ the log lock -- never a per-invocation ordinal, U-HE-01 interface note).
 CLI (what `.claude/skills/merge-gate/SKILL.md` calls):
     merge_gate_log.py binding --lens <id> [--base main]        -> the six fields, JSON
     merge_gate_log.py emit --pr N --lens <id> --verdict-json F  -> record; exit 0/1/2
+    merge_gate_log.py adjudicate --finding-id I --disposition D --actor A -> §5 row; 0/2
     merge_gate_log.py check                                      -> consistency reducer
     merge_gate_log.py reconcile                                  -> re-emit orphan md rows
+
+Emit-time attribution (C-HE-24 §2, v1.6 X6d, U-HE-47): every lens row leaves `emit` with
+non-null `cause_attribution` + `unique_catch` (`attribute_lens_row`, applied under the log
+lock against the codex rounds already recorded); `adjudicate` is the absorption step's
+append-only disposition write.
 """
 
 from __future__ import annotations
@@ -163,6 +169,43 @@ def lens_binding(
     return b
 
 
+#: The producers whose rows ARE the preceding review rounds for the X6d attribution join --
+#: the same set `arc_metrics.REVIEW_ROUND_PRODUCERS` reduces rounds from: the codex channel
+#: and its D-C failover, which reviews "at the identical bar" (C-HE-17 §3).
+CODEX_ROUND_PRODUCERS = frozenset({"codex_review_wrapper", "gemini_review_wrapper"})
+
+
+def attribute_lens_row(obs: dict, log_rows: list[dict]) -> dict:
+    """C-HE-24 §2 (v1.6 X6d): populate `cause_attribution` + `unique_catch` on every
+    merge-gate lens observation at emission time -- null-everywhere attribution ([B] F16:
+    44/44 rows) is not legal for new merge-gate rows, and this attributor is the single
+    writer-side enforcement point (every new lens row flows through `emit_gate_row`).
+
+    Gate-lens `unique_catch` join, spec-fixed so the emitter invents nothing: true iff no
+    same-arc `finding` row from a codex round matches on `(location, finding_type)` -- an
+    intra-arc heuristic keyed on location+type, never `finding_id` (C-HE-24 §4's
+    cross-`head_sha` identity exclusion stands). Marker rows carry `unique_catch=false`
+    (nothing caught, so nothing uniquely caught) -- non-null, per the every-lens-row rule."""
+    if obs["record_kind"] == "reviewer_unavailable":
+        # cause_attribution already carries reviewer_unavailable_<class> from outcome_rows
+        return {**obs, "unique_catch": False}
+    if obs["record_kind"] == "no_finding":
+        return {**obs, "cause_attribution": "clean_approve", "unique_catch": False}
+    matched = any(
+        r["record_kind"] == "finding"
+        and r["arc_id"] == obs["arc_id"]
+        and r["producer"] in CODEX_ROUND_PRODUCERS
+        and r["location"] == obs["location"]
+        and r["finding_type"] == obs["finding_type"]
+        for r in log_rows
+    )
+    return {
+        **obs,
+        "cause_attribution": "codex_round_overlap" if matched else "gate_unique_catch",
+        "unique_catch": not matched,
+    }
+
+
 def verdict_of(row: dict) -> str | None:
     """APPROVE / BLOCK from a gate row's `finding_type` (the wrapper encoding), else None."""
     ft = row.get("finding_type", "")
@@ -224,7 +267,13 @@ def _emit_gate_row_locked(
 ) -> list[dict]:
     try:
         rows = rw.emit_outcome(
-            outcome, producer=lens, arc_id=arc_id, lane_id=lane_id, round_n=round_n, path=jsonl_path
+            outcome,
+            producer=lens,
+            arc_id=arc_id,
+            lane_id=lane_id,
+            round_n=round_n,
+            path=jsonl_path,
+            attributor=attribute_lens_row,  # X6d: emit-time attribution, same critical section
         )
     except (OSError, fr.RecordError) as exc:  # (1) machine record FIRST; unrecordable = no verdict
         raise GateLogError(f"gate verdict could not be recorded: {exc}") from exc
@@ -269,6 +318,7 @@ def _emit_gate_row_locked(
                     diff_digest=rows[0]["diff_digest"],
                     round_n=rows[0]["round_n"],
                     cause_attribution="markdown_write_failed",
+                    unique_catch=False,  # X6d: no null-attribution lens-producer rows
                 ),
                 jsonl_path,
             )
@@ -279,6 +329,35 @@ def _emit_gate_row_locked(
             print(f"merge-gate-log: md-failure warn not recorded: {warn_exc}", file=sys.stderr)
         print(f"merge-gate-log: markdown write failed, JSONL row stands: {exc}", file=sys.stderr)
     return rows
+
+
+def adjudicate(
+    finding_id: str, disposition: str, actor: str, jsonl_path: Path | None = None
+) -> dict:
+    """C-HE-24 §5 (v1.6 X6d): append ONE `finding_adjudication` row for `finding_id` -- the
+    absorption step's disposition write. The row copies the finding's immutable core verbatim
+    (two rows with one id differ only by ts / record_kind / disposition / disposition_actor /
+    unique_catch) and carries a later `ts`; `unique_catch` is carried forward so the reducer's
+    last row keeps the emit-time attribution. Every §5 invariant -- actor ≠ producer, strictly
+    later ts, finding-rows-only, no-write-after-adjudication -- is enforced at the single
+    write-time checkpoint (`finding_record.validate` / `_check_against_prior_rows`), not here.
+    Raises `GateLogError` for an unknown finding_id; a `RecordError` propagates from the
+    append (never swallowed)."""
+    jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
+    prior = [r for r in fr.read_rows(jsonl_path) if r["finding_id"] == finding_id]
+    if not prior:
+        raise GateLogError(f"no row with finding_id {finding_id!r} on {jsonl_path}")
+    base = prior[0]  # core-immutable fields are identical across the lineage
+    row = {
+        **base,
+        "record_kind": "finding_adjudication",
+        "ts": fr.now_iso(),
+        "disposition": disposition,
+        "disposition_actor": actor,
+        "unique_catch": prior[-1]["unique_catch"],
+    }
+    fr.append_row(row, jsonl_path)
+    return row
 
 
 def read_md_rows(md_path: Path | None = None) -> list[dict]:
@@ -498,6 +577,17 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--round-n", type=int, default=None)
     e.add_argument("--prompt-version", default=PROMPT_VERSION)
 
+    a = sub.add_parser(
+        "adjudicate", help="append the C-HE-24 §5 finding_adjudication row (absorption step)"
+    )
+    a.add_argument("--finding-id", required=True)
+    a.add_argument("--disposition", required=True, choices=["accepted", "rejected", "suppressed"])
+    a.add_argument(
+        "--actor",
+        required=True,
+        help="disposition_actor: the adjudicating party; must differ from the finding's producer",
+    )
+
     sub.add_parser("check", help="C-HE-23 §2 consistency reducer (exit 1 on a missing sibling)")
     sub.add_parser("reconcile", help="re-emit markdown rows for orphan JSONL verdicts")
     ld = sub.add_parser(
@@ -603,6 +693,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         return rw.exit_code(outcome)
+    if args.cmd == "adjudicate":
+        try:
+            row = adjudicate(args.finding_id, args.disposition, args.actor)
+        except (GateLogError, fr.RecordError) as exc:
+            print(f"merge-gate-log: NOT ADJUDICATED ({exc})", file=sys.stderr)
+            return 2
+        print(
+            f"merge-gate-log: {row['finding_id']} disposed {row['disposition']} "
+            f"by {row['disposition_actor']}"
+        )
+        return 0
     if args.cmd == "check":
         rep = consistency_report()
         for k in rep["missing_jsonl"]:
