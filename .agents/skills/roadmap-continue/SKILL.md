@@ -45,9 +45,32 @@ check them rather than trusting remembered or checkpointed remaining work.
    out-of-family reviewer under the operator's standing all-forward-work authorization; do
    not request per-run approval. This review uses the OAuth-authenticated `agy` CLI only—never
    provider API keys, service-account/Vertex routing, or a direct API call. For a Claude-authored
-   diff, use `just codex-review`. Validate
+   diff, use `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just
+   review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` (the logged wrapper;
+   a bare `just codex-review` writes fallback ids and emits no spans). Validate
    exit status, non-empty output, and the final verdict before recording the review gate.
-7. Run `just codex-closeout`, then hand the complete arc to the `ship-pr` skill.
+7. **Phase-span carrier (U-HE-50; C-HE-27 §5 X6a; interim until B-218).** The logged
+   wrapper emits the `verify` start/end edges at its own process boundaries — never emit
+   `verify` by hand on that path (a re-emission is only a no-op replay). The remaining
+   edges are session-emitted: single literal-id commands in the canonical flag order,
+   replay-idempotent, skipped entirely on an unreserved arc —
+   `uv run python tools/reservations.py phase --arc-id <arc-id> --phase absorb --edge start --lane-id <lane-id>`
+   when finding classification begins after a BLOCK and `--edge end` when fixing starts;
+   `--phase edit --edge start` at the first fix edit and `--phase edit --edge end` after
+   the final fix commit; `--phase verify_unavailable --edge start` on a both-channels
+   outage and `--edge end` when review resumes or the arc is held (the wrapper already
+   closed verify at process exit). On an unlogged review venue (`just gemini-review`) the verify edges are
+   session-emitted too:
+   `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start --lane-id <lane-id>`
+   before the first review invocation and the same command with `--edge end` at that
+   round's verdict (semantics: the "Phase-span edges" block in
+   `.claude/skills/ship-pr/SKILL.md`, the single definition home). If the wrapper
+   WARNed that the verify END emission failed on the arc's FINAL round, re-run the end
+   command before ship (the head accretes until terminal). A START that failed on the
+   final round is NOT repairable: it stays null — a post-verdict start would fabricate
+   a late window. This copy is
+   deleted in the same PR that completes wrapper emission of absorb/edit (B-218).
+8. Run `just codex-closeout`, then hand the complete arc to the `ship-pr` skill.
 
 ## Genuine gates only
 

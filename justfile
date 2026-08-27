@@ -763,6 +763,48 @@ review-with-failover base='main':
 review-with-failover-logged log base='main':
     #!/usr/bin/env bash
     set -u
+    # U-HE-50 (C-HE-27 §5 X6a): the wrapper's own process boundaries ARE the verify
+    # edges -- start after admission (a refused launch spends nothing and opens no
+    # span), end at the round's terminal. record_phase is first-write-wins and
+    # replay-idempotent, so re-review rounds 2..n re-emit as no-ops and the durable
+    # pair stays the round-1 window (ship-pr "Phase-span edges" stays the definition).
+    # [LAW:single-enforcer] reservations.py record_phase is the only span writer;
+    # [LAW:no-silent-failure] a failed emission warns loud but never alters the
+    # verdict exit -- an absent span reads null downstream, never zero (C-HE-27 §3).
+    # Partial-pair dispositions (codex u-he-50 r1): a lone END is refused here (a
+    # failed start with a successful end would durably record a reversed pair), so
+    # a start-failed attempt records nothing and the retry emits a fresh coherent
+    # pair; a start-only OPEN window -- whether the attempt crashed before end or
+    # its end WRITE failed (codex r2: only the next invocation can close it; no
+    # durable same-attempt signal exists that would not mint a second authority) --
+    # is CLOSED by the retry's end (U-HE-49: the retry keeps the round name), so
+    # that recorded round-1 span is an upper bound that includes the interruption
+    # and can overlap the edit window -- a named measurement bound, never a
+    # gap-derived duration. Residual (codex r5, rejected-as-registered): a start
+    # written before the wrapper's IN-PROCESS admit refuses (GATE_REFUSED) is
+    # immutable and closes at the next real round -- that span includes the refused
+    # attempt's gap; the session layer cannot see admit(), so the structural fix
+    # (emission after admit, inside the process) is the B-218 wrapper-internal
+    # emitter. Emission failure never aborts the round: a measurement write must
+    # not gate the hard review path (absent span = legal null, C-HE-27 §3).
+    _verify_start_failed=0
+    emit_verify() {
+      if [ -z "${HARNESS_ARC_ID:-}" ] && [ -z "${HARNESS_LANE_ID:-}" ]; then return 0; fi
+      if [ -z "${HARNESS_ARC_ID:-}" ] || [ -z "${HARNESS_LANE_ID:-}" ]; then
+        # codex r2 P3: half-set ids are a MISCONFIGURED invocation, not the spec'd
+        # unreserved case -- losing the span silently would read as unreserved
+        echo "review-with-failover-logged: WARN verify.$1 span not emitted -- HARNESS_ARC_ID and HARNESS_LANE_ID must both be set (half-set ids)" >&2
+        return 0
+      fi
+      if [ "$1" = end ] && [ "${_verify_start_failed:-0}" = 1 ]; then
+        echo "review-with-failover-logged: WARN verify.end skipped -- start emission failed this attempt; a lone end would record a reversed pair (C-HE-27 §3)" >&2
+        return 0
+      fi
+      uv run python tools/reservations.py phase --arc-id "$HARNESS_ARC_ID" --phase verify --edge "$1" --lane-id "$HARNESS_LANE_ID" >/dev/null || {
+        if [ "$1" = start ]; then _verify_start_failed=1; fi
+        echo "review-with-failover-logged: WARN verify.$1 span emission failed -- round proceeds; span reads null (C-HE-27)" >&2
+      }
+    }
     # U-HE-49 (C-HE-21 §1 X6b): admission is evaluated BEFORE the launch -- a launch
     # the gate would refuse is not made (exit 3: no reviewer call, no log file, no
     # round identity consumed), and the verb mints a per-attempt destination
@@ -774,8 +816,19 @@ review-with-failover-logged log base='main':
       echo "review-with-failover-logged: launch verb admitted but printed no destination -- aborting before the reviewer call" >&2
       exit 4
     fi
+    emit_verify start
     uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "$dest"
     rc=("${PIPESTATUS[@]}")
+    if [ "${rc[0]}" = 3 ]; then
+      # codex r4: the wrapper's own in-process admit (the enforcer of record) can
+      # refuse AFTER the launch precheck admitted -- GATE_REFUSED is not a round
+      # (C-HE-16 §3), so no end is recorded and a refused attempt can never land as
+      # a complete verify pair in N6; a lone start closes at the next real round's
+      # end (the named upper bound above).
+      echo "review-with-failover-logged: NOTE verify.end not emitted -- GATE_REFUSED is not a round (C-HE-16 §3)" >&2
+    else
+      emit_verify end
+    fi
     if [ "${rc[1]}" -ne 0 ]; then
       # Publish failure is its OWN terminal for EVERY reviewer outcome (codex r8):
       # exiting 1/2/3 here would let callers treat the round as valid while its

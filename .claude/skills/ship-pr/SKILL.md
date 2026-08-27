@@ -98,6 +98,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   - **verify = the round-1 window.** Before the FIRST review invocation:
     `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start --lane-id <lane-id>`;
     at that round's verdict (APPROVE or BLOCK): the same command with `--edge end`.
+    *(U-HE-50, C-HE-27 §5 X6a: on the `review-with-failover-logged` path BOTH edges
+    are wrapper-emitted at its process boundaries — start after gate admission, end
+    at the round terminal — and first-write-wins keeps the durable pair the round-1
+    window. The manual commands remain the definition and the fallback for venues
+    that bypass the logged wrapper; a duplicate emission is a harmless no-op replay.)*
   - **absorb = classification.** On a BLOCK: `--phase absorb --edge start` when finding
     classification begins, `--edge end` when fixing starts.
   - **edit = the fix window.** `--phase edit --edge start` at the first fix edit,
@@ -107,7 +112,9 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
     denominator is round-1 review + the fix window, never a double count.
   - On exit 2 (`REVIEWER_UNAVAILABLE` on both channels): first CLOSE the round-1
     window — `--phase verify --edge end` (the round ended when the wrapper exited; an
-    unclosed pair yields no span and the arc's review time would silently vanish) —
+    unclosed pair yields no span and the arc's review time would silently vanish;
+    on the logged wrapper path U-HE-50 already stamped this close at process exit,
+    so the manual close is the no-op replay) —
     then `--phase verify_unavailable --edge start` immediately on OBSERVING the exit,
     `--edge end` when review attempts resume (or the arc is held) — the phase CLI
     stamps now(), so the span is the observable outage window, detection → resume,
