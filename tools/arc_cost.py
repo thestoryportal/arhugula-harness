@@ -83,8 +83,16 @@ def parse_ts(s: str, *, what: str) -> datetime:
 
 
 def _tok(usage: dict, key: str, where: str) -> int:
-    """A usage token count, refused unless a non-negative int (r4 P3 exit-2 contract)."""
-    v = usage.get(key, 0)
+    """A usage token count, refused unless a present non-negative int.
+
+    All four fields are REQUIRED: 0 of 20,414 usage blocks across the project's
+    126 transcripts omit any of them (measured u-he-48 r7), so an absent field
+    is a malformed producer, and defaulting it to zero would silently
+    undercount instead of following the exit-2 contract (r4/r7 P3s).
+    """
+    if key not in usage:
+        raise CostError(f"{where} usage.{key} is absent")
+    v = usage[key]
     if isinstance(v, bool) or not isinstance(v, int) or v < 0:
         raise CostError(f"{where} usage.{key}={v!r} is not a non-negative int")
     return v
@@ -215,8 +223,23 @@ def read_records(path: Path) -> list[dict]:
 
 
 def subagent_files(transcript: Path) -> list[Path]:
-    # sibling directory named by the transcript stem, per the [B] layout
-    return sorted((transcript.parent / transcript.stem / "subagents").glob("agent-*.jsonl"))
+    """The transcript's subagent sidecars, refusing a present-but-empty store.
+
+    Sibling directory named by the transcript stem, per the [B] layout. An
+    ABSENT subagents/ dir is a session that spawned no subagents (59 of the
+    project's 126 transcripts, measured u-he-48 r7 — a genuine zero); a dir
+    that EXISTS but holds no agent files never occurs naturally (0 of 67
+    measured), so it is a GC'd/partial store and a zero there would be a
+    false measurement.
+    """
+    sub_dir = transcript.parent / transcript.stem / "subagents"
+    files = sorted(sub_dir.glob("agent-*.jsonl"))
+    if sub_dir.is_dir() and not files:
+        raise CostError(
+            f"{transcript}: subagents/ exists but holds no agent files -- a GC'd or "
+            "partial store, so the subagent cost cannot be measured"
+        )
+    return files
 
 
 def cost_report(transcripts: list[Path], cuts: list[datetime]) -> dict:

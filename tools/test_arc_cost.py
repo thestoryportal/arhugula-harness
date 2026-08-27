@@ -123,6 +123,22 @@ def test_malformed_records_refused_not_traceback(tmp_path: Path) -> None:
     neg["message"]["usage"]["input_tokens"] = -1
     with pytest.raises(ac.CostError, match="non-negative int"):
         ac.cost_report([_write(tmp_path / "c.jsonl", [neg])], cuts=[])
+    # r7 P3: absent fields are malformed (0 of 20,414 measured blocks omit any),
+    # and defaulting to zero would silently undercount
+    absent = _rec("r1", "2026-08-26T04:00:00.000Z")
+    del absent["message"]["usage"]["output_tokens"]
+    with pytest.raises(ac.CostError, match="output_tokens is absent"):
+        ac.cost_report([_write(tmp_path / "d.jsonl", [absent])], cuts=[])
+
+
+def test_present_but_empty_subagents_dir_refused(tmp_path: Path) -> None:
+    """codex u-he-48 r7: an existing subagents/ with no agent files never occurs
+    naturally (0 of 67 measured) -- it is a GC'd/partial store, and a zero
+    there would be a false measurement; an ABSENT dir stays a genuine zero."""
+    t = _write(tmp_path / "sess.jsonl", DUPED)
+    (tmp_path / "sess" / "subagents").mkdir(parents=True)
+    with pytest.raises(ac.CostError, match="exists but holds no agent files"):
+        ac.cost_report([t], cuts=[])
 
 
 def test_iet_formula() -> None:
