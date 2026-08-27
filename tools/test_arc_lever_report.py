@@ -291,6 +291,7 @@ def test_treated_sub_cohorts_split_by_exact_lever_set(tmp_path: Path) -> None:
         "p1_measured_n": 5,
         "median_cost_miet": None,
         "cost_measured_n": 0,
+        "cost_arcs": [],
     }
     assert s["pattern_metrics"]["B-212"]["median_rounds"] == 19
     assert "treated_median_rounds" not in s, "pooled treated aggregates evaluate neither lever"
@@ -401,12 +402,21 @@ def test_cost_renders_per_arc_when_present_and_never_as_a_partial_sum(
     assert s["pattern_metrics"]["B-211+B-212"]["median_cost_miet"] == 2.5
     assert s["pattern_metrics"]["B-211+B-212"]["cost_measured_n"] == 1
     assert s["pattern_metrics"]["(none)"]["median_cost_miet"] == 4.0
+    # X6e promises cost PER ARC on every cohort side, not only medians (r4):
+    # the control row's id+cost must be visible through pattern_metrics
+    assert s["pattern_metrics"]["(none)"]["cost_arcs"] == [{"arc_id": "pr-b", "cost_miet": 4.0}]
     ledger = _write(tmp_path / "ledger.jsonl", [base, costed, partial, half])
     assert alr.main(["--ledger", str(ledger)]) == 0
     out = capsys.readouterr().out
-    assert "cost=2.5M IET" in out
+    # line-scoped (r4: a bare substring also matches the median text, so the
+    # per-arc interpolation could be deleted while the assertion stays green)
+    pr_c_line = next(ln for ln in out.splitlines() if ln.strip().startswith("pr-c "))
+    assert "cost=2.5M IET" in pr_c_line
     assert "cost=4.0M IET (n=1)" in out, "the baseline median must expose control-side cost"
-    assert "cost=0.5M IET" not in out, "a main-null row must not render the subagent half"
+    baseline_pattern_line = next(ln for ln in out.splitlines() if "pattern[(none)]" in ln)
+    assert "pr-b=4.0M" in baseline_pattern_line, "control arcs render id=cost, not only a median"
+    pr_q_line = next(ln for ln in out.splitlines() if ln.strip().startswith("pr-q "))
+    assert "cost=" not in pr_q_line, "an unknown subagent half must not render a partial cost"
 
 
 # mutation-probe(tools/arc_lever_report.py): accept a row missing arc_id into the buckets

@@ -9,7 +9,7 @@ by the IET index (input + 1.25*cache-write + 0.1*cache-read + 5*output).
 Subagent transcripts under `<transcript-dir>/<stem>/subagents/` are included.
 Stage windows are cut at transcript event timestamps supplied via `--cut`.
 
-Usage:  just arc-cost <transcript> [--cut ISO ...] [--json]
+Usage:  just arc-cost <transcript> [<transcript> ...] [--cut ISO ...] [--json]
 
 Exit codes: 0 success / 2 bad input (missing file, no usage records, bad cut).
 """
@@ -82,6 +82,14 @@ def parse_ts(s: str, *, what: str) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+def _tok(usage: dict, key: str, where: str) -> int:
+    """A usage token count, refused unless a non-negative int (r4 P3 exit-2 contract)."""
+    v = usage.get(key, 0)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise CostError(f"{where} usage.{key}={v!r} is not a non-negative int")
+    return v
+
+
 def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
     """One Call per requestId.
 
@@ -103,18 +111,22 @@ def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
         rid = r.get("requestId")
         # [LAW:no-silent-failure] a usage block with no requestId cannot be
         # deduplicated; a fallback key would silently change the count's meaning
-        if not rid:
+        if not rid or not isinstance(rid, str):
             raise CostError(f"{source}: assistant record {i} carries usage but no requestId")
         ts = r.get("timestamp")
-        if not ts:
-            raise CostError(f"{source}: assistant record {i} ({rid}) has no timestamp")
+        # [LAW:parse-dont-validate] refuse malformed shapes HERE with the exit-2
+        # contract, never as a traceback mid-closure (codex u-he-48 r4 P3)
+        if not ts or not isinstance(ts, str):
+            raise CostError(f"{source}: assistant record {i} ({rid}) has no string timestamp")
+
+        where = f"{source}: record {i} ({rid})"
         seen = calls.get(rid)
         cur = Call(
             ts=parse_ts(ts, what=f"{source} record {i}"),
-            input=usage.get("input_tokens", 0),
-            cache_write=usage.get("cache_creation_input_tokens", 0),
-            cache_read=usage.get("cache_read_input_tokens", 0),
-            output=usage.get("output_tokens", 0),
+            input=_tok(usage, "input_tokens", where),
+            cache_write=_tok(usage, "cache_creation_input_tokens", where),
+            cache_read=_tok(usage, "cache_read_input_tokens", where),
+            output=_tok(usage, "output_tokens", where),
         )
         calls[rid] = (
             cur
@@ -184,28 +196,42 @@ def subagent_files(transcript: Path) -> list[Path]:
     return sorted((transcript.parent / transcript.stem / "subagents").glob("agent-*.jsonl"))
 
 
-def cost_report(transcript: Path, cuts: list[datetime]) -> dict:
-    # Sidechain records are subagent turns inlined into the main transcript;
-    # their cost is additive and separately sourced from the subagents/ files,
-    # so counting them in main would double-count. Same exclusion as the
-    # repo's existing transcript instrument (tools/context_budget.py).
-    # [LAW:one-source-of-truth] main = non-sidechain records only.
-    main_records = [r for r in read_records(transcript) if not r.get("isSidechain")]
-    main = dedupe_calls(main_records, source=transcript.name)
+def cost_report(transcripts: list[Path], cuts: list[datetime]) -> dict:
+    """Pooled cost over one arc's transcript set.
+
+    An arc resumed or handed off spans several sessions, each with its own
+    transcript (codex u-he-48 r4) — the arc's cost is the pool, deduplicated
+    GLOBALLY by requestId (a resumed session can copy prior records into its
+    own file, so per-file dedupe alone could double-count).
+
+    Sidechain records are subagent turns inlined into the main transcript;
+    their cost is additive and separately sourced from the subagents/ files,
+    so counting them in main would double-count. Same exclusion as the repo's
+    existing transcript instrument (tools/context_budget.py).
+    [LAW:one-source-of-truth] main = pooled non-sidechain records only.
+    """
+    main_records = [r for t in transcripts for r in read_records(t) if not r.get("isSidechain")]
+    main = dedupe_calls(main_records, source=";".join(t.name for t in transcripts))
     if not main:
         # [LAW:no-silent-failure] zero usage records is a wrong input (not this
         # harness's transcript shape), never a measured zero-cost arc
-        raise CostError(f"{transcript}: no assistant usage records -- not a session transcript?")
-    sub_paths = subagent_files(transcript)
-    subs = [c for p in sub_paths for c in dedupe_calls(read_records(p), source=p.name)]
+        raise CostError(
+            f"{';'.join(map(str, transcripts))}: no assistant usage records -- "
+            "not session transcripts?"
+        )
+    sub_paths = [p for t in transcripts for p in subagent_files(t)]
+    subs = dedupe_calls(
+        [r for p in sub_paths for r in read_records(p)],
+        source=";".join(p.name for p in sub_paths) or "subagents",
+    )
     report = {
-        "transcript": str(transcript),
+        "transcripts": [str(t) for t in transcripts],
         "main": totals(main).as_dict(),
         "subagents": {"files": len(sub_paths), **totals(subs).as_dict()},
         "total_iet": round(totals(main).iet + totals(subs).iet, 2),
     }
     if cuts:
-        report["windows"] = windows(main, sorted(subs, key=lambda c: c.ts), cuts)
+        report["windows"] = windows(main, subs, cuts)
     return report
 
 
@@ -217,7 +243,7 @@ def render(report: dict) -> str:
             f"{t['output']:>9,} out  {t['iet'] / 1e6:>7.2f}M IET"
         )
 
-    out = [f"transcript {report['transcript']}"]
+    out = [f"transcripts {'; '.join(report['transcripts'])}"]
     out.append(line("main", report["main"]))
     out.append(line(f"subagents({report['subagents']['files']})", report["subagents"]))
     out.append(f"{'total':<10} {report['total_iet'] / 1e6:.2f}M IET")
@@ -231,7 +257,12 @@ def render(report: dict) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="arc_cost", description=__doc__)
-    p.add_argument("transcript", type=Path, help="session transcript .jsonl")
+    p.add_argument(
+        "transcript",
+        type=Path,
+        nargs="+",
+        help="the arc's session transcript(s) .jsonl — pass every session that ran the arc",
+    )
     p.add_argument(
         "--cut",
         action="append",
@@ -243,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     try:
         cuts = [parse_ts(c, what="--cut") for c in args.cut]
-        report = cost_report(args.transcript, cuts)
+        report = cost_report(list(args.transcript), cuts)
     except CostError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

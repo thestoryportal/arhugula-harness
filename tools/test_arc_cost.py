@@ -61,7 +61,7 @@ DUPED = [
 
 # mutation-probe(tools/arc_cost.py): count every usage record instead of one per requestId
 def test_dedupe_collapses_duplicate_request_ids(tmp_path: Path) -> None:
-    report = ac.cost_report(_write(tmp_path / "t.jsonl", DUPED), cuts=[])
+    report = ac.cost_report([_write(tmp_path / "t.jsonl", DUPED)], cuts=[])
     m = report["main"]
     assert m["calls"] == 2  # not 4
     assert (m["input"], m["cache_write"], m["cache_read"], m["output"]) == (4, 200, 2000, 30)
@@ -80,12 +80,49 @@ def test_divergent_copies_merge_by_per_field_max_not_arrival_order(tmp_path: Pat
         _rec("req_1", "2026-08-26T04:00:00.000Z", out=0, inp=0, cw=0, cr=0),
         _rec("req_1", "2026-08-26T04:00:01.000Z", out=50),
     ]
-    report = ac.cost_report(_write(tmp_path / "a.jsonl", partial_first), cuts=[])
+    report = ac.cost_report([_write(tmp_path / "a.jsonl", partial_first)], cuts=[])
     assert report["main"]["calls"] == 1
     assert report["main"]["output"] == 50  # the real usage, not the zero copy
     # order-independent: reversed arrival yields the identical totals
-    reversed_report = ac.cost_report(_write(tmp_path / "b.jsonl", partial_first[::-1]), cuts=[])
+    reversed_report = ac.cost_report([_write(tmp_path / "b.jsonl", partial_first[::-1])], cuts=[])
     assert reversed_report["main"] == report["main"]
+
+
+# mutation-probe(tools/arc_cost.py): dedupe per transcript instead of across the pool
+def test_multi_transcript_pool_dedupes_globally(tmp_path: Path) -> None:
+    """codex u-he-48 r4: a resumed arc spans sessions, and a resumed session can
+    copy prior records into its own transcript -- the pool dedupes by requestId
+    across ALL transcripts, so the copied call is priced once."""
+    t1 = _write(tmp_path / "s1.jsonl", DUPED)
+    # the second session re-embeds req_2 (a copy) and adds its own new call
+    t2 = _write(
+        tmp_path / "s2.jsonl",
+        [
+            _rec("req_2", "2026-08-26T05:00:00.000Z", out=20),
+            _rec("req_3", "2026-08-26T06:00:00.000Z", out=9),
+        ],
+    )
+    report = ac.cost_report([t1, t2], cuts=[])
+    assert report["main"]["calls"] == 3  # req_1, req_2 (once), req_3
+    assert report["main"]["output"] == 10 + 20 + 9
+    assert report["transcripts"] == [str(t1), str(t2)]
+
+
+def test_malformed_records_refused_not_traceback(tmp_path: Path) -> None:
+    """codex u-he-48 r4 P3: JSON-valid but malformed records must land on the
+    exit-2 CostError contract, never an uncaught TypeError/AttributeError."""
+    bad_ts = _rec("r1", "2026-08-26T04:00:00.000Z")
+    bad_ts["timestamp"] = 12345
+    with pytest.raises(ac.CostError, match="no string timestamp"):
+        ac.cost_report([_write(tmp_path / "a.jsonl", [bad_ts])], cuts=[])
+    bad_tok = _rec("r1", "2026-08-26T04:00:00.000Z")
+    bad_tok["message"]["usage"]["output_tokens"] = None
+    with pytest.raises(ac.CostError, match="non-negative int"):
+        ac.cost_report([_write(tmp_path / "b.jsonl", [bad_tok])], cuts=[])
+    neg = _rec("r1", "2026-08-26T04:00:00.000Z")
+    neg["message"]["usage"]["input_tokens"] = -1
+    with pytest.raises(ac.CostError, match="non-negative int"):
+        ac.cost_report([_write(tmp_path / "c.jsonl", [neg])], cuts=[])
 
 
 def test_iet_formula() -> None:
@@ -106,7 +143,7 @@ def test_subagent_transcripts_included_and_counted_separately(tmp_path: Path) ->
     sub_rec = _rec("req_s1", "2026-08-26T04:10:00.000Z", out=7)
     sub_rec["isSidechain"] = True
     _write(subdir / "agent-a.jsonl", [sub_rec])
-    report = ac.cost_report(t, cuts=[])
+    report = ac.cost_report([t], cuts=[])
     assert report["subagents"]["files"] == 1
     assert report["subagents"]["calls"] == 1
     assert report["subagents"]["output"] == 7
@@ -116,7 +153,7 @@ def test_subagent_transcripts_included_and_counted_separately(tmp_path: Path) ->
 
 def test_windows_partition_at_cut_and_sum_to_whole(tmp_path: Path) -> None:
     t = _write(tmp_path / "t.jsonl", DUPED)
-    report = ac.cost_report(t, cuts=[ac.parse_ts("2026-08-26T04:30:00Z", what="cut")])
+    report = ac.cost_report([t], cuts=[ac.parse_ts("2026-08-26T04:30:00Z", what="cut")])
     w0, w1 = report["windows"]
     assert (w0["main"]["calls"], w1["main"]["calls"]) == (1, 1)
     assert w0["main"]["output"] + w1["main"]["output"] == report["main"]["output"]
@@ -126,19 +163,19 @@ def test_unsorted_cuts_refused(tmp_path: Path) -> None:
     t = _write(tmp_path / "t.jsonl", DUPED)
     cuts = [ac.parse_ts(s, what="cut") for s in ("2026-08-26T05:00:00Z", "2026-08-26T04:00:00Z")]
     with pytest.raises(ac.CostError, match="ascending"):
-        ac.cost_report(t, cuts=cuts)
+        ac.cost_report([t], cuts=cuts)
 
 
 def test_usage_without_request_id_refused_not_guessed(tmp_path: Path) -> None:
     rec = _rec("x", "2026-08-26T04:00:00.000Z")
     del rec["requestId"]
     with pytest.raises(ac.CostError, match="no requestId"):
-        ac.cost_report(_write(tmp_path / "t.jsonl", [rec]), cuts=[])
+        ac.cost_report([_write(tmp_path / "t.jsonl", [rec])], cuts=[])
 
 
 def test_transcript_with_no_usage_refused_never_a_zero_cost_arc(tmp_path: Path) -> None:
     with pytest.raises(ac.CostError, match="no assistant usage"):
-        ac.cost_report(_write(tmp_path / "t.jsonl", [{"type": "user"}]), cuts=[])
+        ac.cost_report([_write(tmp_path / "t.jsonl", [{"type": "user"}])], cuts=[])
 
 
 def test_missing_transcript_is_exit_2(tmp_path: Path, capsys) -> None:
@@ -158,10 +195,10 @@ def _stub_reservation(monkeypatch, reserved_at: str = "2026-08-26T00:00:00.000Z"
 def test_cost_snapshot_shape_matches_the_fold(monkeypatch, tmp_path: Path) -> None:
     _stub_reservation(monkeypatch)
     t = _write(tmp_path / "t.jsonl", DUPED)
-    snap = am._cost_snapshot(str(t), "u-x")
+    snap = am._cost_snapshot([str(t)], "u-x")
     assert snap == {
         "main_calls": 2,
-        "main_iet": ac.cost_report(t, cuts=[])["main"]["iet"],
+        "main_iet": ac.cost_report([t], cuts=[])["main"]["iet"],
         "subagent_calls": 0,
         "subagent_iet": 0.0,
         "source": str(t),
@@ -174,7 +211,7 @@ def test_cost_snapshot_is_bounded_to_the_arc_window(monkeypatch, tmp_path: Path)
     arc's reserved_at belongs to earlier arcs and must stay out of its row."""
     _stub_reservation(monkeypatch, reserved_at="2026-08-26T04:30:00.000Z")
     t = _write(tmp_path / "t.jsonl", DUPED)  # req_1 at 04:00 (before), req_2 at 05:00
-    snap = am._cost_snapshot(str(t), "u-x")
+    snap = am._cost_snapshot([str(t)], "u-x")
     assert snap is not None and snap["main_calls"] == 1
     assert snap["main_iet"] == 2 + 1.25 * 100 + 0.1 * 1000 + 5 * 20  # req_2 only
 
@@ -186,7 +223,7 @@ def test_cost_snapshot_without_reservation_skips_never_totals_the_session(
 
     monkeypatch.setattr(rs, "current", lambda arc_id: None)
     t = _write(tmp_path / "t.jsonl", DUPED)
-    assert am._cost_snapshot(str(t), "u-x") is None
+    assert am._cost_snapshot([str(t)], "u-x") is None
     assert "cost skipped" in capsys.readouterr().out
 
 
@@ -198,13 +235,13 @@ def test_cost_snapshot_refuses_a_transcript_with_no_usage_in_the_window(
     _stub_reservation(monkeypatch, reserved_at="2026-08-27T00:00:00.000Z")
     t = _write(tmp_path / "t.jsonl", DUPED)  # all records predate the boundary
     with pytest.raises(am.AbortError, match="wrong transcript"):
-        am._cost_snapshot(str(t), "u-x")
+        am._cost_snapshot([str(t)], "u-x")
 
 
 def test_cost_snapshot_failure_aborts_loudly(monkeypatch, tmp_path: Path) -> None:
     _stub_reservation(monkeypatch)
     with pytest.raises(am.AbortError, match="cost extraction failed"):
-        am._cost_snapshot(str(tmp_path / "absent.jsonl"), "u-x")
+        am._cost_snapshot([str(tmp_path / "absent.jsonl")], "u-x")
 
 
 def _extract_args(**kw) -> argparse.Namespace:
@@ -265,7 +302,7 @@ def test_extract_derives_live_when_only_a_transcript_is_given(
 ) -> None:
     _stub_reservation(monkeypatch)
     t = _write(tmp_path / "t.jsonl", DUPED)
-    row = am.extract(_extract_args(transcript=str(t)))
+    row = am.extract(_extract_args(transcript=[str(t)]))
     assert row.cost_main_calls == 2
     assert row.cost_source == str(t)
 
@@ -300,7 +337,7 @@ def test_production_queue_to_drain_path_carries_the_cost_snapshot(
                 arc_type_declared_at="close",
                 decisions=0,
                 round_logs=None,
-                transcript=str(t),
+                transcript=[str(t)],
                 levers=[],
                 notes="",
             )
@@ -341,7 +378,7 @@ def test_b_audit_headline_reproduced_on_the_archived_transcript() -> None:
     (codex u-he-48 r1) prices the final copy instead.
     """
     cut = ac.parse_ts("2026-08-26T21:16:18Z", what="cut")
-    report = ac.cost_report(U_HE_35_TRANSCRIPT, cuts=[cut])
+    report = ac.cost_report([U_HE_35_TRANSCRIPT], cuts=[cut])
     audited = report["windows"][0]
     assert audited["main"]["calls"] == 418
     assert round(audited["main"]["iet"]) == 20_996_434  # 20.99M, == [B]

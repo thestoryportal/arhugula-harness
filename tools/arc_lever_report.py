@@ -284,9 +284,16 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
             "p1_measured_n": sum(1 for m in ms if m["p1_rounds"] is not None),
             # every recognized contrast side needs control-side cost, not only
             # the empty-lever baseline (codex u-he-48 r2: {999} vs {B-211,999}
-            # is a valid single-lever contrast with no cost otherwise)
+            # is a valid single-lever contrast with no cost otherwise), and X6e
+            # promises cost PER ARC — the individual control rows, not only a
+            # median (codex r4)
             "median_cost_miet": _median([m["cost_miet"] for m in ms if m["cost_miet"] is not None]),
             "cost_measured_n": sum(1 for m in ms if m["cost_miet"] is not None),
+            "cost_arcs": [
+                {"arc_id": m["arc_id"], "cost_miet": m["cost_miet"]}
+                for m in ms
+                if m["cost_miet"] is not None
+            ],
         }
         for k, ms in by_pattern.items()
     }
@@ -345,8 +352,10 @@ def render(summary: dict[str, Any]) -> str:
                 f"{s['non_evaluable_reason']} — numbers are descriptive only"
             )
         for pat, ps in sorted(s["pattern_metrics"].items()):
+            per_arc = ", ".join(f"{a['arc_id']}={a['cost_miet']}M" for a in ps["cost_arcs"])
             cost = (
-                f" median_cost={ps['median_cost_miet']}M IET (cost n={ps['cost_measured_n']})"
+                f" median_cost={ps['median_cost_miet']}M IET "
+                f"(cost n={ps['cost_measured_n']}: {per_arc})"
                 if ps["cost_measured_n"]
                 else ""
             )

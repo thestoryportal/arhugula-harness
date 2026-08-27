@@ -545,13 +545,16 @@ just arc-metrics queue --pr <NNN> --arc-id <arc-id> --arc-type <inventing|applyi
   --levers <lever-id> <lever-id> <...-or-omit>
 ```
 
-Pass `--transcript` with THIS session's transcript so the row carries the C-HE-25 X6e
-cost fields (requestId-deduplicated IET, `tools/arc_cost.py`). The session transcript
-lives under `~/.claude/projects/<munged-cwd>/<session-uuid>.jsonl`; identify it as the
-newest-mtime transcript in that directory that mentions this arc's id (`grep -l
-<arc-id> *.jsonl` then newest — a parallel lane's transcript names a different arc).
-If none matches unambiguously, OMIT the flag — the cost fields read as null (an honest
-could-not-look), never a guessed transcript's numbers.
+Pass `--transcript` with EVERY session transcript that ran this arc so the row carries
+the C-HE-25 X6e cost fields (requestId-deduplicated IET, `tools/arc_cost.py`) — an arc
+resumed or handed off spans sessions, and a single-transcript snapshot undercounts it.
+Session transcripts live under `~/.claude/projects/<munged-cwd>/<session-uuid>.jsonl`;
+`grep -l <arc-id> *.jsonl` in that directory lists the candidates (a parallel lane's
+transcript names a different arc — include only files whose session actually ran this
+arc, and the snapshot is bounded to the reservation window in any case; pooled
+transcripts deduplicate globally by requestId, so a resumed session's copied records
+are priced once). If nothing matches unambiguously, OMIT the flag — the cost fields
+read as null (an honest could-not-look), never a guessed transcript's numbers.
 
 This writes one file per arc into a queue directory **outside** the repo. That placement is
 load-bearing, not tidiness: in an autonomous arc this step runs inside the topic worktree,
