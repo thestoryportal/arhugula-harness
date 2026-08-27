@@ -7749,7 +7749,7 @@ The self-improvement circuit is broken at both ends: nothing flows in (0 skill r
 - **R0 — instruments:** U-HE-46, U-HE-47, U-HE-48, U-HE-49. Fix what measures before touching what is measured.
 - **R1 — skill/governance levers:** U-HE-50, U-SR-01…U-SR-08.
 - **R2 — mechanical sweep:** U-SR-09.
-- **R3 — eval arc:** U-HE-51 riding the next code arc (decision #2 RATIFIED 2026-08-26: U-HE-36 is the R3 eval arc — §8.5), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), 25.5M IET grand total (21.0M main / 4.52M subagents), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
+- **R3 — eval arc:** U-HE-51 riding the next code arc (decision #2 RATIFIED 2026-08-26: U-HE-36 is the R3 eval arc — §8.5), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), ≈25.6M IET grand total (21.0M main / 4.64M subagents — the u-he-48 execution-time correction ratified at the U-HE-48 acceptance bullet: [B]'s printed 4.52M/25.5M were first-copy-read undercounts), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
 
 Units within a round are mutually independent and may land in any order or together. The instruments-before-levers rule binds as dependency edges wherever a lever touches a measured surface: U-HE-50 (R1, a lever on the C-HE-27 surface R0 repairs) and U-HE-51 (R3) both hard-depend on all four R0 units. The U-SR-* levers touch no instrument surface and may land alongside R0.
 

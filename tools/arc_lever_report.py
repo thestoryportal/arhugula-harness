@@ -183,11 +183,14 @@ def _metrics(r: LedgerRow, levers: tuple[str, ...]) -> dict[str, Any]:
         # would award the best possible P1 score to an unmeasured value (codex r2).
         "p1_rounds": len(p1) if p1 is not None else None,
         "arc_span_h": round(span / 3600, 1) if span is not None else None,
-        # Main + subagent IET in millions. Null main is unmeasured even when a
-        # subagent figure exists — a partial sum would read as a cheaper arc.
+        # Main + subagent IET in millions. BOTH halves must be measured: the
+        # producer (_cost_snapshot) emits an explicit 0.0 when zero subagent
+        # usage was measured, so a null half means UNKNOWN — folding it in as
+        # zero would admit the arc to cost medians as artificially cheap
+        # (codex u-he-48 r2/r3).
         "cost_miet": (
-            round((r.cost_main_iet + (r.cost_subagent_iet or 0)) / 1e6, 2)
-            if r.cost_main_iet is not None
+            round((r.cost_main_iet + r.cost_subagent_iet) / 1e6, 2)
+            if r.cost_main_iet is not None and r.cost_subagent_iet is not None
             else None
         ),
         "levers": declared,

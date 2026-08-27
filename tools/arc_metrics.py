@@ -566,7 +566,7 @@ def extract(args: argparse.Namespace) -> ArcRow:
     # transcript may have grown or been GC'd since the arc closed.
     cost = getattr(args, "cost_snapshot", None)
     if cost is None and getattr(args, "transcript", None):
-        cost = _cost_snapshot(args.transcript)
+        cost = _cost_snapshot(args.transcript, row.arc_id)
     if cost:
         row.cost_main_calls = cost["main_calls"]
         row.cost_main_iet = cost["main_iet"]
@@ -904,20 +904,42 @@ def _completeness_for(arc_id: str, observed_ids: list[int]) -> str:
     return "complete" if recorded and max(recorded) == max(observed) else "unknown"
 
 
-def _cost_snapshot(transcript: str) -> dict:
-    """C-HE-25 X6e: requestId-deduplicated transcript cost (arc_cost.py owns the math)."""
-    # lazy import, same as `reservations`: keep module load free of tool coupling
-    import arc_cost
+def _cost_snapshot(transcript: str, arc_id: str) -> dict | None:
+    """C-HE-25 X6e: requestId-deduplicated transcript cost (arc_cost.py owns the math).
 
+    Bounded to THIS arc's window (codex u-he-48 r3): one session ships
+    consecutive arcs, so whole-session totals would fold every earlier arc's
+    usage into the later row. The arc-start authority is the reservation's
+    ``reserved_at``; without a head there is no truthful boundary, so the cost
+    is skipped loudly (null fields read as could-not-look, C-HE-25) rather
+    than recorded cumulatively.
+    """
+    # lazy imports, same as elsewhere: keep module load free of tool coupling
+    import arc_cost
+    import reservations as rs
+
+    cur = rs.current(arc_id)
+    if cur is None:
+        print(f"  {arc_id}: cost skipped — no reservation head to bound the arc window")
+        return None
+    since = arc_cost.parse_ts(cur[1]["reserved_at"], what=f"{arc_id} reserved_at")
     try:
-        report = arc_cost.cost_report(Path(transcript), cuts=[])
+        report = arc_cost.cost_report(Path(transcript), cuts=[since])
     except arc_cost.CostError as exc:
         raise AbortError(f"cost extraction failed: {exc}") from exc
+    window = report["windows"][1]  # [reserved_at, end)
+    if window["main"]["calls"] == 0:
+        # a transcript with no usage inside this arc's window is some OTHER
+        # session's transcript — a false measured-zero must not enter the ledger
+        raise AbortError(
+            f"cost extraction refused: {transcript} has no main-session usage after "
+            f"{arc_id}'s reserved_at ({cur[1]['reserved_at']}) — wrong transcript?"
+        )
     return {
-        "main_calls": report["main"]["calls"],
-        "main_iet": report["main"]["iet"],
-        "subagent_calls": report["subagents"]["calls"],
-        "subagent_iet": report["subagents"]["iet"],
+        "main_calls": window["main"]["calls"],
+        "main_iet": window["main"]["iet"],
+        "subagent_calls": window["subagents"]["calls"],
+        "subagent_iet": window["subagents"]["iet"],
         "source": report["transcript"],
     }
 
@@ -1002,7 +1024,9 @@ def queue_capture(args: argparse.Namespace) -> int:
     # Same snapshot rationale as the round logs: the transcript is the arc's own
     # NOW, and it can grow (the session continues past closure) or be GC'd before
     # the next arc's drain runs. Derive at closure; drain folds the numbers.
-    cost_snapshot = _cost_snapshot(args.transcript) if getattr(args, "transcript", None) else None
+    cost_snapshot = (
+        _cost_snapshot(args.transcript, arc_id) if getattr(args, "transcript", None) else None
+    )
 
     entry = {
         "pr": args.pr,

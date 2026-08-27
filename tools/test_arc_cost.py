@@ -149,9 +149,16 @@ def test_missing_transcript_is_exit_2(tmp_path: Path, capsys) -> None:
 # -- the arc-row seam (arc_metrics --transcript -> cost_* fields) -----------
 
 
-def test_cost_snapshot_shape_matches_the_fold(tmp_path: Path) -> None:
+def _stub_reservation(monkeypatch, reserved_at: str = "2026-08-26T00:00:00.000Z") -> None:
+    import reservations as rs
+
+    monkeypatch.setattr(rs, "current", lambda arc_id: ("head", {"reserved_at": reserved_at}))
+
+
+def test_cost_snapshot_shape_matches_the_fold(monkeypatch, tmp_path: Path) -> None:
+    _stub_reservation(monkeypatch)
     t = _write(tmp_path / "t.jsonl", DUPED)
-    snap = am._cost_snapshot(str(t))
+    snap = am._cost_snapshot(str(t), "u-x")
     assert snap == {
         "main_calls": 2,
         "main_iet": ac.cost_report(t, cuts=[])["main"]["iet"],
@@ -161,9 +168,43 @@ def test_cost_snapshot_shape_matches_the_fold(tmp_path: Path) -> None:
     }
 
 
-def test_cost_snapshot_failure_aborts_loudly(tmp_path: Path) -> None:
+# mutation-probe(tools/arc_metrics.py): pass cuts=[] instead of the reserved_at cut
+def test_cost_snapshot_is_bounded_to_the_arc_window(monkeypatch, tmp_path: Path) -> None:
+    """codex u-he-48 r3: one session ships consecutive arcs — usage before this
+    arc's reserved_at belongs to earlier arcs and must stay out of its row."""
+    _stub_reservation(monkeypatch, reserved_at="2026-08-26T04:30:00.000Z")
+    t = _write(tmp_path / "t.jsonl", DUPED)  # req_1 at 04:00 (before), req_2 at 05:00
+    snap = am._cost_snapshot(str(t), "u-x")
+    assert snap is not None and snap["main_calls"] == 1
+    assert snap["main_iet"] == 2 + 1.25 * 100 + 0.1 * 1000 + 5 * 20  # req_2 only
+
+
+def test_cost_snapshot_without_reservation_skips_never_totals_the_session(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    import reservations as rs
+
+    monkeypatch.setattr(rs, "current", lambda arc_id: None)
+    t = _write(tmp_path / "t.jsonl", DUPED)
+    assert am._cost_snapshot(str(t), "u-x") is None
+    assert "cost skipped" in capsys.readouterr().out
+
+
+def test_cost_snapshot_refuses_a_transcript_with_no_usage_in_the_window(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A wrong (older) transcript has no calls after reserved_at — a false
+    measured-zero must not enter the ledger."""
+    _stub_reservation(monkeypatch, reserved_at="2026-08-27T00:00:00.000Z")
+    t = _write(tmp_path / "t.jsonl", DUPED)  # all records predate the boundary
+    with pytest.raises(am.AbortError, match="wrong transcript"):
+        am._cost_snapshot(str(t), "u-x")
+
+
+def test_cost_snapshot_failure_aborts_loudly(monkeypatch, tmp_path: Path) -> None:
+    _stub_reservation(monkeypatch)
     with pytest.raises(am.AbortError, match="cost extraction failed"):
-        am._cost_snapshot(str(tmp_path / "absent.jsonl"))
+        am._cost_snapshot(str(tmp_path / "absent.jsonl"), "u-x")
 
 
 def _extract_args(**kw) -> argparse.Namespace:
@@ -219,7 +260,10 @@ def test_extract_without_transcript_reads_null_never_zero(_gh_stub) -> None:
     assert row.provenance["cost_fields"] == "unmapped:no-transcript-supplied"
 
 
-def test_extract_derives_live_when_only_a_transcript_is_given(_gh_stub, tmp_path: Path) -> None:
+def test_extract_derives_live_when_only_a_transcript_is_given(
+    _gh_stub, monkeypatch, tmp_path: Path
+) -> None:
+    _stub_reservation(monkeypatch)
     t = _write(tmp_path / "t.jsonl", DUPED)
     row = am.extract(_extract_args(transcript=str(t)))
     assert row.cost_main_calls == 2
@@ -242,19 +286,27 @@ def test_production_queue_to_drain_path_carries_the_cost_snapshot(
     monkeypatch.setattr(rs, "QUEUE_DIR", qdir)
     monkeypatch.setattr(rs, "emit_loop_row", lambda *a, **k: None)
     t = _write(tmp_path / "t.jsonl", DUPED)
-    am.queue_capture(
-        argparse.Namespace(
-            pr=1,
-            arc_id="u-qc",
-            arc_type="inventing",
-            arc_type_declared_at="close",
-            decisions=0,
-            round_logs=None,
-            transcript=str(t),
-            levers=[],
-            notes="",
+    # Independent patch for the QUEUE phase only: the window boundary must stub
+    # a head whose reserved_at admits the fixture records, but the DRAIN phase
+    # below needs the real (isolated) reservation flow, so undo before drain.
+    qp = pytest.MonkeyPatch()
+    qp.setattr(rs, "current", lambda arc_id: ("head", {"reserved_at": "2026-08-26T00:00:00Z"}))
+    try:
+        am.queue_capture(
+            argparse.Namespace(
+                pr=1,
+                arc_id="u-qc",
+                arc_type="inventing",
+                arc_type_declared_at="close",
+                decisions=0,
+                round_logs=None,
+                transcript=str(t),
+                levers=[],
+                notes="",
+            )
         )
-    )
+    finally:
+        qp.undo()
     entries = am.read_queue()
     assert len(entries) == 1
     snap = entries[0][1]["cost_snapshot"]

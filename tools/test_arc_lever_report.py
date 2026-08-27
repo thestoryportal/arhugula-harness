@@ -385,19 +385,23 @@ def test_cost_renders_per_arc_when_present_and_never_as_a_partial_sum(
     costed.update(cost_main_iet=2_000_000.0, cost_subagent_iet=500_000.0)
     partial = _row("pr-p", 4, ["B-211", "B-212"])
     partial.update(cost_subagent_iet=500_000.0)  # main null -> no partial sum
+    half = _row("pr-q", 5, ["B-211", "B-212"])
+    half.update(cost_main_iet=1_000_000.0)  # subagent null = UNKNOWN, never zero (r3)
     base = _row("pr-b", 10, [])
-    base.update(cost_main_iet=4_000_000.0)  # control-side cost (codex u-he-48 r1)
-    s = _summary(tmp_path, [base, costed, partial])["arc_types"]["applying"]
+    # control-side cost (codex u-he-48 r1); subagent 0.0 is a MEASURED zero
+    base.update(cost_main_iet=4_000_000.0, cost_subagent_iet=0.0)
+    s = _summary(tmp_path, [base, costed, partial, half])["arc_types"]["applying"]
     by_id = {m["arc_id"]: m for m in s["treated_arcs"]}
     assert by_id["pr-c"]["cost_miet"] == 2.5
     assert by_id["pr-p"]["cost_miet"] is None
+    assert by_id["pr-q"]["cost_miet"] is None, "an unknown subagent half must not read as 0"
     assert s["baseline_median"]["cost_miet"] == 4.0
     assert s["baseline_median"]["measured_n"]["cost_miet"] == 1
     # every recognized pattern carries cost, not only the empty baseline (r2)
     assert s["pattern_metrics"]["B-211+B-212"]["median_cost_miet"] == 2.5
     assert s["pattern_metrics"]["B-211+B-212"]["cost_measured_n"] == 1
     assert s["pattern_metrics"]["(none)"]["median_cost_miet"] == 4.0
-    ledger = _write(tmp_path / "ledger.jsonl", [base, costed, partial])
+    ledger = _write(tmp_path / "ledger.jsonl", [base, costed, partial, half])
     assert alr.main(["--ledger", str(ledger)]) == 0
     out = capsys.readouterr().out
     assert "cost=2.5M IET" in out
