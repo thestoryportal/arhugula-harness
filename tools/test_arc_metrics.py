@@ -391,7 +391,7 @@ def test_overlapping_globs_do_not_double_count_a_round(tmp_path: Path):
     b.write_text("y\ncodex-review: APPROVE\n")
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
-    logs, gaps, _ = am.round_metrics([str(tmp_path / "r*.log"), str(tmp_path / "r1*.log")])
+    logs, gaps, _, _ = am.round_metrics([str(tmp_path / "r*.log"), str(tmp_path / "r1*.log")])
     assert len(logs) == 2, "the same file matched twice is still one round"
     assert gaps == [600.0], "and introduces no spurious zero-second gap"
 
@@ -433,7 +433,7 @@ def test_round_derivation_from_content_not_file_position(tmp_path: Path):
     _round_log(tmp_path, "r10.log", p1 + block, t + 1200)
     _round_log(tmp_path, "r11.log", "codex-review: GATE_REFUSED (BUDGET_EXHAUSTED)\n", t + 1800)
 
-    logs, gaps, p1_rounds = am.round_metrics([str(tmp_path / "r*.log")])
+    logs, gaps, p1_rounds, completeness = am.round_metrics([str(tmp_path / "r*.log")])
     assert len(logs) == 10, "refused launches are not rounds"
     assert p1_rounds == [1, 10], "P1s key by ROUND ID, not by position in a listing"
     assert [f.name for f in logs] == [
@@ -442,6 +442,77 @@ def test_round_derivation_from_content_not_file_position(tmp_path: Path):
         "r10.log",
     ], "the retry's fresh-named log IS round 9; both refused transcripts are excluded"
     assert len(gaps) == 9, "gaps pair the 10 real rounds only"
+    assert completeness == "complete", "a set starting at round 1 is the full evidence"
+
+
+# mutation-probe: classify a suffix-only set as "complete" -> red
+def test_suffix_only_set_is_classified_partial_and_reaches_the_snapshot(
+    monkeypatch, tmp_path: Path
+):
+    """A set starting above round 1 is a lower bound: round_metrics derives
+    partial-suffix and queue_capture carries it into the snapshot, so the row
+    cannot ride the schema's "complete" default into exact cohort medians."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    _round_log(logs, "r8.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(logs, "r9.log", "codex-review: BLOCK\n", 1_000_600)
+    _round_log(logs, "r10.log", "codex-review: APPROVE\n", 1_001_200)
+    _, _, _, completeness = am.round_metrics([str(logs / "r*.log")])
+    assert completeness == "partial-suffix"
+
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    am.queue_capture(
+        am.argparse.Namespace(
+            pr=1999,
+            arc_id=None,
+            arc_type="applying",
+            decisions=0,
+            round_logs=[str(logs / "r*.log")],
+            levers=None,
+            notes="",
+        )
+    )
+    snap = json.loads((qdir / "pr-1999.json").read_text())["round_snapshot"]
+    assert snap["round_completeness"] == "partial-suffix"
+
+
+# mutation-probe: drop the snapshot round_completeness read in extract() -> red
+def test_extract_carries_snapshot_completeness_and_defaults_legacy(monkeypatch):
+    monkeypatch.setattr(
+        am,
+        "gh_pr",
+        lambda pr: {
+            "additions": 10,
+            "deletions": 0,
+            "changedFiles": 1,
+            "commits": [{}],
+            "createdAt": "2026-08-14T09:00:00Z",
+            "mergedAt": None,
+            "mergeCommit": None,
+            "title": "t",
+        },
+    )
+    snapshot = {
+        "review_rounds": 3,
+        "round_wall_s": [600.0, 600.0],
+        "p1_rounds": [],
+        "first_round_at": "2026-08-14T11:00:00+00:00",
+        "last_round_at": "2026-08-14T11:20:00+00:00",
+        "round_log_source": "/tmp/logs",
+        "round_completeness": "partial-suffix",
+    }
+    args = dict(
+        pr=999, arc_id=None, arc_type=None, decisions=None, round_logs=None, levers=None, notes=""
+    )
+    row = am.extract(am.argparse.Namespace(**args, round_snapshot=snapshot))
+    assert row.round_completeness == "partial-suffix"
+
+    legacy = {k: v for k, v in snapshot.items() if k != "round_completeness"}
+    row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
+    assert row.round_completeness == "complete", (
+        "pre-X6c snapshots all derive from sets starting at round 1"
+    )
 
 
 def test_reviewer_unavailable_is_a_round_and_any_wrapper_label_counts(tmp_path: Path):
@@ -464,7 +535,7 @@ def test_reviewer_unavailable_is_a_round_and_any_wrapper_label_counts(tmp_path: 
         "gemini-review (failover): BLOCK\n",
         1_000_600,
     )
-    logs, _, _ = am.round_metrics([str(tmp_path / "r*.log")])
+    logs, _, _, _ = am.round_metrics([str(tmp_path / "r*.log")])
     assert len(logs) == 2
 
 
@@ -1095,7 +1166,7 @@ def test_p1_count_collapses_the_codex_duplicate_printing(tmp_path: Path):
     b.write_text("no findings here\ncodex-review: APPROVE\n")  # 0
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
-    logs, gaps, p1 = am.round_metrics([str(tmp_path / "r*.log")])
+    logs, gaps, p1, _ = am.round_metrics([str(tmp_path / "r*.log")])
     assert len(logs) == 2
     assert gaps == [600.0]
     assert p1 == [1], "round 1 carried a P1; round 2 did not"

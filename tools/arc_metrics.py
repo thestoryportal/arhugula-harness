@@ -255,7 +255,7 @@ ROUND_TERMINAL_RE = re.compile(
 ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
 
 
-def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]:
+def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], str]:
     """Derive per-round records from round-log CONTENT, never file position.
 
     C-HE-25 (v1.6 X6c): a round is a log whose wrapper terminal line is a review
@@ -265,6 +265,12 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]
     11; the true content is 10 rounds with P1s at r1 and r10). Rounds key by the
     round id parsed from the log name, so `p1_rounds` carries ROUND IDS, and a
     refused attempt plus its retry under a fresh name collapse to one round.
+
+    Returns ``(logs, gaps, p1_rounds, completeness)``: round ids now make the
+    log set's own coverage readable, so the classification is DERIVED here and
+    carried through snapshot -> ArcRow -- a suffix-only set (first observed id
+    above 1) is a lower bound and must reach `round_completeness` as
+    ``partial-suffix``, never ride the schema default into exact cohort medians.
     """
     # Resolve before de-duplicating: two overlapping globs matching one file
     # would otherwise count it twice, inventing an extra round, a spurious
@@ -350,7 +356,8 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]
     gaps = [round(b - a, 1) for a, b in itertools.pairwise(mtimes)]
 
     p1_rounds = [rid for rid in sorted(rounds) if count_p1(rounds[rid][1]) >= 1]
-    return logs, gaps, p1_rounds
+    completeness = "complete" if min(rounds) == 1 else "partial-suffix"
+    return logs, gaps, p1_rounds, completeness
 
 
 def count_p1(text: str) -> int:
@@ -465,14 +472,18 @@ def extract(args: argparse.Namespace) -> ArcRow:
             row.round_wall_s = snapshot["round_wall_s"]
             row.p1_rounds = snapshot["p1_rounds"]
             row.round_log_source = snapshot["round_log_source"]
+            # Absent on snapshots queued before the X6c rev; those all derive
+            # from sets starting at round 1, so the schema default is truthful.
+            row.round_completeness = snapshot.get("round_completeness", row.round_completeness)
             first = parse_iso(snapshot["first_round_at"])
             row.first_round_at = snapshot["first_round_at"]
             row.last_round_at = snapshot["last_round_at"]
         else:
-            logs, gaps, p1 = round_metrics(args.round_logs)
+            logs, gaps, p1, completeness = round_metrics(args.round_logs)
             row.review_rounds = len(logs)
             row.round_wall_s = gaps
             row.p1_rounds = p1
+            row.round_completeness = completeness
             row.round_log_source = str(Path(args.round_logs[0]).parent)
             first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
             last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
@@ -816,13 +827,14 @@ def queue_capture(args: argparse.Namespace) -> int:
     # no recomputation at all and cannot be affected by later edits.
     snapshot: dict | None = None
     if args.round_logs:
-        logs, gaps, p1 = round_metrics(args.round_logs)
+        logs, gaps, p1, completeness = round_metrics(args.round_logs)
         first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
         last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
         snapshot = {
             "review_rounds": len(logs),
             "round_wall_s": gaps,
             "p1_rounds": p1,
+            "round_completeness": completeness,
             "first_round_at": first.isoformat(),
             "last_round_at": last.isoformat(),
             "round_log_source": str(logs[0].parent),
