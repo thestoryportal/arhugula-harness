@@ -787,9 +787,10 @@ def _reservation_recorded_max_round(arc_id: str) -> int | None:
 
     cur = rs.current(arc_id)
     outcomes = (cur[1].get("round_outcomes") or {}) if cur else {}
-    # int() raising on a foreign key is the loud path: an unparseable authority
-    # must never be silently skipped into "no claim".
-    return max((int(k) for k in outcomes), default=None)
+    # Keys are "<round>/<channel>" (record_round_outcome_if_reserved; verified
+    # live: {"1/codex": ...}). int() raising on a foreign key is the loud path:
+    # an unparseable authority must never be silently skipped into "no claim".
+    return max((int(k.split("/", 1)[0]) for k in outcomes), default=None)
 
 
 def queue_capture(args: argparse.Namespace) -> int:

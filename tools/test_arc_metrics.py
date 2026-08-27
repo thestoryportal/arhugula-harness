@@ -606,11 +606,12 @@ def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
 
 
 def test_reservation_recorded_max_round_reads_the_head_outcomes(monkeypatch):
+    """Keys carry the writer's real "<round>/<channel>" shape (verified live:
+    record_round_outcome_if_reserved writes {"1/codex": {...}})."""
     import reservations as rs
 
-    monkeypatch.setattr(
-        rs, "current", lambda arc_id: (3, {"round_outcomes": {"1": {}, "10": {}, "2": {}}})
-    )
+    outcomes = {"1/codex": {}, "10/codex": {}, "2/gemini": {}}
+    monkeypatch.setattr(rs, "current", lambda arc_id: (3, {"round_outcomes": outcomes}))
     assert am._reservation_recorded_max_round("x") == 10
     monkeypatch.setattr(rs, "current", lambda arc_id: None)
     assert am._reservation_recorded_max_round("x") is None
