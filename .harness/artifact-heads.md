@@ -53,5 +53,5 @@ dropped, so a marker can never leave the corpus unaccounted for.
 | Family | Head | Cleared | Artifact | Markers | Head marker |
 |---|---|---|---|---|---|
 | `class-1-fork-provider-construction-allowlist-semantic` | `§10-amendment (prefer-OAuth default; supersedes E-prod-3's False default forward)` | 2026-07-09 | `.harness/class_1_fork_provider_construction_allowlist_semantic.md` | 1 | `provider-construction-allowlist-prefer-oauth-cleared-2026-07-09.md` |
-| `implementation-plan-he-loop-lanes` | `v1.0 + rev 2026-08-26 (workflow-repair program §8 — U-HE-46…51 + U-SR-01…09, R0→R3)` | 2026-08-26 | `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` | 16 | `implementation-plan-he-loop-lanes-v1-workflow-repair-rev-cleared-2026-08-26.md` |
+| `implementation-plan-he-loop-lanes` | `v1.0 + rev 2026-08-27 (U-HE-48 baseline correction — the acceptance-witness bullet AND the §8.1 R3-baseline narrative, plus the same stamp on Workflow_Repair_Charter_v1.md §3)` | 2026-08-27 | `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` | 17 | `implementation-plan-he-loop-lanes-v1-u-he-48-witness-correction-cleared-2026-08-27.md` |
 | `spec-he-loop-lanes` | `v1.6` | 2026-08-26 | `.harness/spec/Spec_HE_Loop_Lanes_v1.md` | 7 | `spec-he-loop-lanes-v1.6-cleared-2026-08-26.md` |

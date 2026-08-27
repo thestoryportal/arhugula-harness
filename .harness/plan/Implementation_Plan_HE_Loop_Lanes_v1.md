@@ -7749,7 +7749,7 @@ The self-improvement circuit is broken at both ends: nothing flows in (0 skill r
 - **R0 — instruments:** U-HE-46, U-HE-47, U-HE-48, U-HE-49. Fix what measures before touching what is measured.
 - **R1 — skill/governance levers:** U-HE-50, U-SR-01…U-SR-08.
 - **R2 — mechanical sweep:** U-SR-09.
-- **R3 — eval arc:** U-HE-51 riding the next code arc (decision #2 RATIFIED 2026-08-26: U-HE-36 is the R3 eval arc — §8.5), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), 25.5M IET grand total (21.0M main / 4.52M subagents), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
+- **R3 — eval arc:** U-HE-51 riding the next code arc (decision #2 RATIFIED 2026-08-26: U-HE-36 is the R3 eval arc — §8.5), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), ≈25.6M IET grand total (21.0M main / 4.64M subagents — the u-he-48 execution-time correction ratified at the U-HE-48 acceptance bullet: [B]'s printed 4.52M/25.5M were first-copy-read undercounts), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
 
 Units within a round are mutually independent and may land in any order or together. The instruments-before-levers rule binds as dependency edges wherever a lever touches a measured surface: U-HE-50 (R1, a lever on the C-HE-27 surface R0 repairs) and U-HE-51 (R3) both hard-depend on all four R0 units. The U-SR-* levers touch no instrument surface and may land alongside R0.
 
@@ -7812,7 +7812,7 @@ The [B] §6 keep-as-is list (charter §4) binds every unit below: a diff that "i
 
 - [ ] ~100-line extractor per [B] "Evidence and method": deduplicate usage by `requestId` (naive sums double-count 1.9×), IET = input + 1.25×cache-write + 0.1×cache-read + 5×output, stage windows cut at transcript event timestamps; subagent transcripts under `<transcript-dir>/subagents/` included.
 - [ ] Additive-nullable cost fields onto the arc row; B-211/B-212 lever report (`arc-lever-report`) renders cost per arc when present.
-- [ ] **Acceptance witness:** run against the archived U-HE-35 transcript reproduces [B]'s headline within rounding — 418 main calls / ≈20.99M IET main / ≈4.52M subagents. (If the transcript has been GC'd, the witness is a synthetic fixture with duplicated `requestId`s asserting the 1.9× dedupe delta.)
+- [ ] **Acceptance witness:** run against the archived U-HE-35 transcript reproduces [B]'s headline within rounding — 418 main calls / ≈20.99M IET main / ≈4.52M subagents. (If the transcript has been GC'd, the witness is a synthetic fixture with duplicated `requestId`s asserting the 1.9× dedupe delta.) *Execution-time correction (u-he-48 codex r1, measured on the witness): subagent transcripts stamp an early partial `output_tokens` copy before the final one (42 of 291 requestIds; main 0 of 428), so [B]'s first-copy read undercounted subagent output — the extractor merges copies by per-field max and the ratified subagent witness value is the corrected 4,636,541 IET (≈4.64M; main unchanged at 20,996,434). R3 comparisons read against the corrected value.*
 
 #### U-HE-49: launch-admission guard + per-attempt round-log names
 

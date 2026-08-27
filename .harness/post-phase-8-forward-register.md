@@ -2546,3 +2546,12 @@ same spec leg.
 
 - **What it is.** A held bounded race: the holder authority check (inside `adjudicate()`, immediately before the append) and the gate-log append are not one atomic step — the reservation store and the gate log share no lock.
 - **Current state.** HELD as bounded, stated in code: a §6 holder transfer is dead-claim recovery of a crashed/idle lane, and the landing row is exactly the one the then-authorized caller composed. Closure = a design-phase call: accept-as-bounded in C-HE-24 §5, or a common coordination point for reservation-authorized log writes.
+
+### B-223 · Codex-runner cost-cohort gap *(surfaced by codex r2 on u-he-48, 2026-08-27; REGISTERED)*
+
+- **What it is.** A named cost-cohort gap: `tools/arc_cost.py` (U-HE-48, C-HE-25 X6e) reads Claude session-transcript JSONL, but Codex sessions store date-partitioned rollout JSONL under `~/.codex/sessions` in a different shape, so the Codex ship-pr carrier deliberately OMITS `--transcript` (pinned by `test_codex_workflow_parity`) and Codex-shipped arcs record null cost fields — honest, but a systematic cost-baseline under-coverage for that runner.
+- **Current state.** OPEN. Closure = a rollout-shaped usage extractor (or shared normalizer) feeding the same `cost_snapshot` fields, plus the carrier flipped to pass its transcript.
+### B-224 · subagent-sidecar completeness has no verifying authority *(surfaced by codex r5–r8 on u-he-48, 2026-08-27; REGISTERED)*
+
+- **What it is.** A held bounded measurement residual: `tools/arc_cost.py` cannot verify subagent-sidecar COMPLETENESS — no manifest enumerates the expected `agent-*.jsonl` set, so a whole stem-dir GC is indistinguishable from a session that spawned no subagents.
+- **Current state.** HELD as bounded after four codex rounds re-flagged the class (r5–r8). Detectable cases refuse (sidechain records with zero files; an existing `subagents/` dir with zero agent files — 0 of 67 occur naturally; a zero-yield sidecar); the absent-dir case is a measured genuine zero on 59 of 126 project transcripts. Closure = a producer-side subagent manifest or retention guarantee the extractor can check against — an authority this consumer cannot mint.

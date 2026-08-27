@@ -247,6 +247,14 @@ arc-metrics *ARGS:
 arc-lever-report *ARGS:
     uv run python tools/arc_lever_report.py "$@"
 
+# ─── arc COST — per-arc transcript cost extractor (U-HE-48, C-HE-25 X6e) ────
+# requestId-deduplicated usage (naive sums double-count ~1.9x) ranked by the IET
+# index; subagent transcripts included; stage windows cut at transcript event
+# timestamps via --cut. Feeds the arc row via `arc-metrics queue --transcript`.
+#   just arc-cost ~/.claude/projects/<proj>/<session>.jsonl --cut 2026-08-26T21:16:18Z
+arc-cost *ARGS:
+    uv run python tools/arc_cost.py "$@"
+
 # ─── arc EXIT REPORT — machine-readable arc-closure record (U-WT-03) ────────
 # Run as the FINAL ship-pr step, AFTER the reflect / context-save block: only there do
 # the merge SHA, post-merge main-CI conclusion, terminating-refresh commit and the

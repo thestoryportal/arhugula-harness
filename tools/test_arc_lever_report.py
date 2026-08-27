@@ -136,6 +136,7 @@ def test_p1_medians_carry_their_own_sample_counts(tmp_path: Path) -> None:
         "review_rounds": 2,
         "p1_rounds": 1,
         "arc_span_h": 2,
+        "cost_miet": 0,
     }
     assert s["pattern_metrics"]["B-211+B-212"]["p1_measured_n"] == 1
     assert s["p1_unmapped"] == ["pr-b"]
@@ -288,6 +289,9 @@ def test_treated_sub_cohorts_split_by_exact_lever_set(tmp_path: Path) -> None:
         "median_rounds": 1,
         "median_p1": 0,
         "p1_measured_n": 5,
+        "median_cost_miet": None,
+        "cost_measured_n": 0,
+        "cost_arcs": [],
     }
     assert s["pattern_metrics"]["B-212"]["median_rounds"] == 19
     assert "treated_median_rounds" not in s, "pooled treated aggregates evaluate neither lever"
@@ -370,6 +374,54 @@ def test_cli_renders_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert "span_h>=" in out and "lower bound" in out, "span must read as a lower bound"
     assert "pr-4" in out, "the excluded unmapped arc must be visible in the human view"
     assert "pr-6" in out, "the excluded partial arc must be visible in the human view"
+
+
+# mutation-probe(tools/arc_lever_report.py): drop the cost_miet computation in _metrics
+def test_cost_renders_per_arc_when_present_and_never_as_a_partial_sum(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """C-HE-25 X6e: a treated arc with cost fields shows cost=<n>M IET; a row whose
+    MAIN cost is unmeasured stays unmeasured even when a subagent figure exists."""
+    costed = _row("pr-c", 3, ["B-211", "B-212"])
+    costed.update(cost_main_iet=2_000_000.0, cost_subagent_iet=500_000.0)
+    partial = _row("pr-p", 4, ["B-211", "B-212"])
+    partial.update(cost_subagent_iet=500_000.0)  # main null -> no partial sum
+    half = _row("pr-q", 5, ["B-211", "B-212"])
+    half.update(cost_main_iet=1_000_000.0)  # subagent null = UNKNOWN, never zero (r3)
+    base = _row("pr-b", 10, [])
+    # control-side cost (codex u-he-48 r1); subagent 0.0 is a MEASURED zero
+    base.update(cost_main_iet=4_000_000.0, cost_subagent_iet=0.0)
+    # a round-unmapped row's cost stays DESCRIPTIVE, never dropped (r6)
+    unmapped = _row("pr-u", None, [], span=None)
+    unmapped.update(cost_main_iet=3_000_000.0, cost_subagent_iet=0.0)
+    s = _summary(tmp_path, [base, costed, partial, half, unmapped])["arc_types"]["applying"]
+    assert s["excluded_arc_costs"] == [{"arc_id": "pr-u", "cost_miet": 3.0}]
+    by_id = {m["arc_id"]: m for m in s["treated_arcs"]}
+    assert by_id["pr-c"]["cost_miet"] == 2.5
+    assert by_id["pr-p"]["cost_miet"] is None
+    assert by_id["pr-q"]["cost_miet"] is None, "an unknown subagent half must not read as 0"
+    assert s["baseline_median"]["cost_miet"] == 4.0
+    assert s["baseline_median"]["measured_n"]["cost_miet"] == 1
+    # every recognized pattern carries cost, not only the empty baseline (r2)
+    assert s["pattern_metrics"]["B-211+B-212"]["median_cost_miet"] == 2.5
+    assert s["pattern_metrics"]["B-211+B-212"]["cost_measured_n"] == 1
+    assert s["pattern_metrics"]["(none)"]["median_cost_miet"] == 4.0
+    # X6e promises cost PER ARC on every cohort side, not only medians (r4):
+    # the control row's id+cost must be visible through pattern_metrics
+    assert s["pattern_metrics"]["(none)"]["cost_arcs"] == [{"arc_id": "pr-b", "cost_miet": 4.0}]
+    ledger = _write(tmp_path / "ledger.jsonl", [base, costed, partial, half, unmapped])
+    assert alr.main(["--ledger", str(ledger)]) == 0
+    out = capsys.readouterr().out
+    # line-scoped (r4: a bare substring also matches the median text, so the
+    # per-arc interpolation could be deleted while the assertion stays green)
+    pr_c_line = next(ln for ln in out.splitlines() if ln.strip().startswith("pr-c "))
+    assert "cost=2.5M IET" in pr_c_line
+    assert "cost=4.0M IET (n=1)" in out, "the baseline median must expose control-side cost"
+    baseline_pattern_line = next(ln for ln in out.splitlines() if "pattern[(none)]" in ln)
+    assert "pr-b=4.0M" in baseline_pattern_line, "control arcs render id=cost, not only a median"
+    pr_q_line = next(ln for ln in out.splitlines() if ln.strip().startswith("pr-q "))
+    assert "cost=" not in pr_q_line, "an unknown subagent half must not render a partial cost"
+    assert "cost of round-excluded arcs (descriptive only): pr-u=3.0M" in out
 
 
 # mutation-probe(tools/arc_lever_report.py): accept a row missing arc_id into the buckets

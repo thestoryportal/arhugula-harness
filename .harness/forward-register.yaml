@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 222
+  total: 224
   open: 1
   design_substrate_gated: 3
-  registered_finding: 66
+  registered_finding: 68
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 27181a2eb2e07e6e
+  identity_digest: 519c95b3292a7e4f
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10948,3 +10948,42 @@ items:
   council: 'NO — held-as-bounded residual; closure is a design-phase accept-or-lock call.'
   heading: '### B-222 · holder-check-to-append window on adjudication *(surfaced
     by codex r6/r7 on u-he-47, 2026-08-27; REGISTERED)*'
+
+- id: B-223
+  title: >-
+    Codex-runner cost-cohort gap — rollout transcripts need their own extractor
+  pr: 'PR pending (u-he-48 codex r2)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-48: tools/arc_cost.py reads Claude session-transcript
+    JSONL, but Codex sessions store date-partitioned rollout JSONL under
+    ~/.codex/sessions in a different shape, so the Codex ship-pr carrier
+    deliberately OMITS --transcript and every Codex-shipped arc records null
+    C-HE-25 X6e cost fields — an honest could-not-look, but a systematic
+    under-coverage of the cost baseline for that runner (named in the carrier
+    text and pinned by test_codex_workflow_parity).'
+  close_out: 'OPEN — closure = a rollout-shaped usage extractor (or a shared
+    normalizer) feeding the same cost_snapshot fields, plus the Codex carrier
+    flipped to pass its transcript.'
+  council: 'NO — mechanical extractor work once the rollout usage shape is inventoried.'
+  heading: '### B-223 · Codex-runner cost-cohort gap *(surfaced by codex r2 on
+    u-he-48, 2026-08-27; REGISTERED)*'
+
+- id: B-224
+  title: >-
+    Subagent-sidecar completeness has no verifying authority — held as bounded
+  pr: 'PR pending (u-he-48 codex r5–r8)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-48 and HELD after four review rounds re-flagged the
+    same class: tools/arc_cost.py cannot verify subagent-sidecar COMPLETENESS —
+    no manifest enumerates the expected agent-*.jsonl set, so a whole stem-dir
+    GC is indistinguishable from a session that spawned no subagents. The
+    detectable cases refuse (sidechain records with zero files, r5; an existing
+    subagents/ dir with zero agent files, r7 — 0 of 67 occur naturally); the
+    absent-dir case is a measured genuine zero on 59 of 126 project
+    transcripts. Closing the residual needs a producer-side manifest or
+    retention guarantee — an authority this consumer cannot mint.'
+  close_out: 'OPEN — closure = a producer-side subagent manifest (or retention
+    guarantee) the extractor can check completeness against.'
+  council: 'NO — held-as-bounded residual; closure is a producer-surface change.'
+  heading: '### B-224 · subagent-sidecar completeness has no verifying authority
+    *(surfaced by codex r5–r8 on u-he-48, 2026-08-27; REGISTERED)*'

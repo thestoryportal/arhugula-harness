@@ -205,6 +205,14 @@ just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N
   --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
 ```
 
+OMIT `--transcript` on this runner: Codex session transcripts are date-partitioned
+rollout JSONL under `~/.codex/sessions`, a shape `tools/arc_cost.py` does not parse
+(it reads Claude session transcripts), so there is no truthful cost input to pass --
+the C-HE-25 X6e cost fields read as null on Codex-shipped arcs, an honest
+could-not-look, never a guessed transcript's numbers. This is a NAMED cohort gap
+(the cost baseline under-covers the Codex runner) until a rollout-shaped extractor
+exists; the Claude carrier passes the flag.
+
 One file per arc, in a queue directory OUTSIDE the repo. That placement is load-bearing:
 writing the tracked ledger from inside a topic worktree leaves a dirty file that both
 strands the row when the worktree is disposed and blocks the disposal itself. `--arc-type`,

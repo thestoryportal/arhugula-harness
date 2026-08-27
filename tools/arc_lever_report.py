@@ -70,6 +70,9 @@ class LedgerRow(BaseModel):
     round_completeness: str | None = "complete"
     p1_rounds: list[Annotated[int, Field(ge=0)]] | None = None
     arc_span_s: float | None = Field(default=None, ge=0)
+    # C-HE-25 v1.6 X6e: requestId-deduplicated transcript cost (absent = never measured)
+    cost_main_iet: float | None = Field(default=None, ge=0)
+    cost_subagent_iet: float | None = Field(default=None, ge=0)
 
 
 def load_rows(ledger: Path) -> list[LedgerRow]:
@@ -180,6 +183,16 @@ def _metrics(r: LedgerRow, levers: tuple[str, ...]) -> dict[str, Any]:
         # would award the best possible P1 score to an unmeasured value (codex r2).
         "p1_rounds": len(p1) if p1 is not None else None,
         "arc_span_h": round(span / 3600, 1) if span is not None else None,
+        # Main + subagent IET in millions. BOTH halves must be measured: the
+        # producer (_cost_snapshot) emits an explicit 0.0 when zero subagent
+        # usage was measured, so a null half means UNKNOWN — folding it in as
+        # zero would admit the arc to cost medians as artificially cheap
+        # (codex u-he-48 r2/r3).
+        "cost_miet": (
+            round((r.cost_main_iet + r.cost_subagent_iet) / 1e6, 2)
+            if r.cost_main_iet is not None and r.cost_subagent_iet is not None
+            else None
+        ),
         "levers": declared,
         "target_levers_declared": sorted(lv for lv in declared if lv in levers),
     }
@@ -197,16 +210,22 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
     other = [_metrics(r, levers) for r in buckets["other_levers"]]
     base_p1 = [m["p1_rounds"] for m in baseline if m["p1_rounds"] is not None]
     base_span = [m["arc_span_h"] for m in baseline if m["arc_span_h"] is not None]
+    # Control-side cost (codex u-he-48 r1): a treated arc's cost is only readable
+    # against the untreated cohort's — a per-treated-arc figure alone cannot say
+    # whether the lever made arcs cheaper.
+    base_cost = [m["cost_miet"] for m in baseline if m["cost_miet"] is not None]
     base_median = {
         "review_rounds": _median([m["review_rounds"] for m in baseline]),
         "p1_rounds": _median(base_p1),
         "arc_span_h": _median(base_span),
+        "cost_miet": _median(base_cost),
         # A P1 median over fewer rows than the cohort must say so, or the n>=5
         # bar can look satisfied by rows the P1 metric never measured (codex r3).
         "measured_n": {
             "review_rounds": len(baseline),
             "p1_rounds": len(base_p1),
             "arc_span_h": len(base_span),
+            "cost_miet": len(base_cost),
         },
     }
     for m in treated:
@@ -263,6 +282,18 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
             "median_rounds": _median([m["review_rounds"] for m in ms]),
             "median_p1": _median([m["p1_rounds"] for m in ms if m["p1_rounds"] is not None]),
             "p1_measured_n": sum(1 for m in ms if m["p1_rounds"] is not None),
+            # every recognized contrast side needs control-side cost, not only
+            # the empty-lever baseline (codex u-he-48 r2: {999} vs {B-211,999}
+            # is a valid single-lever contrast with no cost otherwise), and X6e
+            # promises cost PER ARC — the individual control rows, not only a
+            # median (codex r4)
+            "median_cost_miet": _median([m["cost_miet"] for m in ms if m["cost_miet"] is not None]),
+            "cost_measured_n": sum(1 for m in ms if m["cost_miet"] is not None),
+            "cost_arcs": [
+                {"arc_id": m["arc_id"], "cost_miet": m["cost_miet"]}
+                for m in ms
+                if m["cost_miet"] is not None
+            ],
         }
         for k, ms in by_pattern.items()
     }
@@ -280,6 +311,18 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
         "separable_levers": separable,
         "per_skill_separable": bool(separable),
         "excluded_treated_count": excluded_treated,
+        # Cost is measured independently of round measurability (X6e; codex
+        # u-he-48 r6): a round-excluded row's cost stays DESCRIPTIVE data —
+        # visible per arc, never entering any evaluation median here.
+        "excluded_arc_costs": [
+            {
+                "arc_id": r.arc_id,
+                "cost_miet": round((r.cost_main_iet + r.cost_subagent_iet) / 1e6, 2),
+            }
+            for b in ("unmapped", "partial", "undeclared")
+            for r in buckets[b]
+            if r.cost_main_iet is not None and r.cost_subagent_iet is not None
+        ],
         "excluded_unmapped": [r.arc_id for r in buckets["unmapped"]],
         "excluded_undeclared": [r.arc_id for r in buckets["undeclared"]],
         "excluded_partial": [r.arc_id for r in buckets["partial"]],
@@ -309,6 +352,11 @@ def render(summary: dict[str, Any]) -> str:
             f"p1={bm['p1_rounds']} (n={bm['measured_n']['p1_rounds']}) "
             f"span_h>={bm['arc_span_h']} (n={bm['measured_n']['arc_span_h']}; span is a "
             f"lower bound: derived excludes first-round duration)"
+            + (
+                f" cost={bm['cost_miet']}M IET (n={bm['measured_n']['cost_miet']})"
+                if bm["measured_n"]["cost_miet"]
+                else ""
+            )
         )
         if not s["evaluable_for_lever_decision"]:
             lines.append(
@@ -316,9 +364,16 @@ def render(summary: dict[str, Any]) -> str:
                 f"{s['non_evaluable_reason']} — numbers are descriptive only"
             )
         for pat, ps in sorted(s["pattern_metrics"].items()):
+            per_arc = ", ".join(f"{a['arc_id']}={a['cost_miet']}M" for a in ps["cost_arcs"])
+            cost = (
+                f" median_cost={ps['median_cost_miet']}M IET "
+                f"(cost n={ps['cost_measured_n']}: {per_arc})"
+                if ps["cost_measured_n"]
+                else ""
+            )
             lines.append(
                 f"  pattern[{pat}]: n={ps['n']} median_rounds={ps['median_rounds']} "
-                f"median_p1={ps['median_p1']} (p1 n={ps['p1_measured_n']})"
+                f"median_p1={ps['median_p1']} (p1 n={ps['p1_measured_n']}){cost}"
             )
         if s["p1_unmapped"]:
             lines.append(
@@ -336,10 +391,11 @@ def render(summary: dict[str, Any]) -> str:
             )
         for m in s["treated_arcs"]:
             p1 = m["p1_rounds"] if m["p1_rounds"] is not None else "unmapped"
+            cost = f" cost={m['cost_miet']}M IET" if m["cost_miet"] is not None else ""
             lines.append(
                 f"  {m['arc_id']} rounds={m['review_rounds']} p1={p1} "
                 f"span_h>={m['arc_span_h']} "
-                f"delta_rounds_vs_baseline={m['delta_rounds_vs_baseline_median']}"
+                f"delta_rounds_vs_baseline={m['delta_rounds_vs_baseline_median']}{cost}"
             )
         lines.append(
             "  per-skill separation: "
@@ -349,6 +405,9 @@ def render(summary: dict[str, Any]) -> str:
                 else "NOT separable — no two evaluable patterns differ in exactly one target lever"
             )
         )
+        if s["excluded_arc_costs"]:
+            per = ", ".join(f"{a['arc_id']}={a['cost_miet']}M" for a in s["excluded_arc_costs"])
+            lines.append(f"  cost of round-excluded arcs (descriptive only): {per}")
         for key, label in (
             ("excluded_unmapped", "unmapped rounds, B-170 — never evaluated"),
             ("excluded_partial", "partial round data — lower bounds, never evaluated"),

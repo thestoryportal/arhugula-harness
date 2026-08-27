@@ -200,6 +200,13 @@ class ArcRow:
     concurrent_lanes_min: int | None = None
     concurrent_lanes_max: int | None = None
     phases: dict[str, dict] = field(default_factory=dict)  # {phase: {start, end}} (C-HE-27)
+    # -- C-HE-25 v1.6 X6e cost fields (additive; historical rows read as null) --
+    # requestId-deduplicated IET from the arc's session transcript (arc_cost.py)
+    cost_main_calls: int | None = None
+    cost_main_iet: float | None = None
+    cost_subagent_calls: int | None = None
+    cost_subagent_iet: float | None = None
+    cost_source: str | None = None  # the transcript the figures were derived from
 
 
 def run(cmd: list[str], *, what: str) -> str:
@@ -554,6 +561,22 @@ def extract(args: argparse.Namespace) -> ArcRow:
     else:
         prov["round_fields"] = "unmapped:no-round-logs-supplied"
 
+    # Cost fields (C-HE-25 X6e). Queue-time is the ONE cost entry point: a
+    # reservation-less backfill via `extract` has no truthful arc boundary to
+    # bound a live derivation (codex u-he-48 r5), so extract folds the queued
+    # closure-time snapshot or records an honest null.
+    cost = getattr(args, "cost_snapshot", None)
+    if cost:
+        row.cost_main_calls = cost["main_calls"]
+        row.cost_main_iet = cost["main_iet"]
+        row.cost_subagent_calls = cost["subagent_calls"]
+        row.cost_subagent_iet = cost["subagent_iet"]
+        row.cost_source = cost["source"]
+        prov["cost_fields"] = "derived"
+    else:
+        skip = getattr(args, "cost_skip_reason", None)
+        prov["cost_fields"] = f"unmapped:{skip or 'no-transcript-supplied'}"
+
     if row.merge_sha:
         # Deliberately NOT wrapped in a try/except. A transient gh failure
         # (auth, network, outage) is not an absent input: swallowing it into
@@ -881,6 +904,48 @@ def _completeness_for(arc_id: str, observed_ids: list[int]) -> str:
     return "complete" if recorded and max(recorded) == max(observed) else "unknown"
 
 
+def _cost_snapshot(transcripts: list[str], arc_id: str) -> dict | None:
+    """C-HE-25 X6e: requestId-deduplicated transcript cost (arc_cost.py owns the math).
+
+    Bounded to THIS arc's window (codex u-he-48 r3): one session ships
+    consecutive arcs, so whole-session totals would fold every earlier arc's
+    usage into the later row. The arc-start authority is the reservation's
+    ``reserved_at``; without a head there is no truthful boundary, so the cost
+    is skipped loudly (null fields read as could-not-look, C-HE-25) rather
+    than recorded cumulatively. A resumed/handed-off arc spans sessions (r4):
+    every transcript that ran the arc is passed and pooled with global
+    requestId dedupe inside arc_cost.
+    """
+    # lazy imports, same as elsewhere: keep module load free of tool coupling
+    import arc_cost
+    import reservations as rs
+
+    cur = rs.current(arc_id)
+    if cur is None:
+        print(f"  {arc_id}: cost skipped — no reservation head to bound the arc window")
+        return None
+    since = arc_cost.parse_ts(cur[1]["reserved_at"], what=f"{arc_id} reserved_at")
+    try:
+        report = arc_cost.cost_report([Path(t) for t in transcripts], cuts=[since])
+    except arc_cost.CostError as exc:
+        raise AbortError(f"cost extraction failed: {exc}") from exc
+    window = report["windows"][1]  # [reserved_at, end)
+    if window["main"]["calls"] == 0:
+        # transcripts with no usage inside this arc's window are some OTHER
+        # session's — a false measured-zero must not enter the ledger
+        raise AbortError(
+            f"cost extraction refused: {';'.join(transcripts)} has no main-session usage "
+            f"after {arc_id}'s reserved_at ({cur[1]['reserved_at']}) — wrong transcript(s)?"
+        )
+    return {
+        "main_calls": window["main"]["calls"],
+        "main_iet": window["main"]["iet"],
+        "subagent_calls": window["subagents"]["calls"],
+        "subagent_iet": window["subagents"]["iet"],
+        "source": ";".join(report["transcripts"]),
+    }
+
+
 def queue_capture(args: argparse.Namespace) -> int:
     """Record an arc's capture inputs OUTSIDE the repo, for a later drain.
 
@@ -958,12 +1023,27 @@ def queue_capture(args: argparse.Namespace) -> int:
             "matched": [str(p) for p in logs],
         }
 
+    # Same snapshot rationale as the round logs: the transcript is the arc's own
+    # NOW, and it can grow (the session continues past closure) or be GC'd before
+    # the next arc's drain runs. Derive at closure; drain folds the numbers.
+    cost_snapshot = (
+        _cost_snapshot(args.transcript, arc_id) if getattr(args, "transcript", None) else None
+    )
+    # A supplied transcript that could not be bounded is NOT "no transcript
+    # supplied" (codex u-he-48 r6 P3): the only None-with-input path is the
+    # missing reservation boundary, and the ledger provenance must say so.
+    cost_skip_reason = (
+        "no-arc-boundary" if cost_snapshot is None and getattr(args, "transcript", None) else None
+    )
+
     entry = {
         "pr": args.pr,
         "arc_id": args.arc_id,
         "arc_type": args.arc_type,
         "arc_type_declared_at": getattr(args, "arc_type_declared_at", None) or "close",
         "decisions": args.decisions,
+        "cost_snapshot": cost_snapshot,
+        "cost_skip_reason": cost_skip_reason,
         "round_snapshot": snapshot,
         "round_logs_globs": args.round_logs or [],
         "levers": args.levers or [],
@@ -1669,6 +1749,8 @@ def _drain_one(path: Path, entry: dict, arc_id: str, committed: set[str], local:
             # The metrics were derived at closure; drain never re-reads the logs.
             round_snapshot=entry.get("round_snapshot"),
             round_logs=None,
+            cost_snapshot=entry.get("cost_snapshot"),
+            cost_skip_reason=entry.get("cost_skip_reason"),
             levers=entry.get("levers"),
             notes=entry.get("notes", ""),
         )
@@ -2525,6 +2607,9 @@ def main(argv: list[str] | None = None) -> int:
     ex.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     ex.add_argument("--decisions", type=int, help="independent decision count")
     ex.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
+    # NO --transcript here (codex u-he-48 r5): cmd_extract's backfill runs before
+    # its race-fence reservation exists, so there is no truthful arc boundary to
+    # bound a live cost derivation -- cost enters at `queue` time only.
     ex.add_argument("--levers", nargs="*", help="levers live during this arc")
     ex.add_argument("--notes", default="")
     ex.add_argument("--dry-run", action="store_true")
@@ -2543,6 +2628,11 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--arc-type-declared-at", choices=["open", "close"], default="close")
     q.add_argument("--decisions", type=int, required=True, help="independent decision count")
     q.add_argument("--round-logs", nargs="+", help="glob(s) for this arc's round logs")
+    q.add_argument(
+        "--transcript",
+        nargs="+",
+        help="the arc's session transcript(s) .jsonl for cost fields (X6e)",
+    )
     q.add_argument("--levers", nargs="*", help="levers live during this arc")
     q.add_argument("--notes", default="")
     q.set_defaults(func=queue_capture)
