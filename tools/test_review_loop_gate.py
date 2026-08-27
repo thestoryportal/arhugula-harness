@@ -1076,6 +1076,10 @@ def recipe_env(tmp_path: Path):
         '      case "$*" in *"--phase verify --edge start"*)\n'
         '        echo "ABORT: injected start failure" >&2; exit 2 ;; esac\n'
         "    fi\n"
+        '    if [ "${REC_PHASE_MODE:-}" = fail-end ]; then\n'
+        '      case "$*" in *"--phase verify --edge end"*)\n'
+        '        echo "ABORT: injected end failure" >&2; exit 2 ;; esac\n'
+        "    fi\n"
         f'    exec "{sys.executable}" "{_RESERVATIONS}" "$@" ;;\n'
         "esac\n"
     )
@@ -1238,6 +1242,38 @@ def test_recipe_start_failure_records_no_partial_pair(recipe_env):
     verify = _phases(tmp / "queue")["verify"]
     assert set(verify) == {"start", "end"}
     assert verify["start"] <= verify["end"]  # coherent, never reversed
+
+
+def test_recipe_end_failure_leaves_open_window_next_round_closes(recipe_env):
+    # codex u-he-50 r2 (partial-write arm 3), pinned as the SAME named bound as the
+    # crash window: a failed end WRITE leaves the durable start intact and only the
+    # next invocation can close it — the recorded span is an upper bound that can
+    # overlap the edit window (no durable same-attempt signal exists that would not
+    # mint a second authority; the recipe comment names the bound).
+    _repo, tmp, run = recipe_env
+    _seed_reservation(tmp / "queue")
+    done = run("allow", arc_env=dict(_ARC_ENV), phase_mode="fail-end")
+    assert done.returncode == 1
+    assert "WARN verify.end span emission failed" in done.stderr
+    open_window = _phases(tmp / "queue")["verify"]
+    assert set(open_window) == {"start"}  # start intact, window open
+    retry = run("allow", ".harness/tmp/x-rounds/r2.log", arc_env=dict(_ARC_ENV))
+    assert retry.returncode == 1
+    verify = _phases(tmp / "queue")["verify"]
+    assert verify["start"] == open_window["start"]  # first-write-wins keeps round-1 start
+    assert set(verify) == {"start", "end"}
+    assert verify["start"] <= verify["end"]
+
+
+def test_recipe_half_set_ids_warn_and_skip_emission(recipe_env):
+    # codex u-he-50 r2 P3: one id without the other is a MISCONFIGURED invocation,
+    # not the spec'd unreserved case — the skip must be loud, and no store write
+    # happens (a half-identity can never bind to the holder fence anyway)
+    _repo, tmp, run = recipe_env
+    done = run("allow", arc_env={"HARNESS_ARC_ID": "arc-x"})
+    assert done.returncode == 1
+    assert "must both be set" in done.stderr
+    assert not (tmp / "queue" / "reservations").exists()
 
 
 def test_recipe_crash_window_closed_by_retry_end(recipe_env):

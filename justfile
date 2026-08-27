@@ -774,12 +774,21 @@ review-with-failover-logged log base='main':
     # Partial-pair dispositions (codex u-he-50 r1): a lone END is refused here (a
     # failed start with a successful end would durably record a reversed pair), so
     # a start-failed attempt records nothing and the retry emits a fresh coherent
-    # pair; a start-only crash window is CLOSED by the retry's end (U-HE-49: the
-    # retry keeps the round name), so that recorded round-1 span is an upper bound
-    # that includes the interruption -- a named measurement bound, never a gap-derived
-    # duration.
+    # pair; a start-only OPEN window -- whether the attempt crashed before end or
+    # its end WRITE failed (codex r2: only the next invocation can close it; no
+    # durable same-attempt signal exists that would not mint a second authority) --
+    # is CLOSED by the retry's end (U-HE-49: the retry keeps the round name), so
+    # that recorded round-1 span is an upper bound that includes the interruption
+    # and can overlap the edit window -- a named measurement bound, never a
+    # gap-derived duration.
     emit_verify() {
-      [ -n "${HARNESS_ARC_ID:-}" ] && [ -n "${HARNESS_LANE_ID:-}" ] || return 0
+      if [ -z "${HARNESS_ARC_ID:-}" ] && [ -z "${HARNESS_LANE_ID:-}" ]; then return 0; fi
+      if [ -z "${HARNESS_ARC_ID:-}" ] || [ -z "${HARNESS_LANE_ID:-}" ]; then
+        # codex r2 P3: half-set ids are a MISCONFIGURED invocation, not the spec'd
+        # unreserved case -- losing the span silently would read as unreserved
+        echo "review-with-failover-logged: WARN verify.$1 span not emitted -- HARNESS_ARC_ID and HARNESS_LANE_ID must both be set (half-set ids)" >&2
+        return 0
+      fi
       if [ "$1" = end ] && [ "${_verify_start_failed:-0}" = 1 ]; then
         echo "review-with-failover-logged: WARN verify.end skipped -- start emission failed this attempt; a lone end would record a reversed pair (C-HE-27 §3)" >&2
         return 0
