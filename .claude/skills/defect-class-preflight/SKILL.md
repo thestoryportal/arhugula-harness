@@ -240,9 +240,11 @@ BEFORE re-invoking the reviewer:
 3. Adjudicate each absorbed finding on the gate log (C-HE-24 §5, U-HE-47): for every
    finding row this round produced, once its fix is committed (or it is refuted with
    grounds), append the disposition — `just merge-gate-adjudicate --finding-id <id>
-   --disposition accepted|rejected --actor claude_absorber` (`accepted` = the fix was
-   applied; `rejected` = refuted; the finding_id is on the round's emitted JSONL
-   rows). Without this row the finding stays disposition=null forever and N6 counts
+   --disposition accepted|rejected --actor <runner>_absorber` (`accepted` = the fix
+   was applied; `rejected` = refuted; the finding_id is on the round's emitted JSONL
+   rows). The actor is the RUNNER's own absorber identity — `claude_absorber` on the
+   Claude runner, `codex_absorber` on the Codex bridge — never the producer, never
+   `operator`. Without this row the finding stays disposition=null forever and N6 counts
    nothing — the attest below records that you ANSWERED the finding, never that it
    was DISPOSED.
 4. If the class was absent/unfired in this file, repair the skill in that commit too

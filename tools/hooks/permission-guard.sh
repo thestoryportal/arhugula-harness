@@ -474,13 +474,19 @@ _adjudicate_exact_shape() {
   # (suppressed stays operator-visible), the finding-id in its C-HE-24 §4 4-part
   # shape, and the actor NEVER the operator identity (an agent must not claim the
   # operator's adjudication authority; write-time actor≠producer is enforced by
-  # finding_record, this is the venue half). Everything else falls to ask.
+  # finding_record, this is the venue half). The id's PRODUCER component is pinned
+  # to the review producers (codex/gemini wrappers + gate lenses) — codex r3 P1: an
+  # unrestricted producer would let a headless agent adjudicate-reject a
+  # DETERMINISTIC check's finding (merge-door, context-guard) and thereby mute the
+  # detection; those targets stay ask-gated. Everything else falls to ask.
   local cmd="$1"
   set -f; set -- $cmd; set +f
   [ "$#" -eq 8 ] || return 1
   [ "$1" = "just" ] && [ "$2" = "merge-gate-adjudicate" ] \
     && [ "$3" = "--finding-id" ] && [ "$5" = "--disposition" ] && [ "$7" = "--actor" ] || return 1
-  printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+:[0-9a-f]{12}:[0-9]+$' || return 1
+  printf '%s' "$4" | grep -Eq \
+    '^(codex_review_wrapper|gemini_review_wrapper|merge-gate-[a-z-]+):[A-Za-z0-9._-]+:[0-9a-f]{12}:[0-9]+$' \
+    || return 1
   case "$6" in accepted|rejected) ;; *) return 1 ;; esac
   printf '%s' "$8" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
   case "$8" in [Oo][Pp][Ee][Rr][Aa][Tt][Oo][Rr]) return 1 ;; esac

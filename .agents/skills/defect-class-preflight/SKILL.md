@@ -15,3 +15,4 @@ Apply these runner translations only:
 - When Codex is the author, any canonical claim that Codex is out-of-family translates to Antigravity via `just gemini-review`; when Claude is the author, `just codex-review` remains out-of-family.
 - Claude `advisor()` transcript judgment translates to the interactive Codex controller's transcript-aware judgment plus the required out-of-family artifact review; never silently drop either function.
 - Claude-only scratch paths translate to a safe `/tmp` or ignored workspace scratch path. All Git, CI, worktree, paid-call, secret, and destructive-action guardrails remain binding.
+- The post-round adjudication step's `--actor <runner>_absorber` resolves to `codex_absorber` on this runner (U-HE-47: the disposition_actor records WHO adjudicated; a Codex absorption must never record Claude's identity).
