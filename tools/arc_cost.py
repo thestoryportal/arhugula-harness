@@ -280,10 +280,19 @@ def cost_report(transcripts: list[Path], cuts: list[datetime]) -> dict:
             "subagents/ files found -- the subagent transcripts are missing, so the "
             "subagent cost cannot be measured"
         )
-    subs = dedupe_calls(
-        [r for p in sub_paths for r in read_records(p)],
-        source=";".join(p.name for p in sub_paths) or "subagents",
-    )
+    # Every supplied sidecar must itself yield work: an empty or zero-only
+    # agent file is a truncated store, and pooling it silently would persist
+    # files=N with understated cost (codex u-he-48 r9).
+    sub_records: list[dict] = []
+    for p in sub_paths:
+        recs = read_records(p)
+        if not dedupe_calls(recs, source=p.name):
+            raise CostError(
+                f"{p}: subagent file yields no non-zero calls -- truncated store, "
+                "so the subagent cost cannot be measured"
+            )
+        sub_records.extend(recs)
+    subs = dedupe_calls(sub_records, source=";".join(p.name for p in sub_paths) or "subagents")
     report = {
         "transcripts": [str(t) for t in transcripts],
         "main": totals(main).as_dict(),

@@ -131,6 +131,21 @@ def test_malformed_records_refused_not_traceback(tmp_path: Path) -> None:
         ac.cost_report([_write(tmp_path / "d.jsonl", [absent])], cuts=[])
 
 
+def test_zero_yield_subagent_file_refused(tmp_path: Path) -> None:
+    """codex u-he-48 r9: an empty or zero-only agent file is a truncated store
+    -- pooled silently it would persist files=N with understated cost."""
+    t = _write(tmp_path / "sess.jsonl", DUPED)
+    subdir = tmp_path / "sess" / "subagents"
+    subdir.mkdir(parents=True)
+    (subdir / "agent-a.jsonl").write_text("")  # empty sidecar
+    with pytest.raises(ac.CostError, match="yields no non-zero calls"):
+        ac.cost_report([t], cuts=[])
+    zero = _rec("req_s0", "2026-08-26T04:10:00.000Z", out=0, inp=0, cw=0, cr=0)
+    _write(subdir / "agent-a.jsonl", [zero])  # zero-only sidecar
+    with pytest.raises(ac.CostError, match="yields no non-zero calls"):
+        ac.cost_report([t], cuts=[])
+
+
 def test_present_but_empty_subagents_dir_refused(tmp_path: Path) -> None:
     """codex u-he-48 r7: an existing subagents/ with no agent files never occurs
     naturally (0 of 67 measured) -- it is a GC'd/partial store, and a zero
