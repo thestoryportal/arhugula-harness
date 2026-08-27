@@ -1065,6 +1065,12 @@ def test_reservation_arc_orphan_is_left_standing_and_the_store_is_never_consulte
     assert mgl.reconcile_orphans(md, jl) == 0
     assert "no recoverable PR" in capsys.readouterr().err
     assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1  # still visible, never lost
+    # r8 P2: the SAME arc's next gate run carries the recovery authority — its own
+    # (arc, pr) invocation pair; a DIFFERENT arc's run must not renumber it.
+    assert mgl.reconcile_orphans(md, jl, arc_id="u-other", pr=99) == 0
+    assert mgl.reconcile_orphans(md, jl, arc_id="u-he-99", pr=42) == 1
+    assert mgl.read_md_rows(md)[0]["pr"] == 42
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
     # a pr-N-arc orphan alongside it still reconciles from its own arc id
     _emit(tmp_path, pr=7, md=md, jl=jl)
     md_lines = md.read_text()

@@ -398,13 +398,15 @@ def adjudicate(
                 f"finding {finding_id!r} belongs to arc {base['arc_id']!r}, not the current "
                 f"arc {expected_arc!r} — cross-arc adjudication is an operator action"
             )
-        # Holder check at the TIGHTEST window (codex r6 P2): re-verified here, immediately
-        # before the append, not only at the CLI edge. The residual race is the append
-        # itself — reservation store and gate log have no common lock — and is bounded
-        # benign: a holder transfer is the C-HE-03 §6 dead-claim recovery of a crashed or
-        # idle lane (operator-adjacent, not a concurrent adversary), and it changes no
-        # field of this row — a lost race lands a row byte-identical to the one the
-        # pre-transfer holder was authorized to write a moment earlier.
+        # Holder check at the TIGHTEST window (codex r6 P2; held + registered as B-222 at
+        # r7/r8): re-verified here, immediately before the append, not only at the CLI
+        # edge. The residual race is the append itself — reservation store and gate log
+        # have no common lock. Held rationale: a §6 holder transfer is dead-claim
+        # recovery of a crashed/idle lane, not a concurrent adversary, and the row this
+        # invocation lands is exactly the row it was authorized to write moments earlier
+        # — the transfer changes nothing about the invocation's own content (its
+        # disposition/actor were chosen by the then-authorized caller, and both venue
+        # actors are absorbers bound to the same finding lineage).
         reason = arc_not_held_reason(expected_arc)
         if reason is not None:
             raise GateLogError(reason)
@@ -551,12 +553,23 @@ def _pr_of(row: dict) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = None) -> int:
+def reconcile_orphans(
+    md_path: Path | None = None,
+    jsonl_path: Path | None = None,
+    *,
+    arc_id: str | None = None,
+    pr: int | None = None,
+) -> int:
     """Re-emit the markdown line for every orphan emission (next gate run, C-HE-23 §2).
-    Touches the md file only when there is something to write. An orphan whose PR cannot
-    be recovered (codex r5 P1: reservation-arc rows carry no pr) is reported loudly and
-    left standing — it re-surfaces on every run until reconcilable, never silently
-    re-numbered."""
+    Touches the md file only when there is something to write.
+
+    PR recovery has exactly two authorities, neither mutable (codex r7 P1 -> r8 P2):
+    a `pr-N` arc id on the row itself, or — for reservation-arc rows — the CALLER's own
+    `(arc_id, pr)` pair when `emit` runs reconciliation: the next gate run for that same
+    arc invokes `emit --pr N --arc-id <arc>`, and that invocation's pr is the same
+    authority the md line would have carried, so the documented next-run recovery works
+    for the U-HE-34 carrier form too. Any other orphan is reported loudly and left
+    standing — never re-derived from the mutable reservation store."""
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
 
@@ -568,8 +581,10 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
         written = 0
         with md_path.open("a", encoding="utf-8") as fh:
             for r in orphans:
-                pr = _pr_of(r)
-                if pr is None:
+                row_pr = _pr_of(r)
+                if row_pr is None and arc_id is not None and r["arc_id"] == arc_id:
+                    row_pr = pr
+                if row_pr is None:
                     print(
                         f"merge-gate-log: orphan for arc {r['arc_id']!r} round {r['round_n']} "
                         "has no recoverable PR; left standing",
@@ -582,7 +597,9 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
                     for x in emissions[(r["arc_id"], *k, r["round_n"])]
                     if x["record_kind"] == "finding"
                 )
-                fh.write(_md_line(r["ts"], pr, r["head_sha"], k[1], k[2], n_findings, r["round_n"]))
+                fh.write(
+                    _md_line(r["ts"], row_pr, r["head_sha"], k[1], k[2], n_findings, r["round_n"])
+                )
                 written += 1
         return written
 
@@ -708,8 +725,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "emit":
         try:
             # "the next gate run" (C-HE-23 §2): re-emit the md line of any orphan JSONL
-            # verdict left by an earlier crash between the two writes (codex R2 P3)
-            n = reconcile_orphans()
+            # verdict left by an earlier crash between the two writes (codex R2 P3).
+            # This invocation's own (arc, pr) pair is the recovery authority for the
+            # same arc's reservation-arc orphans (codex r8 P2).
+            n = reconcile_orphans(arc_id=args.arc_id or f"pr-{args.pr}", pr=args.pr)
             if n:
                 print(f"merge-gate-log: reconciled {n} orphan md row(s) from an earlier run")
             expected = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
