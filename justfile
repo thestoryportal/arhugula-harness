@@ -763,6 +763,19 @@ review-with-failover base='main':
 review-with-failover-logged log base='main':
     #!/usr/bin/env bash
     set -u
+    # U-HE-50 (C-HE-27 §5 X6a): the wrapper's own process boundaries ARE the verify
+    # edges -- start after admission (a refused launch spends nothing and opens no
+    # span), end at the round's terminal. record_phase is first-write-wins and
+    # replay-idempotent, so re-review rounds 2..n re-emit as no-ops and the durable
+    # pair stays the round-1 window (ship-pr "Phase-span edges" stays the definition).
+    # [LAW:single-enforcer] reservations.py record_phase is the only span writer;
+    # [LAW:no-silent-failure] a failed emission warns loud but never alters the
+    # verdict exit -- an absent span reads null downstream, never zero (C-HE-27 §3).
+    emit_verify() {
+      [ -n "${HARNESS_ARC_ID:-}" ] && [ -n "${HARNESS_LANE_ID:-}" ] || return 0
+      uv run python tools/reservations.py phase --arc-id "$HARNESS_ARC_ID" --phase verify --edge "$1" --lane-id "$HARNESS_LANE_ID" >/dev/null \
+        || echo "review-with-failover-logged: WARN verify.$1 span emission failed -- round proceeds; span reads null (C-HE-27)" >&2
+    }
     # U-HE-49 (C-HE-21 §1 X6b): admission is evaluated BEFORE the launch -- a launch
     # the gate would refuse is not made (exit 3: no reviewer call, no log file, no
     # round identity consumed), and the verb mints a per-attempt destination
@@ -774,8 +787,10 @@ review-with-failover-logged log base='main':
       echo "review-with-failover-logged: launch verb admitted but printed no destination -- aborting before the reviewer call" >&2
       exit 4
     fi
+    emit_verify start
     uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "$dest"
     rc=("${PIPESTATUS[@]}")
+    emit_verify end
     if [ "${rc[1]}" -ne 0 ]; then
       # Publish failure is its OWN terminal for EVERY reviewer outcome (codex r8):
       # exiting 1/2/3 here would let callers treat the round as valid while its

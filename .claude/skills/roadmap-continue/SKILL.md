@@ -132,6 +132,27 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    silence. *Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored
    work as before, AND serves as the D-C failover for Claude-authored diffs at the identical
    bar. Exit 2 (`REVIEWER_UNAVAILABLE` on both channels) blocks the arc; record both reasons.*
+
+   **Interim review-span carrier (U-HE-50; C-HE-27 §5 X6a).** The logged wrapper now
+   emits the `verify` start/end edges at its own process boundaries — never emit
+   `verify` by hand (a hand re-emission is only a harmless no-op replay; the durable
+   pair is the round-1 window by first-write-wins). The absorb/edit edges key off
+   events only the session observes (classification begin, the first fix edit, the
+   absorption commit), so until a wrapper-internal emitter lands (B-218) YOU emit
+   them — the ship-pr "Phase-span edges" block stays the definition; each command is
+   a single literal-id invocation in the canonical flag order, replay-idempotent,
+   skipped entirely on an unreserved arc:
+   - On a BLOCK verdict, when finding classification begins:
+     `uv run python tools/reservations.py phase --arc-id <arc-id> --phase absorb --edge start --lane-id <lane-id>`
+     and when fixing starts: the same command with `--edge end`.
+   - At the first fix edit: `--phase edit --edge start`; after the FINAL fix commit:
+     `--phase edit --edge end`.
+   - On wrapper exit 2: `--phase verify_unavailable --edge start` on observing the
+     exit, `--edge end` when review attempts resume (the wrapper already closed the
+     verify window at process exit).
+   This copy is the interim carrier only (skill prose is not an emission site —
+   C-HE-27 §5): it is deleted in the same PR that completes wrapper emission of
+   the absorb/edit edges.
 5. **Surface only the genuine gate.** Per §12.4.1: a real architectural/scoping decision, a
    credential, a paid-call authorization, or an irreversible action → ONE batched
    `AskUserQuestion` (§14.2). Never fire a paid call / relocate a secret unilaterally

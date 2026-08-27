@@ -996,6 +996,40 @@ def test_launch_refuses_unparseable_round_name(launch_env: Path, capsys):
     assert not (launch_env / ".harness/tmp/x-rounds").exists()
 
 
+_RESERVATIONS = Path(__file__).resolve().parent / "reservations.py"
+
+
+def _rsv(qdir: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(_RESERVATIONS), *args],
+        env=dict(os.environ, ARC_METRICS_QUEUE_DIR=str(qdir)),
+        capture_output=True,
+        text=True,
+    )
+
+
+def _seed_reservation(qdir: Path, arc: str = "arc-x", lane: str = "lane-1") -> None:
+    done = _rsv(
+        qdir,
+        "reserve",
+        "--arc-id",
+        arc,
+        "--lane-id",
+        lane,
+        "--branch",
+        "b",
+        "--arc-type",
+        "applying",
+    )
+    assert done.returncode == 0, done.stderr
+
+
+def _phases(qdir: Path, arc: str = "arc-x") -> dict:
+    done = _rsv(qdir, "show", "--arc-id", arc)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout).get("phases", {})
+
+
 def _recipe_body(log: str, base: str = "main") -> str:
     justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
     body = justfile.split("review-with-failover-logged log base='main':", 1)[1].split("\n\n", 1)[0]
@@ -1033,11 +1067,20 @@ def recipe_env(tmp_path: Path):
         '    touch "$REC_MARKER"; printf "codex-review: BLOCK\\n"; exit 1 ;;\n'
         "  tools/round_log_publish.py)\n"
         f'    exec "{sys.executable}" "{real_publisher}" "$@" ;;\n'
+        # U-HE-50: span emission execs the REAL store writer against the fixture's
+        # ARC_METRICS_QUEUE_DIR, so the verify pair below is witnessed on a real
+        # reservation head, not a stub's echo
+        "  tools/reservations.py)\n"
+        f'    exec "{sys.executable}" "{_RESERVATIONS}" "$@" ;;\n'
         "esac\n"
     )
     (shim / "uv").chmod(0o755)
 
-    def run(mode: str, log: str = ".harness/tmp/x-rounds/r1.log"):
+    def run(
+        mode: str,
+        log: str = ".harness/tmp/x-rounds/r1.log",
+        arc_env: dict[str, str] | None = None,
+    ):
         script = tmp_path / "recipe.sh"
         script.write_text(_recipe_body(log))
         env = dict(
@@ -1045,7 +1088,13 @@ def recipe_env(tmp_path: Path):
             PATH=f"{shim}:{os.environ['PATH']}",
             REC_MODE=mode,
             REC_MARKER=str(tmp_path / "wrapper-ran"),
+            ARC_METRICS_QUEUE_DIR=str(tmp_path / "queue"),
         )
+        # hermetic: a live session's exported arc ids must not leak emission into
+        # tests that model the unreserved invocation
+        for key in ("HARNESS_ARC_ID", "HARNESS_LANE_ID"):
+            env.pop(key, None)
+        env.update(arc_env or {})
         return subprocess.run(
             ["bash", str(script)], cwd=repo, env=env, capture_output=True, text=True
         )
@@ -1094,3 +1143,85 @@ def test_logged_recipe_evaluates_admission_before_launch():
     assert '|| exit "$?"' in launch_line  # a refused launch is not made
     assert 'round_log_publish.py "$dest"' in recipe
     assert 'round_log_publish.py "{{log}}"' not in recipe
+
+
+# --- U-HE-50 (C-HE-27 §5 X6a): the wrapper's process boundaries are the verify edges ---
+
+_ARC_ENV = {"HARNESS_ARC_ID": "arc-x", "HARNESS_LANE_ID": "lane-1"}
+
+
+def test_recipe_reserved_arc_emits_verify_span_pair(recipe_env):
+    # the acceptance witness: a fixture round through the REAL recipe body writes
+    # the verify {start, end} pair on the reservation head with zero skill-prose
+    # involvement — the wrapper is the emitter
+    _repo, tmp, run = recipe_env
+    _seed_reservation(tmp / "queue")
+    done = run("allow", arc_env=dict(_ARC_ENV))
+    assert done.returncode == 1  # the verdict exit is untouched by emission
+    verify = _phases(tmp / "queue").get("verify", {})
+    assert set(verify) == {"start", "end"}
+    assert verify["start"] <= verify["end"]  # ISO-8601 UTC orders lexicographically
+    assert "WARN" not in done.stderr
+
+
+def test_recipe_round2_reemission_keeps_round1_window(recipe_env):
+    # record_phase is first-write-wins + replay-idempotent, so the round-2 wrapper
+    # re-emits as a no-op and the durable pair stays the round-1 window (the ship-pr
+    # "verify = the round-1 window" semantics hold by construction, not by prose)
+    _repo, tmp, run = recipe_env
+    _seed_reservation(tmp / "queue")
+    run("allow", arc_env=dict(_ARC_ENV))
+    first = _phases(tmp / "queue")["verify"]
+    done = run("allow", ".harness/tmp/x-rounds/r2.log", arc_env=dict(_ARC_ENV))
+    assert done.returncode == 1
+    assert _phases(tmp / "queue")["verify"] == first
+    assert "WARN" not in done.stderr  # a no-op replay is not an emission failure
+
+
+def test_recipe_refused_launch_opens_no_verify_span(recipe_env):
+    # C-HE-21 §1 X6b composition: admission precedes emission — a refused launch
+    # spends no reviewer call, claims no round name, and opens no span.
+    # Mutation-probe carrier: moving `emit_verify start` above the launch line
+    # reds this test.
+    _repo, tmp, run = recipe_env
+    _seed_reservation(tmp / "queue")
+    done = run("refuse", arc_env=dict(_ARC_ENV))
+    assert done.returncode == 3
+    assert "verify" not in _phases(tmp / "queue")
+
+
+def test_recipe_unreserved_invocation_skips_emission(recipe_env):
+    # C-HE-27 §3 disposition: no arc ids in the environment → no store touch at
+    # all; the absent span reads null downstream, never a measured zero
+    _repo, tmp, run = recipe_env
+    done = run("allow")
+    assert done.returncode == 1
+    assert not (tmp / "queue" / "reservations").exists()
+    assert "WARN" not in done.stderr  # the skip is the spec'd disposition, not a failure
+
+
+def test_recipe_emission_failure_warns_and_preserves_verdict(recipe_env):
+    # ids present but no reservation head: record_phase ABORTs (exit 2) — the
+    # wrapper warns loud on stderr and the round's verdict + publish are untouched
+    # ([LAW:no-silent-failure]: the failure surfaces; it never rewrites the exit)
+    repo, _tmp, run = recipe_env
+    done = run("allow", arc_env=dict(_ARC_ENV))
+    assert done.returncode == 1
+    assert "WARN verify.start span emission failed" in done.stderr
+    assert (repo / ".harness/tmp/x-rounds/r1-a1.log").read_text() == "codex-review: BLOCK\n"
+
+
+def test_logged_recipe_emits_verify_at_process_boundaries():
+    # U-HE-50 composition pin: start is emitted AFTER admission (a refused launch
+    # opens no span) and BEFORE the reviewer call; end closes the window at the
+    # pipeline terminal BEFORE the publish-failure exit arm can leave it dangling.
+    # Mutation-probe carrier: removing either emission line reds this test.
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    recipe = justfile.split("review-with-failover-logged log base='main':", 1)[1].split("\n\n", 1)[
+        0
+    ]
+    assert recipe.index("review_loop_gate.py launch") < recipe.index("emit_verify start")
+    assert recipe.index("emit_verify start") < recipe.index("codex_review.py --base")
+    assert recipe.index("codex_review.py --base") < recipe.index("emit_verify end")
+    assert recipe.index("emit_verify end") < recipe.index("PUBLISH FAILED")
+    assert '--phase verify --edge "$1" --lane-id "$HARNESS_LANE_ID"' in recipe
