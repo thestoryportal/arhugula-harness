@@ -237,9 +237,17 @@ BEFORE re-invoking the reviewer:
    (`except`, `return []`/`return None` on error arms, the suppression inputs, the
    bare counts), then read each hit's semantics. Fix siblings in the SAME absorption
    commit; the reviewer should never meet the same class twice in one arc.
-3. If the class was absent/unfired in this file, repair the skill in that commit too
+3. Adjudicate each absorbed finding on the gate log (C-HE-24 §5, U-HE-47): for every
+   finding row this round produced, once its fix is committed (or it is refuted with
+   grounds), append the disposition — `just merge-gate-adjudicate --finding-id <id>
+   --disposition accepted|rejected --actor claude_absorber` (`accepted` = the fix was
+   applied; `rejected` = refuted; the finding_id is on the round's emitted JSONL
+   rows). Without this row the finding stays disposition=null forever and N6 counts
+   nothing — the attest below records that you ANSWERED the finding, never that it
+   was DISPOSED.
+4. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
-4. When two consecutive rounds' findings target mechanisms YOUR absorption invented
+5. When two consecutive rounds' findings target mechanisms YOUR absorption invented
    (not the plan floor), stop hardening and re-scope by subtraction — the recorded
    adversarial-hardening arms race does not converge by adding layers.
 

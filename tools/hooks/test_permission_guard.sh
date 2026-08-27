@@ -408,6 +408,19 @@ for c in \
 done
 OUT=$(run_on "$(pl Bash "just merge-gate-emit --pr 1 --lens merge-gate-concurrency --verdict-json /tmp/outside.txt" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit reading a verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit auto-allowed: $OUT"
+# U-HE-47 codex r2 P1: adjudication mutes findings — only the exact absorption shape
+# (accepted|rejected, non-operator actor, 4-part finding-id, bounded arity) auto-allows.
+_ADJ_FID="merge-gate-concurrency:0123456789abcdef0123456789abcdef01234567:0123456789ab:1"
+OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition suppressed --actor claude_absorber" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "adjudicate --disposition suppressed → not auto-allowed (operator-visible)" || bad "suppressed adjudication auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition accepted --actor operator" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "adjudicate claiming actor=operator → not auto-allowed" || bad "operator-actor adjudication auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition=accepted --actor claude_absorber" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "adjudicate =-form disposition → not auto-allowed (exact tokens only)" || bad "=-form adjudication auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition accepted --actor claude_absorber review-attest-budget" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "adjudicate with a surplus chained token → not auto-allowed" || bad "chained-token adjudication auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id not-a-4-part-id --disposition accepted --actor claude_absorber" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "adjudicate with a malformed finding-id → not auto-allowed" || bad "malformed-id adjudication auto-allowed: $OUT"
 # B-215: the budget-extension verb is deliberately ask-gated — the loop must never
 # silently extend its own review budget; and an out-of-worktree answers path fails
 # _bash_args_safe containment even on an allowlisted attest verb.

@@ -467,6 +467,25 @@ fi
 # exact-shape: exactly the canonical form's tokens (the arity check below is the authority), flags in canonical order,
 # values never dash-led, edge from the C-HE-27 pair. Anything else — duplicates, =-forms,
 # abbreviations, extra flags — falls through to the normal ask.
+_adjudicate_exact_shape() {
+  # U-HE-47 codex r2 P1: adjudication dispositions MUTE findings downstream, so the
+  # guard admits only the loop's own absorption shape — flag order fixed, arity
+  # bounded (no token can chain a second recipe), disposition ∈ {accepted,rejected}
+  # (suppressed stays operator-visible), the finding-id in its C-HE-24 §4 4-part
+  # shape, and the actor NEVER the operator identity (an agent must not claim the
+  # operator's adjudication authority; write-time actor≠producer is enforced by
+  # finding_record, this is the venue half). Everything else falls to ask.
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  [ "$#" -eq 8 ] || return 1
+  [ "$1" = "just" ] && [ "$2" = "merge-gate-adjudicate" ] \
+    && [ "$3" = "--finding-id" ] && [ "$5" = "--disposition" ] && [ "$7" = "--actor" ] || return 1
+  printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+:[0-9a-f]{12}:[0-9]+$' || return 1
+  case "$6" in accepted|rejected) ;; *) return 1 ;; esac
+  printf '%s' "$8" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+  case "$8" in [Oo][Pp][Ee][Rr][Aa][Tt][Oo][Rr]) return 1 ;; esac
+}
+
 _phase_exact_shape() {
   local cmd="$1"
   set -f; set -- $cmd; set +f
@@ -752,6 +771,13 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # U-HE-34: the C-HE-27 span emitters (roadmap-continue / ship-pr) — positional
       # exact-shape only; see _phase_exact_shape for the duplicate-flag rationale.
       emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+merge-gate-adjudicate([[:space:]]|$)' \
+       && _adjudicate_exact_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-47 codex r2 P1: exact-shape only (see _adjudicate_exact_shape) — the
+      # generic merge-gate-* alternation must NOT carry this verb: a free-argument
+      # allow would let a loop agent suppress any finding or claim actor=operator.
+      emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-with-failover-logged([[:space:]]|$)' \
        && _review_logged_shape "$TRIM" \
        && _bash_args_safe "$CMD"; then
@@ -772,7 +798,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # surplus token can be parsed by `just` as a chained second recipe (the B-215
       # budget-chain class).
       emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|adjudicate|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi
