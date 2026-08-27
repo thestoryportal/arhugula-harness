@@ -805,12 +805,38 @@ def _reservation_recorded_rounds(arc_id: str) -> set[int]:
     return {int(k.split("/", 1)[0]) for k in outcomes}
 
 
+def _gate_log_recorded_rounds(arc_id: str) -> set[int]:
+    """The fail-closed half of the round authority.
+
+    The reservation recorder is deliberately best-effort (its writer catches
+    every exception and continues), but the C-HE-24 rows are write-first --
+    every review terminal yields at least one row under the log lock -- so a
+    round whose reservation persistence failed still appears here."""
+    if not GATE_LOG.exists():
+        return set()
+    rounds: set[int] = set()
+    for line in GATE_LOG.read_text().splitlines():
+        row = json.loads(line)  # an unparseable authority is loud, never skipped
+        if row.get("arc_id") == arc_id and row.get("round_n") is not None:
+            rounds.add(int(row["round_n"]))
+    return rounds
+
+
+def _recorded_rounds(arc_id: str) -> set[int]:
+    """Union of the two round authorities: the best-effort reservation
+    accretion and the fail-closed gate log. Either alone can under-record
+    (a swallowed reservation write; a pre-C-HE-24 round); together they are
+    the strongest recorded evidence available without a paid re-run."""
+    return _reservation_recorded_rounds(arc_id) | _gate_log_recorded_rounds(arc_id)
+
+
 def _completeness_for(arc_id: str, observed_ids: list[int]) -> str:
     """The ONE classifier of a live log set's `round_completeness` label.
 
     The set's own testimony covers only its start: an observed min above 1
     proves a missing prefix (`partial-suffix`). "complete" is a CLAIM about the
-    tail, and only the reservation authority can back it -- the recorded set's
+    tail, and only the recorded authority (reservation accretion UNION the
+    fail-closed C-HE-24 gate log) can back it -- the recorded set's
     maximum equal to the observed maximum. Any RECORDED round at or after the
     observed start with no surviving classified log is a broken evidence set
     (refuse) -- this covers both a deleted tail AND a real round whose
@@ -821,7 +847,7 @@ def _completeness_for(arc_id: str, observed_ids: list[int]) -> str:
     under-recording one (unprefixed rounds land on fallback arc ids), leaves
     `unknown` -- a label every consumer treats as a lower bound excluded from
     exact aggregates, never a guess of wholeness."""
-    recorded = _reservation_recorded_rounds(arc_id)
+    recorded = _recorded_rounds(arc_id)
     observed = set(observed_ids)
     start = min(observed)
     # Recorded rounds missing BEFORE the observed start are the ordinary

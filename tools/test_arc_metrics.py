@@ -453,7 +453,7 @@ def test_completeness_labels_are_evidence_gated(monkeypatch):
     """One classifier: min>1 is the set's own proof of a missing prefix;
     "complete" needs the reservation authority to confirm the tail; anything
     the evidence cannot back is "unknown" (a lower bound, never a guess)."""
-    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 11)))
     assert am._completeness_for("x", list(range(1, 11))) == "complete"
     assert am._completeness_for("x", [4, 5, 6, 7, 8, 9, 10]) == "partial-suffix", (
         "recorded rounds missing BEFORE the observed start are a lost prefix, not corruption"
@@ -465,11 +465,11 @@ def test_completeness_labels_are_evidence_gated(monkeypatch):
         # forged or mangled -- the round cannot be silently discarded
         am._completeness_for("x", list(range(1, 10)))
 
-    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set())
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set())
     assert am._completeness_for("x", list(range(1, 11))) == "unknown", (
         "no authority is never 'complete'"
     )
-    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 8)))
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 8)))
     assert am._completeness_for("x", list(range(1, 11))) == "unknown", (
         "an under-recording authority (fallback-id rounds) cannot confirm the tail"
     )
@@ -490,7 +490,7 @@ def test_suffix_only_set_is_classified_partial_and_reaches_the_snapshot(
 
     qdir = tmp_path / "queue"
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
-    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 11)))
     am.queue_capture(
         am.argparse.Namespace(
             pr=1999,
@@ -631,15 +631,40 @@ def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
         levers=None,
         notes="",
     )
-    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 11)))
     with pytest.raises(am.AbortError, match="no surviving log classifies"):
         am.queue_capture(am.argparse.Namespace(**ns))
 
     # Authority-confirmed tail (recorded == observed) passes as "complete".
-    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: {1, 2, 3})
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: {1, 2, 3})
     assert am.queue_capture(am.argparse.Namespace(**ns)) == 0
     snap = json.loads((qdir / "pr-1998.json").read_text())["round_snapshot"]
     assert snap["round_completeness"] == "complete"
+
+
+# mutation-probe: drop the gate-log half of _recorded_rounds -> red
+def test_recorded_rounds_unions_the_fail_closed_gate_log(monkeypatch, tmp_path: Path):
+    """The reservation recorder is best-effort (its writer swallows persistence
+    failures); the C-HE-24 gate log is write-first. A round present only in the
+    gate log must still count as recorded."""
+    import reservations as rs
+
+    gate = tmp_path / "gate.jsonl"
+    gate.write_text(
+        json.dumps({"arc_id": "x", "round_n": 10, "record_kind": "finding"})
+        + "\n"
+        + json.dumps({"arc_id": "other", "round_n": 3, "record_kind": "finding"})
+        + "\n"
+        + json.dumps({"arc_id": "x", "record_kind": "adjudication"})  # no round_n
+        + "\n"
+    )
+    monkeypatch.setattr(am, "GATE_LOG", gate)
+    monkeypatch.setattr(
+        rs, "current", lambda arc_id: (1, {"round_outcomes": {"1/codex": {}, "2/codex": {}}})
+    )
+    assert am._recorded_rounds("x") == {1, 2, 10}
+    monkeypatch.setattr(am, "GATE_LOG", tmp_path / "absent.jsonl")
+    assert am._recorded_rounds("x") == {1, 2}
 
 
 def test_reservation_recorded_rounds_reads_the_head_outcomes(monkeypatch):
@@ -693,17 +718,28 @@ def test_partial_rows_are_excluded_from_exact_aggregates(monkeypatch, tmp_path: 
     assert "EXCLUDED" in out and "frag>=1" in out
 
 
-# mutation-probe: median the whole lane cohort instead of its complete rows -> red
+# mutation-probe: median the whole lane cohort instead of its complete rows,
+# or pool an unknown row's round_wall_s into the cohort/global gap aggregates -> red
 def test_lane_cohort_medians_exclude_lower_bound_rows(monkeypatch, tmp_path: Path, capsys):
     """C-HE-28 lane metrics are exact aggregates too: a partial-suffix or
-    unknown row is a lower bound and must not enter the lane median."""
+    unknown row is a lower bound and must not enter the lane median -- and an
+    unknown row's gaps (position-era corruption) must reach NO round-wall
+    aggregate, cohort or global."""
     ledger = tmp_path / "arc-metrics.jsonl"
     rows = [
-        {"arc_id": "a", "review_rounds": 4, "levers_active": [], "concurrent_lanes_at_open": 1},
+        {
+            "arc_id": "a",
+            "review_rounds": 4,
+            "round_wall_s": [600.0],
+            "levers_active": [],
+            "concurrent_lanes_at_open": 1,
+        },
         {"arc_id": "b", "review_rounds": 5, "levers_active": [], "concurrent_lanes_at_open": 1},
         {
             "arc_id": "frag",
             "review_rounds": 1,
+            # An extreme position-era gap: visible in any aggregate it leaks into.
+            "round_wall_s": [999_999.0],
             "levers_active": [],
             "concurrent_lanes_at_open": 1,
             "round_completeness": "unknown",
@@ -716,6 +752,10 @@ def test_lane_cohort_medians_exclude_lower_bound_rows(monkeypatch, tmp_path: Pat
     lanes = out[out.index("-- LANES [concurrent_lanes_at_open=1]") :]
     assert "review rounds    4.5 (n=2" in lanes, "median of [4,5]; the unknown row is out"
     assert "1 lower-bound row(s) excluded" in lanes
+    # 999999s = 16666.6m: the corrupt gap must appear nowhere -- not in the
+    # cohort round-wall line, not in the closing global variance spread.
+    assert "16666" not in out
+    assert "round wall clock 10.0m" in out, "only the complete row's 600s gap is pooled"
 
 
 # mutation-probe: pool arc_span_s and total_arc_wall_s into one `arcs` list
