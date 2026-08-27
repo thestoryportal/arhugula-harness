@@ -150,6 +150,11 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    - On wrapper exit 2: `--phase verify_unavailable --edge start` on observing the
      exit, `--edge end` when review attempts resume (the wrapper already closed the
      verify window at process exit).
+   - If the wrapper WARNed that a span emission failed on the arc's FINAL round
+     (no next round will repair it), re-run that edge's exact command by hand
+     before ship — the head accretes until terminal, so a repaired end records the
+     named upper bound; a start that failed on the final round stays null (the
+     spec'd absent disposition), never a late fabricated window.
    This copy is the interim carrier only (skill prose is not an emission site —
    C-HE-27 §5): it is deleted in the same PR that completes wrapper emission of
    the absorb/edit edges.

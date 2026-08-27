@@ -60,7 +60,10 @@ check them rather than trusting remembered or checkpointed remaining work.
    the final fix commit; `--phase verify_unavailable --edge start` on a both-channels
    outage and `--edge end` when review resumes (the wrapper already closed verify at
    process exit). On an unlogged review venue (`just gemini-review`) the verify edges are
-   session-emitted too, per the ship-pr "Phase-span edges" definition. This copy is
+   session-emitted too, per the ship-pr "Phase-span edges" definition. If the wrapper
+   WARNed that a span emission failed on the arc's FINAL round, re-run that edge's exact
+   command before ship (the head accretes until terminal; a failed final-round start
+   stays null — never fabricate a late window). This copy is
    deleted in the same PR that completes wrapper emission of absorb/edit (B-218).
 8. Run `just codex-closeout`, then hand the complete arc to the `ship-pr` skill.
 

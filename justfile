@@ -812,7 +812,16 @@ review-with-failover-logged log base='main':
     emit_verify start
     uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "$dest"
     rc=("${PIPESTATUS[@]}")
-    emit_verify end
+    if [ "${rc[0]}" = 3 ]; then
+      # codex r4: the wrapper's own in-process admit (the enforcer of record) can
+      # refuse AFTER the launch precheck admitted -- GATE_REFUSED is not a round
+      # (C-HE-16 §3), so no end is recorded and a refused attempt can never land as
+      # a complete verify pair in N6; a lone start closes at the next real round's
+      # end (the named upper bound above).
+      echo "review-with-failover-logged: NOTE verify.end not emitted -- GATE_REFUSED is not a round (C-HE-16 §3)" >&2
+    else
+      emit_verify end
+    fi
     if [ "${rc[1]}" -ne 0 ]; then
       # Publish failure is its OWN terminal for EVERY reviewer outcome (codex r8):
       # exiting 1/2/3 here would let callers treat the round as valid while its
