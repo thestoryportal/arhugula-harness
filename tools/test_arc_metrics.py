@@ -537,16 +537,11 @@ def test_extract_carries_snapshot_completeness_and_defaults_legacy(monkeypatch):
     row = am.extract(am.argparse.Namespace(**args, round_snapshot=snapshot))
     assert row.round_completeness == "partial-suffix"
 
-    # Pre-X6c snapshots carry no classification; the captured filenames still
-    # testify. A suffix-only legacy capture must never default to "complete".
+    # Pre-X6c snapshots were computed positionally over arbitrary surviving
+    # subsets -- their stored counts and gaps may themselves be corrupt, so no
+    # legacy shape earns anything but "unknown" (not even a suffix bound).
     legacy = {k: v for k, v in snapshot.items() if k != "round_completeness"}
     legacy["matched"] = ["/x/r8.log", "/x/r9.log", "/x/r10.log"]
-    row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
-    assert row.round_completeness == "partial-suffix"
-
-    # Names alone can never prove the tail survived (position-era captures held
-    # refused logs and gapped subsets) -- an r1-start legacy set is `unknown`.
-    legacy["matched"] = ["/x/r1.log", "/x/r2.log", "/x/r3.log"]
     row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
     assert row.round_completeness == "unknown"
 

@@ -487,14 +487,14 @@ def extract(args: argparse.Namespace) -> ArcRow:
             row.round_wall_s = snapshot["round_wall_s"]
             row.p1_rounds = snapshot["p1_rounds"]
             row.round_log_source = snapshot["round_log_source"]
-            # Absent on snapshots queued before the X6c rev. The old queue
-            # accepted arbitrary surviving log subsets, so absence must never
-            # default to "complete" -- derive from the captured filenames when
-            # they parse, and otherwise label the row unknown (consumers treat
-            # anything != "complete" as a lower bound, never an exact arc).
-            row.round_completeness = snapshot.get(
-                "round_completeness"
-            ) or _legacy_snapshot_completeness(snapshot.get("matched"))
+            # Absent on snapshots queued before the X6c rev. Those were
+            # computed by the positional algorithm over arbitrary surviving
+            # subsets -- refused attempts counted, retries duplicated -- so
+            # nothing about them is re-derivable from the snapshot (not even a
+            # suffix bound: the stored counts and gaps themselves may be
+            # corrupt). Every unlabeled legacy snapshot is `unknown`, which
+            # consumers exclude from ALL round-derived aggregates.
+            row.round_completeness = snapshot.get("round_completeness") or "unknown"
             first = parse_iso(snapshot["first_round_at"])
             row.first_round_at = snapshot["first_round_at"]
             row.last_round_at = snapshot["last_round_at"]
@@ -586,25 +586,6 @@ def extract(args: argparse.Namespace) -> ArcRow:
     row.captured_at = datetime.now(tz=UTC).isoformat()
     row.notes = args.notes or ""
     return row
-
-
-def _legacy_snapshot_completeness(matched: list[str] | None) -> str:
-    """Classify a pre-X6c snapshot from the filenames it captured.
-
-    The old queue stored `matched` paths but no classification; the names still
-    read a missing prefix (`partial-suffix`). Nothing else is derivable from
-    names alone -- position-era captures could hold refused logs and gapped
-    subsets -- so every other legacy shape is `unknown`: a label that keeps the
-    row out of exact aggregates, never a claim of wholeness."""
-    if not matched:
-        return "unknown"
-    ids = []
-    for name in matched:
-        m = ROUND_ID_RE.match(Path(name).stem)
-        if not m:
-            return "unknown"
-        ids.append(int(m.group(1)))
-    return "partial-suffix" if min(ids) > 1 else "unknown"
 
 
 def _ledger_claim_path(ledger: Path) -> Path:
@@ -2346,7 +2327,14 @@ def summary(_args: argparse.Namespace) -> int:
         print(f"N6 problems-prevented/hour  -- (gate log absent: {GATE_LOG})")
     print()
 
-    allgaps = [g for r in rows for g in (r.get("round_wall_s") or [])]
+    # Same exclusion as every round-derived aggregate above: an `unknown` row's
+    # gaps may be position-era corruption, not measurements.
+    allgaps = [
+        g
+        for r in rows
+        if r.get("round_completeness", "complete") in ("complete", "partial-suffix")
+        for g in (r.get("round_wall_s") or [])
+    ]
     if allgaps:
         lo, hi = min(allgaps) / 60, max(allgaps) / 60
         spread = f"{lo:.1f}-{hi:.1f} min/round, {hi / max(lo, 0.1):.0f}x"
