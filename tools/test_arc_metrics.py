@@ -627,6 +627,17 @@ def test_foreign_attempt_suffixed_name_beside_real_attempt_aborts(tmp_path: Path
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
+def test_all_foreign_attempt_family_aborts_not_self_suppresses(tmp_path: Path):
+    """codex r7: a foreign family can be internally consistent — terminal-less
+    `r1-notes-a1.log` beside terminal-bearing `r1-notes-a2.log` — but launch()
+    only mints the canonical `r<rid>-a<K>.log`, so suppression requires the
+    canonical base on BOTH sides."""
+    _round_log(tmp_path, "r1-notes-a1.log", "partial, foreign family\n", 1_000_000)
+    _round_log(tmp_path, "r1-notes-a2.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
 def test_non_minted_attempt_suffix_is_foreign_not_an_earlier_attempt(tmp_path: Path):
     """codex r5: attempt_destination only mints positive canonical decimals, so a
     terminal-less `r1-a0.log` (or `-a01`) is foreign evidence — it must not pass

@@ -346,18 +346,23 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
         # everything outside the minted-and-superseded shape refuses rather
         # than undercounts).
         real_k = _ATTEMPT_K_RE.search(real[0][0].stem) if real else None
-        # Same minted FAMILY, not merely any -a<K> tail (codex r4): the stems
-        # minus their attempt suffixes must be identical, else a foreign
-        # `r1-notes-a1.log` beside `r1-a2.log` would pass the K-ordering check.
-        real_base = _ATTEMPT_K_RE.sub("", real[0][0].stem) if real_k else None
+        # The CANONICAL minted family only (codex r4/r7): launch() can only mint
+        # `r<rid>-a<K>.log`, so both the partial and the terminal-bearing sibling
+        # must strip to exactly `r<rid>` — family self-equality alone would let
+        # an all-foreign pair (`r1-notes-a1` beside `r1-notes-a2`) suppress
+        # itself, and any-tail matching let `r1-notes-a1` ride `r1-a2`.
+        canonical_base = f"r{rid}"
+        real_is_canonical = (
+            bool(real_k) and _ATTEMPT_K_RE.sub("", real[0][0].stem) == canonical_base
+        )
         for f, _, last in files:
             if last is not None:
                 continue
             partial_k = _ATTEMPT_K_RE.search(f.stem)
             superseded = bool(
                 partial_k
-                and real_k
-                and _ATTEMPT_K_RE.sub("", f.stem) == real_base
+                and real_is_canonical
+                and _ATTEMPT_K_RE.sub("", f.stem) == canonical_base
                 and int(partial_k.group(1)) < int(real_k.group(1))
             )
             if not superseded:
