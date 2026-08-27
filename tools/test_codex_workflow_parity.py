@@ -1151,6 +1151,24 @@ def test_codex_shipping_skills_encode_current_review_and_ci_fixed_point() -> Non
     assert "-s read-only" not in merge_gate
 
 
+def test_roadmap_continue_carriers_document_span_emission_parity() -> None:
+    # U-HE-50 (C-HE-27 §5 X6a), codex u-he-50 r3: BOTH runner carriers must document
+    # the same emission surface — the logged wrapper (automatic verify edges) plus the
+    # interim session-emitted absorb/edit/verify_unavailable block — or a supported
+    # runner's arcs leave C-HE-27 spans null. The interim block is deleted with the
+    # B-218 PR from both carriers together.
+    for path in [
+        ".claude/skills/roadmap-continue/SKILL.md",
+        ".agents/skills/roadmap-continue/SKILL.md",
+    ]:
+        text = (ROOT / path).read_text(encoding="utf-8")
+        assert "review-with-failover-logged" in text, path
+        assert "--phase absorb --edge start" in text, path
+        assert "--phase edit --edge start" in text, path
+        assert "verify_unavailable" in text, path
+        assert "B-218" in text, path
+
+
 def test_forward_profile_template_preserves_current_codex_home_and_review_boundary() -> None:
     profile = (ROOT / ".codex" / "notes" / "arhugula-forward.config.toml.example").read_text(
         encoding="utf-8"
