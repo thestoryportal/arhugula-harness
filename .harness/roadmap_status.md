@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b35f32c626c0` |
+| `workspace_state_hash` | `504c7da18507` |
 | `last_refreshed` | 2026-08-27T00:00:00Z |
-| `git_head` | `7d114741` —  |
+| `git_head` | `c03e05a5` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1467).** U-HE-47 (R0 instrument 2 of 4: attribution writers, C-HE-24 §2/§5 X6d) landed at #1467 — emit-time `cause_attribution`/`unique_catch` on every merge-gate lens row (the [B] F16 null state unrepresentable for new rows), the holder-bound `merge-gate-adjudicate` absorption verb with its guard exact-shape, the reservation-arc reducer join fix (23 live MISSING-JSONL rows on main → 0/0 green), and the arc's own 39/39 finding dispositions as the mechanism's first production exercise; residuals registered as B-220/B-221/B-222. The workflow-repair program continues per plan §8.1: next implementable unit is `U-HE-48` (R0: `tools/arc_cost.py` + `just arc-cost <transcript>` — requestId-deduplicated IET extractor, C-HE-25 X6e), then U-HE-49 (launch-admission guard + per-attempt round-log names — twice reproduced live on this arc), then the R1 levers (U-HE-50 + U-SR-01…08), then U-HE-36-as-R3.
+**Current next action (post-#1469).** **Current next action (post-#1469).** U-HE-48 (R0 instrument 3 of 4: per-arc cost extractor, C-HE-25 X6e) landed at #1469 — `tools/arc_cost.py` + `just arc-cost` (requestId-deduplicated IET over the arc's pooled transcript set, per-field-max copy merge, reservation-bounded arc window, a fail-closed refusal surface grounded in per-round measurements), additive-nullable `cost_*` arc-row fields entering at `arc-metrics queue --transcript`, cost rendered per arc on every lever-report cohort side, and the plan/charter-ratified [B] subagent-baseline correction (4,636,541 IET; marker filed). The codex loop ran its full 10-round budget (30 findings: 24 absorbed, 6 rejected with measurement grounds, all disposed); residuals registered as B-223 (Codex rollout-transcript extractor) and B-224 (sidecar-completeness authority, held). The workflow-repair program continues per plan §8.1: next implementable unit is `U-HE-49` (R0: launch-admission guard + per-attempt round-log names, C-HE-21 §1 X6b), then the R1 levers (U-HE-50 + U-SR-01…08), then U-HE-36-as-R3.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1469 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1467 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1465 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1463 | 2026-08-26 | U-HE-35 workflow-repair program doc set: #1462 (Spec_HE_Loop_Lanes v1.6 X6a–X6f + Workflow_Repair_Charter_v1 WR-01…16 + plan §8 U-HE-46…51/U-SR-01…09 R0→R3 + both clearance markers + artifact-heads + cost audit [B]) and #1463 (LEAN-round C-HE-24 rows + next-action archive rotation). Adversarial pass LOOP-BACK absorbed in-PR; LEAN codex round absorbed (B-219 registered). Two open operator decisions at plan §8.5. |
 | PR #1460 | 2026-08-26 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1458 | 2026-08-26 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
