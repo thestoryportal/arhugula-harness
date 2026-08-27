@@ -234,15 +234,18 @@ def gh_pr(pr: int) -> dict:
     return data
 
 
-# The wrapper's terminal line ends every published round log (`_report` in
-# codex_review.py, stderr merged by the logged recipe; the failover verdict is
-# labelled `gemini-review (failover)`, and agy_review's own gate can print a
-# `gemini-review: GATE_REFUSED`). The LAST such line is the transcript's
-# verdict: a failover transcript carries the primary's REVIEWER_UNAVAILABLE
-# before the failover verdict that stands, and publish-failure noise can FOLLOW
-# it, so neither "first" nor "only" is the right read.
+# The wrapper's terminal line ends every published round log. Exactly three
+# producer shapes exist (all in codex_review.py/_report and the two gate
+# refusal prints; agy_review's standalone `VERDICT:` dialect is NOT a round-log
+# producer and aborts below as terminal-less, deliberately): `codex-review:
+# <terminal>`, the failover verdict `gemini-review (failover): <terminal>`, and
+# `gemini-review: GATE_REFUSED (<code>)` from agy_review's own gate. The LAST
+# such line is the transcript's verdict: a failover transcript carries the
+# primary's REVIEWER_UNAVAILABLE before the failover verdict that stands, and
+# publish-failure noise can FOLLOW it, so neither "first" nor "only" is the
+# right read.
 ROUND_TERMINAL_RE = re.compile(
-    r"^(?:codex|gemini|agy)-review(?: \(failover\))?: "
+    r"^(?:codex|gemini)-review(?: \(failover\))?: "
     r"(APPROVE|BLOCK|REVIEWER_UNAVAILABLE|GATE_REFUSED)\b",
     re.MULTILINE,
 )
@@ -315,6 +318,21 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]
             f"round logs: every file matching {globs} is a refused launch "
             "(GATE_REFUSED) -- no review round ever ran; fix the glob rather "
             "than record an empty arc"
+        )
+
+    # Rounds mint sequentially per arc, and every round's log is write-once
+    # (retries publish under fresh per-attempt names), so a hole inside the
+    # observed id range means a deleted or never-published log -- counting
+    # around it would silently undercount the arc and span the missing round's
+    # wall clock across one innocent-looking gap. (A set STARTING above 1 is
+    # the distinct, declared `round_completeness=partial-suffix` case.)
+    missing = sorted(set(range(min(rounds), max(rounds) + 1)) - set(rounds))
+    if missing:
+        raise AbortError(
+            f"round logs: round id(s) {missing} are missing inside the observed "
+            f"range {min(rounds)}..{max(rounds)} -- a deleted or never-published "
+            "log breaks the evidence set; fix the log set rather than record an "
+            "undercounted arc"
         )
 
     logs = [rounds[rid][0] for rid in sorted(rounds)]

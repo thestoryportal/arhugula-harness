@@ -35,7 +35,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | Field | Value |
 |---|---|
 | Status | **Accepted on merge of PR #1393, with the review record in §7 items 4–8** — exit gate = five out-of-family `just codex-review` rounds on the PR (40 P1 / 22 P2 in total, every finding absorbed in-plan before the next round; one spec-internal tension registered, not absorbed); item 8 is the terminal record and states the residual classes honestly (yield did NOT converge to zero — it is carried by unit execution's RED-first + per-PR codex + merge-gate). The spec's clearance marker (same PR) admits the plan only under this recorded gate. |
-| Version | v1.0 + **rev 2026-08-19 (spec v1.3 X3 absorption, U-HE-14 only)**: the U-HE-14 audit template's family table is re-headed "Derived families + new-fact carriers" with a `Relation` column (`derived` / `part of store N` / `sole carrier (new fact)`) and the `.seq` allocator, transition-marker `fresh_lease`, and LEASE sidecars are classified per the as-landed audit — the S4 units (U-HE-17/22/23/30) land against that classification, not the v1.0 "no new authority" template. No other unit changed. + **rev 2026-08-19 (S4a execution correction, U-HE-15 Step 4b only)**: no-upstream teardown residue clause replaced by spec-exact `@{u}..HEAD` scope with the no-upstream composition registered as a residual (rationale at Step 4b). + **rev 2026-08-26 (workflow-repair program — spec v1.6 X6a–X6f + `Workflow_Repair_Charter_v1` absorption)**: new §8 with units U-HE-46…51 (bucket 1: contract surfaces, citing the X6-tagged clauses) and U-SR-01…09 (bucket 2: skill-suite + governance, citing charter WR-ids — a new small family, minted because these units' surfaces are skill bodies, hooks, and eval cases the spec deliberately does not own), R0→R3 sequencing (instruments before levers), an item-coverage table over the two U-HE-35 audits' recommendation ids, and two open operator decisions surfaced (not decided). No pre-existing unit changed; §§1–7 preserved verbatim except the §1 unit-index rows appended. |
+| Version | v1.0 + **rev 2026-08-19 (spec v1.3 X3 absorption, U-HE-14 only)**: the U-HE-14 audit template's family table is re-headed "Derived families + new-fact carriers" with a `Relation` column (`derived` / `part of store N` / `sole carrier (new fact)`) and the `.seq` allocator, transition-marker `fresh_lease`, and LEASE sidecars are classified per the as-landed audit — the S4 units (U-HE-17/22/23/30) land against that classification, not the v1.0 "no new authority" template. No other unit changed. + **rev 2026-08-19 (S4a execution correction, U-HE-15 Step 4b only)**: no-upstream teardown residue clause replaced by spec-exact `@{u}..HEAD` scope with the no-upstream composition registered as a residual (rationale at Step 4b). + **rev 2026-08-26 (workflow-repair program — spec v1.6 X6a–X6f + `Workflow_Repair_Charter_v1` absorption)**: new §8 with units U-HE-46…51 (bucket 1: contract surfaces, citing the X6-tagged clauses) and U-SR-01…09 (bucket 2: skill-suite + governance, citing charter WR-ids — a new small family, minted because these units' surfaces are skill bodies, hooks, and eval cases the spec deliberately does not own), R0→R3 sequencing (instruments before levers), an item-coverage table over the two U-HE-35 audits' recommendation ids, and two open operator decisions surfaced (not decided at authoring; **both ratified arm (a) 2026-08-26 at §8.5, U-HE-46 arc**). No pre-existing unit changed; §§1–7 preserved verbatim except the §1 unit-index rows appended. |
 | Date | 2026-08-18 |
 | Repo | `17011f89c` (every `file:line` below is pinned there, matching the spec's `[V]` set; re-verified in this authoring session) |
 | Path | `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` |
@@ -117,7 +117,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 | U-SR-03 | §8 R1 | laws:prompt durable wiring + binding values by file | Charter WR-08/09 |
 | U-SR-04 | §8 R1 | Attest labels-before-answers + mechanism-precedent search into preflight grounding | Charter WR-10/11 |
 | U-SR-05 | §8 R1 | codex-check background shape + attestation-artifact handling in the stop-gate | Charter WR-12 |
-| U-SR-06 | §8 R1 | `advisor()` reconciliation (gated on open decision #1) | Charter WR-13 |
+| U-SR-06 | §8 R1 | `advisor()` reconciliation (decision #1 RATIFIED 2026-08-26: REWRITE arm) | Charter WR-13 |
 | U-SR-07 | §8 R1 | Session-shape codification: facts-brief handoff, cache-warmth note, read-before-grep | Charter WR-14 |
 | U-SR-08 | §8 R1 | Context-noise deletions: context-save preamble trim + Bash-hook emit policy | Charter WR-15/16 |
 | U-SR-09 | §8 R2 | Mechanical sweep: pin scope, rtk rewrite shapes, edit-hook timing | Charter §2 ("deliberately absent") + [B] b1/b4/b5 |
@@ -7749,7 +7749,7 @@ The self-improvement circuit is broken at both ends: nothing flows in (0 skill r
 - **R0 — instruments:** U-HE-46, U-HE-47, U-HE-48, U-HE-49. Fix what measures before touching what is measured.
 - **R1 — skill/governance levers:** U-HE-50, U-SR-01…U-SR-08.
 - **R2 — mechanical sweep:** U-SR-09.
-- **R3 — eval arc:** U-HE-51 riding the next code arc (see open decision #2), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), 25.5M IET grand total (21.0M main / 4.52M subagents), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
+- **R3 — eval arc:** U-HE-51 riding the next code arc (decision #2 RATIFIED 2026-08-26: U-HE-36 is the R3 eval arc — §8.5), judged against the [B] baseline: 13 rounds (10 codex + 3 gate), 25.5M IET grand total (21.0M main / 4.52M subagents), ≈2h agent-active in 5h19m foreground, 29 PR commits (13 pins), 418 main API calls, spec lens 0 findings per 1.34M IET, 29 wasted rtk calls, 12 re-pins, 3 attest-by-trial failures.
 
 Units within a round are mutually independent and may land in any order or together. The instruments-before-levers rule binds as dependency edges wherever a lever touches a measured surface: U-HE-50 (R1, a lever on the C-HE-27 surface R0 repairs) and U-HE-51 (R3) both hard-depend on all four R0 units. The U-SR-* levers touch no instrument surface and may land alongside R0.
 
@@ -7771,7 +7771,7 @@ Every recommendation id from [A]/[B], so nothing silently drops:
 | b5 (edit-hook timing) | U-SR-09 |
 | b6 (codex-check shape) | U-SR-05 |
 | b7 (worktree hygiene) | NO UNIT — operator one-off (guard-blocked for the agent; [B] §4 item 6); hand the operator the `git worktree prune` + removal commands |
-| b8 (advisor) | U-SR-06 (open decision #1) |
+| b8 (advisor) | U-SR-06 (decision #1 ratified: REWRITE) |
 | b9 (lens trial) | U-HE-51 |
 | b10 (audit session shape) | U-SR-07 |
 | c1 (re-pin commits) | subsumed by b1 → U-SR-09 ([B] c1: they disappear with the pin-scope fix) |
@@ -7880,9 +7880,9 @@ Acceptance mechanism per charter §3: eval-backed units close on "case added to 
 - [ ] Stop-gate tree-dirty test ignores — or re-homes/gitignores — `.harness/.preflight-answers-*` / `.harness/.sweep-answers-*` (2 of 3 runs red on environment only, ≈20 min [B] F6/item 14).
 - [ ] **Acceptance:** a tree carrying only attestation artifacts passes the stop-gate; witness test for the chosen mechanism (ignore vs re-home vs gitignore — implementer's call, recorded in the commit).
 
-#### U-SR-06: `advisor()` reconciliation — GATED on open decision #1
+#### U-SR-06: `advisor()` reconciliation — decision #1 RATIFIED 2026-08-26: REWRITE arm (§8.5)
 
-**Charter.** WR-13. **Depends on.** Open decision #1 (§8.5).
+**Charter.** WR-13. **Depends on.** Decision #1 (§8.5 — ratified: REWRITE).
 
 - [ ] If REWRITE: conform `CLAUDE.md` §13.1, `roadmap-continue/SKILL.md:106`, `merge-gate/SKILL.md:9,17`, `resolve/SKILL.md:35` to the instrument that exists (fresh-context Agent on the transcript summary, or `just codex-review` alone) — the [B] §3 item 1 carrier list. If PROVISION: expose the tool and leave the prose. **Acceptance:** zero governance carriers name an instrument the environment does not expose (grep witness), or the tool answers a live call.
 

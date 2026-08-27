@@ -450,7 +450,9 @@ def test_reviewer_unavailable_is_a_round_and_any_wrapper_label_counts(tmp_path: 
     A failover transcript carries the primary's REVIEWER_UNAVAILABLE terminal
     and then the verdict that stands under the ``gemini-review (failover)``
     label (codex_review._report); both shapes classify as rounds, and the
-    failover line — the LAST matching terminal — is the one read.
+    failover line — the LAST matching terminal — is the one read. (agy_review's
+    standalone ``VERDICT:`` dialect is not a round-log producer; such a
+    transcript aborts as terminal-less by design.)
     """
     _round_log(
         tmp_path, "r1.log", "codex-review: REVIEWER_UNAVAILABLE (transient: timeout)\n", 1_000_000
@@ -483,6 +485,14 @@ def test_unparseable_round_name_aborts(tmp_path: Path):
     _round_log(tmp_path, "final.log", "codex-review: APPROVE\n", 1_000_000)
     with pytest.raises(am.AbortError, match="cannot parse a round id"):
         am.round_metrics([str(tmp_path / "*.log")])
+
+
+def test_internal_round_id_gap_aborts_rather_than_undercounting(tmp_path: Path):
+    """r1 + r3 with r2 missing is a broken evidence set, not a two-round arc."""
+    _round_log(tmp_path, "r1.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r3.log", "codex-review: APPROVE\n", 1_000_600)
+    with pytest.raises(am.AbortError, match=r"\[2\] are missing"):
+        am.round_metrics([str(tmp_path / "r*.log")])
 
 
 def test_all_refused_launches_abort_rather_than_recording_an_empty_arc(tmp_path: Path):
