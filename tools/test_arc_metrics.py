@@ -433,7 +433,7 @@ def test_round_derivation_from_content_not_file_position(tmp_path: Path):
     _round_log(tmp_path, "r10.log", p1 + block, t + 1200)
     _round_log(tmp_path, "r11.log", "codex-review: GATE_REFUSED (BUDGET_EXHAUSTED)\n", t + 1800)
 
-    logs, gaps, p1_rounds, completeness = am.round_metrics([str(tmp_path / "r*.log")])
+    logs, gaps, p1_rounds, id_span = am.round_metrics([str(tmp_path / "r*.log")])
     assert len(logs) == 10, "refused launches are not rounds"
     assert p1_rounds == [1, 10], "P1s key by ROUND ID, not by position in a listing"
     assert [f.name for f in logs] == [
@@ -442,26 +442,45 @@ def test_round_derivation_from_content_not_file_position(tmp_path: Path):
         "r10.log",
     ], "the retry's fresh-named log IS round 9; both refused transcripts are excluded"
     assert len(gaps) == 9, "gaps pair the 10 real rounds only"
-    assert completeness == "complete", "a set starting at round 1 is the full evidence"
+    assert id_span == (1, 10), "the span is the set's own testimony; labels are the classifier's"
 
 
-# mutation-probe: classify a suffix-only set as "complete" -> red
+# mutation-probe: classify a suffix-only set as "complete", or grant "complete"
+# without the reservation authority confirming the tail -> red
+def test_completeness_labels_are_evidence_gated(monkeypatch):
+    """One classifier: min>1 is the set's own proof of a missing prefix;
+    "complete" needs the reservation authority to confirm the tail; anything
+    the evidence cannot back is "unknown" (a lower bound, never a guess)."""
+    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 10)
+    assert am._completeness_for("x", (1, 10)) == "complete"
+    assert am._completeness_for("x", (8, 10)) == "partial-suffix"
+    with pytest.raises(am.AbortError, match="missing its tail"):
+        am._completeness_for("x", (1, 3))
+
+    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: None)
+    assert am._completeness_for("x", (1, 10)) == "unknown", "no authority is never 'complete'"
+    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 7)
+    assert am._completeness_for("x", (1, 10)) == "unknown", (
+        "an under-recording authority (fallback-id rounds) cannot confirm the tail"
+    )
+
+
 def test_suffix_only_set_is_classified_partial_and_reaches_the_snapshot(
     monkeypatch, tmp_path: Path
 ):
-    """A set starting above round 1 is a lower bound: round_metrics derives
-    partial-suffix and queue_capture carries it into the snapshot, so the row
-    cannot ride the schema's "complete" default into exact cohort medians."""
+    """queue_capture carries the classifier's label into the snapshot, so the
+    row cannot ride the schema's "complete" default into exact cohort medians."""
     logs = tmp_path / "logs"
     logs.mkdir()
     _round_log(logs, "r8.log", "codex-review: BLOCK\n", 1_000_000)
     _round_log(logs, "r9.log", "codex-review: BLOCK\n", 1_000_600)
     _round_log(logs, "r10.log", "codex-review: APPROVE\n", 1_001_200)
-    _, _, _, completeness = am.round_metrics([str(logs / "r*.log")])
-    assert completeness == "partial-suffix"
+    _, _, _, id_span = am.round_metrics([str(logs / "r*.log")])
+    assert id_span == (8, 10)
 
     qdir = tmp_path / "queue"
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 10)
     am.queue_capture(
         am.argparse.Namespace(
             pr=1999,
@@ -515,9 +534,11 @@ def test_extract_carries_snapshot_completeness_and_defaults_legacy(monkeypatch):
     row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
     assert row.round_completeness == "partial-suffix"
 
+    # Names alone can never prove the tail survived (position-era captures held
+    # refused logs and gapped subsets) -- an r1-start legacy set is `unknown`.
     legacy["matched"] = ["/x/r1.log", "/x/r2.log", "/x/r3.log"]
     row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
-    assert row.round_completeness == "complete"
+    assert row.round_completeness == "unknown"
 
     del legacy["matched"]
     row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
@@ -584,7 +605,7 @@ def test_gap_detection_never_materializes_the_id_range(tmp_path: Path):
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
-# mutation-probe: drop the recorded_max > observed_max refusal in queue_capture -> red
+# mutation-probe: drop the recorded_max > observed_max refusal in _completeness_for -> red
 def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
     monkeypatch, tmp_path: Path
 ):
@@ -609,9 +630,11 @@ def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
     with pytest.raises(am.AbortError, match="missing its tail"):
         am.queue_capture(am.argparse.Namespace(**ns))
 
-    # Equal (and the one-directional undercount, recorded < observed) both pass.
+    # Authority-confirmed tail (recorded == observed) passes as "complete".
     monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 3)
     assert am.queue_capture(am.argparse.Namespace(**ns)) == 0
+    snap = json.loads((qdir / "pr-1998.json").read_text())["round_snapshot"]
+    assert snap["round_completeness"] == "complete"
 
 
 def test_reservation_recorded_max_round_reads_the_head_outcomes(monkeypatch):
@@ -663,6 +686,31 @@ def test_partial_rows_are_excluded_from_exact_aggregates(monkeypatch, tmp_path: 
     out = capsys.readouterr().out
     assert "review rounds    4.5" in out, "median of [4,5] is 4.5, not 4"
     assert "EXCLUDED" in out and "frag>=1" in out
+
+
+# mutation-probe: median the whole lane cohort instead of its complete rows -> red
+def test_lane_cohort_medians_exclude_lower_bound_rows(monkeypatch, tmp_path: Path, capsys):
+    """C-HE-28 lane metrics are exact aggregates too: a partial-suffix or
+    unknown row is a lower bound and must not enter the lane median."""
+    ledger = tmp_path / "arc-metrics.jsonl"
+    rows = [
+        {"arc_id": "a", "review_rounds": 4, "levers_active": [], "concurrent_lanes_at_open": 1},
+        {"arc_id": "b", "review_rounds": 5, "levers_active": [], "concurrent_lanes_at_open": 1},
+        {
+            "arc_id": "frag",
+            "review_rounds": 1,
+            "levers_active": [],
+            "concurrent_lanes_at_open": 1,
+            "round_completeness": "unknown",
+        },
+    ]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.summary(am.argparse.Namespace())
+    out = capsys.readouterr().out
+    lanes = out[out.index("-- LANES [concurrent_lanes_at_open=1]") :]
+    assert "review rounds    4.5 (n=2" in lanes, "median of [4,5]; the unknown row is out"
+    assert "1 lower-bound row(s) excluded" in lanes
 
 
 # mutation-probe: pool arc_span_s and total_arc_wall_s into one `arcs` list

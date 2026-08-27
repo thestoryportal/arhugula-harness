@@ -235,18 +235,25 @@ def gh_pr(pr: int) -> dict:
 
 
 # The wrapper's terminal line ends every published round log. Exactly three
-# producer shapes exist (all in codex_review.py/_report and the two gate
-# refusal prints; agy_review's standalone `VERDICT:` dialect is NOT a round-log
-# producer and aborts below as terminal-less, deliberately): `codex-review:
-# <terminal>`, the failover verdict `gemini-review (failover): <terminal>`, and
-# `gemini-review: GATE_REFUSED (<code>)` from agy_review's own gate. The LAST
-# such line is the transcript's verdict: a failover transcript carries the
-# primary's REVIEWER_UNAVAILABLE before the failover verdict that stands, and
-# publish-failure noise can FOLLOW it, so neither "first" nor "only" is the
-# right read.
+# producer shapes exist, and each label is restricted to the terminals its
+# producer actually emits (codex_review._report emits the full enum under
+# `codex-review:` and `gemini-review (failover):`; agy_review's own gate emits
+# ONLY `gemini-review: GATE_REFUSED (<code>)`; agy's standalone `VERDICT:`
+# dialect is NOT a round-log producer and aborts below as terminal-less,
+# deliberately). The LAST such line is the transcript's verdict: a failover
+# transcript carries the primary's REVIEWER_UNAVAILABLE before the failover
+# verdict that stands, and publish-failure noise can FOLLOW it, so neither
+# "first" nor "only" is the right read. Residual (named, not handled here):
+# reviewer-controlled finding text is printed verbatim into the transcript, so
+# a forged line remains representable until the wrapper owns an unforgeable
+# terminal sentinel -- that emission contract is wrapper-internal work
+# (B-218/U-HE-50 territory); the AUTHORITATIVE per-round terminal already
+# lives on the reservation's round_outcomes and the C-HE-24 rows, both written
+# from the schema-parsed verdict, never from this transcript read.
 ROUND_TERMINAL_RE = re.compile(
-    r"^(?:codex|gemini)-review(?: \(failover\))?: "
-    r"(APPROVE|BLOCK|REVIEWER_UNAVAILABLE|GATE_REFUSED)\b",
+    r"^(?:(?:codex-review|gemini-review \(failover\)): "
+    r"(APPROVE|BLOCK|REVIEWER_UNAVAILABLE|GATE_REFUSED)"
+    r"|gemini-review: (GATE_REFUSED))\b",
     re.MULTILINE,
 )
 # Round identity lives in the log NAME the publisher wrote (`r9-verdict.log` is
@@ -255,7 +262,7 @@ ROUND_TERMINAL_RE = re.compile(
 ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
 
 
-def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], str]:
+def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], tuple[int, int]]:
     """Derive per-round records from round-log CONTENT, never file position.
 
     C-HE-25 (v1.6 X6c): a round is a log whose wrapper terminal line is a review
@@ -266,11 +273,11 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
     round id parsed from the log name, so `p1_rounds` carries ROUND IDS, and a
     refused attempt plus its retry under a fresh name collapse to one round.
 
-    Returns ``(logs, gaps, p1_rounds, completeness)``: round ids now make the
-    log set's own coverage readable, so the classification is DERIVED here and
-    carried through snapshot -> ArcRow -- a suffix-only set (first observed id
-    above 1) is a lower bound and must reach `round_completeness` as
-    ``partial-suffix``, never ride the schema default into exact cohort medians.
+    Returns ``(logs, gaps, p1_rounds, (min_id, max_id))``. The id span is the
+    log set's own testimony about its coverage; the completeness LABEL is a
+    claim above that testimony and has exactly one classifier,
+    `_completeness_for`, which grounds "complete" in the reservation authority
+    -- this function never labels.
     """
     # Resolve before de-duplicating: two overlapping globs matching one file
     # would otherwise count it twice, inventing an extra round, a spurious
@@ -304,7 +311,7 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
                 "identity comes from the log name (r<N>...), never file position"
             )
         rid = int(m.group(1))
-        terminals = ROUND_TERMINAL_RE.findall(text)
+        terminals = [t.group(1) or t.group(2) for t in ROUND_TERMINAL_RE.finditer(text)]
         if not terminals:
             raise AbortError(
                 f"round logs: {f.name!r} carries no wrapper terminal line -- a "
@@ -361,8 +368,7 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
     gaps = [round(b - a, 1) for a, b in itertools.pairwise(mtimes)]
 
     p1_rounds = [rid for rid in sorted(rounds) if count_p1(rounds[rid][1]) >= 1]
-    completeness = "complete" if min(rounds) == 1 else "partial-suffix"
-    return logs, gaps, p1_rounds, completeness
+    return logs, gaps, p1_rounds, (ids[0], ids[-1])
 
 
 def count_p1(text: str) -> int:
@@ -493,11 +499,11 @@ def extract(args: argparse.Namespace) -> ArcRow:
             row.first_round_at = snapshot["first_round_at"]
             row.last_round_at = snapshot["last_round_at"]
         else:
-            logs, gaps, p1, completeness = round_metrics(args.round_logs)
+            logs, gaps, p1, id_span = round_metrics(args.round_logs)
             row.review_rounds = len(logs)
             row.round_wall_s = gaps
             row.p1_rounds = p1
-            row.round_completeness = completeness
+            row.round_completeness = _completeness_for(row.arc_id, id_span)
             row.round_log_source = str(Path(args.round_logs[0]).parent)
             first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
             last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
@@ -585,10 +591,11 @@ def extract(args: argparse.Namespace) -> ArcRow:
 def _legacy_snapshot_completeness(matched: list[str] | None) -> str:
     """Classify a pre-X6c snapshot from the filenames it captured.
 
-    The old queue stored `matched` paths but no classification; the names carry
-    the round ids, so a missing prefix is still readable. Anything that cannot
-    testify -- no matched list, or a name the id parser refuses -- is `unknown`:
-    a label that keeps the row out of exact aggregates rather than a guess."""
+    The old queue stored `matched` paths but no classification; the names still
+    read a missing prefix (`partial-suffix`). Nothing else is derivable from
+    names alone -- position-era captures could hold refused logs and gapped
+    subsets -- so every other legacy shape is `unknown`: a label that keeps the
+    row out of exact aggregates, never a claim of wholeness."""
     if not matched:
         return "unknown"
     ids = []
@@ -597,7 +604,7 @@ def _legacy_snapshot_completeness(matched: list[str] | None) -> str:
         if not m:
             return "unknown"
         ids.append(int(m.group(1)))
-    return "complete" if min(ids) == 1 else "partial-suffix"
+    return "partial-suffix" if min(ids) > 1 else "unknown"
 
 
 def _ledger_claim_path(ledger: Path) -> Path:
@@ -816,6 +823,31 @@ def _reservation_recorded_max_round(arc_id: str) -> int | None:
     return max((int(k.split("/", 1)[0]) for k in outcomes), default=None)
 
 
+def _completeness_for(arc_id: str, id_span: tuple[int, int]) -> str:
+    """The ONE classifier of a live log set's `round_completeness` label.
+
+    The set's own testimony covers only its start: an observed min above 1
+    proves a missing prefix (`partial-suffix`). "complete" is a CLAIM about the
+    tail, and only the reservation authority can back it -- recorded_max equal
+    to the observed max. More recorded rounds than logged ones is a broken
+    evidence set (refuse); no authority, or an under-recording one (unprefixed
+    rounds land on fallback arc ids), leaves `unknown` -- a label every
+    consumer treats as a lower bound excluded from exact aggregates, never a
+    guess of wholeness."""
+    observed_min, observed_max = id_span
+    recorded_max = _reservation_recorded_max_round(arc_id)
+    if recorded_max is not None and recorded_max > observed_max:
+        raise AbortError(
+            f"round logs: the reservation records rounds through {recorded_max} "
+            f"but the log set ends at r{observed_max} -- the evidence set is "
+            "missing its tail; fix the log set rather than record a "
+            "surviving prefix as the whole arc"
+        )
+    if observed_min > 1:
+        return "partial-suffix"
+    return "complete" if recorded_max == observed_max else "unknown"
+
+
 def queue_capture(args: argparse.Namespace) -> int:
     """Record an arc's capture inputs OUTSIDE the repo, for a later drain.
 
@@ -878,25 +910,8 @@ def queue_capture(args: argparse.Namespace) -> int:
     # no recomputation at all and cannot be affected by later edits.
     snapshot: dict | None = None
     if args.round_logs:
-        logs, gaps, p1, completeness = round_metrics(args.round_logs)
-        # A surviving PREFIX (r1..r3 of a 10-round arc) is invisible to the log
-        # set itself -- it starts at 1 and has no internal gap. The reservation's
-        # accreted round_outcomes are the authority that CAN testify about the
-        # tail, one-directionally (see _reservation_recorded_max_round): at
-        # closure, more recorded rounds than logged ones means the evidence set
-        # is missing its tail -- refuse rather than snapshot a lower bound as
-        # "complete".
-        m = ROUND_ID_RE.match(logs[-1].stem)
-        assert m is not None  # every kept log parsed in round_metrics
-        observed_max = int(m.group(1))
-        recorded_max = _reservation_recorded_max_round(arc_id)
-        if recorded_max is not None and recorded_max > observed_max:
-            raise AbortError(
-                f"round logs: the reservation records rounds through {recorded_max} "
-                f"but the log set ends at r{observed_max} -- the evidence set is "
-                "missing its tail; fix the log set rather than snapshot a "
-                "surviving prefix as the whole arc"
-            )
+        logs, gaps, p1, id_span = round_metrics(args.round_logs)
+        completeness = _completeness_for(arc_id, id_span)
         first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
         last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
         snapshot = {
@@ -2268,7 +2283,11 @@ def summary(_args: argparse.Namespace) -> int:
         by_lanes.setdefault(key, []).append(r)
     for label in sorted(by_lanes):
         cohort = by_lanes[label]
-        rounds = [r["review_rounds"] for r in cohort if r.get("review_rounds") is not None]
+        # Same discipline as the lever cohorts above: a lower-bound row
+        # (partial-suffix / unknown) must not enter an exact lane median.
+        exact_rows = [r for r in cohort if r.get("round_completeness", "complete") == "complete"]
+        rounds = [r["review_rounds"] for r in exact_rows if r.get("review_rounds") is not None]
+        bounded = len(cohort) - len(exact_rows)
         print(f"-- LANES [{label}] (n={len(cohort)}) " + "-" * 20)
         print(
             f"  review rounds    {statistics.median(rounds):g} (n={len(rounds)}, "
@@ -2276,6 +2295,8 @@ def summary(_args: argparse.Namespace) -> int:
             if rounds
             else "  review rounds    --"
         )
+        if bounded:
+            print(f"  {bounded} lower-bound row(s) excluded from the exact line above")
         print()
 
     # C-HE-27 §4: N6 from the durable phases map + the gate log's dispositions.
