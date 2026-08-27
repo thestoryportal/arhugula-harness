@@ -1167,6 +1167,13 @@ def test_roadmap_continue_carriers_document_span_emission_parity() -> None:
         assert "--phase edit --edge start" in text, path
         assert "verify_unavailable" in text, path
         assert "B-218" in text, path
+    # codex r6: the Codex runner's unlogged gemini rounds have NO wrapper emitter,
+    # so its carrier must hold the executable verify commands itself and point at
+    # the single definition home (the Claude ship-pr block) — keyword presence
+    # alone would stay green with the sentence gutted.
+    codex_carrier = (ROOT / ".agents/skills/roadmap-continue/SKILL.md").read_text(encoding="utf-8")
+    assert "--phase verify --edge start" in codex_carrier
+    assert ".claude/skills/ship-pr/SKILL.md" in codex_carrier
 
 
 def test_forward_profile_template_preserves_current_codex_home_and_review_boundary() -> None:

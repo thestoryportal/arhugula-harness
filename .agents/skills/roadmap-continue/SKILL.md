@@ -60,7 +60,11 @@ check them rather than trusting remembered or checkpointed remaining work.
    the final fix commit; `--phase verify_unavailable --edge start` on a both-channels
    outage and `--edge end` when review resumes (the wrapper already closed verify at
    process exit). On an unlogged review venue (`just gemini-review`) the verify edges are
-   session-emitted too, per the ship-pr "Phase-span edges" definition. If the wrapper
+   session-emitted too:
+   `uv run python tools/reservations.py phase --arc-id <arc-id> --phase verify --edge start --lane-id <lane-id>`
+   before the first review invocation and the same command with `--edge end` at that
+   round's verdict (semantics: the "Phase-span edges" block in
+   `.claude/skills/ship-pr/SKILL.md`, the single definition home). If the wrapper
    WARNed that a span emission failed on the arc's FINAL round, re-run that edge's exact
    command before ship (the head accretes until terminal; a failed final-round start
    stays null — never fabricate a late window). This copy is
