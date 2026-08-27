@@ -1069,8 +1069,13 @@ def recipe_env(tmp_path: Path):
         f'    exec "{sys.executable}" "{real_publisher}" "$@" ;;\n'
         # U-HE-50: span emission execs the REAL store writer against the fixture's
         # ARC_METRICS_QUEUE_DIR, so the verify pair below is witnessed on a real
-        # reservation head, not a stub's echo
+        # reservation head, not a stub's echo; REC_PHASE_MODE=fail-start injects a
+        # start-edge store failure (codex u-he-50 r1: the partial-write arm)
         "  tools/reservations.py)\n"
+        '    if [ "${REC_PHASE_MODE:-}" = fail-start ]; then\n'
+        '      case "$*" in *"--phase verify --edge start"*)\n'
+        '        echo "ABORT: injected start failure" >&2; exit 2 ;; esac\n'
+        "    fi\n"
         f'    exec "{sys.executable}" "{_RESERVATIONS}" "$@" ;;\n'
         "esac\n"
     )
@@ -1080,6 +1085,7 @@ def recipe_env(tmp_path: Path):
         mode: str,
         log: str = ".harness/tmp/x-rounds/r1.log",
         arc_env: dict[str, str] | None = None,
+        phase_mode: str = "",
     ):
         script = tmp_path / "recipe.sh"
         script.write_text(_recipe_body(log))
@@ -1089,6 +1095,7 @@ def recipe_env(tmp_path: Path):
             REC_MODE=mode,
             REC_MARKER=str(tmp_path / "wrapper-ran"),
             ARC_METRICS_QUEUE_DIR=str(tmp_path / "queue"),
+            REC_PHASE_MODE=phase_mode,
         )
         # hermetic: a live session's exported arc ids must not leak emission into
         # tests that model the unreserved invocation
@@ -1203,12 +1210,64 @@ def test_recipe_unreserved_invocation_skips_emission(recipe_env):
 def test_recipe_emission_failure_warns_and_preserves_verdict(recipe_env):
     # ids present but no reservation head: record_phase ABORTs (exit 2) — the
     # wrapper warns loud on stderr and the round's verdict + publish are untouched
-    # ([LAW:no-silent-failure]: the failure surfaces; it never rewrites the exit)
+    # ([LAW:no-silent-failure]: the failure surfaces; it never rewrites the exit).
+    # The failed start also mutes the end emission (codex u-he-50 r1: a lone end
+    # would durably record a reversed pair).
     repo, _tmp, run = recipe_env
     done = run("allow", arc_env=dict(_ARC_ENV))
     assert done.returncode == 1
     assert "WARN verify.start span emission failed" in done.stderr
+    assert "WARN verify.end skipped" in done.stderr
     assert (repo / ".harness/tmp/x-rounds/r1-a1.log").read_text() == "codex-review: BLOCK\n"
+
+
+def test_recipe_start_failure_records_no_partial_pair(recipe_env):
+    # codex u-he-50 r1 (partial-write arm 1): a start-edge store failure with a
+    # healthy end path must record NOTHING — a lone end would be a reversed pair
+    # once a retry stamps its later start (record_phase refuses no rewrite, so the
+    # corrupt state would be durable). The retry then emits a fresh coherent pair.
+    _repo, tmp, run = recipe_env
+    _seed_reservation(tmp / "queue")
+    done = run("allow", arc_env=dict(_ARC_ENV), phase_mode="fail-start")
+    assert done.returncode == 1
+    assert "WARN verify.start span emission failed" in done.stderr
+    assert "WARN verify.end skipped" in done.stderr
+    assert "verify" not in _phases(tmp / "queue")  # nothing recorded this attempt
+    retry = run("allow", ".harness/tmp/x-rounds/r2.log", arc_env=dict(_ARC_ENV))
+    assert retry.returncode == 1
+    verify = _phases(tmp / "queue")["verify"]
+    assert set(verify) == {"start", "end"}
+    assert verify["start"] <= verify["end"]  # coherent, never reversed
+
+
+def test_recipe_crash_window_closed_by_retry_end(recipe_env):
+    # codex u-he-50 r1 (partial-write arm 2), pinned as a NAMED measurement bound:
+    # an attempt that recorded start and died before end leaves an open window; the
+    # retry keeps the round identity (U-HE-49) and its terminal closes the pair, so
+    # the recorded round-1 span is an upper bound that includes the interruption —
+    # first-write-wins keeps the original start (no rewrite).
+    _repo, tmp, run = recipe_env
+    _seed_reservation(tmp / "queue")
+    seeded = _rsv(
+        tmp / "queue",
+        "phase",
+        "--arc-id",
+        "arc-x",
+        "--phase",
+        "verify",
+        "--edge",
+        "start",
+        "--lane-id",
+        "lane-1",
+    )
+    assert seeded.returncode == 0, seeded.stderr
+    crashed_start = _phases(tmp / "queue")["verify"]["start"]
+    done = run("allow", arc_env=dict(_ARC_ENV))
+    assert done.returncode == 1
+    verify = _phases(tmp / "queue")["verify"]
+    assert verify["start"] == crashed_start  # the crashed attempt's start survives
+    assert set(verify) == {"start", "end"}
+    assert verify["start"] <= verify["end"]
 
 
 def test_logged_recipe_emits_verify_at_process_boundaries():

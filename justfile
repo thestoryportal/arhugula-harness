@@ -771,10 +771,23 @@ review-with-failover-logged log base='main':
     # [LAW:single-enforcer] reservations.py record_phase is the only span writer;
     # [LAW:no-silent-failure] a failed emission warns loud but never alters the
     # verdict exit -- an absent span reads null downstream, never zero (C-HE-27 §3).
+    # Partial-pair dispositions (codex u-he-50 r1): a lone END is refused here (a
+    # failed start with a successful end would durably record a reversed pair), so
+    # a start-failed attempt records nothing and the retry emits a fresh coherent
+    # pair; a start-only crash window is CLOSED by the retry's end (U-HE-49: the
+    # retry keeps the round name), so that recorded round-1 span is an upper bound
+    # that includes the interruption -- a named measurement bound, never a gap-derived
+    # duration.
     emit_verify() {
       [ -n "${HARNESS_ARC_ID:-}" ] && [ -n "${HARNESS_LANE_ID:-}" ] || return 0
-      uv run python tools/reservations.py phase --arc-id "$HARNESS_ARC_ID" --phase verify --edge "$1" --lane-id "$HARNESS_LANE_ID" >/dev/null \
-        || echo "review-with-failover-logged: WARN verify.$1 span emission failed -- round proceeds; span reads null (C-HE-27)" >&2
+      if [ "$1" = end ] && [ "${_verify_start_failed:-0}" = 1 ]; then
+        echo "review-with-failover-logged: WARN verify.end skipped -- start emission failed this attempt; a lone end would record a reversed pair (C-HE-27 §3)" >&2
+        return 0
+      fi
+      uv run python tools/reservations.py phase --arc-id "$HARNESS_ARC_ID" --phase verify --edge "$1" --lane-id "$HARNESS_LANE_ID" >/dev/null || {
+        if [ "$1" = start ]; then _verify_start_failed=1; fi
+        echo "review-with-failover-logged: WARN verify.$1 span emission failed -- round proceeds; span reads null (C-HE-27)" >&2
+      }
     }
     # U-HE-49 (C-HE-21 §1 X6b): admission is evaluated BEFORE the launch -- a launch
     # the gate would refuse is not made (exit 3: no reviewer call, no log file, no
