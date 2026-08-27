@@ -803,6 +803,7 @@ def _launch(repo: Path, log: str = ".harness/tmp/x-rounds/r1.log") -> int:
 @pytest.fixture()
 def launch_env(repo: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
     monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
     return repo
 
@@ -951,6 +952,36 @@ def test_launch_refuses_symlinked_rounds_dir(launch_env: Path, tmp_path_factory,
     assert out == ""
     assert "GATE_REFUSED (DEST_REFUSED)" in err
     assert "containment" in err
+
+
+def test_launch_refuses_stale_forced_round_env(launch_env: Path, monkeypatch, capsys):
+    # codex r5: a leaked HARNESS_ROUND_N would force the WRAPPER (which honors
+    # it) onto an already-recorded round — refuse pre-launch unless the forced
+    # value IS the next unused primary round
+    _seed_current_preflight(launch_env)
+    (launch_env / "gate-log.jsonl").write_text(json.dumps(_row(1, "no_finding")) + "\n")
+    monkeypatch.setenv("HARNESS_ROUND_N", "1")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r2.log") == 3
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "GATE_REFUSED (FORCED_ROUND_STALE)" in err
+    # a forced value equal to the next unused round is the failover-child shape
+    # and passes
+    monkeypatch.setenv("HARNESS_ROUND_N", "2")
+    assert _launch(launch_env, ".harness/tmp/x-rounds/r2.log") == 0
+    assert capsys.readouterr().out.strip() == ".harness/tmp/x-rounds/r2-a1.log"
+
+
+def test_launch_refuses_alias_round_names(launch_env: Path, capsys):
+    # codex r5: r01/round-1/r1-notes parse to the right NUMBER but would mint a
+    # second attempt family for one round — only the canonical r<N> stem launches
+    _seed_current_preflight(launch_env)
+    for alias in ("r01.log", "round-1.log", "r1-notes.log"):
+        assert _launch(launch_env, f".harness/tmp/x-rounds/{alias}") == 3
+        out, err = capsys.readouterr()
+        assert out == "", alias
+        assert "GATE_REFUSED (ROUND_NAME_MISMATCH)" in err, alias
+    assert not (launch_env / ".harness/tmp/x-rounds").exists()
 
 
 def test_launch_refuses_unparseable_round_name(launch_env: Path, capsys):

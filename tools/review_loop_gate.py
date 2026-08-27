@@ -490,7 +490,9 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
 # ── edge: launch (U-HE-49; C-HE-21 §1 X6b) ───────────────────────────────────
 
 #: A trailing per-attempt suffix on a round-log stem (`r9-a2` → `-a2`).
-_ATTEMPT_SUFFIX = re.compile(r"-a\d+$")
+#: Canonical minted attempt suffix: positive decimal, no leading zero (codex r5 —
+#: `-a0`/`-a01` are never minted and must read as foreign, not as attempts).
+_ATTEMPT_SUFFIX = re.compile(r"-a[1-9]\d*$")
 
 
 def attempt_destination(requested: str, existing_names: list[str]) -> str:
@@ -514,7 +516,7 @@ def attempt_destination(requested: str, existing_names: list[str]) -> str:
     # idempotent on its own output: a requested `r9-a1.log` mints round 9's NEXT
     # attempt, never a nested `r9-a1-a1.log`
     stem = _ATTEMPT_SUFFIX.sub("", stem)
-    attempt_of = re.compile(rf"^{re.escape(stem)}-a(\d+){re.escape(suffix)}$")
+    attempt_of = re.compile(rf"^{re.escape(stem)}-a([1-9]\d*){re.escape(suffix)}$")
     taken = [int(m.group(1)) for name in existing_names if (m := attempt_of.match(name))]
     out = f"{stem}-a{max(taken, default=0) + 1}{suffix}"
     return f"{parent}/{out}" if parent else out
@@ -593,7 +595,7 @@ def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
         )
         return 3
     try:
-        expected = rw.round_n_for(arc_id, LOOP_PRODUCERS[0])
+        expected = rw.next_round_from_rows(arc_id, LOOP_PRODUCERS[0])
     except Exception as exc:
         print(
             f"review-launch: gate log unreadable ({exc}) — cannot bind a round identity",
@@ -601,10 +603,28 @@ def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
         )
         print("review-launch: GATE_REFUSED (STATE_UNREADABLE) — launch not made", file=sys.stderr)
         return 3
-    if int(match.group(1)) != expected:
+    # A leaked HARNESS_ROUND_N would force the WRAPPER (which honors it) onto a
+    # round that already has a primary outcome — a duplicate transcript
+    # arc_metrics must refuse (codex r5). The forcing var belongs to the failover
+    # child only; refuse any forced value that is not the next unused round.
+    forced = os.environ.get("HARNESS_ROUND_N")
+    if forced is not None and forced != str(expected):
         print(
-            f"review-launch: requested {Path(requested).name!r} names round "
-            f"{int(match.group(1))} but the next primary round is {expected} — "
+            f"review-launch: HARNESS_ROUND_N={forced!r} would force the wrapper to a "
+            f"round that is not the next unused primary round ({expected}) — unset it "
+            "(the forcing var is for the failover child only)",
+            file=sys.stderr,
+        )
+        print("review-launch: GATE_REFUSED (FORCED_ROUND_STALE) — launch not made", file=sys.stderr)
+        return 3
+    if Path(requested).stem != f"r{expected}":
+        # canonical-stem equality, not just parsed-number equality (codex r5):
+        # aliases like `r01.log` / `round-1.log` / `r1-notes.log` parse to the
+        # right number but would mint a SECOND attempt family for one round,
+        # which arc_metrics cannot collapse
+        print(
+            f"review-launch: requested {Path(requested).name!r} is not the canonical "
+            f"name for this launch — the next primary round is {expected}; "
             f"request r{expected}.log (a refused attempt never advances the round)",
             file=sys.stderr,
         )

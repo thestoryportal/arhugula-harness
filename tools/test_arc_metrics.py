@@ -627,6 +627,16 @@ def test_foreign_attempt_suffixed_name_beside_real_attempt_aborts(tmp_path: Path
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
+def test_non_minted_attempt_suffix_is_foreign_not_an_earlier_attempt(tmp_path: Path):
+    """codex r5: attempt_destination only mints positive canonical decimals, so a
+    terminal-less `r1-a0.log` (or `-a01`) is foreign evidence — it must not pass
+    the same-family ordering check as an 'earlier attempt'."""
+    _round_log(tmp_path, "r1-a0.log", "partial, non-minted suffix\n", 1_000_000)
+    _round_log(tmp_path, "r1-a1.log", "codex-review: BLOCK\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="foreign or contradictory"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
 def test_terminal_less_attempt_minted_after_completed_round_aborts(tmp_path: Path):
     """codex r3: a crashed r1-a2 AFTER r1-a1 completed is contradictory (the
     launch guard refuses retrying a recorded round) — expose it, don't suppress."""

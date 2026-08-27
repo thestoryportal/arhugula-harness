@@ -268,8 +268,10 @@ ROUND_TERMINAL_RE = re.compile(
 # file's position within a listing.
 ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
 # The minted per-attempt suffix (U-HE-49 launch verb): `r1-a2` → attempt 2. Only
-# names in this minted sequence can be classified as failed attempts.
-_ATTEMPT_K_RE = re.compile(r"-a(\d+)$")
+# names in this minted sequence can be classified as failed attempts — canonical
+# positive decimals only (codex r5: `-a0`/`-a01` are never minted; they must read
+# as foreign evidence, not as earlier attempts).
+_ATTEMPT_K_RE = re.compile(r"-a([1-9]\d*)$")
 
 
 def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], list[int]]:
