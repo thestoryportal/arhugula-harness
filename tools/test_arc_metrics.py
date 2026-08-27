@@ -587,6 +587,18 @@ def test_terminal_less_transcript_aborts_rather_than_classifying(tmp_path: Path)
         am.round_metrics([str(tmp_path / "r*.log")])
 
 
+def test_refused_attempt_beside_real_retry_collapses_to_one_round(tmp_path: Path):
+    """merge-gate witness lens (PR #1471): the headline X6b claim — a
+    GATE_REFUSED-terminal attempt beside its real-terminal retry is ONE round,
+    keyed to the retry's transcript — exercised directly through round_metrics
+    (the GATE_REFUSED filter is a different branch than the terminal-less one)."""
+    _round_log(tmp_path, "r1-a1.log", "codex-review: GATE_REFUSED (SWEEP_MISSING)\n", 1_000_000)
+    _round_log(tmp_path, "r1-a2.log", "codex-review: BLOCK\n", 1_000_600)
+    logs, _, _, ids = am.round_metrics([str(tmp_path / "r*.log")])
+    assert [f.name for f in logs] == ["r1-a2.log"]
+    assert ids == [1]
+
+
 def test_terminal_less_attempt_beside_terminal_bearing_retry_is_excluded(tmp_path: Path):
     """U-HE-49 codex r2: the wrapper crashed/was killed mid-attempt, so the
     write-once r1-a1.log carries no terminal; the retry published r1-a2.log.

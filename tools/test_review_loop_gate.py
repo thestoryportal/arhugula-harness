@@ -996,6 +996,84 @@ def test_launch_refuses_unparseable_round_name(launch_env: Path, capsys):
     assert not (launch_env / ".harness/tmp/x-rounds").exists()
 
 
+def _recipe_body(log: str, base: str = "main") -> str:
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    body = justfile.split("review-with-failover-logged log base='main':", 1)[1].split("\n\n", 1)[0]
+    lines = [ln[4:] if ln.startswith("    ") else ln for ln in body.splitlines()]
+    return "\n".join(lines).replace("{{log}}", log).replace("{{base}}", base) + "\n"
+
+
+@pytest.fixture()
+def recipe_env(tmp_path: Path):
+    """Execute the REAL recipe body under a PATH-shimmed `uv` (merge-gate witness
+    lens, PR #1471): the shim refuses/allows the launch verb per REC_MODE, marks
+    any wrapper invocation, and execs the REAL publisher — so the bash
+    control-flow binding (`|| exit`, the empty-dest arm, PIPESTATUS folding) is
+    witnessed by execution, not by substring presence."""
+    repo = tmp_path / "repo"
+    (repo / ".harness").mkdir(parents=True)
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    real_publisher = Path(__file__).resolve().parent / "round_log_publish.py"
+    (shim / "uv").write_text(
+        "#!/usr/bin/env bash\n"
+        "# args: run python tools/<script> ...\n"
+        'script="$3"; shift 3\n'
+        'case "$script" in\n'
+        "  tools/review_loop_gate.py)\n"
+        '    case "$REC_MODE" in\n'
+        "      refuse) echo 'review-launch: GATE_REFUSED (TEST)' >&2; exit 3 ;;\n"
+        "      empty) exit 0 ;;\n"
+        '      allow) shift; echo "$2" ;;\n'  # launch --log <log> --base <base> -> echo <log>
+        "    esac ;;\n"
+        "  tools/codex_review.py)\n"
+        '    touch "$REC_MARKER"; printf "codex-review: BLOCK\\n"; exit 1 ;;\n'
+        "  tools/round_log_publish.py)\n"
+        f'    exec "{sys.executable}" "{real_publisher}" "$@" ;;\n'
+        "esac\n"
+    )
+    (shim / "uv").chmod(0o755)
+
+    def run(mode: str, log: str = ".harness/tmp/x-rounds/r1.log"):
+        script = tmp_path / "recipe.sh"
+        script.write_text(_recipe_body(log))
+        env = dict(
+            os.environ,
+            PATH=f"{shim}:{os.environ['PATH']}",
+            REC_MODE=mode,
+            REC_MARKER=str(tmp_path / "wrapper-ran"),
+        )
+        return subprocess.run(
+            ["bash", str(script)], cwd=repo, env=env, capture_output=True, text=True
+        )
+
+    return repo, tmp_path, run
+
+
+def test_recipe_execution_refused_launch_never_reaches_wrapper(recipe_env):
+    repo, tmp, run = recipe_env
+    done = run("refuse")
+    assert done.returncode == 3
+    assert not (tmp / "wrapper-ran").exists()  # the reviewer call was NOT made
+    assert not (repo / ".harness/tmp").exists()  # and no log was written
+
+
+def test_recipe_execution_empty_dest_aborts_before_wrapper(recipe_env):
+    _repo, tmp, run = recipe_env
+    done = run("empty")
+    assert done.returncode == 4
+    assert "printed no destination" in done.stderr
+    assert not (tmp / "wrapper-ran").exists()
+
+
+def test_recipe_execution_allowed_pipes_wrapper_through_real_publisher(recipe_env):
+    repo, tmp, run = recipe_env
+    done = run("allow")
+    assert done.returncode == 1  # the stub wrapper's BLOCK exit survives PIPESTATUS folding
+    assert (tmp / "wrapper-ran").exists()
+    assert (repo / ".harness/tmp/x-rounds/r1.log").read_text() == "codex-review: BLOCK\n"
+
+
 def test_logged_recipe_evaluates_admission_before_launch():
     # the launch step composition ([LAW:verifiable-goals] on the bash seam): the
     # launch verb runs BEFORE the wrapper, short-circuits on refusal, and the
