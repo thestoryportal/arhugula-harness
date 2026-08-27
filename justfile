@@ -348,6 +348,15 @@ merge-gate-binding lens base='main':
 merge-gate-emit *ARGS:
     uv run python tools/merge_gate_log.py emit "$@"
 
+# Absorption-step disposition write (C-HE-24 §5, U-HE-47): append ONE finding_adjudication
+# row. Exit 0 recorded / 2 NOT recorded (unknown finding_id, actor == producer, same-second
+# ts, an already-adjudicated lineage violation, or — with HARNESS_ARC_ID set — an arc this
+# lane's reservation does not hold / a target row from another arc). Headless venues MUST
+# use the prefixed form (the guard auto-allows only it, holder-bound):
+#   HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor <runner>_absorber
+merge-gate-adjudicate *ARGS:
+    uv run python tools/merge_gate_log.py adjudicate "$@"
+
 # Landing predicate: the head about to merge may differ from the head the lenses approved
 # ONLY by the two gate-log files. Exit 1 (re-gate) otherwise.
 merge-gate-landing-delta reviewed final='HEAD':

@@ -2531,3 +2531,18 @@ same spec leg.
 - **What it is.** The `just pilot-gate-check` reducer (`tools/lanes_verify.py:620` area, landed at #1460) selects the last historical probe-result row and ignores probe-sample rows entirely. After an existing GREEN, a rerun can record invalid samples and then crash or be terminated before emitting its terminal probe-result row — pilot-gate still returns the prior GREEN, so an incomplete run is indistinguishable from no run and C-HE-22's zero-validity-failures GREEN rule is unenforceable against the run actually in progress.
 - **Current state.** OPEN. Surfaced by the LEAN codex round on the doc-only PR #1462; the code is pre-existing and untouched by that PR, so the finding is registered rather than absorbed (surgical-changes rule).
 - **Closure shape.** A small follow-up arc on `tools/lanes_verify.py`: run-delimited probe-result reduction (run-id/start marker; the newest unterminated run reduces non-GREEN), with a witness that plants an unterminated rerun after a GREEN and asserts `just pilot-gate-check` refuses. Natural companion to U-HE-37 (pilot gate) or the plan §8 R0 instrument round.
+
+### B-220 · C-HE-23 §2 pr-join wording vs reservation arc ids *(surfaced by codex r5/r7 on u-he-47, 2026-08-27; REGISTERED)*
+
+- **What it is.** A contract-wording tension: since U-HE-34 the merge-gate carriers pass the reservation arc id on lens rows (the C-HE-24 §6 / N6 / phase joins key on it), while C-HE-23 §2 words the md↔JSONL consistency join as `(pr, head_sha, verdict)` — recoverable only from the legacy `pr-N` arc shape. The pre-U-HE-47 reducer therefore silently dropped every reservation-arc verdict (23 live MISSING-JSONL rows on main).
+- **Current state.** U-HE-47 re-keyed the join (arc-grouped emissions × `(head12, lens, verdict)` md join, pr md-side only) — the live check is green. Residual: the wording deviation, and the theoretical cross-vouch of two concurrent PRs at one head with identical lens/verdict/ts/round/count (tamper-evidence is out of scope per §2's hash-chain drop). Closure = a C-HE-23 §2 change-note (or an envelope-level pr carrier) at design phase.
+
+### B-221 · adjudicate actor not runner-bound in the shared guard *(surfaced by codex r6/r7 on u-he-47, 2026-08-27; REGISTERED)*
+
+- **What it is.** A venue-signal gap: `tools/hooks/permission-guard.sh` serves BOTH runners (`.codex/hooks.json` registers the same script), so the merge-gate-adjudicate exact shape pins `--actor` to the absorber identity set but cannot bind WHICH runner invokes — either loop could claim the other's absorber in `disposition_actor` (false WHO; auditable append-only, actor ≠ producer still enforced).
+- **Current state.** The two-absorber pin stands (the r6 claude-only pin was reverted at r7 as falsified-premise — it broke documented Codex absorption); append-only audit is the operative control. Closure = a runner-identity signal delivered to the guard (or per-runner entrypoints) + the pin keyed on it, witnessed on both runners.
+
+### B-222 · holder-check-to-append window on adjudication *(surfaced by codex r6/r7 on u-he-47, 2026-08-27; REGISTERED)*
+
+- **What it is.** A held bounded race: the holder authority check (inside `adjudicate()`, immediately before the append) and the gate-log append are not one atomic step — the reservation store and the gate log share no lock.
+- **Current state.** HELD as bounded, stated in code: a §6 holder transfer is dead-claim recovery of a crashed/idle lane, and the landing row is exactly the one the then-authorized caller composed. Closure = a design-phase call: accept-as-bounded in C-HE-24 §5, or a common coordination point for reservation-authorized log writes.

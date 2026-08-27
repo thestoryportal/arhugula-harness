@@ -723,3 +723,10 @@ B-206) rather than unaddressed defects.
 | 2026-08-27T02:33:18Z | #1465 | 1f053acc6b00 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-08-27T02:34:47Z | #1465 | 1f053acc6b00 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | #1465 | 2026-08-26 | feat/u-he-46-round-derivation | concurrency APPROVE / spec-conformance APPROVE / witness-adequacy APPROVE (r2 @1f053acc6; r1 @7012edb2c was 2 APPROVE + witness BLOCK P2 vacuous-lane-filter — absorbed in 1f053acc6; spec r1 verdict unrecorded, binding moved) | all-approve -> merge | blast-radius: 6 consumers (graft callers, round_metrics+extract depth 2) |
+| 2026-08-27T08:42:04Z | #1467 | 398f74198b3d | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-27T08:44:23Z | #1467 | 398f74198b3d | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-08-27T08:58:14Z | #1467 | 01bc91c088a0 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-27T08:58:50Z | #1467 | 01bc91c088a0 | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r1 |
+| 2026-08-27T09:01:37Z | #1467 | 69d0fe24d360 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-08-27T09:04:07Z | #1467 | 69d0fe24d360 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| #1467 | 2026-08-27 | feat/u-he-47-attribution-writers | 3-lens verdicts: concurrency APPROVE (r2 @01bc91c0, transfers), spec-conformance APPROVE (r3 @69d0fe24 after its r2 BLOCK forced the arc to eat its own §5 dogfood — 39/39 dispositions), witness-adequacy APPROVE (r3 @69d0fe24 after its r1 BLOCK added the CLI-recovery + ImportError witnesses, empirically mutation-killed) | outcome: MERGE | blast-radius: 3 emit_outcome producers + 4 log readers (graft, floor-not-ceiling) |

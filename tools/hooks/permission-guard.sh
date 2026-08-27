@@ -467,6 +467,39 @@ fi
 # exact-shape: exactly the canonical form's tokens (the arity check below is the authority), flags in canonical order,
 # values never dash-led, edge from the C-HE-27 pair. Anything else — duplicates, =-forms,
 # abbreviations, extra flags — falls through to the normal ask.
+_adjudicate_exact_shape() {
+  # U-HE-47 codex r2 P1: adjudication dispositions MUTE findings downstream, so the
+  # guard admits only the loop's own absorption shape — flag order fixed, arity
+  # bounded (no token can chain a second recipe), disposition ∈ {accepted,rejected}
+  # (suppressed stays operator-visible), the finding-id in its C-HE-24 §4 4-part
+  # shape, and the actor NEVER the operator identity (an agent must not claim the
+  # operator's adjudication authority; write-time actor≠producer is enforced by
+  # finding_record, this is the venue half). The id's PRODUCER component is pinned
+  # to the review producers (codex/gemini wrappers + gate lenses) — codex r3 P1: an
+  # unrestricted producer would let a headless agent adjudicate-reject a
+  # DETERMINISTIC check's finding (merge-door, context-guard) and thereby mute the
+  # detection; those targets stay ask-gated. Everything else falls to ask.
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  [ "$#" -eq 8 ] || return 1
+  [ "$1" = "just" ] && [ "$2" = "merge-gate-adjudicate" ] \
+    && [ "$3" = "--finding-id" ] && [ "$5" = "--disposition" ] && [ "$7" = "--actor" ] || return 1
+  printf '%s' "$4" | grep -Eq \
+    '^(codex_review_wrapper|gemini_review_wrapper|merge-gate-[a-z-]+):[A-Za-z0-9._-]+:[0-9a-f]{12}:[0-9]+$' \
+    || return 1
+  case "$6" in accepted|rejected) ;; *) return 1 ;; esac
+  # codex r4 P1 / r6 P2 / r7 P2 (settled): the actor is pinned to the two documented
+  # absorber identities. This guard is registered for BOTH runners (.codex/hooks.json
+  # invokes this same script), so a per-venue identity pin is not expressible here —
+  # r6's claude_absorber-only pin was built on a falsified Claude-only premise and
+  # broke the documented Codex absorption. The cross-runner WHO claim (either loop
+  # naming the other's absorber) is a REGISTERED auditable residual, not silently
+  # accepted: rows are append-only, actor != producer is write-time enforced, and a
+  # runner-bound actor pin awaits a venue signal this hook does not receive today.
+  # operator / third-party / forged-lens identities still fall to ask.
+  case "$8" in claude_absorber|codex_absorber) ;; *) return 1 ;; esac
+}
+
 _phase_exact_shape() {
   local cmd="$1"
   set -f; set -- $cmd; set +f
@@ -751,6 +784,18 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
        && _bash_args_safe "$CMD"; then
       # U-HE-34: the C-HE-27 span emitters (roadmap-continue / ship-pr) — positional
       # exact-shape only; see _phase_exact_shape for the duplicate-flag rationale.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+merge-gate-adjudicate([[:space:]]|$)' \
+       && _adjudicate_exact_shape "$TRIM" \
+       && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_LANE_ID=[A-Za-z0-9._-]+[[:space:]]+)?HARNESS_ARC_ID=[A-Za-z0-9._-]+([[:space:]]+HARNESS_LANE_ID=[A-Za-z0-9._-]+)?[[:space:]]' \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-47 codex r2 P1: exact-shape only (see _adjudicate_exact_shape) — the
+      # generic merge-gate-* alternation must NOT carry this verb: a free-argument
+      # allow would let a loop agent suppress any finding or claim actor=operator.
+      # codex r4 P1: the headless form MUST carry the HARNESS_ARC_ID= prefix — the
+      # adjudicate CLI reads it and refuses a target row from ANY OTHER arc, so an
+      # auto-allowed invocation can never dispose a historical finding; the
+      # unprefixed (arc-unbound) form stays operator-visible at ask.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-with-failover-logged([[:space:]]|$)' \
        && _review_logged_shape "$TRIM" \

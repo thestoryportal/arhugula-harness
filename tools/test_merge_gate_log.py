@@ -28,6 +28,7 @@ def _isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "unused-gate-log.jsonl")
     monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "unused-log.md")
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    monkeypatch.delenv("HARNESS_ARC_ID", raising=False)  # adjudicate's arc-binding input
     monkeypatch.setattr(mgl, "config_hash", lambda: "cfg")  # no CLI override exists (R5 P2)
     monkeypatch.setattr(mgl, "LENS_SCRATCH", tmp_path)  # `emit` reads verdict files only here
 
@@ -211,7 +212,9 @@ def test_a_deleted_machine_log_reds_every_structured_md_row(tmp_path: Path):
     _emit(tmp_path, pr=4, md=md, jl=jl, lens="merge-gate-b")
     jl.unlink()
     rep = mgl.consistency_report(md, jl)
-    assert [k[0] for k in rep["missing_jsonl"]] == [3, 4] and not rep["orphan_jsonl"]
+    # ordering follows the (head, lens, verdict) join key since U-HE-47 r5; the contract
+    # is that BOTH rows red, not their order
+    assert sorted(k[0] for k in rep["missing_jsonl"]) == [3, 4] and not rep["orphan_jsonl"]
 
 
 def test_finding_count_is_part_of_the_sibling_match(tmp_path: Path):
@@ -819,3 +822,322 @@ def test_cli_check_is_red_only_on_missing_jsonl(tmp_path: Path, monkeypatch, cap
     md.write_text(md.read_text() + mgl._md_line(rows[0]["ts"], 8, "e" * 40, LENS, "BLOCK", 1, 1))
     assert mgl.main(["check"]) == 1
     assert "MISSING-JSONL pr=8" in capsys.readouterr().out
+
+
+# ---- U-HE-47: emit-time attribution (C-HE-24 §2 X6d) + absorption adjudication (§5) ------
+
+
+def _codex_round(tmp_path: Path, arc_id: str, findings: list[dict], round_n: int) -> list[dict]:
+    """One preceding codex review round on the fixture arc (producer=codex_review_wrapper)."""
+    out = rw.ReviewOutcome("BLOCK", "codex", None, "", findings, _binding())
+    return rw.emit_outcome(
+        out,
+        producer="codex_review_wrapper",
+        arc_id=arc_id,
+        lane_id="h-w-1",
+        round_n=round_n,
+        path=tmp_path / "log.jsonl",
+    )
+
+
+# mutation-probe(tools/merge_gate_log.py): drop the attributor wiring -> F16 nulls -> red
+def test_gate_rows_after_two_codex_rounds_carry_non_null_attribution_on_every_row(tmp_path):
+    _codex_round(tmp_path, "u-t-1", [{"severity": "P1", "location": "a.py:10", "message": "m"}], 1)
+    _codex_round(tmp_path, "u-t-1", [{"severity": "P2", "location": "b.py:20", "message": "m"}], 2)
+    fs = [
+        {"severity": "P1", "location": "a.py:10", "message": "same place, same type"},
+        {"severity": "P2", "location": "c.py:30", "message": "gate-only catch"},
+    ]
+    rows = _emit(tmp_path, pr=9, verdict="BLOCK", findings=fs, arc_id="u-t-1")
+    assert all(r["cause_attribution"] is not None for r in rows)  # F16 unrepresentable
+    assert all(r["unique_catch"] is not None for r in rows)
+    by_loc = {r["location"]: r for r in rows}
+    assert by_loc["a.py:10"]["unique_catch"] is False
+    assert by_loc["a.py:10"]["cause_attribution"] == "codex_round_overlap"
+    assert by_loc["c.py:30"]["unique_catch"] is True
+    assert by_loc["c.py:30"]["cause_attribution"] == "gate_unique_catch"
+
+
+def test_clean_approve_lens_row_is_attributed_non_null(tmp_path: Path):
+    rows = _emit(tmp_path, pr=9, verdict="APPROVE", arc_id="u-t-1")
+    assert rows[0]["record_kind"] == "no_finding"
+    assert rows[0]["cause_attribution"] == "clean_approve"
+    assert rows[0]["unique_catch"] is False
+
+
+def test_unique_catch_join_is_intra_arc_never_cross_arc(tmp_path: Path):
+    f = {"severity": "P1", "location": "a.py:10", "message": "m"}
+    _codex_round(tmp_path, "u-other", [f], 1)
+    rows = _emit(
+        tmp_path,
+        pr=9,
+        verdict="BLOCK",
+        findings=[{"severity": "P1", "location": "a.py:10", "message": "m"}],
+        arc_id="u-t-1",
+    )
+    assert rows[0]["unique_catch"] is True  # the match lives on another arc: out of scope
+
+
+def test_codex_wrapper_rows_stay_unattributed(tmp_path: Path):
+    rows = _codex_round(
+        tmp_path, "u-t-1", [{"severity": "P1", "location": "a.py:10", "message": "m"}], 1
+    )
+    assert rows[0]["cause_attribution"] is None and rows[0]["unique_catch"] is None
+
+
+def test_adjudicate_appends_the_disposition_row_and_the_reducer_returns_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = _emit(
+        tmp_path,
+        pr=9,
+        verdict="BLOCK",
+        findings=[{"severity": "P1", "location": "c.py:30", "message": "m"}],
+        arc_id="u-t-1",
+    )
+    fid = rows[0]["finding_id"]
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    adj = mgl.adjudicate(fid, "accepted", "claude_absorber", tmp_path / "log.jsonl")
+    assert adj["record_kind"] == "finding_adjudication" and adj["disposition"] == "accepted"
+    assert adj["disposition_actor"] == "claude_absorber"
+    assert adj["unique_catch"] is rows[0]["unique_catch"]  # emit-time attribution carried
+    reduced = fr.reduce_last_by_finding_id(fr.read_rows(tmp_path / "log.jsonl"))
+    assert reduced[fid]["disposition"] == "accepted"
+
+
+def test_adjudicate_rejects_actor_equal_to_producer(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = _emit(
+        tmp_path,
+        pr=9,
+        verdict="BLOCK",
+        findings=[{"severity": "P1", "location": "c.py:30", "message": "m"}],
+        arc_id="u-t-1",
+    )
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    with pytest.raises(fr.RecordError, match="never disposes its own finding"):
+        mgl.adjudicate(rows[0]["finding_id"], "accepted", LENS, tmp_path / "log.jsonl")
+
+
+def test_adjudicate_unknown_finding_id_is_a_gate_log_error(tmp_path: Path):
+    (tmp_path / "log.jsonl").write_text("")
+    with pytest.raises(mgl.GateLogError, match="no row with finding_id"):
+        mgl.adjudicate("x:y:000000000000:1", "accepted", "claude_absorber", tmp_path / "log.jsonl")
+
+
+def test_cli_adjudicate_exit_0_recorded_2_not_recorded(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "log.md")
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "log.jsonl")
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=_outcome("BLOCK", [{"severity": "P1", "location": "c.py:30", "message": "m"}]),
+        lane_id="h-w-1",
+    )
+    fid = rows[0]["finding_id"]
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    args = ["adjudicate", "--finding-id", fid, "--disposition", "rejected", "--actor", "op"]
+    assert mgl.main(args) == 0
+    assert f"{fid} disposed rejected by op" in capsys.readouterr().out
+    # a second disposition write on the adjudicated lineage needs a later ts; same-second -> 2
+    assert mgl.main(args) == 2
+    assert "NOT ADJUDICATED" in capsys.readouterr().err
+
+
+def test_reviewer_unavailable_lens_row_is_attributed_non_null(tmp_path: Path):
+    out = rw.ReviewOutcome(
+        "REVIEWER_UNAVAILABLE", mgl.CHANNEL, "transient", "lens died", [], _binding()
+    )
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=out,
+        lane_id="h-w-1",
+        md_path=tmp_path / "log.md",
+        jsonl_path=tmp_path / "log.jsonl",
+    )
+    assert rows[0]["record_kind"] == "reviewer_unavailable"
+    assert rows[0]["cause_attribution"] == "reviewer_unavailable_transient"
+    assert rows[0]["unique_catch"] is False
+
+
+def test_cli_adjudicate_oserror_is_exit_2_not_1(tmp_path, monkeypatch, capsys):
+    # r1 P3: an unreadable log (here: the path is a directory) is "not recorded" -> exit 2,
+    # never the uncaught-exception exit 1 the skill would misread as a recorded failure
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path)
+    args = ["adjudicate", "--finding-id", "x:y:000000000000:1", "--disposition", "accepted"]
+    assert mgl.main([*args, "--actor", "op"]) == 2
+    assert "NOT ADJUDICATED" in capsys.readouterr().err
+
+
+def test_cli_adjudicate_refuses_a_cross_arc_target_when_arc_bound(tmp_path, monkeypatch, capsys):
+    # r4 P1: with HARNESS_ARC_ID set (the guard-required headless form), only the current
+    # arc's own findings are disposable; a historical finding from another arc is refused.
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "log.md")
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "log.jsonl")
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=_outcome("BLOCK", [{"severity": "P1", "location": "c.py:30", "message": "m"}]),
+        arc_id="u-t-1",
+        lane_id="h-w-1",
+    )
+    fid = rows[0]["finding_id"]
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    monkeypatch.setattr(mgl, "arc_not_held_reason", lambda a: None)  # holder half tested below
+    args = ["adjudicate", "--finding-id", fid, "--disposition", "accepted", "--actor", "op"]
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-other")
+    assert mgl.main(args) == 2
+    assert "cross-arc adjudication" in capsys.readouterr().err
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-t-1")
+    assert mgl.main(args) == 0
+
+
+def test_arc_not_held_reason_binds_to_reservation_holder_state(tmp_path, monkeypatch):
+    # r5 P1: the HARNESS_ARC_ID prefix is caller-chosen text; authority comes from the
+    # reservation store (live head, held by THIS lane's persisted id) — the record_phase
+    # pattern. Terminal (historical) arcs and other lanes' holds refuse.
+    import reservations as rs
+
+    monkeypatch.setattr(mgl, "LANE_ID_FILE", tmp_path / "lane-id")
+    (tmp_path / "lane-id").write_text("lane-A\n")
+    heads = {
+        "u-held": {"state": "open", "lane_id": "lane-A"},
+        "u-pending": {"state": "pending", "lane_id": "lane-A"},
+        "u-merged": {"state": "merged", "lane_id": "lane-A"},
+        "u-theirs": {"state": "open", "lane_id": "lane-B"},
+    }
+    monkeypatch.setattr(rs, "current", lambda a: (1, heads[a]) if a in heads else None)
+    assert mgl.arc_not_held_reason("u-held") is None
+    assert mgl.arc_not_held_reason("u-pending") is None
+    assert "terminal" in (mgl.arc_not_held_reason("u-merged") or "")
+    assert "not this lane" in (mgl.arc_not_held_reason("u-theirs") or "")
+    assert "no reservation" in (mgl.arc_not_held_reason("u-absent") or "")
+    (tmp_path / "lane-id").unlink()
+    assert "lane identity unreadable" in (mgl.arc_not_held_reason("u-held") or "")
+
+
+def test_cli_adjudicate_refuses_an_arc_this_lane_does_not_hold(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "log.md")
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "log.jsonl")
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=_outcome("BLOCK", [{"severity": "P1", "location": "c.py:30", "message": "m"}]),
+        arc_id="u-hist",
+        lane_id="h-w-1",
+    )
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    monkeypatch.setattr(mgl, "arc_not_held_reason", lambda a: f"arc {a!r} has no reservation")
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-hist")
+    args = ["adjudicate", "--finding-id", rows[0]["finding_id"], "--disposition", "accepted"]
+    assert mgl.main([*args, "--actor", "op"]) == 2
+    assert "no reservation" in capsys.readouterr().err
+
+
+def test_reservation_arc_lens_rows_join_their_md_lines(tmp_path):
+    # r5 P1 (the live 23-missing-siblings defect): a lens row whose arc_id is the
+    # reservation id — the U-HE-34 carrier form — must join its md line.
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
+def test_reservation_arc_orphan_is_left_standing_and_the_store_is_never_consulted(
+    tmp_path, monkeypatch, capsys
+):
+    # r6 P2 -> r7 P1, settled by DELETION: the reservation's `pr` is mutable, so orphan
+    # PR recovery from it can relabel an old verdict. The md line is the only pr
+    # authority — a reservation-arc orphan is reported loudly and left standing, and
+    # the store is not even read (witness: a consulting call would raise).
+    import reservations as rs
+
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
+    md.write_text("")  # crash between the writes
+
+    def _boom(_a):
+        raise AssertionError("reconcile must not consult the reservation store")
+
+    monkeypatch.setattr(rs, "current", _boom)
+    assert mgl.reconcile_orphans(md, jl) == 0
+    assert "no recoverable PR" in capsys.readouterr().err
+    assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1  # still visible, never lost
+    # r8 P2 + r9 P2: the SAME arc's gate rerun AT THE SAME REVIEWED HEAD carries the
+    # recovery authority — its own (arc, pr, head) triple; a different arc, a different
+    # head, or a missing head must not renumber it.
+    assert mgl.reconcile_orphans(md, jl, arc_id="u-other", pr=99, head_sha=H) == 0
+    assert mgl.reconcile_orphans(md, jl, arc_id="u-he-99", pr=99, head_sha="f" * 40) == 0
+    assert mgl.reconcile_orphans(md, jl, arc_id="u-he-99", pr=42) == 0  # no head: no recovery
+    assert mgl.reconcile_orphans(md, jl, arc_id="u-he-99", pr=42, head_sha=H) == 1
+    assert mgl.read_md_rows(md)[0]["pr"] == 42
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+    # a pr-N-arc orphan alongside it still reconciles from its own arc id
+    _emit(tmp_path, pr=7, md=md, jl=jl)
+    md_lines = md.read_text()
+    md.write_text("\n".join(ln for ln in md_lines.splitlines() if "#7" not in ln) + "\n")
+    assert mgl.reconcile_orphans(md, jl) == 1
+    assert any(r["pr"] == 7 for r in mgl.read_md_rows(md))
+
+
+def test_orphan_pr_recovery_is_bound_to_the_emissions_own_head(tmp_path, monkeypatch, capsys):
+    # r6 P2: the reservation's `pr` is mutable — a payload rebound to a NEW head must not
+    # relabel an old orphan verdict; recovery requires the reservation head == row head.
+    import reservations as rs
+
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
+    md.write_text("")
+    monkeypatch.setattr(
+        rs,
+        "current",
+        lambda a: (2, {"pr": 77, "head_sha": "f" * 40}),  # rebound payload
+    )
+    assert mgl.reconcile_orphans(md, jl) == 0
+    assert "no recoverable PR" in capsys.readouterr().err
+    assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1
+
+
+def test_cli_emit_recovers_a_reservation_arc_orphan_via_the_real_entry_point(
+    tmp_path, monkeypatch, capsys
+):
+    # merge-gate witness lens on PR #1467: the arc/pr/head recovery triple is wired in
+    # main()'s emit branch — this drives it through mgl.main, so reverting the call site
+    # to a bare reconcile_orphans() reds here (every other recovery test calls the
+    # function directly and cannot see the wiring).
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS, cfg_hash="cfg")
+    _emit(tmp_path, pr=42, head=b["head_sha"], md=md, jl=jl, arc_id="u-he-99")
+    md.write_text("")  # crash between the writes: a reservation-arc orphan at this head
+    f = tmp_path / "lens.txt"
+    f.write_text(_lens_output(b, "APPROVE"))
+    rc = mgl.main(
+        [
+            "emit",
+            "--pr",
+            "42",
+            "--arc-id",
+            "u-he-99",
+            "--lens",
+            LENS,
+            "--verdict-json",
+            str(f),
+            "--base",
+            "HEAD",
+            "--lane-id",
+            "h",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0 and "reconciled 1 orphan md row(s)" in out
+    assert [r["pr"] for r in mgl.read_md_rows(md)].count(42) == 2  # recovered + new emission
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
+def test_arc_not_held_reason_without_reservations_substrate_refuses(monkeypatch):
+    monkeypatch.setitem(sys.modules, "reservations", None)  # import raises ImportError
+    assert "no reservations substrate" in (mgl.arc_not_held_reason("u-x") or "")

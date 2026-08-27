@@ -174,7 +174,15 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   gate is now an additional one for code-touching PRs).
 - **Any `BLOCK`, or a split verdict** → do **not** merge. If the block names a concrete,
   narrow, fixable defect: fix it, then re-run the logged review invocation (`just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` -- the U-HE-34 canonical form; the bare recipe produces no round log) to convergence and re-run
-  this gate. **Cap this at ten rounds total** (operator decision, 2026-08-01) — an eleventh
+  this gate. **Absorption adjudication (C-HE-24 §5, U-HE-47):** when a gate `finding` row's
+  fix is absorbed (or the finding is refuted), append its disposition —
+  `HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor claude_absorber`
+  (the `HARNESS_ARC_ID=` prefix is REQUIRED for the guard's auto-allow and is
+  holder-bound: the CLI refuses an arc this lane's reservation does not hold, and a
+  target row from any other arc; the `finding_id` is on the emitted JSONL row;
+  `--actor` must differ from the lens producer, write-time enforced; exit 2 = not
+  recorded, re-run). Rejected dispositions
+  keep a `unique_catch=true` row from counting (C-HE-29 §2). **Cap this at ten rounds total** (operator decision, 2026-08-01) — an eleventh
   substantive disagreement is a genuine decision point,
   not a bug to keep iterating on; auto-fix-and-re-gate without a cap is an infinite loop in
   autonomous mode.
