@@ -392,11 +392,22 @@ def adjudicate(
     if not prior:
         raise GateLogError(f"no row with finding_id {finding_id!r} on {jsonl_path}")
     base = prior[0]  # core-immutable fields are identical across the lineage
-    if expected_arc is not None and base["arc_id"] != expected_arc:
-        raise GateLogError(
-            f"finding {finding_id!r} belongs to arc {base['arc_id']!r}, not the current "
-            f"arc {expected_arc!r} — cross-arc adjudication is an operator action"
-        )
+    if expected_arc is not None:
+        if base["arc_id"] != expected_arc:
+            raise GateLogError(
+                f"finding {finding_id!r} belongs to arc {base['arc_id']!r}, not the current "
+                f"arc {expected_arc!r} — cross-arc adjudication is an operator action"
+            )
+        # Holder check at the TIGHTEST window (codex r6 P2): re-verified here, immediately
+        # before the append, not only at the CLI edge. The residual race is the append
+        # itself — reservation store and gate log have no common lock — and is bounded
+        # benign: a holder transfer is the C-HE-03 §6 dead-claim recovery of a crashed or
+        # idle lane (operator-adjacent, not a concurrent adversary), and it changes no
+        # field of this row — a lost race lands a row byte-identical to the one the
+        # pre-transfer holder was authorized to write a moment earlier.
+        reason = arc_not_held_reason(expected_arc)
+        if reason is not None:
+            raise GateLogError(reason)
     row = {
         **base,
         "record_kind": "finding_adjudication",
@@ -549,7 +560,16 @@ def _pr_of(row: dict) -> int | None:
             file=sys.stderr,
         )
         return None
-    pr = res[1].get("pr") if res is not None else None
+    if res is None:
+        return None
+    # The reservation's `pr` is mutable across the arc's life (codex r6 P2: a rebound
+    # payload would relabel an old verdict under a new PR). It is trusted ONLY when the
+    # reservation's recorded head equals the orphan row's own reviewed head — the
+    # emission's identity, not the store's current state. No match -> unrecoverable,
+    # reported loudly by the caller and left standing (fail-closed, never renumbered).
+    if res[1].get("head_sha") != row["head_sha"]:
+        return None
+    pr = res[1].get("pr")
     return int(pr) if pr is not None else None
 
 
@@ -788,14 +808,10 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return rw.exit_code(outcome)
     if args.cmd == "adjudicate":
+        # the guard-required headless form: HARNESS_ARC_ID names an arc, and that claim is
+        # bound to reservation HOLDER state inside adjudicate(), immediately before the
+        # append (codex r5 P1 authority; codex r6 P2 window), never to the caller's text.
         expected_arc = os.environ.get("HARNESS_ARC_ID")
-        if expected_arc is not None:
-            # the guard-required headless form: the env names an arc, and that claim is
-            # bound to reservation HOLDER state, not to the caller's text (codex r5 P1)
-            reason = arc_not_held_reason(expected_arc)
-            if reason is not None:
-                print(f"merge-gate-log: NOT ADJUDICATED ({reason})", file=sys.stderr)
-                return 2
         try:
             row = adjudicate(
                 args.finding_id,

@@ -1021,9 +1021,18 @@ def test_arc_not_held_reason_binds_to_reservation_holder_state(tmp_path, monkeyp
 def test_cli_adjudicate_refuses_an_arc_this_lane_does_not_hold(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "log.md")
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "log.jsonl")
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=_outcome("BLOCK", [{"severity": "P1", "location": "c.py:30", "message": "m"}]),
+        arc_id="u-hist",
+        lane_id="h-w-1",
+    )
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
     monkeypatch.setattr(mgl, "arc_not_held_reason", lambda a: f"arc {a!r} has no reservation")
     monkeypatch.setenv("HARNESS_ARC_ID", "u-hist")
-    args = ["adjudicate", "--finding-id", "x:y:000000000000:1", "--disposition", "accepted"]
+    args = ["adjudicate", "--finding-id", rows[0]["finding_id"], "--disposition", "accepted"]
     assert mgl.main([*args, "--actor", "op"]) == 2
     assert "no reservation" in capsys.readouterr().err
 
@@ -1038,7 +1047,9 @@ def test_reservation_arc_lens_rows_join_their_md_lines(tmp_path, monkeypatch):
     _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
     md.write_text("")  # crash between the writes
-    monkeypatch.setattr(rs, "current", lambda a: (1, {"pr": 42}) if a == "u-he-99" else None)
+    monkeypatch.setattr(
+        rs, "current", lambda a: (1, {"pr": 42, "head_sha": H}) if a == "u-he-99" else None
+    )
     assert mgl.reconcile_orphans(md, jl) == 1
     assert mgl.read_md_rows(md)[0]["pr"] == 42
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
@@ -1054,3 +1065,21 @@ def test_orphan_with_unrecoverable_pr_is_left_standing_loudly(tmp_path, monkeypa
     assert mgl.reconcile_orphans(md, jl) == 0
     assert "no recoverable PR" in capsys.readouterr().err
     assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1  # still visible, never lost
+
+
+def test_orphan_pr_recovery_is_bound_to_the_emissions_own_head(tmp_path, monkeypatch, capsys):
+    # r6 P2: the reservation's `pr` is mutable — a payload rebound to a NEW head must not
+    # relabel an old orphan verdict; recovery requires the reservation head == row head.
+    import reservations as rs
+
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
+    md.write_text("")
+    monkeypatch.setattr(
+        rs,
+        "current",
+        lambda a: (2, {"pr": 77, "head_sha": "f" * 40}),  # rebound payload
+    )
+    assert mgl.reconcile_orphans(md, jl) == 0
+    assert "no recoverable PR" in capsys.readouterr().err
+    assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1

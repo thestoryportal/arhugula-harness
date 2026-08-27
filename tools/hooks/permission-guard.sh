@@ -488,10 +488,13 @@ _adjudicate_exact_shape() {
     '^(codex_review_wrapper|gemini_review_wrapper|merge-gate-[a-z-]+):[A-Za-z0-9._-]+:[0-9a-f]{12}:[0-9]+$' \
     || return 1
   case "$6" in accepted|rejected) ;; *) return 1 ;; esac
-  # codex r4 P1: the actor is pinned to the two documented absorber identities —
-  # any other identity (operator, a third-party reviewer name, a forged lens) is
-  # an authority claim the loop may not make headlessly.
-  case "$8" in claude_absorber|codex_absorber) ;; *) return 1 ;; esac
+  # codex r4 P1 + r6 P2: the actor is pinned to THIS venue's own absorber identity.
+  # This guard runs only for Claude sessions, so only claude_absorber may pass —
+  # allowing codex_absorber here would let a Claude loop forge the Codex runner's
+  # WHO attribution (the Codex venue's invocation is governed by its own approval
+  # surface + the .agents carrier contract, not by this hook). Any other identity
+  # (operator, a third-party reviewer, a forged lens) falls to ask.
+  case "$8" in claude_absorber) ;; *) return 1 ;; esac
 }
 
 _phase_exact_shape() {

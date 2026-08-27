@@ -241,6 +241,13 @@ the guard actually allows — a bare documented form against a prefix-requiring 
 strands headless at ask; identities parameterize per runner. (d) **Production-call
 witness**: a static test must pin the documented command shape in each carrier —
 helper-level tests stay green when the production instruction is reverted.
+**Sweep-altitude rule (U-HE-47 r2→r5, four rounds on one verb):** at the FIRST
+reviewer finding on such a surface, do not fix only the named token — enumerate
+EVERY degree of freedom of the command (each argument, each identity, each env
+input) in a table with its pinning authority (enum, identity set, holder state,
+ask-gate), and close them ALL in that absorption. The sibling sweep's unit is the
+mechanism's whole authority surface, never the literal flagged shape — otherwise
+the reviewer walks the remaining dimensions one full round each.
 
 ## After every review round — the class-sibling sweep (before the next invocation)
 

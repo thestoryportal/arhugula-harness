@@ -432,8 +432,12 @@ OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id not-a-4-part-id
 # adjudicable headlessly — rejecting it would mute the detection downstream.
 OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id merge-door-lease-acquire:0123456789abcdef0123456789abcdef01234567:0123456789ab:1 --disposition rejected --actor claude_absorber" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "adjudicate targeting a deterministic-check producer → not auto-allowed" || bad "deterministic-producer adjudication auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "HARNESS_ARC_ID=u-he-47 just merge-gate-adjudicate --finding-id codex_review_wrapper:0123456789abcdef0123456789abcdef01234567:0123456789ab:1 --disposition accepted --actor claude_absorber" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "adjudicate a codex-wrapper finding as this venue's absorber → allow" || bad "review-producer adjudication not allowed: $OUT"
+# r6 P2: this guard governs the CLAUDE venue only — a Claude loop claiming the Codex
+# runner's identity is a forged WHO attribution and stays at ask.
 OUT=$(run_on "$(pl Bash "HARNESS_ARC_ID=u-he-47 just merge-gate-adjudicate --finding-id codex_review_wrapper:0123456789abcdef0123456789abcdef01234567:0123456789ab:1 --disposition accepted --actor codex_absorber" '')")
-[ "$(dec "$OUT")" = "allow" ] && ok "adjudicate a codex-wrapper finding as codex_absorber → allow (review producer)" || bad "review-producer adjudication not allowed: $OUT"
+[ "$(dec "$OUT")" != "allow" ] && ok "adjudicate claiming the OTHER runner's absorber identity → not auto-allowed" || bad "cross-runner actor auto-allowed: $OUT"
 # B-215: the budget-extension verb is deliberately ask-gated — the loop must never
 # silently extend its own review budget; and an out-of-worktree answers path fails
 # _bash_args_safe containment even on an allowlisted attest verb.
