@@ -61,7 +61,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `gemini-review` failover; the logged variant is CANONICAL — its in-recipe log publisher is the
   only way a guarded venue produces the round log that `arc-metrics queue
   --round-logs` later reads, and the bare `just review-with-failover` remains only for
-  a venue that cannot take the log path) to convergence. Run it in background mode, or
+  a venue that cannot take the log path; U-HE-49, C-HE-21 §1 X6b: the recipe evaluates
+  gate admission BEFORE launching — a refused launch exits 3 with no reviewer call and
+  no round log — and publishes each attempt under its own minted `r<N>-a<K>.log` name,
+  so pass the plain `r<N>.log` round name and expect the attempt-suffixed file on disk)
+  to convergence. Run it in background mode, or
   with a Bash tool timeout ABOVE the wrapper's own shared deadline (1260 s primary +
   bounded failover — e.g. ≥ 3000000 ms): a shorter tool timeout kills a valid required
   review mid-flight. The inline `HARNESS_*` prefix is REQUIRED

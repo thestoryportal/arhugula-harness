@@ -121,7 +121,12 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    convergence (§13.1; the LOGGED variant is canonical — U-HE-34: its in-recipe log publisher is
    how a guarded venue produces the round log arc-metrics later reads; the inline
    prefix is the step-2 arc-open ids — a bare invocation
-   writes `branch-*`/`-nolane` fallback ids into the C-HE-24/25 rows) —
+   writes `branch-*`/`-nolane` fallback ids into the C-HE-24/25 rows. U-HE-49,
+   C-HE-21 §1 X6b: the recipe evaluates gate admission BEFORE launching — a refusal
+   exits 3 having spent no reviewer call and claimed no round name — and publishes
+   each attempt under its own minted name `r<N>-a<K>.log`, so pass the plain `r<N>.log`
+   round name and NEVER pre-create or reuse log files; a refused attempt's retry keeps
+   the same `r<N>` and the publisher lands it cleanly) —
    the fail-closed `codex-review` wrapper (C-HE-18) with the `gemini-review` D-C failover
    (C-HE-17); a verdict counts only on its schema parse (C-HE-15), never on exit code or
    silence. *Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored

@@ -763,7 +763,18 @@ review-with-failover base='main':
 review-with-failover-logged log base='main':
     #!/usr/bin/env bash
     set -u
-    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "{{log}}"
+    # U-HE-49 (C-HE-21 §1 X6b): admission is evaluated BEFORE the launch -- a launch
+    # the gate would refuse is not made (exit 3: no reviewer call, no log file, no
+    # round identity consumed), and the verb mints a per-attempt destination
+    # (r<N>-a<K>.log) so a refused/failed attempt never claims the write-once round
+    # name its retry needs. Round identity keys on the r<N> prefix (arc_metrics
+    # ROUND_ID_RE); the wrapper's own in-process admit() stays the enforcer of record.
+    dest="$(uv run python tools/review_loop_gate.py launch --log "{{log}}" --base "{{base}}")" || exit "$?"
+    if [ -z "$dest" ]; then
+      echo "review-with-failover-logged: launch verb admitted but printed no destination -- aborting before the reviewer call" >&2
+      exit 4
+    fi
+    uv run python tools/codex_review.py --base {{base}} --failover 2>&1 | uv run python tools/round_log_publish.py "$dest"
     rc=("${PIPESTATUS[@]}")
     if [ "${rc[1]}" -ne 0 ]; then
       # Publish failure is its OWN terminal for EVERY reviewer outcome (codex r8):
@@ -771,7 +782,7 @@ review-with-failover-logged log base='main':
       # canonical log is missing, and round_metrics cannot detect an absent
       # intermediate round. The verdict itself is never lost -- the wrapper already
       # recorded its C-HE-24 rows and the transcript above carries the terminal line.
-      echo "review-with-failover-logged: PUBLISH FAILED (exit ${rc[1]}) -- round log {{log}} missing/partial; wrapper verdict exit was ${rc[0]} (see transcript + gate rows)" >&2
+      echo "review-with-failover-logged: PUBLISH FAILED (exit ${rc[1]}) -- round log $dest missing/partial; wrapper verdict exit was ${rc[0]} (see transcript + gate rows)" >&2
       exit 4
     fi
     exit "${rc[0]}"

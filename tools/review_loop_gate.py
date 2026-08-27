@@ -26,6 +26,10 @@ A refusal is NOT a review terminal: C-HE-16 §3 closes that enum at
 {APPROVE, BLOCK, REVIEWER_UNAVAILABLE}, and a refused invocation never begins —
 no C-HE-24 row is written, no round outcome is recorded, the wrapper exits 3
 behind its own distinct stderr line (`codex-review: GATE_REFUSED (<code>)`).
+Since U-HE-49 (C-HE-21 §1 X6b) the logged launch step (`launch` verb, invoked by
+`just review-with-failover-logged` before the wrapper process is created) reads
+the same decision at the launch seam and mints per-attempt round-log names, so a
+refused launch spends no reviewer call and claims no write-once round name.
 
 State lives at `.harness/review_loop_gate_state.json` — local and gitignored,
 same class as codex_loop's state: transient loop progress, never a tracked
@@ -483,6 +487,71 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
     )
 
 
+# ── edge: launch (U-HE-49; C-HE-21 §1 X6b) ───────────────────────────────────
+
+#: A trailing per-attempt suffix on a round-log stem (`r9-a2` → `-a2`).
+_ATTEMPT_SUFFIX = re.compile(r"-a\d+$")
+
+
+def attempt_destination(requested: str, existing_names: list[str]) -> str:
+    """Mint the per-attempt destination for a requested round-log name.
+
+    [LAW:one-source-of-truth] this function is the one place attempt names come
+    from. Every launch attempt gets a fresh name unconditionally — `r9.log` →
+    `r9-a1.log`, then `r9-a2.log` while `r9-a1.log` exists —
+    [LAW:dataflow-not-control-flow] the name is f(request, prior attempts), never
+    "reuse the bare name if free", so a refused or failed attempt can never claim
+    the write-once name a retry needs (C-HE-21 §1 X6b; [B] F13: r9's relaunch
+    reused `r9.log` → PUBLISH FAILED exit 4). The `r<N>` prefix survives the
+    suffix, so arc_metrics.ROUND_ID_RE keys every attempt to its round and
+    round_metrics collapses a refused attempt plus its retry into one round.
+    """
+    parent, _, base = requested.rpartition("/")
+    stem, dot, ext = base.rpartition(".")
+    if not dot:  # no extension: the whole basename is the stem
+        stem, ext = base, ""
+    suffix = f".{ext}" if dot else ""
+    # idempotent on its own output: a requested `r9-a1.log` mints round 9's NEXT
+    # attempt, never a nested `r9-a1-a1.log`
+    stem = _ATTEMPT_SUFFIX.sub("", stem)
+    attempt_of = re.compile(rf"^{re.escape(stem)}-a(\d+){re.escape(suffix)}$")
+    taken = [int(m.group(1)) for name in existing_names if (m := attempt_of.match(name))]
+    out = f"{stem}-a{max(taken, default=0) + 1}{suffix}"
+    return f"{parent}/{out}" if parent else out
+
+
+def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
+    """Pre-launch admission: evaluate the SAME `admit()` the wrapper enforces,
+    BEFORE any reviewer subprocess exists — a launch the gate would refuse is not
+    made ([B] F13: r11 launched into BUDGET_EXHAUSTED, r9 into SWEEP_MISSING), so
+    a refusal here spends no reviewer call, writes no file, and consumes no round
+    identity. [LAW:single-enforcer] the wrapper's own `admit()` stays the
+    enforcer of record; this edge reads the same decision at the launch seam,
+    where refusing still costs nothing. On admission the per-attempt destination
+    goes to stdout (the recipe's dataflow seam); all status goes to stderr.
+    """
+    decision = admit(repo, base, arc_id)
+    if isinstance(decision, Refused):
+        print(f"review-launch: {decision.detail}\n  recipe: {decision.recipe}", file=sys.stderr)
+        print(
+            f"review-launch: GATE_REFUSED ({decision.code}) — launch not made; "
+            "no reviewer call, no round log written",
+            file=sys.stderr,
+        )
+        return 3
+    if isinstance(decision, Inactive):
+        print(f"review-launch: gate INACTIVE — {decision.reason}", file=sys.stderr)
+    else:
+        print(f"review-launch: ALLOWED (next round {decision.round_n})", file=sys.stderr)
+    parent = repo / Path(requested).parent
+    try:
+        existing = [entry.name for entry in parent.iterdir()]
+    except FileNotFoundError:
+        existing = []  # no rounds dir yet = zero prior attempts; the publisher creates it
+    print(attempt_destination(requested, existing))
+    return 0
+
+
 # ── edge: attest verbs ───────────────────────────────────────────────────────
 
 
@@ -654,6 +723,10 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("check")
     sp.add_argument("--base", default="main")
     sp.add_argument("--repo", default=".")
+    sp = sub.add_parser("launch")
+    sp.add_argument("--log", required=True, help="requested round-log destination (r<N>.log)")
+    sp.add_argument("--base", default="main")
+    sp.add_argument("--repo", default=".")
     args = p.parse_args(argv)
     repo = Path(args.repo).resolve()
     arc_id, _ = rw.env_arc_and_lane()
@@ -667,6 +740,8 @@ def main(argv: list[str] | None = None) -> int:
     except GateError as exc:
         print(f"review-gate: {exc}", file=sys.stderr)
         return 1
+    if args.cmd == "launch":
+        return launch(repo, args.base, arc_id, args.log)
     decision = admit(repo, args.base, arc_id)
     if isinstance(decision, Refused):
         print(f"review-gate: {decision.detail}\n  recipe: {decision.recipe}", file=sys.stderr)
