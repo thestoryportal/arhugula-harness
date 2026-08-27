@@ -332,11 +332,16 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
     # around it would silently undercount the arc and span the missing round's
     # wall clock across one innocent-looking gap. (A set STARTING above 1 is
     # the distinct, declared `round_completeness=partial-suffix` case.)
-    missing = sorted(set(range(min(rounds), max(rounds) + 1)) - set(rounds))
-    if missing:
+    # Gaps derive from ADJACENT sorted ids -- filename ids are caller-controlled
+    # input, and materializing min..max (a r100000000.log) is an OOM, not a
+    # refusal.
+    ids = sorted(rounds)
+    gap_spans = [(a + 1, b - 1) for a, b in itertools.pairwise(ids) if b - a > 1]
+    if gap_spans:
+        shown = ", ".join(str(lo) if lo == hi else f"{lo}-{hi}" for lo, hi in gap_spans)
         raise AbortError(
-            f"round logs: round id(s) {missing} are missing inside the observed "
-            f"range {min(rounds)}..{max(rounds)} -- a deleted or never-published "
+            f"round logs: round id(s) {shown} are missing inside the observed "
+            f"range {ids[0]}..{ids[-1]} -- a deleted or never-published "
             "log breaks the evidence set; fix the log set rather than record an "
             "undercounted arc"
         )
@@ -381,6 +386,10 @@ def count_p1(text: str) -> int:
     Absorption commit messages write a bare ``P1 <CLAIM>`` at line start and are
     NOT duplicated. Counting only one dialect silently reports zero for the
     other, which is the 'empty vs unlooked' failure this ledger exists to avoid.
+    (Both dialects are shapes WITHIN a transcript's text -- the bare dialect
+    rides inside round logs that quote absorption commits, never as a
+    standalone terminal-less file; round classification itself stays with the
+    wrapper terminal line in round_metrics.)
     """
     payload = text
     if FINAL_REVIEW_MARKER in text:
@@ -765,6 +774,24 @@ def cmd_relabel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reservation_recorded_max_round(arc_id: str) -> int | None:
+    """Highest round the C-HE-25 recorder accreted on this arc's reservation.
+
+    None when no head or no outcomes exist. ONE-DIRECTIONAL authority: the
+    outcomes can legitimately UNDERCOUNT the logs (a round run without the
+    HARNESS_ARC_ID prefix records on a fallback arc id), so only
+    recorded > observed is ever a claim -- observed rounds absent from the
+    outcomes are not. (`reservations` imports this module at load; import it
+    inside the function, as _require_reservation_holder does.)"""
+    import reservations as rs
+
+    cur = rs.current(arc_id)
+    outcomes = (cur[1].get("round_outcomes") or {}) if cur else {}
+    # int() raising on a foreign key is the loud path: an unparseable authority
+    # must never be silently skipped into "no claim".
+    return max((int(k) for k in outcomes), default=None)
+
+
 def queue_capture(args: argparse.Namespace) -> int:
     """Record an arc's capture inputs OUTSIDE the repo, for a later drain.
 
@@ -828,6 +855,24 @@ def queue_capture(args: argparse.Namespace) -> int:
     snapshot: dict | None = None
     if args.round_logs:
         logs, gaps, p1, completeness = round_metrics(args.round_logs)
+        # A surviving PREFIX (r1..r3 of a 10-round arc) is invisible to the log
+        # set itself -- it starts at 1 and has no internal gap. The reservation's
+        # accreted round_outcomes are the authority that CAN testify about the
+        # tail, one-directionally (see _reservation_recorded_max_round): at
+        # closure, more recorded rounds than logged ones means the evidence set
+        # is missing its tail -- refuse rather than snapshot a lower bound as
+        # "complete".
+        m = ROUND_ID_RE.match(logs[-1].stem)
+        assert m is not None  # every kept log parsed in round_metrics
+        observed_max = int(m.group(1))
+        recorded_max = _reservation_recorded_max_round(arc_id)
+        if recorded_max is not None and recorded_max > observed_max:
+            raise AbortError(
+                f"round logs: the reservation records rounds through {recorded_max} "
+                f"but the log set ends at r{observed_max} -- the evidence set is "
+                "missing its tail; fix the log set rather than snapshot a "
+                "surviving prefix as the whole arc"
+            )
         first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
         last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
         snapshot = {

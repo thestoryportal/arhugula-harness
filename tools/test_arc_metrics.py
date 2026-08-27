@@ -562,8 +562,60 @@ def test_internal_round_id_gap_aborts_rather_than_undercounting(tmp_path: Path):
     """r1 + r3 with r2 missing is a broken evidence set, not a two-round arc."""
     _round_log(tmp_path, "r1.log", "codex-review: BLOCK\n", 1_000_000)
     _round_log(tmp_path, "r3.log", "codex-review: APPROVE\n", 1_000_600)
-    with pytest.raises(am.AbortError, match=r"\[2\] are missing"):
+    with pytest.raises(am.AbortError, match=r"round id\(s\) 2 are missing"):
         am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_gap_detection_never_materializes_the_id_range(tmp_path: Path):
+    """Filename ids are caller-controlled input; r1 + r100000000 must refuse as
+    a span, not build a hundred-million-element set."""
+    _round_log(tmp_path, "r1.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r100000000.log", "codex-review: APPROVE\n", 1_000_600)
+    with pytest.raises(am.AbortError, match=r"round id\(s\) 2-99999999 are missing"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+# mutation-probe: drop the recorded_max > observed_max refusal in queue_capture -> red
+def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
+    monkeypatch, tmp_path: Path
+):
+    """r1..r3 of an arc whose reservation accreted rounds through 10 is a
+    missing-tail evidence set, not a complete three-round arc."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for n in (1, 2, 3):
+        _round_log(logs, f"r{n}.log", "codex-review: BLOCK\n", 1_000_000 + n * 600)
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    ns = dict(
+        pr=1998,
+        arc_id=None,
+        arc_type="applying",
+        decisions=0,
+        round_logs=[str(logs / "r*.log")],
+        levers=None,
+        notes="",
+    )
+    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 10)
+    with pytest.raises(am.AbortError, match="missing its tail"):
+        am.queue_capture(am.argparse.Namespace(**ns))
+
+    # Equal (and the one-directional undercount, recorded < observed) both pass.
+    monkeypatch.setattr(am, "_reservation_recorded_max_round", lambda arc_id: 3)
+    assert am.queue_capture(am.argparse.Namespace(**ns)) == 0
+
+
+def test_reservation_recorded_max_round_reads_the_head_outcomes(monkeypatch):
+    import reservations as rs
+
+    monkeypatch.setattr(
+        rs, "current", lambda arc_id: (3, {"round_outcomes": {"1": {}, "10": {}, "2": {}}})
+    )
+    assert am._reservation_recorded_max_round("x") == 10
+    monkeypatch.setattr(rs, "current", lambda arc_id: None)
+    assert am._reservation_recorded_max_round("x") is None
+    monkeypatch.setattr(rs, "current", lambda arc_id: (1, {"round_outcomes": {}}))
+    assert am._reservation_recorded_max_round("x") is None
 
 
 def test_all_refused_launches_abort_rather_than_recording_an_empty_arc(tmp_path: Path):
