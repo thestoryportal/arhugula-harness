@@ -559,17 +559,20 @@ def reconcile_orphans(
     *,
     arc_id: str | None = None,
     pr: int | None = None,
+    head_sha: str | None = None,
 ) -> int:
     """Re-emit the markdown line for every orphan emission (next gate run, C-HE-23 §2).
     Touches the md file only when there is something to write.
 
-    PR recovery has exactly two authorities, neither mutable (codex r7 P1 -> r8 P2):
-    a `pr-N` arc id on the row itself, or — for reservation-arc rows — the CALLER's own
-    `(arc_id, pr)` pair when `emit` runs reconciliation: the next gate run for that same
-    arc invokes `emit --pr N --arc-id <arc>`, and that invocation's pr is the same
-    authority the md line would have carried, so the documented next-run recovery works
-    for the U-HE-34 carrier form too. Any other orphan is reported loudly and left
-    standing — never re-derived from the mutable reservation store."""
+    PR recovery has exactly two authorities, neither mutable (codex r7 P1 -> r8 P2 ->
+    r9 P2): a `pr-N` arc id on the row itself, or — for reservation-arc rows — the
+    CALLER's own `(arc_id, pr, head_sha)` triple when `emit` runs reconciliation: the
+    gate rerun after a crash invokes `emit --pr N --arc-id <arc>` at the SAME reviewed
+    head, so recovery fires only for orphans matching BOTH the arc and this
+    invocation's head — the pr trusted here is exactly the pr the same invocation is
+    about to write on its own md line, and a later-head or mistyped invocation cannot
+    relabel an older emission. Any other orphan is reported loudly and left standing —
+    never re-derived from the mutable reservation store."""
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
 
@@ -582,7 +585,13 @@ def reconcile_orphans(
         with md_path.open("a", encoding="utf-8") as fh:
             for r in orphans:
                 row_pr = _pr_of(r)
-                if row_pr is None and arc_id is not None and r["arc_id"] == arc_id:
+                if (
+                    row_pr is None
+                    and arc_id is not None
+                    and r["arc_id"] == arc_id
+                    and head_sha is not None
+                    and r["head_sha"] == head_sha
+                ):
                     row_pr = pr
                 if row_pr is None:
                     print(
@@ -724,14 +733,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "emit":
         try:
+            expected = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
             # "the next gate run" (C-HE-23 §2): re-emit the md line of any orphan JSONL
             # verdict left by an earlier crash between the two writes (codex R2 P3).
-            # This invocation's own (arc, pr) pair is the recovery authority for the
-            # same arc's reservation-arc orphans (codex r8 P2).
-            n = reconcile_orphans(arc_id=args.arc_id or f"pr-{args.pr}", pr=args.pr)
+            # This invocation's own (arc, pr, head) triple is the recovery authority for
+            # the same arc's reservation-arc orphans (codex r8 P2, head-bound at r9 P2:
+            # recovery fires only for orphans AT THIS INVOCATION's reviewed head — the
+            # gate-rerun-after-crash scenario — so a later-head or mistyped-pr run can
+            # never relabel an older emission; those stay loudly standing).
+            n = reconcile_orphans(
+                arc_id=args.arc_id or f"pr-{args.pr}",
+                pr=args.pr,
+                head_sha=expected["head_sha"],
+            )
             if n:
                 print(f"merge-gate-log: reconciled {n} orphan md row(s) from an earlier run")
-            expected = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
             text = _read_text(args.verdict_json)
             outcome = rw.parse_verdict(CHANNEL, text, expected)
             if outcome.terminal in ("APPROVE", "BLOCK"):
