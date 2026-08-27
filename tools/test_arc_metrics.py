@@ -650,19 +650,25 @@ def test_recorded_rounds_unions_the_fail_closed_gate_log(monkeypatch, tmp_path: 
     import reservations as rs
 
     gate = tmp_path / "gate.jsonl"
-    gate.write_text(
-        json.dumps({"arc_id": "x", "round_n": 10, "record_kind": "finding"})
-        + "\n"
-        + json.dumps({"arc_id": "other", "round_n": 3, "record_kind": "finding"})
-        + "\n"
-        + json.dumps({"arc_id": "x", "record_kind": "adjudication"})  # no round_n
-        + "\n"
-    )
+    rows = [
+        {"arc_id": "x", "round_n": 10, "producer": "codex_review_wrapper"},
+        {"arc_id": "other", "round_n": 3, "producer": "codex_review_wrapper"},
+        {"arc_id": "x", "producer": "codex_review_wrapper"},  # no round_n
+        # Mixed-producer witness: lens/probe rows number their OWN round
+        # spaces -- an unrelated r1/r2 here must neither certify nor abort
+        # the review-round evidence.
+        {"arc_id": "x", "round_n": 1, "producer": "merge-gate-concurrency"},
+        {"arc_id": "x", "round_n": 2, "producer": "reviewer_concurrency_probe"},
+        {"arc_id": "x", "round_n": 5, "producer": "gemini_review_wrapper"},
+    ]
+    gate.write_text("".join(json.dumps(r) + "\n" for r in rows))
     monkeypatch.setattr(am, "GATE_LOG", gate)
     monkeypatch.setattr(
         rs, "current", lambda arc_id: (1, {"round_outcomes": {"1/codex": {}, "2/codex": {}}})
     )
-    assert am._recorded_rounds("x") == {1, 2, 10}
+    assert am._recorded_rounds("x") == {1, 2, 5, 10}, (
+        "wrapper rounds (both channels) count; lens/probe round spaces do not"
+    )
     monkeypatch.setattr(am, "GATE_LOG", tmp_path / "absent.jsonl")
     assert am._recorded_rounds("x") == {1, 2}
 

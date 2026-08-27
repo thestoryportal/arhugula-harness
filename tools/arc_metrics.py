@@ -805,19 +805,32 @@ def _reservation_recorded_rounds(arc_id: str) -> set[int]:
     return {int(k.split("/", 1)[0]) for k in outcomes}
 
 
+# Round numbers are scoped to (arc_id, producer): the merge-gate lenses and
+# the reviewer-concurrency probe number their OWN row spaces, which overlap the
+# review wrappers' round ids. Only the two wrappers produce review rounds --
+# the thing a round LOG evidences -- so only their rows are round authority.
+REVIEW_ROUND_PRODUCERS = frozenset({"codex_review_wrapper", "gemini_review_wrapper"})
+
+
 def _gate_log_recorded_rounds(arc_id: str) -> set[int]:
     """The fail-closed half of the round authority.
 
     The reservation recorder is deliberately best-effort (its writer catches
     every exception and continues), but the C-HE-24 rows are write-first --
     every review terminal yields at least one row under the log lock -- so a
-    round whose reservation persistence failed still appears here."""
+    round whose reservation persistence failed still appears here. Scoped to
+    the review-wrapper producers: an unrelated merge-gate lens r1 must neither
+    certify a codex log set nor abort it."""
     if not GATE_LOG.exists():
         return set()
     rounds: set[int] = set()
     for line in GATE_LOG.read_text().splitlines():
         row = json.loads(line)  # an unparseable authority is loud, never skipped
-        if row.get("arc_id") == arc_id and row.get("round_n") is not None:
+        if (
+            row.get("arc_id") == arc_id
+            and row.get("producer") in REVIEW_ROUND_PRODUCERS
+            and row.get("round_n") is not None
+        ):
             rounds.add(int(row["round_n"]))
     return rounds
 
