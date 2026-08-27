@@ -305,7 +305,7 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
     # [LAW:parse-dont-validate] every matched file is parsed into (round id,
     # terminal) or refused loudly -- an unclassifiable log silently counted (or
     # silently dropped) is exactly the position-derived corruption X6c removes.
-    rounds: dict[int, tuple[Path, str]] = {}
+    attempts: dict[int, list[tuple[Path, str, str | None]]] = {}
     for f in seen:
         try:
             text = f.read_text(errors="replace")
@@ -317,22 +317,37 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int],
                 f"round logs: cannot parse a round id from {f.name!r} -- round "
                 "identity comes from the log name (r<N>...), never file position"
             )
-        rid = int(m.group(1))
         terminals = [t.group(1) or t.group(2) for t in ROUND_TERMINAL_RE.finditer(text)]
-        if not terminals:
-            raise AbortError(
-                f"round logs: {f.name!r} carries no wrapper terminal line -- a "
-                "partial or foreign transcript cannot be classified as a round"
-            )
-        if terminals[-1] == "GATE_REFUSED":
-            continue  # a refused launch, not a round (C-HE-25 X6c)
-        if rid in rounds:
+        last = terminals[-1] if terminals else None
+        attempts.setdefault(int(m.group(1)), []).append((f, text, last))
+
+    rounds: dict[int, tuple[Path, str]] = {}
+    for rid, files in attempts.items():
+        real = [(f, text) for f, text, last in files if last is not None and last != "GATE_REFUSED"]
+        if len(real) > 1:
+            a, b = sorted(f.name for f, _ in real)[:2]
             raise AbortError(
                 f"round logs: two review transcripts claim round {rid} "
-                f"({rounds[rid][0].name!r} and {f.name!r}) -- write-once round "
+                f"({a!r} and {b!r}) -- write-once round "
                 "evidence is ambiguous; fix the log set"
             )
-        rounds[rid] = (f, text)
+        # A terminal-less file is a FAILED attempt -- the wrapper crashed or was
+        # killed before emitting its terminal (U-HE-49 codex r2) -- and is
+        # excludable ONLY when a sibling attempt carries this round's review
+        # terminal (the retry that succeeded). Without one, a crashed attempt
+        # and a truncated REAL round read identically, so the set refuses
+        # rather than undercounts.
+        partial = [f for f, _, last in files if last is None]
+        if partial and not real:
+            raise AbortError(
+                f"round logs: {partial[0].name!r} carries no wrapper terminal line -- a "
+                "partial or foreign transcript cannot be classified as a round, and no "
+                f"sibling attempt carries round {rid}'s terminal"
+            )
+        if real:
+            rounds[rid] = real[0]
+        # a rid whose attempts are all GATE_REFUSED contributes no round
+        # (refused launches, C-HE-25 X6c)
     if not rounds:
         raise AbortError(
             f"round logs: every file matching {globs} is a refused launch "
