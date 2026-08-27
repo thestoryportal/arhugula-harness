@@ -2549,7 +2549,7 @@ same spec leg.
 
 ### B-223 · Codex-runner cost-cohort gap *(surfaced by codex r2 on u-he-48, 2026-08-27; REGISTERED)*
 
-`tools/arc_cost.py` (U-HE-48, C-HE-25 X6e) reads Claude session-transcript JSONL;
+**What it is.** A named cost-cohort gap: `tools/arc_cost.py` (U-HE-48, C-HE-25 X6e) reads Claude session-transcript JSONL;
 Codex sessions store date-partitioned rollout JSONL under `~/.codex/sessions` in a
 different shape. The Codex ship-pr carrier therefore deliberately OMITS
 `--transcript` (pinned by `test_codex_workflow_parity`), so Codex-shipped arcs
@@ -2560,7 +2560,7 @@ transcript.
 
 ### B-224 · subagent-sidecar completeness has no verifying authority *(surfaced by codex r5–r8 on u-he-48, 2026-08-27; REGISTERED)*
 
-`tools/arc_cost.py` cannot verify subagent-sidecar COMPLETENESS: no manifest
+**What it is.** A held bounded measurement residual: `tools/arc_cost.py` cannot verify subagent-sidecar COMPLETENESS — no manifest
 enumerates the expected `agent-*.jsonl` set, so a whole stem-dir GC is
 indistinguishable from a session that spawned no subagents. Detectable cases
 refuse (sidechain records with zero files; an existing `subagents/` dir with
