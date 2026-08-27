@@ -541,8 +541,17 @@ set):
 ```
 just arc-metrics queue --pr <NNN> --arc-id <arc-id> --arc-type <inventing|applying> \
   --decisions <N> --round-logs '<glob for THIS arc's round logs>' \
+  --transcript <this-session's-transcript.jsonl-or-omit> \
   --levers <lever-id> <lever-id> <...-or-omit>
 ```
+
+Pass `--transcript` with THIS session's transcript so the row carries the C-HE-25 X6e
+cost fields (requestId-deduplicated IET, `tools/arc_cost.py`). The session transcript
+lives under `~/.claude/projects/<munged-cwd>/<session-uuid>.jsonl`; identify it as the
+newest-mtime transcript in that directory that mentions this arc's id (`grep -l
+<arc-id> *.jsonl` then newest — a parallel lane's transcript names a different arc).
+If none matches unambiguously, OMIT the flag — the cost fields read as null (an honest
+could-not-look), never a guessed transcript's numbers.
 
 This writes one file per arc into a queue directory **outside** the repo. That placement is
 load-bearing, not tidiness: in an autonomous arc this step runs inside the topic worktree,

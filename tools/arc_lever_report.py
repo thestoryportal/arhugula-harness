@@ -207,16 +207,22 @@ def summarize_type(group: dict[str, Any], levers: tuple[str, ...]) -> dict[str, 
     other = [_metrics(r, levers) for r in buckets["other_levers"]]
     base_p1 = [m["p1_rounds"] for m in baseline if m["p1_rounds"] is not None]
     base_span = [m["arc_span_h"] for m in baseline if m["arc_span_h"] is not None]
+    # Control-side cost (codex u-he-48 r1): a treated arc's cost is only readable
+    # against the untreated cohort's — a per-treated-arc figure alone cannot say
+    # whether the lever made arcs cheaper.
+    base_cost = [m["cost_miet"] for m in baseline if m["cost_miet"] is not None]
     base_median = {
         "review_rounds": _median([m["review_rounds"] for m in baseline]),
         "p1_rounds": _median(base_p1),
         "arc_span_h": _median(base_span),
+        "cost_miet": _median(base_cost),
         # A P1 median over fewer rows than the cohort must say so, or the n>=5
         # bar can look satisfied by rows the P1 metric never measured (codex r3).
         "measured_n": {
             "review_rounds": len(baseline),
             "p1_rounds": len(base_p1),
             "arc_span_h": len(base_span),
+            "cost_miet": len(base_cost),
         },
     }
     for m in treated:
@@ -319,6 +325,11 @@ def render(summary: dict[str, Any]) -> str:
             f"p1={bm['p1_rounds']} (n={bm['measured_n']['p1_rounds']}) "
             f"span_h>={bm['arc_span_h']} (n={bm['measured_n']['arc_span_h']}; span is a "
             f"lower bound: derived excludes first-round duration)"
+            + (
+                f" cost={bm['cost_miet']}M IET (n={bm['measured_n']['cost_miet']})"
+                if bm["measured_n"]["cost_miet"]
+                else ""
+            )
         )
         if not s["evaluable_for_lever_decision"]:
             lines.append(

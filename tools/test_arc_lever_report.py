@@ -136,6 +136,7 @@ def test_p1_medians_carry_their_own_sample_counts(tmp_path: Path) -> None:
         "review_rounds": 2,
         "p1_rounds": 1,
         "arc_span_h": 2,
+        "cost_miet": 0,
     }
     assert s["pattern_metrics"]["B-211+B-212"]["p1_measured_n"] == 1
     assert s["p1_unmapped"] == ["pr-b"]
@@ -370,6 +371,32 @@ def test_cli_renders_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixtur
     assert "span_h>=" in out and "lower bound" in out, "span must read as a lower bound"
     assert "pr-4" in out, "the excluded unmapped arc must be visible in the human view"
     assert "pr-6" in out, "the excluded partial arc must be visible in the human view"
+
+
+# mutation-probe(tools/arc_lever_report.py): drop the cost_miet computation in _metrics
+def test_cost_renders_per_arc_when_present_and_never_as_a_partial_sum(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """C-HE-25 X6e: a treated arc with cost fields shows cost=<n>M IET; a row whose
+    MAIN cost is unmeasured stays unmeasured even when a subagent figure exists."""
+    costed = _row("pr-c", 3, ["B-211", "B-212"])
+    costed.update(cost_main_iet=2_000_000.0, cost_subagent_iet=500_000.0)
+    partial = _row("pr-p", 4, ["B-211", "B-212"])
+    partial.update(cost_subagent_iet=500_000.0)  # main null -> no partial sum
+    base = _row("pr-b", 10, [])
+    base.update(cost_main_iet=4_000_000.0)  # control-side cost (codex u-he-48 r1)
+    s = _summary(tmp_path, [base, costed, partial])["arc_types"]["applying"]
+    by_id = {m["arc_id"]: m for m in s["treated_arcs"]}
+    assert by_id["pr-c"]["cost_miet"] == 2.5
+    assert by_id["pr-p"]["cost_miet"] is None
+    assert s["baseline_median"]["cost_miet"] == 4.0
+    assert s["baseline_median"]["measured_n"]["cost_miet"] == 1
+    ledger = _write(tmp_path / "ledger.jsonl", [base, costed, partial])
+    assert alr.main(["--ledger", str(ledger)]) == 0
+    out = capsys.readouterr().out
+    assert "cost=2.5M IET" in out
+    assert "cost=4.0M IET (n=1)" in out, "the baseline median must expose control-side cost"
+    assert "cost=0.5M IET" not in out, "a main-null row must not render the subagent half"
 
 
 # mutation-probe(tools/arc_lever_report.py): accept a row missing arc_id into the buckets

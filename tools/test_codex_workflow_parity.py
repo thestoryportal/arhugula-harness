@@ -1249,6 +1249,10 @@ def test_arc_metrics_capture_is_mirrored_across_both_ship_carriers() -> None:
         start = body.lower().index(marker)
         section = body[start:]
         assert "just arc-metrics queue" in section, path
+        # C-HE-25 X6e activation: the documented queue command must carry the
+        # cost-field input, or production rows record cost_snapshot=null forever
+        # (codex u-he-48 r1).
+        assert "--transcript" in section, path
         assert "just arc-metrics drain" in section, path
         # the two properties a carrier must not silently drop
         assert "outside" in section.lower(), path  # queue lives out of the repo

@@ -72,6 +72,22 @@ def test_dedupe_collapses_duplicate_request_ids(tmp_path: Path) -> None:
     assert naive_output == 2 * m["output"]
 
 
+# mutation-probe(tools/arc_cost.py): keep first-copy usage instead of the per-field max
+def test_divergent_copies_merge_by_per_field_max_not_arrival_order(tmp_path: Path) -> None:
+    """codex u-he-48 r1: a streaming producer could stamp a partial (even all-zero)
+    copy before the final one; the merge must not depend on which copy lands first."""
+    partial_first = [
+        _rec("req_1", "2026-08-26T04:00:00.000Z", out=0, inp=0, cw=0, cr=0),
+        _rec("req_1", "2026-08-26T04:00:01.000Z", out=50),
+    ]
+    report = ac.cost_report(_write(tmp_path / "a.jsonl", partial_first), cuts=[])
+    assert report["main"]["calls"] == 1
+    assert report["main"]["output"] == 50  # the real usage, not the zero copy
+    # order-independent: reversed arrival yields the identical totals
+    reversed_report = ac.cost_report(_write(tmp_path / "b.jsonl", partial_first[::-1]), cuts=[])
+    assert reversed_report["main"] == report["main"]
+
+
 def test_iet_formula() -> None:
     t = ac.Totals(calls=1, input=100, cache_write=100, cache_read=100, output=100)
     assert t.iet == 100 + 1.25 * 100 + 0.1 * 100 + 5 * 100
@@ -210,12 +226,18 @@ def test_b_audit_headline_reproduced_on_the_archived_transcript() -> None:
     """[B] Evidence and method: 418 main calls / ~20.99M IET main / ~4.52M subagents.
 
     The transcript outlived the audit (the session continued), so the witness
-    bounds at the audit's last-record timestamp via a stage-window cut.
+    bounds at the audit's last-record timestamp via a stage-window cut. Main
+    reproduces [B] exactly (its usage copies are identical: 0 divergent of 428
+    requestIds). Subagents reproduce the call count exactly but the IET lands
+    0.12M ABOVE [B]'s 4.52M: the subagent files stamp an early partial
+    output_tokens copy before the final one (measured: 42 of 291 requestIds),
+    [B]'s first-copy read undercounted those calls, and the per-field-max merge
+    (codex u-he-48 r1) prices the final copy instead.
     """
     cut = ac.parse_ts("2026-08-26T21:16:18Z", what="cut")
     report = ac.cost_report(U_HE_35_TRANSCRIPT, cuts=[cut])
     audited = report["windows"][0]
     assert audited["main"]["calls"] == 418
-    assert round(audited["main"]["iet"]) == 20_996_434  # 20.99M
+    assert round(audited["main"]["iet"]) == 20_996_434  # 20.99M, == [B]
     assert audited["subagents"]["calls"] == 286
-    assert round(audited["subagents"]["iet"]) == 4_516_426  # 4.52M
+    assert round(audited["subagents"]["iet"]) == 4_636_541  # [B]'s 4.52M + corrected output

@@ -83,7 +83,16 @@ def parse_ts(s: str, *, what: str) -> datetime:
 
 
 def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
-    """One Call per requestId, first occurrence wins (all copies are identical)."""
+    """One Call per requestId.
+
+    Main-session copies of a request's usage block are identical on the [B]
+    witness (0 divergent of 428 requestIds), but subagent transcripts stamp an
+    early PARTIAL output_tokens copy before the final one (42 of 291), so copies
+    merge by PER-FIELD MAX — order-independent, equal to the copy when copies
+    agree, and equal to the final (largest) value under monotone streaming
+    growth. The timestamp keeps the earliest copy: windows cut at when the call
+    happened.
+    """
     calls: dict[str, Call] = {}
     for i, r in enumerate(records):
         if r.get("type") != "assistant":
@@ -99,14 +108,25 @@ def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
         ts = r.get("timestamp")
         if not ts:
             raise CostError(f"{source}: assistant record {i} ({rid}) has no timestamp")
-        if rid not in calls:
-            calls[rid] = Call(
-                ts=parse_ts(ts, what=f"{source} record {i}"),
-                input=usage.get("input_tokens", 0),
-                cache_write=usage.get("cache_creation_input_tokens", 0),
-                cache_read=usage.get("cache_read_input_tokens", 0),
-                output=usage.get("output_tokens", 0),
+        seen = calls.get(rid)
+        cur = Call(
+            ts=parse_ts(ts, what=f"{source} record {i}"),
+            input=usage.get("input_tokens", 0),
+            cache_write=usage.get("cache_creation_input_tokens", 0),
+            cache_read=usage.get("cache_read_input_tokens", 0),
+            output=usage.get("output_tokens", 0),
+        )
+        calls[rid] = (
+            cur
+            if seen is None
+            else Call(
+                ts=min(seen.ts, cur.ts),
+                input=max(seen.input, cur.input),
+                cache_write=max(seen.cache_write, cur.cache_write),
+                cache_read=max(seen.cache_read, cur.cache_read),
+                output=max(seen.output, cur.output),
             )
+        )
     return sorted(calls.values(), key=lambda c: c.ts)
 
 
