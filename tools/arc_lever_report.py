@@ -70,6 +70,9 @@ class LedgerRow(BaseModel):
     round_completeness: str | None = "complete"
     p1_rounds: list[Annotated[int, Field(ge=0)]] | None = None
     arc_span_s: float | None = Field(default=None, ge=0)
+    # C-HE-25 v1.6 X6e: requestId-deduplicated transcript cost (absent = never measured)
+    cost_main_iet: float | None = Field(default=None, ge=0)
+    cost_subagent_iet: float | None = Field(default=None, ge=0)
 
 
 def load_rows(ledger: Path) -> list[LedgerRow]:
@@ -180,6 +183,13 @@ def _metrics(r: LedgerRow, levers: tuple[str, ...]) -> dict[str, Any]:
         # would award the best possible P1 score to an unmeasured value (codex r2).
         "p1_rounds": len(p1) if p1 is not None else None,
         "arc_span_h": round(span / 3600, 1) if span is not None else None,
+        # Main + subagent IET in millions. Null main is unmeasured even when a
+        # subagent figure exists — a partial sum would read as a cheaper arc.
+        "cost_miet": (
+            round((r.cost_main_iet + (r.cost_subagent_iet or 0)) / 1e6, 2)
+            if r.cost_main_iet is not None
+            else None
+        ),
         "levers": declared,
         "target_levers_declared": sorted(lv for lv in declared if lv in levers),
     }
@@ -336,10 +346,11 @@ def render(summary: dict[str, Any]) -> str:
             )
         for m in s["treated_arcs"]:
             p1 = m["p1_rounds"] if m["p1_rounds"] is not None else "unmapped"
+            cost = f" cost={m['cost_miet']}M IET" if m["cost_miet"] is not None else ""
             lines.append(
                 f"  {m['arc_id']} rounds={m['review_rounds']} p1={p1} "
                 f"span_h>={m['arc_span_h']} "
-                f"delta_rounds_vs_baseline={m['delta_rounds_vs_baseline_median']}"
+                f"delta_rounds_vs_baseline={m['delta_rounds_vs_baseline_median']}{cost}"
             )
         lines.append(
             "  per-skill separation: "
