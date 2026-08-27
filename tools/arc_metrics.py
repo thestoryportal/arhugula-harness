@@ -170,7 +170,7 @@ class ArcRow:
     # bounds, not measurements -- pr-1060 kept round 10 alone out of >=10, and
     # a note saying so is not enough: `summary` reads fields, not prose, and
     # would average a 1-round 44-minute fragment in as if it were the arc.
-    round_completeness: str = "complete"  # complete | partial-suffix
+    round_completeness: str = "complete"  # complete | partial-suffix | unknown
     # -- derived from gh run --
     ci_runs: int | None = None
     ci_wall_s: list[float] = field(default_factory=list)
@@ -234,8 +234,51 @@ def gh_pr(pr: int) -> dict:
     return data
 
 
-def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]:
-    """Derive per-round wall clock from log mtimes, and P1 arrival by round."""
+# The wrapper's terminal line ends every published round log. Exactly three
+# producer shapes exist, and each label is restricted to the terminals its
+# producer actually emits (codex_review._report emits the full enum under
+# `codex-review:` and `gemini-review (failover):`; agy_review's own gate emits
+# ONLY `gemini-review: GATE_REFUSED (<code>)`; agy's standalone `VERDICT:`
+# dialect is NOT a round-log producer and aborts below as terminal-less,
+# deliberately). The LAST such line is the transcript's verdict: a failover
+# transcript carries the primary's REVIEWER_UNAVAILABLE before the failover
+# verdict that stands, and publish-failure noise can FOLLOW it, so neither
+# "first" nor "only" is the right read. Residual (named, not handled here):
+# reviewer-controlled finding text is printed verbatim into the transcript, so
+# a forged line remains representable until the wrapper owns an unforgeable
+# terminal sentinel -- that emission contract is wrapper-internal work
+# (B-218/U-HE-50 territory); the AUTHORITATIVE per-round terminal already
+# lives on the reservation's round_outcomes and the C-HE-24 rows, both written
+# from the schema-parsed verdict, never from this transcript read.
+ROUND_TERMINAL_RE = re.compile(
+    r"^(?:(?:codex-review|gemini-review \(failover\)): "
+    r"(APPROVE|BLOCK|REVIEWER_UNAVAILABLE|GATE_REFUSED)"
+    r"|gemini-review: (GATE_REFUSED))\b",
+    re.MULTILINE,
+)
+# Round identity lives in the log NAME the publisher wrote (`r9-verdict.log` is
+# round 9's verdict; U-HE-49's per-attempt names keep this prefix), never in the
+# file's position within a listing.
+ROUND_ID_RE = re.compile(r"^r(?:ound-?)?(\d+)(?=$|\D)")
+
+
+def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int], list[int]]:
+    """Derive per-round records from round-log CONTENT, never file position.
+
+    C-HE-25 (v1.6 X6c): a round is a log whose wrapper terminal line is a review
+    verdict; a `GATE_REFUSED` transcript is a refused LAUNCH -- the review never
+    began -- and recording it as a round both inflates the count and shifts every
+    later P1 index ([B] F15: the u-he-35 dir read as 12 rounds with P1s at 1 and
+    11; the true content is 10 rounds with P1s at r1 and r10). Rounds key by the
+    round id parsed from the log name, so `p1_rounds` carries ROUND IDS, and a
+    refused attempt plus its retry under a fresh name collapse to one round.
+
+    Returns ``(logs, gaps, p1_rounds, round_ids)``. The sorted id list is the
+    log set's own testimony about its coverage; the completeness LABEL is a
+    claim above that testimony and has exactly one classifier,
+    `_completeness_for`, which grounds "complete" in the reservation authority
+    -- this function never labels.
+    """
     # Resolve before de-duplicating: two overlapping globs matching one file
     # would otherwise count it twice, inventing an extra round, a spurious
     # zero-second gap, and an off-by-one in every later P1 round index.
@@ -246,26 +289,86 @@ def round_metrics(globs: list[str]) -> tuple[list[Path], list[float], list[int]]
         for m in matched:
             if m.is_file():
                 seen[m.resolve()] = None
-    logs: list[Path] = list(seen)
-    if not logs:
+    if not seen:
         raise AbortError(
             f"round logs: zero files matched {globs} -- refusing to record "
             "'0 rounds' for what may be an unlooked path"
         )
 
-    logs.sort(key=lambda f: f.stat().st_mtime)
-    mtimes = [f.stat().st_mtime for f in logs]
-    gaps = [round(b - a, 1) for a, b in itertools.pairwise(mtimes)]
-
-    p1_rounds: list[int] = []
-    for idx, f in enumerate(logs, start=1):
+    # [LAW:parse-dont-validate] every matched file is parsed into (round id,
+    # terminal) or refused loudly -- an unclassifiable log silently counted (or
+    # silently dropped) is exactly the position-derived corruption X6c removes.
+    rounds: dict[int, tuple[Path, str]] = {}
+    for f in seen:
         try:
             text = f.read_text(errors="replace")
         except OSError as exc:
             raise AbortError(f"round logs: cannot read {f}: {exc}") from exc
-        if count_p1(text) >= 1:
-            p1_rounds.append(idx)
-    return logs, gaps, p1_rounds
+        m = ROUND_ID_RE.match(f.stem)
+        if not m:
+            raise AbortError(
+                f"round logs: cannot parse a round id from {f.name!r} -- round "
+                "identity comes from the log name (r<N>...), never file position"
+            )
+        rid = int(m.group(1))
+        terminals = [t.group(1) or t.group(2) for t in ROUND_TERMINAL_RE.finditer(text)]
+        if not terminals:
+            raise AbortError(
+                f"round logs: {f.name!r} carries no wrapper terminal line -- a "
+                "partial or foreign transcript cannot be classified as a round"
+            )
+        if terminals[-1] == "GATE_REFUSED":
+            continue  # a refused launch, not a round (C-HE-25 X6c)
+        if rid in rounds:
+            raise AbortError(
+                f"round logs: two review transcripts claim round {rid} "
+                f"({rounds[rid][0].name!r} and {f.name!r}) -- write-once round "
+                "evidence is ambiguous; fix the log set"
+            )
+        rounds[rid] = (f, text)
+    if not rounds:
+        raise AbortError(
+            f"round logs: every file matching {globs} is a refused launch "
+            "(GATE_REFUSED) -- no review round ever ran; fix the glob rather "
+            "than record an empty arc"
+        )
+
+    # Rounds mint sequentially per arc, and every round's log is write-once
+    # (retries publish under fresh per-attempt names), so a hole inside the
+    # observed id range means a deleted or never-published log -- counting
+    # around it would silently undercount the arc and span the missing round's
+    # wall clock across one innocent-looking gap. (A set STARTING above 1 is
+    # the distinct, declared `round_completeness=partial-suffix` case.)
+    # Gaps derive from ADJACENT sorted ids -- filename ids are caller-controlled
+    # input, and materializing min..max (a r100000000.log) is an OOM, not a
+    # refusal.
+    ids = sorted(rounds)
+    gap_spans = [(a + 1, b - 1) for a, b in itertools.pairwise(ids) if b - a > 1]
+    if gap_spans:
+        shown = ", ".join(str(lo) if lo == hi else f"{lo}-{hi}" for lo, hi in gap_spans)
+        raise AbortError(
+            f"round logs: round id(s) {shown} are missing inside the observed "
+            f"range {ids[0]}..{ids[-1]} -- a deleted or never-published "
+            "log breaks the evidence set; fix the log set rather than record an "
+            "undercounted arc"
+        )
+
+    logs = [rounds[rid][0] for rid in sorted(rounds)]
+    mtimes = [f.stat().st_mtime for f in logs]
+    # Rounds are published sequentially, so round-id order IS time order; an
+    # mtime regression means a copied or re-touched log, and a negative gap
+    # would enter cohort medians as a measurement. Refuse rather than record.
+    for a, b in itertools.pairwise(zip(logs, mtimes, strict=True)):
+        if b[1] < a[1]:
+            raise AbortError(
+                f"round logs: {b[0].name!r} predates {a[0].name!r} on disk but "
+                "follows it by round id -- a copied or re-touched log is in the "
+                "set; fix the logs rather than record a negative round gap"
+            )
+    gaps = [round(b - a, 1) for a, b in itertools.pairwise(mtimes)]
+
+    p1_rounds = [rid for rid in sorted(rounds) if count_p1(rounds[rid][1]) >= 1]
+    return logs, gaps, p1_rounds, ids
 
 
 def count_p1(text: str) -> int:
@@ -289,6 +392,10 @@ def count_p1(text: str) -> int:
     Absorption commit messages write a bare ``P1 <CLAIM>`` at line start and are
     NOT duplicated. Counting only one dialect silently reports zero for the
     other, which is the 'empty vs unlooked' failure this ledger exists to avoid.
+    (Both dialects are shapes WITHIN a transcript's text -- the bare dialect
+    rides inside round logs that quote absorption commits, never as a
+    standalone terminal-less file; round classification itself stays with the
+    wrapper terminal line in round_metrics.)
     """
     payload = text
     if FINAL_REVIEW_MARKER in text:
@@ -380,14 +487,23 @@ def extract(args: argparse.Namespace) -> ArcRow:
             row.round_wall_s = snapshot["round_wall_s"]
             row.p1_rounds = snapshot["p1_rounds"]
             row.round_log_source = snapshot["round_log_source"]
+            # Absent on snapshots queued before the X6c rev. Those were
+            # computed by the positional algorithm over arbitrary surviving
+            # subsets -- refused attempts counted, retries duplicated -- so
+            # nothing about them is re-derivable from the snapshot (not even a
+            # suffix bound: the stored counts and gaps themselves may be
+            # corrupt). Every unlabeled legacy snapshot is `unknown`, which
+            # consumers exclude from ALL round-derived aggregates.
+            row.round_completeness = snapshot.get("round_completeness") or "unknown"
             first = parse_iso(snapshot["first_round_at"])
             row.first_round_at = snapshot["first_round_at"]
             row.last_round_at = snapshot["last_round_at"]
         else:
-            logs, gaps, p1 = round_metrics(args.round_logs)
+            logs, gaps, p1, round_ids = round_metrics(args.round_logs)
             row.review_rounds = len(logs)
             row.round_wall_s = gaps
             row.p1_rounds = p1
+            row.round_completeness = _completeness_for(row.arc_id, round_ids)
             row.round_log_source = str(Path(args.round_logs[0]).parent)
             first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
             last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
@@ -669,6 +785,102 @@ def cmd_relabel(args: argparse.Namespace) -> int:
     return 0
 
 
+def _reservation_recorded_rounds(arc_id: str) -> set[int]:
+    """Round ids the C-HE-25 recorder accreted on this arc's reservation.
+
+    Empty when no head or no outcomes exist. ONE-DIRECTIONAL authority: the
+    outcomes can legitimately UNDERCOUNT the logs (a round run without the
+    HARNESS_ARC_ID prefix records on a fallback arc id), so only a recorded
+    round MISSING from the observed set is ever a claim -- observed rounds
+    absent from the outcomes are not. (`reservations` imports this module at
+    load; import it inside the function, as _require_reservation_holder
+    does.)"""
+    import reservations as rs
+
+    cur = rs.current(arc_id)
+    outcomes = (cur[1].get("round_outcomes") or {}) if cur else {}
+    # Keys are "<round>/<channel>" (record_round_outcome_if_reserved; verified
+    # live: {"1/codex": ...}). int() raising on a foreign key is the loud path:
+    # an unparseable authority must never be silently skipped into "no claim".
+    return {int(k.split("/", 1)[0]) for k in outcomes}
+
+
+# Round numbers are scoped to (arc_id, producer): the merge-gate lenses and
+# the reviewer-concurrency probe number their OWN row spaces, which overlap the
+# review wrappers' round ids. Only the two wrappers produce review rounds --
+# the thing a round LOG evidences -- so only their rows are round authority.
+REVIEW_ROUND_PRODUCERS = frozenset({"codex_review_wrapper", "gemini_review_wrapper"})
+
+
+def _gate_log_recorded_rounds(arc_id: str) -> set[int]:
+    """The fail-closed half of the round authority.
+
+    The reservation recorder is deliberately best-effort (its writer catches
+    every exception and continues), but the C-HE-24 rows are write-first --
+    every review terminal yields at least one row under the log lock -- so a
+    round whose reservation persistence failed still appears here. Scoped to
+    the review-wrapper producers: an unrelated merge-gate lens r1 must neither
+    certify a codex log set nor abort it."""
+    if not GATE_LOG.exists():
+        return set()
+    rounds: set[int] = set()
+    for line in GATE_LOG.read_text().splitlines():
+        row = json.loads(line)  # an unparseable authority is loud, never skipped
+        if (
+            row.get("arc_id") == arc_id
+            and row.get("producer") in REVIEW_ROUND_PRODUCERS
+            and row.get("round_n") is not None
+        ):
+            rounds.add(int(row["round_n"]))
+    return rounds
+
+
+def _recorded_rounds(arc_id: str) -> set[int]:
+    """Union of the two round authorities: the best-effort reservation
+    accretion and the fail-closed gate log. Either alone can under-record
+    (a swallowed reservation write; a pre-C-HE-24 round); together they are
+    the strongest recorded evidence available without a paid re-run."""
+    return _reservation_recorded_rounds(arc_id) | _gate_log_recorded_rounds(arc_id)
+
+
+def _completeness_for(arc_id: str, observed_ids: list[int]) -> str:
+    """The ONE classifier of a live log set's `round_completeness` label.
+
+    The set's own testimony covers only its start: an observed min above 1
+    proves a missing prefix (`partial-suffix`). "complete" is a CLAIM about the
+    tail, and only the recorded authority (reservation accretion UNION the
+    fail-closed C-HE-24 gate log) can back it -- the recorded set's
+    maximum equal to the observed maximum. Any RECORDED round at or after the
+    observed start with no surviving classified log is a broken evidence set
+    (refuse) -- this covers both a deleted tail AND a real round whose
+    transcript reads refused (a refused launch never yields an outcome, so a
+    recorded round that parses GATE_REFUSED means a forged or mangled
+    transcript); recorded rounds missing BEFORE the start are the ordinary
+    partial-suffix archive. No authority, or an
+    under-recording one (unprefixed rounds land on fallback arc ids), leaves
+    `unknown` -- a label every consumer treats as a lower bound excluded from
+    exact aggregates, never a guess of wholeness."""
+    recorded = _recorded_rounds(arc_id)
+    observed = set(observed_ids)
+    start = min(observed)
+    # Recorded rounds missing BEFORE the observed start are the ordinary
+    # partial-suffix archive (early logs lost); recorded rounds missing AT or
+    # AFTER it mean a deleted tail or a real round whose transcript reads
+    # refused (a refused launch never yields an outcome, so that is a forged
+    # or mangled transcript) -- refuse those.
+    missing = sorted(r for r in recorded if r >= start and r not in observed)
+    if missing:
+        raise AbortError(
+            f"round logs: the reservation records round(s) {missing} but no "
+            "surviving log classifies as those rounds -- a deleted, forged, or "
+            "mangled transcript is in the evidence set; fix the log set rather "
+            "than record it as the whole arc"
+        )
+    if start > 1:
+        return "partial-suffix"
+    return "complete" if recorded and max(recorded) == max(observed) else "unknown"
+
+
 def queue_capture(args: argparse.Namespace) -> int:
     """Record an arc's capture inputs OUTSIDE the repo, for a later drain.
 
@@ -731,13 +943,15 @@ def queue_capture(args: argparse.Namespace) -> int:
     # no recomputation at all and cannot be affected by later edits.
     snapshot: dict | None = None
     if args.round_logs:
-        logs, gaps, p1 = round_metrics(args.round_logs)
+        logs, gaps, p1, round_ids = round_metrics(args.round_logs)
+        completeness = _completeness_for(arc_id, round_ids)
         first = datetime.fromtimestamp(logs[0].stat().st_mtime, tz=UTC)
         last = datetime.fromtimestamp(logs[-1].stat().st_mtime, tz=UTC)
         snapshot = {
             "review_rounds": len(logs),
             "round_wall_s": gaps,
             "p1_rounds": p1,
+            "round_completeness": completeness,
             "first_round_at": first.isoformat(),
             "last_round_at": last.isoformat(),
             "round_log_source": str(logs[0].parent),
@@ -2033,7 +2247,17 @@ def summary(_args: argparse.Namespace) -> int:
         # Averaging a surviving fragment in as if it were a whole arc is how a
         # baseline quietly understates itself.
         exact = [r for r in cohort if r.get("round_completeness", "complete") == "complete"]
-        partial = [r for r in cohort if r.get("round_completeness", "complete") != "complete"]
+        # Two distinct non-exact classes, rendered apart: a `partial-suffix`
+        # row's counts and gaps are TRUE measurements of its surviving suffix
+        # (a lower bound); an `unknown` row's round-derived numbers may be
+        # position-era corruption (refused logs counted, gaps spanning them),
+        # so they enter NO round-derived aggregate at all.
+        suffix = [r for r in cohort if r.get("round_completeness", "complete") == "partial-suffix"]
+        unknown = [
+            r
+            for r in cohort
+            if r.get("round_completeness", "complete") not in ("complete", "partial-suffix")
+        ]
         # TWO different quantities, reported separately and never pooled. An
         # arc span (first review activity -> merge) and a PR-open window measure
         # different things -- #1337 is 269.2m against 6.1m, #1060 44.4m against
@@ -2050,7 +2274,7 @@ def summary(_args: argparse.Namespace) -> int:
             if r.get("arc_span_s") is None and r.get("total_arc_wall_s") is not None
         ]
         rounds = [r["review_rounds"] for r in exact if r.get("review_rounds") is not None]
-        allgaps = [g for r in cohort for g in (r.get("round_wall_s") or [])]
+        allgaps = [g for r in exact + suffix for g in (r.get("round_wall_s") or [])]
         adds = [r["additions"] for r in cohort if r.get("additions") is not None]
         print(f"  arc span         {fmt_span(arcs)}          [stochastic, LOWER BOUND]")
         print(
@@ -2074,13 +2298,20 @@ def summary(_args: argparse.Namespace) -> int:
             if rounds
             else "  review rounds    --"
         )
-        if partial:
+        if suffix:
             bound = ", ".join(
-                f"{r['arc_id']}>={r['review_rounds']}" for r in partial if r.get("review_rounds")
+                f"{r['arc_id']}>={r['review_rounds']}" for r in suffix if r.get("review_rounds")
             )
             print(
-                f"  {len(partial)} row(s) EXCLUDED from the two exact lines above -- only a "
+                f"  {len(suffix)} row(s) EXCLUDED from the two exact lines above -- only a "
                 f"suffix of their logs survives, so their counts are lower bounds ({bound})"
+            )
+        if unknown:
+            names = ", ".join(sorted(r["arc_id"] for r in unknown))
+            print(
+                f"  {len(unknown)} row(s) of UNKNOWN completeness excluded from ALL "
+                f"round-derived aggregates -- their round metrics may be position-era "
+                f"corruption, not lower bounds ({names})"
             )
         print(f"  additions        {fmt_span(adds, 1.0, '')}")
         unmapped = sum(
@@ -2102,7 +2333,11 @@ def summary(_args: argparse.Namespace) -> int:
         by_lanes.setdefault(key, []).append(r)
     for label in sorted(by_lanes):
         cohort = by_lanes[label]
-        rounds = [r["review_rounds"] for r in cohort if r.get("review_rounds") is not None]
+        # Same discipline as the lever cohorts above: a lower-bound row
+        # (partial-suffix / unknown) must not enter an exact lane median.
+        exact_rows = [r for r in cohort if r.get("round_completeness", "complete") == "complete"]
+        rounds = [r["review_rounds"] for r in exact_rows if r.get("review_rounds") is not None]
+        bounded = len(cohort) - len(exact_rows)
         print(f"-- LANES [{label}] (n={len(cohort)}) " + "-" * 20)
         print(
             f"  review rounds    {statistics.median(rounds):g} (n={len(rounds)}, "
@@ -2110,6 +2345,8 @@ def summary(_args: argparse.Namespace) -> int:
             if rounds
             else "  review rounds    --"
         )
+        if bounded:
+            print(f"  {bounded} lower-bound row(s) excluded from the exact line above")
         print()
 
     # C-HE-27 §4: N6 from the durable phases map + the gate log's dispositions.
@@ -2129,7 +2366,14 @@ def summary(_args: argparse.Namespace) -> int:
         print(f"N6 problems-prevented/hour  -- (gate log absent: {GATE_LOG})")
     print()
 
-    allgaps = [g for r in rows for g in (r.get("round_wall_s") or [])]
+    # Same exclusion as every round-derived aggregate above: an `unknown` row's
+    # gaps may be position-era corruption, not measurements.
+    allgaps = [
+        g
+        for r in rows
+        if r.get("round_completeness", "complete") in ("complete", "partial-suffix")
+        for g in (r.get("round_wall_s") or [])
+    ]
     if allgaps:
         lo, hi = min(allgaps) / 60, max(allgaps) / 60
         spread = f"{lo:.1f}-{hi:.1f} min/round, {hi / max(lo, 0.1):.0f}x"

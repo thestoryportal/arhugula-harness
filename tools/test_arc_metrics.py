@@ -387,13 +387,337 @@ def test_transient_ci_failure_aborts_rather_than_persisting_an_unmapped_row(monk
 def test_overlapping_globs_do_not_double_count_a_round(tmp_path: Path):
     a = tmp_path / "r1.log"
     b = tmp_path / "r2.log"
-    a.write_text("x\n")
-    b.write_text("y\n")
+    a.write_text("x\ncodex-review: BLOCK\n")
+    b.write_text("y\ncodex-review: APPROVE\n")
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
-    logs, gaps, _ = am.round_metrics([str(tmp_path / "r*.log"), str(tmp_path / "r1*.log")])
+    logs, gaps, _, _ = am.round_metrics([str(tmp_path / "r*.log"), str(tmp_path / "r1*.log")])
     assert len(logs) == 2, "the same file matched twice is still one round"
     assert gaps == [600.0], "and introduces no spurious zero-second gap"
+
+
+def _round_log(tmp_path: Path, name: str, text: str, mtime: int) -> Path:
+    f = tmp_path / name
+    f.write_text(text)
+    os.utime(f, (mtime, mtime))
+    return f
+
+
+# ── C-HE-25 v1.6 X6c: rounds derive from log CONTENT, never file position (U-HE-46) ─────
+# mutation-probe: number rounds by file position (mtime order + positional indices),
+# or count GATE_REFUSED transcripts as rounds -> red
+def test_round_derivation_from_content_not_file_position(tmp_path: Path):
+    """[B] F15 witness: the landed u-he-35 round-dir shape is 10 rounds, P1s at r1+r10.
+
+    The 12-file directory (r1..r11.log + r9-verdict.log) carries two GATE_REFUSED
+    transcripts (r9: SWEEP_MISSING; r11: BUDGET_EXHAUSTED) and r9's retry under the
+    fresh per-attempt name. File-position derivation read it as the corrupted
+    ``review_rounds: 12`` with ``p1_rounds: [1, 11]``.
+    """
+    block = "codex-review: BLOCK\n"
+    p1 = "- [P1] tools/x.py:1: a real finding\n"
+    t = 1_000_000
+    for n in range(1, 9):  # r1..r8 real rounds; only r1 carries a P1
+        _round_log(tmp_path, f"r{n}.log", (p1 if n == 1 else "") + block, t)
+        t += 600
+    _round_log(
+        tmp_path, "r9.log", "review gate: ...\ncodex-review: GATE_REFUSED (SWEEP_MISSING)\n", t
+    )
+    # r9's retry publishes under a fresh name; publish-failure noise FOLLOWS the verdict
+    _round_log(
+        tmp_path,
+        "r9-verdict.log",
+        block + "round_log_publish: refused 'r9.log': destination already exists\n",
+        t + 600,
+    )
+    _round_log(tmp_path, "r10.log", p1 + block, t + 1200)
+    _round_log(tmp_path, "r11.log", "codex-review: GATE_REFUSED (BUDGET_EXHAUSTED)\n", t + 1800)
+
+    logs, gaps, p1_rounds, round_ids = am.round_metrics([str(tmp_path / "r*.log")])
+    assert len(logs) == 10, "refused launches are not rounds"
+    assert p1_rounds == [1, 10], "P1s key by ROUND ID, not by position in a listing"
+    assert [f.name for f in logs] == [
+        *(f"r{n}.log" for n in range(1, 9)),
+        "r9-verdict.log",
+        "r10.log",
+    ], "the retry's fresh-named log IS round 9; both refused transcripts are excluded"
+    assert len(gaps) == 9, "gaps pair the 10 real rounds only"
+    assert round_ids == list(range(1, 11)), (
+        "the id list is the set's own testimony; labels are the classifier's"
+    )
+
+
+# mutation-probe: classify a suffix-only set as "complete", or grant "complete"
+# without the reservation authority confirming the tail -> red
+def test_completeness_labels_are_evidence_gated(monkeypatch):
+    """One classifier: min>1 is the set's own proof of a missing prefix;
+    "complete" needs the reservation authority to confirm the tail; anything
+    the evidence cannot back is "unknown" (a lower bound, never a guess)."""
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    assert am._completeness_for("x", list(range(1, 11))) == "complete"
+    assert am._completeness_for("x", [4, 5, 6, 7, 8, 9, 10]) == "partial-suffix", (
+        "recorded rounds missing BEFORE the observed start are a lost prefix, not corruption"
+    )
+    with pytest.raises(am.AbortError, match=r"round\(s\) \[4, 5, 6, 7, 8, 9, 10\]"):
+        am._completeness_for("x", [1, 2, 3])  # a surviving prefix hides a recorded tail
+    with pytest.raises(am.AbortError, match=r"round\(s\) \[10\]"):
+        # round 10 is recorded, so a transcript that reads refused for it is
+        # forged or mangled -- the round cannot be silently discarded
+        am._completeness_for("x", list(range(1, 10)))
+
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set())
+    assert am._completeness_for("x", list(range(1, 11))) == "unknown", (
+        "no authority is never 'complete'"
+    )
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 8)))
+    assert am._completeness_for("x", list(range(1, 11))) == "unknown", (
+        "an under-recording authority (fallback-id rounds) cannot confirm the tail"
+    )
+
+
+def test_suffix_only_set_is_classified_partial_and_reaches_the_snapshot(
+    monkeypatch, tmp_path: Path
+):
+    """queue_capture carries the classifier's label into the snapshot, so the
+    row cannot ride the schema's "complete" default into exact cohort medians."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    _round_log(logs, "r8.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(logs, "r9.log", "codex-review: BLOCK\n", 1_000_600)
+    _round_log(logs, "r10.log", "codex-review: APPROVE\n", 1_001_200)
+    _, _, _, round_ids = am.round_metrics([str(logs / "r*.log")])
+    assert round_ids == [8, 9, 10]
+
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    am.queue_capture(
+        am.argparse.Namespace(
+            pr=1999,
+            arc_id=None,
+            arc_type="applying",
+            decisions=0,
+            round_logs=[str(logs / "r*.log")],
+            levers=None,
+            notes="",
+        )
+    )
+    snap = json.loads((qdir / "pr-1999.json").read_text())["round_snapshot"]
+    assert snap["round_completeness"] == "partial-suffix"
+
+
+# mutation-probe: drop the snapshot round_completeness read in extract() -> red
+def test_extract_carries_snapshot_completeness_and_defaults_legacy(monkeypatch):
+    monkeypatch.setattr(
+        am,
+        "gh_pr",
+        lambda pr: {
+            "additions": 10,
+            "deletions": 0,
+            "changedFiles": 1,
+            "commits": [{}],
+            "createdAt": "2026-08-14T09:00:00Z",
+            "mergedAt": None,
+            "mergeCommit": None,
+            "title": "t",
+        },
+    )
+    snapshot = {
+        "review_rounds": 3,
+        "round_wall_s": [600.0, 600.0],
+        "p1_rounds": [],
+        "first_round_at": "2026-08-14T11:00:00+00:00",
+        "last_round_at": "2026-08-14T11:20:00+00:00",
+        "round_log_source": "/tmp/logs",
+        "round_completeness": "partial-suffix",
+    }
+    args = dict(
+        pr=999, arc_id=None, arc_type=None, decisions=None, round_logs=None, levers=None, notes=""
+    )
+    row = am.extract(am.argparse.Namespace(**args, round_snapshot=snapshot))
+    assert row.round_completeness == "partial-suffix"
+
+    # Pre-X6c snapshots were computed positionally over arbitrary surviving
+    # subsets -- their stored counts and gaps may themselves be corrupt, so no
+    # legacy shape earns anything but "unknown" (not even a suffix bound).
+    legacy = {k: v for k, v in snapshot.items() if k != "round_completeness"}
+    legacy["matched"] = ["/x/r8.log", "/x/r9.log", "/x/r10.log"]
+    row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
+    assert row.round_completeness == "unknown"
+
+    del legacy["matched"]
+    row = am.extract(am.argparse.Namespace(**args, round_snapshot=legacy))
+    assert row.round_completeness == "unknown", "no evidence is never a claim of completeness"
+
+
+def test_reviewer_unavailable_is_a_round_and_any_wrapper_label_counts(tmp_path: Path):
+    """The C-HE-25 per-round terminal enum includes REVIEWER_UNAVAILABLE.
+
+    A failover transcript carries the primary's REVIEWER_UNAVAILABLE terminal
+    and then the verdict that stands under the ``gemini-review (failover)``
+    label (codex_review._report); both shapes classify as rounds, and the
+    failover line — the LAST matching terminal — is the one read. (agy_review's
+    standalone ``VERDICT:`` dialect is not a round-log producer; such a
+    transcript aborts as terminal-less by design.)
+    """
+    _round_log(
+        tmp_path, "r1.log", "codex-review: REVIEWER_UNAVAILABLE (transient: timeout)\n", 1_000_000
+    )
+    _round_log(
+        tmp_path,
+        "r2.log",
+        "codex-review: REVIEWER_UNAVAILABLE (permanent: no binary)\n"
+        "gemini-review (failover): BLOCK\n",
+        1_000_600,
+    )
+    logs, _, _, _ = am.round_metrics([str(tmp_path / "r*.log")])
+    assert len(logs) == 2
+
+
+def test_two_real_transcripts_claiming_one_round_abort(tmp_path: Path):
+    _round_log(tmp_path, "r3.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r3-verdict.log", "codex-review: APPROVE\n", 1_000_600)
+    with pytest.raises(am.AbortError, match="claim round 3"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_terminal_less_transcript_aborts_rather_than_classifying(tmp_path: Path):
+    _round_log(tmp_path, "r1.log", "some partial output with no verdict\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="no wrapper terminal line"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_unparseable_round_name_aborts(tmp_path: Path):
+    _round_log(tmp_path, "final.log", "codex-review: APPROVE\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="cannot parse a round id"):
+        am.round_metrics([str(tmp_path / "*.log")])
+
+
+def test_internal_round_id_gap_aborts_rather_than_undercounting(tmp_path: Path):
+    """r1 + r3 with r2 missing is a broken evidence set, not a two-round arc."""
+    _round_log(tmp_path, "r1.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r3.log", "codex-review: APPROVE\n", 1_000_600)
+    with pytest.raises(am.AbortError, match=r"round id\(s\) 2 are missing"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_gap_detection_never_materializes_the_id_range(tmp_path: Path):
+    """Filename ids are caller-controlled input; r1 + r100000000 must refuse as
+    a span, not build a hundred-million-element set."""
+    _round_log(tmp_path, "r1.log", "codex-review: BLOCK\n", 1_000_000)
+    _round_log(tmp_path, "r100000000.log", "codex-review: APPROVE\n", 1_000_600)
+    with pytest.raises(am.AbortError, match=r"round id\(s\) 2-99999999 are missing"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+# mutation-probe: drop the recorded-but-unclassified refusal in _completeness_for -> red
+def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
+    monkeypatch, tmp_path: Path
+):
+    """r1..r3 of an arc whose reservation accreted rounds through 10 is a
+    missing-tail evidence set, not a complete three-round arc."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for n in (1, 2, 3):
+        _round_log(logs, f"r{n}.log", "codex-review: BLOCK\n", 1_000_000 + n * 600)
+    qdir = tmp_path / "queue"
+    monkeypatch.setattr(am, "QUEUE_DIR", qdir)
+    ns = dict(
+        pr=1998,
+        arc_id=None,
+        arc_type="applying",
+        decisions=0,
+        round_logs=[str(logs / "r*.log")],
+        levers=None,
+        notes="",
+    )
+    # Authority through the REAL union: the reservation half is empty (the
+    # best-effort recorder failed), and the fail-closed gate log alone carries
+    # the recorded rounds -- dropping the gate-log half of _recorded_rounds
+    # makes both arms below misbehave (no abort; then no "complete").
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set())
+    gate = tmp_path / "gate.jsonl"
+    gate.write_text(
+        "".join(
+            json.dumps({"arc_id": "pr-1998", "round_n": n, "producer": "codex_review_wrapper"})
+            + "\n"
+            for n in range(1, 11)
+        )
+    )
+    monkeypatch.setattr(am, "GATE_LOG", gate)
+    with pytest.raises(am.AbortError, match="no surviving log classifies"):
+        am.queue_capture(am.argparse.Namespace(**ns))
+
+    # Authority-confirmed tail (recorded == observed) passes as "complete".
+    gate.write_text(
+        "".join(
+            json.dumps({"arc_id": "pr-1998", "round_n": n, "producer": "codex_review_wrapper"})
+            + "\n"
+            for n in (1, 2, 3)
+        )
+    )
+    assert am.queue_capture(am.argparse.Namespace(**ns)) == 0
+    snap = json.loads((qdir / "pr-1998.json").read_text())["round_snapshot"]
+    assert snap["round_completeness"] == "complete"
+
+
+# mutation-probe: drop the gate-log half of _recorded_rounds -> red
+def test_recorded_rounds_unions_the_fail_closed_gate_log(monkeypatch, tmp_path: Path):
+    """The reservation recorder is best-effort (its writer swallows persistence
+    failures); the C-HE-24 gate log is write-first. A round present only in the
+    gate log must still count as recorded."""
+    import reservations as rs
+
+    gate = tmp_path / "gate.jsonl"
+    rows = [
+        {"arc_id": "x", "round_n": 10, "producer": "codex_review_wrapper"},
+        {"arc_id": "other", "round_n": 3, "producer": "codex_review_wrapper"},
+        {"arc_id": "x", "producer": "codex_review_wrapper"},  # no round_n
+        # Mixed-producer witness: lens/probe rows number their OWN round
+        # spaces -- an unrelated r1/r2 here must neither certify nor abort
+        # the review-round evidence.
+        {"arc_id": "x", "round_n": 1, "producer": "merge-gate-concurrency"},
+        {"arc_id": "x", "round_n": 2, "producer": "reviewer_concurrency_probe"},
+        {"arc_id": "x", "round_n": 5, "producer": "gemini_review_wrapper"},
+    ]
+    gate.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "GATE_LOG", gate)
+    monkeypatch.setattr(
+        rs, "current", lambda arc_id: (1, {"round_outcomes": {"1/codex": {}, "2/codex": {}}})
+    )
+    assert am._recorded_rounds("x") == {1, 2, 5, 10}, (
+        "wrapper rounds (both channels) count; lens/probe round spaces do not"
+    )
+    monkeypatch.setattr(am, "GATE_LOG", tmp_path / "absent.jsonl")
+    assert am._recorded_rounds("x") == {1, 2}
+
+
+def test_reservation_recorded_rounds_reads_the_head_outcomes(monkeypatch):
+    """Keys carry the writer's real "<round>/<channel>" shape (verified live:
+    record_round_outcome_if_reserved writes {"1/codex": {...}})."""
+    import reservations as rs
+
+    outcomes = {"1/codex": {}, "10/codex": {}, "2/gemini": {}}
+    monkeypatch.setattr(rs, "current", lambda arc_id: (3, {"round_outcomes": outcomes}))
+    assert am._reservation_recorded_rounds("x") == {1, 2, 10}
+    monkeypatch.setattr(rs, "current", lambda arc_id: None)
+    assert am._reservation_recorded_rounds("x") == set()
+    monkeypatch.setattr(rs, "current", lambda arc_id: (1, {"round_outcomes": {}}))
+    assert am._reservation_recorded_rounds("x") == set()
+
+
+def test_all_refused_launches_abort_rather_than_recording_an_empty_arc(tmp_path: Path):
+    _round_log(tmp_path, "r1.log", "codex-review: GATE_REFUSED (SWEEP_MISSING)\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="refused launch"):
+        am.round_metrics([str(tmp_path / "r*.log")])
+
+
+def test_mtime_regression_against_round_id_order_aborts(tmp_path: Path):
+    """A copied/re-touched log would otherwise enter round_wall_s as a negative gap."""
+    _round_log(tmp_path, "r1.log", "codex-review: BLOCK\n", 1_000_600)
+    _round_log(tmp_path, "r2.log", "codex-review: APPROVE\n", 1_000_000)
+    with pytest.raises(am.AbortError, match="predates"):
+        am.round_metrics([str(tmp_path / "r*.log")])
 
 
 # mutation-probe: change the review-rounds median format back to :.0f
@@ -417,6 +741,61 @@ def test_partial_rows_are_excluded_from_exact_aggregates(monkeypatch, tmp_path: 
     out = capsys.readouterr().out
     assert "review rounds    4.5" in out, "median of [4,5] is 4.5, not 4"
     assert "EXCLUDED" in out and "frag>=1" in out
+
+
+# mutation-probe: median the whole lane cohort instead of its complete rows,
+# or pool an unknown row's round_wall_s into the cohort/global gap aggregates -> red
+def test_lane_cohort_medians_exclude_lower_bound_rows(monkeypatch, tmp_path: Path, capsys):
+    """C-HE-28 lane metrics are exact aggregates too: a partial-suffix or
+    unknown row is a lower bound and must not enter the lane median -- and an
+    unknown row's gaps (position-era corruption) must reach NO round-wall
+    aggregate, cohort or global."""
+    ledger = tmp_path / "arc-metrics.jsonl"
+    rows = [
+        {
+            "arc_id": "a",
+            "review_rounds": 4,
+            "round_wall_s": [600.0],
+            "levers_active": [],
+            "concurrent_lanes_at_open": 1,
+        },
+        {"arc_id": "b", "review_rounds": 5, "levers_active": [], "concurrent_lanes_at_open": 1},
+        {
+            "arc_id": "frag",
+            "review_rounds": 1,
+            # An extreme position-era gap: visible in any aggregate it leaks into.
+            "round_wall_s": [999_999.0],
+            "levers_active": [],
+            "concurrent_lanes_at_open": 1,
+            "round_completeness": "unknown",
+        },
+        # A partial-suffix row is the OTHER lower-bound class: its true suffix
+        # gaps pool, but its round count must stay out of the exact lane
+        # median (a `!= "unknown"` filter would readmit it).
+        {
+            "arc_id": "sfx",
+            "review_rounds": 2,
+            "round_wall_s": [1200.0],
+            "levers_active": [],
+            "concurrent_lanes_at_open": 1,
+            "round_completeness": "partial-suffix",
+        },
+    ]
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    am.summary(am.argparse.Namespace())
+    out = capsys.readouterr().out
+    lanes = out[out.index("-- LANES [concurrent_lanes_at_open=1]") :]
+    assert "review rounds    4.5 (n=2" in lanes, (
+        "median of [4,5]; both the unknown AND the partial-suffix row are out"
+    )
+    assert "2 lower-bound row(s) excluded" in lanes
+    # 999999s = 16666.6m: the corrupt unknown gap must appear nowhere -- not in
+    # the cohort round-wall line, not in the closing global variance spread --
+    # while the partial-suffix row's 1200s gap DOES pool (a true measurement of
+    # its surviving suffix).
+    assert "16666" not in out
+    assert "15.0m (n=2, 10.0-20.0)" in out, "the partial-suffix row's true 1200s gap pools"
 
 
 # mutation-probe: pool arc_span_s and total_arc_wall_s into one `arcs` list
@@ -618,8 +997,8 @@ def test_queue_snapshots_derived_metrics_not_a_live_glob(monkeypatch, tmp_path: 
     logs = tmp_path / "logs"
     logs.mkdir()
     a, b = logs / "round1.log", logs / "round2.log"
-    a.write_text("[P1] a real finding\n")
-    b.write_text("clean\n")
+    a.write_text("[P1] a real finding\ncodex-review: BLOCK\n")
+    b.write_text("clean\ncodex-review: APPROVE\n")
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
     monkeypatch.setattr(am, "QUEUE_DIR", qdir)
@@ -977,11 +1356,12 @@ def test_p1_count_collapses_the_codex_duplicate_printing(tmp_path: Path):
     """The codex CLI prints each finding twice; a single [P1] pair is ONE finding."""
     a = tmp_path / "r1.log"
     b = tmp_path / "r2.log"
-    a.write_text("[P1] a real finding\n[P1] a real finding\n")  # 2 raw -> 1 true
-    b.write_text("no findings here\n")  # 0
+    # 2 raw -> 1 true
+    a.write_text("[P1] a real finding\n[P1] a real finding\ncodex-review: BLOCK\n")
+    b.write_text("no findings here\ncodex-review: APPROVE\n")  # 0
     os.utime(a, (1_000_000, 1_000_000))
     os.utime(b, (1_000_600, 1_000_600))
-    logs, gaps, p1 = am.round_metrics([str(tmp_path / "r*.log")])
+    logs, gaps, p1, _ = am.round_metrics([str(tmp_path / "r*.log")])
     assert len(logs) == 2
     assert gaps == [600.0]
     assert p1 == [1], "round 1 carried a P1; round 2 did not"
