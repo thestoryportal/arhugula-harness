@@ -730,3 +730,7 @@ B-206) rather than unaddressed defects.
 | 2026-08-27T09:01:37Z | #1467 | 69d0fe24d360 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | 2026-08-27T09:04:07Z | #1467 | 69d0fe24d360 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | #1467 | 2026-08-27 | feat/u-he-47-attribution-writers | 3-lens verdicts: concurrency APPROVE (r2 @01bc91c0, transfers), spec-conformance APPROVE (r3 @69d0fe24 after its r2 BLOCK forced the arc to eat its own §5 dogfood — 39/39 dispositions), witness-adequacy APPROVE (r3 @69d0fe24 after its r1 BLOCK added the CLI-recovery + ImportError witnesses, empirically mutation-killed) | outcome: MERGE | blast-radius: 3 emit_outcome producers + 4 log readers (graft, floor-not-ceiling) |
+| 2026-08-27T12:49:42Z | #1469 | 7d3d6372ff09 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-27T12:51:47Z | #1469 | 7d3d6372ff09 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+| 2026-08-27T12:52:10Z | #1469 | 7d3d6372ff09 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| #1469 | 2026-08-27 | feat/u-he-48-arc-cost | concurrency APPROVE / spec-conformance APPROVE / witness-adequacy APPROVE | all-approve — merge | blast-radius: 5 production consumers enumerated (extract←_drain_one/cmd_extract←drain; _cost_snapshot←queue_capture; cost_report←arc_cost.main + lazy-import _cost_snapshot; summarize_type←summarize←main; carriers ship-pr x2 + arc-lever-report) |
