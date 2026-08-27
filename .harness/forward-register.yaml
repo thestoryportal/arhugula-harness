@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 219
+  total: 222
   open: 1
   design_substrate_gated: 3
-  registered_finding: 63
+  registered_finding: 66
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 49adca1c147fa0ce
+  identity_digest: 27181a2eb2e07e6e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -10878,3 +10878,73 @@ items:
   council: 'NO — single-file reducer refinement; no cross-axis tension.'
   heading: '### B-219 · pilot-gate stale-GREEN over an incomplete rerun *(surfaced
     by codex r1 on PR #1462, 2026-08-26; REGISTERED)*'
+- id: B-220
+  title: >-
+    C-HE-23 §2 pr-join wording vs C-HE-24 §6 reservation arc ids on gate rows
+    (two contracts pull arc_id two ways)
+  pr: 'PR pending (u-he-47 codex r5/r7)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-47: since U-HE-34 the merge-gate carriers pass the
+    reservation arc id on lens rows (required by the C-HE-24 §6 / N6 / phase joins),
+    but C-HE-23 §2 words the consistency join as "(pr, head_sha, verdict)" — pr is
+    recoverable only from the legacy pr-N arc shape, so the pre-U-HE-47 reducer
+    silently dropped every reservation-arc verdict (23 live MISSING-JSONL rows on
+    main, fixed at u-he-47 by re-keying the join to (arc_id-grouped emissions ×
+    (head12, lens, verdict) md join)). The residual tension: the implemented join
+    carries pr on the md side only, which deviates from the §2 wording; two
+    concurrent PRs at one head with identical lens/verdict/ts/round/count could
+    cross-vouch (tamper-evidence is explicitly out of scope per C-HE-23 §2 drop of
+    hash-chaining). Class 3 informational — route a wording reconciliation to the
+    spec at the next C-HE-23 touch.'
+  close_out: 'OPEN — closure = a C-HE-23 §2 change-note reconciling the join wording
+    with reservation-arc rows (or an envelope-level pr carrier decided at
+    design-phase); until then the u-he-47 join + tests are the operative shape.'
+  council: 'NO — contract-wording reconciliation on one spec section; no cross-axis tension.'
+  heading: '### B-220 · C-HE-23 §2 pr-join wording vs reservation arc ids *(surfaced
+    by codex r5/r7 on u-he-47, 2026-08-27; REGISTERED)*'
+- id: B-221
+  title: >-
+    merge-gate-adjudicate actor is absorber-pinned but not runner-bound (shared
+    guard has no venue signal)
+  pr: 'PR pending (u-he-47 codex r6/r7)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-47: tools/hooks/permission-guard.sh is registered for
+    BOTH runners (.codex/hooks.json invokes the same script), so the adjudicate
+    exact-shape can pin the actor to the absorber identity SET
+    (claude_absorber|codex_absorber) but cannot bind WHICH runner is invoking —
+    either loop could claim the other runner''s absorber identity in
+    disposition_actor (false WHO attribution; auditable on the append-only log,
+    actor != producer still write-time enforced). r6''s claude_absorber-only pin
+    was reverted at r7 as a falsified-premise fix (it broke documented Codex
+    absorption). Closure needs a venue signal the hook receives (env/manifest
+    distinguishing the invoking runner) — a guard feature, not an adjudication
+    change.'
+  close_out: 'OPEN — closure = a runner-identity signal delivered to the shared
+    guard (or per-runner guard entrypoints) + the actor pin keyed on it, with
+    witnesses on both runners.'
+  council: 'NO — guard venue-signal feature; single-surface, no cross-axis tension.'
+  heading: '### B-221 · adjudicate actor not runner-bound in the shared guard *(surfaced
+    by codex r6/r7 on u-he-47, 2026-08-27; REGISTERED)*'
+- id: B-222
+  title: >-
+    holder-check-to-append window on adjudication (reservation store and gate log
+    share no lock)
+  pr: 'PR pending (u-he-47 codex r6/r7)'
+  status: registered_finding
+  summary: 'SURFACED on u-he-47 and HELD-AS-BOUNDED after two review rounds: the
+    holder authority check (arc_not_held_reason, run inside adjudicate immediately
+    before the append) and the gate-log append are not one atomic step — the two
+    stores have no common lock, so a holder transfer or terminal transition can
+    interleave. Held rationale, stated in code: a §6 holder transfer is dead-claim
+    recovery of a crashed/idle lane (operator-adjacent, not a concurrent
+    adversary), and the transfer changes no field of the adjudication row, so a
+    lost race lands a row byte-identical to the one the pre-transfer holder was
+    authorized to write. Closing atomically would require a cross-store lock
+    neither surface owns — a design-phase decision, not an in-arc hardening layer
+    (the r6/r7 re-flag loop is the recorded non-convergent arms-race shape).'
+  close_out: 'OPEN — closure = a design-phase call: accept-as-bounded (document in
+    C-HE-24 §5) or introduce a common coordination point for
+    reservation-authorized log writes.'
+  council: 'NO — held-as-bounded residual; closure is a design-phase accept-or-lock call.'
+  heading: '### B-222 · holder-check-to-append window on adjudication *(surfaced
+    by codex r6/r7 on u-he-47, 2026-08-27; REGISTERED)*'

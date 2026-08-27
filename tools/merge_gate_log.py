@@ -541,36 +541,14 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
 
 
 def _pr_of(row: dict) -> int | None:
-    """The PR an orphan emission belongs to: from a `pr-N` arc id directly, else from the
-    arc's reservation record (`pr` is back-filled by ship-pr). None = genuinely unknown
-    (a reservation-arc crash before any PR existed) — the caller reports it loudly and
-    leaves the orphan standing rather than inventing a number."""
+    """The PR an orphan emission belongs to — from a `pr-N` arc id, or nothing. The md
+    line is the ONLY pr authority; the reservation store is deliberately NOT consulted
+    (codex r6 P2 -> r7 P1, settled by deletion: its `pr` is mutable across the arc's
+    life, so any reconstruction from it can relabel an old verdict — head-binding only
+    narrowed the window. A lost md line for a reservation-arc emission is REPORTED and
+    left standing by the caller, never re-derived from a second, mutable authority)."""
     m = _ARC_PR_RE.match(row["arc_id"])
-    if m:
-        return int(m.group(1))
-    try:
-        import reservations as rs
-    except ImportError:
-        return None
-    try:
-        res = rs.current(row["arc_id"])  # -> tuple[generation, payload] | None
-    except Exception as exc:  # unreadable store: unknown, reported by the caller
-        print(
-            f"merge-gate-log: reservation lookup failed for {row['arc_id']!r}: {exc}",
-            file=sys.stderr,
-        )
-        return None
-    if res is None:
-        return None
-    # The reservation's `pr` is mutable across the arc's life (codex r6 P2: a rebound
-    # payload would relabel an old verdict under a new PR). It is trusted ONLY when the
-    # reservation's recorded head equals the orphan row's own reviewed head — the
-    # emission's identity, not the store's current state. No match -> unrecoverable,
-    # reported loudly by the caller and left standing (fail-closed, never renumbered).
-    if res[1].get("head_sha") != row["head_sha"]:
-        return None
-    pr = res[1].get("pr")
-    return int(pr) if pr is not None else None
+    return int(m.group(1)) if m else None
 
 
 def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = None) -> int:

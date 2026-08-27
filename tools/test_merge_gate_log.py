@@ -1037,34 +1037,40 @@ def test_cli_adjudicate_refuses_an_arc_this_lane_does_not_hold(tmp_path, monkeyp
     assert "no reservation" in capsys.readouterr().err
 
 
-def test_reservation_arc_lens_rows_join_their_md_lines(tmp_path, monkeypatch):
+def test_reservation_arc_lens_rows_join_their_md_lines(tmp_path):
     # r5 P1 (the live 23-missing-siblings defect): a lens row whose arc_id is the
-    # reservation id — the U-HE-34 carrier form — must join its md line, and reconcile
-    # must recover the PR from the arc's reservation record.
+    # reservation id — the U-HE-34 carrier form — must join its md line.
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
+def test_reservation_arc_orphan_is_left_standing_and_the_store_is_never_consulted(
+    tmp_path, monkeypatch, capsys
+):
+    # r6 P2 -> r7 P1, settled by DELETION: the reservation's `pr` is mutable, so orphan
+    # PR recovery from it can relabel an old verdict. The md line is the only pr
+    # authority — a reservation-arc orphan is reported loudly and left standing, and
+    # the store is not even read (witness: a consulting call would raise).
     import reservations as rs
 
     md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
     _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
-    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
     md.write_text("")  # crash between the writes
-    monkeypatch.setattr(
-        rs, "current", lambda a: (1, {"pr": 42, "head_sha": H}) if a == "u-he-99" else None
-    )
-    assert mgl.reconcile_orphans(md, jl) == 1
-    assert mgl.read_md_rows(md)[0]["pr"] == 42
-    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
 
+    def _boom(_a):
+        raise AssertionError("reconcile must not consult the reservation store")
 
-def test_orphan_with_unrecoverable_pr_is_left_standing_loudly(tmp_path, monkeypatch, capsys):
-    import reservations as rs
-
-    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
-    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
-    md.write_text("")
-    monkeypatch.setattr(rs, "current", lambda a: None)  # no reservation, pr unknown
+    monkeypatch.setattr(rs, "current", _boom)
     assert mgl.reconcile_orphans(md, jl) == 0
     assert "no recoverable PR" in capsys.readouterr().err
     assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1  # still visible, never lost
+    # a pr-N-arc orphan alongside it still reconciles from its own arc id
+    _emit(tmp_path, pr=7, md=md, jl=jl)
+    md_lines = md.read_text()
+    md.write_text("\n".join(ln for ln in md_lines.splitlines() if "#7" not in ln) + "\n")
+    assert mgl.reconcile_orphans(md, jl) == 1
+    assert any(r["pr"] == 7 for r in mgl.read_md_rows(md))
 
 
 def test_orphan_pr_recovery_is_bound_to_the_emissions_own_head(tmp_path, monkeypatch, capsys):
