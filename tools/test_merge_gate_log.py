@@ -1098,3 +1098,46 @@ def test_orphan_pr_recovery_is_bound_to_the_emissions_own_head(tmp_path, monkeyp
     assert mgl.reconcile_orphans(md, jl) == 0
     assert "no recoverable PR" in capsys.readouterr().err
     assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1
+
+
+def test_cli_emit_recovers_a_reservation_arc_orphan_via_the_real_entry_point(
+    tmp_path, monkeypatch, capsys
+):
+    # merge-gate witness lens on PR #1467: the arc/pr/head recovery triple is wired in
+    # main()'s emit branch — this drives it through mgl.main, so reverting the call site
+    # to a bare reconcile_orphans() reds here (every other recovery test calls the
+    # function directly and cannot see the wiring).
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS, cfg_hash="cfg")
+    _emit(tmp_path, pr=42, head=b["head_sha"], md=md, jl=jl, arc_id="u-he-99")
+    md.write_text("")  # crash between the writes: a reservation-arc orphan at this head
+    f = tmp_path / "lens.txt"
+    f.write_text(_lens_output(b, "APPROVE"))
+    rc = mgl.main(
+        [
+            "emit",
+            "--pr",
+            "42",
+            "--arc-id",
+            "u-he-99",
+            "--lens",
+            LENS,
+            "--verdict-json",
+            str(f),
+            "--base",
+            "HEAD",
+            "--lane-id",
+            "h",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0 and "reconciled 1 orphan md row(s)" in out
+    assert [r["pr"] for r in mgl.read_md_rows(md)].count(42) == 2  # recovered + new emission
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
+def test_arc_not_held_reason_without_reservations_substrate_refuses(monkeypatch):
+    monkeypatch.setitem(sys.modules, "reservations", None)  # import raises ImportError
+    assert "no reservations substrate" in (mgl.arc_not_held_reason("u-x") or "")
