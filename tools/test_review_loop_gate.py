@@ -1024,7 +1024,10 @@ def recipe_env(tmp_path: Path):
         '    case "$REC_MODE" in\n'
         "      refuse) echo 'review-launch: GATE_REFUSED (TEST)' >&2; exit 3 ;;\n"
         "      empty) exit 0 ;;\n"
-        '      allow) shift; echo "$2" ;;\n'  # launch --log <log> --base <base> -> echo <log>
+        # allow: echo a MINTED name distinguishable from the raw --log value, as the
+        # real verb always does — witness-lens r2: an echo of the input cannot
+        # discriminate `publish "$dest"` from `publish "{{log}}"`
+        '      allow) shift; echo "${2%.log}-a1.log" ;;\n'
         "    esac ;;\n"
         "  tools/codex_review.py)\n"
         '    touch "$REC_MARKER"; printf "codex-review: BLOCK\\n"; exit 1 ;;\n'
@@ -1071,7 +1074,10 @@ def test_recipe_execution_allowed_pipes_wrapper_through_real_publisher(recipe_en
     done = run("allow")
     assert done.returncode == 1  # the stub wrapper's BLOCK exit survives PIPESTATUS folding
     assert (tmp / "wrapper-ran").exists()
-    assert (repo / ".harness/tmp/x-rounds/r1.log").read_text() == "codex-review: BLOCK\n"
+    # the publish lands at the MINTED destination, never the caller's raw name —
+    # execution-discriminates `publish "$dest"` from `publish "{{log}}"` (lens r2)
+    assert (repo / ".harness/tmp/x-rounds/r1-a1.log").read_text() == "codex-review: BLOCK\n"
+    assert not (repo / ".harness/tmp/x-rounds/r1.log").exists()
 
 
 def test_logged_recipe_evaluates_admission_before_launch():
