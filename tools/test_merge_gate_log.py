@@ -1008,7 +1008,7 @@ def test_arc_not_held_reason_binds_to_reservation_holder_state(tmp_path, monkeyp
         "u-merged": {"state": "merged", "lane_id": "lane-A"},
         "u-theirs": {"state": "open", "lane_id": "lane-B"},
     }
-    monkeypatch.setattr(rs, "current", lambda a: heads.get(a))
+    monkeypatch.setattr(rs, "current", lambda a: (1, heads[a]) if a in heads else None)
     assert mgl.arc_not_held_reason("u-held") is None
     assert mgl.arc_not_held_reason("u-pending") is None
     assert "terminal" in (mgl.arc_not_held_reason("u-merged") or "")
@@ -1038,7 +1038,7 @@ def test_reservation_arc_lens_rows_join_their_md_lines(tmp_path, monkeypatch):
     _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
     md.write_text("")  # crash between the writes
-    monkeypatch.setattr(rs, "current", lambda a: {"pr": 42} if a == "u-he-99" else None)
+    monkeypatch.setattr(rs, "current", lambda a: (1, {"pr": 42}) if a == "u-he-99" else None)
     assert mgl.reconcile_orphans(md, jl) == 1
     assert mgl.read_md_rows(md)[0]["pr"] == 42
     assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}

@@ -354,11 +354,12 @@ def arc_not_held_reason(arc_id: str) -> str | None:
     except OSError as exc:
         return f"lane identity unreadable ({exc}): not a lane venue"
     try:
-        head = rs.current(arc_id)
+        res = rs.current(arc_id)  # -> tuple[generation, payload] | None
     except Exception as exc:
         return f"reservation store unreadable ({exc})"
-    if head is None:
+    if res is None:
         return f"arc {arc_id!r} has no reservation"
+    head = res[1]
     if head.get("state") not in ("pending", "open"):
         return f"arc {arc_id!r} reservation is terminal ({head.get('state')!r})"
     if head.get("lane_id") != lane:
@@ -541,14 +542,14 @@ def _pr_of(row: dict) -> int | None:
     except ImportError:
         return None
     try:
-        head = rs.current(row["arc_id"])
+        res = rs.current(row["arc_id"])  # -> tuple[generation, payload] | None
     except Exception as exc:  # unreadable store: unknown, reported by the caller
         print(
             f"merge-gate-log: reservation lookup failed for {row['arc_id']!r}: {exc}",
             file=sys.stderr,
         )
         return None
-    pr = head.get("pr") if head else None
+    pr = res[1].get("pr") if res is not None else None
     return int(pr) if pr is not None else None
 
 
