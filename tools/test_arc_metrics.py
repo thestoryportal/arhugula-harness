@@ -631,12 +631,31 @@ def test_surviving_prefix_is_refused_when_the_reservation_recorded_more_rounds(
         levers=None,
         notes="",
     )
-    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: set(range(1, 11)))
+    # Authority through the REAL union: the reservation half is empty (the
+    # best-effort recorder failed), and the fail-closed gate log alone carries
+    # the recorded rounds -- dropping the gate-log half of _recorded_rounds
+    # makes both arms below misbehave (no abort; then no "complete").
+    monkeypatch.setattr(am, "_reservation_recorded_rounds", lambda arc_id: set())
+    gate = tmp_path / "gate.jsonl"
+    gate.write_text(
+        "".join(
+            json.dumps({"arc_id": "pr-1998", "round_n": n, "producer": "codex_review_wrapper"})
+            + "\n"
+            for n in range(1, 11)
+        )
+    )
+    monkeypatch.setattr(am, "GATE_LOG", gate)
     with pytest.raises(am.AbortError, match="no surviving log classifies"):
         am.queue_capture(am.argparse.Namespace(**ns))
 
     # Authority-confirmed tail (recorded == observed) passes as "complete".
-    monkeypatch.setattr(am, "_recorded_rounds", lambda arc_id: {1, 2, 3})
+    gate.write_text(
+        "".join(
+            json.dumps({"arc_id": "pr-1998", "round_n": n, "producer": "codex_review_wrapper"})
+            + "\n"
+            for n in (1, 2, 3)
+        )
+    )
     assert am.queue_capture(am.argparse.Namespace(**ns)) == 0
     snap = json.loads((qdir / "pr-1998.json").read_text())["round_snapshot"]
     assert snap["round_completeness"] == "complete"
@@ -750,18 +769,33 @@ def test_lane_cohort_medians_exclude_lower_bound_rows(monkeypatch, tmp_path: Pat
             "concurrent_lanes_at_open": 1,
             "round_completeness": "unknown",
         },
+        # A partial-suffix row is the OTHER lower-bound class: its true suffix
+        # gaps pool, but its round count must stay out of the exact lane
+        # median (a `!= "unknown"` filter would readmit it).
+        {
+            "arc_id": "sfx",
+            "review_rounds": 2,
+            "round_wall_s": [1200.0],
+            "levers_active": [],
+            "concurrent_lanes_at_open": 1,
+            "round_completeness": "partial-suffix",
+        },
     ]
     ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
     monkeypatch.setattr(am, "LEDGER", ledger)
     am.summary(am.argparse.Namespace())
     out = capsys.readouterr().out
     lanes = out[out.index("-- LANES [concurrent_lanes_at_open=1]") :]
-    assert "review rounds    4.5 (n=2" in lanes, "median of [4,5]; the unknown row is out"
-    assert "1 lower-bound row(s) excluded" in lanes
-    # 999999s = 16666.6m: the corrupt gap must appear nowhere -- not in the
-    # cohort round-wall line, not in the closing global variance spread.
+    assert "review rounds    4.5 (n=2" in lanes, (
+        "median of [4,5]; both the unknown AND the partial-suffix row are out"
+    )
+    assert "2 lower-bound row(s) excluded" in lanes
+    # 999999s = 16666.6m: the corrupt unknown gap must appear nowhere -- not in
+    # the cohort round-wall line, not in the closing global variance spread --
+    # while the partial-suffix row's 1200s gap DOES pool (a true measurement of
+    # its surviving suffix).
     assert "16666" not in out
-    assert "round wall clock 10.0m" in out, "only the complete row's 600s gap is pooled"
+    assert "15.0m (n=2, 10.0-20.0)" in out, "the partial-suffix row's true 1200s gap pools"
 
 
 # mutation-probe: pool arc_span_s and total_arc_wall_s into one `arcs` list
