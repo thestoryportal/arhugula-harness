@@ -1285,6 +1285,19 @@ def test_recipe_half_set_ids_warn_and_skip_emission(recipe_env):
     assert not (tmp / "queue" / "reservations").exists()
 
 
+def test_recipe_env_inherited_flag_cannot_skip_end(recipe_env):
+    # codex u-he-50 r5 P3: the skip flag is process-local state, initialized by the
+    # recipe — an environment-exported _verify_start_failed=1 must not mute the end
+    # emission after a successful start.
+    _repo, tmp, run = recipe_env
+    _seed_reservation(tmp / "queue")
+    done = run("allow", arc_env={"_verify_start_failed": "1", **_ARC_ENV})
+    assert done.returncode == 1
+    verify = _phases(tmp / "queue")["verify"]
+    assert set(verify) == {"start", "end"}  # the inherited flag was reset, end emitted
+    assert "WARN" not in done.stderr
+
+
 def test_recipe_inner_gate_refusal_records_no_verify_end(recipe_env):
     # codex u-he-50 r4: the wrapper's own in-process admit is the enforcer of record
     # and can refuse AFTER the launch precheck admitted — GATE_REFUSED is not a round

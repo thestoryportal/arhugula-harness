@@ -780,7 +780,14 @@ review-with-failover-logged log base='main':
     # is CLOSED by the retry's end (U-HE-49: the retry keeps the round name), so
     # that recorded round-1 span is an upper bound that includes the interruption
     # and can overlap the edit window -- a named measurement bound, never a
-    # gap-derived duration.
+    # gap-derived duration. Residual (codex r5, rejected-as-registered): a start
+    # written before the wrapper's IN-PROCESS admit refuses (GATE_REFUSED) is
+    # immutable and closes at the next real round -- that span includes the refused
+    # attempt's gap; the session layer cannot see admit(), so the structural fix
+    # (emission after admit, inside the process) is the B-218 wrapper-internal
+    # emitter. Emission failure never aborts the round: a measurement write must
+    # not gate the hard review path (absent span = legal null, C-HE-27 §3).
+    _verify_start_failed=0
     emit_verify() {
       if [ -z "${HARNESS_ARC_ID:-}" ] && [ -z "${HARNESS_LANE_ID:-}" ]; then return 0; fi
       if [ -z "${HARNESS_ARC_ID:-}" ] || [ -z "${HARNESS_LANE_ID:-}" ]; then
