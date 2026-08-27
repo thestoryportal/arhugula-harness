@@ -617,11 +617,12 @@ def launch(repo: Path, base: str, arc_id: str, requested: str) -> int:
         )
         print("review-launch: GATE_REFUSED (FORCED_ROUND_STALE) — launch not made", file=sys.stderr)
         return 3
-    if Path(requested).stem != f"r{expected}":
-        # canonical-stem equality, not just parsed-number equality (codex r5):
-        # aliases like `r01.log` / `round-1.log` / `r1-notes.log` parse to the
-        # right number but would mint a SECOND attempt family for one round,
-        # which arc_metrics cannot collapse
+    if Path(requested).name != f"r{expected}.log":
+        # canonical-BASENAME equality, not just parsed-number equality (codex
+        # r5/r6): aliases like `r01.log` / `round-1.log` / `r1-notes.log` parse
+        # to the right number but would mint a SECOND attempt family for one
+        # round, and `r1` / `r1.txt` would publish evidence the documented
+        # `r*.log` round-log glob omits
         print(
             f"review-launch: requested {Path(requested).name!r} is not the canonical "
             f"name for this launch — the next primary round is {expected}; "

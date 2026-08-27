@@ -973,10 +973,11 @@ def test_launch_refuses_stale_forced_round_env(launch_env: Path, monkeypatch, ca
 
 
 def test_launch_refuses_alias_round_names(launch_env: Path, capsys):
-    # codex r5: r01/round-1/r1-notes parse to the right NUMBER but would mint a
-    # second attempt family for one round — only the canonical r<N> stem launches
+    # codex r5/r6: r01/round-1/r1-notes parse to the right NUMBER but would mint
+    # a second attempt family for one round, and r1/r1.txt would publish outside
+    # the documented r*.log glob — only the canonical r<N>.log basename launches
     _seed_current_preflight(launch_env)
-    for alias in ("r01.log", "round-1.log", "r1-notes.log"):
+    for alias in ("r01.log", "round-1.log", "r1-notes.log", "r1", "r1.txt"):
         assert _launch(launch_env, f".harness/tmp/x-rounds/{alias}") == 3
         out, err = capsys.readouterr()
         assert out == "", alias
