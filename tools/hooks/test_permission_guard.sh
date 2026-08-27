@@ -394,7 +394,6 @@ for c in \
   "just merge-gate-binding merge-gate-concurrency" \
   "just merge-gate-binding merge-gate-spec-conformance main" \
   "just merge-gate-emit --pr 1397 --lens merge-gate-concurrency --verdict-json .harness/tmp/merge-gate-lens-concurrency.txt --base main" \
-  "just merge-gate-adjudicate --finding-id merge-gate-concurrency:0123456789abcdef0123456789abcdef01234567:0123456789ab:1 --disposition accepted --actor claude_absorber" \
   "just merge-gate-log-check" \
   "just merge-gate-landing-delta 0123456789abcdef0123456789abcdef01234567" \
   "just lanes-verify" \
@@ -408,9 +407,17 @@ for c in \
 done
 OUT=$(run_on "$(pl Bash "just merge-gate-emit --pr 1 --lens merge-gate-concurrency --verdict-json /tmp/outside.txt" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit reading a verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit auto-allowed: $OUT"
-# U-HE-47 codex r2 P1: adjudication mutes findings — only the exact absorption shape
-# (accepted|rejected, non-operator actor, 4-part finding-id, bounded arity) auto-allows.
+# U-HE-47 codex r2 P1 + r4 P1: adjudication mutes findings — only the exact absorption
+# shape (accepted|rejected, an absorber-identity actor, a review-producer 4-part
+# finding-id, bounded arity) AND the HARNESS_ARC_ID= prefix (the CLI's arc-binding
+# input) auto-allow; everything else stays operator-visible.
 _ADJ_FID="merge-gate-concurrency:0123456789abcdef0123456789abcdef01234567:0123456789ab:1"
+OUT=$(run_on "$(pl Bash "HARNESS_ARC_ID=u-he-47 just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition accepted --actor claude_absorber" '')")
+[ "$(dec "$OUT")" = "allow" ] && ok "prefixed exact-shape adjudicate → allow" || bad "prefixed exact-shape adjudicate not allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition accepted --actor claude_absorber" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "UNPREFIXED adjudicate (arc-unbound) → not auto-allowed" || bad "arc-unbound adjudication auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "HARNESS_ARC_ID=u-he-47 just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition accepted --actor third_party_reviewer" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "adjudicate with a non-absorber actor → not auto-allowed" || bad "non-absorber actor auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition suppressed --actor claude_absorber" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "adjudicate --disposition suppressed → not auto-allowed (operator-visible)" || bad "suppressed adjudication auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id $_ADJ_FID --disposition accepted --actor operator" '')")
@@ -425,7 +432,7 @@ OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id not-a-4-part-id
 # adjudicable headlessly — rejecting it would mute the detection downstream.
 OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id merge-door-lease-acquire:0123456789abcdef0123456789abcdef01234567:0123456789ab:1 --disposition rejected --actor claude_absorber" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "adjudicate targeting a deterministic-check producer → not auto-allowed" || bad "deterministic-producer adjudication auto-allowed: $OUT"
-OUT=$(run_on "$(pl Bash "just merge-gate-adjudicate --finding-id codex_review_wrapper:0123456789abcdef0123456789abcdef01234567:0123456789ab:1 --disposition accepted --actor codex_absorber" '')")
+OUT=$(run_on "$(pl Bash "HARNESS_ARC_ID=u-he-47 just merge-gate-adjudicate --finding-id codex_review_wrapper:0123456789abcdef0123456789abcdef01234567:0123456789ab:1 --disposition accepted --actor codex_absorber" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "adjudicate a codex-wrapper finding as codex_absorber → allow (review producer)" || bad "review-producer adjudication not allowed: $OUT"
 # B-215: the budget-extension verb is deliberately ask-gated — the loop must never
 # silently extend its own review budget; and an out-of-worktree answers path fails

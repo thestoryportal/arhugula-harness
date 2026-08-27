@@ -488,8 +488,10 @@ _adjudicate_exact_shape() {
     '^(codex_review_wrapper|gemini_review_wrapper|merge-gate-[a-z-]+):[A-Za-z0-9._-]+:[0-9a-f]{12}:[0-9]+$' \
     || return 1
   case "$6" in accepted|rejected) ;; *) return 1 ;; esac
-  printf '%s' "$8" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
-  case "$8" in [Oo][Pp][Ee][Rr][Aa][Tt][Oo][Rr]) return 1 ;; esac
+  # codex r4 P1: the actor is pinned to the two documented absorber identities —
+  # any other identity (operator, a third-party reviewer name, a forged lens) is
+  # an authority claim the loop may not make headlessly.
+  case "$8" in claude_absorber|codex_absorber) ;; *) return 1 ;; esac
 }
 
 _phase_exact_shape() {
@@ -779,10 +781,15 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+merge-gate-adjudicate([[:space:]]|$)' \
        && _adjudicate_exact_shape "$TRIM" \
+       && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*(HARNESS_LANE_ID=[A-Za-z0-9._-]+[[:space:]]+)?HARNESS_ARC_ID=[A-Za-z0-9._-]+([[:space:]]+HARNESS_LANE_ID=[A-Za-z0-9._-]+)?[[:space:]]' \
        && _bash_args_safe "$CMD"; then
       # U-HE-47 codex r2 P1: exact-shape only (see _adjudicate_exact_shape) — the
       # generic merge-gate-* alternation must NOT carry this verb: a free-argument
       # allow would let a loop agent suppress any finding or claim actor=operator.
+      # codex r4 P1: the headless form MUST carry the HARNESS_ARC_ID= prefix — the
+      # adjudicate CLI reads it and refuses a target row from ANY OTHER arc, so an
+      # auto-allowed invocation can never dispose a historical finding; the
+      # unprefixed (arc-unbound) form stays operator-visible at ask.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-with-failover-logged([[:space:]]|$)' \
        && _review_logged_shape "$TRIM" \

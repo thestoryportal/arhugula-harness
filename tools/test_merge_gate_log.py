@@ -28,6 +28,7 @@ def _isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "unused-gate-log.jsonl")
     monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "unused-log.md")
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
+    monkeypatch.delenv("HARNESS_ARC_ID", raising=False)  # adjudicate's arc-binding input
     monkeypatch.setattr(mgl, "config_hash", lambda: "cfg")  # no CLI override exists (R5 P2)
     monkeypatch.setattr(mgl, "LENS_SCRATCH", tmp_path)  # `emit` reads verdict files only here
 
@@ -837,8 +838,7 @@ def _codex_round(tmp_path: Path, arc_id: str, findings: list[dict], round_n: int
     )
 
 
-# mutation-probe(tools/merge_gate_log.py): drop the `attributor=attribute_lens_row` wiring in
-# `_emit_gate_row_locked` -> gate rows revert to the [B] F16 null-attribution state -> red
+# mutation-probe(tools/merge_gate_log.py): drop the attributor wiring -> F16 nulls -> red
 def test_gate_rows_after_two_codex_rounds_carry_non_null_attribution_on_every_row(tmp_path):
     _codex_round(tmp_path, "u-t-1", [{"severity": "P1", "location": "a.py:10", "message": "m"}], 1)
     _codex_round(tmp_path, "u-t-1", [{"severity": "P2", "location": "b.py:20", "message": "m"}], 2)
@@ -966,3 +966,26 @@ def test_cli_adjudicate_oserror_is_exit_2_not_1(tmp_path, monkeypatch, capsys):
     args = ["adjudicate", "--finding-id", "x:y:000000000000:1", "--disposition", "accepted"]
     assert mgl.main([*args, "--actor", "op"]) == 2
     assert "NOT ADJUDICATED" in capsys.readouterr().err
+
+
+def test_cli_adjudicate_refuses_a_cross_arc_target_when_arc_bound(tmp_path, monkeypatch, capsys):
+    # r4 P1: with HARNESS_ARC_ID set (the guard-required headless form), only the current
+    # arc's own findings are disposable; a historical finding from another arc is refused.
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "log.md")
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "log.jsonl")
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:00Z")
+    rows = mgl.emit_gate_row(
+        pr=9,
+        lens=LENS,
+        outcome=_outcome("BLOCK", [{"severity": "P1", "location": "c.py:30", "message": "m"}]),
+        arc_id="u-t-1",
+        lane_id="h-w-1",
+    )
+    fid = rows[0]["finding_id"]
+    monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    args = ["adjudicate", "--finding-id", fid, "--disposition", "accepted", "--actor", "op"]
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-other")
+    assert mgl.main(args) == 2
+    assert "cross-arc adjudication" in capsys.readouterr().err
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-t-1")
+    assert mgl.main(args) == 0

@@ -1299,3 +1299,30 @@ def test_project_mcp_context7_registration_is_locked_local() -> None:
     locked = lock["packages"]["node_modules/@upstash/context7-mcp"]
     assert locked["version"] == "4.0.3"
     assert locked["integrity"].startswith("sha512-")
+
+
+def test_merge_gate_carriers_wire_arc_id_and_adjudication() -> None:
+    """U-HE-47 codex r4 P2×2: the Codex carrier's emit line must pass the reservation
+    --arc-id (its omission defaults gate rows to pr-<N> and silently voids the X6d
+    same-arc unique-catch join), and BOTH carriers must instruct the absorption-step
+    adjudication with their own runner's absorber identity — reverting either
+    instruction must red this suite, not just leave the helper tests green."""
+    codex = (ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md").read_text(encoding="utf-8")
+    claude = (ROOT / ".claude" / "skills" / "merge-gate" / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id>" in codex
+    assert "--arc-id <arc-id>" in claude
+
+    assert "just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected" in codex
+    assert "--actor codex_absorber" in codex
+    assert "just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected" in claude
+    assert "--actor claude_absorber" in claude
+
+    preflight = (ROOT / ".claude" / "skills" / "defect-class-preflight" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    bridge = (ROOT / ".agents" / "skills" / "defect-class-preflight" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "just merge-gate-adjudicate --finding-id <id>" in preflight
+    assert "codex_absorber" in bridge  # the runner translation of <runner>_absorber

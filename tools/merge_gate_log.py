@@ -332,7 +332,11 @@ def _emit_gate_row_locked(
 
 
 def adjudicate(
-    finding_id: str, disposition: str, actor: str, jsonl_path: Path | None = None
+    finding_id: str,
+    disposition: str,
+    actor: str,
+    jsonl_path: Path | None = None,
+    expected_arc: str | None = None,
 ) -> dict:
     """C-HE-24 §5 (v1.6 X6d): append ONE `finding_adjudication` row for `finding_id` -- the
     absorption step's disposition write. The row copies the finding's immutable core verbatim
@@ -341,6 +345,10 @@ def adjudicate(
     last row keeps the emit-time attribution. Every §5 invariant -- actor ≠ producer, strictly
     later ts, finding-rows-only, no-write-after-adjudication -- is enforced at the single
     write-time checkpoint (`finding_record.validate` / `_check_against_prior_rows`), not here.
+    `expected_arc` is the arc-binding authority half (codex r4 P1): when given, a target
+    row from any OTHER arc is refused — the CLI passes `HARNESS_ARC_ID`, so the guard's
+    auto-allowed headless form can only dispose the current arc's own findings; a
+    cross-arc adjudication requires the operator venue (no env, ask-gated command).
     Raises `GateLogError` for an unknown finding_id; a `RecordError` propagates from the
     append (never swallowed)."""
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
@@ -348,6 +356,11 @@ def adjudicate(
     if not prior:
         raise GateLogError(f"no row with finding_id {finding_id!r} on {jsonl_path}")
     base = prior[0]  # core-immutable fields are identical across the lineage
+    if expected_arc is not None and base["arc_id"] != expected_arc:
+        raise GateLogError(
+            f"finding {finding_id!r} belongs to arc {base['arc_id']!r}, not the current "
+            f"arc {expected_arc!r} — cross-arc adjudication is an operator action"
+        )
     row = {
         **base,
         "record_kind": "finding_adjudication",
@@ -695,7 +708,12 @@ def main(argv: list[str] | None = None) -> int:
         return rw.exit_code(outcome)
     if args.cmd == "adjudicate":
         try:
-            row = adjudicate(args.finding_id, args.disposition, args.actor)
+            row = adjudicate(
+                args.finding_id,
+                args.disposition,
+                args.actor,
+                expected_arc=os.environ.get("HARNESS_ARC_ID"),
+            )
         except (GateLogError, fr.RecordError) as exc:
             print(f"merge-gate-log: NOT ADJUDICATED ({exc})", file=sys.stderr)
             return 2
