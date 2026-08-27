@@ -331,6 +331,41 @@ def _emit_gate_row_locked(
     return rows
 
 
+#: The lane's persisted identity (lane-init's single-writer file, U-HE-31) — the
+#: holder-binding authority for headless adjudication, read from DISK, never from env.
+LANE_ID_FILE = REPO / ".harness" / ".lane-id"
+
+
+def arc_not_held_reason(arc_id: str) -> str | None:
+    """The holder-state authority half of headless adjudication (codex r5 P1: the
+    HARNESS_ARC_ID prefix is caller-chosen text, not authority — the record_phase pattern
+    binds the claim to reservation state instead). None = `arc_id` has a live
+    (pending/open) reservation HELD by this lane per the persisted `.harness/.lane-id`;
+    otherwise the refusal reason. Fail-closed: a missing reservations substrate, absent
+    lane file, unreadable store, terminal state, or another lane's hold all REFUSE — a
+    historical (merged/abandoned) arc is terminal, so its findings can never be disposed
+    through the auto-allowed venue."""
+    try:
+        import reservations as rs
+    except ImportError:
+        return "no reservations substrate: arc-bound adjudication requires it"
+    try:
+        lane = LANE_ID_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        return f"lane identity unreadable ({exc}): not a lane venue"
+    try:
+        head = rs.current(arc_id)
+    except Exception as exc:
+        return f"reservation store unreadable ({exc})"
+    if head is None:
+        return f"arc {arc_id!r} has no reservation"
+    if head.get("state") not in ("pending", "open"):
+        return f"arc {arc_id!r} reservation is terminal ({head.get('state')!r})"
+    if head.get("lane_id") != lane:
+        return f"arc {arc_id!r} is held by lane {head.get('lane_id')!r}, not this lane"
+    return None
+
+
 def adjudicate(
     finding_id: str,
     disposition: str,
@@ -396,14 +431,16 @@ def read_md_rows(md_path: Path | None = None) -> list[dict]:
 
 
 def _gate_rows(jsonl_path: Path) -> list[dict]:
-    """JSONL rows the reducer compares: lens verdict rows (finding / no_finding) on a `pr-N`
-    arc. Wrapper rows (codex/gemini) and unavailability markers are not gate verdicts."""
+    """JSONL rows the reducer compares: lens verdict rows (finding / no_finding). Wrapper rows
+    (codex/gemini) and unavailability markers are not gate verdicts. The arc_id's SHAPE is not
+    a filter (U-HE-47 codex r5 P1): since U-HE-34 the carriers pass the reservation arc id, so
+    a `pr-N`-only filter silently dropped every such verdict from the comparison and reported
+    its md line as MISSING-JSONL (23 live rows at the fix's head)."""
     return [
         r
         for r in fr.read_rows(jsonl_path)
         if r["record_kind"] in ("finding", "no_finding")
         and _LENS_RE.match(r["producer"])
-        and _ARC_PR_RE.match(r["arc_id"])
         and verdict_of(r) is not None
         # the join is ON head_sha (C-HE-23 §2): a row with no head has no sibling to compare
         # against, and a re-emitted `nohead` md line could never be re-parsed (gemini R1 P2)
@@ -411,21 +448,24 @@ def _gate_rows(jsonl_path: Path) -> list[dict]:
     ]
 
 
-def _key(row: dict) -> tuple[int, str, str, str]:
-    """The md-joinable key: `(pr, head12, lens, verdict)`."""
-    m = _ARC_PR_RE.match(row["arc_id"])
-    assert m is not None  # filtered by _gate_rows
-    return (int(m.group(1)), (row["head_sha"] or "")[:12], row["producer"], verdict_of(row) or "")
+def _key(row: dict) -> tuple[str, str, str]:
+    """The md-joinable key: `(head12, lens, verdict)`. `pr` is NOT in the key — the JSONL row
+    carries the reservation arc, not the PR (the md line is the pr authority; ts + finding
+    count + round disambiguate emissions at one key, and tamper-evidence is out of scope —
+    C-HE-23 §2 drops hash-chaining for append-only adjudication)."""
+    return ((row["head_sha"] or "")[:12], row["producer"], verdict_of(row) or "")
 
 
 def _emissions(jsonl_path: Path) -> dict[tuple, list[dict]]:
-    """Gate rows grouped per EMISSION -- `(pr, head12, lens, verdict, round_n)` -- each worth
-    exactly one md line. A BLOCK emission is several finding rows; an APPROVE one `no_finding`
-    row. Keyed with the round so a second run at the same head is its own emission (codex R2
-    P2: first-row-per-key dedupe lost every later round)."""
+    """Gate rows grouped per EMISSION -- `(arc_id, head12, lens, verdict, round_n)` -- each
+    worth exactly one md line. A BLOCK emission is several finding rows; an APPROVE one
+    `no_finding` row. Keyed with the round so a second run at the same head is its own
+    emission (codex R2 P2: first-row-per-key dedupe lost every later round), and with the
+    ARC so two arcs gating one head at the same round stay distinct emissions (codex R4 P2,
+    re-keyed from pr to arc_id at U-HE-47 r5 -- the arc is on every row; the pr is not)."""
     out: dict[tuple, list[dict]] = {}
     for r in _gate_rows(jsonl_path):
-        out.setdefault((*_key(r), r["round_n"]), []).append(r)
+        out.setdefault((r["arc_id"], *_key(r), r["round_n"]), []).append(r)
     return out
 
 
@@ -444,10 +484,12 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     # EVERY structured md line is compared -- no time window (codex R3 P1: with zero surviving
     # emissions a window filtered every md row out, so a deleted machine log passed). Only
     # this module writes the structured shape; the legacy narrative rows never match it.
-    md_by_key: dict[tuple, list[tuple[str, int, int]]] = {}
+    # keyed WITHOUT pr (codex r5 P1): the JSONL side carries the reservation arc, not the PR,
+    # so pr lives only on the md line — it rides along in the value for reporting.
+    md_by_key: dict[tuple, list[tuple[str, int, int, int]]] = {}
     for r in read_md_rows(md_path):
-        k = (r["pr"], r["head_sha"], r["lens"], r["verdict"])
-        md_by_key.setdefault(k, []).append((r["ts"], r["n_findings"], r["round_n"]))
+        k = (r["head_sha"], r["lens"], r["verdict"])
+        md_by_key.setdefault(k, []).append((r["ts"], r["n_findings"], r["round_n"], r["pr"]))
     # a warn vouches for ONE emission: same head, same lens, same round (codex R2 P2 -- keyed
     # without the round, a round-1 md failure would hide a round-2 crash between the writes)
     warned = {
@@ -463,31 +505,59 @@ def consistency_report(md_path: Path | None = None, jsonl_path: Path | None = No
     # `reconcile_orphans` re-emits with that same ts)
     em_by_key: dict[tuple, list[tuple[str, int, int, dict]]] = {}
     for k, rows in sorted(emissions.items(), key=lambda kv: kv[0][4]):
-        # the warn vouches for ONE emission: same arc (pr), head, lens AND round (codex R2/R4
-        # P2 -- two PRs at one head+lens both have a round 1)
-        if (rows[0]["arc_id"], rows[0]["head_sha"], rows[0]["producer"], k[4]) in warned:
+        # the warn vouches for ONE emission: same arc, head, lens AND round (codex R2/R4
+        # P2 -- two arcs at one head+lens both have a round 1)
+        if (k[0], rows[0]["head_sha"], rows[0]["producer"], k[4]) in warned:
             continue
         n_findings = sum(1 for x in rows if x["record_kind"] == "finding")
-        em_by_key.setdefault(k[:4], []).append((rows[0]["ts"], n_findings, k[4], rows[0]))
+        em_by_key.setdefault(k[1:4], []).append((rows[0]["ts"], n_findings, k[4], rows[0]))
     missing: list[tuple] = []
     orphan: list[dict] = []
     for k in sorted(set(md_by_key) | set(em_by_key)):
         ems = list(em_by_key.get(k, []))
-        for ts, n, rn in sorted(md_by_key.get(k, [])):
+        for ts, n, rn, pr in sorted(md_by_key.get(k, [])):
             match = next(
                 (i for i, (ets, c, er, _) in enumerate(ems) if (ets, c, er) == (ts, n, rn)), None
             )
             if match is None:
-                missing.append((*k, ts, n, rn))  # an md line with no emission of that identity
+                # an md line with no emission of that identity; pr reported from the md side
+                missing.append((pr, *k, ts, n, rn))
             else:
                 ems.pop(match)
         orphan.extend(row for _, _, _, row in ems)  # emissions left without an md line
     return {"missing_jsonl": missing, "orphan_jsonl": orphan}
 
 
+def _pr_of(row: dict) -> int | None:
+    """The PR an orphan emission belongs to: from a `pr-N` arc id directly, else from the
+    arc's reservation record (`pr` is back-filled by ship-pr). None = genuinely unknown
+    (a reservation-arc crash before any PR existed) — the caller reports it loudly and
+    leaves the orphan standing rather than inventing a number."""
+    m = _ARC_PR_RE.match(row["arc_id"])
+    if m:
+        return int(m.group(1))
+    try:
+        import reservations as rs
+    except ImportError:
+        return None
+    try:
+        head = rs.current(row["arc_id"])
+    except Exception as exc:  # unreadable store: unknown, reported by the caller
+        print(
+            f"merge-gate-log: reservation lookup failed for {row['arc_id']!r}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+    pr = head.get("pr") if head else None
+    return int(pr) if pr is not None else None
+
+
 def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = None) -> int:
     """Re-emit the markdown line for every orphan emission (next gate run, C-HE-23 §2).
-    Touches the md file only when there is something to write."""
+    Touches the md file only when there is something to write. An orphan whose PR cannot
+    be recovered (codex r5 P1: reservation-arc rows carry no pr) is reported loudly and
+    left standing — it re-surfaces on every run until reconcilable, never silently
+    re-numbered."""
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
 
@@ -496,16 +566,26 @@ def reconcile_orphans(md_path: Path | None = None, jsonl_path: Path | None = Non
         if not orphans:
             return 0
         emissions = _emissions(jsonl_path)
+        written = 0
         with md_path.open("a", encoding="utf-8") as fh:
             for r in orphans:
+                pr = _pr_of(r)
+                if pr is None:
+                    print(
+                        f"merge-gate-log: orphan for arc {r['arc_id']!r} round {r['round_n']} "
+                        "has no recoverable PR; left standing",
+                        file=sys.stderr,
+                    )
+                    continue
                 k = _key(r)
                 n_findings = sum(
-                    1 for x in emissions[(*k, r["round_n"])] if x["record_kind"] == "finding"
+                    1
+                    for x in emissions[(r["arc_id"], *k, r["round_n"])]
+                    if x["record_kind"] == "finding"
                 )
-                fh.write(
-                    _md_line(r["ts"], k[0], r["head_sha"], k[2], k[3], n_findings, r["round_n"])
-                )
-        return len(orphans)
+                fh.write(_md_line(r["ts"], pr, r["head_sha"], k[1], k[2], n_findings, r["round_n"]))
+                written += 1
+        return written
 
     # under the same lock emission holds: an in-flight emitter's JSONL-but-not-yet-md state
     # is never observable here (codex R4 P2)
@@ -707,12 +787,20 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return rw.exit_code(outcome)
     if args.cmd == "adjudicate":
+        expected_arc = os.environ.get("HARNESS_ARC_ID")
+        if expected_arc is not None:
+            # the guard-required headless form: the env names an arc, and that claim is
+            # bound to reservation HOLDER state, not to the caller's text (codex r5 P1)
+            reason = arc_not_held_reason(expected_arc)
+            if reason is not None:
+                print(f"merge-gate-log: NOT ADJUDICATED ({reason})", file=sys.stderr)
+                return 2
         try:
             row = adjudicate(
                 args.finding_id,
                 args.disposition,
                 args.actor,
-                expected_arc=os.environ.get("HARNESS_ARC_ID"),
+                expected_arc=expected_arc,
             )
         except (GateLogError, fr.RecordError) as exc:
             print(f"merge-gate-log: NOT ADJUDICATED ({exc})", file=sys.stderr)

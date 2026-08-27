@@ -88,9 +88,10 @@ agree with the block, exact-line match). Exit 0 = APPROVE recorded, 1 = BLOCK re
   against the delta. A broad code change invalidates all three approvals.
 - Absorption adjudication (C-HE-24 §5, U-HE-47): for each gate `finding` row absorbed
   (fix applied) or refuted, append its disposition —
-  `just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor codex_absorber`
-  (actor must differ from the lens producer; write-time enforced). The `finding_id` is on
-  the emitted JSONL row. Exit 2 = not recorded; re-run.
+  `HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor codex_absorber`
+  (the prefix is REQUIRED for the guard's auto-allow and holder-bound to this lane's
+  live reservation; actor must differ from the lens producer, write-time enforced).
+  The `finding_id` is on the emitted JSONL row. Exit 2 = not recorded; re-run.
 - Cap automatic fix/re-gate at ten rounds (operator decision, 2026-08-01). An eleventh
   substantive disagreement is a genuine decision point; surface all verdicts together
   rather than looping or choosing silently.

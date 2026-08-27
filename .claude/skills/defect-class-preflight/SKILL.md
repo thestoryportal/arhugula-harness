@@ -224,6 +224,24 @@ higher-scope teardown runs inside the CURRENT item's teardown phase (measured);
 `conftest` runtest hooks fire for items ANYWHERE in the run unless path-guarded; a
 function-scoped autouse fixture covers only the test body.
 
+### 11. New authority-bearing command surface (added U-HE-47; 5 findings in one arc)
+Fires the moment a diff introduces a NEW command, verb, or recipe whose effect can
+mute, dispose, suppress, or authorize anything (an adjudication, an exemption write,
+a gate override). Before committing, answer ALL FOUR — every U-HE-47 review round
+2–5 finding was one of these, discovered serially at a full round each:
+(a) **Guard venue**: how does the permission guard see it? A generic-prefix allow
+auto-approves every argument shape — an authority-bearing verb needs an exact-shape
+validator (arity-bounded, enum-pinned submodes, identity-pinned actors), with the
+dangerous submodes left at ask. (b) **Authority half**: the guard validates FORM
+only — what binds the CLAIM to real state? Caller-supplied text (an env prefix, a
+flag value) is not authority; bind to holder/reservation/store state the caller
+cannot choose (the record_phase pattern). (c) **Carrier parity**: every runner's
+carrier (.claude skill, .agents bridge/projection) must document the SAME invocation
+the guard actually allows — a bare documented form against a prefix-requiring guard
+strands headless at ask; identities parameterize per runner. (d) **Production-call
+witness**: a static test must pin the documented command shape in each carrier —
+helper-level tests stay green when the production instruction is reverted.
+
 ## After every review round — the class-sibling sweep (before the next invocation)
 
 A reviewer finding names an INSTANCE; the absorption owes the CLASS. Measured on the
@@ -239,12 +257,14 @@ BEFORE re-invoking the reviewer:
    commit; the reviewer should never meet the same class twice in one arc.
 3. Adjudicate each absorbed finding on the gate log (C-HE-24 §5, U-HE-47): for every
    finding row this round produced, once its fix is committed (or it is refuted with
-   grounds), append the disposition — `just merge-gate-adjudicate --finding-id <id>
-   --disposition accepted|rejected --actor <runner>_absorber` (`accepted` = the fix
-   was applied; `rejected` = refuted; the finding_id is on the round's emitted JSONL
-   rows). The actor is the RUNNER's own absorber identity — `claude_absorber` on the
-   Claude runner, `codex_absorber` on the Codex bridge — never the producer, never
-   `operator`. Without this row the finding stays disposition=null forever and N6 counts
+   grounds), append the disposition — `HARNESS_ARC_ID=<arc-id> just
+   merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor
+   <runner>_absorber` (`accepted` = the fix was applied; `rejected` = refuted; the
+   finding_id is on the round's emitted JSONL rows). The `HARNESS_ARC_ID=` prefix is
+   REQUIRED — the guard auto-allows only the prefixed form, and the CLI holder-binds
+   it to this lane's live reservation. The actor is the RUNNER's own absorber
+   identity — `claude_absorber` on the Claude runner, `codex_absorber` on the Codex
+   bridge — never the producer, never `operator`. Without this row the finding stays disposition=null forever and N6 counts
    nothing — the attest below records that you ANSWERED the finding, never that it
    was DISPOSED.
 4. If the class was absent/unfired in this file, repair the skill in that commit too

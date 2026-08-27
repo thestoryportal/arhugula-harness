@@ -212,7 +212,9 @@ def test_a_deleted_machine_log_reds_every_structured_md_row(tmp_path: Path):
     _emit(tmp_path, pr=4, md=md, jl=jl, lens="merge-gate-b")
     jl.unlink()
     rep = mgl.consistency_report(md, jl)
-    assert [k[0] for k in rep["missing_jsonl"]] == [3, 4] and not rep["orphan_jsonl"]
+    # ordering follows the (head, lens, verdict) join key since U-HE-47 r5; the contract
+    # is that BOTH rows red, not their order
+    assert sorted(k[0] for k in rep["missing_jsonl"]) == [3, 4] and not rep["orphan_jsonl"]
 
 
 def test_finding_count_is_part_of_the_sibling_match(tmp_path: Path):
@@ -983,9 +985,72 @@ def test_cli_adjudicate_refuses_a_cross_arc_target_when_arc_bound(tmp_path, monk
     )
     fid = rows[0]["finding_id"]
     monkeypatch.setattr(fr, "now_iso", lambda: "2026-08-27T10:00:07Z")
+    monkeypatch.setattr(mgl, "arc_not_held_reason", lambda a: None)  # holder half tested below
     args = ["adjudicate", "--finding-id", fid, "--disposition", "accepted", "--actor", "op"]
     monkeypatch.setenv("HARNESS_ARC_ID", "u-other")
     assert mgl.main(args) == 2
     assert "cross-arc adjudication" in capsys.readouterr().err
     monkeypatch.setenv("HARNESS_ARC_ID", "u-t-1")
     assert mgl.main(args) == 0
+
+
+def test_arc_not_held_reason_binds_to_reservation_holder_state(tmp_path, monkeypatch):
+    # r5 P1: the HARNESS_ARC_ID prefix is caller-chosen text; authority comes from the
+    # reservation store (live head, held by THIS lane's persisted id) — the record_phase
+    # pattern. Terminal (historical) arcs and other lanes' holds refuse.
+    import reservations as rs
+
+    monkeypatch.setattr(mgl, "LANE_ID_FILE", tmp_path / "lane-id")
+    (tmp_path / "lane-id").write_text("lane-A\n")
+    heads = {
+        "u-held": {"state": "open", "lane_id": "lane-A"},
+        "u-pending": {"state": "pending", "lane_id": "lane-A"},
+        "u-merged": {"state": "merged", "lane_id": "lane-A"},
+        "u-theirs": {"state": "open", "lane_id": "lane-B"},
+    }
+    monkeypatch.setattr(rs, "current", lambda a: heads.get(a))
+    assert mgl.arc_not_held_reason("u-held") is None
+    assert mgl.arc_not_held_reason("u-pending") is None
+    assert "terminal" in (mgl.arc_not_held_reason("u-merged") or "")
+    assert "not this lane" in (mgl.arc_not_held_reason("u-theirs") or "")
+    assert "no reservation" in (mgl.arc_not_held_reason("u-absent") or "")
+    (tmp_path / "lane-id").unlink()
+    assert "lane identity unreadable" in (mgl.arc_not_held_reason("u-held") or "")
+
+
+def test_cli_adjudicate_refuses_an_arc_this_lane_does_not_hold(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", tmp_path / "log.md")
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "log.jsonl")
+    monkeypatch.setattr(mgl, "arc_not_held_reason", lambda a: f"arc {a!r} has no reservation")
+    monkeypatch.setenv("HARNESS_ARC_ID", "u-hist")
+    args = ["adjudicate", "--finding-id", "x:y:000000000000:1", "--disposition", "accepted"]
+    assert mgl.main([*args, "--actor", "op"]) == 2
+    assert "no reservation" in capsys.readouterr().err
+
+
+def test_reservation_arc_lens_rows_join_their_md_lines(tmp_path, monkeypatch):
+    # r5 P1 (the live 23-missing-siblings defect): a lens row whose arc_id is the
+    # reservation id — the U-HE-34 carrier form — must join its md line, and reconcile
+    # must recover the PR from the arc's reservation record.
+    import reservations as rs
+
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+    md.write_text("")  # crash between the writes
+    monkeypatch.setattr(rs, "current", lambda a: {"pr": 42} if a == "u-he-99" else None)
+    assert mgl.reconcile_orphans(md, jl) == 1
+    assert mgl.read_md_rows(md)[0]["pr"] == 42
+    assert mgl.consistency_report(md, jl) == {"missing_jsonl": [], "orphan_jsonl": []}
+
+
+def test_orphan_with_unrecoverable_pr_is_left_standing_loudly(tmp_path, monkeypatch, capsys):
+    import reservations as rs
+
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    _emit(tmp_path, pr=42, md=md, jl=jl, arc_id="u-he-99")
+    md.write_text("")
+    monkeypatch.setattr(rs, "current", lambda a: None)  # no reservation, pr unknown
+    assert mgl.reconcile_orphans(md, jl) == 0
+    assert "no recoverable PR" in capsys.readouterr().err
+    assert len(mgl.consistency_report(md, jl)["orphan_jsonl"]) == 1  # still visible, never lost

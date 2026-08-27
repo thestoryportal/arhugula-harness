@@ -1313,9 +1313,15 @@ def test_merge_gate_carriers_wire_arc_id_and_adjudication() -> None:
     assert "just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id>" in codex
     assert "--arc-id <arc-id>" in claude
 
-    assert "just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected" in codex
+    # the documented command MUST carry the HARNESS_ARC_ID= prefix (r5 P2): the guard
+    # auto-allows only the prefixed form, so a bare instruction strands headless at ask
+    adjudicate_cmd = (
+        "HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate "
+        "--finding-id <id> --disposition accepted|rejected"
+    )
+    assert adjudicate_cmd in codex
     assert "--actor codex_absorber" in codex
-    assert "just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected" in claude
+    assert adjudicate_cmd in claude
     assert "--actor claude_absorber" in claude
 
     preflight = (ROOT / ".claude" / "skills" / "defect-class-preflight" / "SKILL.md").read_text(
@@ -1324,5 +1330,6 @@ def test_merge_gate_carriers_wire_arc_id_and_adjudication() -> None:
     bridge = (ROOT / ".agents" / "skills" / "defect-class-preflight" / "SKILL.md").read_text(
         encoding="utf-8"
     )
-    assert "just merge-gate-adjudicate --finding-id <id>" in preflight
+    assert "HARNESS_ARC_ID=<arc-id> just" in preflight
+    assert "merge-gate-adjudicate --finding-id <id>" in preflight
     assert "codex_absorber" in bridge  # the runner translation of <runner>_absorber

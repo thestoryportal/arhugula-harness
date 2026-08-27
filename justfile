@@ -350,8 +350,10 @@ merge-gate-emit *ARGS:
 
 # Absorption-step disposition write (C-HE-24 §5, U-HE-47): append ONE finding_adjudication
 # row. Exit 0 recorded / 2 NOT recorded (unknown finding_id, actor == producer, same-second
-# ts, or an already-adjudicated lineage violation).
-#   just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected|suppressed --actor <actor_id>
+# ts, an already-adjudicated lineage violation, or — with HARNESS_ARC_ID set — an arc this
+# lane's reservation does not hold / a target row from another arc). Headless venues MUST
+# use the prefixed form (the guard auto-allows only it, holder-bound):
+#   HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor <runner>_absorber
 merge-gate-adjudicate *ARGS:
     uv run python tools/merge_gate_log.py adjudicate "$@"
 
