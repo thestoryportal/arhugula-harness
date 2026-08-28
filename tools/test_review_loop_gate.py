@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -553,11 +554,16 @@ def test_refresh_classes_rows_match_the_findings_they_were_added_for(cls: str, e
 # still be refused: a flat OR of the same terms passes every one of them, which is the
 # state codex r3/r4 measured (class 13 mis-bucketed 33 of 64 rows, class 14 six of ten).
 _NEAR_MISSES = [
-    # class 13: command half only — no loop reachability, no guard
+    # class 13: command half only — names a NEW command but no loop reachability and no
+    # guard, so dropping the reach conjunct would let it through. This evidence is
+    # checked against the command conjunct by the invariant below: an earlier version
+    # cited a `justfile:` recipe and satisfied NEITHER conjunct once r9 narrowed the
+    # command terms to `runs_in|new recipe|new command`, which made this case dead and
+    # left the reach-conjunct-drop mutation untested (merge-gate witness lens, round 1).
     (
         "13 new command the loop must reach",
-        "the codex-review recipe in justfile:594 runs"
-        " _require-codex-subscription before the wrapper, so the check is ordered wrong",
+        "the new recipe writes its output file before validating the argument,"
+        " so a malformed call truncates it",
     ),
     # class 13: reach half only — no new command
     (
@@ -602,14 +608,37 @@ _NEAR_MISSES = [
         "12 quoted contract phrase not discharged",
         "the contract phrase names the wrong component",
     ),
-    # class 13: ANY recipe plus the word loop is co-occurrence, not a new command whose
-    # loop reachability is unwired — `just recipe` was dropped for this (codex r9 P2)
+    # class 13: guards the r9 removal of the `just recipe` alternative. As written this
+    # satisfies the reach conjunct only; re-adding `just recipe` to the command conjunct
+    # would make it satisfy BOTH, match, and red this case — which is the point.
     (
         "13 new command the loop must reach",
         "the return status from loop_log_structured is discarded by the just recipe and"
         " replaced with return 1",
     ),
 ]
+
+
+def test_near_miss_cases_each_satisfy_exactly_one_conjunct():
+    """A near miss discriminates AND from OR only if it satisfies exactly ONE conjunct.
+
+    Satisfying NEITHER is the silent failure: the case still passes, so it looks like
+    coverage, while the mutation it was written to catch goes undetected. That is not
+    hypothetical — when r9 narrowed class 13's command terms to
+    `runs_in|new recipe|new command`, a case citing a `justfile:` recipe stopped
+    satisfying either conjunct and went dead, and dropping the reach conjunct became
+    untestable (merge-gate witness lens, round 1). Checking the balance mechanically is
+    what keeps the near-miss table honest as the patterns keep narrowing.
+    """
+    mod = _preflight_module()
+    for cls, evidence in _NEAR_MISSES:
+        pattern = mod.CLASSES[cls]
+        if isinstance(pattern, str):
+            continue  # disjunction rows have no conjuncts to balance
+        satisfied = sum(bool(re.search(p, evidence, re.I)) for p in pattern)
+        assert satisfied == 1, (
+            f"{cls}: near miss satisfies {satisfied} conjunct(s), must be exactly 1 — {evidence!r}"
+        )
 
 
 @pytest.mark.parametrize(("cls", "evidence"), _NEAR_MISSES)
