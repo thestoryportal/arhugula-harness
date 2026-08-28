@@ -97,7 +97,16 @@ report "exit code read as verdict (class 12 — name the schema parse that decid
 report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*\bTimeoutExpired' 'except[^:]*\bOSError\b'
 # A count parsed straight off the CLI is an unvalidated budget one token from class 5:
 # name the contract value that bounds it (the reps token took four paid touches).
-report "argparse count without a contract-derived bound" 'add_argument[^)]*type=int'
+# Deliberately the bare charter shape, not `add_argument[^)]*type=int`. That scoping was
+# tried and REVERTED (codex r10 P2): `add_argument(` and `type=int` sit on different lines
+# in the ordinary multiline call — tools/mutation_probe.py:1601-1603 is one — so a
+# line-based grep scoped that way misses the common case entirely.
+# NOTE the direction, because it is the OPPOSITE of refresh-classes.py's: there, a false
+# match silently drops a row from new-class discovery, so that table prefers to MISS. Here
+# a miss means the defect ships, while a false hit costs exactly one named answer in the
+# preflight. This sweep therefore prefers to OVER-match. Same author, same arc, opposite
+# safe direction — the tool's failure mode decides, not a house style.
+report "argparse count without a contract-derived bound" 'type=int'
 # Class 13: a new allow branch in the permission guard. The paired witness is a case
 # in tools/hooks/test_permission_guard.sh — name it, or the wiring reverts green.
 report "new permission-guard allow branch (name its witness)" 'elif.*printf.*TRIM.*grep +-Eq'

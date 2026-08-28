@@ -439,6 +439,11 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
         "except (subprocess.TimeoutExpired, NotOSError):\n"
         "    handle()\n"
         'parser.add_argument("--reps", type=int, default=3)\n'
+        # the ordinary MULTILINE argparse call: `add_argument(` and `type=int` land on
+        # different lines, so a same-line-scoped pattern misses it (codex r10 P2)
+        "        ap.add_argument(\n"
+        '            "--budget",\n'
+        "            type=int,\n"
     )
     (repo / "planted_guard.sh").write_text(
         "    elif printf '%s' \"$TRIM\" | grep -Eq '^just[[:space:]]+new-recipe$' \\\n"
@@ -466,7 +471,11 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     # report()'s eight-hit cap, such false positives can push a real misuse out of the
     # report while the attestation still shows the label answered (codex r6 P2)
     assert "returncode != 0" not in verdict_block
-    assert "--reps" in block("argparse count without a contract-derived bound")
+    argparse_block = block("argparse count without a contract-derived bound")
+    assert "--reps" in argparse_block
+    # the multiline form must be caught too: scoping the pattern to the same line as
+    # `add_argument(` silently dropped every ordinary multiline call (codex r10 P2)
+    assert "type=int," in argparse_block
     assert "new-recipe" in block("new permission-guard allow branch (name its witness)")
     # Five planted arms, one per way the exclusion can be right or wrong. Only OSError
     # actually inside the except CLAUSE means "handled"; everything else is reported.

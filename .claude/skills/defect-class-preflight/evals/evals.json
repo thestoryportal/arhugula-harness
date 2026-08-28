@@ -242,7 +242,7 @@
    "id": 14,
    "eval_name": "loop-reachable-command-without-guard-wiring",
    "skill": "defect-class-preflight",
-   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. Review the proposed change described at .claude/skills/defect-class-preflight/evals/fixtures-usr01/loop_recipe/ARTIFACT.md. It is a complete description of one diff: a new justfile recipe, the verification-manifest row added for it, the permission-guard allow chain as it stands UNCHANGED on main, and the tests the diff adds. Perform a thorough pre-commit review. List every defect you find — cite the section, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files.",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. Review the proposed change described at .claude/skills/defect-class-preflight/evals/fixtures-usr01/loop_recipe/ARTIFACT.md. It is a complete description of one diff: a new justfile recipe, the verification-manifest row added for it, a SYNTHETIC illustration of the permission-guard allow chain (which this diff leaves unchanged), and the tests the diff adds. The guard excerpt is deliberately not a real file: judge it only on the one fact the fixture asserts about it. Perform a thorough pre-commit review. List every defect you find — cite the section, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files.",
    "expected_output": "review.md naming that the new recipe's manifest runs_in includes \"loop\" while the permission-guard allow chain gains no branch for it, so every headless/loop invocation stalls at an ask prompt; and that no test pins the documented command shape, so the missing wiring cannot go red",
    "files": [
     "fixtures-usr01/loop_recipe/ARTIFACT.md"
@@ -251,7 +251,7 @@
     "names the missing permission-guard wiring for the new recipe — passes only if the review connects runs_in \"loop\" (or headless/loop execution) to the unchanged allow chain; a generic 'add tests' or 'document the recipe' note does not pass",
     "makes the failure concrete: a loop/headless lane invoking the recipe stops at an ask prompt nobody is present to answer, rather than the recipe misbehaving",
     "observes that the added tests exercise the publisher helper directly and pin no invocation shape, so reverting the recipe wiring leaves them green",
-    "does NOT pad: the publisher helper's own three test cases are not flagged as defects in themselves"
+    "does NOT pad: the publisher helper's own three test cases are not flagged as defects in themselves, and no defect is reported against the synthetic guard excerpt itself"
    ]
   },
   {

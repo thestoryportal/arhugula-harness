@@ -14,17 +14,20 @@ round-log-publish ROUND:
 |---|---|---|---|---|---|
 | C-HE-27 | `just:round-log-publish` | phase1 | operator/loop | no | publishes the round log the metrics reader consumes |
 
-## 3. Permission-guard allow chain (`tools/hooks/permission-guard.sh`) — UNCHANGED by this diff
+## 3. Permission-guard allow chain — UNCHANGED by this diff
 
-The chain's tail, quoted as it stands on main:
+This section is a SYNTHETIC illustration of the guard's branch shape, not a quotation of
+any real file. Do not audit it as a snapshot of a real guard, and do not report defects in
+the branches shown: they stand in for whatever the guard contains. The only fact this
+fixture asserts about the guard is the one that matters here — **no branch, anywhere in
+the chain, mentions `round-log-publish`**, and this diff adds none.
 
 ```sh
-    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-with-failover-logged([[:space:]]|$)' \
+    # ... earlier branches, each pinning one verb's exact shape ...
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+some-existing-verb([[:space:]]|$)' \
       && [ "$LOOP_MODE" = "1" ]; then
       decision=allow
-    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+merge-gate-adjudicate([[:space:]]|$)' \
-      && [ "$LOOP_MODE" = "1" ]; then
-      decision=allow
+    # ... later branches, then the default ...
 ```
 
 ## 4. Tests added by this diff
