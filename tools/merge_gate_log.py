@@ -34,10 +34,11 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import finding_record as fr
@@ -622,37 +623,47 @@ def reconcile_orphans(
 LENS_SCRATCH = REPO / ".harness" / "tmp"
 
 
-def scratch_dir() -> Path:
-    """`LENS_SCRATCH`, refused when it is itself a symlink (codex u-sr-03 r1 P2).
+def open_scratch_dir() -> int:
+    """A descriptor for `LENS_SCRATCH`, refusing a symlink ATOMICALLY (codex r1 P2, r2 P2).
 
-    `O_NOFOLLOW` and `Path.resolve()` both guard the FINAL component. With `.harness/tmp`
-    pre-planted as a symlink, `binding` would publish into the external target and
-    `_read_text` would accept a lens file out of it -- the containment both paths claim
-    would be a containment neither has. ONE enforcer for the rule, so the two cannot drift
-    apart and a later caller inherits it for free.
+    Returns an fd rather than a path because the path-shaped version of this rule was
+    check-then-use: `is_symlink()` answered a question about the directory, and every later
+    `mkdir` / `os.open` / `os.replace` re-traversed the name, so another process could swap
+    `.harness/tmp` for a symlink in between and the auto-allowed recipe would publish outside
+    the repository. `O_DIRECTORY|O_NOFOLLOW` makes the check and the capture the same
+    syscall; every caller then works `dir_fd`-relative against the inode this opened, which
+    no later rename can repoint. ONE enforcer, so `binding` and `emit` cannot drift apart.
+
+    The caller owns the fd and must close it.
     """
-    if LENS_SCRATCH.is_symlink():
-        raise GateLogError(f"{LENS_SCRATCH} is a symlink -- refusing to read or publish there")
-    return LENS_SCRATCH
+    try:
+        return os.open(LENS_SCRATCH, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise GateLogError(f"{LENS_SCRATCH} is not a usable scratch directory: {exc}") from exc
 
 
-def binding_path(lens: str, head_sha: str) -> Path:
+def binding_path(lens: str, values: Mapping[str, str]) -> Path:
     """Where `binding` publishes one lens's six values (U-SR-03, charter WR-09).
 
     A prompt names this path so the orchestrator never handles a value: both round-3 lens
     corruptions were orchestrator TRANSCRIPTION errors -- a truncated `head_sha` and a
     spliced `base_sha` -- not lens errors ([B] F3).
 
-    The head is part of the NAME, not just the contents (codex r1 P1). Keyed on the lens
-    alone, the file is a mutable cell two runs at different heads share: a lens launched
-    against H1 could read values republished for H2 and copy them into its verdict, and
-    `emit` -- which recomputes against the current head -- would accept an H1 review as an
-    H2 one. That is the precise soundness hole the binding exists to close, so the path
-    carries the provenance and a stale file simply is not the file the prompt named.
-    `head_sha` comes from `lens_binding`, i.e. from `git rev-parse`, and the lens id has
-    already been matched against `_LENS_RE`, so neither component can carry a separator.
+    The name is CONTENT-ADDRESSED: a digest over all six values, so identical name implies
+    identical contents and the file is immutable by construction. Keyed on anything less,
+    it is a mutable cell that two invocations share -- a lens launched against one contract
+    can read values republished under another and copy them into its verdict, and `emit`,
+    which recomputes against the current state, accepts the mismatch (codex r1 P1 on the
+    lens-only key, r2 P1 on lens+head: `base_sha`, `diff_digest`, `config_hash` and
+    `prompt_version` all vary independently of the head, and `config_hash` changes whenever
+    a carrier is edited mid-arc, which this very arc does). Digesting the whole binding
+    closes every dimension at once instead of one per review round. The lens id stays in the
+    name for legibility only; `_LENS_RE` has already accepted it, so it carries no separator.
     """
-    return LENS_SCRATCH / f"merge-gate-binding-{lens}-{head_sha[:8]}.json"
+    digest = hashlib.sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return LENS_SCRATCH / f"merge-gate-binding-{lens}-{digest}.json"
 
 
 #: The only files a post-gate "log-only" commit may touch (C-HE-23 §2 sibling + human view).
@@ -697,17 +708,27 @@ def _read_text(arg: str) -> str:
     destination closes that, and the content is never echoed (see the VERDICT-line check)."""
     if arg == "-":
         return sys.stdin.read()
-    path = Path(arg)
-    resolved = path.resolve()
-    if (
-        path.is_symlink()
-        or not resolved.is_file()
-        or scratch_dir().resolve() not in resolved.parents
-    ):
-        raise GateLogError(
-            f"--verdict-json must be '-' or a regular file under {LENS_SCRATCH} (got {arg!r})"
-        )
-    return resolved.read_text(encoding="utf-8")
+    name = Path(arg).name
+    bad = GateLogError(
+        f"--verdict-json must be '-' or a regular file directly under {LENS_SCRATCH} (got {arg!r})"
+    )
+    # The documented shape is flat (`.harness/tmp/merge-gate-lens-<id>.txt` in both merge-gate
+    # carriers), so the read is `dir_fd`-relative to the captured scratch inode and a name
+    # carrying any separator is refused outright -- no traversal, and no re-walk of a path
+    # another process could repoint between the check and the open (codex R7 P2, r2 P2).
+    if not name or name != arg.rsplit("/", 1)[-1] or Path(arg).parent.name != LENS_SCRATCH.name:
+        raise bad
+    dfd = open_scratch_dir()
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+    except OSError as exc:
+        raise bad from exc
+    finally:
+        os.close(dfd)
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise bad
+        return stream.read().decode("utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -755,27 +776,33 @@ def main(argv: list[str] | None = None) -> int:
         # bind to nothing); tests patch `config_hash` itself.
         try:
             values = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
-            scratch_dir()  # refuses a symlinked .harness/tmp before anything is written
+            LENS_SCRATCH.mkdir(parents=True, exist_ok=True)
+            dfd = open_scratch_dir()
         except GateLogError as exc:
             print(f"merge-gate-log: {exc}", file=sys.stderr)
             return 2
         # [LAW:effects-at-boundaries] `lens_binding` computes; the write happens here, at the
         # CLI edge. The values are published to a FILE and stdout carries only its path
         # (charter WR-09): a value the orchestrator never sees is a value it cannot mistype.
-        out = binding_path(args.lens, values["head_sha"])
-        out.parent.mkdir(parents=True, exist_ok=True)
-        # Same-directory temp + `os.replace` -- this module's own publication idiom, not a
-        # new one. Two properties earn it here: a lens never reads a half-written binding,
-        # and `replace` overwrites the destination NAME, so a symlink pre-planted at this
-        # gitignored path (which an auto-allowed recipe writes) is replaced rather than
-        # followed -- the containment `emit` already applies to its `--verdict-json` sibling
-        # in the same directory. `O_EXCL|O_NOFOLLOW` extends it to the temp itself: a planted
-        # temp fails loudly instead of being written through.
-        tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
-        os.replace(tmp, out)
+        out = binding_path(args.lens, values)
+        # Everything below is relative to the descriptor opened above, never to the name:
+        # temp-then-`os.replace` so a lens never reads a half-written binding, `O_EXCL` so a
+        # pre-planted temp fails loudly instead of being written through, `O_NOFOLLOW` so
+        # neither component is a symlink, and `dir_fd=` so no step can be redirected by a
+        # rename of `.harness/tmp` after the check (codex r2 P2).
+        tmp_name = f"{out.name}.{os.getpid()}.tmp"
+        try:
+            fd = os.open(
+                tmp_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=dfd,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
+            os.replace(tmp_name, out.name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        finally:
+            os.close(dfd)
         print(out)
         return 0
     if args.cmd == "emit":

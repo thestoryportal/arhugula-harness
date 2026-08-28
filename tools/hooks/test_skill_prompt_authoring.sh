@@ -76,10 +76,20 @@ printf '%s' "$REF" | grep -q 'never denies' \
 # be transplanted (laws:prompt is a Claude-plugin skill). Its TRANSLATION is therefore the
 # only thing carrying the rule on that runner, and it is pinned here (codex r1 P2).
 CODEX_MG="$REPO/.agents/skills/merge-gate/SKILL.md"
-for needle in "canonical template" "is AUTHORING" "fresh Codex subagent"; do
+for needle in "canonical template" "is AUTHORING" "fresh Codex subagent" "Base case"; do
   grep -q "$needle" "$CODEX_MG" \
     && ok "Codex merge-gate carrier states: $needle" \
     || bad "Codex merge-gate carrier lost the authoring rule ($needle)"
+done
+
+# The carrier must name the templates the procedure ACTUALLY loads, and those files must
+# exist -- naming "the briefs in this file" made every normal launch a departure requiring
+# delegation, which is the opposite of what the rule intends (codex r2 P2).
+for lens in lens1-concurrency lens2-spec-conformance lens3-test-witness; do
+  [ -f "$REPO/.codex/notes/merge-gate-lenses/$lens.md" ] \
+    && grep -q "$lens" "$CODEX_MG" \
+    && ok "Codex carrier names its real template $lens.md" \
+    || bad "Codex carrier does not name the existing template $lens.md"
 done
 grep -q "laws:prompt" "$CODEX_MG" \
   && ok "Codex carrier names the Claude-side rule it translates" \

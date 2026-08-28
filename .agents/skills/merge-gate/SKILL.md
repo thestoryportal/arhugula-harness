@@ -73,13 +73,20 @@ NOT waived here, and the `agent-prompt-advisory` PreToolUse hook does not reach 
 these lenses launch through `codex exec`, not an `Agent` tool call, so this text is the only
 thing carrying the rule on the Codex side (codex u-sr-03 r1 P2).
 
-The translation: the three lens briefs in this file, plus the self-contained tail above,
-**are** the canonical template — instantiating them with this PR's literal values (PR number,
-branch, blast-radius list, binding-file path) is the sanctioned path. Departing from them —
-a re-worded specialty, an added lens, an extra instruction — is AUTHORING, and authoring goes
+The translation: the canonical templates are the lens files this procedure actually loads —
+`.codex/notes/merge-gate-lenses/lens1-concurrency.md`, `lens2-spec-conformance.md`, and
+`lens3-test-witness.md` — together with the self-contained tail above. Instantiating those
+with this PR's literal values (PR number, branch, blast-radius list, binding-file path) is
+the sanctioned path, and it is what a normal launch already does. Departing from them — a
+re-worded specialty, an added lens, an extra instruction — is AUTHORING, and authoring goes
 through a fresh Codex subagent whose brief is to write the prompt and return only the prompt,
 never through a prompt composed inline while mid-implementation. Both round-3 lens
 corruptions came from an orchestrator hand-assembling lens input mid-task.
+
+**Base case.** Launching that authoring subagent is itself an invocation, so without an
+exemption the rule would recurse forever. The base case is literal and needs no further
+delegation: `codex exec --ephemeral --sandbox read-only` with the brief `Author the subagent
+prompt described below; return only the finished prompt.` plus the task description.
 
 Before launching, publish each lens's binding with
 `just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`. It

@@ -2352,8 +2352,26 @@ def test_binding_publishes_by_file_and_the_recipe_routes_through_it():
     # (codex r1 P2 caught this pin naming `out.write_text`, which the class-1 fix had
     # already replaced -- a stale source pin is red in CI and green in `just codex-check`,
     # which does not run this file; only .github/workflows/ci.yml does.)
-    for token in ("os.O_EXCL", "os.O_NOFOLLOW", "os.replace(tmp, out)", "print(out)"):
+    # Every step is dir_fd-relative to the descriptor `open_scratch_dir()` captured, so no
+    # component can be repointed by a rename after the check (codex r2 P2), and the name is
+    # content-addressed so a republish under different values cannot land on it (r2 P1).
+    for token in (
+        "open_scratch_dir()",
+        "os.O_EXCL",
+        "os.O_NOFOLLOW",
+        "dir_fd=dfd",
+        "src_dir_fd=dfd, dst_dir_fd=dfd",
+        "print(out)",
+    ):
         assert token in dispatch, f"binding dispatch no longer contains {token}"
+    opener = src.split("def open_scratch_dir", 1)[1].split("\ndef ", 1)[0]
+    assert "os.O_DIRECTORY" in opener and "os.O_NOFOLLOW" in opener, (
+        "the scratch capture is no longer an atomic symlink-refusing directory open"
+    )
+    addressing = src.split("def binding_path", 1)[1].split("\ndef ", 1)[0]
+    assert "hashlib.sha256" in addressing and "sort_keys=True" in addressing, (
+        "the published name is no longer a digest of the whole binding"
+    )
     assert "json.dumps" not in dispatch.split("print(out)", 1)[1], (
         "something is printed after the path; hand-copying is back on the table"
     )
