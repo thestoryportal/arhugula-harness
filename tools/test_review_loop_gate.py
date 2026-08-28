@@ -9,6 +9,7 @@ review terminal per C-HE-16 §3 — no C-HE-24 row, no round outcome).
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
+from unittest import mock
 
 import pytest
 
@@ -1838,6 +1840,59 @@ _DRAIN_BUDGET_CALLS = frozenset(
 _ADMIT_RETURNS = [1, 1, 0]
 
 
+def _load_fixture(rel: str, mod_name: str):
+    """Import a fixture module FRESH — module-level state (`_LIVE`) must not leak.
+
+    Executing the fixtures is the terminal answer to a class that produced findings in
+    five straight rounds: every static pin is a PROXY for "this fixture still
+    misbehaves", and each proxy had a gap the reviewer found — a lock at the call site
+    rather than in the body (r6), a contract-correct guard making the planted one
+    unreachable (r6), `set_defaults` overriding the pinned default (r6), a comment
+    holding the old text (r5), a wrapper preserving the call set (r5). Running the code
+    asserts the property itself, so there is no proxy left to slip past. The eval
+    prompts forbid the REVIEWER from executing these files; that constrains the graded
+    agent, not this suite.
+    """
+    src = _repo_root() / EVALS_REL.parent / "fixtures-usr02" / rel
+    spec = importlib.util.spec_from_file_location(mod_name, src)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Bullet labels of the answers file, in order. The denial was pinned by substring until
+# codex r6 P2: moving both exact sentences into a quoted "previous incorrect answer"
+# section and adding a corrected operative answer left the substring pin green over a
+# file that no longer denies anything. Parsing the bullets pins which answer is
+# OPERATIVE, and the label list pins that no second Race answer was added beside it.
+_ANSWER_LABELS = [
+    "Race / TOCTOU / atomicity",
+    "Silent failure",
+    "Vacuous witness",
+    "Timeout / retry / budget arithmetic",
+    "Env-var mutation and restore",
+    "Subprocess boundary",
+    "Path / default resolution",
+]
+_RACE_ANSWER = (
+    "no new mechanism — this round only adds a skip to an existing loop, so there is "
+    "no new coordination surface to sweep."
+)
+
+
+def _answer_bullets() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for line in _fixture("absorption/sweep-answers-r5.md").splitlines():
+        match = re.match(r"- \*\*(.+?):\*\*\s*(.*)$", line)
+        if match:
+            out.append((match.group(1), match.group(2)))
+        elif out and line.startswith("  ") and line.strip():
+            label, text = out[-1]
+            out[-1] = (label, f"{text} {line.strip()}")
+    return out
+
+
 def _check_registry_race() -> None:
     """The planted check-then-set, pinned as EXACT AST rather than as source text.
 
@@ -1867,6 +1922,17 @@ def _check_registry_race() -> None:
         "claim()'s set is no longer the unguarded assignment the race needs"
     )
     assert _dump(claim.body[-1]) == _stmt("return True")
+    # The CALL SITE, not only the body (codex r6 P2): wrapping `_LIVE.claim(...)` in a
+    # lock inside drain_once removes the graded two-workers-can-claim race while every
+    # assertion above stays green. drain_once's shape is pinned exactly, so any
+    # synchronisation around the call adds a statement and reds.
+    drain_once = _one_function("absorption/round5_fix.py", "drain_once")
+    assert _body_shape(drain_once) == ["Assign", "For", "Return"], (
+        "drain_once changed shape; the claim call may now be synchronised"
+    )
+    loop = next(s for s in drain_once.body if isinstance(s, ast.For))
+    assert [type(s).__name__ for s in loop.body] == ["If", "Try"]
+    assert _dump(loop.body[0].test) == _expr("not _LIVE.claim(name, worker_id)")
 
 
 def _check_release_then_reclaim() -> None:
@@ -1888,12 +1954,28 @@ def _check_release_then_reclaim() -> None:
     assert _dump(release.body[-1]) == _stmt("self._live.pop(name, None)"), (
         "release() no longer removes the claim; the reclaim defect is gone"
     )
+    # BEHAVIOURAL: the registry forgets completed groups, so draining the same group
+    # twice appends it twice. Deterministic (no race needed) and immune to every
+    # syntactic dodge — this is the defect eval 16 demands, asserted directly.
+    mod = _load_fixture("absorption/round5_fix.py", "_usr02_round5_fix")
+    sink: list[str] = []
+    mod.drain_once(["a"], 1, sink)
+    mod.drain_once(["a"], 2, sink)
+    assert sink == ["a", "a"], (
+        "completed groups are now remembered; the release-then-reclaim defect is gone"
+    )
 
 
 def _check_answers_deny() -> None:
-    answers = _squash(_fixture("absorption/sweep-answers-r5.md"))
-    assert _squash(_DENIAL) in answers, "the answers no longer DENY a new mechanism"
-    assert _squash(_DENIAL_CONCLUSION) in answers
+    bullets = _answer_bullets()
+    assert [label for label, _ in bullets] == _ANSWER_LABELS, (
+        "the answers' bullet set changed; a second or replaced answer may now be operative"
+    )
+    race = dict(bullets)["Race / TOCTOU / atomicity"]
+    assert _squash(race) == _squash(_RACE_ANSWER), (
+        "the OPERATIVE race answer no longer denies a new mechanism"
+    )
+    assert _squash(_DENIAL_CONCLUSION) in _squash(_fixture("absorption/sweep-answers-r5.md"))
 
 
 def _guard_tests() -> list[str]:
@@ -1907,29 +1989,39 @@ def _guard_tests() -> list[str]:
     return [_dump(s.test) for s in _nodes(validate, ast.If)]
 
 
+def _admits(argv: list[str]) -> bool:
+    """Does the guard, RUN, admit `argv`? Collecting matching `ast.If` nodes proved
+    only that a bound was written (codex r6 P2): contract-correct guards followed by an
+    early `return None` leave the planted ones unreachable with every dump assertion
+    green. Running validate() proves the prohibited input is still ADMITTED."""
+    guard = _load_fixture("reps_guard.py", "_usr02_reps_guard")
+    return guard.validate(guard.build_parser().parse_args(argv)) is None
+
+
 def _check_reps_range() -> None:
-    assert _expr("not 1 <= args.reps <= 99") in _guard_tests(), (
-        "the executable reps bound is no longer the planted 1..99"
-    )
+    assert _expr("not 1 <= args.reps <= 99") in _guard_tests()
+    assert _admits(["--reps", "50"]), "reps=50 is no longer admitted; §3.2 breach gone"
 
 
 def _check_round_bound() -> None:
-    assert _expr("args.round is not None and args.round > 25") in _guard_tests(), (
-        "the executable round bound is no longer the planted 25"
-    )
+    assert _expr("args.round is not None and args.round > 25") in _guard_tests()
+    assert _admits(["--round", "20"]), "round=20 is no longer admitted; §3.1 breach gone"
 
 
 def _check_lane_bound() -> None:
-    assert _expr("args.lane_id is not None and len(args.lane_id) > 128") in _guard_tests(), (
-        "the executable lane-id bound is no longer the planted 128"
-    )
+    assert _expr("args.lane_id is not None and len(args.lane_id) > 128") in _guard_tests()
+    assert _admits(["--lane-id", "x" * 100]), "a 100-char lane id is no longer admitted"
 
 
 def _check_reps_default() -> None:
     parser = _one_function("reps_guard.py", "build_parser")
     calls = [_dump(c) for c in _nodes(parser, ast.Call)]
-    assert _expr('ap.add_argument("--reps", type=int, default=3)') in calls, (
-        "the planted --reps default is no longer 3, or is no longer executable"
+    assert _expr('ap.add_argument("--reps", type=int, default=3)') in calls
+    # the EFFECTIVE default (codex r6 P2): `ap.set_defaults(reps=1)` after the call
+    # fixes the graded defect while the pinned call remains in the AST
+    guard = _load_fixture("reps_guard.py", "_usr02_reps_guard")
+    assert guard.build_parser().parse_args([]).reps == 3, (
+        "the parser's effective --reps default is no longer the planted 3"
     )
 
 
@@ -1944,6 +2036,10 @@ def _check_refusal_code() -> None:
     ]
     assert returns == _ADMIT_RETURNS, (
         f"admit() returns {returns}; the planted §3.3 refusal-code breach is gone"
+    )
+    guard = _load_fixture("reps_guard.py", "_usr02_reps_guard")
+    assert guard.admit(["--reps", "50"]) == 1, (
+        "admit() no longer refuses with 1; §3.3 names 3, which is the graded breach"
     )
 
 
@@ -1981,6 +2077,15 @@ def _check_bare_hold() -> None:
     assert any(_dump(f.iter) == _expr("range(_budget())") for f in _nodes(drain, ast.For)), (
         "the budget no longer flows unbounded into range()"
     )
+    # BEHAVIOURAL fail-open proof, which no static pin could give: a budget of 0 drains
+    # NOTHING and raises NOTHING, so the caller reads success over an empty result.
+    # This is what eval 18 demands, and it is what kills the `{3: 3}[int(...)]` dodge —
+    # that variant fails closed with KeyError and would red here (codex r5 P2).
+    mod = _load_fixture("drain_budget.py", "_usr02_drain_budget")
+    with mock.patch.dict(os.environ, {"DRAIN_RETRY_BUDGET": "0"}):
+        assert mod.drain_with_retries(lambda _row: None, ["a"]) == [], (
+            "a zero budget no longer drains silently; the hold is no longer unvalidated"
+        )
 
 
 _PLANTED = (
@@ -2156,4 +2261,19 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     assert (
         "Order matters, and only one order is safe: probe committed and seen to fail "
         "closed, THEN the `suppressed` row." in squashed
+    )
+
+    # The guard venue (codex r6 P2): the SKILL implied the prefixed hold completes
+    # headlessly, but `_adjudicate_exact_shape` auto-allows only accepted|rejected and
+    # keeps `suppressed` operator-visible, so every prescribed hold stopped at an ask
+    # the prose did not mention. Pinned against the GUARD's own source rather than
+    # restated, so the two cannot drift apart: if the guard ever admits `suppressed`,
+    # this reds and the prose must be revisited — the direction that matters, since
+    # widening it would let an agent grant itself authority to mute findings.
+    assert "does not complete headlessly" in squashed
+    guard_src = (_repo_root() / "tools" / "hooks" / "permission-guard.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'case "$6" in accepted|rejected) ;; *) return 1 ;; esac' in guard_src, (
+        "the guard's disposition allowlist changed; the SKILL's headless claim must follow"
     )

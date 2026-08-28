@@ -407,6 +407,17 @@ BEFORE re-invoking the reviewer:
    You will want the other order, because the row is the cheap part and writing it
    while you have the finding_id in hand feels tidy. That tidiness is the whole
    defect: it muzzles the finding first and earns the right second.
+
+   **And the `suppressed` row does not complete headlessly — by design.** The
+   permission guard auto-allows only `accepted|rejected`; `suppressed` stays
+   operator-visible (`tools/hooks/permission-guard.sh` `_adjudicate_exact_shape`,
+   U-HE-47), because a disposition that MUTES a finding is authority an agent must
+   not grant itself. Do not read that ask as friction to route around, and do not
+   widen the guard to clear it: the ask IS C-HE-24 §5's third authority, the logged
+   operator override, and removing it would leave the suppression with no authority
+   at all. The practical consequence is the honest one — **holding costs more than
+   fixing**, so the loop's cheapest path stays: fix it, or route it, and hold only
+   what you can defend to a person.
 5. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
 6. When two consecutive rounds' findings target mechanisms YOUR absorption invented
