@@ -1934,9 +1934,23 @@ def _check_registry_race() -> None:
     record = (_repo_root() / ".harness" / "u-sr-02-eval-run-2026-08-28.md").read_text(
         encoding="utf-8"
     )
-    assert _RACE_FIXTURE_SHA256 in record, (
-        "the eval-run record does not name this digest; the graded evidence and the "
-        "fixture have come apart — re-grade eval 16 rather than syncing the strings"
+    # Anchored to the record's OWN table cell, keyed by the fixture path — not a
+    # whole-file substring. `in record` was the r4 draft and r5 refuted it: fixing the
+    # race, bumping the constant, and dropping the new digest ANYWHERE in the ~150-line
+    # record satisfied it while the actual row stayed stale. A cell-anchored read is the
+    # difference between "this string occurs somewhere" and "the record says this".
+    row = re.search(
+        r"\|\s*`evals/fixtures-usr02/absorption/round5_fix\.py`\s*\|\s*`([0-9a-f]{64})`\s*\|",
+        record,
+    )
+    assert row, (
+        "the eval-run record no longer carries a digest row for the race fixture; the "
+        "graded evidence and the fixture have come apart — re-grade eval 16 rather than "
+        "syncing the strings"
+    )
+    assert row.group(1) == _RACE_FIXTURE_SHA256, (
+        f"the record's digest row says {row.group(1)[:12]} but this constant says "
+        f"{_RACE_FIXTURE_SHA256[:12]} — one was updated without the other"
     )
     assert actual == _RACE_FIXTURE_SHA256, (
         "the race fixture changed (sha256 "
