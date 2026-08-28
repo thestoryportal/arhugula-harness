@@ -276,7 +276,7 @@
    "eval_name": "absorption-sweep-answers-claim-no-new-mechanism",
    "skill": "defect-class-preflight",
    "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate has just absorbed a review finding and is about to commit. Their round-5 fix is at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/round5_fix.py and the pre-commit sweep answers they wrote for that fix are at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/sweep-answers-r5.md. Review the SWEEP ANSWERS against the fix they attest: say for each answer whether the fix supports it, and list every defect in the fix that the answers fail to surface — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
-   "expected_output": "review.md rejecting the 'no new mechanism' answer — the fix introduces the _LiveGroups registry — and naming the unsynchronised claim() check-then-act race that answer let through",
+   "expected_output": "review.md rejecting the 'no new mechanism' answer — the fix introduces the _LiveGroups registry — and naming the unsynchronised claim() check-then-act race that answer let through; and the independent release-then-reclaim duplicate drain, which survives an atomic claim()",
    "files": [
     "fixtures-usr02/absorption/round5_fix.py",
     "fixtures-usr02/absorption/sweep-answers-r5.md"
@@ -284,7 +284,8 @@
    "assertions": [
     "rejects the answers' 'no new mechanism' / 'no new coordination surface' claim by naming the mechanism the fix actually adds (the _LiveGroups registry, or claim()/release() as a new coordination surface); merely restating that the answers look thin does not pass",
     "finds the check-then-act race in _LiveGroups.claim — the `if name in self._live` test and the assignment are not atomic, so two workers can both claim one group; passes only if the review names the non-atomicity or its consequence (double-append of one group), not merely that the dict is 'not thread-safe' in the abstract",
-    "connects the miss to the sweep being answered against the pre-absorption diff rather than the fix's own bytes — i.e. that a commit adding a mechanism cannot answer 'no new mechanism'"
+    "connects the miss to the sweep being answered against the pre-absorption diff rather than the fix's own bytes — i.e. that a commit adding a mechanism cannot answer 'no new mechanism'",
+    "finds the SECOND duplicate-drain defect, independent of the race: drain_once releases the claim in its `finally` as soon as the row is appended, so the registry tracks only what is in flight and never what is done — a later worker iterating the same list re-claims that group and appends it again even if claim() were made atomic"
    ]
   },
   {
@@ -319,8 +320,7 @@
    "assertions": [
     "refuses the HELD disposition as it stands — requires that a minimal fail-closed probe (an assertion, a validating guard, a refusing row) land in this SAME round rather than accepting the deferral to U-XX-77 bare",
     "does not merely demand the full validation be built now: passes only if the review distinguishes the scope decision (which may stand) from the missing same-round probe (which may not)",
-    "names at least one concrete failure the unvalidated budget produces — `DRAIN_RETRY_BUDGET=0` or a negative value makes range() empty so nothing drains while the caller reads success, or a non-numeric value raises ValueError inside the drain loop",
-    "flags the note's own closing sweep line ('no new mechanism') as an unswept absorption, or otherwise notes the P3 fix was not itself swept"
+    "names at least one concrete failure the unvalidated budget produces — `DRAIN_RETRY_BUDGET=0` or a negative value makes range() empty so nothing drains while the caller reads success, or a non-numeric value raises ValueError inside the drain loop"
    ]
   }
  ]

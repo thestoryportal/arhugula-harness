@@ -1723,6 +1723,37 @@ def _nodes(tree: ast.AST, *kinds: type[ast.AST]) -> list[ast.AST]:
     return [n for n in ast.walk(tree) if isinstance(n, kinds)]
 
 
+def _body_shape(fn: ast.FunctionDef) -> list[str]:
+    """Statement kinds of `fn`'s body, docstring excluded."""
+    return [
+        type(s).__name__
+        for s in fn.body
+        if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+    ]
+
+
+def _call_names(tree: ast.AST) -> set[str]:
+    """Dotted names of everything called anywhere in `tree`."""
+    names = set()
+    for call in _nodes(tree, ast.Call):
+        parts, node = [], call.func
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        names.add(".".join(reversed(parts)))
+    return names
+
+
+def _one_function(rel: str, name: str) -> ast.FunctionDef:
+    fns = [n for n in _nodes(_fixture_ast(rel), ast.FunctionDef) if n.name == name]
+    # named, not `next(...)`: a renamed function would otherwise surface as a bare
+    # StopIteration, which reds for the wrong reason and reads as a broken test
+    assert len(fns) == 1, f"{rel} no longer defines exactly one {name}()"
+    return fns[0]
+
+
 def test_wr_04_fixture_plants_a_new_mechanism_the_answers_deny():
     """A planted-defect fixture is only a witness while it still carries the defect.
 
@@ -1731,68 +1762,134 @@ def test_wr_04_fixture_plants_a_new_mechanism_the_answers_deny():
     — synchronising the claim, or making the answers honest — reds this, which is the
     point: the case would then be testing nothing.
 
-    The absence of synchronisation is read off the AST, not off the text. `"Lock" not
-    in fix` was the first draft and belongs to the same class as codex r1's two P2s:
-    it pins a spelling rather than the property, so repairing the race any other way
-    — `setdefault`, a semaphore, a mutex built elsewhere and passed in — left it
-    green with nothing planted. Swept as a sibling of those findings, not reported.
+    The synchronisation check is a POSITIVE shape pin, not a list of banned shapes.
+    Enumerating them lost twice: `"Lock" not in fix` fell to `setdefault` (swept at
+    r1), and forbidding `ast.With` fell to `lock.acquire()/try/finally` (codex r2
+    P2). Each round produced another spelling, which is the arms race this
+    workspace's own notes warn does not converge. Pinning claim()'s body to exactly
+    test-set-report is complete by construction: any guard, lock, or retry adds a
+    statement and reds, whatever it is called.
     """
     fix = _fixture("absorption/round5_fix.py")
     answers = _fixture("absorption/sweep-answers-r5.md")
     assert "class _LiveGroups" in fix
     # the check and the act, unguarded and in that order — the race under review
     assert fix.index("if name in self._live") < fix.index("self._live[name] = worker_id")
-    claims = [
-        n
-        for n in _nodes(_fixture_ast("absorption/round5_fix.py"), ast.FunctionDef)
-        if n.name == "claim"
-    ]
-    # named, not `next(...)`: a renamed method would otherwise surface as a bare
-    # StopIteration, which reds for the wrong reason and reads as a broken test
-    assert len(claims) == 1, "the fixture no longer defines exactly one claim()"
-    assert not _nodes(claims[0], ast.With, ast.AsyncWith), "claim() is synchronised; race gone"
+    claim = _one_function("absorption/round5_fix.py", "claim")
+    assert _body_shape(claim) == ["If", "Assign", "Return"], (
+        "claim() is no longer a bare test-then-set; the planted race is gone"
+    )
+    guard = next(s for s in claim.body if isinstance(s, ast.If))
+    # the early-out is a lone `return False`: an `else`, or any statement beside it,
+    # would mean the membership test now does something other than gate the set
+    assert [type(s).__name__ for s in guard.body] == ["Return"] and not guard.orelse
     assert "no new mechanism" in answers
 
 
 # (guard literal, its invented bound, contract section, pattern capturing that
-# section's real value). The pattern binds a value to the CLAUSE that states it —
-# codex r1 P2: bare membership let "3" be satisfied by "§3.1" and by §3.3's exit
-# code, so changing §3.2's maximum TO 99 would erase the planted divergence and
-# leave this test green.
+# section's real value, the phrase eval 17 uses to demand that value).
+#
+# Three separate drifts are closed here, because eval 17 grades against numbers
+# recorded in THREE places and any pair can slide apart:
+#   * bare membership let "3" be satisfied by "§3.1" and by §3.3's exit code, so
+#     changing §3.2's maximum TO 99 erased the divergence green (codex r1 P2) —
+#     hence a pattern binding each value to the CLAUSE that states it;
+#   * checking only `captured != invented` let §3.2's ceiling drift 3 -> 4 while
+#     the oracle still told reviewers to report 3 (codex r2 P2) — hence the
+#     captured value is pinned to `expected`;
+#   * `expected` itself could drift from the oracle, so the phrase eval 17 uses to
+#     demand it is pinned in the same row.
 _WR_05_BOUNDS = (
-    ("1 <= args.reps <= 99", "99", "§3.2", r"§3\.2[^§]*?never above \*\*(\d+)\*\*"),
-    ("args.round > 25", "25", "§3.1", r"§3\.1[^§]*?\*\*at most (\d+) review rounds\*\*"),
-    ("len(args.lane_id) > 128", "128", "§3.4", r"§3\.4[^§]*?\*\*at most (\d+) characters\*\*"),
+    (
+        "1 <= args.reps <= 99",
+        "99",
+        "3",
+        "§3.2",
+        r"§3\.2[^§]*?never above \*\*(\d+)\*\*",
+        "§3.2 ceiling of 3",
+    ),
+    (
+        "args.round > 25",
+        "25",
+        "10",
+        "§3.1",
+        r"§3\.1[^§]*?\*\*at most (\d+) review rounds\*\*",
+        "§3.1 budget of 10 rounds",
+    ),
+    (
+        "len(args.lane_id) > 128",
+        "128",
+        "64",
+        "§3.4",
+        r"§3\.4[^§]*?\*\*at most (\d+) characters\*\*",
+        "§3.4's 64",
+    ),
 )
+
+# The two non-range breaches eval 17 also grades. Left unpinned they could be
+# repaired to their contractual values while assertions 4 and 5 went on demanding
+# defects that were no longer present (codex r2 P2).
+_WR_05_DEFAULT = 'ap.add_argument("--reps", type=int, default=3)'
+
+# admit()'s returns in source order: both refusals wrongly use 1 (§3.3 names 3 and
+# reserves 0/1 for a schema-parsed verdict), then the admission returns 0. Pinned as
+# the exact SEQUENCE, not as a substring: `"return 1" in guard` was the first draft
+# and stayed green when only ONE of the two refusals was repaired — the same
+# incomplete-pinning class as the findings above, caught by this arc's own probe.
+_WR_05_ADMIT_RETURNS = [1, 1, 0]
 
 
 def test_wr_05_fixture_bounds_diverge_from_the_contract_they_cite():
-    """Each planted bound must be BOTH present in the guard and wrong against the
-    clause it should have derived from — a bound that agrees with its contract value
-    tests nothing, so the divergence is asserted against the captured value."""
+    """Every defect eval 17 grades must still be planted, and each contract value
+    must still be the one the oracle names — a bound that agrees with its clause,
+    or a clause that has drifted from the oracle, grades against nothing."""
     guard = _fixture("reps_guard.py")
     contract = _fixture("contract_excerpt.md")
-    for literal, invented, section, pattern in _WR_05_BOUNDS:
+    oracle = " ".join(next(c for c in _evals() if c["id"] == 17)["assertions"])
+    for literal, invented, expected, section, pattern, demand in _WR_05_BOUNDS:
         assert literal in guard, f"planted bound gone from the guard: {literal}"
         match = re.search(pattern, contract, re.S)
         assert match, f"contract clause {section} no longer states its bound"
-        assert match.group(1) != invented, (
-            f"{section} now agrees with the guard's {invented} — divergence is gone"
+        assert match.group(1) == expected, (
+            f"{section} states {match.group(1)}, but eval 17 grades against {expected}"
         )
+        assert expected != invented
+        assert demand in oracle, f"eval 17 no longer demands {section}'s value"
+    assert _WR_05_DEFAULT in guard, "planted breach of §3.2's 'exactly one' is gone"
+    admit = _one_function("reps_guard.py", "admit")
+    # sorted by lineno, never by walk order: `ast.walk` is breadth-first, so it read
+    # these as [0, 1, 1] and the sequence claim below would have been about nothing
+    returns = [
+        s.value.value
+        for s in sorted(_nodes(admit, ast.Return), key=lambda n: n.lineno)
+        if isinstance(s.value, ast.Constant)  # type: ignore[union-attr]
+    ]
+    assert returns == _WR_05_ADMIT_RETURNS, (
+        f"admit() returns {returns}; the planted §3.3 refusal-code breach is gone"
+    )
     # no bound in the guard cites its contract section — that absence IS the defect
     assert "§3" not in guard
+
+
+# Every call the bare fixture legitimately makes. Pinned as an exact SET rather than
+# as a list of banned node types: `ast.Assert/Raise/Compare` missed `operator.gt(v, 0)`
+# and `sys.exit(3)`, which are loud probes carrying none of those nodes (codex r2 P2).
+# Any added call — a validator, an exit, a comparison helper — is a new name here.
+_DRAIN_BUDGET_CALLS = frozenset(
+    {"int", "os.environ.get", "range", "_budget", "step", "time.sleep", "done.append"}
+)
 
 
 def test_wr_06_fixture_holds_a_finding_with_no_probe():
     """The hold must be BARE: a probe landing in the fixture's own round would make
     the disposition adequate and the case vacuous.
 
-    The probe's absence is a property of the CODE, and it is read off the AST because
-    the skill names several accepted probe shapes. Forbidding the token `raise` (the
-    first draft) left `assert _budget() > 0` — explicitly one of those shapes — fully
-    green over a fixture that was no longer a bare hold (codex r1 P2). An assertion,
-    a raise, and any comparison are all refused, so every shape the skill accepts as
-    a probe reds this test.
+    The probe's absence is a property of the CODE, pinned POSITIVELY. Two rounds of
+    banning shapes lost twice — forbidding the token `raise` left `assert _budget() >
+    0` green (codex r1 P2), and forbidding Assert/Raise/Compare left
+    `operator.gt(v, 0)` and `sys.exit(3)` green (codex r2 P2). Fixing the fixture's
+    call set and statement shape is complete by construction: a probe has to run
+    something, and anything it runs is a name outside the frozen set.
     """
     note = _fixture("hold_note.md")
     code = _fixture("drain_budget.py")
@@ -1805,8 +1902,10 @@ def test_wr_06_fixture_holds_a_finding_with_no_probe():
     assert 'int(os.environ.get("DRAIN_RETRY_BUDGET"' in code
     # the env value flows straight into range() with nothing bounding or rejecting it
     assert "range(_budget())" in code
-    planted = _nodes(_fixture_ast("drain_budget.py"), ast.Assert, ast.Raise, ast.Compare)
-    assert not planted, f"fixture gained a probe ({type(planted[0]).__name__}); hold not bare"
+    tree = _fixture_ast("drain_budget.py")
+    assert _call_names(tree) == _DRAIN_BUDGET_CALLS, "fixture's call set changed; hold not bare"
+    assert not _nodes(tree, ast.Assert, ast.Raise, ast.Compare, ast.IfExp), "fixture gained a probe"
+    assert _body_shape(_one_function("drain_budget.py", "_budget")) == ["Return"]
 
 
 def test_preflight_carries_the_u_sr_02_meta_rules():
