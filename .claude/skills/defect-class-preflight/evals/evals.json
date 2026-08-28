@@ -204,6 +204,72 @@
     "flags the exists-then-read check-then-act on STATE",
     "flags the non-atomic write_text rewrite (no same-directory temp + os.replace), so a crash mid-write leaves half-state that a later reader parses as corruption"
    ]
+  },
+  {
+   "id": 12,
+   "eval_name": "p1-exit-code-as-verdict",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a new file, currently staged as a fixture at .claude/skills/defect-class-preflight/evals/fixtures-usr01/wrapper_verdict.py. Perform a thorough pre-commit review of it. List every defect you find — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md naming the undischarged contract phrase: the module docstring quotes C-HE-15 ('a verdict counts only on its schema parse — never on the reviewer process's exit code') while run_review decides the verdict from proc.returncode and never calls parse_verdict; plus the crash/exit-1 aliasing and the TimeoutExpired-without-OSError arm",
+   "files": [
+    "fixtures-usr01/wrapper_verdict.py"
+   ],
+   "assertions": [
+    "names the quoted-contract-phrase-with-no-line-behind-it defect — passes only if the review ties the docstring's C-HE-15 phrase to the code that contradicts it (returncode-as-verdict); merely calling run_review 'inconsistent' or noting the docstring is out of date does not pass",
+    "identifies that parse_verdict — the only schema parse in the module, and the function that would discharge the quoted phrase — has no caller",
+    "flags that a reviewer crashing with exit status 1 is indistinguishable from a genuine 'block' verdict",
+    "flags the except subprocess.TimeoutExpired arm that does not also handle OSError (a spawn failure escapes the handler)"
+   ]
+  },
+  {
+   "id": 13,
+   "eval_name": "p1-declared-but-unenforced-gate",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a new file, currently staged as a fixture at .claude/skills/defect-class-preflight/evals/fixtures-usr01/pilot_gate.py. Perform a thorough pre-commit review of it. List every defect you find — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md naming the declared-but-unenforced gate: the manifest row and docstring both state 'result row required before pilots', but launch_pilots only counts the rows into an audit line and launches regardless — both when result_rows returns empty AND when it returns a row whose status is RED, since ResultRow.status is never inspected anywhere; plus the unbounded --reps count",
+   "files": [
+    "fixtures-usr01/pilot_gate.py"
+   ],
+   "assertions": [
+    "names the declared-but-unenforced gate — passes only if the review states that the documented 'result row required before pilots' precondition is never enforced in launch_pilots; noting the docstring is long or the row is stale does not pass",
+    "makes concrete that with an empty store (ProbeStore([]), as main() constructs) the pilots launch anyway — the gate's zero case is the one it was written to stop",
+    "ALSO covers the present-but-failing arm: ResultRow.status is never read, so ProbeStore([ResultRow('C-HE-22', 'RED')]) launches too — a review that treats a missing row as the whole defect has found half of it",
+    "observes that the rows value is read but only logged, never branched on",
+    "flags --reps (argparse type=int) as accepting an unbounded or non-positive count with no contract-derived bound"
+   ]
+  },
+  {
+   "id": 14,
+   "eval_name": "loop-reachable-command-without-guard-wiring",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. Review the proposed change described at .claude/skills/defect-class-preflight/evals/fixtures-usr01/loop_recipe/ARTIFACT.md. It is a complete description of one diff: a new justfile recipe, the verification-manifest row added for it, a SYNTHETIC illustration of the permission-guard allow chain (which this diff leaves unchanged), and the tests the diff adds. The guard excerpt is deliberately not a real file: judge it only on the one fact the fixture asserts about it. Perform a thorough pre-commit review. List every defect you find — cite the section, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files.",
+   "expected_output": "review.md naming that the new recipe's manifest runs_in includes \"loop\" while the permission-guard allow chain gains no branch for it, so every headless/loop invocation stalls at an ask prompt; and that no test pins the documented command shape, so the missing wiring cannot go red",
+   "files": [
+    "fixtures-usr01/loop_recipe/ARTIFACT.md"
+   ],
+   "assertions": [
+    "names the missing permission-guard wiring for the new recipe — passes only if the review connects runs_in \"loop\" (or headless/loop execution) to the unchanged allow chain; a generic 'add tests' or 'document the recipe' note does not pass",
+    "makes the failure concrete: a loop/headless lane invoking the recipe stops at an ask prompt nobody is present to answer, rather than the recipe misbehaving",
+    "observes that the added tests exercise the publisher helper directly and pin no invocation shape, so reverting the recipe wiring leaves them green",
+    "does NOT pad: the publisher helper's own three test cases are not flagged as defects in themselves, and no defect is reported against the synthetic guard excerpt itself"
+   ]
+  },
+  {
+   "id": 15,
+   "eval_name": "signal-handler-and-held-lock",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a new file, currently staged as a fixture at .claude/skills/defect-class-preflight/evals/fixtures-usr01/drain_worker.py. Perform a thorough pre-commit review of it. List every defect you find — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md naming the signal-handler/lock hazard with the right mechanism: in CPython a Python-level handler runs on the MAIN thread whatever thread received the signal, so if record() is mid-update on the main thread _on_term re-enters the RLock it already owns and flushes/clears a half-written registry, while if a worker holds the lock the handler blocks inside the signal handler waiting for it",
+   "files": [
+    "fixtures-usr01/drain_worker.py"
+   ],
+   "assertions": [
+    "names the mechanism, not just the smell — passes only if the review says a CPython Python-level signal handler runs on the main thread (so ownership of the RLock, not the mere presence of a lock, decides what happens); calling the handler 'unsafe' or 'racy' without that does not pass",
+    "covers the main-thread arm: a SIGTERM landing inside record() between the _ROUNDS write and _reindex() lets _on_term re-enter the RLock it already owns and _flush() clear a registry mid-update, losing or staling a recorded round",
+    "covers the worker-held arm TOO: when a worker holds the lock the handler is not its owner and BLOCKS inside a signal handler waiting for it. Both arms are required — treating either as the whole story is the defect the class names, and an RLock looks like protection against the first while buying nothing against the second",
+    "does NOT claim the RLock makes this safe, and does not assert the handler runs on whichever thread was interrupted",
+    "recommends keeping the handler async-signal-safe (set a flag / write to a self-pipe) and doing the flush on an ordinary thread"
+   ]
   }
  ]
 }

@@ -749,3 +749,30 @@ B-206) rather than unaddressed defects.
 | 2026-08-27T23:22:59Z | #1473 | 2054bf67ff4d | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
 | 2026-08-27T23:24:37Z | #1473 | 2054bf67ff4d | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
 - PR #1473 | 2026-08-27 | feat/he-lanes-u-he-50 | concurrency: APPROVE · spec-conformance: APPROVE · witness-adequacy: APPROVE | outcome: merge (all-approve, round 1) | blast-radius: 10 consumers (grep on the recipe name + record_phase callee; guard outer shape unchanged) | arc u-he-50; 10 codex rounds precede (20 findings: 10 absorbed / 10 rejected, all adjudicated); witness lens ran the 14 arc tests green at the reviewed head
+| 2026-08-28T05:12:55Z | #1475 | 8372ed068370 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-28T05:20:13Z | #1475 | 8372ed068370 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-08-28T05:20:14Z | #1475 | 8372ed068370 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+| 2026-08-28T05:26:52Z | #1475 | 79395c870a42 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-08-28T05:34:44Z | #1475 | 79395c870a42 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-08-28T05:34:45Z | #1475 | 79395c870a42 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+
+---
+
+## PR #1475 — feat(he-lanes): U-SR-01 preflight classes 12-14 + grep shapes + P1 planted-defect evals
+Branch: feat/he-lanes-u-sr-01 · Date: 2026-08-28 · Arc: u-sr-01
+
+blast-radius: 8 consumers (graft grep + callers). tools/review_loop_gate.py:84 (PREFLIGHT_SCRIPT_REL, production consumer), :328-404 (decide), :676-690 (_run_sweep_script); tools/test_review_loop_gate.py:327, :380-395, :496; tools/test_codex_workflow_parity.py:1304-1317, :1343-1374; tools/reviewer_concurrency_probe.py:228-285 (comment only). LIMIT RECORDED: `.claude/skills/**` is not in the graft index (1072 indexed files cover tools/ and harness-*), so the new `matches()` in refresh-classes.py has NO graph edges — its only known consumer was found by string search. Static call edges only; misses reference-passing, getattr, string-keyed registries. Floor, not ceiling.
+
+**Round 1 (head `8372ed068`):**
+- Concurrency: APPROVE — no threads/asyncio/locks in non-fixture code. Flagged a genuine read-read TOCTOU in preflight-grep.sh's default branch (git diff HEAD then git ls-files --others) but judged it unreachable from the attested path: `_run_sweep_script` (review_loop_gate.py:676) always passes an explicit diff_range, routing to the range branch. Independently re-grounded by the orchestrator before accepting the APPROVE. Verified the drain_worker.py fixture's planted signal/RLock defect is correctly described by SKILL.md class 14 and eval 15.
+- Spec-conformance: APPROVE — WR-01/02/03/07 verified byte-exact at Workflow_Repair_Charter_v1.md:24-30; plan acceptance criterion verified at Implementation_Plan_HE_Loop_Lanes_v1.md §8.4. Independently confirmed the PR's eval-harness-not-run precedent claim (ids 8-11 have no iteration directory; only ids 4-7 do). No X-AL-3 extension, no ledger divergence, no sibling drift.
+- Test-witness: **BLOCK** (P2) — class 13's "command half only" near-miss cited a `justfile:` recipe, but r9 had narrowed the command conjunct to `runs_in|new recipe|new command`, so the evidence satisfied NEITHER conjunct. The case was dead: still passing, so it read as coverage, while the mutation it existed to catch (collapsing the row to its command conjunct, dropping loop reachability) went undetected by every test. Reproduced: all three class-13 cases stayed green under that mutation.
+
+**Absorption (`79395c870`, test file only).** Verified independently before absorbing, and found one case worse than reported — the r9 lane-init case had decayed the same way, its comment describing an alternative removed in r9. Fixed at instance and class: the dead case's evidence now names a NEW command and no reachability term; `test_near_miss_cases_each_satisfy_exactly_one_conjunct` asserts every near miss against a tuple class satisfies EXACTLY ONE conjunct, so satisfying neither — the silent failure — cannot ship. Finding adjudicated `accepted` by `claude_absorber`.
+
+**Round 2 (head `79395c870`):** Concurrency APPROVE · Spec-conformance APPROVE · Test-witness APPROVE.
+- Spec-conformance independently reproduced the mutation probe in isolated worktrees: 0 tests red at the pre-fix head, exactly 2 red at `79395c870`.
+- Test-witness re-ran its own round-1 mutation in a scratch clone and confirmed the defect is closed under BOTH mutation representations; it also vacuity-checked the new invariant (fails on 0 conjuncts, fails on 2, correctly skips disjunction rows).
+- Test-witness returned APPROVE carrying one P3 on the ABSORPTION COMMIT'S PROSE, not on the code: the message claims the mutation "reds BOTH tests", which holds only for the 1-tuple mutation form; under a bare-string collapse the invariant skips via `isinstance(pattern, str)` and only the near-miss test reds. The schema forbids findings on APPROVE, so the emitted row carries `findings: []` and the P3 is preserved here and in the PR body as a named residual. Follow-up worth taking: pin classes 13/14 as tuples so a bare-string collapse reds the invariant directly instead of silently disabling it.
+
+**Outcome: all-approve at round 2 → merge.** Codex out-of-family review ran separately to its 10-round budget cap (30 findings, all accepted); round 11 was refused by the budget gate and the operator directed landing at round 10.

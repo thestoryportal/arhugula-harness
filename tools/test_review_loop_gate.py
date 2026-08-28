@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -393,6 +394,276 @@ def test_attest_preflight_real_script_integration(repo: Path, monkeypatch: pytes
     assert rc == 0
     (pf,) = rlg.load_state(repo).preflights
     assert "silent-failure shapes" in pf.hit_labels
+
+
+def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
+    """U-SR-01 (charter WR-03) acceptance: each of the four added shapes catches a
+    planted fixture, run through the REAL script — a pattern that matches nothing is
+    a class the sweep silently stops covering. The TimeoutExpired case asserts BOTH
+    directions: the bare arm is reported and the `(TimeoutExpired, OSError)` sibling
+    is NOT, so the exclusion is witnessed as discriminating rather than merely
+    present (a label-only assertion passes even if report_unless never filters)."""
+    real = Path(__file__).resolve().parents[1] / SCRIPT_REL
+    _plant_script(repo, real.read_text(encoding="utf-8"))
+    # Commit the script BEFORE planting, so the sweep never reads its own source as
+    # an untracked new file (codex r1 P3). `type=int` is a metacharacter-free
+    # literal, so an untracked copy of the script self-matches that pattern from its
+    # own `report` declaration — the label then fires with the planted fixture
+    # deleted, and every assertion below would pass while proving nothing.
+    _commit_all(repo, "script on main, outside the swept set")
+    (repo / "planted.py").write_text(
+        "if proc.returncode in (0, 1):\n"
+        "    verdict = 'approve'\n"
+        "if proc.returncode != 0:  # ordinary status check, not a verdict\n"
+        "    log_it()\n"
+        "try:\n"
+        "    run()\n"
+        "except subprocess.TimeoutExpired:\n"
+        "    give_up()\n"
+        "try:\n"
+        "    run_sibling()\n"
+        "except (subprocess.TimeoutExpired, OSError):\n"
+        "    handle()\n"
+        "try:\n"
+        "    run_third()\n"
+        "except subprocess.TimeoutExpired:  # OSError still propagates\n"
+        "    give_up()\n"
+        "try:\n"
+        "    run_fourth()\n"
+        "except TimeoutExpired:\n"  # unqualified import spelling, same defect
+        "    give_up()\n"
+        "try:\n"
+        "    run_fifth()\n"
+        'except subprocess.TimeoutExpired: print("OSError was not caught")\n'
+        "try:\n"
+        "    run_sixth()\n"
+        "except (subprocess.TimeoutExpired, NotOSError):\n"
+        "    handle()\n"
+        'parser.add_argument("--reps", type=int, default=3)\n'
+        # the ordinary MULTILINE argparse call: `add_argument(` and `type=int` land on
+        # different lines, so a same-line-scoped pattern misses it (codex r10 P2)
+        "        ap.add_argument(\n"
+        '            "--budget",\n'
+        "            type=int,\n"
+    )
+    (repo / "planted_guard.sh").write_text(
+        "    elif printf '%s' \"$TRIM\" | grep -Eq '^just[[:space:]]+new-recipe$' \\\n"
+    )
+    out = subprocess.run(
+        ["bash", str(repo / SCRIPT_REL)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert out.returncode == 0, out.stderr
+
+    def block(label: str) -> str:
+        assert f"[{label}]" in out.stdout, f"shape did not fire: {label}\n{out.stdout}"
+        return out.stdout.split(f"[{label}]")[1].split("\n\n")[0]
+
+    # Each label must carry the PLANTED line, not merely be present: deleting a
+    # planted shape has to red its own assertion.
+    verdict_block = block(
+        "exit code read as verdict (class 12 — name the schema parse that decides)"
+    )
+    assert "proc.returncode in (0, 1)" in verdict_block
+    # an ordinary `!= 0` status check is CORRECT code and must not be flagged: with
+    # report()'s eight-hit cap, such false positives can push a real misuse out of the
+    # report while the attestation still shows the label answered (codex r6 P2)
+    assert "returncode != 0" not in verdict_block
+    argparse_block = block("argparse count without a contract-derived bound")
+    assert "--reps" in argparse_block
+    # the multiline form must be caught too: scoping the pattern to the same line as
+    # `add_argument(` silently dropped every ordinary multiline call (codex r10 P2)
+    assert "type=int," in argparse_block
+    assert "new-recipe" in block("new permission-guard allow branch (name its witness)")
+    # Five planted arms, one per way the exclusion can be right or wrong. Only OSError
+    # actually inside the except CLAUSE means "handled"; everything else is reported.
+    timeout_block = block("TimeoutExpired without OSError (crash aliases as timeout)")
+    assert "give_up()" not in timeout_block  # bodies are not swept, only the arms
+    for reported in (
+        "except subprocess.TimeoutExpired:\n",  # bare arm
+        "# OSError still propagates",  # named only in a trailing comment
+        "except TimeoutExpired:",  # unqualified import spelling
+        'print("OSError was not caught")',  # named only after the clause's colon
+        "NotOSError",  # a different identifier that merely CONTAINS the token
+    ):
+        assert reported in timeout_block, f"arm not reported: {reported}\n{timeout_block}"
+    # the one genuinely handled arm — OSError inside the caught tuple — is excluded
+    assert "(subprocess.TimeoutExpired, OSError)" not in timeout_block
+
+
+CLASSES_REL = Path(".claude/skills/defect-class-preflight/scripts/refresh-classes.py")
+
+
+def _preflight_module():
+    import importlib.util
+
+    src = Path(__file__).resolve().parents[1] / CLASSES_REL
+    spec = importlib.util.spec_from_file_location("_refresh_classes", src)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Evidence quoted from the real gate rows these classes were added FOR, pinned here so
+# the assertion cannot drift with the live log (codex r3 P3: nothing exercised
+# refresh-classes.py, so deleting every new CLASSES row stayed green).
+_CLS_12 = "12 quoted contract phrase not discharged"
+_CLASS_WITNESSES = [
+    # u-he-35 r1 P1 — reviewer_concurrency_probe.py:96 (exit-code-as-verdict)
+    (
+        _CLS_12,
+        "The probe treats every exit 1 as a schema-parsed BLOCK, but both"
+        " wrappers can also exit 1 from an uncaught exception",
+    ),
+    # u-he-35 r10 P1 — lanes_verify.py:309 (declared-but-unenforced gate)
+    (_CLS_12, "The claimed pilot gate is unenforced. This entry is a `live:` row"),
+    (
+        "13 new command the loop must reach",
+        "the new justfile recipe's runs_in includes loop but the guard wiring is absent",
+    ),
+    (
+        "14 signal handler meets lock",
+        "the SIGTERM signal handler takes the RLock the main thread already owns",
+    ),
+    (
+        "11 authority-bearing command surface",
+        "the permission guard auto-allow admits every argument shape for this verb",
+    ),
+]
+
+
+@pytest.mark.parametrize(("cls", "evidence"), _CLASS_WITNESSES)
+def test_refresh_classes_rows_match_the_findings_they_were_added_for(cls: str, evidence: str):
+    """Each class added by U-SR-01 must bucket its OWN motivating shape.
+
+    A classifier row that misses the finding it was written for silently mis-buckets
+    and leaves those rows in the unmatched 'new-class candidate' pile forever — the
+    exact defect codex r2 caught on class 12, here made deletion-sensitive.
+    """
+    mod = _preflight_module()
+    classes = mod.CLASSES
+    assert cls in classes, f"class row removed: {cls}"
+    assert mod.matches(classes[cls], evidence), f"{cls} does not match its own finding"
+
+
+# Classes 13 and 14 are CONJUNCTIONS. Each near miss below satisfies ONE half and must
+# still be refused: a flat OR of the same terms passes every one of them, which is the
+# state codex r3/r4 measured (class 13 mis-bucketed 33 of 64 rows, class 14 six of ten).
+_NEAR_MISSES = [
+    # class 13: command half only — names a NEW command but no loop reachability and no
+    # guard, so dropping the reach conjunct would let it through. This evidence is
+    # checked against the command conjunct by the invariant below: an earlier version
+    # cited a `justfile:` recipe and satisfied NEITHER conjunct once r9 narrowed the
+    # command terms to `runs_in|new recipe|new command`, which made this case dead and
+    # left the reach-conjunct-drop mutation untested (merge-gate witness lens, round 1).
+    (
+        "13 new command the loop must reach",
+        "the new recipe writes its output file before validating the argument,"
+        " so a malformed call truncates it",
+    ),
+    # class 13: reach half only — no new command
+    (
+        "13 new command the loop must reach",
+        "the recovery path strands a headless claim"
+        " when $HOME resolves to the operator's real store",
+    ),
+    # class 14: signal half only — no lock anywhere
+    (
+        "14 signal handler meets lock",
+        "a SIGTERM landing between fut.result() returning"
+        " and the append call loses that observation entirely",
+    ),
+    # class 14: lock half only — no signal anywhere
+    (
+        "14 signal handler meets lock",
+        "the RLock is acquired twice on the same path, so"
+        " a second holder waits forever behind the first",
+    ),
+    # class 14: `block`/`blocking` are not locks — a bare `lock` alternative matched
+    # both, so a Ctrl-C shutdown row landed here with no lock in sight (codex r6 P2)
+    (
+        "14 signal handler meets lock",
+        "Ctrl-C can block in ThreadPoolExecutor shutdown and the blocking wait is"
+        " unbounded, so SIGINT never reaches the caller",
+    ),
+    # class 12: a bare location noun is not the class — every alternative must mean
+    # BOTH a quoted obligation and its absence (codex r6 P2)
+    (
+        "12 quoted contract phrase not discharged",
+        "the manifest row lists the wrong tag for this artifact",
+    ),
+    # class 11: merely MENTIONING adjudication is not an authority-bearing command
+    # surface — the bare `adjudicat` alternative pulled 48 such rows (codex r8 P2)
+    (
+        "11 authority-bearing command surface",
+        "the finding is not among the four adjudicated HELD classes",
+    ),
+    # class 12: naming a contract phrase is only half — the class needs its ABSENCE too,
+    # so `spec phrase`/`contract phrase` were dropped as alternatives (codex r9 P2)
+    (
+        "12 quoted contract phrase not discharged",
+        "the contract phrase names the wrong component",
+    ),
+    # class 13: guards the r9 removal of the `just recipe` alternative. As written this
+    # satisfies the reach conjunct only; re-adding `just recipe` to the command conjunct
+    # would make it satisfy BOTH, match, and red this case — which is the point.
+    (
+        "13 new command the loop must reach",
+        "the return status from loop_log_structured is discarded by the just recipe and"
+        " replaced with return 1",
+    ),
+]
+
+
+def test_near_miss_cases_each_satisfy_exactly_one_conjunct():
+    """A near miss discriminates AND from OR only if it satisfies exactly ONE conjunct.
+
+    Satisfying NEITHER is the silent failure: the case still passes, so it looks like
+    coverage, while the mutation it was written to catch goes undetected. That is not
+    hypothetical — when r9 narrowed class 13's command terms to
+    `runs_in|new recipe|new command`, a case citing a `justfile:` recipe stopped
+    satisfying either conjunct and went dead, and dropping the reach conjunct became
+    untestable (merge-gate witness lens, round 1). Checking the balance mechanically is
+    what keeps the near-miss table honest as the patterns keep narrowing.
+    """
+    mod = _preflight_module()
+    for cls, evidence in _NEAR_MISSES:
+        pattern = mod.CLASSES[cls]
+        if isinstance(pattern, str):
+            continue  # disjunction rows have no conjuncts to balance
+        satisfied = sum(bool(re.search(p, evidence, re.I)) for p in pattern)
+        assert satisfied == 1, (
+            f"{cls}: near miss satisfies {satisfied} conjunct(s), must be exactly 1 — {evidence!r}"
+        )
+
+
+@pytest.mark.parametrize(("cls", "evidence"), _NEAR_MISSES)
+def test_refresh_classes_conjunctions_refuse_half_matches(cls: str, evidence: str):
+    """Over-broad rows corrupt the counts the SKILL cites AND remove those findings from
+    unmatched new-class discovery — the more expensive half, since a swallowed row can
+    never surface as a candidate again. Each near miss satisfies one conjunct only."""
+    mod = _preflight_module()
+    classes = mod.CLASSES
+    assert not mod.matches(classes[cls], evidence), f"{cls} matched a half-match"
+
+
+def test_refresh_classes_rows_are_not_generically_over_broad():
+    """Wholly unrelated evidence must land in none of the U-SR-01 classes — the trap that
+    took class 12 from 6 to 126 mid-absorption."""
+    mod = _preflight_module()
+    classes = mod.CLASSES
+    unrelated = "the fixture teardown leaks a temp dir when an assertion fails mid-run"
+    for cls in (
+        "11 authority-bearing command surface",
+        "12 quoted contract phrase not discharged",
+        "13 new command the loop must reach",
+        "14 signal handler meets lock",
+    ):
+        assert not mod.matches(classes[cls], unrelated), f"{cls} is over-broad"
 
 
 def test_attest_sweep_records_and_covers(repo: Path, monkeypatch: pytest.MonkeyPatch):

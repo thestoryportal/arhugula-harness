@@ -17,10 +17,33 @@ import re
 import sys
 from pathlib import Path
 
-# One definition per class, mirroring SKILL.md's ten sections. When a class is
+# One definition per class, mirroring SKILL.md's class sections. When a class is
 # added or reworded there, extend this table in the same commit (the counts the
-# skill cites are derived HERE, so a drifted table silently mis-buckets).
-CLASSES: dict[str, str] = {
+# skill cites are derived HERE, so a drifted table silently mis-buckets, and a
+# class absent here can never leave the unmatched bucket — it reads as a
+# new-class candidate forever). Classes 11–14 were added by U-SR-01; 11 had been
+# carried in SKILL.md since U-HE-47 without a row here.
+#
+# A row is EITHER one pattern — any alternative IS the class — OR a TUPLE of patterns
+# that must ALL match, for the two classes that name two conditions in their own title.
+# The conjunction was first written as `(?=.*A)(?=.*B)` and that was a product type
+# squeezed into a string: with `re.search` the unanchored lookaheads retry both
+# whole-suffix scans at every character, costing 12.3s and 17.4s on the committed corpus
+# against under 0.11s for every other row, and degrading as this append-only log grows
+# (codex r5 P2, reproduced before absorbing). Two independent searches are linear and say
+# what they mean.
+#
+# UNDER-matching is the safe direction and is chosen deliberately throughout: a missed
+# row stays in the unmatched new-class discovery pile, while a false match silently
+# removes it from that pile. Prefer to miss.
+#
+# Known precision bound, named rather than chased: a conjunction still matches on
+# CO-OCCURRENCE, so a row pairing an unrelated command term with an unrelated loop term
+# can land in class 13, and a finding whose text DISCUSSES a class necessarily contains
+# that class's vocabulary. This tool is advisory by its own docstring and multi-match is
+# by design; successive regex layers were measured trading one imprecision for another
+# without converging, so the bound is documented here rather than chased further.
+CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
     ),
@@ -46,7 +69,55 @@ CLASSES: dict[str, str] = {
     "10 fixture scope / lifecycle": (
         r"session-scoped|module-scoped|function-scoped|teardown|collection|autouse|fixture"
     ),
+    # Bare `adjudicat` alone pulled 48 rows in that merely MENTION adjudication, and
+    # `exemption` was equally context-free (codex r8 P2). Every alternative left names a
+    # command/permission surface outright. 158 -> 120.
+    "11 authority-bearing command surface": (
+        r"permission.guard|auto-allow|allowlist|guard venue|exact.shape|carrier parity"
+        r"|gate override"
+    ),
+    # Both u-he-35 P1s must land here — the skill claims both were this shape, and a
+    # classifier that says otherwise makes the claim false. `as the verdict` and
+    # `schema-parsed BLOCK` are where the exit-code-as-verdict row matches; `is
+    # unenforced` is where the pilot-gate row does. Overlap with class 3 is by design.
+    # Every alternative carries BOTH halves of the class — a quoted obligation AND its
+    # absence — on its own, so each is a PHRASE, not a token. Dropped once measured:
+    # `manifest row` / `copied verbatim` (bare nouns), `unenforced` and `schema-parsed`
+    # (too loose; narrowed to the phrases the P1s actually use), `spec phrase` and
+    # `contract phrase` (name the obligation but not its absence, so "the contract phrase
+    # names the wrong component" landed here), and `undischarged`, which matched zero rows
+    # in the entire corpus — a dead alternative is not caution, it is noise with no upside.
+    "12 quoted contract phrase not discharged": (
+        r"is unenforced|declared but|no code discharges|as the verdict"
+        r"|schema-parsed BLOCK"
+    ),
+    # Conjunctions (measured before absorbing): a flat OR mis-bucketed 33 of 64 class-13
+    # rows and 6 of 10 class-14 rows. The command conjunct has been narrowed to terms that
+    # mean a NEW command: `justfile` went because the matcher sees `location` too and that
+    # token pulled in every finding merely LOCATED there; `just recipe` went because it
+    # names any recipe, which let a lane-init logging finding in on co-occurrence with the
+    # word "loop"; `allow branch` went because it matched zero rows. Each removal was
+    # checked to keep justfile:777, the canonical member of this class.
+    "13 new command the loop must reach": (
+        r"runs_in|new recipe|new command",
+        r"loop|headless|guard|auto-allow|permission|ask prompt",
+    ),
+    "14 signal handler meets lock": (
+        r"signal handler|SIGTERM|SIGINT|SIGHUP|async-signal|self-pipe",
+        # word-bounded: a bare `lock` also matched `block`/`blocking`, so a Ctrl-C row
+        # that "can block in ThreadPoolExecutor shutdown" landed here with no lock in
+        # sight (codex r6 P2). `\block\b` excludes both for free — neither has a word
+        # boundary before "lock" — so no extra guard is needed. `RLock` gets its own
+        # alternative because there is no boundary inside it either.
+        r"\block\b|\blocks\b|RLock|mutex|reentran|acquire",
+    ),
 }
+
+
+def matches(pattern: str | tuple[str, ...], text: str) -> bool:
+    """True when `text` satisfies a class row: one pattern, or all of a tuple."""
+    patterns = (pattern,) if isinstance(pattern, str) else pattern
+    return all(re.search(p, text, re.I) for p in patterns)
 
 
 def main() -> int:
@@ -83,7 +154,7 @@ def main() -> int:
         text = (r.get("observed_evidence") or "") + " " + (r.get("location") or "")
         hit = False
         for name, pat in CLASSES.items():
-            if re.search(pat, text, re.I):
+            if matches(pat, text):
                 counts[name] += 1
                 hit = True
         if not hit:
