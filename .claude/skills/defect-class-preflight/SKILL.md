@@ -26,12 +26,37 @@ mechanized). Then, for each changed hunk, walk the classes below **in order** �
 are ranked by real finding frequency — and answer each applicable class's question
 concretely (name the line, not "looks fine").
 
-Two meta-rules that outrank the list:
+Three meta-rules that outrank the list:
 
 - **A fix you just wrote is the least-reviewed code in the arc.** After absorbing a
   review finding, sweep the fix itself with this list before committing — measured
   across recent arcs, roughly a third of findings were introduced by a previous round's
-  fix.
+  fix, and on the u-he-35 arc 8 of 29 findings landed on code its own absorptions had
+  added (charter WR-04, [A] §2).
+  The place this rule is actually lost is the sweep ANSWERS. You will have spent the
+  last hour inside the reviewer's finding; the work will feel like a repair rather
+  than a build; and you will write *"no new mechanism"* into the answers file without
+  re-reading what you just added. That is the moment. **A commit that adds a mechanism
+  can never answer "no new mechanism"** — the u-he-35 r5 sweep answered exactly that
+  while introducing `_LiveGroups`, whose race came back as r6's finding one full round
+  later. An answers file carried over from the pre-absorption sweep describes the diff
+  you MEANT to write, not the one you are committing: re-run
+  `scripts/preflight-grep.sh` over the absorption's own bytes and answer from its
+  hits.
+- **Every numeric bound names the contract value it derives from.** Any literal in a
+  guard, allowlist, validator, or budget — a range, a cap, an arity, a retry count —
+  is either traceable to a contract value you can cite, or it is a guess wearing a
+  validator's uniform. Put the derivation where the number is, not in the PR body.
+  The rationalization sounds like care: *"1 to 99 is obviously reasonable — nothing
+  legitimate falls outside it."* Reasonable-looking is the defect. The u-he-35
+  guard-reps token took FOUR paid touches — `any` → `1–99` → `1–9` → `5–9` — because
+  each bound was invented from how the line read instead of from what the contract
+  says, and each invented bound bought exactly one more round in which to invent the
+  next (charter WR-05, [A] §3). Nor is a wide bound the safe default it looks like: a
+  range that admits values its contract forbids is a gate that claims to enforce and
+  does not — class 12's shape with an integer in it. `scripts/preflight-grep.sh`
+  mechanizes the argparse half (`type=int`); this rule covers every literal the grep
+  cannot see.
 - **Touching a shared surface obligates a blast-radius pass first**: `graft callers
   <symbol> --depth 2` (or `--depth all` for renames/precondition changes) plus a grep
   for every consumer, then read each consumer's *semantics*, not just its existence.
@@ -350,9 +375,21 @@ BEFORE re-invoking the reviewer:
    bridge — never the producer, never `operator`. Without this row the finding stays disposition=null forever and N6 counts
    nothing — the attest below records that you ANSWERED the finding, never that it
    was DISPOSED.
-4. If the class was absent/unfired in this file, repair the skill in that commit too
+4. **A finding you HOLD owes a fail-closed probe in the same round.** Holding is the
+   cheapest-feeling disposition in the loop, and it arrives sounding like good scope
+   discipline: *"that's a later unit's job — the plan already schedules it."* The
+   scope call is often right. What is never right is holding it BARE. In the same
+   round, land the minimal thing that fails loud when the held condition is violated —
+   one assertion, one refusing row, one guard — and the hold becomes a scope decision
+   with a floor under it. Held bare it is a promise, and the reviewer does not take
+   promises: the u-he-35 pilot gate was held at r1 and then re-litigated at r5, r9,
+   and r10 — four paid rounds on one unpromoted hold, the costliest policy miss of
+   that arc (charter WR-06, [A] §1). And if the minimal probe is genuinely
+   un-writable this round, read that as evidence the hold is wrong — not as
+   permission to skip the probe.
+5. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
-5. When two consecutive rounds' findings target mechanisms YOUR absorption invented
+6. When two consecutive rounds' findings target mechanisms YOUR absorption invented
    (not the plan floor), stop hardening and re-scope by subtraction — the recorded
    adversarial-hardening arms race does not converge by adding layers.
 
@@ -396,7 +433,9 @@ stashed MonkeyPatch at M, sole consumer verified via grep". If the diff introduc
 new data-surface consumer, the inventory table (field × semantics) is part of the
 named-answer set — every recorded semantic either tested, or carried as an explicit
 deferred finding per the next sentence (sitting in the table is not "named"). Findings you choose not to
-fix now must be named in the commit message or register, never silently carried. Then
+fix now must be named in the commit message or register, never silently carried — and
+naming is what stops a hold being *silent*, never what makes it *safe*: a held finding
+still owes the same-round fail-closed probe (step 4 of the sweep above). Then
 commit and invoke the reviewers — they should be confirming, not discovering.
 
 Since B-215, the named-answer set is ATTESTED, not merely written: after the final

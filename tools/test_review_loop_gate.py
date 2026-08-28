@@ -1655,3 +1655,133 @@ def test_logged_recipe_emits_verify_at_process_boundaries():
     assert recipe.index("codex_review.py --base") < recipe.index("emit_verify end")
     assert recipe.index("emit_verify end") < recipe.index("PUBLISH FAILED")
     assert '--phase verify --edge "$1" --lane-id "$HARNESS_LANE_ID"' in recipe
+
+
+# --- U-SR-02: preflight meta-rules (charter WR-04/05/06) -------------------------
+
+PREFLIGHT_DIR = Path(".claude/skills/defect-class-preflight")
+EVALS_REL = PREFLIGHT_DIR / "evals" / "evals.json"
+PREFLIGHT_SKILL_REL = PREFLIGHT_DIR / "SKILL.md"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _evals() -> list[dict]:
+    doc = json.loads((_repo_root() / EVALS_REL).read_text(encoding="utf-8"))
+    return doc["evals"]
+
+
+def _preflight_skill_text() -> str:
+    return (_repo_root() / PREFLIGHT_SKILL_REL).read_text(encoding="utf-8")
+
+
+def test_eval_cases_are_structurally_sound_and_their_fixtures_exist():
+    """Every eval case's declared fixtures must resolve on disk.
+
+    Nothing exercised evals.json before this: a deleted or renamed fixture left the
+    case pointing at nothing and the suite stayed green, so a planted-defect case
+    could rot into a no-op without a single red. The whole set is swept (not only
+    U-SR-02's) because the gap was never case-specific.
+    """
+    evals_dir = _repo_root() / EVALS_REL.parent
+    cases = _evals()
+    ids = [c["id"] for c in cases]
+    assert len(ids) == len(set(ids)), f"duplicate eval ids: {ids}"
+    for case in cases:
+        where = f"eval {case['id']} ({case['eval_name']})"
+        assert case["prompt"].strip(), f"{where}: empty prompt"
+        assert case["expected_output"].strip(), f"{where}: empty expected_output"
+        assert case["assertions"], f"{where}: no assertions"
+        for rel in case["files"]:
+            assert (evals_dir / rel).is_file(), f"{where}: missing fixture {rel}"
+
+
+def test_u_sr_02_eval_cases_are_registered():
+    """The three charter WR-04/05/06 rules each close on an eval case (charter §3)."""
+    by_name = {c["eval_name"]: c for c in _evals()}
+    for name in (
+        "absorption-sweep-answers-claim-no-new-mechanism",  # WR-04
+        "invented-bounds-without-contract-derivation",  # WR-05
+        "bare-hold-without-fail-closed-probe",  # WR-06
+    ):
+        assert name in by_name, f"U-SR-02 eval case removed: {name}"
+        assert by_name[name]["files"], f"{name}: case carries no fixture"
+
+
+def _fixture(rel: str) -> str:
+    return (_repo_root() / EVALS_REL.parent / "fixtures-usr02" / rel).read_text(encoding="utf-8")
+
+
+def test_wr_04_fixture_plants_a_new_mechanism_the_answers_deny():
+    """A planted-defect fixture is only a witness while it still carries the defect.
+
+    Both halves are pinned: the fix must ADD a mechanism (the registry) whose claim
+    is non-atomic, and the answers must DENY having added one. Repairing either half
+    — putting a lock in the fix, or making the answers honest — reds this, which is
+    the point: the case would then be testing nothing.
+    """
+    fix = _fixture("absorption/round5_fix.py")
+    answers = _fixture("absorption/sweep-answers-r5.md")
+    assert "class _LiveGroups" in fix
+    # the check and the act, unguarded and in that order — the race under review
+    assert fix.index("if name in self._live") < fix.index("self._live[name] = worker_id")
+    assert "Lock" not in fix, "fixture no longer carries the race it was planted for"
+    assert "no new mechanism" in answers
+
+
+def test_wr_05_fixture_bounds_diverge_from_the_contract_they_cite():
+    """Each planted bound must be BOTH present in the guard and wrong against the
+    contract excerpt — a bound that happens to match its contract value tests
+    nothing, so the divergence is asserted, never merely the literal."""
+    guard = _fixture("reps_guard.py")
+    contract = _fixture("contract_excerpt.md")
+    # (invented literal in the guard, the contract value it should have derived from)
+    for invented, derived in (("99", "3"), ("25", "10"), ("128", "64")):
+        assert invented in guard, f"planted bound {invented} gone from the guard"
+        assert derived in contract, f"contract value {derived} gone from the excerpt"
+        assert invented != derived
+    assert "1 <= args.reps <= 99" in guard
+    assert "args.round > 25" in guard
+    assert "> 128" in guard
+    # no bound in the guard cites its contract section — that absence IS the defect
+    assert "§3" not in guard
+
+
+def test_wr_06_fixture_holds_a_finding_with_no_probe():
+    """The hold must be BARE: a probe landing in the fixture's own round would make
+    the disposition adequate and the case vacuous."""
+    note = _fixture("hold_note.md")
+    code = _fixture("drain_budget.py")
+    assert "Disposition: HELD" in note
+    assert "U-XX-77" in note  # the deferral target the hold leans on
+    # The note may DESCRIBE the finding freely ("a non-numeric value raises ...") —
+    # what it must not do is claim a probe was landed. Word-bounded on purpose: a
+    # bare `in` check reads "raises" as "raise" and reds on the description itself.
+    assert re.search(r"\bprobe\b", note, re.I) is None, "hold is no longer bare"
+    # The probe's absence is a property of the CODE, which is where it would land:
+    # the env value goes straight into range() with nothing bounding or rejecting it.
+    assert 'int(os.environ.get("DRAIN_RETRY_BUDGET"' in code
+    assert "range(_budget())" in code
+    assert re.search(r"\braise\b", code) is None, "fixture no longer carries the bare read"
+
+
+def test_preflight_carries_the_u_sr_02_meta_rules():
+    """Charter WR-04/05/06 land as SKILL prose, so the pin is on the load-bearing
+    tell of each rule rather than on surrounding wording that may be re-edited.
+
+    The bullet count is pinned against the heading in the same assertion set: a
+    fourth meta-rule added under a heading still reading "Three" is the class-2
+    prose drift this skill's own list warns about.
+    """
+    text = _preflight_skill_text()
+    # WR-04 — the tell, verbatim from the charter
+    assert 'can never answer "no new mechanism"' in text
+    # WR-05 — the rule, not merely the example
+    assert "Every numeric bound names the contract value it derives from" in text
+    # WR-06 — the same-round obligation, wired where holds are adjudicated
+    assert "owes a fail-closed probe in the same round" in text
+
+    block = text.split("Three meta-rules that outrank the list:", 1)[1].split("\n\n## ", 1)[0]
+    assert len([ln for ln in block.splitlines() if ln.startswith("- **")]) == 3
