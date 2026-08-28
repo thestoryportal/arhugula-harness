@@ -55,15 +55,21 @@ CLASSES: dict[str, str] = {
     ),
     # Both u-he-35 P1s must land here, or the skill's "both P1s were this shape" claim
     # is not what the classifier says (codex r2 P3: the r1 row matched class 3 only).
-    # `claimed|as the verdict|schema-parsed` are what the exit-code-as-verdict row's
+    # `as the verdict|schema-parsed` are what the exit-code-as-verdict row's
     # evidence actually says; overlap with class 3 is by design — a row counts in every
     # class it touches.
     "12 quoted contract phrase not discharged": (
         r"spec phrase|contract phrase|undischarged|copied verbatim|declared but"
         r"|unenforced|manifest row|no code discharges|as the verdict|schema-parsed"
     ),
+    # Every alternative must carry the new-command/runs_in/guard relationship itself
+    # (codex r3 P3): bare `headless` and `strands` were generic enough to swallow
+    # unrelated rows — a path-recovery finding that "strands" a claim is not this class —
+    # which both corrupts the count and hides those rows from unmatched new-class
+    # discovery. Same over-broad trap the class-12 row hit one round earlier.
     "13 new command the loop must reach": (
-        r"runs_in|justfile|just recipe|headless|ask prompt|guard wiring|strands"
+        r"runs_in|justfile|just recipe|new recipe|guard wiring|allow branch"
+        r"|headless (lane|arc|run|invocation)|strands headless"
     ),
     "14 signal handler meets lock": (
         r"signal handler|SIGTERM|SIGINT|SIGHUP|reentran|RLock|async-signal|self-pipe"

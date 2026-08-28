@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -421,6 +422,10 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
         "    run_sibling()\n"
         "except (subprocess.TimeoutExpired, OSError):\n"
         "    handle()\n"
+        "try:\n"
+        "    run_third()\n"
+        "except subprocess.TimeoutExpired:  # OSError still propagates\n"
+        "    give_up()\n"
         'parser.add_argument("--reps", type=int, default=3)\n'
     )
     (repo / "planted_guard.sh").write_text(
@@ -448,8 +453,81 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     assert "new-recipe" in block("new permission-guard allow branch (name its witness)")
     # the discriminating half: only the un-paired arm is carried into the report
     timeout_block = block("TimeoutExpired without OSError (crash aliases as timeout)")
-    assert "except subprocess.TimeoutExpired:" in timeout_block
-    assert "OSError" not in timeout_block
+    # the genuine same-line tuple is excluded; the bare arm and the arm that only
+    # MENTIONS OSError in a trailing comment are both reported (codex r3 P3 — a bare
+    # `OSError` exclusion suppressed the comment case, which handles nothing)
+    assert "give_up()" not in timeout_block  # bodies are not swept, only the arms
+    assert timeout_block.count("except subprocess.TimeoutExpired") == 2, timeout_block
+    assert "# OSError still propagates" in timeout_block
+    assert "(subprocess.TimeoutExpired, OSError)" not in timeout_block
+
+
+CLASSES_REL = Path(".claude/skills/defect-class-preflight/scripts/refresh-classes.py")
+
+
+def _preflight_classes() -> dict[str, str]:
+    import importlib.util
+
+    src = Path(__file__).resolve().parents[1] / CLASSES_REL
+    spec = importlib.util.spec_from_file_location("_refresh_classes", src)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.CLASSES
+
+
+# Evidence quoted from the real gate rows these classes were added FOR, pinned here so
+# the assertion cannot drift with the live log (codex r3 P3: nothing exercised
+# refresh-classes.py, so deleting every new CLASSES row stayed green).
+_CLS_12 = "12 quoted contract phrase not discharged"
+_CLASS_WITNESSES = [
+    # u-he-35 r1 P1 — reviewer_concurrency_probe.py:96 (exit-code-as-verdict)
+    (
+        _CLS_12,
+        "The probe treats every exit 1 as a schema-parsed BLOCK, but both"
+        " wrappers can also exit 1 from an uncaught exception",
+    ),
+    # u-he-35 r10 P1 — lanes_verify.py:309 (declared-but-unenforced gate)
+    (_CLS_12, "The claimed pilot gate is unenforced. This entry is a `live:` row"),
+    (
+        "13 new command the loop must reach",
+        "the new justfile recipe's runs_in includes loop but the guard wiring is absent",
+    ),
+    (
+        "14 signal handler meets lock",
+        "the SIGTERM signal handler takes the RLock the main thread already owns",
+    ),
+    (
+        "11 authority-bearing command surface",
+        "the permission guard auto-allow admits every argument shape for this verb",
+    ),
+]
+
+
+@pytest.mark.parametrize(("cls", "evidence"), _CLASS_WITNESSES)
+def test_refresh_classes_rows_match_the_findings_they_were_added_for(cls: str, evidence: str):
+    """Each class added by U-SR-01 must bucket its OWN motivating shape.
+
+    A classifier row that misses the finding it was written for silently mis-buckets
+    and leaves those rows in the unmatched 'new-class candidate' pile forever — the
+    exact defect codex r2 caught on class 12, here made deletion-sensitive.
+    """
+    classes = _preflight_classes()
+    assert cls in classes, f"class row removed: {cls}"
+    assert re.search(classes[cls], evidence, re.I), f"{cls} does not match its own finding"
+
+
+def test_refresh_classes_rows_are_not_generically_over_broad():
+    """Over-broad alternatives corrupt the counts the SKILL cites and swallow rows that
+    belong in other classes — the trap that took class 12 from 6 to 126 mid-absorption.
+    Unrelated evidence must NOT land in the U-SR-01 classes."""
+    classes = _preflight_classes()
+    unrelated = (
+        "the recovery path strands a headless claim when $HOME resolves to the"
+        " operator's real store"
+    )
+    for cls in ("13 new command the loop must reach", "14 signal handler meets lock"):
+        assert not re.search(classes[cls], unrelated, re.I), f"{cls} is over-broad"
 
 
 def test_attest_sweep_records_and_covers(repo: Path, monkeypatch: pytest.MonkeyPatch):

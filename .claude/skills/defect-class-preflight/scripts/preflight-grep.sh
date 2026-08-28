@@ -87,7 +87,11 @@ report "exit code read as verdict (class 12 — name the schema parse that decid
 # is "OSError is on the next line". A false hit costs one named answer; the miss is
 # the real limit, and it is the tool's, not a claim this sweep can make good on —
 # the file's exit contract already says silence proves nothing.
-report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*subprocess\.TimeoutExpired' 'OSError'
+# The exclusion is anchored BEFORE any `#` (codex r3 P3): a trailing comment such as
+# `except subprocess.TimeoutExpired:  # OSError still propagates` names the token
+# without handling it, and a bare `OSError` exclusion would suppress the very hit that
+# comment admits to earning.
+report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*subprocess\.TimeoutExpired' '^[^#]*OSError'
 # A count parsed straight off the CLI is an unvalidated budget one token from class 5:
 # name the contract value that bounds it (the reps token took four paid touches).
 report "argparse count without a contract-derived bound" 'type=int'

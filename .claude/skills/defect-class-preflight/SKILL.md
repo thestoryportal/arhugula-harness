@@ -273,8 +273,18 @@ The rationalization arrives in the voice of diligence: *"the plan skeleton alrea
 shows `returncode in (0, 1)` — I'll follow the plan."* That is plan-over-spec
 deference. A plan skeleton sketches SHAPE; it never grants CONTRACT, and where the
 skeleton and the quoted phrase disagree the phrase wins and the skeleton is the
-finding. Write the discharging line beside the phrase, or delete the phrase and
-describe what you actually built.
+finding.
+
+Two exits, and only two. **Discharge it** — write the line number beside the phrase.
+Or, if you believe the phrase is wrong, **route it**: a quoted spec requirement is
+BINDING, so disagreeing with it is a Class 1 fork to design-phase back-flow, not an
+edit you make on your own authority. What is never an exit is deleting the quote and
+describing what you built instead: the requirement outlives the sentence, so that
+move leaves the violation in place and removes the only evidence of it. Both P1s
+above stay defective under it — exit-code-as-verdict is still wrong once the C-HE-15
+quote is gone, and the pilot gate is still unenforced once the row stops claiming it.
+Silent absorption is the worst failure mode this workspace has; a docstring is a
+cheap place to commit it.
 
 ### 13. A new command the loop must reach (added U-SR-01; u-he-35 r2, one round)
 Class 11 asks what a new verb can AUTHORIZE. This asks the other half: can the loop
