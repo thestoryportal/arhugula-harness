@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `92a3f5d022aa` |
-| `last_refreshed` | 2026-08-27T00:00:00Z |
-| `git_head` | `9b08633b` —  |
+| `workspace_state_hash` | `a5b26a70d1d8` |
+| `last_refreshed` | 2026-08-28T00:00:00Z |
+| `git_head` | `a1941714` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1473).** U-HE-50 (R1: C-HE-27 §5 X6a span emission) landed at #1473 — the logged review wrapper now emits the verify start/end edges at its own process boundaries (first-write-wins keeps the durable pair the round-1 window; a refused launch or in-process GATE_REFUSED opens/completes no pair; partial-write arms tested fail-start/fail-end/crash), and the interim absorb/edit emission block rides BOTH roadmap-continue carriers (Claude + Codex bridge, executable commands inline, deletion trigger = the B-218 wrapper-internal emitter, which also owes the in-process-refusal TOCTOU close). The arc dogfooded its own unit: the u-he-50 reservation carries all five span pairs (U-HE-35 baseline was 0 of 60 expected edges). Ten codex rounds (20 findings: 10 absorbed, 10 rejected with witnessed grounds, all adjudicated) + 3-lens merge-gate all-APPROVE round 1. The next implementable unit is `U-SR-01` (R1: preflight — three new classes + four grep shapes + planted-defect evals for both P1 shapes, Charter WR-01/02/03/07); the remaining §8 sequence after it: U-SR-02…08 (R1, order-free), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it.
+**Current next action (post-#1475).** The next implementable unit is `U-SR-02` (§8.4 R1: preflight meta-rules — fix-sweep sharpening, contract-derived bounds, hold-policy promotion; charter WR-04/05/06). U-SR-01 landed at #1475: preflight classes 12–14 (quoted-contract-phrase-not-discharged, new-command-the-loop-must-reach, signal-handler-meets-lock), the four WR-03 grep shapes plus a `report_unless` exclusion helper, eval ids 12–15 with fixtures, and `refresh-classes.py`'s class table extended to 14 rows — class 11 had been carried in SKILL.md since U-HE-47 with no classifier row, so its findings could never leave the unmatched new-class bucket. Ten out-of-family codex rounds produced 30 findings, all accepted and adjudicated, none refuted; the 10-round budget cap refused round 11 and the operator directed landing at round 10. The decorrelated 3-lens merge gate then ran twice: round 1 returned 2 APPROVE + 1 BLOCK on a dead near-miss case whose evidence stopped satisfying either conjunct when r9 narrowed class 13's command terms, leaving the reach-conjunct-drop mutation undetected by every test; round 2 was all-approve after repairing the case and adding an invariant that makes that decay unshippable. Remaining §8 sequence: U-SR-03…08 (R1, order-free), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it. Named residual carried forward: the absorption commit's message overclaims which tests red under a bare-string mutation form, and classes 13/14 are worth pinning as tuples so a bare-string collapse reds the invariant directly instead of silently skipping it.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1475 | 2026-08-28 | landed through the merge door; 3-lens gate all-approve at round 2; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1473 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1471 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1469 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1467 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1465 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
