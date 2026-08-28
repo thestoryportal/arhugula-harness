@@ -275,8 +275,8 @@
    "id": 16,
    "eval_name": "absorption-sweep-answers-claim-no-new-mechanism",
    "skill": "defect-class-preflight",
-   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate has just absorbed a review finding and is about to commit. Their round-5 fix is at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/round5_fix.py and the pre-commit sweep answers they wrote for that fix are at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/sweep-answers-r5.md. Review the SWEEP ANSWERS against the fix they attest: say for each answer whether the fix supports it, and list every defect in the fix that the answers fail to surface — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). For each defect you name, say whether it would still occur if `claim()` were made atomic. Then say what the sweep should have done differently at authoring time, so the miss would not have shipped. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
-   "expected_output": "review.md rejecting the 'no new mechanism' answer — the fix introduces the _LiveGroups registry — and naming the unsynchronised claim() check-then-act race that answer let through; and the independent release-then-reclaim duplicate drain, which survives an atomic claim()",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate has just absorbed a review finding and is about to commit. Their round-5 fix is at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/round5_fix.py and the pre-commit sweep answers they wrote for that fix are at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/sweep-answers-r5.md. Review the SWEEP ANSWERS against the fix they attest: say for each answer whether the fix supports it, and list every defect in the fix that the answers fail to surface — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Then say what the sweep should have done differently at authoring time, so the miss would not have shipped. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md rejecting the 'no new mechanism' answer — the fix introduces the _LiveGroups registry — and naming the unsynchronised claim() check-then-act race that answer let through",
    "files": [
     "fixtures-usr02/absorption/round5_fix.py",
     "fixtures-usr02/absorption/sweep-answers-r5.md"
@@ -284,8 +284,7 @@
    "assertions": [
     "rejects the answers' 'no new mechanism' / 'no new coordination surface' claim by naming the mechanism the fix actually adds (the _LiveGroups registry, or claim()/release() as a new coordination surface); merely restating that the answers look thin does not pass",
     "finds the check-then-act race in _LiveGroups.claim — the `if name in self._live` test and the assignment are not atomic, so two workers can both claim one group; passes only if the review names the non-atomicity or its consequence (double-append of one group), not merely that the dict is 'not thread-safe' in the abstract",
-    "connects the miss to the sweep being answered against the pre-absorption diff rather than the fix's own bytes — i.e. that a commit adding a mechanism cannot answer 'no new mechanism'",
-    "finds the SECOND duplicate-drain defect, independent of the race: drain_once releases the claim in its `finally` as soon as the row is appended, so the registry tracks only what is in flight and never what is done — a later worker iterating the same list re-claims that group and appends it again even if claim() were made atomic"
+    "connects the miss to the sweep being answered against the pre-absorption diff rather than the fix's own bytes — i.e. that a commit adding a mechanism cannot answer 'no new mechanism'"
    ]
   },
   {

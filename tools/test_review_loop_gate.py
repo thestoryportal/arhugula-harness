@@ -1931,39 +1931,8 @@ def _check_registry_race() -> None:
         "drain_once changed shape; the claim call may now be synchronised"
     )
     loop = next(s for s in drain_once.body if isinstance(s, ast.For))
-    assert [type(s).__name__ for s in loop.body] == ["If", "Try"]
+    assert [type(s).__name__ for s in loop.body] == ["If", "Expr", "AugAssign"]
     assert _dump(loop.body[0].test) == _expr("not _LIVE.claim(name, worker_id)")
-
-
-def _check_release_then_reclaim() -> None:
-    # eval 16's second graded defect: the registry tracks what is IN FLIGHT and never
-    # what is DONE, so a later worker re-claims a finished group and appends it again
-    # even if claim() were atomic. Unpinned until codex r3 P2 — the oracle demanded a
-    # defect that `_LIVE.release(name)` could be deleted to remove, all-green.
-    drain_once = _one_function("absorption/round5_fix.py", "drain_once")
-    tries = _nodes(drain_once, ast.Try)
-    assert len(tries) == 1, "drain_once no longer wraps its append in exactly one try"
-    assert [_dump(s) for s in tries[0].finalbody] == [_stmt("_LIVE.release(name)")], (
-        "the claim is no longer released on the drain path; the reclaim defect is gone"
-    )
-    release = _one_function("absorption/round5_fix.py", "release")
-    assert _body_shape(release) == ["Expr"]
-    # `release()` must actually REMOVE the claim. One-Expr alone was the r4 draft, and
-    # `self._live.setdefault(name, -1)` keeps that shape and the `_LIVE.release` call
-    # while completed groups stay claimed — the defect gone, the pins green (r5 P2).
-    assert _dump(release.body[-1]) == _stmt("self._live.pop(name, None)"), (
-        "release() no longer removes the claim; the reclaim defect is gone"
-    )
-    # BEHAVIOURAL: the registry forgets completed groups, so draining the same group
-    # twice appends it twice. Deterministic (no race needed) and immune to every
-    # syntactic dodge — this is the defect eval 16 demands, asserted directly.
-    mod = _load_fixture("absorption/round5_fix.py", "_usr02_round5_fix")
-    sink: list[str] = []
-    mod.drain_once(["a"], 1, sink)
-    mod.drain_once(["a"], 2, sink)
-    assert sink == ["a", "a"], (
-        "completed groups are now remembered; the release-then-reclaim defect is gone"
-    )
 
 
 def _check_answers_deny() -> None:
@@ -2103,12 +2072,6 @@ _PLANTED = (
         _check_registry_race,
     ),
     _Planted(
-        "wr04-release-then-reclaim",
-        16,
-        "releases the claim in its `finally`",
-        _check_release_then_reclaim,
-    ),
-    _Planted(
         "wr04-answers-deny-the-mechanism",
         16,
         "no new coordination surface",
@@ -2194,7 +2157,6 @@ def test_planted_defect_is_pinned_on_every_side(planted: _Planted):
 _EXPECTED_ROWS = frozenset(
     {
         "wr04-registry-race",
-        "wr04-release-then-reclaim",
         "wr04-answers-deny-the-mechanism",
         "wr05-reps-range",
         "wr05-round-budget",
@@ -2239,55 +2201,38 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     block = text.split("Three meta-rules that outrank the list:", 1)[1].split("\n\n## ", 1)[0]
     assert len([ln for ln in block.splitlines() if ln.startswith("- **")]) == 3
 
-    # WR-06's ledger half. Step 4 contradicted step 3 while the adjudication vocabulary
-    # was accepted|rejected — a held finding is neither, so the workflow left
-    # disposition=null (which this skill says N6 cannot count) or recorded a false
-    # disposition (codex r4 P2). All three pins are here because the r4 probe found the
-    # fix itself unwitnessed: reverting any of them was green.
-    assert "--disposition accepted|rejected|suppressed" in text
-    assert "A hold is `suppressed` on the ledger" in text
-    # The authority link is the load-bearing half: C-HE-24 §5 forbids an absorber
-    # disposing on its own say-so, and the same-round probe is the deterministic rule
-    # that supplies the authority — which is what makes the probe non-optional rather
-    # than merely advisable. Squashed, because the sentence wraps in the source and a
-    # line-break guess would pin the formatting instead of the claim.
-    squashed = _squash(text)
-    assert "a **deterministic rule**, or a logged operator override" in squashed
-    assert "The same-round fail-closed probe IS that deterministic rule." in squashed
-
-    # The ORDER, which is the half that has teeth (codex r5 P2): adjudication is
-    # durable and consumers honour `suppressed` at once, so a row written before the
-    # probe lands is a live suppression backed by nothing — and it stays live if the
-    # probe then fails or the session is interrupted.
+    # WR-06's ledger half, which took four rounds to get right and is pinned at its
+    # SETTLED form, not its history: r4 added `suppressed` to the absorber's vocabulary,
+    # r5 ordered it after its probe, r6 recorded that the guard keeps it operator-visible,
+    # and r8 (P1) established that the absorber must not write it at all. The r4/r5 pins
+    # are deliberately GONE rather than kept alongside — a pin on superseded prose is a
+    # second authority that would have to be argued with at every future edit.
     #
-    # Pinned here because BOTH of this arc's SKILL fixes shipped unwitnessed on their
-    # first draft (r4's disposition vocabulary, r5's ordering) and the arc's own probe
-    # caught each. A prose fix needs its pin as much as a code fix does; that is the
-    # standing lesson, and these assertions are it.
-    assert "only once step 4's probe is COMMITTED and seen to fail closed" in squashed
-    assert (
-        "Order matters, and only one order is safe: probe committed and seen to fail "
-        "closed, THEN the `suppressed` row." in squashed
+    # Kept from r6: the authority list, which is what makes the absorber ineligible.
+    squashed = _squash(text)
+    # Kept from r6/r7: the authority list, which is what makes the absorber ineligible
+    # to sign a suppression at all.
+    assert "a decorrelated lens, a deterministic rule, or a logged operator override" in squashed
+
+    # The absorber writes only two dispositions (codex r8 P1). `suppressed` names its
+    # actor as the ADJUDICATING AUTHORITY, and C-HE-24 §5 says that authority is a
+    # decorrelated lens, a deterministic rule, or a logged operator override — never
+    # the absorber. A row signed by the absorber therefore records an authority that
+    # never existed, and readers reducing by finding_id see a settled mute where a
+    # visible `disposition=null` used to be. Held findings stay UNDISPOSED.
+    assert "--disposition accepted|rejected --actor <runner>_absorber" in squashed
+    assert "A hold is left UNDISPOSED on the ledger — an absorber never writes it." in squashed
+    assert "suppressed|" not in squashed and "|suppressed" not in squashed, (
+        "the absorber's documented disposition set admits `suppressed` again"
     )
 
-    # The guard venue (codex r6 P2): the SKILL implied the prefixed hold completes
-    # headlessly, but `_adjudicate_exact_shape` auto-allows only accepted|rejected and
-    # keeps `suppressed` operator-visible, so every prescribed hold stopped at an ask
-    # the prose did not mention. Pinned against the GUARD's own source rather than
-    # restated, so the two cannot drift apart: if the guard ever admits `suppressed`,
-    # this reds and the prose must be revisited — the direction that matters, since
-    # widening it would let an agent grant itself authority to mute findings.
-    assert "does not complete headlessly" in squashed
-    # What the row does NOT carry (codex r7 P2): `--actor` is the adjudicating party
-    # and the guard pins it to an absorber identity, so the durable row records the
-    # absorber — not the operator approval that authorised the hold, nor the probe
-    # that grounds it. The prose claimed the ask WAS the recorded authority; it is
-    # not recorded at all. Pinned so the overclaim cannot come back.
-    assert (
-        "it records neither the operator approval that authorised it nor the probe "
-        "that grounds it" in squashed
-    )
-    assert "name the probe (its test id and the commit that landed it)" in squashed
+    # The guard venue (codex r6 P2), pinned against the GUARD's own source rather than
+    # restated, so the two cannot drift apart: if the allowlist ever admits
+    # `suppressed`, this reds and the prose must be revisited — the direction that
+    # matters, since widening it would let an agent grant itself mute authority.
+    assert "_adjudicate_exact_shape` auto-allows only `accepted|rejected`" in squashed
+    # Where the hold actually lives now that no row carries it (codex r7 P2 + r8 P1).
+    assert "name the finding_id, the probe (its test id and the commit that landed it)" in squashed
     guard_src = (_repo_root() / "tools" / "hooks" / "permission-guard.sh").read_text(
         encoding="utf-8"
     )

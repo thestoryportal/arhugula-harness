@@ -15,20 +15,17 @@ from collections.abc import Iterable
 
 
 class _LiveGroups:
-    """Registry of groups currently being drained by some worker."""
+    """Registry of groups already taken by some worker."""
 
     def __init__(self) -> None:
         self._live: dict[str, int] = {}
 
     def claim(self, name: str, worker_id: int) -> bool:
-        """Take `name` for `worker_id`. False if another worker already holds it."""
+        """Take `name` for `worker_id`. False if another worker already took it."""
         if name in self._live:
             return False
         self._live[name] = worker_id
         return True
-
-    def release(self, name: str) -> None:
-        self._live.pop(name, None)
 
 
 _LIVE = _LiveGroups()
@@ -39,11 +36,8 @@ def drain_once(groups: Iterable[str], worker_id: int, sink: list[str]) -> int:
     for name in groups:
         if not _LIVE.claim(name, worker_id):
             continue
-        try:
-            sink.append(name)
-            drained += 1
-        finally:
-            _LIVE.release(name)
+        sink.append(name)
+        drained += 1
     return drained
 
 

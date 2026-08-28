@@ -367,10 +367,10 @@ BEFORE re-invoking the reviewer:
    finding row this round produced, once its fix is committed (or it is refuted with
    grounds, or it is held per step 4), append the disposition —
    `HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id>
-   --disposition accepted|rejected|suppressed --actor <runner>_absorber` (`accepted`
-   = the fix was applied; `rejected` = refuted; `suppressed` = held — and only once
-   step 4's probe is COMMITTED and seen to fail closed, never in anticipation of it;
-   the finding_id is on the round's emitted JSONL rows). The
+   --disposition accepted|rejected --actor <runner>_absorber` (`accepted` = the fix
+   was applied; `rejected` = refuted; the finding_id is on the round's emitted JSONL
+   rows). Those are the only two dispositions an absorber may write — a HELD finding
+   is left UNDISPOSED; see step 4. The
    `HARNESS_ARC_ID=` prefix is
    REQUIRED — the guard auto-allows only the prefixed form, and the CLI holder-binds
    it to this lane's live reservation. The actor is the RUNNER's own absorber
@@ -389,46 +389,28 @@ BEFORE re-invoking the reviewer:
    and r10 — four paid rounds on one unpromoted hold, the costliest policy miss of
    that arc (charter WR-06, [A] §1).
 
-   A hold is `suppressed` on the ledger, never a silence and never a false
-   `accepted` — and C-HE-24 §5 is what makes the probe non-optional rather than
-   merely advisable: an absorber is *never authoritative for its own disposition*,
-   so a suppression stands only on a decorrelated lens, a **deterministic rule**, or
-   a logged operator override. The same-round fail-closed probe IS that deterministic
-   rule. So the two halves are one thing: no probe, no authority to suppress; no
-   authority, no legal disposition. If the minimal probe is genuinely un-writable
-   this round, that is not a licence to hold anyway — it is the evidence that the
-   hold is wrong. Fix it, or route it.
+   **A hold is left UNDISPOSED on the ledger — an absorber never writes it.** The
+   temptation is to reach for `suppressed`, which the CLI does accept. Do not: the
+   row's `disposition_actor` is the *adjudicating authority*, and C-HE-24 §5 says
+   that authority is a decorrelated lens, a deterministic rule, or a logged operator
+   override — an absorber is none of the three. A `suppressed` row signed by the
+   absorber therefore records an authority that never existed, and since readers
+   reduce by `finding_id` to the last row, every downstream consumer sees a mute with
+   nothing behind it. That is worse than the null it replaced: `disposition=null` is
+   visibly unfinished, while a false `suppressed` looks settled.
 
-   **Order matters, and only one order is safe: probe committed and seen to fail
-   closed, THEN the `suppressed` row.** Adjudication is append-only and durable, and
-   consumers honour `suppressed` immediately as muting the finding — so a row written
-   in anticipation of a probe is a live suppression backed by nothing, and it stays
-   live if the probe then fails, or if the session is interrupted before writing it.
-   You will want the other order, because the row is the cheap part and writing it
-   while you have the finding_id in hand feels tidy. That tidiness is the whole
-   defect: it muzzles the finding first and earns the right second.
+   The permission guard already refuses it — `_adjudicate_exact_shape` auto-allows
+   only `accepted|rejected` (U-HE-47) — and that refusal is the contract holding, not
+   friction to route around. Never widen the guard to clear it.
 
-   **And the `suppressed` row does not complete headlessly — by design.** The
-   permission guard auto-allows only `accepted|rejected`; `suppressed` stays
-   operator-visible (`tools/hooks/permission-guard.sh` `_adjudicate_exact_shape`,
-   U-HE-47), because a disposition that MUTES a finding is authority an agent must
-   not grant itself. Do not read that ask as friction to route around, and do not
-   widen the guard to clear it: that ask is where the operator override is actually
-   exercised, and removing it would leave the suppression with no authority at all.
-   The practical consequence is the honest one — **holding costs more than fixing**,
-   so the loop's cheapest path stays: fix it, or route it, and hold only what you can
-   defend to a person.
+   So a held finding stays undisposed, and the hold lives where prose is durable:
+   name the finding_id, the probe (its test id and the commit that landed it), and
+   the reason in the absorption commit message and the sweep attestation. The
+   attestation is what the next round reads, so the hold is carried forward in the
+   open rather than muted — reported, not silenced. If the operator later decides to
+   suppress, that is theirs to write, and their approval is the logged override the
+   contract names.
 
-   Know what the row does and does not carry, because it carries less than it looks
-   like. `--actor` is the adjudicating party and the guard pins it to an absorber
-   identity, so the durable row says *the absorber suppressed this* — it records
-   neither the operator approval that authorised it nor the probe that grounds it,
-   and a consumer reducing by `finding_id` sees only a mute. So make the pairing
-   recoverable where prose IS durable: name the probe (its test id and the commit
-   that landed it) and the `finding_id` in the absorption commit message and in the
-   sweep attestation. Until a row can bind its own authority, that naming is the
-   whole audit trail — write it as if someone will have to reconstruct the hold from
-   the git history a year from now, because that is exactly what they will have.
 5. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
 6. When two consecutive rounds' findings target mechanisms YOUR absorption invented
