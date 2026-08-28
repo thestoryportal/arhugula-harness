@@ -23,7 +23,23 @@ from pathlib import Path
 # class absent here can never leave the unmatched bucket — it reads as a
 # new-class candidate forever). Classes 11–14 were added by U-SR-01; 11 had been
 # carried in SKILL.md since U-HE-47 without a row here.
-CLASSES: dict[str, str] = {
+#
+# A row is EITHER one pattern — any alternative IS the class — OR a TUPLE of patterns
+# that must ALL match, for the two classes that name two conditions in their own title.
+# The conjunction was first written as `(?=.*A)(?=.*B)` and that was a product type
+# squeezed into a string: with `re.search` the unanchored lookaheads retry both
+# whole-suffix scans at every character, costing 12.3s and 17.4s on the committed corpus
+# against under 0.11s for every other row, and degrading as this append-only log grows
+# (codex r5 P2, reproduced before absorbing). Two independent searches are linear and say
+# what they mean.
+#
+# Known precision bound, named rather than chased: a conjunction still matches on
+# CO-OCCURRENCE, so a row pairing an unrelated command term with an unrelated loop term
+# can land in class 13. This tool is advisory by its own docstring and multi-match is by
+# design; the cost of a false positive is one row not re-surfaced as a new-class
+# candidate. Successive regex layers were measured to trade one imprecision for another
+# without converging, so the bound is documented here instead.
+CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
     ),
@@ -62,22 +78,26 @@ CLASSES: dict[str, str] = {
         r"spec phrase|contract phrase|undischarged|copied verbatim|declared but"
         r"|unenforced|manifest row|no code discharges|as the verdict|schema-parsed"
     ),
-    # Classes 13 and 14 are CONJUNCTIONS, so they are written as conjunctions (codex r4
-    # P3 x2, each measured against the log before absorbing). A flat OR of independent
-    # terms mis-buckets badly: class 13 matched any row merely LOCATED in `justfile`
-    # (33 of 64 rows carried no loop/guard context at all), and class 14 matched any
-    # SIGTERM row with no lock in sight (6 of 10). Both corrupt the counts AND remove
-    # those rows from unmatched new-class discovery, which is the more expensive half.
-    # `(?s)` because evidence spans newlines and `.` would stop at the first one.
+    # Conjunctions (codex r4 P3 x2, each measured before absorbing): a flat OR
+    # mis-bucketed 33 of 64 class-13 rows and 6 of 10 class-14 rows. `justfile` is
+    # dropped from the command conjunct — the matcher sees `location` too, so that one
+    # token pulled in every finding merely LOCATED in the justfile regardless of subject
+    # (codex r5 P2). Removing the over-broad alternative beats bolting on another layer.
     "13 new command the loop must reach": (
-        r"(?s)(?=.*(runs_in|justfile|just recipe|new recipe|new command|allow branch))"
-        r"(?=.*(loop|headless|guard|auto-allow|permission|ask prompt))"
+        r"runs_in|just recipe|new recipe|new command|allow branch",
+        r"loop|headless|guard|auto-allow|permission|ask prompt",
     ),
     "14 signal handler meets lock": (
-        r"(?s)(?=.*(signal handler|SIGTERM|SIGINT|SIGHUP|async-signal|self-pipe))"
-        r"(?=.*(lock|RLock|mutex|reentran|acquire))"
+        r"signal handler|SIGTERM|SIGINT|SIGHUP|async-signal|self-pipe",
+        r"lock|RLock|mutex|reentran|acquire",
     ),
 }
+
+
+def matches(pattern: str | tuple[str, ...], text: str) -> bool:
+    """True when `text` satisfies a class row: one pattern, or all of a tuple."""
+    patterns = (pattern,) if isinstance(pattern, str) else pattern
+    return all(re.search(p, text, re.I) for p in patterns)
 
 
 def main() -> int:
@@ -114,7 +134,7 @@ def main() -> int:
         text = (r.get("observed_evidence") or "") + " " + (r.get("location") or "")
         hit = False
         for name, pat in CLASSES.items():
-            if re.search(pat, text, re.I):
+            if matches(pat, text):
                 counts[name] += 1
                 hit = True
         if not hit:

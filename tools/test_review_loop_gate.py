@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -430,6 +429,9 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
         "    run_fourth()\n"
         "except TimeoutExpired:\n"  # unqualified import spelling, same defect
         "    give_up()\n"
+        "try:\n"
+        "    run_fifth()\n"
+        'except subprocess.TimeoutExpired: print("OSError was not caught")\n'
         'parser.add_argument("--reps", type=int, default=3)\n'
     )
     (repo / "planted_guard.sh").write_text(
@@ -455,24 +457,25 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     )
     assert "--reps" in block("argparse count without a contract-derived bound")
     assert "new-recipe" in block("new permission-guard allow branch (name its witness)")
-    # the discriminating half: only the un-paired arm is carried into the report
+    # Five planted arms, one per way the exclusion can be right or wrong. Only OSError
+    # actually inside the except CLAUSE means "handled"; everything else is reported.
     timeout_block = block("TimeoutExpired without OSError (crash aliases as timeout)")
-    # the genuine same-line tuple is excluded; the bare arm and the arm that only
-    # MENTIONS OSError in a trailing comment are both reported (codex r3 P3 — a bare
-    # `OSError` exclusion suppressed the comment case, which handles nothing)
     assert "give_up()" not in timeout_block  # bodies are not swept, only the arms
-    assert timeout_block.count("except subprocess.TimeoutExpired") == 2, timeout_block
-    assert "# OSError still propagates" in timeout_block
-    # the unqualified `from subprocess import TimeoutExpired` spelling is the same
-    # defect and must also be reported (codex r4 P2)
-    assert "except TimeoutExpired:" in timeout_block
+    for reported in (
+        "except subprocess.TimeoutExpired:\n",  # bare arm
+        "# OSError still propagates",  # named only in a trailing comment
+        "except TimeoutExpired:",  # unqualified import spelling
+        'print("OSError was not caught")',  # named only after the clause's colon
+    ):
+        assert reported in timeout_block, f"arm not reported: {reported}\n{timeout_block}"
+    # the one genuinely handled arm — OSError inside the caught tuple — is excluded
     assert "(subprocess.TimeoutExpired, OSError)" not in timeout_block
 
 
 CLASSES_REL = Path(".claude/skills/defect-class-preflight/scripts/refresh-classes.py")
 
 
-def _preflight_classes() -> dict[str, str]:
+def _preflight_module():
     import importlib.util
 
     src = Path(__file__).resolve().parents[1] / CLASSES_REL
@@ -480,7 +483,7 @@ def _preflight_classes() -> dict[str, str]:
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.CLASSES
+    return mod
 
 
 # Evidence quoted from the real gate rows these classes were added FOR, pinned here so
@@ -519,9 +522,10 @@ def test_refresh_classes_rows_match_the_findings_they_were_added_for(cls: str, e
     and leaves those rows in the unmatched 'new-class candidate' pile forever — the
     exact defect codex r2 caught on class 12, here made deletion-sensitive.
     """
-    classes = _preflight_classes()
+    mod = _preflight_module()
+    classes = mod.CLASSES
     assert cls in classes, f"class row removed: {cls}"
-    assert re.search(classes[cls], evidence, re.I), f"{cls} does not match its own finding"
+    assert mod.matches(classes[cls], evidence), f"{cls} does not match its own finding"
 
 
 # Classes 13 and 14 are CONJUNCTIONS. Each near miss below satisfies ONE half and must
@@ -560,14 +564,16 @@ def test_refresh_classes_conjunctions_refuse_half_matches(cls: str, evidence: st
     """Over-broad rows corrupt the counts the SKILL cites AND remove those findings from
     unmatched new-class discovery — the more expensive half, since a swallowed row can
     never surface as a candidate again. Each near miss satisfies one conjunct only."""
-    classes = _preflight_classes()
-    assert not re.search(classes[cls], evidence, re.I), f"{cls} matched a half-match"
+    mod = _preflight_module()
+    classes = mod.CLASSES
+    assert not mod.matches(classes[cls], evidence), f"{cls} matched a half-match"
 
 
 def test_refresh_classes_rows_are_not_generically_over_broad():
     """Wholly unrelated evidence must land in none of the U-SR-01 classes — the trap that
     took class 12 from 6 to 126 mid-absorption."""
-    classes = _preflight_classes()
+    mod = _preflight_module()
+    classes = mod.CLASSES
     unrelated = "the fixture teardown leaks a temp dir when an assertion fails mid-run"
     for cls in (
         "11 authority-bearing command surface",
@@ -575,7 +581,7 @@ def test_refresh_classes_rows_are_not_generically_over_broad():
         "13 new command the loop must reach",
         "14 signal handler meets lock",
     ):
-        assert not re.search(classes[cls], unrelated, re.I), f"{cls} is over-broad"
+        assert not mod.matches(classes[cls], unrelated), f"{cls} is over-broad"
 
 
 def test_attest_sweep_records_and_covers(repo: Path, monkeypatch: pytest.MonkeyPatch):

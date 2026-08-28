@@ -74,28 +74,21 @@ report "new retry/timeout constants"  'timeout|retry|deadline|budget'
 # the written classes alone did not fire on. Class 12's P1: a process exit code read
 # as if it were the verdict, against a contract that says only the schema parse is.
 report "exit code read as verdict (class 12 — name the schema parse that decides)" 'returncode +in +\(|\.returncode *(==|!=) *[0-9]'
-# Spawn failure escaping the bounded call: `OSError` is what `subprocess` raises when
-# the child never STARTS (missing executable, EACCES, fd exhaustion) — a child that
-# starts and then dies returns a CompletedProcess carrying a negative returncode, and
-# is not this shape. So a lone TimeoutExpired arm bounds only the ran-long case and
-# lets the never-started one escape the very call it was meant to bound (codex r2 P3
-# corrected the earlier "the child died" wording here; the eval had it right).
-# Line-bound in BOTH directions, like the except/pass opener above (codex r1 P2): a
-# tuple split across lines hides the pair from a line grep, so
-# `except (\n subprocess.TimeoutExpired,\n ValueError,\n):` is a MISS, and
-# `except (subprocess.TimeoutExpired,\n OSError):` is a false HIT whose named answer
-# is "OSError is on the next line". A false hit costs one named answer; the miss is
-# the real limit, and it is the tool's, not a claim this sweep can make good on —
-# the file's exit contract already says silence proves nothing.
-# The exclusion is anchored BEFORE any `#` (codex r3 P3): a trailing comment such as
-# `except subprocess.TimeoutExpired:  # OSError still propagates` names the token
-# without handling it, and a bare `OSError` exclusion would suppress the very hit that
-# comment admits to earning.
-# Unqualified too (codex r4 P2): `from subprocess import TimeoutExpired` then
-# `except TimeoutExpired:` is the same defect, and requiring the dotted spelling let
-# preflight attest the intended shape as having no hit. `TimeoutExpired` is
-# distinctive enough that the bare name costs no realistic false positives.
-report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*\bTimeoutExpired' '^[^#]*OSError'
+# Spawn failure escaping a bounded call. `OSError` is what `subprocess` raises when the
+# child never STARTS (missing executable, EACCES, fd exhaustion); a child that starts
+# and then dies returns a CompletedProcess with a negative returncode and is NOT this
+# shape. So a lone TimeoutExpired arm bounds only the ran-long case and lets the
+# never-started one escape the call it was meant to bound.
+#   Match: any `TimeoutExpired`, qualified or bare — `from subprocess import
+#   TimeoutExpired` is the same defect, and demanding the dotted spelling let preflight
+#   attest the intended shape as having no hit.
+#   Exclude: only OSError inside the except CLAUSE (`except[^:]*OSError`), so a mention
+#   in a trailing comment or a statement after the colon never counts as handling.
+#   Bound, not fixed: this is line-based. A tuple split across lines is a MISS, and
+#   `except (subprocess.TimeoutExpired,\n OSError):` is a false HIT whose named answer
+#   is "OSError is on the next line". A false hit costs one named answer; the miss is
+#   the tool's limit, and the exit contract above already says silence proves nothing.
+report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*\bTimeoutExpired' 'except[^:]*OSError'
 # A count parsed straight off the CLI is an unvalidated budget one token from class 5:
 # name the contract value that bounds it (the reps token took four paid touches).
 report "argparse count without a contract-derived bound" 'type=int'
