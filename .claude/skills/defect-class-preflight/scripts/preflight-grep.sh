@@ -91,7 +91,11 @@ report "exit code read as verdict (class 12 — name the schema parse that decid
 # `except subprocess.TimeoutExpired:  # OSError still propagates` names the token
 # without handling it, and a bare `OSError` exclusion would suppress the very hit that
 # comment admits to earning.
-report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*subprocess\.TimeoutExpired' '^[^#]*OSError'
+# Unqualified too (codex r4 P2): `from subprocess import TimeoutExpired` then
+# `except TimeoutExpired:` is the same defect, and requiring the dotted spelling let
+# preflight attest the intended shape as having no hit. `TimeoutExpired` is
+# distinctive enough that the bare name costs no realistic false positives.
+report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*\bTimeoutExpired' '^[^#]*OSError'
 # A count parsed straight off the CLI is an unvalidated budget one token from class 5:
 # name the contract value that bounds it (the reps token took four paid touches).
 report "argparse count without a contract-derived bound" 'type=int'

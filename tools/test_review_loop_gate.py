@@ -426,6 +426,10 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
         "    run_third()\n"
         "except subprocess.TimeoutExpired:  # OSError still propagates\n"
         "    give_up()\n"
+        "try:\n"
+        "    run_fourth()\n"
+        "except TimeoutExpired:\n"  # unqualified import spelling, same defect
+        "    give_up()\n"
         'parser.add_argument("--reps", type=int, default=3)\n'
     )
     (repo / "planted_guard.sh").write_text(
@@ -459,6 +463,9 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     assert "give_up()" not in timeout_block  # bodies are not swept, only the arms
     assert timeout_block.count("except subprocess.TimeoutExpired") == 2, timeout_block
     assert "# OSError still propagates" in timeout_block
+    # the unqualified `from subprocess import TimeoutExpired` spelling is the same
+    # defect and must also be reported (codex r4 P2)
+    assert "except TimeoutExpired:" in timeout_block
     assert "(subprocess.TimeoutExpired, OSError)" not in timeout_block
 
 
@@ -517,16 +524,57 @@ def test_refresh_classes_rows_match_the_findings_they_were_added_for(cls: str, e
     assert re.search(classes[cls], evidence, re.I), f"{cls} does not match its own finding"
 
 
-def test_refresh_classes_rows_are_not_generically_over_broad():
-    """Over-broad alternatives corrupt the counts the SKILL cites and swallow rows that
-    belong in other classes — the trap that took class 12 from 6 to 126 mid-absorption.
-    Unrelated evidence must NOT land in the U-SR-01 classes."""
+# Classes 13 and 14 are CONJUNCTIONS. Each near miss below satisfies ONE half and must
+# still be refused: a flat OR of the same terms passes every one of them, which is the
+# state codex r3/r4 measured (class 13 mis-bucketed 33 of 64 rows, class 14 six of ten).
+_NEAR_MISSES = [
+    # class 13: command half only — no loop reachability, no guard
+    (
+        "13 new command the loop must reach",
+        "the codex-review recipe in justfile:594 runs"
+        " _require-codex-subscription before the wrapper, so the check is ordered wrong",
+    ),
+    # class 13: reach half only — no new command
+    (
+        "13 new command the loop must reach",
+        "the recovery path strands a headless claim"
+        " when $HOME resolves to the operator's real store",
+    ),
+    # class 14: signal half only — no lock anywhere
+    (
+        "14 signal handler meets lock",
+        "a SIGTERM landing between fut.result() returning"
+        " and the append call loses that observation entirely",
+    ),
+    # class 14: lock half only — no signal anywhere
+    (
+        "14 signal handler meets lock",
+        "the RLock is acquired twice on the same path, so"
+        " a second holder waits forever behind the first",
+    ),
+]
+
+
+@pytest.mark.parametrize(("cls", "evidence"), _NEAR_MISSES)
+def test_refresh_classes_conjunctions_refuse_half_matches(cls: str, evidence: str):
+    """Over-broad rows corrupt the counts the SKILL cites AND remove those findings from
+    unmatched new-class discovery — the more expensive half, since a swallowed row can
+    never surface as a candidate again. Each near miss satisfies one conjunct only."""
     classes = _preflight_classes()
-    unrelated = (
-        "the recovery path strands a headless claim when $HOME resolves to the"
-        " operator's real store"
-    )
-    for cls in ("13 new command the loop must reach", "14 signal handler meets lock"):
+    assert not re.search(classes[cls], evidence, re.I), f"{cls} matched a half-match"
+
+
+def test_refresh_classes_rows_are_not_generically_over_broad():
+    """Wholly unrelated evidence must land in none of the U-SR-01 classes — the trap that
+    took class 12 from 6 to 126 mid-absorption."""
+    classes = _preflight_classes()
+    unrelated = "the fixture teardown leaks a temp dir when an assertion fails mid-run"
+    for cls in (
+        "11 authority-bearing command surface",
+        "12 quoted contract phrase not discharged",
+        "13 new command the loop must reach",
+        "14 signal handler meets lock",
+    ):
         assert not re.search(classes[cls], unrelated, re.I), f"{cls} is over-broad"
 
 

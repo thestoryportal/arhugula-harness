@@ -62,17 +62,20 @@ CLASSES: dict[str, str] = {
         r"spec phrase|contract phrase|undischarged|copied verbatim|declared but"
         r"|unenforced|manifest row|no code discharges|as the verdict|schema-parsed"
     ),
-    # Every alternative must carry the new-command/runs_in/guard relationship itself
-    # (codex r3 P3): bare `headless` and `strands` were generic enough to swallow
-    # unrelated rows — a path-recovery finding that "strands" a claim is not this class —
-    # which both corrupts the count and hides those rows from unmatched new-class
-    # discovery. Same over-broad trap the class-12 row hit one round earlier.
+    # Classes 13 and 14 are CONJUNCTIONS, so they are written as conjunctions (codex r4
+    # P3 x2, each measured against the log before absorbing). A flat OR of independent
+    # terms mis-buckets badly: class 13 matched any row merely LOCATED in `justfile`
+    # (33 of 64 rows carried no loop/guard context at all), and class 14 matched any
+    # SIGTERM row with no lock in sight (6 of 10). Both corrupt the counts AND remove
+    # those rows from unmatched new-class discovery, which is the more expensive half.
+    # `(?s)` because evidence spans newlines and `.` would stop at the first one.
     "13 new command the loop must reach": (
-        r"runs_in|justfile|just recipe|new recipe|guard wiring|allow branch"
-        r"|headless (lane|arc|run|invocation)|strands headless"
+        r"(?s)(?=.*(runs_in|justfile|just recipe|new recipe|new command|allow branch))"
+        r"(?=.*(loop|headless|guard|auto-allow|permission|ask prompt))"
     ),
     "14 signal handler meets lock": (
-        r"signal handler|SIGTERM|SIGINT|SIGHUP|reentran|RLock|async-signal|self-pipe"
+        r"(?s)(?=.*(signal handler|SIGTERM|SIGINT|SIGHUP|async-signal|self-pipe))"
+        r"(?=.*(lock|RLock|mutex|reentran|acquire))"
     ),
 }
 
