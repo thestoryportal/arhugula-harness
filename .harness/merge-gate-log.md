@@ -784,3 +784,5 @@ blast-radius: 8 consumers (graft grep + callers). tools/review_loop_gate.py:84 (
 | 2026-08-28T13:41:09Z | #1477 | b60d2e151ba6 | merge-gate-witness-adequacy | REVIEWER_UNAVAILABLE | 0 finding(s) | r2 |
 | 2026-08-28T13:41:54Z | #1477 | b60d2e151ba6 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |
 | PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | witness-adequacy **BLOCK** (P2 + P3) at `b60d2e151` | round 2 — the r1 fix read the CLASS attribute while `drain_once` calls the INSTANCE; both instance-shadow and subclass-at-construction verified green by probe before this fix. Absorbed below; re-gate owed | blast-radius unchanged (4 consumers) |
+| 2026-08-28T14:38:07Z | #1477 | f8c095c09178 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r4 |
+| PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | witness-adequacy **BLOCK** (P1 + P3) at `f8c095c09` | round 3 — `drain_all` unpinned; third consecutive round on one row → answered by SUBTRACTION (fixture frozen by content digest), not a fourth patch. P3 answered by correcting an overclaim rather than adding a third spelling-ban | blast-radius unchanged (4 consumers) |

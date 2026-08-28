@@ -9,6 +9,7 @@ review terminal per C-HE-16 §3 — no C-HE-24 row, no round outcome).
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -1893,90 +1894,42 @@ def _answer_bullets() -> list[tuple[str, str]]:
     return out
 
 
+# The race fixture is FROZEN EVIDENCE, pinned by content digest.
+#
+# This replaces three rounds of structural pinning, and the replacement is the point.
+# A concurrency defect is a property of the WHOLE MODULE under threading, so every
+# structural pin has an unpinned neighbour: r1 pinned claim()'s body and lost to a
+# wrapper outside it; r2 pinned the class and lost to the instance; r3 pinned the
+# instance and lost to `drain_all`, the one function that actually spawns the threads.
+# Each fix was correct about its own scope and bought exactly one more round — the
+# non-converging arms race this skill's own step 5 says to answer by SUBTRACTION.
+#
+# A digest has no unpinned neighbour: any edit anywhere in the file, at any scope, reds.
+# It is also the honest shape for what this file IS. The fixture is not code under
+# development; it is a recorded test vector that eval 16 was graded against, so it must
+# not drift silently at all — changing it invalidates the grade in
+# `.harness/u-sr-02-eval-run-2026-08-28.md`, which is exactly what this assertion says.
+#
+# Deliberately changing the fixture is a three-step act, not a digest bump: edit, re-run
+# eval 16 and re-grade it, then update this digest and the recorded run together.
+_RACE_FIXTURE_SHA256 = "f5c84559715beec4a717295939a03d6b95534d37e7d7bce10521de2ac6e13657"
+
+
 def _check_registry_race() -> None:
-    """The planted check-then-set, pinned as EXACT AST rather than as source text.
+    """The planted check-then-act race, pinned by freezing the artifact that carries it.
 
-    Text pins are satisfiable by a COMMENT: an atomic `setdefault` guard can keep
-    `if name in self._live` and the assignment in a migration note while the running
-    code is serialised, leaving the old substring assertions green over a fixture with
-    no race left (codex r5 P2). `ast.parse` discards comments, so an expression
-    compared by `ast.dump` cannot be satisfied by anything that does not RUN.
+    See the note above the digest for why this is a digest and not a structural pin.
     """
-    tree = _fixture_ast("absorption/round5_fix.py")
-    classes = [n.name for n in _nodes(tree, ast.ClassDef)]
-    assert "_LiveGroups" in classes, "the fix no longer defines the registry it adds"
-    claim = _one_function("absorption/round5_fix.py", "claim")
-    # Body shape first (any lock, guard or retry adds a statement), then the exact
-    # expressions, so a same-shaped but atomic rewrite cannot pass.
-    assert _body_shape(claim) == ["If", "Assign", "Return"], (
-        "claim() is no longer a bare test-then-set; the planted race is gone"
+    raw = (
+        _repo_root() / EVALS_REL.parent / "fixtures-usr02" / "absorption" / "round5_fix.py"
+    ).read_bytes()
+    actual = hashlib.sha256(raw).hexdigest()
+    assert actual == _RACE_FIXTURE_SHA256, (
+        "the race fixture changed (sha256 "
+        f"{actual[:12]} != {_RACE_FIXTURE_SHA256[:12]}). Eval 16 was graded against the "
+        "recorded bytes, so this is not a digest to bump: re-run eval 16, re-grade it, and "
+        "update this constant and .harness/u-sr-02-eval-run-2026-08-28.md together."
     )
-    guard = next(s for s in claim.body if isinstance(s, ast.If))
-    assert _dump(guard.test) == _expr("name in self._live"), (
-        "claim()'s membership test changed; the check-then-act race may be gone"
-    )
-    assert not guard.orelse
-    assert [_dump(s) for s in guard.body] == [_stmt("return False")]
-    assign = next(s for s in claim.body if isinstance(s, ast.Assign))
-    assert _dump(assign) == _stmt("self._live[name] = worker_id"), (
-        "claim()'s set is no longer the unguarded assignment the race needs"
-    )
-    assert _dump(claim.body[-1]) == _stmt("return True")
-    # The CALL SITE, not only the body (codex r6 P2): wrapping `_LIVE.claim(...)` in a
-    # lock inside drain_once removes the graded two-workers-can-claim race while every
-    # assertion above stays green. drain_once's shape is pinned exactly, so any
-    # synchronisation around the call adds a statement and reds.
-    drain_once = _one_function("absorption/round5_fix.py", "drain_once")
-    assert _body_shape(drain_once) == ["Assign", "For", "Return"], (
-        "drain_once changed shape; the claim call may now be synchronised"
-    )
-    loop = next(s for s in drain_once.body if isinstance(s, ast.For))
-    assert [type(s).__name__ for s in loop.body] == ["If", "Expr", "AugAssign"]
-    assert _dump(loop.body[0].test) == _expr("not _LIVE.claim(name, worker_id)")
-
-    # Everything above inspects claim() and its call site. Synchronisation can also be
-    # added from OUTSIDE both, at class or module scope, and that repairs the race while
-    # every pin above stays byte-identical (merge-gate witness lens r1 — verified by
-    # probe: a post-hoc `_LiveGroups.claim = _synchronized(...)` rebind left this row
-    # green). This is the same decorator-from-outside pattern `_one_function` already
-    # refuses at function scope, one and two scopes up.
-    tree_ast = _fixture_ast("absorption/round5_fix.py")
-    registry = next(n for n in _nodes(tree_ast, ast.ClassDef) if n.name == "_LiveGroups")
-    assert not registry.decorator_list, "_LiveGroups is decorated; claim() may be synchronised"
-    assert not registry.keywords, "_LiveGroups declares a metaclass; claim() may be wrapped"
-    # Module top level pinned exactly: a rebind, a lock construction, or an added import
-    # all change this list, whatever they are named.
-    assert [type(n).__name__ for n in tree_ast.body] == [
-        "Expr",
-        "ImportFrom",
-        "Import",
-        "ImportFrom",
-        "ClassDef",
-        "Assign",
-        "FunctionDef",
-        "FunctionDef",
-    ], "the fixture's module top level changed; claim() may be wrapped from outside"
-    # RUNTIME identity, resolved through the object `drain_once` ACTUALLY CALLS.
-    # The first draft of this check read `_LiveGroups.claim` — the CLASS attribute —
-    # while `drain_once` calls `_LIVE.claim(...)` on the singleton INSTANCE, so an
-    # instance shadow or a subclass-at-construction repaired the race with the class
-    # untouched (merge-gate witness lens r2; both verified green by probe before this
-    # fix). Reading the instance is the correction: attribute resolution walks
-    # instance → type → MRO, so ONE code-object comparison covers every wrapping site
-    # at once rather than enumerating them.
-    module = _load_fixture("absorption/round5_fix.py", "_usr02_round5_fix_race")
-    live = module._LIVE
-    assert type(live) is module._LiveGroups, "_LIVE is a subclass; claim() may be overridden"
-    assert "claim" not in vars(live), "_LIVE shadows claim() on the instance"
-    # bound method → __func__; a plain-function shadow has none, so fall back to itself
-    resolved = getattr(live.claim, "__func__", live.claim)
-    assert resolved.__code__.co_firstlineno == claim.lineno, (
-        "the claim() reached from _LIVE is not the inspected one; it was wrapped"
-    )
-    assert not hasattr(resolved, "__wrapped__")
-    # the registry's own store must be a plain dict: a thread-safe dict-like would make
-    # the pinned test-then-set atomic without touching claim()'s body
-    assert type(live._live) is dict, "_LIVE._live is not a plain dict; the race may be gone"
 
 
 def _check_answers_deny() -> None:
@@ -2268,11 +2221,14 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     assert "suppressed|" not in squashed and "|suppressed" not in squashed, (
         "the absorber's documented disposition set admits `suppressed` again"
     )
-    # The negative above only sees `suppressed` adjacent to a pipe, i.e. inside the CLI
-    # flag syntax; prose reintroducing it elsewhere would slip past (merge-gate witness
-    # lens r2, P3). The remedy is a POSITIVE exclusivity claim rather than a second
-    # negative — this arc spent rounds learning that banning spellings loses to the next
-    # one, while a positive pin is complete by construction.
+    # A positive claim the doc must carry. NOT an exclusivity guarantee: r2 called this
+    # "complete by construction", and r3 correctly refuted that — this assertion and the
+    # negative above are independent substring checks, so prose added elsewhere granting
+    # the absorber `suppressed` authority (phrased without an adjacent pipe) would leave
+    # both green over a self-contradicting document. Whether a document says a thing
+    # NOWHERE is not a substring property, so no pin closes it; a third spelling-ban would
+    # only add a fourth. Registered as a named limit in the PR body instead of pretended
+    # away here.
     assert "an absorber writes no third state" in squashed
     # r9 P1: the r8 rule (leave it null, name it in the sweep) lost the finding.
     # `unanswered_findings` subtracts every id an attestation names and never reads
