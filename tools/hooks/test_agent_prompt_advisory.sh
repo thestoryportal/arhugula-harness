@@ -9,6 +9,12 @@
 #      rather than silently reintroducing the un-rehearsed passive memory WR-08 replaced;
 #   4. it is actually WIRED at PreToolUse/"Agent" in settings.json -- a hook nothing routes
 #      to is unreachable, and the script's own green says nothing about that.
+#
+# What this file CANNOT prove, stated so a green run is not over-read: it asserts the
+# hook's EMISSION, never that the host honors `additionalContext`. The honoring happens
+# in the runtime that invokes the hook, so no shell test can reach it. That half is
+# closed by a recorded live observation at
+# .harness/u-sr-03-pretooluse-additionalcontext-witness.md (codex r1/r5 disputed it).
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

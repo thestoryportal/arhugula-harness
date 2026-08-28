@@ -6,6 +6,8 @@ subprocess reaches a real reviewer, and the only git calls are read-only `rev-pa
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -850,6 +852,38 @@ def test_cli_binding_publishes_the_six_fields_to_a_file_and_prints_only_its_path
     )
 
 
+def test_cli_emit_refuses_a_fifo_without_hanging(tmp_path, monkeypatch, capsys):
+    """codex r5 P2: a blocking `O_RDONLY` on a planted FIFO never reaches the type check.
+
+    `.harness/tmp` is where an auto-allowed recipe writes, so a local actor can plant a FIFO
+    at the verdict name; a blocking open then waits for a writer that never comes and wedges
+    `emit` before `fstat` can reject it. The test would HANG rather than fail if the fix were
+    reverted, so it is bounded by an alarm: a hang is reported as a failure, not as a stall.
+    """
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+    fifo = scratch / "lens.txt"
+    os.mkfifo(fifo)
+
+    def _hung(signum, frame):
+        raise AssertionError("emit blocked on the FIFO instead of refusing it")
+
+    previous = signal.signal(signal.SIGALRM, _hung)
+    signal.alarm(5)
+    try:
+        assert mgl.main(_cli(fifo)) == 2
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert "must be '-' or a regular file directly under" in capsys.readouterr().err
+    assert not jl.exists()
+
+
 def test_cli_emit_refuses_a_same_basename_directory_that_is_not_the_scratch_dir(
     tmp_path, monkeypatch, capsys
 ):
@@ -880,7 +914,7 @@ def test_cli_emit_refuses_a_same_basename_directory_that_is_not_the_scratch_dir(
     assert not jl.exists(), "recorded a verdict from a directory that was not the scratch dir"
 
 
-def test_cli_binding_refuses_a_symlinked_ANCESTOR_of_the_scratch_dir(tmp_path, monkeypatch, capsys):
+def test_cli_binding_refuses_a_symlinked_ancestor_of_the_scratch_dir(tmp_path, monkeypatch, capsys):
     """codex r3 P2: `O_NOFOLLOW` on the final component alone left the parent swappable.
 
     With the equivalent of `.harness` replaced by a symlink to an external directory that

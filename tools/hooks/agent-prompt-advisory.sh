@@ -13,6 +13,12 @@
 # replaces (`feedback-subagent-prompts-are-laws-prompt-medium`) failed twice in 48h by being
 # present but un-rehearsed, which is what a cap would reintroduce.
 #
+# The runtime honors `additionalContext` on this event -- OBSERVED, not assumed: one Agent
+# call was made with this hook wired and the advisory came back in the turn's context
+# verbatim. The observation and its scope are recorded at
+# .harness/u-sr-03-pretooluse-additionalcontext-witness.md, because out-of-family review
+# disputed it twice on an inferred field contract this repository does not actually pin.
+#
 # Trigger: PreToolUse matcher "Agent". Test: tools/hooks/test_agent_prompt_advisory.sh.
 
 set -uo pipefail

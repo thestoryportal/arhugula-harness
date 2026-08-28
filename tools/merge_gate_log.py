@@ -762,7 +762,13 @@ def _read_text(arg: str) -> str:
             raise bad from exc
         if not same:
             raise bad
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+        # `O_NONBLOCK` so the TYPE check can happen at all: a FIFO planted at this
+        # auto-allowed name makes a blocking `O_RDONLY` wait for a writer forever, so
+        # `emit` wedges before `fstat` ever runs and a local actor can stall the gate
+        # (codex r5 P2). This is the class-1 rider's own idiom -- `O_NOFOLLOW|O_NONBLOCK`
+        # plus a post-open `S_ISREG` -- which the first draft applied only by halves. On a
+        # regular file the flag has no further effect.
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
     except OSError as exc:
         raise bad from exc
     finally:
