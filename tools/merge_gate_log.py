@@ -654,6 +654,14 @@ def open_scratch_dir() -> int:
     except OSError as exc:
         raise GateLogError(f"{SCRATCH_ANCHOR} is not a usable scratch anchor: {exc}") from exc
     for part in parts:
+        # Provision descriptor-relative, never through the path. A `mkdir(parents=True)` on
+        # `LENS_SCRATCH` runs BEFORE any of this and follows symlinked ancestors, so a
+        # `.harness` pointing at a writable outside directory with no `tmp` child had the
+        # auto-allowed recipe CREATE that outside `tmp` before the refusal ever fired
+        # (codex r4 P2). Best-effort here on purpose: the open below is the single authority
+        # on whether this component is usable, and it reports the one specific refusal.
+        with contextlib.suppress(OSError):
+            os.mkdir(part, 0o755, dir_fd=fd)
         try:
             nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
         except OSError as exc:
@@ -740,10 +748,20 @@ def _read_text(arg: str) -> str:
     # carriers), so the read is `dir_fd`-relative to the captured scratch inode and a name
     # carrying any separator is refused outright -- no traversal, and no re-walk of a path
     # another process could repoint between the check and the open (codex R7 P2, r2 P2).
-    if not name or name != arg.rsplit("/", 1)[-1] or Path(arg).parent.name != LENS_SCRATCH.name:
+    if not name or name != arg.rsplit("/", 1)[-1]:
         raise bad
     dfd = open_scratch_dir()
     try:
+        # The supplied directory must BE the captured one, compared by identity. Comparing
+        # its BASENAME accepted `other/tmp/verdict.txt` while the read still came from
+        # `.harness/tmp/verdict.txt` -- emit would record a different, possibly stale verdict
+        # instead of failing closed (codex r4 P2). `samestat` cannot be fooled by naming.
+        try:
+            same = os.path.samestat(os.stat(Path(arg).parent), os.fstat(dfd))
+        except OSError as exc:
+            raise bad from exc
+        if not same:
+            raise bad
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
     except OSError as exc:
         raise bad from exc
@@ -800,8 +818,7 @@ def main(argv: list[str] | None = None) -> int:
         # bind to nothing); tests patch `config_hash` itself.
         try:
             values = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
-            LENS_SCRATCH.mkdir(parents=True, exist_ok=True)
-            dfd = open_scratch_dir()
+            dfd = open_scratch_dir()  # provisions the chain itself, inside the walk
         except GateLogError as exc:
             print(f"merge-gate-log: {exc}", file=sys.stderr)
             return 2

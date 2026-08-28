@@ -850,6 +850,36 @@ def test_cli_binding_publishes_the_six_fields_to_a_file_and_prints_only_its_path
     )
 
 
+def test_cli_emit_refuses_a_same_basename_directory_that_is_not_the_scratch_dir(
+    tmp_path, monkeypatch, capsys
+):
+    """codex r4 P2: comparing the parent's BASENAME accepted a different directory.
+
+    `other/tmp/verdict.txt` shares its parent's name with `.harness/tmp`, so the basename
+    check passed and the read then came from the REAL scratch dir -- emit would have recorded
+    a different, possibly stale verdict instead of failing closed. Identity is compared now,
+    which no amount of naming can satisfy.
+    """
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
+    (scratch / "lens.txt").write_text(_lens_output(b, "APPROVE"))  # the verdict emit must NOT read
+
+    decoy = tmp_path / "other" / "scratch"  # same basename, different directory
+    decoy.mkdir(parents=True)
+    (decoy / "lens.txt").write_text("not a verdict at all\n")
+
+    assert mgl.main(_cli(decoy / "lens.txt")) == 2
+    assert "must be '-' or a regular file directly under" in capsys.readouterr().err
+    assert not jl.exists(), "recorded a verdict from a directory that was not the scratch dir"
+
+
 def test_cli_binding_refuses_a_symlinked_ANCESTOR_of_the_scratch_dir(tmp_path, monkeypatch, capsys):
     """codex r3 P2: `O_NOFOLLOW` on the final component alone left the parent swappable.
 
@@ -859,7 +889,7 @@ def test_cli_binding_refuses_a_symlinked_ANCESTOR_of_the_scratch_dir(tmp_path, m
     Every component below the anchor is validated now, so the ancestor is refused too.
     """
     outside = tmp_path / "outside"
-    (outside / "tmp").mkdir(parents=True)
+    outside.mkdir()  # deliberately WITHOUT a `tmp` child: pre-creating it hid the mkdir
     root = tmp_path / "root"
     root.mkdir()
     (root / "harness").symlink_to(outside, target_is_directory=True)
@@ -869,7 +899,10 @@ def test_cli_binding_refuses_a_symlinked_ANCESTOR_of_the_scratch_dir(tmp_path, m
 
     assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 2
     assert "not a usable scratch directory" in capsys.readouterr().err
-    assert list((outside / "tmp").iterdir()) == [], "published through the swapped ancestor"
+    # Nothing outside the repository was created, let alone written: the provisioning walks
+    # descriptor-relative inside the validated chain, so it never reaches a swapped ancestor
+    # (codex r4 P2 -- the path-based `mkdir(parents=True)` created `outside/tmp` first).
+    assert list(outside.iterdir()) == [], "mutated outside the repository before refusing"
 
 
 def test_cli_binding_refuses_a_symlinked_scratch_directory(tmp_path, monkeypatch, capsys):
