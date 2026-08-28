@@ -2221,18 +2221,36 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     # never existed, and readers reducing by finding_id see a settled mute where a
     # visible `disposition=null` used to be. Held findings stay UNDISPOSED.
     assert "--disposition accepted|rejected --actor <runner>_absorber" in squashed
-    assert "A hold is left UNDISPOSED on the ledger — an absorber never writes it." in squashed
     assert "suppressed|" not in squashed and "|suppressed" not in squashed, (
         "the absorber's documented disposition set admits `suppressed` again"
+    )
+    # r9 P1: the r8 rule (leave it null, name it in the sweep) lost the finding.
+    # `unanswered_findings` subtracts every id an attestation names and never reads
+    # disposition, so an attested null-disposition finding is retired permanently with
+    # nothing recording that it was decided. Neither `suppressed` nor null is available,
+    # so "held" is not a ledger state at all — the probe IS the disposition.
+    assert '"Held" is not a ledger state, and reaching for one is the error.' in squashed
+    assert "EVERY finding gets one of these two, always" in squashed
+    assert "no finding may be attested past with `disposition=null`" in squashed
+    # Bound to the gate's actual behaviour, not to a restatement of it: if
+    # unanswered_findings ever starts consulting disposition, this reds and the prose
+    # must be revisited.
+    gate_src = (_repo_root() / "tools" / "review_loop_gate.py").read_text(encoding="utf-8")
+    subtract = gate_src.split("def unanswered_findings", 1)[1].split("\ndef ", 1)[0]
+    assert "sorted(all_ids - answered)" in subtract
+    assert "disposition" not in subtract, (
+        "unanswered_findings now reads disposition; the skill's step 4 rationale is stale"
     )
 
     # The guard venue (codex r6 P2), pinned against the GUARD's own source rather than
     # restated, so the two cannot drift apart: if the allowlist ever admits
     # `suppressed`, this reds and the prose must be revisited — the direction that
     # matters, since widening it would let an agent grant itself mute authority.
-    assert "_adjudicate_exact_shape` auto-allows only `accepted|rejected`" in squashed
-    # Where the hold actually lives now that no row carries it (codex r7 P2 + r8 P1).
-    assert "name the finding_id, the probe (its test id and the commit that landed it)" in squashed
+    assert (
+        "permission guard's `accepted|rejected` allowlist (`_adjudicate_exact_shape`, "
+        "U-HE-47)" in squashed
+    )
+    assert "never widen it to get past this moment" in squashed
     guard_src = (_repo_root() / "tools" / "hooks" / "permission-guard.sh").read_text(
         encoding="utf-8"
     )

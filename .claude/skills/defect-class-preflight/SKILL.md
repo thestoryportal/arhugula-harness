@@ -369,8 +369,9 @@ BEFORE re-invoking the reviewer:
    `HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id>
    --disposition accepted|rejected --actor <runner>_absorber` (`accepted` = the fix
    was applied; `rejected` = refuted; the finding_id is on the round's emitted JSONL
-   rows). Those are the only two dispositions an absorber may write — a HELD finding
-   is left UNDISPOSED; see step 4. The
+   rows). EVERY finding gets one of these two, always: an absorber writes no third
+   state, and no finding may be attested past with `disposition=null` — see step 4
+   for why holding is not the exception it looks like. The
    `HARNESS_ARC_ID=` prefix is
    REQUIRED — the guard auto-allows only the prefixed form, and the CLI holder-binds
    it to this lane's live reservation. The actor is the RUNNER's own absorber
@@ -389,27 +390,30 @@ BEFORE re-invoking the reviewer:
    and r10 — four paid rounds on one unpromoted hold, the costliest policy miss of
    that arc (charter WR-06, [A] §1).
 
-   **A hold is left UNDISPOSED on the ledger — an absorber never writes it.** The
-   temptation is to reach for `suppressed`, which the CLI does accept. Do not: the
-   row's `disposition_actor` is the *adjudicating authority*, and C-HE-24 §5 says
-   that authority is a decorrelated lens, a deterministic rule, or a logged operator
-   override — an absorber is none of the three. A `suppressed` row signed by the
-   absorber therefore records an authority that never existed, and since readers
-   reduce by `finding_id` to the last row, every downstream consumer sees a mute with
-   nothing behind it. That is worse than the null it replaced: `disposition=null` is
-   visibly unfinished, while a false `suppressed` looks settled.
+   **"Held" is not a ledger state, and reaching for one is the error.** Both obvious
+   moves are wrong, and they are wrong in opposite directions. Writing `suppressed`
+   names its actor as the *adjudicating authority*, which C-HE-24 §5 restricts to a
+   decorrelated lens, a deterministic rule, or a logged operator override — an
+   absorber is none of the three, so the row asserts an authority that never existed.
+   Leaving the row null and naming the finding in the sweep is worse in a quieter
+   way: `unanswered_findings` subtracts every id an attestation names, and it never
+   reads disposition, so the obligation disappears permanently while the ledger still
+   says nothing was decided. One move fakes a verdict; the other loses the finding.
 
-   The permission guard already refuses it — `_adjudicate_exact_shape` auto-allows
-   only `accepted|rejected` (U-HE-47) — and that refusal is the contract holding, not
-   friction to route around. Never widen the guard to clear it.
+   The way out is to notice that the probe already IS the disposition. If you landed
+   the fail-closed floor, you FIXED this finding — the risk it named is now caught —
+   so it is `accepted`, and what remains is not this finding at all but a separate
+   scope item: the policy, the real ceiling, the proper owner. Register that as its
+   own forward row where forward work lives. A reviewer's finding and the scope it
+   brushes against are two objects, and collapsing them is what made "held" feel
+   necessary.
 
-   So a held finding stays undisposed, and the hold lives where prose is durable:
-   name the finding_id, the probe (its test id and the commit that landed it), and
-   the reason in the absorption commit message and the sweep attestation. The
-   attestation is what the next round reads, so the hold is carried forward in the
-   open rather than muted — reported, not silenced. If the operator later decides to
-   suppress, that is theirs to write, and their approval is the logged override the
-   contract names.
+   And if you cannot land even the minimal probe, you have no disposition to write —
+   so do not attest past it. That is the genuine operator gate: halt, surface the
+   finding, and let the operator direct the fix or write the `suppressed` row on
+   their own authority, which is the logged override the contract names. The
+   permission guard's `accepted|rejected` allowlist (`_adjudicate_exact_shape`,
+   U-HE-47) is that boundary made mechanical; never widen it to get past this moment.
 
 5. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
