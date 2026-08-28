@@ -1934,6 +1934,41 @@ def _check_registry_race() -> None:
     assert [type(s).__name__ for s in loop.body] == ["If", "Expr", "AugAssign"]
     assert _dump(loop.body[0].test) == _expr("not _LIVE.claim(name, worker_id)")
 
+    # Everything above inspects claim() and its call site. Synchronisation can also be
+    # added from OUTSIDE both, at class or module scope, and that repairs the race while
+    # every pin above stays byte-identical (merge-gate witness lens r1 — verified by
+    # probe: a post-hoc `_LiveGroups.claim = _synchronized(...)` rebind left this row
+    # green). This is the same decorator-from-outside pattern `_one_function` already
+    # refuses at function scope, one and two scopes up.
+    tree_ast = _fixture_ast("absorption/round5_fix.py")
+    registry = next(n for n in _nodes(tree_ast, ast.ClassDef) if n.name == "_LiveGroups")
+    assert not registry.decorator_list, "_LiveGroups is decorated; claim() may be synchronised"
+    assert not registry.keywords, "_LiveGroups declares a metaclass; claim() may be wrapped"
+    # Module top level pinned exactly: a rebind, a lock construction, or an added import
+    # all change this list, whatever they are named.
+    assert [type(n).__name__ for n in tree_ast.body] == [
+        "Expr",
+        "ImportFrom",
+        "Import",
+        "ImportFrom",
+        "ClassDef",
+        "Assign",
+        "FunctionDef",
+        "FunctionDef",
+    ], "the fixture's module top level changed; claim() may be wrapped from outside"
+    # RUNTIME identity: the claim() that actually EXECUTES must be the one inspected
+    # above. Any wrapper — class decorator, metaclass, or post-hoc rebind — replaces the
+    # attribute, so its code object no longer starts at the inspected `def` line.
+    module = _load_fixture("absorption/round5_fix.py", "_usr02_round5_fix_race")
+    executable = module._LiveGroups.claim
+    assert executable.__qualname__ == "_LiveGroups.claim", (
+        "the executable claim() is not the class's own function; it was rebound"
+    )
+    assert executable.__code__.co_firstlineno == claim.lineno, (
+        "the executable claim() is not the inspected one; it was wrapped from outside"
+    )
+    assert not hasattr(executable, "__wrapped__")
+
 
 def _check_answers_deny() -> None:
     bullets = _answer_bullets()

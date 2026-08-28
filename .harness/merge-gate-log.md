@@ -776,3 +776,8 @@ blast-radius: 8 consumers (graft grep + callers). tools/review_loop_gate.py:84 (
 - Test-witness returned APPROVE carrying one P3 on the ABSORPTION COMMIT'S PROSE, not on the code: the message claims the mutation "reds BOTH tests", which holds only for the 1-tuple mutation form; under a bare-string collapse the invariant skips via `isinstance(pattern, str)` and only the near-miss test reds. The schema forbids findings on APPROVE, so the emitted row carries `findings: []` and the P3 is preserved here and in the PR body as a named residual. Follow-up worth taking: pin classes 13/14 as tuples so a bare-string collapse reds the invariant directly instead of silently disabling it.
 
 **Outcome: all-approve at round 2 → merge.** Codex out-of-family review ran separately to its 10-round budget cap (30 findings, all accepted); round 11 was refused by the budget gate and the operator directed landing at round 10.
+| 2026-08-28T13:21:30Z | #1477 | 8b3c4b6d87c2 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-08-28T13:23:40Z | #1477 | 8b3c4b6d87c2 | merge-gate-witness-adequacy | BLOCK | 3 finding(s) | r1 |
+| 2026-08-28T13:26:03Z | #1477 | 8b3c4b6d87c2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+
+| PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | concurrency APPROVE · spec-conformance APPROVE · witness-adequacy **BLOCK** (P2) | round 1 — BLOCK absorbed at the fix below; re-gate owed | blast-radius: 4 consumers (`tools/review_loop_gate.py:84,387`, `tools/test_codex_workflow_parity.py:1311,1313,1366,1369`, `tools/reviewer_concurrency_probe.py:233`, `tools/test_review_loop_gate.py` as sole `evals.json` reader); nothing imports the changed module |
