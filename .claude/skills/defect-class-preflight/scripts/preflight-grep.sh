@@ -73,7 +73,13 @@ report "new retry/timeout constants"  'timeout|retry|deadline|budget'
 # The four U-SR-01 shapes (charter WR-03), each a mechanization of a u-he-35 finding
 # the written classes alone did not fire on. Class 12's P1: a process exit code read
 # as if it were the verdict, against a contract that says only the schema parse is.
-report "exit code read as verdict (class 12 — name the schema parse that decides)" 'returncode +in +\(|\.returncode *(==|!=) *[0-9]'
+# Only the charter's shape, `returncode in (`. A `.returncode == / != N` alternative was
+# tried and REMOVED (codex r6 P2): `proc.returncode != 0` is the ordinary way to check a
+# child's status, so it fired on correct code — and with report()'s eight-hit cap, eight
+# such false positives can push a real verdict misuse out of the report while the
+# attestation still shows the label answered. A detector whose noise can hide its own
+# signal is worse than a narrower one.
+report "exit code read as verdict (class 12 — name the schema parse that decides)" 'returncode +in +\('
 # Spawn failure escaping a bounded call. `OSError` is what `subprocess` raises when the
 # child never STARTS (missing executable, EACCES, fd exhaustion); a child that starts
 # and then dies returns a CompletedProcess with a negative returncode and is NOT this

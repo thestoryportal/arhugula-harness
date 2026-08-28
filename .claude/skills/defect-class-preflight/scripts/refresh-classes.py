@@ -74,9 +74,14 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # `as the verdict|schema-parsed` are what the exit-code-as-verdict row's
     # evidence actually says; overlap with class 3 is by design — a row counts in every
     # class it touches.
+    # Every alternative must carry BOTH halves of the class — a quoted obligation AND its
+    # absence — on its own. `manifest row` and `copied verbatim` were bare location/act
+    # nouns that admitted any finding mentioning either, so they went (codex r6 P2). This
+    # row stays a disjunction rather than becoming a conjunction: `unenforced`,
+    # `undischarged` and `no code discharges` each already mean both halves in one word.
     "12 quoted contract phrase not discharged": (
-        r"spec phrase|contract phrase|undischarged|copied verbatim|declared but"
-        r"|unenforced|manifest row|no code discharges|as the verdict|schema-parsed"
+        r"spec phrase|contract phrase|undischarged|declared but"
+        r"|unenforced|no code discharges|as the verdict|schema-parsed"
     ),
     # Conjunctions (codex r4 P3 x2, each measured before absorbing): a flat OR
     # mis-bucketed 33 of 64 class-13 rows and 6 of 10 class-14 rows. `justfile` is
@@ -89,7 +94,12 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     ),
     "14 signal handler meets lock": (
         r"signal handler|SIGTERM|SIGINT|SIGHUP|async-signal|self-pipe",
-        r"lock|RLock|mutex|reentran|acquire",
+        # word-bounded: a bare `lock` also matched `block`/`blocking`, so a Ctrl-C row
+        # that "can block in ThreadPoolExecutor shutdown" landed here with no lock in
+        # sight (codex r6 P2). `\block\b` excludes both for free — neither has a word
+        # boundary before "lock" — so no extra guard is needed. `RLock` gets its own
+        # alternative because there is no boundary inside it either.
+        r"\block\b|\blocks\b|RLock|mutex|reentran|acquire",
     ),
 }
 

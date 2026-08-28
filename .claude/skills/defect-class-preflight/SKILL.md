@@ -10,7 +10,7 @@ description: Pre-commit self-review sweep against the recurring defect classes t
 This workspace's review loop is fail-closed: every defect a reviewer finds costs a full
 serial cycle (fix → probe → commit → CI → re-review → re-bind), typically 15–30 minutes.
 Analysis of the recorded findings in `.harness/merge-gate-log.jsonl` (1,084 at first distillation, 2026-08-24; the committed corpus below is newer) shows they
-cluster into ten recurring classes — and repeatedly, the defect found was a shape the
+cluster into a small set of recurring classes — and repeatedly, the defect found was a shape the
 workspace had *already fixed once elsewhere* (the same two-armed restore shipped twice in
 one arc). The knowledge exists; this skill is its activation at authoring time. One pass
 here converts review rounds into pre-commit edits.

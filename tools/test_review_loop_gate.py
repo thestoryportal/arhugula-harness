@@ -413,6 +413,8 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     (repo / "planted.py").write_text(
         "if proc.returncode in (0, 1):\n"
         "    verdict = 'approve'\n"
+        "if proc.returncode != 0:  # ordinary status check, not a verdict\n"
+        "    log_it()\n"
         "try:\n"
         "    run()\n"
         "except subprocess.TimeoutExpired:\n"
@@ -452,9 +454,14 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
 
     # Each label must carry the PLANTED line, not merely be present: deleting a
     # planted shape has to red its own assertion.
-    assert "proc.returncode in (0, 1)" in block(
+    verdict_block = block(
         "exit code read as verdict (class 12 — name the schema parse that decides)"
     )
+    assert "proc.returncode in (0, 1)" in verdict_block
+    # an ordinary `!= 0` status check is CORRECT code and must not be flagged: with
+    # report()'s eight-hit cap, such false positives can push a real misuse out of the
+    # report while the attestation still shows the label answered (codex r6 P2)
+    assert "returncode != 0" not in verdict_block
     assert "--reps" in block("argparse count without a contract-derived bound")
     assert "new-recipe" in block("new permission-guard allow branch (name its witness)")
     # Five planted arms, one per way the exclusion can be right or wrong. Only OSError
@@ -555,6 +562,19 @@ _NEAR_MISSES = [
         "14 signal handler meets lock",
         "the RLock is acquired twice on the same path, so"
         " a second holder waits forever behind the first",
+    ),
+    # class 14: `block`/`blocking` are not locks — a bare `lock` alternative matched
+    # both, so a Ctrl-C shutdown row landed here with no lock in sight (codex r6 P2)
+    (
+        "14 signal handler meets lock",
+        "Ctrl-C can block in ThreadPoolExecutor shutdown and the blocking wait is"
+        " unbounded, so SIGINT never reaches the caller",
+    ),
+    # class 12: a bare location noun is not the class — every alternative must mean
+    # BOTH a quoted obligation and its absence (codex r6 P2)
+    (
+        "12 quoted contract phrase not discharged",
+        "the manifest row lists the wrong tag for this artifact",
     ),
 ]
 
