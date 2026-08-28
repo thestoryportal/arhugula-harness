@@ -395,6 +395,52 @@ def test_attest_preflight_real_script_integration(repo: Path, monkeypatch: pytes
     assert "silent-failure shapes" in pf.hit_labels
 
 
+def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
+    """U-SR-01 (charter WR-03) acceptance: each of the four added shapes catches a
+    planted fixture, run through the REAL script — a pattern that matches nothing is
+    a class the sweep silently stops covering. The TimeoutExpired case asserts BOTH
+    directions: the bare arm is reported and the `(TimeoutExpired, OSError)` sibling
+    is NOT, so the exclusion is witnessed as discriminating rather than merely
+    present (a label-only assertion passes even if report_unless never filters)."""
+    real = Path(__file__).resolve().parents[1] / SCRIPT_REL
+    _plant_script(repo, real.read_text(encoding="utf-8"))
+    (repo / "planted.py").write_text(
+        "if proc.returncode in (0, 1):\n"
+        "    verdict = 'approve'\n"
+        "try:\n"
+        "    run()\n"
+        "except subprocess.TimeoutExpired:\n"
+        "    give_up()\n"
+        "try:\n"
+        "    run_sibling()\n"
+        "except (subprocess.TimeoutExpired, OSError):\n"
+        "    handle()\n"
+        'parser.add_argument("--reps", type=int, default=3)\n'
+    )
+    (repo / "planted_guard.sh").write_text(
+        "    elif printf '%s' \"$TRIM\" | grep -Eq '^just[[:space:]]+new-recipe$' \\\n"
+    )
+    out = subprocess.run(
+        ["bash", str(repo / SCRIPT_REL)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert out.returncode == 0, out.stderr
+    for label in (
+        "exit code read as verdict",
+        "TimeoutExpired without OSError",
+        "argparse count without a contract-derived bound",
+        "new permission-guard allow branch",
+    ):
+        assert label in out.stdout, f"shape did not fire: {label}\n{out.stdout}"
+    # the discriminating half: only the un-paired arm is carried into the report
+    timeout_block = out.stdout.split("[TimeoutExpired without OSError")[1].split("\n\n")[0]
+    assert "except subprocess.TimeoutExpired:" in timeout_block
+    assert "OSError" not in timeout_block
+
+
 def test_attest_sweep_records_and_covers(repo: Path, monkeypatch: pytest.MonkeyPatch):
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)

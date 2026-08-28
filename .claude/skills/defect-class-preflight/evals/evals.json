@@ -204,6 +204,38 @@
     "flags the exists-then-read check-then-act on STATE",
     "flags the non-atomic write_text rewrite (no same-directory temp + os.replace), so a crash mid-write leaves half-state that a later reader parses as corruption"
    ]
+  },
+  {
+   "id": 12,
+   "eval_name": "p1-exit-code-as-verdict",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a new file, currently staged as a fixture at .claude/skills/defect-class-preflight/evals/fixtures-usr01/wrapper_verdict.py. Perform a thorough pre-commit review of it. List every defect you find — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md naming the undischarged contract phrase: the module docstring quotes C-HE-15 ('a verdict counts only on its schema parse — never on the reviewer process's exit code') while run_review decides the verdict from proc.returncode and never calls parse_verdict; plus the crash/exit-1 aliasing and the TimeoutExpired-without-OSError arm",
+   "files": [
+    "fixtures-usr01/wrapper_verdict.py"
+   ],
+   "assertions": [
+    "names the quoted-contract-phrase-with-no-line-behind-it defect — passes only if the review ties the docstring's C-HE-15 phrase to the code that contradicts it (returncode-as-verdict); merely calling run_review 'inconsistent' or noting the docstring is out of date does not pass",
+    "identifies that parse_verdict — the only schema parse in the module, and the function that would discharge the quoted phrase — has no caller",
+    "flags that a reviewer crashing with exit status 1 is indistinguishable from a genuine 'block' verdict",
+    "flags the except subprocess.TimeoutExpired arm that does not also handle OSError (a spawn failure escapes the handler)"
+   ]
+  },
+  {
+   "id": 13,
+   "eval_name": "p1-declared-but-unenforced-gate",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a new file, currently staged as a fixture at .claude/skills/defect-class-preflight/evals/fixtures-usr01/pilot_gate.py. Perform a thorough pre-commit review of it. List every defect you find — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md naming the declared-but-unenforced gate: the manifest row and docstring both state 'result row required before pilots', but launch_pilots only counts the rows into an audit line and launches regardless — including when result_rows returns empty; plus the unbounded --reps count",
+   "files": [
+    "fixtures-usr01/pilot_gate.py"
+   ],
+   "assertions": [
+    "names the declared-but-unenforced gate — passes only if the review states that the documented 'result row required before pilots' precondition is never enforced in launch_pilots; noting the docstring is long or the row is stale does not pass",
+    "makes concrete that with an empty store (ProbeStore([]), as main() constructs) the pilots launch anyway — the gate's zero case is the one it was written to stop",
+    "observes that the rows value is read but only logged, never branched on",
+    "flags --reps (argparse type=int) as accepting an unbounded or non-positive count with no contract-derived bound"
+   ]
   }
  ]
 }

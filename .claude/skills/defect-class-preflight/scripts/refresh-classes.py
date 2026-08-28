@@ -17,9 +17,12 @@ import re
 import sys
 from pathlib import Path
 
-# One definition per class, mirroring SKILL.md's ten sections. When a class is
+# One definition per class, mirroring SKILL.md's class sections. When a class is
 # added or reworded there, extend this table in the same commit (the counts the
-# skill cites are derived HERE, so a drifted table silently mis-buckets).
+# skill cites are derived HERE, so a drifted table silently mis-buckets, and a
+# class absent here can never leave the unmatched bucket — it reads as a
+# new-class candidate forever). Classes 11–14 were added by U-SR-01; 11 had been
+# carried in SKILL.md since U-HE-47 without a row here.
 CLASSES: dict[str, str] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -45,6 +48,20 @@ CLASSES: dict[str, str] = {
     ),
     "10 fixture scope / lifecycle": (
         r"session-scoped|module-scoped|function-scoped|teardown|collection|autouse|fixture"
+    ),
+    "11 authority-bearing command surface": (
+        r"permission.guard|auto-allow|allowlist|guard venue|exact.shape|carrier parity"
+        r"|adjudicat|exemption|gate override"
+    ),
+    "12 quoted contract phrase not discharged": (
+        r"spec phrase|contract phrase|undischarged|copied verbatim|declared but"
+        r"|unenforced|manifest row|no code discharges"
+    ),
+    "13 new command the loop must reach": (
+        r"runs_in|justfile|just recipe|headless|ask prompt|guard wiring|strands"
+    ),
+    "14 signal handler meets lock": (
+        r"signal handler|SIGTERM|SIGINT|SIGHUP|reentran|RLock|async-signal|self-pipe"
     ),
 }
 

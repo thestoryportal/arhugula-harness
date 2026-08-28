@@ -1,6 +1,6 @@
 ---
 name: defect-class-preflight
-description: Pre-commit self-review sweep against the ten defect classes this workspace's reviewers actually catch, distilled from the merge-gate/codex finding corpus (the corpus only grows; scripts/refresh-classes.py rederives counts). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), whenever a review round's fix is being committed (fixes introduce their own defects), and whenever a diff introduces a new consumer of an existing data surface — another tool's log/ledger/store/output, an env variable, or an external SDK — which fires the new-consumer inventory pause at authoring time, BEFORE the consumer is written. One pass here is how a first draft survives review — skipping it is how arcs run 9–17 BLOCK rounds.
+description: Pre-commit self-review sweep against the recurring defect classes this workspace's reviewers actually catch, distilled from the merge-gate/codex finding corpus (the corpus only grows; scripts/refresh-classes.py rederives counts). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), whenever a review round's fix is being committed (fixes introduce their own defects), and whenever a diff introduces a new consumer of an existing data surface — another tool's log/ledger/store/output, an env variable, or an external SDK — which fires the new-consumer inventory pause at authoring time, BEFORE the consumer is written. One pass here is how a first draft survives review — skipping it is how arcs run 9–17 BLOCK rounds.
 ---
 
 # defect-class-preflight — sweep the diff before the reviewers do
@@ -128,9 +128,9 @@ than an in-repo file, the same pause applies, with a three-rung ladder:
    in the inventory table as a case to handle; the probe narrows nothing it did
    not see.
 
-## The ten classes, ranked by finding count
+## The classes, ranked by finding count
 
-*(Counts and order regenerated from the committed log by `scripts/refresh-classes.py` at the 2026-08-24 committed corpus of 1,095 findings — rerun the script for live figures; the log only grows, so these are a bound snapshot, not live state.)*
+*(Counts and order for classes 1–10 regenerated from the committed log by `scripts/refresh-classes.py` at the 2026-08-24 committed corpus of 1,095 findings — rerun the script for live figures; the log only grows, so these are a bound snapshot, not live state. Classes past 10 are appended by the arc that paid for them and carry that arc's count, so they are outside the ranking.)*
 
 ### 1. Race / TOCTOU / atomicity (379 findings)
 Any check-then-act on files, refs, locks, or shared state. Ask: *between my check and my
@@ -248,6 +248,64 @@ input) in a table with its pinning authority (enum, identity set, holder state,
 ask-gate), and close them ALL in that absorption. The sibling sweep's unit is the
 mechanism's whole authority surface, never the literal flagged shape — otherwise
 the reviewer walks the remaining dimensions one full round each.
+
+### 12. A quoted contract phrase with no line behind it (added U-SR-01; both of the u-he-35 arc's P1s)
+Fires whenever the diff QUOTES a contract — a spec phrase in a docstring, a
+requirement copied into a verification-manifest row, a comment restating what the
+code guarantees. Ask it per phrase: *which line discharges this?* Name that line. An
+answer of "the mechanism generally does that" means the phrase is undischarged, and
+an undischarged phrase is another finding on layaway — the wording of a guarantee
+sitting in the place the guarantee was supposed to go, and reading, to every later
+reviewer, exactly like the real thing.
+
+Both P1s of the u-he-35 arc were this shape, and both were spec-verbatim misses at
+turn 0 — the deciding text was in the session's own context before the first line
+was written:
+- `codex_review.py`'s own docstring said "the exit code is a convenience, never a
+  verdict," and the loop skill body said a verdict counts only on its schema parse
+  (C-HE-15), never on exit code or silence. `returncode in (0, 1)` shipped as the
+  verdict anyway.
+- The spec's "result row required before pilots" was read at grounding and copied
+  verbatim into the arc's own manifest row. Nothing enforced it. Four rounds
+  (r1, r5, r9, r10) went to re-litigating a gate the row already claimed.
+
+The rationalization arrives in the voice of diligence: *"the plan skeleton already
+shows `returncode in (0, 1)` — I'll follow the plan."* That is plan-over-spec
+deference. A plan skeleton sketches SHAPE; it never grants CONTRACT, and where the
+skeleton and the quoted phrase disagree the phrase wins and the skeleton is the
+finding. Write the discharging line beside the phrase, or delete the phrase and
+describe what you actually built.
+
+### 13. A new command the loop must reach (added U-SR-01; u-he-35 r2, one round)
+Class 11 asks what a new verb can AUTHORIZE. This asks the other half: can the loop
+INVOKE it at all? The trigger is mechanical — the diff adds a justfile recipe (or any
+new command shape) whose verification-manifest `runs_in` includes "loop". Answer
+both halves: is the permission guard wired to auto-allow the EXACT shape the loop
+will type, and does a witness pin that shape so reverting the wiring goes red? The
+precedent commits already model the whole chain — recipe ⇒ guard allow ⇒ witness
+(U-HE-25, U-HE-34); match one of them instead of inventing a fourth arrangement.
+
+The temptation is the harmless recipe: *"it only publishes a log — there's nothing
+dangerous here for the guard to gate."* Danger was class 11's question, and the two
+questions come apart precisely here. The guard's silence on a harmless verb is not
+permission; it is an ask prompt — and an ask prompt inside a headless lane is a
+stall with nobody awake to clear it.
+
+### 14. Signal handler meets lock (added U-SR-01; u-he-35 r10)
+Any signal handler in a process that also takes locks, or any handler touching state
+a lock guards. Ask: *if this signal lands while the interrupted thread already holds
+the lock, what happens?* A handler runs ON the thread it interrupts, so an `RLock`
+re-entry succeeds happily and walks the handler into the middle of a half-finished
+update the lock existed to hide; a plain `Lock` deadlocks against its own holder
+instead. Either way, a lock's protection is the one thing an asynchronous handler
+bypasses. Same family as the recorded fork-while-holding-a-lock deadlock: the hazard
+is asynchronous control transfer while a lock is held, whichever way control goes.
+
+*"The handler only sets a flag"* is the sentence to distrust — first because the
+flag's readers may assume it changes only between guarded sections, and second
+because the handler that only sets a flag this round grows a cleanup call the next.
+Keep handlers to what is async-signal-safe (set a flag, write one byte to a
+self-pipe) and let an ordinary thread do the work under the lock.
 
 ## After every review round — the class-sibling sweep (before the next invocation)
 

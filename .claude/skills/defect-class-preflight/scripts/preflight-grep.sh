@@ -45,6 +45,16 @@ report() { # $1 label, $2 pattern
   [ -n "$hits" ] && printf '\n[%s]\n%s\n' "$1" "$hits"
 }
 
+# Same contract as report(), minus lines that already carry the exculpating token —
+# the shape is only interesting when the paired handling is ABSENT (U-SR-01: the
+# TimeoutExpired-without-OSError shape). The exclusion filters the matched lines and
+# never the exit status: `head` terminates the pipeline either way, so an all-filtered
+# result is a silent no-hit, exactly as when the first grep matches nothing.
+report_unless() { # $1 label, $2 pattern, $3 exclusion
+  hits=$(printf '%s\n' "$added" | grep -nE "$2" 2>/dev/null | grep -vE "$3" | head -8) || true
+  [ -n "$hits" ] && printf '\n[%s]\n%s\n' "$1" "$hits"
+}
+
 # Two silent-failure patterns: the one-liner form, and the except-line-with-empty-
 # suffix that opens the standard MULTILINE `except ...:\n    pass` (a line-based
 # grep cannot span lines, so the opener is the flaggable half — codex round 1).
@@ -60,6 +70,20 @@ report "check-then-act on paths"      '\.exists\(\)|os\.path\.exists|isfile\('
 report "sleeps in tests"              'time\.sleep|sleep [0-9]'
 report "bare counts/absolutes in prose" '(^\+.*(#|"""|\*).*(all |every |only |exactly [0-9]+|[0-9]+ (witnesses|rows|files|tests)))'
 report "new retry/timeout constants"  'timeout|retry|deadline|budget'
+# The four U-SR-01 shapes (charter WR-03), each a mechanization of a u-he-35 finding
+# the written classes alone did not fire on. Class 12's P1: a process exit code read
+# as if it were the verdict, against a contract that says only the schema parse is.
+report "exit code read as verdict (class 12 — name the schema parse that decides)" 'returncode +in +\(|\.returncode *(==|!=) *[0-9]'
+# Crash-vs-timeout aliasing: a timeout arm that does not also handle the OS-level
+# failure treats "the child died" as "the child ran long" — the exact half-written-at-
+# crash case the inventory mandates and the r1 P1 answered only for happy paths.
+report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*subprocess\.TimeoutExpired' 'OSError'
+# A count parsed straight off the CLI is an unvalidated budget one token from class 5:
+# name the contract value that bounds it (the reps token took four paid touches).
+report "argparse count without a contract-derived bound" 'type=int'
+# Class 13: a new allow branch in the permission guard. The paired witness is a case
+# in tools/hooks/test_permission_guard.sh — name it, or the wiring reverts green.
+report "new permission-guard allow branch (name its witness)" 'elif.*printf.*TRIM.*grep +-Eq'
 echo
-echo "preflight-grep: done (advisory — see defect-class-preflight SKILL.md for the ten classes)"
+echo "preflight-grep: done (advisory — see defect-class-preflight SKILL.md for the classes)"
 exit 0
