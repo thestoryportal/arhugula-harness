@@ -365,10 +365,12 @@ BEFORE re-invoking the reviewer:
    commit; the reviewer should never meet the same class twice in one arc.
 3. Adjudicate each absorbed finding on the gate log (C-HE-24 §5, U-HE-47): for every
    finding row this round produced, once its fix is committed (or it is refuted with
-   grounds), append the disposition — `HARNESS_ARC_ID=<arc-id> just
-   merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor
-   <runner>_absorber` (`accepted` = the fix was applied; `rejected` = refuted; the
-   finding_id is on the round's emitted JSONL rows). The `HARNESS_ARC_ID=` prefix is
+   grounds, or it is held per step 4), append the disposition —
+   `HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id>
+   --disposition accepted|rejected|suppressed --actor <runner>_absorber` (`accepted`
+   = the fix was applied; `rejected` = refuted; `suppressed` = held, and step 4 owes
+   its authority; the finding_id is on the round's emitted JSONL rows). The
+   `HARNESS_ARC_ID=` prefix is
    REQUIRED — the guard auto-allows only the prefixed form, and the CLI holder-binds
    it to this lane's live reservation. The actor is the RUNNER's own absorber
    identity — `claude_absorber` on the Claude runner, `codex_absorber` on the Codex
@@ -384,9 +386,17 @@ BEFORE re-invoking the reviewer:
    with a floor under it. Held bare it is a promise, and the reviewer does not take
    promises: the u-he-35 pilot gate was held at r1 and then re-litigated at r5, r9,
    and r10 — four paid rounds on one unpromoted hold, the costliest policy miss of
-   that arc (charter WR-06, [A] §1). And if the minimal probe is genuinely
-   un-writable this round, read that as evidence the hold is wrong — not as
-   permission to skip the probe.
+   that arc (charter WR-06, [A] §1).
+
+   A hold is `suppressed` on the ledger, never a silence and never a false
+   `accepted` — and C-HE-24 §5 is what makes the probe non-optional rather than
+   merely advisable: an absorber is *never authoritative for its own disposition*,
+   so a suppression stands only on a decorrelated lens, a **deterministic rule**, or
+   a logged operator override. The same-round fail-closed probe IS that deterministic
+   rule. So the two halves are one thing: no probe, no authority to suppress; no
+   authority, no legal disposition. If the minimal probe is genuinely un-writable
+   this round, that is not a licence to hold anyway — it is the evidence that the
+   hold is wrong. Fix it, or route it.
 5. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
 6. When two consecutive rounds' findings target mechanisms YOUR absorption invented

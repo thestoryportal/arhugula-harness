@@ -1753,6 +1753,12 @@ def _one_function(rel: str, name: str) -> ast.FunctionDef:
     # named, not `next(...)`: a renamed function would otherwise surface as a bare
     # StopIteration, which reds for the wrong reason and reads as a broken test
     assert len(fns) == 1, f"{rel} no longer defines exactly one {name}()"
+    # Undecorated, checked HERE so it holds for every row the table pins rather than
+    # for whichever one a reviewer happened to look at (codex r4 P2: a synchronising
+    # decorator on claim() left the source strings and the If/Assign/Return body
+    # untouched, serialising the check-then-set while the race pin stayed green). A
+    # decorator can change any pinned property from outside the body it wraps.
+    assert not fns[0].decorator_list, f"{rel}:{name}() is decorated; its body no longer decides"
     return fns[0]
 
 
@@ -1997,12 +2003,38 @@ def test_planted_defect_is_pinned_on_every_side(planted: _Planted):
     assert planted.demand in oracle, f"eval {planted.eval_id} no longer demands {planted.what}"
 
 
+# The complete row set, pinned by NAME. The eval-id set alone was the first draft and
+# could not see a deletion: dropping `wr05-refusal-exit-code` left {16, 17, 18} and the
+# uniqueness check untouched while that graded defect went unpinned entirely (codex r4
+# P2). Removing a planted defect must now be a deliberate edit in two places — the
+# table and this set — which is the point: a row cannot leave quietly.
+_EXPECTED_ROWS = frozenset(
+    {
+        "wr04-registry-race",
+        "wr04-release-then-reclaim",
+        "wr04-answers-deny-the-mechanism",
+        "wr05-reps-range",
+        "wr05-round-budget",
+        "wr05-lane-id-length",
+        "wr05-reps-default",
+        "wr05-refusal-exit-code",
+        "wr05-bounds-cite-nothing",
+        "wr06-bare-hold",
+    }
+)
+
+
 def test_planted_table_covers_every_u_sr_02_eval():
     """The table is the single place a planted defect is declared, so it must span
-    all three cases — a defect declared nowhere is a defect pinned on no side."""
+    all three cases AND carry every declared row — a defect declared nowhere is a
+    defect pinned on no side."""
     assert {p.eval_id for p in _PLANTED} == {16, 17, 18}
     names = [p.what for p in _PLANTED]
     assert len(names) == len(set(names)), f"duplicate row names: {names}"
+    assert set(names) == _EXPECTED_ROWS, (
+        f"planted-defect table drifted: missing {_EXPECTED_ROWS - set(names)}, "
+        f"undeclared {set(names) - _EXPECTED_ROWS}"
+    )
 
 
 def test_preflight_carries_the_u_sr_02_meta_rules():
@@ -2023,3 +2055,19 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
 
     block = text.split("Three meta-rules that outrank the list:", 1)[1].split("\n\n## ", 1)[0]
     assert len([ln for ln in block.splitlines() if ln.startswith("- **")]) == 3
+
+    # WR-06's ledger half. Step 4 contradicted step 3 while the adjudication vocabulary
+    # was accepted|rejected — a held finding is neither, so the workflow left
+    # disposition=null (which this skill says N6 cannot count) or recorded a false
+    # disposition (codex r4 P2). All three pins are here because the r4 probe found the
+    # fix itself unwitnessed: reverting any of them was green.
+    assert "--disposition accepted|rejected|suppressed" in text
+    assert "A hold is `suppressed` on the ledger" in text
+    # The authority link is the load-bearing half: C-HE-24 §5 forbids an absorber
+    # disposing on its own say-so, and the same-round probe is the deterministic rule
+    # that supplies the authority — which is what makes the probe non-optional rather
+    # than merely advisable. Squashed, because the sentence wraps in the source and a
+    # line-break guess would pin the formatting instead of the claim.
+    squashed = _squash(text)
+    assert "a **deterministic rule**, or a logged operator override" in squashed
+    assert "The same-round fail-closed probe IS that deterministic rule." in squashed
