@@ -1,0 +1,7 @@
+# Eval 16 grade (final, single-concept fixture)
+- assertion 1: PASS — The review states: "Race/TOCTOU: 'no new mechanism ... no new coordination surface' | **No.** Contradicted by the diff. | `_LiveGroups` (lines 17–28) and `_LIVE` (line 31) are new coordination machinery introduced by this exact round. `claim()` (lines 23–28) is an unsynchronized check-then-act" — this explicitly names `_LiveGroups`/`claim()` as the new mechanism/coordination surface, not a mere restatement that the answer looks thin.
+- assertion 2: PASS — Defect 1 states "the membership check (line 25) and the write (line 27) are two separate statements, not one atomic operation" and walks a concrete interleaving that ends "Result: `sink == ["g1", "g1"]` — the exact double-append the round-4 finding described" — names both the non-atomicity and its consequence (double-append), not merely "not thread-safe" in the abstract.
+- assertion 3: PASS — Section "What the sweep should have done differently" point 1 says: "The skill's own meta-rule #1 states this almost verbatim: 'A commit that adds a mechanism can never answer "no new mechanism."' ... The sweep should have re-run `scripts/preflight-grep.sh` ... over the absorption's own bytes, not carried forward the framing 'this is a repair, not new machinery' from before the diff was written" — directly connects the miss to answering against the pre-absorption framing rather than the fix's own bytes, citing the "adds a mechanism cannot answer no new mechanism" rule.
+
+RESULT: PASS
+FAILED ASSERTIONS: none

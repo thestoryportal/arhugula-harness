@@ -8,12 +8,18 @@ review terminal per C-HE-16 §3 — no C-HE-24 row, no round outcome).
 
 from __future__ import annotations
 
+import ast
+import hashlib
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
+from unittest import mock
 
 import pytest
 
@@ -1655,3 +1661,633 @@ def test_logged_recipe_emits_verify_at_process_boundaries():
     assert recipe.index("codex_review.py --base") < recipe.index("emit_verify end")
     assert recipe.index("emit_verify end") < recipe.index("PUBLISH FAILED")
     assert '--phase verify --edge "$1" --lane-id "$HARNESS_LANE_ID"' in recipe
+
+
+# --- U-SR-02: preflight meta-rules (charter WR-04/05/06) -------------------------
+
+PREFLIGHT_DIR = Path(".claude/skills/defect-class-preflight")
+EVALS_REL = PREFLIGHT_DIR / "evals" / "evals.json"
+PREFLIGHT_SKILL_REL = PREFLIGHT_DIR / "SKILL.md"
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _evals() -> list[dict]:
+    doc = json.loads((_repo_root() / EVALS_REL).read_text(encoding="utf-8"))
+    return doc["evals"]
+
+
+def _preflight_skill_text() -> str:
+    return (_repo_root() / PREFLIGHT_SKILL_REL).read_text(encoding="utf-8")
+
+
+def test_eval_cases_are_structurally_sound_and_their_fixtures_exist():
+    """Every eval case's declared fixtures must resolve on disk.
+
+    Nothing exercised evals.json before this: a deleted or renamed fixture left the
+    case pointing at nothing and the suite stayed green, so a planted-defect case
+    could rot into a no-op without a single red. The whole set is swept (not only
+    U-SR-02's) because the gap was never case-specific.
+    """
+    evals_dir = _repo_root() / EVALS_REL.parent
+    cases = _evals()
+    ids = [c["id"] for c in cases]
+    assert len(ids) == len(set(ids)), f"duplicate eval ids: {ids}"
+    for case in cases:
+        where = f"eval {case['id']} ({case['eval_name']})"
+        assert case["prompt"].strip(), f"{where}: empty prompt"
+        assert case["expected_output"].strip(), f"{where}: empty expected_output"
+        assert case["assertions"], f"{where}: no assertions"
+        for rel in case["files"]:
+            assert (evals_dir / rel).is_file(), f"{where}: missing fixture {rel}"
+
+
+def test_u_sr_02_eval_cases_are_registered():
+    """The three charter WR-04/05/06 rules each close on an eval case (charter §3)."""
+    by_name = {c["eval_name"]: c for c in _evals()}
+    for name in (
+        "absorption-sweep-answers-claim-no-new-mechanism",  # WR-04
+        "invented-bounds-without-contract-derivation",  # WR-05
+        "bare-hold-without-fail-closed-probe",  # WR-06
+    ):
+        assert name in by_name, f"U-SR-02 eval case removed: {name}"
+        assert by_name[name]["files"], f"{name}: case carries no fixture"
+
+
+def _fixture(rel: str) -> str:
+    return (_repo_root() / EVALS_REL.parent / "fixtures-usr02" / rel).read_text(encoding="utf-8")
+
+
+def _fixture_ast(rel: str) -> ast.Module:
+    return ast.parse(_fixture(rel))
+
+
+def _nodes(tree: ast.AST, *kinds: type[ast.AST]) -> list[ast.AST]:
+    return [n for n in ast.walk(tree) if isinstance(n, kinds)]
+
+
+# Exact-AST comparison. `ast.dump` omits line/col by default, so these compare STRUCTURE
+# and nothing else — and `ast.parse` discards comments, which is the whole point: every
+# text-substring pin this arc wrote was satisfiable by leaving the old code in a
+# migration comment while the running code changed (codex r5 P2, four findings).
+def _dump(node: ast.AST) -> str:
+    return ast.dump(node)
+
+
+def _expr(source: str) -> str:
+    """Dump of `source` parsed as an expression."""
+    return ast.dump(ast.parse(source, mode="eval").body)
+
+
+def _stmt(source: str) -> str:
+    """Dump of `source` parsed as a single statement."""
+    return ast.dump(ast.parse(source).body[0])
+
+
+def _body_shape(fn: ast.FunctionDef) -> list[str]:
+    """Statement kinds of `fn`'s body, docstring excluded."""
+    return [
+        type(s).__name__
+        for s in fn.body
+        if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+    ]
+
+
+def _call_names(tree: ast.AST) -> set[str]:
+    """Dotted names of everything called anywhere in `tree`."""
+    names = set()
+    for call in _nodes(tree, ast.Call):
+        parts, node = [], call.func
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        names.add(".".join(reversed(parts)))
+    return names
+
+
+def _one_function(rel: str, name: str) -> ast.FunctionDef:
+    fns = [n for n in _nodes(_fixture_ast(rel), ast.FunctionDef) if n.name == name]
+    # named, not `next(...)`: a renamed function would otherwise surface as a bare
+    # StopIteration, which reds for the wrong reason and reads as a broken test
+    assert len(fns) == 1, f"{rel} no longer defines exactly one {name}()"
+    # Undecorated, checked HERE so it holds for every row the table pins rather than
+    # for whichever one a reviewer happened to look at (codex r4 P2: a synchronising
+    # decorator on claim() left the source strings and the If/Assign/Return body
+    # untouched, serialising the check-then-set while the race pin stayed green). A
+    # decorator can change any pinned property from outside the body it wraps.
+    assert not fns[0].decorator_list, f"{rel}:{name}() is decorated; its body no longer decides"
+    return fns[0]
+
+
+# Every defect the U-SR-02 evals grade, declared ONCE as a triple: what the fixture
+# must still carry, what the contract clause must still say, and the phrase the
+# oracle uses to demand it.
+#
+# This table is a re-scope by SUBTRACTION, not another layer of hardening. Rounds 1-3
+# each found a different unpinned SIDE of one of these defects — r1: the contract
+# value was not bound to the clause stating it; r2: the contract could drift from the
+# oracle, and banning shapes lost to the next spelling; r3: the `--reps` default, the
+# §3.3 refusal code, the release-then-reclaim defect, and the answers' denial were
+# each pinned on one side only. Patching a side per round is the arms race this
+# workspace's notes say does not converge. One table checked by one loop converges
+# instead: a planted defect cannot be declared here with a side missing, because the
+# loop reads all three sides of every row.
+#
+# Adding a planted defect to any of these evals owes a row here.
+
+
+class _Planted(NamedTuple):
+    what: str
+    eval_id: int
+    demand: str  # phrase the oracle must still use to require this defect
+    check: Callable[[], None]  # fixture-side property
+    clause: tuple[str, str] | None = None  # (pattern capturing the value, expected)
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.split())
+
+
+# The answers file's denial, pinned as its exact sentence rather than as the token
+# "no new mechanism" (codex r3 P2): rewriting the bullet to ADMIT the mechanism —
+# `The old "no new mechanism" answer was wrong; _LiveGroups is new coordination` —
+# keeps the token and inverts the meaning, leaving eval 16's required rejection
+# inapplicable while the test stayed green.
+_DENIAL = (
+    "**Race / TOCTOU / atomicity:** no new mechanism — this round only adds a skip "
+    "to an existing loop, so there is no new coordination surface to sweep."
+)
+_DENIAL_CONCLUSION = (
+    "Nothing in the diff introduces a mechanism the previous sweep did not already cover."
+)
+
+# Every call the bare drain_budget fixture legitimately makes. Pinned as an exact SET
+# rather than as a list of banned node types: `ast.Assert/Raise/Compare` missed
+# `operator.gt(v, 0)` and `sys.exit(3)`, which are loud probes carrying none of those
+# nodes (codex r2 P2). A probe has to RUN something, and anything it runs is a new
+# name here.
+_DRAIN_BUDGET_CALLS = frozenset(
+    {"int", "os.environ.get", "range", "_budget", "step", "time.sleep", "done.append"}
+)
+
+# admit()'s returns in SOURCE order: both refusals wrongly use 1 (§3.3 names 3 and
+# reserves 0/1 for a schema-parsed verdict), then the admission returns 0. Pinned as
+# the exact sequence, not as a substring: `"return 1" in guard` stayed green when
+# only ONE of the two refusals was repaired (self-caught by this arc's r2 probe).
+_ADMIT_RETURNS = [1, 1, 0]
+
+
+def _load_fixture(rel: str, mod_name: str):
+    """Import a fixture module FRESH — module-level state (`_LIVE`) must not leak.
+
+    Executing the fixtures is the terminal answer to a class that produced findings in
+    five straight rounds: every static pin is a PROXY for "this fixture still
+    misbehaves", and each proxy had a gap the reviewer found — a lock at the call site
+    rather than in the body (r6), a contract-correct guard making the planted one
+    unreachable (r6), `set_defaults` overriding the pinned default (r6), a comment
+    holding the old text (r5), a wrapper preserving the call set (r5). Running the code
+    asserts the property itself, so there is no proxy left to slip past. The eval
+    prompts forbid the REVIEWER from executing these files; that constrains the graded
+    agent, not this suite.
+    """
+    src = _repo_root() / EVALS_REL.parent / "fixtures-usr02" / rel
+    spec = importlib.util.spec_from_file_location(mod_name, src)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+# Bullet labels of the answers file, in order. The denial was pinned by substring until
+# codex r6 P2: moving both exact sentences into a quoted "previous incorrect answer"
+# section and adding a corrected operative answer left the substring pin green over a
+# file that no longer denies anything. Parsing the bullets pins which answer is
+# OPERATIVE, and the label list pins that no second Race answer was added beside it.
+_ANSWER_LABELS = [
+    "Race / TOCTOU / atomicity",
+    "Silent failure",
+    "Vacuous witness",
+    "Timeout / retry / budget arithmetic",
+    "Env-var mutation and restore",
+    "Subprocess boundary",
+    "Path / default resolution",
+]
+_RACE_ANSWER = (
+    "no new mechanism — this round only adds a skip to an existing loop, so there is "
+    "no new coordination surface to sweep."
+)
+
+
+def _answer_bullets() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for line in _fixture("absorption/sweep-answers-r5.md").splitlines():
+        match = re.match(r"- \*\*(.+?):\*\*\s*(.*)$", line)
+        if match:
+            out.append((match.group(1), match.group(2)))
+        elif out and line.startswith("  ") and line.strip():
+            label, text = out[-1]
+            out[-1] = (label, f"{text} {line.strip()}")
+    return out
+
+
+# The race fixture is FROZEN EVIDENCE, pinned by content digest.
+#
+# This replaces three rounds of structural pinning, and the replacement is the point.
+# A concurrency defect is a property of the WHOLE MODULE under threading, so every
+# structural pin has an unpinned neighbour: r1 pinned claim()'s body and lost to a
+# wrapper outside it; r2 pinned the class and lost to the instance; r3 pinned the
+# instance and lost to `drain_all`, the one function that actually spawns the threads.
+# Each fix was correct about its own scope and bought exactly one more round — the
+# non-converging arms race this skill's own step 5 says to answer by SUBTRACTION.
+#
+# A digest has no unpinned neighbour: any edit anywhere in the file, at any scope, reds.
+# It is also the honest shape for what this file IS. The fixture is not code under
+# development; it is a recorded test vector that eval 16 was graded against, so it must
+# not drift silently at all — changing it invalidates the grade in
+# `.harness/u-sr-02-eval-run-2026-08-28.md`, which is exactly what this assertion says.
+#
+# Deliberately changing the fixture is a three-step act, not a digest bump: edit, re-run
+# eval 16 and re-grade it, then update this digest and the recorded run together.
+_RACE_FIXTURE_SHA256 = "f5c84559715beec4a717295939a03d6b95534d37e7d7bce10521de2ac6e13657"
+
+
+def _check_registry_race() -> None:
+    """The planted check-then-act race, pinned by freezing the artifact that carries it.
+
+    See the note above the digest for why this is a digest and not a structural pin.
+    """
+    raw = (
+        _repo_root() / EVALS_REL.parent / "fixtures-usr02" / "absorption" / "round5_fix.py"
+    ).read_bytes()
+    actual = hashlib.sha256(raw).hexdigest()
+    # The digest is bound to the RECORD, not just to this constant. Without this, the
+    # three-step protocol below was documented in a comment and nothing enforced it:
+    # repairing the race and bumping only `_RACE_FIXTURE_SHA256` left the suite green
+    # while the recorded grade silently went stale (merge-gate witness lens r4). That is
+    # the same prose-over-mechanism gap this file already closes for the ledger claims by
+    # reading `unanswered_findings` and the permission guard's own source — applied here
+    # too, instead of only where it was convenient.
+    record = (_repo_root() / ".harness" / "u-sr-02-eval-run-2026-08-28.md").read_text(
+        encoding="utf-8"
+    )
+    # Anchored to the record's OWN table cell, keyed by the fixture path — not a
+    # whole-file substring. `in record` was the r4 draft and r5 refuted it: fixing the
+    # race, bumping the constant, and dropping the new digest ANYWHERE in the ~150-line
+    # record satisfied it while the actual row stayed stale. A cell-anchored read is the
+    # difference between "this string occurs somewhere" and "the record says this".
+    row = re.search(
+        r"\|\s*`evals/fixtures-usr02/absorption/round5_fix\.py`\s*\|\s*`([0-9a-f]{64})`\s*\|",
+        record,
+    )
+    assert row, (
+        "the eval-run record no longer carries a digest row for the race fixture; the "
+        "graded evidence and the fixture have come apart — re-grade eval 16 rather than "
+        "syncing the strings"
+    )
+    assert row.group(1) == _RACE_FIXTURE_SHA256, (
+        f"the record's digest row says {row.group(1)[:12]} but this constant says "
+        f"{_RACE_FIXTURE_SHA256[:12]} — one was updated without the other"
+    )
+    assert actual == _RACE_FIXTURE_SHA256, (
+        "the race fixture changed (sha256 "
+        f"{actual[:12]} != {_RACE_FIXTURE_SHA256[:12]}). Eval 16 was graded against the "
+        "recorded bytes, so this is not a digest to bump: re-run eval 16, re-grade it, and "
+        "update this constant and .harness/u-sr-02-eval-run-2026-08-28.md together."
+    )
+
+
+def _check_answers_deny() -> None:
+    bullets = _answer_bullets()
+    assert [label for label, _ in bullets] == _ANSWER_LABELS, (
+        "the answers' bullet set changed; a second or replaced answer may now be operative"
+    )
+    race = dict(bullets)["Race / TOCTOU / atomicity"]
+    assert _squash(race) == _squash(_RACE_ANSWER), (
+        "the OPERATIVE race answer no longer denies a new mechanism"
+    )
+    assert _squash(_DENIAL_CONCLUSION) in _squash(_fixture("absorption/sweep-answers-r5.md"))
+
+
+def _guard_tests() -> list[str]:
+    """Dumps of every `if` test in validate() — the EXECUTABLE bounds.
+
+    Raw substring checks were the r4 draft and fell to the same comment trick as the
+    race pin: correcting the guard to a contract-derived maximum while leaving
+    `1 <= args.reps <= 99` in a historical comment kept them green (codex r5 P2).
+    """
+    validate = _one_function("reps_guard.py", "validate")
+    return [_dump(s.test) for s in _nodes(validate, ast.If)]
+
+
+def _admits(argv: list[str]) -> bool:
+    """Does the guard, RUN, admit `argv`? Collecting matching `ast.If` nodes proved
+    only that a bound was written (codex r6 P2): contract-correct guards followed by an
+    early `return None` leave the planted ones unreachable with every dump assertion
+    green. Running validate() proves the prohibited input is still ADMITTED."""
+    guard = _load_fixture("reps_guard.py", "_usr02_reps_guard")
+    return guard.validate(guard.build_parser().parse_args(argv)) is None
+
+
+def _check_reps_range() -> None:
+    assert _expr("not 1 <= args.reps <= 99") in _guard_tests()
+    assert _admits(["--reps", "50"]), "reps=50 is no longer admitted; §3.2 breach gone"
+
+
+def _check_round_bound() -> None:
+    assert _expr("args.round is not None and args.round > 25") in _guard_tests()
+    assert _admits(["--round", "20"]), "round=20 is no longer admitted; §3.1 breach gone"
+
+
+def _check_lane_bound() -> None:
+    assert _expr("args.lane_id is not None and len(args.lane_id) > 128") in _guard_tests()
+    assert _admits(["--lane-id", "x" * 100]), "a 100-char lane id is no longer admitted"
+
+
+def _check_reps_default() -> None:
+    parser = _one_function("reps_guard.py", "build_parser")
+    calls = [_dump(c) for c in _nodes(parser, ast.Call)]
+    assert _expr('ap.add_argument("--reps", type=int, default=3)') in calls
+    # the EFFECTIVE default (codex r6 P2): `ap.set_defaults(reps=1)` after the call
+    # fixes the graded defect while the pinned call remains in the AST
+    guard = _load_fixture("reps_guard.py", "_usr02_reps_guard")
+    assert guard.build_parser().parse_args([]).reps == 3, (
+        "the parser's effective --reps default is no longer the planted 3"
+    )
+
+
+def _check_refusal_code() -> None:
+    admit = _one_function("reps_guard.py", "admit")
+    # sorted by lineno, never by walk order: `ast.walk` is breadth-first, so it read
+    # these as [0, 1, 1] and the sequence claim would have been about nothing
+    returns = [
+        s.value.value
+        for s in sorted(_nodes(admit, ast.Return), key=lambda n: n.lineno)
+        if isinstance(s.value, ast.Constant)  # type: ignore[union-attr]
+    ]
+    assert returns == _ADMIT_RETURNS, (
+        f"admit() returns {returns}; the planted §3.3 refusal-code breach is gone"
+    )
+    guard = _load_fixture("reps_guard.py", "_usr02_reps_guard")
+    # `--reps 0` refuses via validate()'s BOUNDS, so the outcome does not depend on
+    # REVIEWER_PROBE. `--reps 50` was the first draft and refused via the probe-mode
+    # branch instead, which returns 0 when REVIEWER_PROBE=1 — an ambient-env dependency
+    # that would red this suite in a legitimate probe environment (codex r7 P2). The
+    # variable is cleared as well, so neither branch can be reached by accident.
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("REVIEWER_PROBE", None)
+        assert guard.admit(["--reps", "0"]) == 1, (
+            "admit() no longer refuses with 1; §3.3 names 3, which is the graded breach"
+        )
+
+
+def _check_uncited_bounds() -> None:
+    # no bound in the guard cites its contract section — that absence IS the defect
+    assert "§3" not in _fixture("reps_guard.py")
+
+
+def _check_bare_hold() -> None:
+    note = _fixture("hold_note.md")
+    assert "Disposition: HELD" in note
+    assert "U-XX-77" in note  # the deferral target the hold leans on
+    # The note may DESCRIBE the finding freely ("a non-numeric value raises ...") —
+    # what it must not do is claim a probe was landed. Word-bounded on purpose: a
+    # bare `in` check reads "raises" as "raise" and reds on the description itself.
+    assert re.search(r"\bprobe\b", note, re.I) is None, "hold is no longer bare"
+    tree = _fixture_ast("drain_budget.py")
+    # Coarse pins first — they catch the loud shapes cheaply — then the EXACT return
+    # expression, which is what actually decides. The call set and the banned-node
+    # list were both satisfiable while the budget was validated: `_budget()` returning
+    # `{3: 3}[int(os.environ.get("DRAIN_RETRY_BUDGET", "3"))]` fails closed on zero,
+    # negative, non-numeric and oversized values via KeyError while preserving the
+    # substring, the Return-only body, the call names and the absence of
+    # Assert/Raise/Compare/IfExp (codex r5 P2). Pinning the returned expression itself
+    # leaves no room for a wrapper: any validation has to change what is returned.
+    assert _call_names(tree) == _DRAIN_BUDGET_CALLS, "fixture's call set changed; hold not bare"
+    assert not _nodes(tree, ast.Assert, ast.Raise, ast.Compare, ast.IfExp)
+    budget = _one_function("drain_budget.py", "_budget")
+    assert _body_shape(budget) == ["Return"]
+    assert _dump(budget.body[-1]) == _stmt(
+        'return int(os.environ.get("DRAIN_RETRY_BUDGET", "3"))'
+    ), "_budget() no longer reads the env value bare; the hold is no longer unvalidated"
+    # the env value flows straight into range() with nothing bounding or rejecting it
+    drain = _one_function("drain_budget.py", "drain_with_retries")
+    assert any(_dump(f.iter) == _expr("range(_budget())") for f in _nodes(drain, ast.For)), (
+        "the budget no longer flows unbounded into range()"
+    )
+    # BEHAVIOURAL fail-open proof, which no static pin could give: a budget of 0 drains
+    # NOTHING and raises NOTHING, so the caller reads success over an empty result.
+    # This is what eval 18 demands, and it is what kills the `{3: 3}[int(...)]` dodge —
+    # that variant fails closed with KeyError and would red here (codex r5 P2).
+    mod = _load_fixture("drain_budget.py", "_usr02_drain_budget")
+    with mock.patch.dict(os.environ, {"DRAIN_RETRY_BUDGET": "0"}):
+        assert mod.drain_with_retries(lambda _row: None, ["a"]) == [], (
+            "a zero budget no longer drains silently; the hold is no longer unvalidated"
+        )
+
+
+_PLANTED = (
+    _Planted(
+        "wr04-registry-race",
+        16,
+        "the _LiveGroups registry",
+        _check_registry_race,
+    ),
+    _Planted(
+        "wr04-answers-deny-the-mechanism",
+        16,
+        "no new coordination surface",
+        _check_answers_deny,
+    ),
+    _Planted(
+        "wr05-reps-range",
+        17,
+        "§3.2 ceiling of 3",
+        _check_reps_range,
+        (r"§3\.2[^§]*?never above \*\*(\d+)\*\*", "3"),
+    ),
+    _Planted(
+        "wr05-round-budget",
+        17,
+        "§3.1 budget of 10 rounds",
+        _check_round_bound,
+        (r"§3\.1[^§]*?\*\*at most (\d+) review rounds\*\*", "10"),
+    ),
+    _Planted(
+        "wr05-lane-id-length",
+        17,
+        "§3.4's 64",
+        _check_lane_bound,
+        (r"§3\.4[^§]*?\*\*at most (\d+) characters\*\*", "64"),
+    ),
+    _Planted(
+        "wr05-reps-default",
+        17,
+        "§3.2's 'exactly one'",
+        _check_reps_default,
+        (r"§3\.2[^§]*?requests \*\*(exactly one)\*\*", "exactly one"),
+    ),
+    _Planted(
+        "wr05-refusal-exit-code",
+        17,
+        "§3.3, which names 3 as the refusal code",
+        _check_refusal_code,
+        (r"§3\.3[^§]*?is \*\*(\d+)\*\*", "3"),
+    ),
+    _Planted(
+        "wr05-bounds-cite-nothing",
+        17,
+        "cite the contract value it derives from",
+        _check_uncited_bounds,
+    ),
+    _Planted(
+        "wr06-bare-hold",
+        18,
+        "fail-closed probe",
+        _check_bare_hold,
+    ),
+)
+
+
+@pytest.mark.parametrize("planted", _PLANTED, ids=lambda p: p.what)
+def test_planted_defect_is_pinned_on_every_side(planted: _Planted):
+    """A planted-defect eval is only a witness while all three sides hold: the
+    fixture still carries the defect, the contract clause still states the value the
+    defect diverges from, and the oracle still demands it.
+
+    Any one side alone is satisfiable without the other two — which is precisely how
+    rounds 1, 2 and 3 each found a different green-but-vacuous case.
+    """
+    planted.check()
+    if planted.clause is not None:
+        pattern, expected = planted.clause
+        match = re.search(pattern, _fixture("contract_excerpt.md"), re.S)
+        assert match, f"contract clause for {planted.what} no longer states its value"
+        assert match.group(1) == expected, (
+            f"contract says {match.group(1)!r} but eval {planted.eval_id} "
+            f"grades against {expected!r}"
+        )
+    oracle = " ".join(next(c for c in _evals() if c["id"] == planted.eval_id)["assertions"])
+    assert planted.demand in oracle, f"eval {planted.eval_id} no longer demands {planted.what}"
+
+
+# The complete row set, pinned by NAME. The eval-id set alone was the first draft and
+# could not see a deletion: dropping `wr05-refusal-exit-code` left {16, 17, 18} and the
+# uniqueness check untouched while that graded defect went unpinned entirely (codex r4
+# P2). Removing a planted defect must now be a deliberate edit in two places — the
+# table and this set — which is the point: a row cannot leave quietly.
+_EXPECTED_ROWS = frozenset(
+    {
+        "wr04-registry-race",
+        "wr04-answers-deny-the-mechanism",
+        "wr05-reps-range",
+        "wr05-round-budget",
+        "wr05-lane-id-length",
+        "wr05-reps-default",
+        "wr05-refusal-exit-code",
+        "wr05-bounds-cite-nothing",
+        "wr06-bare-hold",
+    }
+)
+
+
+def test_planted_table_covers_every_u_sr_02_eval():
+    """The table is the single place a planted defect is declared, so it must span
+    all three cases AND carry every declared row — a defect declared nowhere is a
+    defect pinned on no side."""
+    assert {p.eval_id for p in _PLANTED} == {16, 17, 18}
+    names = [p.what for p in _PLANTED]
+    assert len(names) == len(set(names)), f"duplicate row names: {names}"
+    assert set(names) == _EXPECTED_ROWS, (
+        f"planted-defect table drifted: missing {_EXPECTED_ROWS - set(names)}, "
+        f"undeclared {set(names) - _EXPECTED_ROWS}"
+    )
+
+
+def test_preflight_carries_the_u_sr_02_meta_rules():
+    """Charter WR-04/05/06 land as SKILL prose, so the pin is on the load-bearing
+    tell of each rule rather than on surrounding wording that may be re-edited.
+
+    The bullet count is pinned against the heading in the same assertion set: a
+    fourth meta-rule added under a heading still reading "Three" is the class-2
+    prose drift this skill's own list warns about.
+    """
+    text = _preflight_skill_text()
+    # WR-04 — the tell, verbatim from the charter
+    assert 'can never answer "no new mechanism"' in text
+    # WR-05 — the rule, not merely the example
+    assert "Every numeric bound names the contract value it derives from" in text
+    # WR-06 — the same-round obligation, wired where holds are adjudicated
+    assert "owes a fail-closed probe in the same round" in text
+
+    block = text.split("Three meta-rules that outrank the list:", 1)[1].split("\n\n## ", 1)[0]
+    assert len([ln for ln in block.splitlines() if ln.startswith("- **")]) == 3
+
+    # WR-06's ledger half, which took four rounds to get right and is pinned at its
+    # SETTLED form, not its history: r4 added `suppressed` to the absorber's vocabulary,
+    # r5 ordered it after its probe, r6 recorded that the guard keeps it operator-visible,
+    # and r8 (P1) established that the absorber must not write it at all. The r4/r5 pins
+    # are deliberately GONE rather than kept alongside — a pin on superseded prose is a
+    # second authority that would have to be argued with at every future edit.
+    #
+    # Kept from r6: the authority list, which is what makes the absorber ineligible.
+    squashed = _squash(text)
+    # Kept from r6/r7: the authority list, which is what makes the absorber ineligible
+    # to sign a suppression at all.
+    assert "a decorrelated lens, a deterministic rule, or a logged operator override" in squashed
+
+    # The absorber writes only two dispositions (codex r8 P1). `suppressed` names its
+    # actor as the ADJUDICATING AUTHORITY, and C-HE-24 §5 says that authority is a
+    # decorrelated lens, a deterministic rule, or a logged operator override — never
+    # the absorber. A row signed by the absorber therefore records an authority that
+    # never existed, and readers reducing by finding_id see a settled mute where a
+    # visible `disposition=null` used to be. Held findings stay UNDISPOSED.
+    assert "--disposition accepted|rejected --actor <runner>_absorber" in squashed
+    assert "suppressed|" not in squashed and "|suppressed" not in squashed, (
+        "the absorber's documented disposition set admits `suppressed` again"
+    )
+    # A positive claim the doc must carry. NOT an exclusivity guarantee: r2 called this
+    # "complete by construction", and r3 correctly refuted that — this assertion and the
+    # negative above are independent substring checks, so prose added elsewhere granting
+    # the absorber `suppressed` authority (phrased without an adjacent pipe) would leave
+    # both green over a self-contradicting document. Whether a document says a thing
+    # NOWHERE is not a substring property, so no pin closes it; a third spelling-ban would
+    # only add a fourth. Registered as a named limit in the PR body instead of pretended
+    # away here.
+    assert "an absorber writes no third state" in squashed
+    # r9 P1: the r8 rule (leave it null, name it in the sweep) lost the finding.
+    # `unanswered_findings` subtracts every id an attestation names and never reads
+    # disposition, so an attested null-disposition finding is retired permanently with
+    # nothing recording that it was decided. Neither `suppressed` nor null is available,
+    # so "held" is not a ledger state at all — the probe IS the disposition.
+    assert '"Held" is not a ledger state, and reaching for one is the error.' in squashed
+    assert "EVERY finding gets one of these two, always" in squashed
+    assert "no finding may be attested past with `disposition=null`" in squashed
+    # Bound to the gate's actual behaviour, not to a restatement of it: if
+    # unanswered_findings ever starts consulting disposition, this reds and the prose
+    # must be revisited.
+    gate_src = (_repo_root() / "tools" / "review_loop_gate.py").read_text(encoding="utf-8")
+    subtract = gate_src.split("def unanswered_findings", 1)[1].split("\ndef ", 1)[0]
+    assert "sorted(all_ids - answered)" in subtract
+    assert "disposition" not in subtract, (
+        "unanswered_findings now reads disposition; the skill's step 4 rationale is stale"
+    )
+
+    # The guard venue (codex r6 P2), pinned against the GUARD's own source rather than
+    # restated, so the two cannot drift apart: if the allowlist ever admits
+    # `suppressed`, this reds and the prose must be revisited — the direction that
+    # matters, since widening it would let an agent grant itself mute authority.
+    assert (
+        "permission guard's `accepted|rejected` allowlist (`_adjudicate_exact_shape`, "
+        "U-HE-47)" in squashed
+    )
+    assert "never widen it to get past this moment" in squashed
+    guard_src = (_repo_root() / "tools" / "hooks" / "permission-guard.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'case "$6" in accepted|rejected) ;; *) return 1 ;; esac' in guard_src, (
+        "the guard's disposition allowlist changed; the SKILL's headless claim must follow"
+    )

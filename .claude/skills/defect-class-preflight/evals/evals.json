@@ -270,6 +270,57 @@
     "does NOT claim the RLock makes this safe, and does not assert the handler runs on whichever thread was interrupted",
     "recommends keeping the handler async-signal-safe (set a flag / write to a self-pipe) and doing the flush on an ordinary thread"
    ]
+  },
+  {
+   "id": 16,
+   "eval_name": "absorption-sweep-answers-claim-no-new-mechanism",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate has just absorbed a review finding and is about to commit. Their round-5 fix is at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/round5_fix.py and the pre-commit sweep answers they wrote for that fix are at .claude/skills/defect-class-preflight/evals/fixtures-usr02/absorption/sweep-answers-r5.md. Review the SWEEP ANSWERS against the fix they attest: say for each answer whether the fix supports it, and list every defect in the fix that the answers fail to surface — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Then say what the sweep should have done differently at authoring time, so the miss would not have shipped. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md rejecting the 'no new mechanism' answer — the fix introduces the _LiveGroups registry — and naming the unsynchronised claim() check-then-act race that answer let through",
+   "files": [
+    "fixtures-usr02/absorption/round5_fix.py",
+    "fixtures-usr02/absorption/sweep-answers-r5.md"
+   ],
+   "assertions": [
+    "rejects the answers' 'no new mechanism' / 'no new coordination surface' claim by naming the mechanism the fix actually adds (the _LiveGroups registry, or claim()/release() as a new coordination surface); merely restating that the answers look thin does not pass",
+    "finds the check-then-act race in _LiveGroups.claim — the `if name in self._live` test and the assignment are not atomic, so two workers can both claim one group; passes only if the review names the non-atomicity or its consequence (double-append of one group), not merely that the dict is 'not thread-safe' in the abstract",
+    "connects the miss to the sweep being answered against the pre-absorption diff rather than the fix's own bytes — i.e. that a commit adding a mechanism cannot answer 'no new mechanism'"
+   ]
+  },
+  {
+   "id": 17,
+   "eval_name": "invented-bounds-without-contract-derivation",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a launch-admission guard at .claude/skills/defect-class-preflight/evals/fixtures-usr02/reps_guard.py. The contract excerpt it is meant to enforce is at .claude/skills/defect-class-preflight/evals/fixtures-usr02/contract_excerpt.md. Perform a pre-commit review of the guard against that contract: for every numeric bound in the guard, say which contract value it derives from or that it derives from none. List every defect — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Finally, state the general rule this guard violates — not only the individual corrections. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md flagging each invented bound against its contract value: reps 1-99 vs the max of 3 (§3.2), round > 25 vs the 10-round budget (§3.1), lane id 128 vs 64 chars (§3.4), the --reps default of 3 vs 'exactly one' (§3.2), and the refusal returning 1 where §3.3 reserves 0/1 for a verdict and names 3",
+   "files": [
+    "fixtures-usr02/reps_guard.py",
+    "fixtures-usr02/contract_excerpt.md"
+   ],
+   "assertions": [
+    "flags the `1 <= args.reps <= 99` range as deriving from no contract value, and names the §3.2 ceiling of 3 it should derive from",
+    "flags `args.round > 25` against the §3.1 budget of 10 rounds — a 25-round guard admits rounds 11-25 the contract refuses",
+    "flags the 128-character lane-id bound against §3.4's 64",
+    "flags the `--reps` default of 3 against §3.2's 'exactly one' — the default alone puts every ordinary launch into probe mode",
+    "flags the refusal `return 1` against §3.3, which names 3 as the refusal code and reserves 0/1 for a schema-parsed verdict",
+    "states the general rule — a numeric bound in a guard must cite the contract value it derives from — rather than only correcting the individual numbers"
+   ]
+  },
+  {
+   "id": 18,
+   "eval_name": "bare-hold-without-fail-closed-probe",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate has adjudicated a review round and is about to commit and re-invoke the reviewer. Their absorption note is at .claude/skills/defect-class-preflight/evals/fixtures-usr02/hold_note.md and the code it discusses is at .claude/skills/defect-class-preflight/evals/fixtures-usr02/drain_budget.py. Review the ADJUDICATION: for each finding, say whether its disposition is adequate to commit on, and what the absorption still owes before the reviewer is re-invoked. Cite file and line for anything you flag and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
+   "expected_output": "review.md refusing the bare HELD disposition — the hold owes a minimal fail-closed probe in this same round — and naming what the unvalidated budget does concretely (0/negative drains nothing while reporting success; non-numeric raises inside the loop)",
+   "files": [
+    "fixtures-usr02/hold_note.md",
+    "fixtures-usr02/drain_budget.py"
+   ],
+   "assertions": [
+    "refuses the HELD disposition as it stands — requires that a minimal fail-closed probe (an assertion, a validating guard, a refusing row) land in this SAME round rather than accepting the deferral to U-XX-77 bare",
+    "does not merely demand the full validation be built now: passes only if the review distinguishes the scope decision (which may stand) from the missing same-round probe (which may not)",
+    "names at least one concrete failure the unvalidated budget produces — `DRAIN_RETRY_BUDGET=0` or a negative value makes range() empty so nothing drains while the caller reads success, or a non-numeric value raises ValueError inside the drain loop"
+   ]
   }
  ]
 }

@@ -1,0 +1,10 @@
+# Eval 17 grade (skill-loaded)
+- assertion 1: PASS — Table row (line 16) reads `1 <= args.reps <= 99` | `§3.2 "never above **3**" (probe mode)` | `**Wrong value** — ceiling should be 3, not 99`, and Defect 2 elaborates the same §3.2 ceiling-of-3 citation with a concrete admitted-value count; the "None carry an inline citation to §3.1–§3.4" line confirms the review is flagging the missing derivation.
+- assertion 2: PASS — Defect 3 header "round-budget threshold of 25 instead of 10" cites §3.1 "at most 10 review rounds; round 11 is refused" and states "Rounds 11 through 25 (15 illegal round numbers) are admitted as if within budget, when the contract requires refusal starting at round 11."
+- assertion 3: PASS — Defect 4 header "lane-id length cap of 128 instead of 64" cites §3.4 "at most 64 characters" directly against the 128 literal.
+- assertion 4: PASS — Defect 1 cites §3.2 "A single launch requests exactly one round" against `default=3` and concludes "The most common invocation — no flags at all — is treated as an unauthorized probe-mode request," matching the "puts every ordinary launch into probe mode" demand.
+- assertion 5: PASS — Defect 5 quotes §3.3 verbatim: "The refusal exit code for an inadmissible launch is 3; exits 0 and 1 are reserved for a schema-parsed verdict and are never a refusal," directly against the `return 1` refusal paths.
+- assertion 6: PASS — The review states the rule as an explicit general principle twice: in the intro, "anchored on the skill's central meta-rule: **'Every numeric bound names the contract value it derives from.'** None of this file's bounds do," and in the closing "## The general rule this guard violates" section, quoting "**Any literal in a guard, allowlist, validator, or budget ... is either traceable to a contract value you can cite, or it is a guess wearing a validator's uniform.**" Both are phrased as a general rule about guards/validators generically, not merely a summary observation tied to this file's five specific numbers.
+
+RESULT: PASS
+FAILED ASSERTIONS: none
