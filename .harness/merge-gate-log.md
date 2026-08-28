@@ -781,3 +781,6 @@ blast-radius: 8 consumers (graft grep + callers). tools/review_loop_gate.py:84 (
 | 2026-08-28T13:26:03Z | #1477 | 8b3c4b6d87c2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
 
 | PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | concurrency APPROVE · spec-conformance APPROVE · witness-adequacy **BLOCK** (P2) | round 1 — BLOCK absorbed at the fix below; re-gate owed | blast-radius: 4 consumers (`tools/review_loop_gate.py:84,387`, `tools/test_codex_workflow_parity.py:1311,1313,1366,1369`, `tools/reviewer_concurrency_probe.py:233`, `tools/test_review_loop_gate.py` as sole `evals.json` reader); nothing imports the changed module |
+| 2026-08-28T13:41:09Z | #1477 | b60d2e151ba6 | merge-gate-witness-adequacy | REVIEWER_UNAVAILABLE | 0 finding(s) | r2 |
+| 2026-08-28T13:41:54Z | #1477 | b60d2e151ba6 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |
+| PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | witness-adequacy **BLOCK** (P2 + P3) at `b60d2e151` | round 2 — the r1 fix read the CLASS attribute while `drain_once` calls the INSTANCE; both instance-shadow and subclass-at-construction verified green by probe before this fix. Absorbed below; re-gate owed | blast-radius unchanged (4 consumers) |

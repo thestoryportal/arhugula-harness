@@ -1956,18 +1956,27 @@ def _check_registry_race() -> None:
         "FunctionDef",
         "FunctionDef",
     ], "the fixture's module top level changed; claim() may be wrapped from outside"
-    # RUNTIME identity: the claim() that actually EXECUTES must be the one inspected
-    # above. Any wrapper — class decorator, metaclass, or post-hoc rebind — replaces the
-    # attribute, so its code object no longer starts at the inspected `def` line.
+    # RUNTIME identity, resolved through the object `drain_once` ACTUALLY CALLS.
+    # The first draft of this check read `_LiveGroups.claim` — the CLASS attribute —
+    # while `drain_once` calls `_LIVE.claim(...)` on the singleton INSTANCE, so an
+    # instance shadow or a subclass-at-construction repaired the race with the class
+    # untouched (merge-gate witness lens r2; both verified green by probe before this
+    # fix). Reading the instance is the correction: attribute resolution walks
+    # instance → type → MRO, so ONE code-object comparison covers every wrapping site
+    # at once rather than enumerating them.
     module = _load_fixture("absorption/round5_fix.py", "_usr02_round5_fix_race")
-    executable = module._LiveGroups.claim
-    assert executable.__qualname__ == "_LiveGroups.claim", (
-        "the executable claim() is not the class's own function; it was rebound"
+    live = module._LIVE
+    assert type(live) is module._LiveGroups, "_LIVE is a subclass; claim() may be overridden"
+    assert "claim" not in vars(live), "_LIVE shadows claim() on the instance"
+    # bound method → __func__; a plain-function shadow has none, so fall back to itself
+    resolved = getattr(live.claim, "__func__", live.claim)
+    assert resolved.__code__.co_firstlineno == claim.lineno, (
+        "the claim() reached from _LIVE is not the inspected one; it was wrapped"
     )
-    assert executable.__code__.co_firstlineno == claim.lineno, (
-        "the executable claim() is not the inspected one; it was wrapped from outside"
-    )
-    assert not hasattr(executable, "__wrapped__")
+    assert not hasattr(resolved, "__wrapped__")
+    # the registry's own store must be a plain dict: a thread-safe dict-like would make
+    # the pinned test-then-set atomic without touching claim()'s body
+    assert type(live._live) is dict, "_LIVE._live is not a plain dict; the race may be gone"
 
 
 def _check_answers_deny() -> None:
@@ -2259,6 +2268,12 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     assert "suppressed|" not in squashed and "|suppressed" not in squashed, (
         "the absorber's documented disposition set admits `suppressed` again"
     )
+    # The negative above only sees `suppressed` adjacent to a pipe, i.e. inside the CLI
+    # flag syntax; prose reintroducing it elsewhere would slip past (merge-gate witness
+    # lens r2, P3). The remedy is a POSITIVE exclusivity claim rather than a second
+    # negative — this arc spent rounds learning that banning spellings loses to the next
+    # one, while a positive pin is complete by construction.
+    assert "an absorber writes no third state" in squashed
     # r9 P1: the r8 rule (leave it null, name it in the sweep) lost the finding.
     # `unanswered_findings` subtracts every id an attestation names and never reads
     # disposition, so an attested null-disposition finding is retired permanently with
