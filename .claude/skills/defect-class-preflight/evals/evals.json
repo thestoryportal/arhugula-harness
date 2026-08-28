@@ -226,13 +226,14 @@
    "eval_name": "p1-declared-but-unenforced-gate",
    "skill": "defect-class-preflight",
    "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a new file, currently staged as a fixture at .claude/skills/defect-class-preflight/evals/fixtures-usr01/pilot_gate.py. Perform a thorough pre-commit review of it. List every defect you find — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
-   "expected_output": "review.md naming the declared-but-unenforced gate: the manifest row and docstring both state 'result row required before pilots', but launch_pilots only counts the rows into an audit line and launches regardless — including when result_rows returns empty; plus the unbounded --reps count",
+   "expected_output": "review.md naming the declared-but-unenforced gate: the manifest row and docstring both state 'result row required before pilots', but launch_pilots only counts the rows into an audit line and launches regardless — both when result_rows returns empty AND when it returns a row whose status is RED, since ResultRow.status is never inspected anywhere; plus the unbounded --reps count",
    "files": [
     "fixtures-usr01/pilot_gate.py"
    ],
    "assertions": [
     "names the declared-but-unenforced gate — passes only if the review states that the documented 'result row required before pilots' precondition is never enforced in launch_pilots; noting the docstring is long or the row is stale does not pass",
     "makes concrete that with an empty store (ProbeStore([]), as main() constructs) the pilots launch anyway — the gate's zero case is the one it was written to stop",
+    "ALSO covers the present-but-failing arm: ResultRow.status is never read, so ProbeStore([ResultRow('C-HE-22', 'RED')]) launches too — a review that treats a missing row as the whole defect has found half of it",
     "observes that the rows value is read but only logged, never branched on",
     "flags --reps (argparse type=int) as accepting an unbounded or non-positive count with no contract-derived bound"
    ]
@@ -264,7 +265,8 @@
    ],
    "assertions": [
     "names the mechanism, not just the smell — passes only if the review says a CPython Python-level signal handler runs on the main thread (so ownership of the RLock, not the mere presence of a lock, decides what happens); calling the handler 'unsafe' or 'racy' without that does not pass",
-    "gets at least one arm concrete: EITHER main-thread re-entry (SIGTERM landing inside record() between the _ROUNDS write and _reindex() lets _flush() clear a registry mid-update, losing or staling a recorded round) OR worker-held blocking (the handler waits on a lock it does not own, inside a signal handler)",
+    "covers the main-thread arm: a SIGTERM landing inside record() between the _ROUNDS write and _reindex() lets _on_term re-enter the RLock it already owns and _flush() clear a registry mid-update, losing or staling a recorded round",
+    "covers the worker-held arm TOO: when a worker holds the lock the handler is not its owner and BLOCKS inside a signal handler waiting for it. Both arms are required — treating either as the whole story is the defect the class names, and an RLock looks like protection against the first while buying nothing against the second",
     "does NOT claim the RLock makes this safe, and does not assert the handler runs on whichever thread was interrupted",
     "recommends keeping the handler async-signal-safe (set a flag / write to a self-pipe) and doing the flush on an ordinary thread"
    ]
