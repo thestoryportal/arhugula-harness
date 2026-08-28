@@ -434,6 +434,10 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
         "try:\n"
         "    run_fifth()\n"
         'except subprocess.TimeoutExpired: print("OSError was not caught")\n'
+        "try:\n"
+        "    run_sixth()\n"
+        "except (subprocess.TimeoutExpired, NotOSError):\n"
+        "    handle()\n"
         'parser.add_argument("--reps", type=int, default=3)\n'
     )
     (repo / "planted_guard.sh").write_text(
@@ -473,6 +477,7 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
         "# OSError still propagates",  # named only in a trailing comment
         "except TimeoutExpired:",  # unqualified import spelling
         'print("OSError was not caught")',  # named only after the clause's colon
+        "NotOSError",  # a different identifier that merely CONTAINS the token
     ):
         assert reported in timeout_block, f"arm not reported: {reported}\n{timeout_block}"
     # the one genuinely handled arm — OSError inside the caught tuple — is excluded
@@ -575,6 +580,12 @@ _NEAR_MISSES = [
     (
         "12 quoted contract phrase not discharged",
         "the manifest row lists the wrong tag for this artifact",
+    ),
+    # class 11: merely MENTIONING adjudication is not an authority-bearing command
+    # surface — the bare `adjudicat` alternative pulled 48 such rows (codex r8 P2)
+    (
+        "11 authority-bearing command surface",
+        "the finding is not among the four adjudicated HELD classes",
     ),
 ]
 

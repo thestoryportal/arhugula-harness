@@ -94,10 +94,10 @@ report "exit code read as verdict (class 12 — name the schema parse that decid
 #   `except (subprocess.TimeoutExpired,\n OSError):` is a false HIT whose named answer
 #   is "OSError is on the next line". A false hit costs one named answer; the miss is
 #   the tool's limit, and the exit contract above already says silence proves nothing.
-report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*\bTimeoutExpired' 'except[^:]*OSError'
+report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*\bTimeoutExpired' 'except[^:]*\bOSError\b'
 # A count parsed straight off the CLI is an unvalidated budget one token from class 5:
 # name the contract value that bounds it (the reps token took four paid touches).
-report "argparse count without a contract-derived bound" 'type=int'
+report "argparse count without a contract-derived bound" 'add_argument[^)]*type=int'
 # Class 13: a new allow branch in the permission guard. The paired witness is a case
 # in tools/hooks/test_permission_guard.sh — name it, or the wiring reverts green.
 report "new permission-guard allow branch (name its witness)" 'elif.*printf.*TRIM.*grep +-Eq'

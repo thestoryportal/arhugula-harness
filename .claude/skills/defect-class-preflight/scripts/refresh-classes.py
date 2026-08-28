@@ -33,12 +33,16 @@ from pathlib import Path
 # (codex r5 P2, reproduced before absorbing). Two independent searches are linear and say
 # what they mean.
 #
+# UNDER-matching is the safe direction and is chosen deliberately throughout: a missed
+# row stays in the unmatched new-class discovery pile, while a false match silently
+# removes it from that pile. Prefer to miss.
+#
 # Known precision bound, named rather than chased: a conjunction still matches on
 # CO-OCCURRENCE, so a row pairing an unrelated command term with an unrelated loop term
-# can land in class 13. This tool is advisory by its own docstring and multi-match is by
-# design; the cost of a false positive is one row not re-surfaced as a new-class
-# candidate. Successive regex layers were measured to trade one imprecision for another
-# without converging, so the bound is documented here instead.
+# can land in class 13, and a finding whose text DISCUSSES a class necessarily contains
+# that class's vocabulary. This tool is advisory by its own docstring and multi-match is
+# by design; successive regex layers were measured trading one imprecision for another
+# without converging, so the bound is documented here rather than chased further.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -65,23 +69,26 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "10 fixture scope / lifecycle": (
         r"session-scoped|module-scoped|function-scoped|teardown|collection|autouse|fixture"
     ),
+    # Bare `adjudicat` alone pulled 48 rows in that merely MENTION adjudication, and
+    # `exemption` was equally context-free (codex r8 P2). Every alternative left names a
+    # command/permission surface outright. 158 -> 120.
     "11 authority-bearing command surface": (
         r"permission.guard|auto-allow|allowlist|guard venue|exact.shape|carrier parity"
-        r"|adjudicat|exemption|gate override"
+        r"|gate override"
     ),
-    # Both u-he-35 P1s must land here, or the skill's "both P1s were this shape" claim
-    # is not what the classifier says (codex r2 P3: the r1 row matched class 3 only).
-    # `as the verdict|schema-parsed` are what the exit-code-as-verdict row's
-    # evidence actually says; overlap with class 3 is by design — a row counts in every
-    # class it touches.
-    # Every alternative must carry BOTH halves of the class — a quoted obligation AND its
-    # absence — on its own. `manifest row` and `copied verbatim` were bare location/act
-    # nouns that admitted any finding mentioning either, so they went (codex r6 P2). This
-    # row stays a disjunction rather than becoming a conjunction: `unenforced`,
-    # `undischarged` and `no code discharges` each already mean both halves in one word.
+    # Both u-he-35 P1s must land here — the skill claims both were this shape, and a
+    # classifier that says otherwise makes the claim false. `as the verdict` and
+    # `schema-parsed BLOCK` are where the exit-code-as-verdict row matches; `is
+    # unenforced` is where the pilot-gate row does. Overlap with class 3 is by design.
+    # Every alternative carries BOTH halves of the class — a quoted obligation AND its
+    # absence — on its own, so each is a PHRASE, not a token. Dropped once measured:
+    # `manifest row` / `copied verbatim` (bare nouns), `unenforced` and `schema-parsed`
+    # (too loose; narrowed to the phrases the P1s actually use), and `undischarged`,
+    # which matched zero rows in the entire corpus — a dead alternative is not caution,
+    # it is noise with no upside.
     "12 quoted contract phrase not discharged": (
-        r"spec phrase|contract phrase|undischarged|declared but"
-        r"|unenforced|no code discharges|as the verdict|schema-parsed"
+        r"spec phrase|contract phrase|is unenforced|declared but"
+        r"|no code discharges|as the verdict|schema-parsed BLOCK"
     ),
     # Conjunctions (codex r4 P3 x2, each measured before absorbing): a flat OR
     # mis-bucketed 33 of 64 class-13 rows and 6 of 10 class-14 rows. `justfile` is
