@@ -74,9 +74,12 @@ report "new retry/timeout constants"  'timeout|retry|deadline|budget'
 # the written classes alone did not fire on. Class 12's P1: a process exit code read
 # as if it were the verdict, against a contract that says only the schema parse is.
 report "exit code read as verdict (class 12 — name the schema parse that decides)" 'returncode +in +\(|\.returncode *(==|!=) *[0-9]'
-# Crash-vs-timeout aliasing: a timeout arm that does not also handle the OS-level
-# failure treats "the child died" as "the child ran long" — the exact half-written-at-
-# crash case the inventory mandates and the r1 P1 answered only for happy paths.
+# Spawn failure escaping the bounded call: `OSError` is what `subprocess` raises when
+# the child never STARTS (missing executable, EACCES, fd exhaustion) — a child that
+# starts and then dies returns a CompletedProcess carrying a negative returncode, and
+# is not this shape. So a lone TimeoutExpired arm bounds only the ran-long case and
+# lets the never-started one escape the very call it was meant to bound (codex r2 P3
+# corrected the earlier "the child died" wording here; the eval had it right).
 # Line-bound in BOTH directions, like the except/pass opener above (codex r1 P2): a
 # tuple split across lines hides the pair from a line grep, so
 # `except (\n subprocess.TimeoutExpired,\n ValueError,\n):` is a MISS, and

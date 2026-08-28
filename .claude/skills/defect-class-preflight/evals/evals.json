@@ -255,16 +255,17 @@
   },
   {
    "id": 15,
-   "eval_name": "signal-handler-reenters-held-lock",
+   "eval_name": "signal-handler-and-held-lock",
    "skill": "defect-class-preflight",
    "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a new file, currently staged as a fixture at .claude/skills/defect-class-preflight/evals/fixtures-usr01/drain_worker.py. Perform a thorough pre-commit review of it. List every defect you find — cite file and line, name the defect, and say concretely how it fails (inputs/state -> wrong outcome). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run pytest, do NOT execute the fixture code.",
-   "expected_output": "review.md naming the signal-handler/lock reentrancy: SIGTERM is delivered on the interrupted thread, so _on_term acquires the RLock that same thread already holds inside record(), re-enters instead of waiting, and flushes and clears _ROUNDS in the middle of record()'s half-finished update",
+   "expected_output": "review.md naming the signal-handler/lock hazard with the right mechanism: in CPython a Python-level handler runs on the MAIN thread whatever thread received the signal, so if record() is mid-update on the main thread _on_term re-enters the RLock it already owns and flushes/clears a half-written registry, while if a worker holds the lock the handler blocks inside the signal handler waiting for it",
    "files": [
     "fixtures-usr01/drain_worker.py"
    ],
    "assertions": [
-    "names the signal-handler-plus-lock reentrancy — passes only if the review states that the RLock does NOT protect against the handler because the signal runs on the thread that already holds it; calling the handler 'unsafe' or 'racy' without that mechanism does not pass",
-    "makes it concrete: a SIGTERM landing inside record() between the _ROUNDS write and _reindex() lets _flush() run against, and clear, a registry mid-update, so a recorded round is printed stale or lost",
+    "names the mechanism, not just the smell — passes only if the review says a CPython Python-level signal handler runs on the main thread (so ownership of the RLock, not the mere presence of a lock, decides what happens); calling the handler 'unsafe' or 'racy' without that does not pass",
+    "gets at least one arm concrete: EITHER main-thread re-entry (SIGTERM landing inside record() between the _ROUNDS write and _reindex() lets _flush() clear a registry mid-update, losing or staling a recorded round) OR worker-held blocking (the handler waits on a lock it does not own, inside a signal handler)",
+    "does NOT claim the RLock makes this safe, and does not assert the handler runs on whichever thread was interrupted",
     "recommends keeping the handler async-signal-safe (set a flag / write to a self-pipe) and doing the flush on an ordinary thread"
    ]
   }

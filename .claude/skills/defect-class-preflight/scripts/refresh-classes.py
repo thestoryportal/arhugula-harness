@@ -53,9 +53,14 @@ CLASSES: dict[str, str] = {
         r"permission.guard|auto-allow|allowlist|guard venue|exact.shape|carrier parity"
         r"|adjudicat|exemption|gate override"
     ),
+    # Both u-he-35 P1s must land here, or the skill's "both P1s were this shape" claim
+    # is not what the classifier says (codex r2 P3: the r1 row matched class 3 only).
+    # `claimed|as the verdict|schema-parsed` are what the exit-code-as-verdict row's
+    # evidence actually says; overlap with class 3 is by design — a row counts in every
+    # class it touches.
     "12 quoted contract phrase not discharged": (
         r"spec phrase|contract phrase|undischarged|copied verbatim|declared but"
-        r"|unenforced|manifest row|no code discharges"
+        r"|unenforced|manifest row|no code discharges|as the verdict|schema-parsed"
     ),
     "13 new command the loop must reach": (
         r"runs_in|justfile|just recipe|headless|ask prompt|guard wiring|strands"

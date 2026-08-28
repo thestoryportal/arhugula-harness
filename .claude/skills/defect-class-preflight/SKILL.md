@@ -293,13 +293,21 @@ stall with nobody awake to clear it.
 
 ### 14. Signal handler meets lock (added U-SR-01; u-he-35 r10)
 Any signal handler in a process that also takes locks, or any handler touching state
-a lock guards. Ask: *if this signal lands while the interrupted thread already holds
-the lock, what happens?* A handler runs ON the thread it interrupts, so an `RLock`
-re-entry succeeds happily and walks the handler into the middle of a half-finished
-update the lock existed to hide; a plain `Lock` deadlocks against its own holder
-instead. Either way, a lock's protection is the one thing an asynchronous handler
-bypasses. Same family as the recorded fork-while-holding-a-lock deadlock: the hazard
-is asynchronous control transfer while a lock is held, whichever way control goes.
+a lock guards. The fact that decides the answer: in CPython a Python-level handler
+always runs on the MAIN thread, whichever thread the signal was delivered to. So ask
+*which* thread holds the lock when the signal lands, because the two arms fail
+differently:
+- **Main thread holds it** — the handler is the lock's own owner. An `RLock` lets it
+  straight back in and the handler walks into the middle of a half-finished update
+  the lock existed to hide; a plain `Lock` deadlocks against itself instead.
+- **A worker holds it** — the handler is not the owner, so it BLOCKS, waiting inside
+  a signal handler for a lock it cannot hurry. If that worker needs anything the main
+  thread was going to do, the wait never ends.
+
+The trap is assuming one arm is the whole story: an `RLock` looks like protection
+against the first and buys nothing against the second. Same family as the recorded
+fork-while-holding-a-lock deadlock — the hazard is asynchronous control transfer
+while a lock is held, whichever way control goes.
 
 *"The handler only sets a flag"* is the sentence to distrust — first because the
 flag's readers may assume it changes only between guarded sections, and second
