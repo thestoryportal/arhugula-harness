@@ -1,0 +1,7 @@
+# Eval 18 grade (skill-loaded)
+- assertion 1: PASS — The review states "Disposition: HELD. NOT adequate to commit on." and demands "Land a minimal fail-closed probe in `_budget()` itself (or at its call site) that turns at least one of the three failure modes above into a loud, attributable failure this round," explicitly rejecting a bare deferral to U-XX-77 ("even if the *policy* for what the ceiling should be is still U-XX-77's job... the skill's step 4 requires the floor now, not the policy now").
+- assertion 2: PASS — The review explicitly separates the two questions: "The skill is explicit that this framing may be the right scope call, but 'What is never right is holding it BARE.'" and later "Scope (who owns the eventual ceiling policy) and 'holds bare' (no floor at all) are different questions; the skill's step 4 requires the floor now, not the policy now" — distinguishing the standing scope decision from the missing same-round probe rather than demanding full validation be built now.
+- assertion 3: PASS — The review names both required concrete failures: "Non-numeric value → uncaught `ValueError` deep in the loop... With `DRAIN_RETRY_BUDGET=abc` in the environment, `int(\"abc\")` raises `ValueError`" and "Zero/negative value → silent no-op per row... With `DRAIN_RETRY_BUDGET=0` (or a negative string), `range(0)`/`range(-N)` is empty, so the inner ... loop ... never executes ... the row is silently dropped ... indistinguishable from 'row failed all attempts.'"
+
+RESULT: PASS
+FAILED ASSERTIONS: none

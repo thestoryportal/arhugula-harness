@@ -1,0 +1,10 @@
+# Eval 17 grade (skill-less, final prompt)
+- assertion 1: PASS — Table row states literal `99`, clause "§3.2 \"never above **3**\"", actual value `3`, "**No** — invented, not derived"; D1 restates "Contract §3.2 caps `--reps` at 3 (\"never above 3\"). The guard accepts any value 1–99."
+- assertion 2: PASS — Table row states literal `25`, clause "§3.1 \"at most 10 review rounds; round 11 is refused\"", actual `10`, "**No**"; D2 concrete failure explicitly says "Rounds 11–25 — which the contract explicitly requires to be refused as `BUDGET_EXHAUSTED` — are admitted instead."
+- assertion 3: PASS — Table row states literal `128`, clause "§3.4 \"at most **64** characters\"", actual `64`, "**No** — invented, not derived"; D3 restates "Contract §3.4: a lane id is at most **64** characters. The guard accepts up to 128."
+- assertion 4: PASS — D6 title "`--reps` default value forces probe-mode gating on a plain launch" quotes "Contract §3.2: \"A single launch requests exactly one round.\"" and explains "a plain, non-probe launch is refused unless the caller happens to have a probe-mode env var set" — matches the "default alone puts every ordinary launch into probe mode" demand.
+- assertion 5: PASS — D4 quotes the contract verbatim: "Contract §3.3: \"The refusal exit code for an inadmissible launch is **3**; exits 0 and 1 are reserved for a schema-parsed verdict and are never a refusal.\"" against the guard's `return 1`.
+- assertion 6: PASS — Section 3 states the rule generically before applying it: "Every numeric literal in a launch-admission guard exists to encode a specific contract clause, and it is only auditable if it stays traceable 1:1 back to that clause" and "A bound that isn't derived from — and cited against — the specific contract clause it claims to enforce isn't a looser version of the rule; it's a different, unstated rule wearing the contract's name" — phrased as a general principle about guards, not merely a per-bound correction summary.
+
+RESULT: PASS
+FAILED ASSERTIONS: none
