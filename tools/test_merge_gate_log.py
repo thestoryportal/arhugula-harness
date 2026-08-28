@@ -803,11 +803,55 @@ def test_cli_emit_reads_only_regular_files_under_the_lens_scratch_dir(
     assert mgl.main(_cli(good)) == 0
 
 
-def test_cli_binding_prints_the_six_fields(capsys):
+def test_cli_binding_publishes_the_six_fields_to_a_file_and_prints_only_its_path(
+    tmp_path, monkeypatch, capsys
+):
+    """U-SR-03 (charter WR-09): the values land in a file; stdout carries the path alone.
+
+    The contract this pins is the ABSENCE of the values from stdout, not merely their
+    presence in the file. Printing both would leave the hand-copy path -- the source of both
+    round-3 lens corruptions -- just as available as before, and a test that only checked the
+    file would stay green through exactly that regression.
+    """
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", tmp_path / "scratch")
     assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert set(out) == set(rw.BINDING_FIELDS) and out["reviewer_identity"] == LENS
+    printed = capsys.readouterr().out.strip()
+    assert printed == str(mgl.binding_path(LENS))
+    written = json.loads(mgl.binding_path(LENS).read_text())
+    assert set(written) == set(rw.BINDING_FIELDS) and written["reviewer_identity"] == LENS
+    # Every value the orchestrator does NOT already hold is absent from stdout.
+    # `reviewer_identity` is exempt because it IS the `--lens` argument the caller passed:
+    # it names the file, and a value you supplied is not a value you can mistranscribe.
+    for field, value in written.items():
+        if field != "reviewer_identity":
+            assert value not in printed, f"{field} is transcribable off stdout"
     assert mgl.main(["binding", "--lens", "nope", "--base", "HEAD"]) == 2
+    assert not mgl.binding_path("nope").exists()  # a refused id publishes nothing
+
+
+def test_cli_binding_replaces_a_pre_planted_destination_instead_of_following_it(
+    tmp_path, monkeypatch, capsys
+):
+    """The recipe that writes this file is auto-allowed by the permission guard, and it
+    writes into a gitignored directory any other actor in the worktree can reach first.
+    `os.replace` overwrites the NAME, so a symlink planted at the destination is dropped
+    rather than used to clobber whatever it aimed at -- the containment `emit` already
+    applies to its `--verdict-json` sibling in the same directory."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    victim = tmp_path / "tracked-file-someone-cares-about.md"
+    victim.write_text("original content\n")
+    mgl.binding_path(LENS).symlink_to(victim)
+
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
+    capsys.readouterr()
+    assert victim.read_text() == "original content\n", "the symlink target was clobbered"
+    assert not mgl.binding_path(LENS).is_symlink()
+    assert set(json.loads(mgl.binding_path(LENS).read_text())) == set(rw.BINDING_FIELDS)
+    assert [p.name for p in scratch.iterdir()] == [mgl.binding_path(LENS).name], (
+        "a temp file was left behind"
+    )
 
 
 def test_cli_check_is_red_only_on_missing_jsonl(tmp_path: Path, monkeypatch, capsys):

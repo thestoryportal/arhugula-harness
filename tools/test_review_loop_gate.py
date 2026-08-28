@@ -2291,3 +2291,66 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     assert 'case "$6" in accepted|rejected) ;; *) return 1 ;; esac' in guard_src, (
         "the guard's disposition allowlist changed; the SKILL's headless claim must follow"
     )
+
+
+# --- U-SR-03: laws:prompt durable wiring + bindings by file (charter WR-08/09) ----
+
+
+def test_u_sr_03_eval_case_is_registered_and_its_fixture_still_carries_the_defects():
+    """WR-08c: the regression case exists AND the fixture still plants what it grades.
+
+    The registration half alone rots silently: an edit that tidied the fixture's prompts
+    into the canonical three-lens shape, or repaired the truncated sha, would leave the
+    case green-by-vacuity — it would elicit nothing, and no assertion in `assertions`
+    could fire. Each pin below is one graded defect, so repairing the fixture reds here.
+    """
+    by_name = {c["eval_name"]: c for c in _evals()}
+    case = by_name.get("freehand-lens-prompts-and-hand-copied-binding")
+    assert case is not None, "U-SR-03 eval case removed"
+    assert case["skill"] == "merge-gate", (
+        "the case must load the carrier that holds the rule under test, or the A/B "
+        "measures something other than the wiring this unit landed"
+    )
+    assert case["files"] == ["fixtures-usr03/gate_launch_notes.md"]
+
+    fixture = (
+        _repo_root() / EVALS_REL.parent / "fixtures-usr03" / "gate_launch_notes.md"
+    ).read_text(encoding="utf-8")
+
+    # Defect 1 -- authored freehand, inside a laws:code session.
+    assert "laws:code is loaded" in fixture
+
+    # Defect 2 -- a fourth lens: the departure from the canonical three-lens template
+    # that makes this authoring rather than instantiation.
+    assert len(re.findall(r"^## Lens", fixture, re.M)) == 4
+
+    # Defect 3 -- the six values are hand-copied into the prompt text.
+    assert "head_sha=" in fixture and "config_hash=" in fixture
+
+    # Defect 4 -- and the copy is truncated: a 39-hex prefix of the 40-hex CI sha, the
+    # exact round-3 corruption. Compared against the fixture's OWN real sha rather than a
+    # literal, so the pin cannot pass by matching a stale constant.
+    pasted = re.search(r"head_sha=([0-9a-f]+)", fixture).group(1)
+    real = re.search(r"CI is green at `([0-9a-f]+)`", fixture).group(1)
+    assert len(real) == 40 and len(pasted) == 39 and real.startswith(pasted)
+
+
+def test_binding_publishes_by_file_and_the_recipe_routes_through_it():
+    """WR-09: the tool writes the values to a file and the recipe is what skills call.
+
+    Pinned against `merge_gate_log.py`'s own source: a revert to printing the JSON would
+    red here as well as in test_merge_gate_log.py, and the SKILL prose that names a
+    printed PATH would otherwise be describing a mechanism that no longer exists.
+    """
+    src = (_repo_root() / "tools" / "merge_gate_log.py").read_text(encoding="utf-8")
+    binding_block = src.split("def binding_path", 1)[1].split("\ndef ", 1)[0]
+    assert "merge-gate-binding-" in binding_block and "LENS_SCRATCH" in binding_block
+
+    dispatch = src.split('if args.cmd == "binding":', 1)[1].split("\n    if args.cmd", 1)[0]
+    assert "out.write_text" in dispatch and "print(out)" in dispatch
+    assert "print(\n                json.dumps(" not in dispatch, (
+        "the six values are being printed again; hand-copying is back on the table"
+    )
+
+    recipe = (_repo_root() / "justfile").read_text(encoding="utf-8")
+    assert "merge_gate_log.py binding --lens {{lens}} --base {{base}}" in recipe

@@ -40,9 +40,9 @@ PR under review: #<N> on branch <branch>, base main, head <sha>.
 Review the local merge-base diff and enough surrounding source to judge it. Do not edit.
 Immediately before your final line, print ONE fenced ```json block with exactly these keys:
 verdict (APPROVE|BLOCK), findings (array of {severity: P1|P2|P3, location, message}; empty on
-APPROVE, non-empty on BLOCK) and these six values copied VERBATIM: head_sha=<...>,
-base_sha=<...>, diff_digest=<...>, reviewer_identity=<lens id>, prompt_version=<...>,
-config_hash=<...> (the output of `just merge-gate-binding <lens id>`). No other keys.
+APPROVE, non-empty on BLOCK) and the six binding values — head_sha, base_sha, diff_digest,
+reviewer_identity, prompt_version, config_hash — copied VERBATIM from the JSON file at
+<binding-file path printed by `just merge-gate-binding <lens id>`>. No other keys.
 End with exactly `VERDICT: APPROVE` or `VERDICT: BLOCK: <one-sentence reason>` as the final
 non-empty line (a bare `VERDICT: BLOCK` without its reason is not a verdict).
 ```
@@ -64,9 +64,12 @@ Validate each invocation separately: exit 0, output file exists and is non-empty
 final non-empty line is exactly one permitted verdict. Missing, malformed, truncated, or
 ambiguous output is `BLOCK`.
 
-Before launching, compute each lens's binding with
-`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`
-and include the six printed values in that lens's prompt; require, immediately before the
+Before launching, publish each lens's binding with
+`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`. It
+writes the six values to a file and prints ONLY that path (U-SR-03, charter WR-09): name the
+printed path in that lens's prompt and have the lens read the values from it — never copy a
+value through the orchestrator, which is where both round-3 corruptions came from. Require,
+immediately before the
 `VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
 (`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
 the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored) and record it:

@@ -13,7 +13,8 @@ row minting through `review_wrapper_common.emit_outcome` (ids and `round_n` mint
 the log lock -- never a per-invocation ordinal, U-HE-01 interface note).
 
 CLI (what `.claude/skills/merge-gate/SKILL.md` calls):
-    merge_gate_log.py binding --lens <id> [--base main]        -> the six fields, JSON
+    merge_gate_log.py binding --lens <id> [--base main]        -> writes the six fields to a
+                                                                  file; prints only that path
     merge_gate_log.py emit --pr N --lens <id> --verdict-json F  -> record; exit 0/1/2
     merge_gate_log.py adjudicate --finding-id I --disposition D --actor A -> §5 row; 0/2
     merge_gate_log.py check                                      -> consistency reducer
@@ -621,6 +622,20 @@ def reconcile_orphans(
 LENS_SCRATCH = REPO / ".harness" / "tmp"
 
 
+def binding_path(lens: str) -> Path:
+    """Where `binding` publishes one lens's six values (U-SR-03, charter WR-09).
+
+    Derived from the lens id alone, so a prompt can name this path while the orchestrator
+    never handles a value. Both round-3 lens corruptions were orchestrator TRANSCRIPTION
+    errors -- a truncated `head_sha` and a spliced `base_sha` -- not lens errors; delegating
+    was never the cost, hand-copying the values was ([B] F3).
+
+    Callers reach this only after `lens_binding` has accepted the id against `_LENS_RE`, so
+    the id cannot carry a separator by the time it becomes a filename.
+    """
+    return LENS_SCRATCH / f"merge-gate-binding-{lens}.json"
+
+
 #: The only files a post-gate "log-only" commit may touch (C-HE-23 §2 sibling + human view).
 GATE_ROW_FILES = frozenset({".harness/merge-gate-log.jsonl", ".harness/merge-gate-log.md"})
 
@@ -720,16 +735,28 @@ def main(argv: list[str] | None = None) -> int:
         # override on either command (codex R5 P2: a shared arbitrary value would let a verdict
         # bind to nothing); tests patch `config_hash` itself.
         try:
-            print(
-                json.dumps(
-                    lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version),
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
+            values = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
         except GateLogError as exc:
             print(f"merge-gate-log: {exc}", file=sys.stderr)
             return 2
+        # [LAW:effects-at-boundaries] `lens_binding` computes; the write happens here, at the
+        # CLI edge. The values are published to a FILE and stdout carries only its path
+        # (charter WR-09): a value the orchestrator never sees is a value it cannot mistype.
+        out = binding_path(args.lens)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Same-directory temp + `os.replace` -- this module's own publication idiom, not a
+        # new one. Two properties earn it here: a lens never reads a half-written binding,
+        # and `replace` overwrites the destination NAME, so a symlink pre-planted at this
+        # gitignored path (which an auto-allowed recipe writes) is replaced rather than
+        # followed -- the containment `emit` already applies to its `--verdict-json` sibling
+        # in the same directory. `O_EXCL|O_NOFOLLOW` extends it to the temp itself: a planted
+        # temp fails loudly instead of being written through.
+        tmp = out.with_name(f"{out.name}.{os.getpid()}.tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, out)
+        print(out)
         return 0
     if args.cmd == "emit":
         try:

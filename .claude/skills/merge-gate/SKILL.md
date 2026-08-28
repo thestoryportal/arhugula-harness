@@ -71,16 +71,37 @@ call edges: they do not model reference-passing (a callback registered rather th
 `getattr`, string-keyed registries, or plugin loaders. The list is a floor on the blast
 radius, never a ceiling. `tools/graft_reachability.py` documents this same limit in detail.
 
-## Binding — compute BEFORE launching (C-HE-15 §4, U-HE-13)
+## Binding — publish BEFORE launching (C-HE-15 §4, U-HE-13; bindings by file, WR-09)
 
 Each lens verdict is bound to the exact tree it reviewed. For each lens id —
 `merge-gate-concurrency`, `merge-gate-spec-conformance`, `merge-gate-witness-adequacy` — run
-`just merge-gate-binding <id>` (base `main`) on the checked-out
-PR head and paste the six printed values (`head_sha`, `base_sha`, `diff_digest`,
-`reviewer_identity`, `prompt_version`, `config_hash`) into that lens's prompt. The lens
-copies them VERBATIM into its fenced JSON block; `emit` (below) recomputes them and refuses
-a verdict whose values differ (a moved head, a swapped lens) — the verdict is then NOT
-recorded and does not count.
+`just merge-gate-binding <id>` (base `main`) on the checked-out PR head. It writes the six
+values (`head_sha`, `base_sha`, `diff_digest`, `reviewer_identity`, `prompt_version`,
+`config_hash`) to a file and prints **only that path**. Name the printed path in that lens's
+prompt and tell the lens to READ it — never copy a value through this turn. Both round-3 lens
+corruptions were orchestrator transcription errors (a truncated `head_sha` → one re-emit; a
+spliced `base_sha` → a full 0.38M-IET lens rerun, ≈5 min on the critical path) [B] F3, and a
+value you never handle is a value you cannot corrupt. The lens copies the six VERBATIM out of
+that file into its fenced JSON block; `emit` (below) recomputes them and refuses a verdict
+whose values differ (a moved head, a swapped lens) — the verdict is then NOT recorded and
+does not count.
+
+## Prompt authoring — delegate under `laws:prompt`
+
+**Subagent prompts are authored under `laws:prompt` (U-SR-03, charter WR-08).** A subagent
+sees only the prompt you write — no transcript, no CLAUDE.md, no user requirement unless you
+put it there. Delegate the authoring to an agent that adopts `laws:prompt` and use the prompt
+it returns; composing one inline is legal ONLY when instantiating a skill-canonical template
+with literal values. A freehand prompt written in a `laws:code` session is the defect this
+rule exists to stop: the passive memory (`[[feedback-subagent-prompts-are-laws-prompt-medium]]`)
+failed twice in 48h, and delegating costs ~1m13s / 0.11M IET — about 3% of one lens run. The
+`agent-prompt-advisory` PreToolUse hook restates this at every `Agent` call; it is advisory
+and never denies.
+
+The three reviewer prompts below **are** the skill-canonical template: instantiating them
+with this PR's literal values (PR number, branch, blast-radius list, binding-file path) is
+the sanctioned inline path. Departing from them — a new lens, a re-worded specialty, an
+extra instruction — is authoring, and goes through the delegate.
 
 ## The three reviewers — launch in ONE message, three parallel Agent calls
 
@@ -92,8 +113,10 @@ generic pass, and demand a machine-parseable verdict line. **Every prompt also d
 before the `VERDICT:` line, ONE fenced ```` ```json ```` block matching
 `tools/review_schemas/merge-gate.schema.json`: keys `verdict` (APPROVE|BLOCK), `findings`
 (array of `{severity: P1|P2|P3, location, message}`, empty on APPROVE, non-empty on BLOCK) and
-the six binding values copied verbatim — no other keys.** Append that sentence, with the six
-values, to each of the three prompts below.
+the six binding values copied verbatim — no other keys.** Append that sentence to each of the
+three prompts below, naming the **binding-file path** the recipe printed for that lens and
+instructing the lens to read the six values from it; the values themselves never appear in
+the prompt you write.
 
 **Reviewer 1 — concurrency / race conditions:**
 > Review this diff for concurrency defects only — do not do a general code review. Diff:
