@@ -14,7 +14,9 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -1754,143 +1756,139 @@ def _one_function(rel: str, name: str) -> ast.FunctionDef:
     return fns[0]
 
 
-def test_wr_04_fixture_plants_a_new_mechanism_the_answers_deny():
-    """A planted-defect fixture is only a witness while it still carries the defect.
+# Every defect the U-SR-02 evals grade, declared ONCE as a triple: what the fixture
+# must still carry, what the contract clause must still say, and the phrase the
+# oracle uses to demand it.
+#
+# This table is a re-scope by SUBTRACTION, not another layer of hardening. Rounds 1-3
+# each found a different unpinned SIDE of one of these defects — r1: the contract
+# value was not bound to the clause stating it; r2: the contract could drift from the
+# oracle, and banning shapes lost to the next spelling; r3: the `--reps` default, the
+# §3.3 refusal code, the release-then-reclaim defect, and the answers' denial were
+# each pinned on one side only. Patching a side per round is the arms race this
+# workspace's notes say does not converge. One table checked by one loop converges
+# instead: a planted defect cannot be declared here with a side missing, because the
+# loop reads all three sides of every row.
+#
+# Adding a planted defect to any of these evals owes a row here.
 
-    Both halves are pinned: the fix must ADD a mechanism (the registry) whose claim
-    is non-atomic, and the answers must DENY having added one. Repairing either half
-    — synchronising the claim, or making the answers honest — reds this, which is the
-    point: the case would then be testing nothing.
 
-    The synchronisation check is a POSITIVE shape pin, not a list of banned shapes.
-    Enumerating them lost twice: `"Lock" not in fix` fell to `setdefault` (swept at
-    r1), and forbidding `ast.With` fell to `lock.acquire()/try/finally` (codex r2
-    P2). Each round produced another spelling, which is the arms race this
-    workspace's own notes warn does not converge. Pinning claim()'s body to exactly
-    test-set-report is complete by construction: any guard, lock, or retry adds a
-    statement and reds, whatever it is called.
-    """
+class _Planted(NamedTuple):
+    what: str
+    eval_id: int
+    demand: str  # phrase the oracle must still use to require this defect
+    check: Callable[[], None]  # fixture-side property
+    clause: tuple[str, str] | None = None  # (pattern capturing the value, expected)
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.split())
+
+
+# The answers file's denial, pinned as its exact sentence rather than as the token
+# "no new mechanism" (codex r3 P2): rewriting the bullet to ADMIT the mechanism —
+# `The old "no new mechanism" answer was wrong; _LiveGroups is new coordination` —
+# keeps the token and inverts the meaning, leaving eval 16's required rejection
+# inapplicable while the test stayed green.
+_DENIAL = (
+    "**Race / TOCTOU / atomicity:** no new mechanism — this round only adds a skip "
+    "to an existing loop, so there is no new coordination surface to sweep."
+)
+_DENIAL_CONCLUSION = (
+    "Nothing in the diff introduces a mechanism the previous sweep did not already cover."
+)
+
+# Every call the bare drain_budget fixture legitimately makes. Pinned as an exact SET
+# rather than as a list of banned node types: `ast.Assert/Raise/Compare` missed
+# `operator.gt(v, 0)` and `sys.exit(3)`, which are loud probes carrying none of those
+# nodes (codex r2 P2). A probe has to RUN something, and anything it runs is a new
+# name here.
+_DRAIN_BUDGET_CALLS = frozenset(
+    {"int", "os.environ.get", "range", "_budget", "step", "time.sleep", "done.append"}
+)
+
+# admit()'s returns in SOURCE order: both refusals wrongly use 1 (§3.3 names 3 and
+# reserves 0/1 for a schema-parsed verdict), then the admission returns 0. Pinned as
+# the exact sequence, not as a substring: `"return 1" in guard` stayed green when
+# only ONE of the two refusals was repaired (self-caught by this arc's r2 probe).
+_ADMIT_RETURNS = [1, 1, 0]
+
+
+def _check_registry_race() -> None:
     fix = _fixture("absorption/round5_fix.py")
-    answers = _fixture("absorption/sweep-answers-r5.md")
     assert "class _LiveGroups" in fix
     # the check and the act, unguarded and in that order — the race under review
     assert fix.index("if name in self._live") < fix.index("self._live[name] = worker_id")
     claim = _one_function("absorption/round5_fix.py", "claim")
+    # POSITIVE shape pin. Banning shapes lost twice — `"Lock" not in fix` fell to
+    # `setdefault` (swept at r1) and banning `ast.With` fell to
+    # `lock.acquire()/try/finally` (codex r2 P2). Pinning the body to exactly
+    # test-set-report is complete by construction: any lock, guard, or retry adds a
+    # statement, whatever it is named or imported from.
     assert _body_shape(claim) == ["If", "Assign", "Return"], (
         "claim() is no longer a bare test-then-set; the planted race is gone"
     )
     guard = next(s for s in claim.body if isinstance(s, ast.If))
-    # the early-out is a lone `return False`: an `else`, or any statement beside it,
-    # would mean the membership test now does something other than gate the set
     assert [type(s).__name__ for s in guard.body] == ["Return"] and not guard.orelse
-    assert "no new mechanism" in answers
 
 
-# (guard literal, its invented bound, contract section, pattern capturing that
-# section's real value, the phrase eval 17 uses to demand that value).
-#
-# Three separate drifts are closed here, because eval 17 grades against numbers
-# recorded in THREE places and any pair can slide apart:
-#   * bare membership let "3" be satisfied by "§3.1" and by §3.3's exit code, so
-#     changing §3.2's maximum TO 99 erased the divergence green (codex r1 P2) —
-#     hence a pattern binding each value to the CLAUSE that states it;
-#   * checking only `captured != invented` let §3.2's ceiling drift 3 -> 4 while
-#     the oracle still told reviewers to report 3 (codex r2 P2) — hence the
-#     captured value is pinned to `expected`;
-#   * `expected` itself could drift from the oracle, so the phrase eval 17 uses to
-#     demand it is pinned in the same row.
-_WR_05_BOUNDS = (
-    (
-        "1 <= args.reps <= 99",
-        "99",
-        "3",
-        "§3.2",
-        r"§3\.2[^§]*?never above \*\*(\d+)\*\*",
-        "§3.2 ceiling of 3",
-    ),
-    (
-        "args.round > 25",
-        "25",
-        "10",
-        "§3.1",
-        r"§3\.1[^§]*?\*\*at most (\d+) review rounds\*\*",
-        "§3.1 budget of 10 rounds",
-    ),
-    (
-        "len(args.lane_id) > 128",
-        "128",
-        "64",
-        "§3.4",
-        r"§3\.4[^§]*?\*\*at most (\d+) characters\*\*",
-        "§3.4's 64",
-    ),
-)
-
-# The two non-range breaches eval 17 also grades. Left unpinned they could be
-# repaired to their contractual values while assertions 4 and 5 went on demanding
-# defects that were no longer present (codex r2 P2).
-_WR_05_DEFAULT = 'ap.add_argument("--reps", type=int, default=3)'
-
-# admit()'s returns in source order: both refusals wrongly use 1 (§3.3 names 3 and
-# reserves 0/1 for a schema-parsed verdict), then the admission returns 0. Pinned as
-# the exact SEQUENCE, not as a substring: `"return 1" in guard` was the first draft
-# and stayed green when only ONE of the two refusals was repaired — the same
-# incomplete-pinning class as the findings above, caught by this arc's own probe.
-_WR_05_ADMIT_RETURNS = [1, 1, 0]
+def _check_release_then_reclaim() -> None:
+    # eval 16's second graded defect: the registry tracks what is IN FLIGHT and never
+    # what is DONE, so a later worker re-claims a finished group and appends it again
+    # even if claim() were atomic. Unpinned until codex r3 P2 — the oracle demanded a
+    # defect that `_LIVE.release(name)` could be deleted to remove, all-green.
+    drain_once = _one_function("absorption/round5_fix.py", "drain_once")
+    tries = _nodes(drain_once, ast.Try)
+    assert len(tries) == 1, "drain_once no longer wraps its append in exactly one try"
+    finally_calls = {name for s in tries[0].finalbody for name in _call_names(s)}
+    assert "_LIVE.release" in finally_calls, (
+        "the claim is no longer released on the drain path; the reclaim defect is gone"
+    )
+    assert _body_shape(_one_function("absorption/round5_fix.py", "release")) == ["Expr"]
 
 
-def test_wr_05_fixture_bounds_diverge_from_the_contract_they_cite():
-    """Every defect eval 17 grades must still be planted, and each contract value
-    must still be the one the oracle names — a bound that agrees with its clause,
-    or a clause that has drifted from the oracle, grades against nothing."""
-    guard = _fixture("reps_guard.py")
-    contract = _fixture("contract_excerpt.md")
-    oracle = " ".join(next(c for c in _evals() if c["id"] == 17)["assertions"])
-    for literal, invented, expected, section, pattern, demand in _WR_05_BOUNDS:
-        assert literal in guard, f"planted bound gone from the guard: {literal}"
-        match = re.search(pattern, contract, re.S)
-        assert match, f"contract clause {section} no longer states its bound"
-        assert match.group(1) == expected, (
-            f"{section} states {match.group(1)}, but eval 17 grades against {expected}"
-        )
-        assert expected != invented
-        assert demand in oracle, f"eval 17 no longer demands {section}'s value"
-    assert _WR_05_DEFAULT in guard, "planted breach of §3.2's 'exactly one' is gone"
+def _check_answers_deny() -> None:
+    answers = _squash(_fixture("absorption/sweep-answers-r5.md"))
+    assert _squash(_DENIAL) in answers, "the answers no longer DENY a new mechanism"
+    assert _squash(_DENIAL_CONCLUSION) in answers
+
+
+def _check_reps_range() -> None:
+    assert "1 <= args.reps <= 99" in _fixture("reps_guard.py")
+
+
+def _check_round_bound() -> None:
+    assert "args.round > 25" in _fixture("reps_guard.py")
+
+
+def _check_lane_bound() -> None:
+    assert "len(args.lane_id) > 128" in _fixture("reps_guard.py")
+
+
+def _check_reps_default() -> None:
+    assert 'ap.add_argument("--reps", type=int, default=3)' in _fixture("reps_guard.py")
+
+
+def _check_refusal_code() -> None:
     admit = _one_function("reps_guard.py", "admit")
     # sorted by lineno, never by walk order: `ast.walk` is breadth-first, so it read
-    # these as [0, 1, 1] and the sequence claim below would have been about nothing
+    # these as [0, 1, 1] and the sequence claim would have been about nothing
     returns = [
         s.value.value
         for s in sorted(_nodes(admit, ast.Return), key=lambda n: n.lineno)
         if isinstance(s.value, ast.Constant)  # type: ignore[union-attr]
     ]
-    assert returns == _WR_05_ADMIT_RETURNS, (
+    assert returns == _ADMIT_RETURNS, (
         f"admit() returns {returns}; the planted §3.3 refusal-code breach is gone"
     )
+
+
+def _check_uncited_bounds() -> None:
     # no bound in the guard cites its contract section — that absence IS the defect
-    assert "§3" not in guard
+    assert "§3" not in _fixture("reps_guard.py")
 
 
-# Every call the bare fixture legitimately makes. Pinned as an exact SET rather than
-# as a list of banned node types: `ast.Assert/Raise/Compare` missed `operator.gt(v, 0)`
-# and `sys.exit(3)`, which are loud probes carrying none of those nodes (codex r2 P2).
-# Any added call — a validator, an exit, a comparison helper — is a new name here.
-_DRAIN_BUDGET_CALLS = frozenset(
-    {"int", "os.environ.get", "range", "_budget", "step", "time.sleep", "done.append"}
-)
-
-
-def test_wr_06_fixture_holds_a_finding_with_no_probe():
-    """The hold must be BARE: a probe landing in the fixture's own round would make
-    the disposition adequate and the case vacuous.
-
-    The probe's absence is a property of the CODE, pinned POSITIVELY. Two rounds of
-    banning shapes lost twice — forbidding the token `raise` left `assert _budget() >
-    0` green (codex r1 P2), and forbidding Assert/Raise/Compare left
-    `operator.gt(v, 0)` and `sys.exit(3)` green (codex r2 P2). Fixing the fixture's
-    call set and statement shape is complete by construction: a probe has to run
-    something, and anything it runs is a name outside the frozen set.
-    """
+def _check_bare_hold() -> None:
     note = _fixture("hold_note.md")
     code = _fixture("drain_budget.py")
     assert "Disposition: HELD" in note
@@ -1904,8 +1902,107 @@ def test_wr_06_fixture_holds_a_finding_with_no_probe():
     assert "range(_budget())" in code
     tree = _fixture_ast("drain_budget.py")
     assert _call_names(tree) == _DRAIN_BUDGET_CALLS, "fixture's call set changed; hold not bare"
-    assert not _nodes(tree, ast.Assert, ast.Raise, ast.Compare, ast.IfExp), "fixture gained a probe"
+    assert not _nodes(tree, ast.Assert, ast.Raise, ast.Compare, ast.IfExp)
     assert _body_shape(_one_function("drain_budget.py", "_budget")) == ["Return"]
+
+
+_PLANTED = (
+    _Planted(
+        "wr04-registry-race",
+        16,
+        "the _LiveGroups registry",
+        _check_registry_race,
+    ),
+    _Planted(
+        "wr04-release-then-reclaim",
+        16,
+        "releases the claim in its `finally`",
+        _check_release_then_reclaim,
+    ),
+    _Planted(
+        "wr04-answers-deny-the-mechanism",
+        16,
+        "no new coordination surface",
+        _check_answers_deny,
+    ),
+    _Planted(
+        "wr05-reps-range",
+        17,
+        "§3.2 ceiling of 3",
+        _check_reps_range,
+        (r"§3\.2[^§]*?never above \*\*(\d+)\*\*", "3"),
+    ),
+    _Planted(
+        "wr05-round-budget",
+        17,
+        "§3.1 budget of 10 rounds",
+        _check_round_bound,
+        (r"§3\.1[^§]*?\*\*at most (\d+) review rounds\*\*", "10"),
+    ),
+    _Planted(
+        "wr05-lane-id-length",
+        17,
+        "§3.4's 64",
+        _check_lane_bound,
+        (r"§3\.4[^§]*?\*\*at most (\d+) characters\*\*", "64"),
+    ),
+    _Planted(
+        "wr05-reps-default",
+        17,
+        "§3.2's 'exactly one'",
+        _check_reps_default,
+        (r"§3\.2[^§]*?requests \*\*(exactly one)\*\*", "exactly one"),
+    ),
+    _Planted(
+        "wr05-refusal-exit-code",
+        17,
+        "§3.3, which names 3 as the refusal code",
+        _check_refusal_code,
+        (r"§3\.3[^§]*?is \*\*(\d+)\*\*", "3"),
+    ),
+    _Planted(
+        "wr05-bounds-cite-nothing",
+        17,
+        "cite the contract value it derives from",
+        _check_uncited_bounds,
+    ),
+    _Planted(
+        "wr06-bare-hold",
+        18,
+        "fail-closed probe",
+        _check_bare_hold,
+    ),
+)
+
+
+@pytest.mark.parametrize("planted", _PLANTED, ids=lambda p: p.what)
+def test_planted_defect_is_pinned_on_every_side(planted: _Planted):
+    """A planted-defect eval is only a witness while all three sides hold: the
+    fixture still carries the defect, the contract clause still states the value the
+    defect diverges from, and the oracle still demands it.
+
+    Any one side alone is satisfiable without the other two — which is precisely how
+    rounds 1, 2 and 3 each found a different green-but-vacuous case.
+    """
+    planted.check()
+    if planted.clause is not None:
+        pattern, expected = planted.clause
+        match = re.search(pattern, _fixture("contract_excerpt.md"), re.S)
+        assert match, f"contract clause for {planted.what} no longer states its value"
+        assert match.group(1) == expected, (
+            f"contract says {match.group(1)!r} but eval {planted.eval_id} "
+            f"grades against {expected!r}"
+        )
+    oracle = " ".join(next(c for c in _evals() if c["id"] == planted.eval_id)["assertions"])
+    assert planted.demand in oracle, f"eval {planted.eval_id} no longer demands {planted.what}"
+
+
+def test_planted_table_covers_every_u_sr_02_eval():
+    """The table is the single place a planted defect is declared, so it must span
+    all three cases — a defect declared nowhere is a defect pinned on no side."""
+    assert {p.eval_id for p in _PLANTED} == {16, 17, 18}
+    names = [p.what for p in _PLANTED]
+    assert len(names) == len(set(names)), f"duplicate row names: {names}"
 
 
 def test_preflight_carries_the_u_sr_02_meta_rules():
