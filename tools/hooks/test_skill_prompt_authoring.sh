@@ -71,6 +71,24 @@ printf '%s' "$REF" | grep -q 'never denies' \
   && ok "the advisory hook the rule names is present and executable" \
   || bad "rule names agent-prompt-advisory but the hook is missing/not executable"
 
+# The Codex merge-gate carrier launches its lenses through `codex exec`, not an `Agent`
+# call, so the PreToolUse advisory never reaches that path and the Claude paragraph cannot
+# be transplanted (laws:prompt is a Claude-plugin skill). Its TRANSLATION is therefore the
+# only thing carrying the rule on that runner, and it is pinned here (codex r1 P2).
+CODEX_MG="$REPO/.agents/skills/merge-gate/SKILL.md"
+for needle in "canonical template" "is AUTHORING" "fresh Codex subagent"; do
+  grep -q "$needle" "$CODEX_MG" \
+    && ok "Codex merge-gate carrier states: $needle" \
+    || bad "Codex merge-gate carrier lost the authoring rule ($needle)"
+done
+grep -q "laws:prompt" "$CODEX_MG" \
+  && ok "Codex carrier names the Claude-side rule it translates" \
+  || bad "Codex carrier does not reference the rule it translates"
+
+# The base case, without which the rule recurses forever (codex r1 P2).
+printf '%s' "$REF" | grep -q 'base case' \
+  && ok "rule names the delegation base case" || bad "rule has no bootstrap base case"
+
 # WR-09: neither merge-gate carrier may still tell the reader to paste the values.
 for rel in ".claude/skills/merge-gate/SKILL.md" ".agents/skills/merge-gate/SKILL.md"; do
   text=$(cat "$REPO/$rel")

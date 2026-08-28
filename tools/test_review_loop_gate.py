@@ -2347,9 +2347,15 @@ def test_binding_publishes_by_file_and_the_recipe_routes_through_it():
     assert "merge-gate-binding-" in binding_block and "LENS_SCRATCH" in binding_block
 
     dispatch = src.split('if args.cmd == "binding":', 1)[1].split("\n    if args.cmd", 1)[0]
-    assert "out.write_text" in dispatch and "print(out)" in dispatch
-    assert "print(\n                json.dumps(" not in dispatch, (
-        "the six values are being printed again; hand-copying is back on the table"
+    # The mechanism as it actually ships, not as an earlier draft wrote it: a temp opened
+    # O_EXCL|O_NOFOLLOW, published by os.replace, with the PATH as the only thing printed.
+    # (codex r1 P2 caught this pin naming `out.write_text`, which the class-1 fix had
+    # already replaced -- a stale source pin is red in CI and green in `just codex-check`,
+    # which does not run this file; only .github/workflows/ci.yml does.)
+    for token in ("os.O_EXCL", "os.O_NOFOLLOW", "os.replace(tmp, out)", "print(out)"):
+        assert token in dispatch, f"binding dispatch no longer contains {token}"
+    assert "json.dumps" not in dispatch.split("print(out)", 1)[1], (
+        "something is printed after the path; hand-copying is back on the table"
     )
 
     recipe = (_repo_root() / "justfile").read_text(encoding="utf-8")

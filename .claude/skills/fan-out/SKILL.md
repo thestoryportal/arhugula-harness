@@ -51,7 +51,11 @@ with literal values. A freehand prompt written in a `laws:code` session is the d
 rule exists to stop: the passive memory (`[[feedback-subagent-prompts-are-laws-prompt-medium]]`)
 failed twice in 48h, and delegating costs ~1m13s / 0.11M IET — about 3% of one lens run. The
 `agent-prompt-advisory` PreToolUse hook restates this at every `Agent` call; it is advisory
-and never denies.
+and never denies. The delegate's OWN invocation is the base case: launching the
+laws:prompt authoring agent uses the one-line brief `Adopt laws:prompt and author the
+subagent prompt described below; return only the finished prompt.` plus the task
+description, and needs no further delegation -- without a named base case the rule
+recurses forever, since every authoring agent would itself need an authored prompt.
 
 This skill carries no canonical prompt template — every variant brief and the judge rubric
 are written fresh per problem, so step 3 and step 4 above are always the delegated path,

@@ -64,6 +64,23 @@ Validate each invocation separately: exit 0, output file exists and is non-empty
 final non-empty line is exactly one permitted verdict. Missing, malformed, truncated, or
 ambiguous output is `BLOCK`.
 
+## Prompt authoring — the Codex translation of the laws:prompt rule
+
+The Claude carriers (`merge-gate`, `fan-out`, `council-orchestrator`) require subagent
+prompts to be authored by a delegated `laws:prompt` agent. `laws:prompt` is a Claude-plugin
+skill this runner cannot load, so the rule translates rather than transplants — but it is
+NOT waived here, and the `agent-prompt-advisory` PreToolUse hook does not reach this path:
+these lenses launch through `codex exec`, not an `Agent` tool call, so this text is the only
+thing carrying the rule on the Codex side (codex u-sr-03 r1 P2).
+
+The translation: the three lens briefs in this file, plus the self-contained tail above,
+**are** the canonical template — instantiating them with this PR's literal values (PR number,
+branch, blast-radius list, binding-file path) is the sanctioned path. Departing from them —
+a re-worded specialty, an added lens, an extra instruction — is AUTHORING, and authoring goes
+through a fresh Codex subagent whose brief is to write the prompt and return only the prompt,
+never through a prompt composed inline while mid-implementation. Both round-3 lens
+corruptions came from an orchestrator hand-assembling lens input mid-task.
+
 Before launching, publish each lens's binding with
 `just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`. It
 writes the six values to a file and prints ONLY that path (U-SR-03, charter WR-09): name the

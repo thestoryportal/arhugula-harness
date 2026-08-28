@@ -813,20 +813,60 @@ def test_cli_binding_publishes_the_six_fields_to_a_file_and_prints_only_its_path
     round-3 lens corruptions -- just as available as before, and a test that only checked the
     file would stay green through exactly that regression.
     """
-    monkeypatch.setattr(mgl, "LENS_SCRATCH", tmp_path / "scratch")
+    scratch = tmp_path / "scratch"
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    head = mgl.lens_binding(mgl.REPO, "HEAD", LENS)["head_sha"]  # the head the CLI resolves
     assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
     printed = capsys.readouterr().out.strip()
-    assert printed == str(mgl.binding_path(LENS))
-    written = json.loads(mgl.binding_path(LENS).read_text())
+    assert printed == str(mgl.binding_path(LENS, head))
+    written = json.loads(mgl.binding_path(LENS, head).read_text())
+    # The head is in the NAME, so a republish at another head writes a different file and
+    # cannot hand a lens values for a tree it did not review (codex r1 P1).
+    assert head[:8] in printed and written["head_sha"] == head
     assert set(written) == set(rw.BINDING_FIELDS) and written["reviewer_identity"] == LENS
-    # Every value the orchestrator does NOT already hold is absent from stdout.
-    # `reviewer_identity` is exempt because it IS the `--lens` argument the caller passed:
-    # it names the file, and a value you supplied is not a value you can mistranscribe.
+
+    # No value is COPYABLE off stdout. Two fields appear there only in forms that cannot be
+    # transcribed into what the lens must emit, and both are named rather than skipped:
+    # `reviewer_identity` IS the `--lens` argument the caller passed, and the head appears
+    # as an 8-char path component while the verdict requires the full 40. Every other value
+    # must be absent outright -- that absence is what a revert to printing JSON violates.
     for field, value in written.items():
-        if field != "reviewer_identity":
-            assert value not in printed, f"{field} is transcribable off stdout"
+        if field == "reviewer_identity":
+            continue
+        assert value not in printed, f"{field} is transcribable off stdout"
+    assert written["head_sha"][:8] in printed and written["head_sha"] not in printed
+
     assert mgl.main(["binding", "--lens", "nope", "--base", "HEAD"]) == 2
-    assert not mgl.binding_path("nope").exists()  # a refused id publishes nothing
+    assert list(scratch.iterdir()) == [mgl.binding_path(LENS, head)], (
+        "a refused id published something"
+    )
+
+
+def test_cli_binding_refuses_a_symlinked_scratch_directory(tmp_path, monkeypatch, capsys):
+    """codex r1 P2: `O_NOFOLLOW` guards the final component only.
+
+    With `.harness/tmp` itself pre-planted as a symlink, `mkdir(exist_ok=True)` succeeds and
+    the temp open, the write, and the `os.replace` all land in the external target -- the
+    auto-allowed recipe would publish somewhere it never promised to write. Refuse loudly
+    (exit 2, nothing written) rather than silently relocate the publication.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    scratch = tmp_path / "scratch"
+    scratch.symlink_to(elsewhere, target_is_directory=True)
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 2
+    assert "is a symlink" in capsys.readouterr().err
+    assert list(elsewhere.iterdir()) == [], "published into the symlink target anyway"
+
+    # Same enforcer, other caller: `emit`'s reader resolved through this directory too, so a
+    # symlinked scratch dir would have let a lens file from outside the worktree in. The
+    # sibling is closed by construction rather than by a second, drift-prone check.
+    planted = elsewhere / "lens.txt"
+    planted.write_text("VERDICT: APPROVE\n")
+    with pytest.raises(mgl.GateLogError, match="is a symlink"):
+        mgl._read_text(str(scratch / "lens.txt"))
 
 
 def test_cli_binding_replaces_a_pre_planted_destination_instead_of_following_it(
@@ -840,16 +880,17 @@ def test_cli_binding_replaces_a_pre_planted_destination_instead_of_following_it(
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    head = mgl.lens_binding(mgl.REPO, "HEAD", LENS)["head_sha"]
     victim = tmp_path / "tracked-file-someone-cares-about.md"
     victim.write_text("original content\n")
-    mgl.binding_path(LENS).symlink_to(victim)
+    mgl.binding_path(LENS, head).symlink_to(victim)
 
     assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
     capsys.readouterr()
     assert victim.read_text() == "original content\n", "the symlink target was clobbered"
-    assert not mgl.binding_path(LENS).is_symlink()
-    assert set(json.loads(mgl.binding_path(LENS).read_text())) == set(rw.BINDING_FIELDS)
-    assert [p.name for p in scratch.iterdir()] == [mgl.binding_path(LENS).name], (
+    assert not mgl.binding_path(LENS, head).is_symlink()
+    assert set(json.loads(mgl.binding_path(LENS, head).read_text())) == set(rw.BINDING_FIELDS)
+    assert [p.name for p in scratch.iterdir()] == [mgl.binding_path(LENS, head).name], (
         "a temp file was left behind"
     )
 

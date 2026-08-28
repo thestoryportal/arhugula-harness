@@ -622,18 +622,37 @@ def reconcile_orphans(
 LENS_SCRATCH = REPO / ".harness" / "tmp"
 
 
-def binding_path(lens: str) -> Path:
+def scratch_dir() -> Path:
+    """`LENS_SCRATCH`, refused when it is itself a symlink (codex u-sr-03 r1 P2).
+
+    `O_NOFOLLOW` and `Path.resolve()` both guard the FINAL component. With `.harness/tmp`
+    pre-planted as a symlink, `binding` would publish into the external target and
+    `_read_text` would accept a lens file out of it -- the containment both paths claim
+    would be a containment neither has. ONE enforcer for the rule, so the two cannot drift
+    apart and a later caller inherits it for free.
+    """
+    if LENS_SCRATCH.is_symlink():
+        raise GateLogError(f"{LENS_SCRATCH} is a symlink -- refusing to read or publish there")
+    return LENS_SCRATCH
+
+
+def binding_path(lens: str, head_sha: str) -> Path:
     """Where `binding` publishes one lens's six values (U-SR-03, charter WR-09).
 
-    Derived from the lens id alone, so a prompt can name this path while the orchestrator
-    never handles a value. Both round-3 lens corruptions were orchestrator TRANSCRIPTION
-    errors -- a truncated `head_sha` and a spliced `base_sha` -- not lens errors; delegating
-    was never the cost, hand-copying the values was ([B] F3).
+    A prompt names this path so the orchestrator never handles a value: both round-3 lens
+    corruptions were orchestrator TRANSCRIPTION errors -- a truncated `head_sha` and a
+    spliced `base_sha` -- not lens errors ([B] F3).
 
-    Callers reach this only after `lens_binding` has accepted the id against `_LENS_RE`, so
-    the id cannot carry a separator by the time it becomes a filename.
+    The head is part of the NAME, not just the contents (codex r1 P1). Keyed on the lens
+    alone, the file is a mutable cell two runs at different heads share: a lens launched
+    against H1 could read values republished for H2 and copy them into its verdict, and
+    `emit` -- which recomputes against the current head -- would accept an H1 review as an
+    H2 one. That is the precise soundness hole the binding exists to close, so the path
+    carries the provenance and a stale file simply is not the file the prompt named.
+    `head_sha` comes from `lens_binding`, i.e. from `git rev-parse`, and the lens id has
+    already been matched against `_LENS_RE`, so neither component can carry a separator.
     """
-    return LENS_SCRATCH / f"merge-gate-binding-{lens}.json"
+    return LENS_SCRATCH / f"merge-gate-binding-{lens}-{head_sha[:8]}.json"
 
 
 #: The only files a post-gate "log-only" commit may touch (C-HE-23 §2 sibling + human view).
@@ -683,7 +702,7 @@ def _read_text(arg: str) -> str:
     if (
         path.is_symlink()
         or not resolved.is_file()
-        or LENS_SCRATCH.resolve() not in resolved.parents
+        or scratch_dir().resolve() not in resolved.parents
     ):
         raise GateLogError(
             f"--verdict-json must be '-' or a regular file under {LENS_SCRATCH} (got {arg!r})"
@@ -736,13 +755,14 @@ def main(argv: list[str] | None = None) -> int:
         # bind to nothing); tests patch `config_hash` itself.
         try:
             values = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
+            scratch_dir()  # refuses a symlinked .harness/tmp before anything is written
         except GateLogError as exc:
             print(f"merge-gate-log: {exc}", file=sys.stderr)
             return 2
         # [LAW:effects-at-boundaries] `lens_binding` computes; the write happens here, at the
         # CLI edge. The values are published to a FILE and stdout carries only its path
         # (charter WR-09): a value the orchestrator never sees is a value it cannot mistype.
-        out = binding_path(args.lens)
+        out = binding_path(args.lens, values["head_sha"])
         out.parent.mkdir(parents=True, exist_ok=True)
         # Same-directory temp + `os.replace` -- this module's own publication idiom, not a
         # new one. Two properties earn it here: a lens never reads a half-written binding,
