@@ -77,6 +77,13 @@ report "exit code read as verdict (class 12 — name the schema parse that decid
 # Crash-vs-timeout aliasing: a timeout arm that does not also handle the OS-level
 # failure treats "the child died" as "the child ran long" — the exact half-written-at-
 # crash case the inventory mandates and the r1 P1 answered only for happy paths.
+# Line-bound in BOTH directions, like the except/pass opener above (codex r1 P2): a
+# tuple split across lines hides the pair from a line grep, so
+# `except (\n subprocess.TimeoutExpired,\n ValueError,\n):` is a MISS, and
+# `except (subprocess.TimeoutExpired,\n OSError):` is a false HIT whose named answer
+# is "OSError is on the next line". A false hit costs one named answer; the miss is
+# the real limit, and it is the tool's, not a claim this sweep can make good on —
+# the file's exit contract already says silence proves nothing.
 report_unless "TimeoutExpired without OSError (crash aliases as timeout)" 'except[^:]*subprocess\.TimeoutExpired' 'OSError'
 # A count parsed straight off the CLI is an unvalidated budget one token from class 5:
 # name the contract value that bounds it (the reps token took four paid touches).

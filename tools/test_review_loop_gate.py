@@ -404,6 +404,12 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     present (a label-only assertion passes even if report_unless never filters)."""
     real = Path(__file__).resolve().parents[1] / SCRIPT_REL
     _plant_script(repo, real.read_text(encoding="utf-8"))
+    # Commit the script BEFORE planting, so the sweep never reads its own source as
+    # an untracked new file (codex r1 P3). `type=int` is a metacharacter-free
+    # literal, so an untracked copy of the script self-matches that pattern from its
+    # own `report` declaration — the label then fires with the planted fixture
+    # deleted, and every assertion below would pass while proving nothing.
+    _commit_all(repo, "script on main, outside the swept set")
     (repo / "planted.py").write_text(
         "if proc.returncode in (0, 1):\n"
         "    verdict = 'approve'\n"
@@ -428,15 +434,20 @@ def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
         check=False,
     )
     assert out.returncode == 0, out.stderr
-    for label in (
-        "exit code read as verdict",
-        "TimeoutExpired without OSError",
-        "argparse count without a contract-derived bound",
-        "new permission-guard allow branch",
-    ):
-        assert label in out.stdout, f"shape did not fire: {label}\n{out.stdout}"
+
+    def block(label: str) -> str:
+        assert f"[{label}]" in out.stdout, f"shape did not fire: {label}\n{out.stdout}"
+        return out.stdout.split(f"[{label}]")[1].split("\n\n")[0]
+
+    # Each label must carry the PLANTED line, not merely be present: deleting a
+    # planted shape has to red its own assertion.
+    assert "proc.returncode in (0, 1)" in block(
+        "exit code read as verdict (class 12 — name the schema parse that decides)"
+    )
+    assert "--reps" in block("argparse count without a contract-derived bound")
+    assert "new-recipe" in block("new permission-guard allow branch (name its witness)")
     # the discriminating half: only the un-paired arm is carried into the report
-    timeout_block = out.stdout.split("[TimeoutExpired without OSError")[1].split("\n\n")[0]
+    timeout_block = block("TimeoutExpired without OSError (crash aliases as timeout)")
     assert "except subprocess.TimeoutExpired:" in timeout_block
     assert "OSError" not in timeout_block
 
