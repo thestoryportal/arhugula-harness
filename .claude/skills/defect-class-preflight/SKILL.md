@@ -368,8 +368,9 @@ BEFORE re-invoking the reviewer:
    grounds, or it is held per step 4), append the disposition —
    `HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id>
    --disposition accepted|rejected|suppressed --actor <runner>_absorber` (`accepted`
-   = the fix was applied; `rejected` = refuted; `suppressed` = held, and step 4 owes
-   its authority; the finding_id is on the round's emitted JSONL rows). The
+   = the fix was applied; `rejected` = refuted; `suppressed` = held — and only once
+   step 4's probe is COMMITTED and seen to fail closed, never in anticipation of it;
+   the finding_id is on the round's emitted JSONL rows). The
    `HARNESS_ARC_ID=` prefix is
    REQUIRED — the guard auto-allows only the prefixed form, and the CLI holder-binds
    it to this lane's live reservation. The actor is the RUNNER's own absorber
@@ -397,6 +398,15 @@ BEFORE re-invoking the reviewer:
    authority, no legal disposition. If the minimal probe is genuinely un-writable
    this round, that is not a licence to hold anyway — it is the evidence that the
    hold is wrong. Fix it, or route it.
+
+   **Order matters, and only one order is safe: probe committed and seen to fail
+   closed, THEN the `suppressed` row.** Adjudication is append-only and durable, and
+   consumers honour `suppressed` immediately as muting the finding — so a row written
+   in anticipation of a probe is a live suppression backed by nothing, and it stays
+   live if the probe then fails, or if the session is interrupted before writing it.
+   You will want the other order, because the row is the cheap part and writing it
+   while you have the finding_id in hand feels tidy. That tidiness is the whole
+   defect: it muzzles the finding first and earns the right second.
 5. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
 6. When two consecutive rounds' findings target mechanisms YOUR absorption invented

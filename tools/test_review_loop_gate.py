@@ -1725,6 +1725,24 @@ def _nodes(tree: ast.AST, *kinds: type[ast.AST]) -> list[ast.AST]:
     return [n for n in ast.walk(tree) if isinstance(n, kinds)]
 
 
+# Exact-AST comparison. `ast.dump` omits line/col by default, so these compare STRUCTURE
+# and nothing else — and `ast.parse` discards comments, which is the whole point: every
+# text-substring pin this arc wrote was satisfiable by leaving the old code in a
+# migration comment while the running code changed (codex r5 P2, four findings).
+def _dump(node: ast.AST) -> str:
+    return ast.dump(node)
+
+
+def _expr(source: str) -> str:
+    """Dump of `source` parsed as an expression."""
+    return ast.dump(ast.parse(source, mode="eval").body)
+
+
+def _stmt(source: str) -> str:
+    """Dump of `source` parsed as a single statement."""
+    return ast.dump(ast.parse(source).body[0])
+
+
 def _body_shape(fn: ast.FunctionDef) -> list[str]:
     """Statement kinds of `fn`'s body, docstring excluded."""
     return [
@@ -1821,21 +1839,34 @@ _ADMIT_RETURNS = [1, 1, 0]
 
 
 def _check_registry_race() -> None:
-    fix = _fixture("absorption/round5_fix.py")
-    assert "class _LiveGroups" in fix
-    # the check and the act, unguarded and in that order — the race under review
-    assert fix.index("if name in self._live") < fix.index("self._live[name] = worker_id")
+    """The planted check-then-set, pinned as EXACT AST rather than as source text.
+
+    Text pins are satisfiable by a COMMENT: an atomic `setdefault` guard can keep
+    `if name in self._live` and the assignment in a migration note while the running
+    code is serialised, leaving the old substring assertions green over a fixture with
+    no race left (codex r5 P2). `ast.parse` discards comments, so an expression
+    compared by `ast.dump` cannot be satisfied by anything that does not RUN.
+    """
+    tree = _fixture_ast("absorption/round5_fix.py")
+    classes = [n.name for n in _nodes(tree, ast.ClassDef)]
+    assert "_LiveGroups" in classes, "the fix no longer defines the registry it adds"
     claim = _one_function("absorption/round5_fix.py", "claim")
-    # POSITIVE shape pin. Banning shapes lost twice — `"Lock" not in fix` fell to
-    # `setdefault` (swept at r1) and banning `ast.With` fell to
-    # `lock.acquire()/try/finally` (codex r2 P2). Pinning the body to exactly
-    # test-set-report is complete by construction: any lock, guard, or retry adds a
-    # statement, whatever it is named or imported from.
+    # Body shape first (any lock, guard or retry adds a statement), then the exact
+    # expressions, so a same-shaped but atomic rewrite cannot pass.
     assert _body_shape(claim) == ["If", "Assign", "Return"], (
         "claim() is no longer a bare test-then-set; the planted race is gone"
     )
     guard = next(s for s in claim.body if isinstance(s, ast.If))
-    assert [type(s).__name__ for s in guard.body] == ["Return"] and not guard.orelse
+    assert _dump(guard.test) == _expr("name in self._live"), (
+        "claim()'s membership test changed; the check-then-act race may be gone"
+    )
+    assert not guard.orelse
+    assert [_dump(s) for s in guard.body] == [_stmt("return False")]
+    assign = next(s for s in claim.body if isinstance(s, ast.Assign))
+    assert _dump(assign) == _stmt("self._live[name] = worker_id"), (
+        "claim()'s set is no longer the unguarded assignment the race needs"
+    )
+    assert _dump(claim.body[-1]) == _stmt("return True")
 
 
 def _check_release_then_reclaim() -> None:
@@ -1846,11 +1877,17 @@ def _check_release_then_reclaim() -> None:
     drain_once = _one_function("absorption/round5_fix.py", "drain_once")
     tries = _nodes(drain_once, ast.Try)
     assert len(tries) == 1, "drain_once no longer wraps its append in exactly one try"
-    finally_calls = {name for s in tries[0].finalbody for name in _call_names(s)}
-    assert "_LIVE.release" in finally_calls, (
+    assert [_dump(s) for s in tries[0].finalbody] == [_stmt("_LIVE.release(name)")], (
         "the claim is no longer released on the drain path; the reclaim defect is gone"
     )
-    assert _body_shape(_one_function("absorption/round5_fix.py", "release")) == ["Expr"]
+    release = _one_function("absorption/round5_fix.py", "release")
+    assert _body_shape(release) == ["Expr"]
+    # `release()` must actually REMOVE the claim. One-Expr alone was the r4 draft, and
+    # `self._live.setdefault(name, -1)` keeps that shape and the `_LIVE.release` call
+    # while completed groups stay claimed — the defect gone, the pins green (r5 P2).
+    assert _dump(release.body[-1]) == _stmt("self._live.pop(name, None)"), (
+        "release() no longer removes the claim; the reclaim defect is gone"
+    )
 
 
 def _check_answers_deny() -> None:
@@ -1859,20 +1896,41 @@ def _check_answers_deny() -> None:
     assert _squash(_DENIAL_CONCLUSION) in answers
 
 
+def _guard_tests() -> list[str]:
+    """Dumps of every `if` test in validate() — the EXECUTABLE bounds.
+
+    Raw substring checks were the r4 draft and fell to the same comment trick as the
+    race pin: correcting the guard to a contract-derived maximum while leaving
+    `1 <= args.reps <= 99` in a historical comment kept them green (codex r5 P2).
+    """
+    validate = _one_function("reps_guard.py", "validate")
+    return [_dump(s.test) for s in _nodes(validate, ast.If)]
+
+
 def _check_reps_range() -> None:
-    assert "1 <= args.reps <= 99" in _fixture("reps_guard.py")
+    assert _expr("not 1 <= args.reps <= 99") in _guard_tests(), (
+        "the executable reps bound is no longer the planted 1..99"
+    )
 
 
 def _check_round_bound() -> None:
-    assert "args.round > 25" in _fixture("reps_guard.py")
+    assert _expr("args.round is not None and args.round > 25") in _guard_tests(), (
+        "the executable round bound is no longer the planted 25"
+    )
 
 
 def _check_lane_bound() -> None:
-    assert "len(args.lane_id) > 128" in _fixture("reps_guard.py")
+    assert _expr("args.lane_id is not None and len(args.lane_id) > 128") in _guard_tests(), (
+        "the executable lane-id bound is no longer the planted 128"
+    )
 
 
 def _check_reps_default() -> None:
-    assert 'ap.add_argument("--reps", type=int, default=3)' in _fixture("reps_guard.py")
+    parser = _one_function("reps_guard.py", "build_parser")
+    calls = [_dump(c) for c in _nodes(parser, ast.Call)]
+    assert _expr('ap.add_argument("--reps", type=int, default=3)') in calls, (
+        "the planted --reps default is no longer 3, or is no longer executable"
+    )
 
 
 def _check_refusal_code() -> None:
@@ -1896,20 +1954,33 @@ def _check_uncited_bounds() -> None:
 
 def _check_bare_hold() -> None:
     note = _fixture("hold_note.md")
-    code = _fixture("drain_budget.py")
     assert "Disposition: HELD" in note
     assert "U-XX-77" in note  # the deferral target the hold leans on
     # The note may DESCRIBE the finding freely ("a non-numeric value raises ...") —
     # what it must not do is claim a probe was landed. Word-bounded on purpose: a
     # bare `in` check reads "raises" as "raise" and reds on the description itself.
     assert re.search(r"\bprobe\b", note, re.I) is None, "hold is no longer bare"
-    assert 'int(os.environ.get("DRAIN_RETRY_BUDGET"' in code
-    # the env value flows straight into range() with nothing bounding or rejecting it
-    assert "range(_budget())" in code
     tree = _fixture_ast("drain_budget.py")
+    # Coarse pins first — they catch the loud shapes cheaply — then the EXACT return
+    # expression, which is what actually decides. The call set and the banned-node
+    # list were both satisfiable while the budget was validated: `_budget()` returning
+    # `{3: 3}[int(os.environ.get("DRAIN_RETRY_BUDGET", "3"))]` fails closed on zero,
+    # negative, non-numeric and oversized values via KeyError while preserving the
+    # substring, the Return-only body, the call names and the absence of
+    # Assert/Raise/Compare/IfExp (codex r5 P2). Pinning the returned expression itself
+    # leaves no room for a wrapper: any validation has to change what is returned.
     assert _call_names(tree) == _DRAIN_BUDGET_CALLS, "fixture's call set changed; hold not bare"
     assert not _nodes(tree, ast.Assert, ast.Raise, ast.Compare, ast.IfExp)
-    assert _body_shape(_one_function("drain_budget.py", "_budget")) == ["Return"]
+    budget = _one_function("drain_budget.py", "_budget")
+    assert _body_shape(budget) == ["Return"]
+    assert _dump(budget.body[-1]) == _stmt(
+        'return int(os.environ.get("DRAIN_RETRY_BUDGET", "3"))'
+    ), "_budget() no longer reads the env value bare; the hold is no longer unvalidated"
+    # the env value flows straight into range() with nothing bounding or rejecting it
+    drain = _one_function("drain_budget.py", "drain_with_retries")
+    assert any(_dump(f.iter) == _expr("range(_budget())") for f in _nodes(drain, ast.For)), (
+        "the budget no longer flows unbounded into range()"
+    )
 
 
 _PLANTED = (
@@ -2071,3 +2142,18 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     squashed = _squash(text)
     assert "a **deterministic rule**, or a logged operator override" in squashed
     assert "The same-round fail-closed probe IS that deterministic rule." in squashed
+
+    # The ORDER, which is the half that has teeth (codex r5 P2): adjudication is
+    # durable and consumers honour `suppressed` at once, so a row written before the
+    # probe lands is a live suppression backed by nothing — and it stays live if the
+    # probe then fails or the session is interrupted.
+    #
+    # Pinned here because BOTH of this arc's SKILL fixes shipped unwitnessed on their
+    # first draft (r4's disposition vocabulary, r5's ordering) and the arc's own probe
+    # caught each. A prose fix needs its pin as much as a code fix does; that is the
+    # standing lesson, and these assertions are it.
+    assert "only once step 4's probe is COMMITTED and seen to fail closed" in squashed
+    assert (
+        "Order matters, and only one order is safe: probe committed and seen to fail "
+        "closed, THEN the `suppressed` row." in squashed
+    )
