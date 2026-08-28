@@ -1924,6 +1924,20 @@ def _check_registry_race() -> None:
         _repo_root() / EVALS_REL.parent / "fixtures-usr02" / "absorption" / "round5_fix.py"
     ).read_bytes()
     actual = hashlib.sha256(raw).hexdigest()
+    # The digest is bound to the RECORD, not just to this constant. Without this, the
+    # three-step protocol below was documented in a comment and nothing enforced it:
+    # repairing the race and bumping only `_RACE_FIXTURE_SHA256` left the suite green
+    # while the recorded grade silently went stale (merge-gate witness lens r4). That is
+    # the same prose-over-mechanism gap this file already closes for the ledger claims by
+    # reading `unanswered_findings` and the permission guard's own source — applied here
+    # too, instead of only where it was convenient.
+    record = (_repo_root() / ".harness" / "u-sr-02-eval-run-2026-08-28.md").read_text(
+        encoding="utf-8"
+    )
+    assert _RACE_FIXTURE_SHA256 in record, (
+        "the eval-run record does not name this digest; the graded evidence and the "
+        "fixture have come apart — re-grade eval 16 rather than syncing the strings"
+    )
     assert actual == _RACE_FIXTURE_SHA256, (
         "the race fixture changed (sha256 "
         f"{actual[:12]} != {_RACE_FIXTURE_SHA256[:12]}). Eval 16 was graded against the "
