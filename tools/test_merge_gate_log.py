@@ -31,6 +31,8 @@ def _isolated(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("HARNESS_ARC_ID", raising=False)  # adjudicate's arc-binding input
     monkeypatch.setattr(mgl, "config_hash", lambda: "cfg")  # no CLI override exists (R5 P2)
     monkeypatch.setattr(mgl, "LENS_SCRATCH", tmp_path)  # `emit` reads verdict files only here
+    # the containment walk starts at the anchor, so a repointed scratch dir moves both
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", tmp_path.parent)
 
 
 def _binding(lens: str = LENS, head: str = H) -> dict[str, str]:
@@ -788,6 +790,7 @@ def test_cli_emit_reads_only_regular_files_under_the_lens_scratch_dir(
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
     outside = tmp_path / "secret.txt"
     outside.write_text("VERDICT: APPROVE\nTOKEN=hunter2\n")
     link = scratch / "lens.txt"
@@ -815,6 +818,7 @@ def test_cli_binding_publishes_the_six_fields_to_a_file_and_prints_only_its_path
     """
     scratch = tmp_path / "scratch"
     monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
     expected = mgl.lens_binding(mgl.REPO, "HEAD", LENS)  # the binding the CLI resolves
     assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
     printed = capsys.readouterr().out.strip()
@@ -846,6 +850,28 @@ def test_cli_binding_publishes_the_six_fields_to_a_file_and_prints_only_its_path
     )
 
 
+def test_cli_binding_refuses_a_symlinked_ANCESTOR_of_the_scratch_dir(tmp_path, monkeypatch, capsys):
+    """codex r3 P2: `O_NOFOLLOW` on the final component alone left the parent swappable.
+
+    With the equivalent of `.harness` replaced by a symlink to an external directory that
+    contains a real `tmp`, the old single-component open succeeded and the auto-allowed
+    recipe published outside the repository while the comment still claimed containment.
+    Every component below the anchor is validated now, so the ancestor is refused too.
+    """
+    outside = tmp_path / "outside"
+    (outside / "tmp").mkdir(parents=True)
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "harness").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", root)
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", root / "harness" / "tmp")
+
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 2
+    assert "not a usable scratch directory" in capsys.readouterr().err
+    assert list((outside / "tmp").iterdir()) == [], "published through the swapped ancestor"
+
+
 def test_cli_binding_refuses_a_symlinked_scratch_directory(tmp_path, monkeypatch, capsys):
     """codex r1 P2: `O_NOFOLLOW` guards the final component only.
 
@@ -859,6 +885,7 @@ def test_cli_binding_refuses_a_symlinked_scratch_directory(tmp_path, monkeypatch
     scratch = tmp_path / "scratch"
     scratch.symlink_to(elsewhere, target_is_directory=True)
     monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
 
     assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 2
     assert "not a usable scratch directory" in capsys.readouterr().err
@@ -884,6 +911,7 @@ def test_cli_binding_replaces_a_pre_planted_destination_instead_of_following_it(
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
     expected = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
     victim = tmp_path / "tracked-file-someone-cares-about.md"
     victim.write_text("original content\n")

@@ -83,10 +83,24 @@ through a fresh Codex subagent whose brief is to write the prompt and return onl
 never through a prompt composed inline while mid-implementation. Both round-3 lens
 corruptions came from an orchestrator hand-assembling lens input mid-task.
 
-**Base case.** Launching that authoring subagent is itself an invocation, so without an
-exemption the rule would recurse forever. The base case is literal and needs no further
-delegation: `codex exec --ephemeral --sandbox read-only` with the brief `Author the subagent
-prompt described below; return only the finished prompt.` plus the task description.
+**Base case, and where it stops being automatic.** Launching an authoring subagent is itself
+an invocation, so without an exemption the rule would recurse forever. The base case is the
+literal brief `Author the subagent prompt described below; return only the finished prompt.`
+plus the task description, which needs no further delegation.
+
+Be honest about the venue, though: this delegation is **not auto-allowed in loop mode**, and
+no wording here changes that. `_safe_codex_exec_command` in `tools/hooks/permission-guard.sh`
+admits exactly one `codex exec` shape — `env HARNESS_CODEX_REVIEW_ISOLATED=1`, one each of
+`--ephemeral`, `--sandbox read-only`, `-C <project dir>`, and an `--output-last-message`
+matching `/tmp/arhugula-pr-<N>-lens[123]-<40-hex>.md`. An authoring delegate is not a lens,
+so it cannot satisfy that pattern without claiming a lens identity it does not have, and the
+allowlist is deliberately NOT widened to make this sentence true (codex u-sr-03 r3 P2).
+
+The consequence is the right one rather than a gap: instantiating the three canonical
+templates is the normal path and needs no delegation at all, so ordinary gate runs are
+unaffected. Authoring a genuinely new or re-worded lens is rare and judgment-bearing, and it
+surfaces to the operator as an approval — which is the correct gate for changing what the
+reviewers are asked, not an obstacle to route around.
 
 Before launching, publish each lens's binding with
 `just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`. It

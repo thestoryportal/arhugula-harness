@@ -2368,6 +2368,11 @@ def test_binding_publishes_by_file_and_the_recipe_routes_through_it():
     assert "os.O_DIRECTORY" in opener and "os.O_NOFOLLOW" in opener, (
         "the scratch capture is no longer an atomic symlink-refusing directory open"
     )
+    # Every component below the anchor, not just the last one: `O_NOFOLLOW` on `tmp` alone
+    # left `.harness` swappable for a symlink containing a real `tmp` (codex r3 P2).
+    assert "SCRATCH_ANCHOR" in opener and "for part in parts" in opener, (
+        "the scratch capture no longer validates every component below the anchor"
+    )
     addressing = src.split("def binding_path", 1)[1].split("\ndef ", 1)[0]
     assert "hashlib.sha256" in addressing and "sort_keys=True" in addressing, (
         "the published name is no longer a digest of the whole binding"

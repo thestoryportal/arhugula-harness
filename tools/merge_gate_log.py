@@ -29,6 +29,7 @@ append-only disposition write.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -621,25 +622,48 @@ def reconcile_orphans(
 
 #: Where lens responses live for `emit` (the skills write them here; gitignored).
 LENS_SCRATCH = REPO / ".harness" / "tmp"
+#: The trust root `open_scratch_dir()` walks down from, validating EVERY component below it.
+#: Stated rather than implied, because a containment claim needs a stopping point: this is the
+#: directory holding the module being executed, so an actor who can replace it has already
+#: replaced this code and no check here could bind them. Above the anchor is out of scope by
+#: construction; below it, nothing is (codex r3 P2 -- `O_NOFOLLOW` on `tmp` alone left
+#: `.harness` itself swappable for a symlink containing a real `tmp`).
+SCRATCH_ANCHOR = REPO
 
 
 def open_scratch_dir() -> int:
-    """A descriptor for `LENS_SCRATCH`, refusing a symlink ATOMICALLY (codex r1 P2, r2 P2).
+    """A descriptor for `LENS_SCRATCH`, refusing a symlink at ANY component (codex r1/r2/r3).
 
     Returns an fd rather than a path because the path-shaped version of this rule was
     check-then-use: `is_symlink()` answered a question about the directory, and every later
-    `mkdir` / `os.open` / `os.replace` re-traversed the name, so another process could swap
-    `.harness/tmp` for a symlink in between and the auto-allowed recipe would publish outside
-    the repository. `O_DIRECTORY|O_NOFOLLOW` makes the check and the capture the same
-    syscall; every caller then works `dir_fd`-relative against the inode this opened, which
-    no later rename can repoint. ONE enforcer, so `binding` and `emit` cannot drift apart.
+    `mkdir` / `os.open` / `os.replace` re-traversed the name, so another process could swap a
+    component in between and the auto-allowed recipe would publish outside the repository.
+    Each component from `SCRATCH_ANCHOR` down is opened `O_DIRECTORY|O_NOFOLLOW` relative to
+    the previous descriptor, so the check and the capture are the same syscall at every level
+    and callers then work `dir_fd`-relative against an inode no later rename can repoint.
+    ONE enforcer, so `binding` and `emit` cannot drift apart.
 
-    The caller owns the fd and must close it.
+    The caller owns the returned fd and must close it.
     """
     try:
-        return os.open(LENS_SCRATCH, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parts = LENS_SCRATCH.relative_to(SCRATCH_ANCHOR).parts
+    except ValueError as exc:  # a scratch dir outside its own anchor is a wiring error
+        raise GateLogError(f"{LENS_SCRATCH} is not under {SCRATCH_ANCHOR}") from exc
+    try:
+        fd = os.open(SCRATCH_ANCHOR, os.O_RDONLY | os.O_DIRECTORY)
     except OSError as exc:
-        raise GateLogError(f"{LENS_SCRATCH} is not a usable scratch directory: {exc}") from exc
+        raise GateLogError(f"{SCRATCH_ANCHOR} is not a usable scratch anchor: {exc}") from exc
+    for part in parts:
+        try:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError as exc:
+            os.close(fd)
+            raise GateLogError(
+                f"{LENS_SCRATCH} is not a usable scratch directory ({part!r}): {exc}"
+            ) from exc
+        os.close(fd)
+        fd = nxt
+    return fd
 
 
 def binding_path(lens: str, values: Mapping[str, str]) -> Path:
@@ -792,15 +816,25 @@ def main(argv: list[str] | None = None) -> int:
         # rename of `.harness/tmp` after the check (codex r2 P2).
         tmp_name = f"{out.name}.{os.getpid()}.tmp"
         try:
-            fd = os.open(
-                tmp_name,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=dfd,
-            )
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
-            os.replace(tmp_name, out.name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            try:
+                fd = os.open(
+                    tmp_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=dfd,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    stream.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
+                os.replace(tmp_name, out.name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            except OSError as exc:
+                # A planted temp name, a full disk, or a failed replace is a gate error like
+                # any other -- exit 2 with a message, never an uncaught traceback (codex r3
+                # P3). The temp is removed on the way out so a transient failure cannot make
+                # the NEXT run fail with `O_EXCL` on a leftover it did not create.
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name, dir_fd=dfd)
+                print(f"merge-gate-log: could not publish {out.name}: {exc}", file=sys.stderr)
+                return 2
         finally:
             os.close(dfd)
         print(out)

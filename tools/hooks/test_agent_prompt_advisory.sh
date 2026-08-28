@@ -72,7 +72,7 @@ for payload in '{"hook_event_name":"PreToolUse"}' '{}' ''; do
     && ok "silent, exit 0 on $label" || bad "$label -> rc=$rc out=$o"
 done
 
-# --- 4. wired where the runtime will reach it ---
+# --- 4. wired where the runtime will reach it, on BOTH runners ---
 jq -e --arg c '${CLAUDE_PROJECT_DIR}/tools/hooks/agent-prompt-advisory.sh' '
   .hooks.PreToolUse
   | map(select(.matcher == "Agent"))
@@ -80,6 +80,21 @@ jq -e --arg c '${CLAUDE_PROJECT_DIR}/tools/hooks/agent-prompt-advisory.sh' '
 ' "$SETTINGS" >/dev/null 2>&1 \
   && ok "wired at PreToolUse matcher Agent in settings.json" \
   || bad "settings.json does not route PreToolUse/Agent to this hook"
+
+# The Codex mirror had no regression witness: deleting its registration left this test, the
+# carrier test, and the parity matcher list all green (codex r3 P2). It is asserted directly
+# now. Note what this does and does NOT prove: it pins the REGISTRATION, not a live firing.
+# The Codex runner exposes no `Agent` tool today -- its subagents launch via `codex exec` --
+# so there is no runtime event to exercise, which is exactly why the Codex merge-gate carrier
+# carries the rule in prose instead of relying on this hook.
+CODEX_HOOKS="$REPO/.codex/hooks.json"
+jq -e --arg c '/bin/bash "$(git rev-parse --show-toplevel)/tools/hooks/agent-prompt-advisory.sh"' '
+  .hooks.PreToolUse
+  | map(select(.matcher == "Agent"))
+  | map(.hooks[].command) | index($c) != null
+' "$CODEX_HOOKS" >/dev/null 2>&1 \
+  && ok "wired at PreToolUse matcher Agent in .codex/hooks.json" \
+  || bad ".codex/hooks.json does not route PreToolUse/Agent to this hook"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
