@@ -301,7 +301,8 @@
     "flags the `1 <= args.reps <= 99` range as deriving from no contract value, and names the §3.2 ceiling of 3 it should derive from",
     "flags `args.round > 25` against the §3.1 budget of 10 rounds — a 25-round guard admits rounds 11-25 the contract refuses",
     "flags the 128-character lane-id bound against §3.4's 64",
-    "flags at least one of: the `--reps` default of 3 against §3.2's 'exactly one', or the refusal `return 1` against §3.3 (which names 3 and reserves 0/1 for a schema-parsed verdict)",
+    "flags the `--reps` default of 3 against §3.2's 'exactly one' — the default alone puts every ordinary launch into probe mode",
+    "flags the refusal `return 1` against §3.3, which names 3 as the refusal code and reserves 0/1 for a schema-parsed verdict",
     "states the general rule — a numeric bound in a guard must cite the contract value it derives from — rather than only correcting the individual numbers"
    ]
   },

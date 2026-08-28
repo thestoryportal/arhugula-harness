@@ -8,6 +8,7 @@ review terminal per C-HE-16 §3 — no C-HE-24 row, no round outcome).
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -1714,44 +1715,85 @@ def _fixture(rel: str) -> str:
     return (_repo_root() / EVALS_REL.parent / "fixtures-usr02" / rel).read_text(encoding="utf-8")
 
 
+def _fixture_ast(rel: str) -> ast.Module:
+    return ast.parse(_fixture(rel))
+
+
+def _nodes(tree: ast.AST, *kinds: type[ast.AST]) -> list[ast.AST]:
+    return [n for n in ast.walk(tree) if isinstance(n, kinds)]
+
+
 def test_wr_04_fixture_plants_a_new_mechanism_the_answers_deny():
     """A planted-defect fixture is only a witness while it still carries the defect.
 
     Both halves are pinned: the fix must ADD a mechanism (the registry) whose claim
     is non-atomic, and the answers must DENY having added one. Repairing either half
-    — putting a lock in the fix, or making the answers honest — reds this, which is
-    the point: the case would then be testing nothing.
+    — synchronising the claim, or making the answers honest — reds this, which is the
+    point: the case would then be testing nothing.
+
+    The absence of synchronisation is read off the AST, not off the text. `"Lock" not
+    in fix` was the first draft and belongs to the same class as codex r1's two P2s:
+    it pins a spelling rather than the property, so repairing the race any other way
+    — `setdefault`, a semaphore, a mutex built elsewhere and passed in — left it
+    green with nothing planted. Swept as a sibling of those findings, not reported.
     """
     fix = _fixture("absorption/round5_fix.py")
     answers = _fixture("absorption/sweep-answers-r5.md")
     assert "class _LiveGroups" in fix
     # the check and the act, unguarded and in that order — the race under review
     assert fix.index("if name in self._live") < fix.index("self._live[name] = worker_id")
-    assert "Lock" not in fix, "fixture no longer carries the race it was planted for"
+    claims = [
+        n
+        for n in _nodes(_fixture_ast("absorption/round5_fix.py"), ast.FunctionDef)
+        if n.name == "claim"
+    ]
+    # named, not `next(...)`: a renamed method would otherwise surface as a bare
+    # StopIteration, which reds for the wrong reason and reads as a broken test
+    assert len(claims) == 1, "the fixture no longer defines exactly one claim()"
+    assert not _nodes(claims[0], ast.With, ast.AsyncWith), "claim() is synchronised; race gone"
     assert "no new mechanism" in answers
+
+
+# (guard literal, its invented bound, contract section, pattern capturing that
+# section's real value). The pattern binds a value to the CLAUSE that states it —
+# codex r1 P2: bare membership let "3" be satisfied by "§3.1" and by §3.3's exit
+# code, so changing §3.2's maximum TO 99 would erase the planted divergence and
+# leave this test green.
+_WR_05_BOUNDS = (
+    ("1 <= args.reps <= 99", "99", "§3.2", r"§3\.2[^§]*?never above \*\*(\d+)\*\*"),
+    ("args.round > 25", "25", "§3.1", r"§3\.1[^§]*?\*\*at most (\d+) review rounds\*\*"),
+    ("len(args.lane_id) > 128", "128", "§3.4", r"§3\.4[^§]*?\*\*at most (\d+) characters\*\*"),
+)
 
 
 def test_wr_05_fixture_bounds_diverge_from_the_contract_they_cite():
     """Each planted bound must be BOTH present in the guard and wrong against the
-    contract excerpt — a bound that happens to match its contract value tests
-    nothing, so the divergence is asserted, never merely the literal."""
+    clause it should have derived from — a bound that agrees with its contract value
+    tests nothing, so the divergence is asserted against the captured value."""
     guard = _fixture("reps_guard.py")
     contract = _fixture("contract_excerpt.md")
-    # (invented literal in the guard, the contract value it should have derived from)
-    for invented, derived in (("99", "3"), ("25", "10"), ("128", "64")):
-        assert invented in guard, f"planted bound {invented} gone from the guard"
-        assert derived in contract, f"contract value {derived} gone from the excerpt"
-        assert invented != derived
-    assert "1 <= args.reps <= 99" in guard
-    assert "args.round > 25" in guard
-    assert "> 128" in guard
+    for literal, invented, section, pattern in _WR_05_BOUNDS:
+        assert literal in guard, f"planted bound gone from the guard: {literal}"
+        match = re.search(pattern, contract, re.S)
+        assert match, f"contract clause {section} no longer states its bound"
+        assert match.group(1) != invented, (
+            f"{section} now agrees with the guard's {invented} — divergence is gone"
+        )
     # no bound in the guard cites its contract section — that absence IS the defect
     assert "§3" not in guard
 
 
 def test_wr_06_fixture_holds_a_finding_with_no_probe():
     """The hold must be BARE: a probe landing in the fixture's own round would make
-    the disposition adequate and the case vacuous."""
+    the disposition adequate and the case vacuous.
+
+    The probe's absence is a property of the CODE, and it is read off the AST because
+    the skill names several accepted probe shapes. Forbidding the token `raise` (the
+    first draft) left `assert _budget() > 0` — explicitly one of those shapes — fully
+    green over a fixture that was no longer a bare hold (codex r1 P2). An assertion,
+    a raise, and any comparison are all refused, so every shape the skill accepts as
+    a probe reds this test.
+    """
     note = _fixture("hold_note.md")
     code = _fixture("drain_budget.py")
     assert "Disposition: HELD" in note
@@ -1760,11 +1802,11 @@ def test_wr_06_fixture_holds_a_finding_with_no_probe():
     # what it must not do is claim a probe was landed. Word-bounded on purpose: a
     # bare `in` check reads "raises" as "raise" and reds on the description itself.
     assert re.search(r"\bprobe\b", note, re.I) is None, "hold is no longer bare"
-    # The probe's absence is a property of the CODE, which is where it would land:
-    # the env value goes straight into range() with nothing bounding or rejecting it.
     assert 'int(os.environ.get("DRAIN_RETRY_BUDGET"' in code
+    # the env value flows straight into range() with nothing bounding or rejecting it
     assert "range(_budget())" in code
-    assert re.search(r"\braise\b", code) is None, "fixture no longer carries the bare read"
+    planted = _nodes(_fixture_ast("drain_budget.py"), ast.Assert, ast.Raise, ast.Compare)
+    assert not planted, f"fixture gained a probe ({type(planted[0]).__name__}); hold not bare"
 
 
 def test_preflight_carries_the_u_sr_02_meta_rules():
