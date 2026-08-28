@@ -587,6 +587,19 @@ _NEAR_MISSES = [
         "11 authority-bearing command surface",
         "the finding is not among the four adjudicated HELD classes",
     ),
+    # class 12: naming a contract phrase is only half — the class needs its ABSENCE too,
+    # so `spec phrase`/`contract phrase` were dropped as alternatives (codex r9 P2)
+    (
+        "12 quoted contract phrase not discharged",
+        "the contract phrase names the wrong component",
+    ),
+    # class 13: ANY recipe plus the word loop is co-occurrence, not a new command whose
+    # loop reachability is unwired — `just recipe` was dropped for this (codex r9 P2)
+    (
+        "13 new command the loop must reach",
+        "the return status from loop_log_structured is discarded by the just recipe and"
+        " replaced with return 1",
+    ),
 ]
 
 

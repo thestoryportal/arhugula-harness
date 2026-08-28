@@ -83,20 +83,23 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # Every alternative carries BOTH halves of the class — a quoted obligation AND its
     # absence — on its own, so each is a PHRASE, not a token. Dropped once measured:
     # `manifest row` / `copied verbatim` (bare nouns), `unenforced` and `schema-parsed`
-    # (too loose; narrowed to the phrases the P1s actually use), and `undischarged`,
-    # which matched zero rows in the entire corpus — a dead alternative is not caution,
-    # it is noise with no upside.
+    # (too loose; narrowed to the phrases the P1s actually use), `spec phrase` and
+    # `contract phrase` (name the obligation but not its absence, so "the contract phrase
+    # names the wrong component" landed here), and `undischarged`, which matched zero rows
+    # in the entire corpus — a dead alternative is not caution, it is noise with no upside.
     "12 quoted contract phrase not discharged": (
-        r"spec phrase|contract phrase|is unenforced|declared but"
-        r"|no code discharges|as the verdict|schema-parsed BLOCK"
+        r"is unenforced|declared but|no code discharges|as the verdict"
+        r"|schema-parsed BLOCK"
     ),
-    # Conjunctions (codex r4 P3 x2, each measured before absorbing): a flat OR
-    # mis-bucketed 33 of 64 class-13 rows and 6 of 10 class-14 rows. `justfile` is
-    # dropped from the command conjunct — the matcher sees `location` too, so that one
-    # token pulled in every finding merely LOCATED in the justfile regardless of subject
-    # (codex r5 P2). Removing the over-broad alternative beats bolting on another layer.
+    # Conjunctions (measured before absorbing): a flat OR mis-bucketed 33 of 64 class-13
+    # rows and 6 of 10 class-14 rows. The command conjunct has been narrowed to terms that
+    # mean a NEW command: `justfile` went because the matcher sees `location` too and that
+    # token pulled in every finding merely LOCATED there; `just recipe` went because it
+    # names any recipe, which let a lane-init logging finding in on co-occurrence with the
+    # word "loop"; `allow branch` went because it matched zero rows. Each removal was
+    # checked to keep justfile:777, the canonical member of this class.
     "13 new command the loop must reach": (
-        r"runs_in|just recipe|new recipe|new command|allow branch",
+        r"runs_in|new recipe|new command",
         r"loop|headless|guard|auto-allow|permission|ask prompt",
     ),
     "14 signal handler meets lock": (
