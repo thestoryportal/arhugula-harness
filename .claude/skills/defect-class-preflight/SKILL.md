@@ -413,11 +413,22 @@ BEFORE re-invoking the reviewer:
    operator-visible (`tools/hooks/permission-guard.sh` `_adjudicate_exact_shape`,
    U-HE-47), because a disposition that MUTES a finding is authority an agent must
    not grant itself. Do not read that ask as friction to route around, and do not
-   widen the guard to clear it: the ask IS C-HE-24 §5's third authority, the logged
-   operator override, and removing it would leave the suppression with no authority
-   at all. The practical consequence is the honest one — **holding costs more than
-   fixing**, so the loop's cheapest path stays: fix it, or route it, and hold only
-   what you can defend to a person.
+   widen the guard to clear it: that ask is where the operator override is actually
+   exercised, and removing it would leave the suppression with no authority at all.
+   The practical consequence is the honest one — **holding costs more than fixing**,
+   so the loop's cheapest path stays: fix it, or route it, and hold only what you can
+   defend to a person.
+
+   Know what the row does and does not carry, because it carries less than it looks
+   like. `--actor` is the adjudicating party and the guard pins it to an absorber
+   identity, so the durable row says *the absorber suppressed this* — it records
+   neither the operator approval that authorised it nor the probe that grounds it,
+   and a consumer reducing by `finding_id` sees only a mute. So make the pairing
+   recoverable where prose IS durable: name the probe (its test id and the commit
+   that landed it) and the `finding_id` in the absorption commit message and in the
+   sweep attestation. Until a row can bind its own authority, that naming is the
+   whole audit trail — write it as if someone will have to reconstruct the hold from
+   the git history a year from now, because that is exactly what they will have.
 5. If the class was absent/unfired in this file, repair the skill in that commit too
    (the loop below).
 6. When two consecutive rounds' findings target mechanisms YOUR absorption invented

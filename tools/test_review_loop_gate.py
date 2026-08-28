@@ -2038,9 +2038,16 @@ def _check_refusal_code() -> None:
         f"admit() returns {returns}; the planted §3.3 refusal-code breach is gone"
     )
     guard = _load_fixture("reps_guard.py", "_usr02_reps_guard")
-    assert guard.admit(["--reps", "50"]) == 1, (
-        "admit() no longer refuses with 1; §3.3 names 3, which is the graded breach"
-    )
+    # `--reps 0` refuses via validate()'s BOUNDS, so the outcome does not depend on
+    # REVIEWER_PROBE. `--reps 50` was the first draft and refused via the probe-mode
+    # branch instead, which returns 0 when REVIEWER_PROBE=1 — an ambient-env dependency
+    # that would red this suite in a legitimate probe environment (codex r7 P2). The
+    # variable is cleared as well, so neither branch can be reached by accident.
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("REVIEWER_PROBE", None)
+        assert guard.admit(["--reps", "0"]) == 1, (
+            "admit() no longer refuses with 1; §3.3 names 3, which is the graded breach"
+        )
 
 
 def _check_uncited_bounds() -> None:
@@ -2271,6 +2278,16 @@ def test_preflight_carries_the_u_sr_02_meta_rules():
     # this reds and the prose must be revisited — the direction that matters, since
     # widening it would let an agent grant itself authority to mute findings.
     assert "does not complete headlessly" in squashed
+    # What the row does NOT carry (codex r7 P2): `--actor` is the adjudicating party
+    # and the guard pins it to an absorber identity, so the durable row records the
+    # absorber — not the operator approval that authorised the hold, nor the probe
+    # that grounds it. The prose claimed the ask WAS the recorded authority; it is
+    # not recorded at all. Pinned so the overclaim cannot come back.
+    assert (
+        "it records neither the operator approval that authorised it nor the probe "
+        "that grounds it" in squashed
+    )
+    assert "name the probe (its test id and the commit that landed it)" in squashed
     guard_src = (_repo_root() / "tools" / "hooks" / "permission-guard.sh").read_text(
         encoding="utf-8"
     )
