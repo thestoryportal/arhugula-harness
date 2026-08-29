@@ -892,6 +892,25 @@ OUT=$(run_on "$(pl Bash 'git push --repo=origin main' '')"); [ "$(dec "$OUT")" =
 # as unreliable, so a literal '#' inside a quoted push-option stays denied (fail-closed).
 OUT=$(run_on "$(pl Bash "git push -o 'note=#123' origin topic" '')"); [ "$(dec "$OUT")" = "deny" ] && ok "quoted '#' push-option → deny (retained fail-closed over-deny, r10 terminal)" || bad "quoted-# over-deny witness failed: $OUT"
 
+# U-SR-03 (codex r7 P2): the subagent tool is named `Agent` on this runtime, and the
+# allowlist had drifted off it -- it named only the old `Task`. That is load-bearing now:
+# WR-08 makes prompt authoring a delegated Agent call, so a fall-through here is an approval
+# prompt, and an approval prompt in a headless lane is a stall. Both names are asserted, and
+# an unrelated tool is asserted to still fall through, so this cannot pass by allowing
+# everything.
+for _t in Agent Task TodoWrite; do
+  OUT=$(run_on "$(pl "$_t" '' '')")
+  [ "$(dec "$OUT")" = "allow" ] \
+    && ok "loop mode auto-allows the $_t tool" \
+    || bad "$_t is not auto-allowed in loop mode -- a headless delegation would stall"
+done
+OUT=$(run_on "$(pl WebFetch '' '')")
+[ -z "$(dec "$OUT")" ] \
+  && ok "an unrelated tool still falls through (the allowlist is not blanket)" \
+  || bad "WebFetch was auto-allowed: the tool allowlist is too broad"
+OUT=$(run_off "$(pl Agent '' '')")
+[ -z "$OUT" ] && ok "Agent is inert when loop mode is off" || bad "Agent decided off-mode: $OUT"
+
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
