@@ -120,6 +120,26 @@ for rel in ".claude/skills/merge-gate/SKILL.md" ".agents/skills/merge-gate/SKILL
   printf '%s' "$text" | grep -q 'merge-gate-binding' \
     && ok "$rel still routes through the binding recipe" \
     || bad "$rel lost the binding recipe reference"
+done
+
+# The PROMPT the lens receives must carry no binding value at all -- not as an assignment
+# (checked above) and not as a substituted placeholder either (codex r9 P2: the Codex launch
+# tail said `head <sha>`, which the assignment check did not see, so the orchestrator still
+# hand-copied the head into every lens prompt while the prose claimed it never did).
+# Scoped to the fenced prompt-tail block, because the `--output-last-message` path OUTSIDE it
+# legitimately carries a 40-char head that the permission guard's shape requires.
+CODEX_TAIL=$(awk '/^```text$/{n++; if (n==1) {inb=1; next}} inb && /^```$/{exit} inb' "$CODEX_MG")
+if [ -z "$CODEX_TAIL" ]; then
+  bad "could not extract the Codex prompt tail block"
+else
+  ok "extracted the Codex prompt tail block"
+  printf '%s' "$CODEX_TAIL" | grep -Eq '<[0-9]*-?(char-)?(head|sha)>|head[[:space:]]+<' \
+    && bad "the Codex prompt tail still hands the lens a head value to transcribe" \
+    || ok "the Codex prompt tail hands the lens no binding value"
+fi
+
+for rel in ".claude/skills/merge-gate/SKILL.md" ".agents/skills/merge-gate/SKILL.md"; do
+  text=$(cat "$REPO/$rel")
   # ...and the positive half: it must actually tell the lens to READ the published path,
   # so deleting the by-file instruction cannot pass merely by assigning nothing.
   printf '%s' "$text" | grep -Eqi 'read (it|the values|the six)|reads? the values from it' \

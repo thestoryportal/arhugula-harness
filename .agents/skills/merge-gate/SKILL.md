@@ -36,7 +36,8 @@ Launch one fresh, ephemeral, lifecycle-isolated, read-only `codex exec` per lens
 gets only its lens prompt plus this self-contained tail:
 
 ```text
-PR under review: #<N> on branch <branch>, base main, head <sha>.
+PR under review: #<N> on branch <branch>, base main. The head is in the binding
+file named below -- read it there rather than being told it here.
 Review the local merge-base diff and enough surrounding source to judge it. Do not edit.
 Immediately before your final line, print ONE fenced ```json block with exactly these keys:
 verdict (APPROVE|BLOCK), findings (array of {severity: P1|P2|P3, location, message}; empty on
@@ -105,8 +106,18 @@ reviewers are asked, not an obstacle to route around.
 Before launching, publish each lens's binding with
 `just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`. It
 writes the six values to a file and prints ONLY that path (U-SR-03, charter WR-09): name the
-printed path in that lens's prompt and have the lens read the values from it — never copy a
-value through the orchestrator, which is where both round-3 corruptions came from. Require,
+printed path in that lens's prompt and have the lens read the values from it, so no binding
+value is transcribed into the prompt or into the verdict block — that is where both round-3
+corruptions came from.
+
+One copy of the head DOES remain on this runner, and it is stated rather than glossed (codex
+u-sr-03 r9 P2): `--output-last-message` must match
+`/tmp/arhugula-pr-<N>-lens[123]-<40-hex>.md`, so the 40-character head is typed into that CLI
+argument. It cannot be removed without widening `_safe_codex_exec_command`, which this arc
+declines to do. It is a different risk from the one WR-09 targets, and a benign one: it is not
+a value the lens copies into its verdict, and getting it wrong fails LOUDLY and before any
+review runs — the permission guard simply refuses the command shape — rather than producing a
+verdict bound to the wrong tree. Require,
 immediately before the
 `VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
 (`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
