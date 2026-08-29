@@ -914,6 +914,43 @@ def test_cli_emit_refuses_a_same_basename_directory_that_is_not_the_scratch_dir(
     assert not jl.exists(), "recorded a verdict from a directory that was not the scratch dir"
 
 
+def test_a_tampered_binding_file_cannot_produce_a_counted_verdict(tmp_path, monkeypatch, capsys):
+    """codex r6 P2: nothing re-hashes the published file, so witness what actually stops it.
+
+    The publisher closes its directory descriptor and hands the lens a PATHNAME, so a
+    concurrent actor can overwrite the file between publication and the lens's read. Checking
+    the contents against the digest in the filename would not help -- whoever can rewrite the
+    file can rename it to match. The enforcement that cannot be forged from inside the scratch
+    dir is `emit`'s INDEPENDENT recomputation from the tree, and this walks the whole path:
+    publish, tamper, have the lens copy the tampered values, emit. Exit 2, nothing recorded.
+    """
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+
+    published = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
+    path = Path(capsys.readouterr().out.strip())
+
+    # A concurrent actor rewrites the published contract in place; the NAME is untouched.
+    tampered = {**published, "head_sha": "0" * 40}
+    path.write_text(json.dumps(tampered, indent=2, sort_keys=True) + "\n")
+    assert path.exists() and json.loads(path.read_text())["head_sha"] == "0" * 40
+
+    # A lens that faithfully copies what it was handed now carries the tampered values.
+    verdict = scratch / "lens.txt"
+    verdict.write_text(_lens_output(tampered, "APPROVE"))
+    assert mgl.main(_cli(verdict)) == 2
+    assert "binding mismatch" in fr.read_rows(jl)[-1]["observed_evidence"]
+    assert not any(r["record_kind"] == "no_finding" for r in fr.read_rows(jl)), (
+        "a verdict bound to a tampered contract was counted"
+    )
+
+
 def test_cli_binding_refuses_a_symlinked_ancestor_of_the_scratch_dir(tmp_path, monkeypatch, capsys):
     """codex r3 P2: `O_NOFOLLOW` on the final component alone left the parent swappable.
 

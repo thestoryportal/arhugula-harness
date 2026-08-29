@@ -681,8 +681,14 @@ def binding_path(lens: str, values: Mapping[str, str]) -> Path:
     corruptions were orchestrator TRANSCRIPTION errors -- a truncated `head_sha` and a
     spliced `base_sha` -- not lens errors ([B] F3).
 
-    The name is CONTENT-ADDRESSED: a digest over all six values, so identical name implies
-    identical contents and the file is immutable by construction. Keyed on anything less,
+    The name is CONTENT-ADDRESSED: a digest over all six values, so the name a prompt quotes
+    records exactly which contract was published under it. Note what that does NOT claim: the
+    file is not immutable after publication, and nothing re-hashes it on read (codex r6 P2).
+    Verifying contents against the filename digest would be the weaker check anyway -- an
+    actor who can rewrite the file can rename it to match -- so the enforcement lives where it
+    cannot be forged from inside the scratch dir: `emit` recomputes all six values from the
+    TREE and refuses any verdict that disagrees, so a tampered binding costs a re-run and can
+    never make a wrong verdict count. Keyed on anything less,
     it is a mutable cell that two invocations share -- a lens launched against one contract
     can read values republished under another and copy them into its verdict, and `emit`,
     which recomputes against the current state, accepts the mismatch (codex r1 P1 on the
