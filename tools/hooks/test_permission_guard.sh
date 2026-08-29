@@ -911,6 +911,23 @@ OUT=$(run_on "$(pl WebFetch '' '')")
 OUT=$(run_off "$(pl Agent '' '')")
 [ -z "$OUT" ] && ok "Agent is inert when loop mode is off" || bad "Agent decided off-mode: $OUT"
 
+# codex r10 P1: the r7 allow was justified by "the subagent's own calls re-enter this hook",
+# which is FALSE for `isolation: worktree` -- that creates a git worktree as part of the spawn,
+# before any child call reaches PreToolUse. The auto-allow is restricted to the shape the
+# argument covers, and both isolation modes must fall through to ask. The r7 witness used a
+# prompt-only payload and could not see this input shape at all.
+agent_pl() { jq -nc --arg i "$1" '{"hook_event_name":"PreToolUse","tool_name":"Agent","tool_input":({"prompt":"go"} + (if $i == "" then {} else {"isolation":$i} end))}'; }
+OUT=$(run_on "$(agent_pl '')")
+[ "$(dec "$OUT")" = "allow" ] \
+  && ok "Agent without isolation → allow (the loop's delegation path)" \
+  || bad "a plain Agent spawn is not auto-allowed: $OUT"
+for _iso in worktree remote; do
+  OUT=$(run_on "$(agent_pl "$_iso")")
+  [ -z "$(dec "$OUT")" ] \
+    && ok "Agent with isolation=$_iso → ask (spawn-time filesystem mutation)" \
+    || bad "isolation=$_iso was auto-allowed: $OUT"
+done
+
 echo "----"
 echo "permission_guard: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

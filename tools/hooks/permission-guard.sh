@@ -638,15 +638,22 @@ fi
 
 # Non-destructive built-in tools.
 case "$TOOL" in
-  # `Agent` is the CURRENT name of the subagent tool this line has always allowed under
-  # its old name `Task`; both are listed because the allowlist had drifted off the live
-  # tool name (codex u-sr-03 r7 P2). This grants no authority `Task` did not already
-  # have: the subagent's own tool calls re-enter this guard through the PreToolUse `*`
-  # matcher and are judged individually, so the spawn itself has no filesystem reach.
-  # Load-bearing since U-SR-03: prompt authoring is delegated to an Agent call, so a
-  # fall-through here is an approval prompt, and an approval prompt in a headless lane
-  # is a stall (preflight class 13 -- a new command the loop must be able to reach).
-  TodoWrite|Task|Agent) emit_allow ;;
+  TodoWrite|Task) emit_allow ;;  # no filesystem reach (Task subagent re-enters the hook)
+  # `Agent` is the CURRENT name of the subagent tool allowed above as `Task`, and the
+  # allowlist had drifted off the live tool name (codex u-sr-03 r7 P2). Load-bearing since
+  # U-SR-03: prompt authoring is a delegated Agent call, so a fall-through here is an
+  # approval prompt, and an approval prompt in a headless lane is a stall (class 13).
+  #
+  # But it is NOT a plain rename, and r7 claimed it was (codex r10 P1). `Agent` takes an
+  # `isolation` parameter: `isolation: "worktree"` CREATES a git worktree as part of the
+  # spawn, before any child tool call re-enters this guard, so the nested-hook argument --
+  # the whole basis for allowing the spawn by tool name -- does not hold for that shape.
+  # Auto-allow is therefore restricted to the shape the argument actually covers: a spawn
+  # with no isolation requested. Worktree-isolated spawns fall through to ask, which is
+  # where a filesystem mutation nothing else gates belongs.
+  Agent)
+    [ -z "$(hook_json "$PAYLOAD" '.tool_input.isolation')" ] && emit_allow
+    ;;
   Read|NotebookRead)
     # Reads are auto-allowed only for non-secret, in-worktree paths — otherwise a read of
     # .env / SSH keys / out-of-worktree files would leak past the approval boundary.

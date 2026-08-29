@@ -57,9 +57,11 @@ subagent prompt described below; return only the finished prompt.` plus the task
 description, and needs no further delegation -- without a named base case the rule
 recurses forever, since every authoring agent would itself need an authored prompt.
 
-This skill carries no canonical prompt template — every variant brief and the judge rubric
-are written fresh per problem, so step 3 and step 4 above are always the delegated path,
-never the inline exception.
+This skill carries no canonical prompt template — every variant brief is written fresh per
+problem, so step 3 is always the delegated path and never the inline exception. Step 4 depends
+on which judge you chose: a SPAWNED judge gets a delegated prompt like any other subagent, while
+judging INLINE authors no subagent prompt at all and the rule simply does not reach it (codex
+u-sr-03 r10 P2 — an earlier draft said "always", which forbade a path step 4 explicitly permits).
 
 ## Guardrails
 

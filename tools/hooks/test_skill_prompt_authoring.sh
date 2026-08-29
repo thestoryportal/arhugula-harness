@@ -147,5 +147,22 @@ for rel in ".claude/skills/merge-gate/SKILL.md" ".agents/skills/merge-gate/SKILL
     || bad "$rel no longer tells the lens to read the binding file"
 done
 
+# The Codex carrier tells operators to read this README and follow its launch snippet, so a
+# README that contradicts the emit contract is a documented path to unrecordable verdicts
+# (codex r10 P2). Both halves are pinned: the binding file must be published and named, and
+# the verdict line must require its reason, because `_VERDICT_LINE` refuses a bare BLOCK.
+LENS_README="$REPO/.codex/notes/merge-gate-lenses/README.md"
+if [ -f "$LENS_README" ]; then
+  ok "the Codex lens README exists"
+  grep -q 'merge-gate-binding' "$LENS_README" \
+    && ok "lens README publishes the binding before launching" \
+    || bad "lens README launches reviewers without publishing a binding"
+  grep -q 'VERDICT: BLOCK: <one-sentence reason>' "$LENS_README" \
+    && ok "lens README requires the BLOCK reason the emitter demands" \
+    || bad "lens README still permits a bare VERDICT: BLOCK that emit refuses"
+else
+  bad "the Codex lens README is missing"
+fi
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

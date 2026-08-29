@@ -157,9 +157,11 @@ subagent prompt described below; return only the finished prompt.` plus the task
 description, and needs no further delegation -- without a named base case the rule
 recurses forever, since every authoring agent would itself need an authored prompt.
 
-Applies to every genuine agent invocation this skill fans out: each cN voice, the adversarial
-reviewer, and the E3 out-of-family primer. A voice convened on a freehand brief is a voice
-whose decorrelation you cannot account for.
+Scoped to the invocations this skill actually spawns as SUBAGENTS -- the adversarial reviewer
+and the E3 out-of-family primer -- and not to the cN voices, which this file's own opening
+paragraph convenes within one model call rather than over separate inference requests (codex
+u-sr-03 r10 P2). A voice is prose you write in your own turn, so there is no subagent prompt to
+delegate; the rule binds where a prompt is handed to something that sees nothing else.
 
 ---
 
