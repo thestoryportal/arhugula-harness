@@ -99,15 +99,32 @@ grep -q "laws:prompt" "$CODEX_MG" \
 printf '%s' "$REF" | grep -q 'base case' \
   && ok "rule names the delegation base case" || bad "rule has no bootstrap base case"
 
-# WR-09: neither merge-gate carrier may still tell the reader to paste the values.
+# WR-09: neither merge-gate carrier may hand the lens its binding values inline.
+#
+# Bound to the SHAPE, not to a spelling (codex r8 P2). The first version of this check
+# blocklisted two phrases, so restoring the old launch tail under any other wording -- e.g.
+# `these six values copied VERBATIM: head_sha=<...>` -- evaded it while the positive check
+# below still passed. What actually distinguishes by-file from by-hand is whether a binding
+# FIELD is assigned a value in the carrier at all: the by-file form names the fields (as
+# prose or backticked identifiers) and points at a path, and never writes `field=`. This is
+# the same spelling-bound-ban defect U-SR-02 carried forward as a named residual.
 for rel in ".claude/skills/merge-gate/SKILL.md" ".agents/skills/merge-gate/SKILL.md"; do
   text=$(cat "$REPO/$rel")
-  printf '%s' "$text" | grep -qi 'paste the six\|include the six printed values' \
-    && bad "$rel still instructs hand-copying the binding values" \
-    || ok "$rel does not instruct hand-copying the binding values"
+  assigned=""
+  for field in head_sha base_sha diff_digest reviewer_identity prompt_version config_hash; do
+    printf '%s' "$text" | grep -Eq "$field[[:space:]]*=" && assigned="$assigned $field"
+  done
+  [ -z "$assigned" ] \
+    && ok "$rel assigns no binding value inline" \
+    || bad "$rel writes binding value(s) into the prompt:$assigned"
   printf '%s' "$text" | grep -q 'merge-gate-binding' \
     && ok "$rel still routes through the binding recipe" \
     || bad "$rel lost the binding recipe reference"
+  # ...and the positive half: it must actually tell the lens to READ the published path,
+  # so deleting the by-file instruction cannot pass merely by assigning nothing.
+  printf '%s' "$text" | grep -Eqi 'read (it|the values|the six)|reads? the values from it' \
+    && ok "$rel instructs the lens to read the published file" \
+    || bad "$rel no longer tells the lens to read the binding file"
 done
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
