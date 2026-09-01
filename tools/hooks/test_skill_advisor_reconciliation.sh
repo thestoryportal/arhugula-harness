@@ -54,6 +54,10 @@ CARRIERS=(
   # contract lives here, not only in the .agents bridges.
   "$ROOT/AGENTS.md"
   "$ROOT/.codex/notes/claude-codex-parity.md"
+  # Startup routing inventories (codex r7): AGENTS.md directs sessions through
+  # these routers, so their mechanism menus are live carriers too.
+  "$ROOT/CONTEXT.md"
+  "$ROOT/docs/governance/README.md"
 )
 # The Codex-venue bridge skills carry the same discipline translated; the venue
 # exposes no advisor tool either, so they are carriers at the identical bar.

@@ -18,7 +18,7 @@ pointer into this directory, so `CLAUDE.md §N.M` citations keep resolving (CI-e
 | `docs/governance/skills-and-subphases.md` | §6, §7 | Choosing a Phase 7 skill or routing a sub-phase | Skill router reads it | Read on demand |
 | `docs/governance/design-phase-principles.md` | §10, §10.1–§10.9 | **Design-phase posture only** — authoring/revising `design-substrate/**` | Read at posture entry | Read at posture entry |
 | `docs/governance/roadmap-protocol.md` | §12, §12.1, §12.2, §12.3, §12.5, §12.5.1–§12.5.4 | Running the session-start audit by hand, the post-merge refresh, or a drift reconciliation | `SessionStart` hook covers the common path; read for the full recipe | `just codex-preflight` covers the common path; read for the full recipe |
-| `docs/governance/orchestration.md` | §13.2–§13.5 | Choosing between solo / advisor / codex-review / council / fan-out | Read on demand | Read on demand |
+| `docs/governance/orchestration.md` | §13.2–§13.5 | Choosing between solo / transcript-brief review / codex-review / council / fan-out | Read on demand | Read on demand |
 
 Artifact-head lineage is **not** in this directory — it lives under
 `.harness/artifact-pointers/` (`spec-heads.md`, `plan-heads.md`, and the per-family files).
