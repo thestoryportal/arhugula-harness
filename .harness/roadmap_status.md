@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8d37a5587a13` |
-| `last_refreshed` | 2026-08-31T00:00:00Z |
-| `git_head` | `e4dc068d` —  |
+| `workspace_state_hash` | `a5699f117315` |
+| `last_refreshed` | 2026-09-01T00:00:00Z |
+| `git_head` | `706dd78c` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1479).** The next implementable unit is `U-SR-04` (§8 R1: attest labels-before-answers + mechanism-precedent search into preflight grounding; charter WR-10/11). U-SR-03 landed at #1479: the laws:prompt subagent-authoring rule now carried byte-identically in the three charter carriers (merge-gate / fan-out / council-workflow SKILL text) with a named recursion base case, the `agent-prompt-advisory` PreToolUse hook restating the rule at every Agent call, and `test_skill_prompt_authoring.sh` binding each carrier to Agent-reachability (WR-08); plus binding values by file (WR-09): `merge-gate-binding` writes the six lens-binding values to a content-addressed file (sha256 over all six values, so same-name-different-contents is unrepresentable) and prints only the path, lenses copy the six verbatim from that file, and `emit` refuses any verdict whose independently recomputed values differ — `open_scratch_dir()` returns an fd (O_DIRECTORY|O_NOFOLLOW per component below the stated SCRATCH_ANCHOR trust boundary) so check and capture are one syscall. The 3-lens merge gate closed ALL APPROVE at `b121efb94`: the concurrency APPROVE recorded at `d8f024f27` transferred via landing-delta exit 0 (only gate-row files in the delta); spec-conformance re-ran tasked to verify — not trust — its earlier P1/P2 absorption at `04cc50d7c` and confirmed the rule byte-identical across the three carriers, absent from council-orchestrator, and the CARRIERS assertions passing by direct execution; witness-adequacy traced the load-bearing tests to real-path execution and empirical mutation-probe kills, flagging one grep-shaped test as redundant-but-informational only. The WR-08 eval acceptance was reported honestly as 3 of 4 assertions met, not adjusted post-measurement. Named residuals carried to U-SR-04/05: eval 19 assertion 3 (diagnosis vs prescription — split the assertion or make the Binding section prescriptive, re-measure in a separate pass), the permission guard's `Task` entry retaining its old unconditional allow (no evidence yet about what `Task` accepts on any runner), the prompt-tail check being blind to a binding value expressed without `=` or `<>`, and charter WR-12's untracked-file sweep pollution (U-SR-05). Remaining §8 sequence: U-SR-04…08 (R1, order-free), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it.
+**Current next action (post-#1481).** **Current next action (post-#1481).** The next implementable unit is one of the remaining §8 R1 levers `U-SR-05…08` (order-free; U-SR-05 — codex-check shape + stop-gate tree-dirty attestation-artifact handling, charter WR-12 — is the natural pick: this arc's template verbs already re-homed template-written answers to `.harness/tmp/`, and U-SR-05 owes the ignore/re-home disposition for the legacy `.harness/.preflight-answers-*` / `.sweep-answers-*` pollution plus the `run_in_background` codex-check rule). U-SR-04 landed at #1481: WR-10 labels-before-answers is mechanized — `review-template-{preflight,sweep}` verbs pre-fill every hit label (+ outstanding finding ids) from the attested binding range into a `.harness/tmp/`-anchored exclusive-create template, attest refuses unfilled placeholders / deletion-only edits / stale or malformed binding stamps, gate refusal recipes route template-first with working arc/lane prefixes, and this arc's own 10 attestations all passed first-trial (the [B] F14 class, 3 → 0); WR-11's mechanism-precedent search landed as grounding-time preflight-skill text (sibling-first, corpus grep, plan-skeleton-is-unreviewed) with carrier parity in ship-pr and witness pins. The out-of-family loop ran its full B-215 budget (9 rounds + failover; 22 findings, 19 accepted with witnesses, 3 rejected with ledger grounds) and closed at the BUDGET_EXHAUSTED checkpoint with zero residual findings; the 3-lens merge gate then went ALL-APPROVE at `9ac6759d1` (witness lens BLOCK r1 → both P2s absorbed and verified discharged r2), with CI catching one Linux-only inode-recycling defect the fix pinned by holding the written fd through the verify. Named residuals carried: stamp-deletion (trust-boundary rejection, ledger-recorded), id-domain charset (reservations.py authority), and the #1479 residuals unchanged; remaining §8 sequence: U-SR-05…08 (R1), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1481 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1479 | 2026-08-31 | U-SR-03 laws:prompt durable wiring + bindings by file (charter WR-08/09) merged; 3-lens merge gate ALL APPROVE. |
 | PR #1477 | 2026-08-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1475 | 2026-08-28 | landed through the merge door; 3-lens gate all-approve at round 2; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1473 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1471 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
