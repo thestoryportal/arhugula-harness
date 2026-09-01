@@ -113,6 +113,17 @@ needs "$ROOT/.harness/council/council-workflow.generic.yaml" "canonical generic 
 # phrase also appears in the routing rule above, so a prose needle stays green
 # when the E3 hunk alone reverts to the bare advisor schema (codex r3).
 needs "$ROOT/.harness/council/council-workflow.generic.yaml" "canonical generic yaml E3 reviewer key" 'transcript_brief_reviewer:'
+# The on_fail ROUTE is its own degree of freedom (codex r4): the bare
+# identifier route_single_voice_plus_advisor is neither a call-form (negative
+# sweep blind) nor adjacent to any pinned prose. Pin the exact key: value in
+# ALL FOUR live workflow yamls — canonical pair and .claude twins.
+for yml in \
+  "$ROOT/.harness/council/council-workflow.generic.yaml" \
+  "$ROOT/.harness/council/council-workflow.harness-aware.yaml" \
+  "$ROOT/.claude/workflows/council-workflow.generic.yaml" \
+  "$ROOT/.claude/skills/council/workflows/council-workflow.harness-aware.yaml"; do
+  needs "$yml" "on_fail route in ${yml##*/} (${yml#"$ROOT"/})" 'on_fail: route_single_voice_plus_brief_review'
+done
 # codex r2: the Codex venue's second reviewer must be ISOLATED — the exact
 # self-review shape the bridge rewrite forbids, pinned at both root authorities.
 needs "$ROOT/AGENTS.md"                                    "AGENTS.md reviewer contract" 'never the interactive controller reviewing its own work'
