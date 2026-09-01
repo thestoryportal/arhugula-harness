@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c92344b3b6ee` |
-| `last_refreshed` | 2026-08-28T00:00:00Z |
-| `git_head` | `04718a3d` —  |
+| `workspace_state_hash` | `8d37a5587a13` |
+| `last_refreshed` | 2026-08-31T00:00:00Z |
+| `git_head` | `e4dc068d` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1477).** The next implementable unit is `U-SR-03` (§8.4 R1: laws:prompt durable wiring + binding values by file; charter WR-08/09). U-SR-02 landed at #1477: the three preflight meta-rules — WR-04's fix-sweep tell sharpening the existing rule where it is actually lost (the sweep answers), WR-05's contract-derived-bounds rule as a new meta-rule cross-referencing the existing `type=int` grep shape, and WR-06's hold policy landing as step 4 of the after-every-round sweep — plus eval ids 16/17/18 with `fixtures-usr02/`, and a declarative planted-defect table in `tools/test_review_loop_gate.py` where each graded defect is declared once as a triple (fixture property, contract clause, oracle demand) and checked by one parametrized loop. WR-06's ledger half took four codex rounds and one gate P1 to settle: an absorber writing `suppressed` asserts an authority C-HE-24 §5 does not grant it, and leaving the row null loses the finding because `unanswered_findings` subtracts every attested id without reading disposition — so "held" is not a ledger state at all, the fail-closed probe IS the disposition (`accepted`), and an unprobeable finding is the operator gate. Ten codex rounds produced 34 findings and six merge-gate rounds produced 11 more; all 45 are adjudicated (42 accepted, 3 rejected with grounds), 0 undisposed. The three eval cases were RUN and graded, not merely added: 16/17/18 all pass, and a controlled A/B (same final prompt, skill the only variable) retracted an earlier confounded "the skill demonstrably fires" claim — only WR-06 shows a measurable effect; WR-04 and WR-05 pass skill-less once the prompt asks for what the rubric grades. Named residuals carried forward: the liveness-state vs completion-state class candidate (three reviewers missed it; no current class fires on it, and classes are U-SR-01's merged surface), charter WR-12's untracked-file sweep pollution (U-SR-05), and the `suppressed` prose ban being spelling-bound rather than exclusivity-bound. Remaining §8 sequence: U-SR-03…08 (R1, order-free), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it.
+**Current next action (post-#1479).** The next implementable unit is `U-SR-04` (§8 R1: attest labels-before-answers + mechanism-precedent search into preflight grounding; charter WR-10/11). U-SR-03 landed at #1479: the laws:prompt subagent-authoring rule now carried byte-identically in the three charter carriers (merge-gate / fan-out / council-workflow SKILL text) with a named recursion base case, the `agent-prompt-advisory` PreToolUse hook restating the rule at every Agent call, and `test_skill_prompt_authoring.sh` binding each carrier to Agent-reachability (WR-08); plus binding values by file (WR-09): `merge-gate-binding` writes the six lens-binding values to a content-addressed file (sha256 over all six values, so same-name-different-contents is unrepresentable) and prints only the path, lenses copy the six verbatim from that file, and `emit` refuses any verdict whose independently recomputed values differ — `open_scratch_dir()` returns an fd (O_DIRECTORY|O_NOFOLLOW per component below the stated SCRATCH_ANCHOR trust boundary) so check and capture are one syscall. The 3-lens merge gate closed ALL APPROVE at `b121efb94`: the concurrency APPROVE recorded at `d8f024f27` transferred via landing-delta exit 0 (only gate-row files in the delta); spec-conformance re-ran tasked to verify — not trust — its earlier P1/P2 absorption at `04cc50d7c` and confirmed the rule byte-identical across the three carriers, absent from council-orchestrator, and the CARRIERS assertions passing by direct execution; witness-adequacy traced the load-bearing tests to real-path execution and empirical mutation-probe kills, flagging one grep-shaped test as redundant-but-informational only. The WR-08 eval acceptance was reported honestly as 3 of 4 assertions met, not adjusted post-measurement. Named residuals carried to U-SR-04/05: eval 19 assertion 3 (diagnosis vs prescription — split the assertion or make the Binding section prescriptive, re-measure in a separate pass), the permission guard's `Task` entry retaining its old unconditional allow (no evidence yet about what `Task` accepts on any runner), the prompt-tail check being blind to a binding value expressed without `=` or `<>`, and charter WR-12's untracked-file sweep pollution (U-SR-05). Remaining §8 sequence: U-SR-04…08 (R1, order-free), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1479 | 2026-08-31 | U-SR-03 laws:prompt durable wiring + bindings by file (charter WR-08/09) merged; 3-lens merge gate ALL APPROVE. |
 | PR #1477 | 2026-08-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1475 | 2026-08-28 | landed through the merge door; 3-lens gate all-approve at round 2; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1473 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1471 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1469 | 2026-08-27 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
