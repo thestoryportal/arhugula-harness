@@ -885,3 +885,10 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | 2026-09-01T10:15:42Z | #1481 | 9ac6759d177f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | 2026-09-01T10:17:45Z | #1481 | 9ac6759d177f | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | PR #1481 | 2026-09-01 | feat/he-lanes-u-sr-04 | concurrency: APPROVE (r1+r2) | spec-conformance: APPROVE (r1+r2) | witness-adequacy: BLOCK r1 (2 P2, absorbed 9ac6759d1) → APPROVE r2 | outcome: ALL-APPROVE at 9ac6759d177f | blast-radius: 4 production consumers enumerated (codex_review.py:595, agy_review.py:832, guard branch, 2 SKILL carriers) |
+| 2026-09-01T15:53:15Z | #1483 | fd5d7ae5f271 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T15:53:16Z | #1483 | fd5d7ae5f271 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+| 2026-09-01T15:54:22Z | #1483 | fd5d7ae5f271 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T16:01:40Z | #1483 | 3794d019a4b6 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-09-01T16:03:00Z | #1483 | 3794d019a4b6 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-09-01T16:05:40Z | #1483 | 3794d019a4b6 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| PR #1483 | 2026-09-01 | feat/he-lanes-u-sr-05 | concurrency: APPROVE (r1+r2) | spec-conformance: APPROVE (r1+r2) | witness-adequacy: BLOCK r1 (1 P2 — witness stopped at the collector seam; absorbed 3794d019a) → APPROVE r2 | outcome: ALL-APPROVE at 3794d019a4b6 | blast-radius: no production symbol changed; .gitignore's 6 porcelain consumers enumerated manually (graft call edges do not model gitignore — codex_context_guard _status_entries/_changed_files, lib.sh hook_worktree_local_state, stop-gate.sh, loop_lib.sh _loop_gc_local_state, codex-parity-check glob); a floor not a ceiling |
