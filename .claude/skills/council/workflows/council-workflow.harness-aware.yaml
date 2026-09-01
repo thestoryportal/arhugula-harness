@@ -26,7 +26,7 @@ pre_convening:
       NAMED in advance. If no nameable cross-domain tension exists, route to a
       single voice + a transcript-brief review instead — a council with no tension collapses to
       a primary + cosmetic consultants (primary-collapse failure).
-    on_fail: route_single_voice_plus_advisor
+    on_fail: route_single_voice_plus_brief_review
   identify_layer:
     question: Which harness layer/axis does the deliberation touch?
     drives: which voices convene (see layer_voice_map)

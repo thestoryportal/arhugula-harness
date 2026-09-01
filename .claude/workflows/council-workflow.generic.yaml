@@ -21,7 +21,7 @@ applicability:
 pre_convening:
   nameable_tension_gate:
     rule: "Convene ONLY if a cross-perspective tension can be named in advance; else single voice + a transcript-brief review."
-    on_fail: route_single_voice_plus_advisor
+    on_fail: route_single_voice_plus_brief_review
   voice_roster:               # <-- PARAMETERIZE THIS per task (the agnostic seam)
     how_to_build:
       - "List the distinct PERSPECTIVES the task genuinely spans (domains, stakes, lenses)."

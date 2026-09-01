@@ -34,7 +34,7 @@ that file routes to, then follow that workflow with only these runner translatio
 - `AskUserQuestion` becomes the Codex user-input surface only for a genuine user-owned fork.
 - Claude scratch output becomes `/tmp` or another ignored scratch path.
 - Reviewer routing follows authorship: Claude author → Codex review; Codex author → Antigravity.
-- Transcript-aware advisor judgment remains the interactive controller's job and is complemented, never silently replaced, by the out-of-family artifact review.
+- Transcript-aware judgment is the transcript-brief review: an ISOLATED fresh-context reviewer — a separate `codex exec` call handed a written session brief, never the interactive controller reviewing its own work — complemented, never silently replaced, by the out-of-family artifact review.
 
 The Codex-native `roadmap-continue`, `ship-pr`, `codex-autonomous-loop`, and
 `merge-gate` skills encode the current runner-specific fixed point explicitly.

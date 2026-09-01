@@ -50,6 +50,10 @@ CARRIERS=(
   "$ROOT/.harness/council/COUNCIL-WORKFLOW.md"
   "$ROOT/.harness/council/council-workflow.harness-aware.yaml"
   "$ROOT/.harness/council/council-workflow.generic.yaml"
+  # Codex-venue ROOT authorities (codex r2): the venue's own reviewer-routing
+  # contract lives here, not only in the .agents bridges.
+  "$ROOT/AGENTS.md"
+  "$ROOT/.codex/notes/claude-codex-parity.md"
 )
 # The Codex-venue bridge skills carry the same discipline translated; the venue
 # exposes no advisor tool either, so they are carriers at the identical bar.
@@ -98,6 +102,18 @@ needs "$ROOT/.claude/skills/roadmap-continue/SKILL.md"     "roadmap-continue ste
 needs "$ROOT/.claude/skills/merge-gate/SKILL.md"           "merge-gate honesty caveat"  'transcript-brief review (the §13.1 transcript-aware half)'
 needs "$ROOT/.claude/skills/resolve/SKILL.md"              "resolve reviewer step"      'spawn a fresh-context Agent reviewer with a written brief of the session'
 needs "$ROOT/docs/governance/orchestration.md"             "orchestration §13.2 matrix" 'Transcript-brief review** (Agent subagent)'
+# codex r2: the canonical council workflow the /council-generic command follows
+# "exactly" must itself carry the replacement mechanism — the call-form needle
+# cannot prove a migration, only the absence of the old name. Pinned at BOTH
+# operational sites the finding named (a loose one-mention needle survived a
+# routing-rule regression in the mutation probe): the no-tension routing rule
+# and the E3 reviewer role.
+needs "$ROOT/.harness/council/council-workflow.generic.yaml" "canonical generic yaml routing rule" 'voice plus a transcript-brief review'
+needs "$ROOT/.harness/council/council-workflow.generic.yaml" "canonical generic yaml E3 role"      'a fresh-context agent handed a written session brief'
+# codex r2: the Codex venue's second reviewer must be ISOLATED — the exact
+# self-review shape the bridge rewrite forbids, pinned at both root authorities.
+needs "$ROOT/AGENTS.md"                                    "AGENTS.md reviewer contract" 'never the interactive controller reviewing its own work'
+needs "$ROOT/.codex/notes/claude-codex-parity.md"          "codex parity note"          'never the interactive controller reviewing its own work'
 
 # ── Pairing control: both §13.1 halves still stand in the SAME carrier ──
 # The rename must not decouple the transcript-aware half from the out-of-family
