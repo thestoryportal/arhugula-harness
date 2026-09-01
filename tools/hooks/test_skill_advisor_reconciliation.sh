@@ -147,6 +147,12 @@ needs "$ROOT/.harness/council/COUNCIL-WORKFLOW.md"                 "council pros
 # HISTORICAL entry rows only — its LIVE checkpoint-on-pause protocol banked an
 # "advisor pass" as satisfiable; pin the migrated banking clause.
 needs "$ROOT/Project_Roadmap_v1.md" "roadmap checkpoint-on-pause banking clause" 'if the transcript-brief review is banked'
+# codex r8: skills whose flow CONSUMES the second vote at decision time
+# (resolve compares votes; optimize-claude-md needs both reviewers' acceptance)
+# cannot use the deferred-routing fallback — their bridges must carry the
+# fork-defers-not-the-review exception.
+needs "$ROOT/.agents/skills/resolve/SKILL.md"            "resolve bridge decision-time exception"  'DECISION-TIME EXCEPTION'
+needs "$ROOT/.agents/skills/optimize-claude-md/SKILL.md" "optimize bridge decision-time exception" 'DECISION-TIME EXCEPTION'
 
 # ── Pairing control: both §13.1 halves still stand in the SAME carrier ──
 # The rename must not decouple the transcript-aware half from the out-of-family
