@@ -1,7 +1,7 @@
 # Council Workflow — HARNESS-LAYER-AWARE variant
 # ============================================================================
 # A reusable, council-skill-AGNOSTIC-pre-invocation workflow for running a
-# genuine multi-agent council -> adversarial -> Codex/advisor reconcile-to-zero
+# genuine multi-agent council -> adversarial -> Codex/brief-reviewer reconcile-to-zero
 # loop over a design/planning question in THIS harness.
 #
 # "Council-skill-agnostic pre-invocation" = the workflow does NOT hardcode which
@@ -24,9 +24,9 @@ pre_convening:
     rule: >
       Convene a council ONLY if a tension between two or more voices can be
       NAMED in advance. If no nameable cross-domain tension exists, route to a
-      single voice + advisor() instead — a council with no tension collapses to
+      single voice + a transcript-brief review instead — a council with no tension collapses to
       a primary + cosmetic consultants (primary-collapse failure).
-    on_fail: route_single_voice_plus_advisor
+    on_fail: route_single_voice_plus_brief_review
   identify_layer:
     question: Which harness layer/axis does the deliberation touch?
     drives: which voices convene (see layer_voice_map)
@@ -115,27 +115,27 @@ stages:
     who: the council voices respond (ACCEPT / reconcile / rebut) to each finding
     rule: loop until zero unreconciled; cross-cutting synthesis (seam cross-read)
           on every reconcile pass
-    gate: reconciled-to-zero BEFORE Codex/advisor handoff (charter default order)
+    gate: reconciled-to-zero BEFORE Codex/brief-reviewer handoff (charter default order)
 
   - id: E3
-    name: Codex (out-of-family) + advisor (in-family) — decorrelated evaluators
+    name: Codex (out-of-family) + the brief-reviewer (in-family) — decorrelated evaluators
     who:
       codex:   { tool: "just codex-review (gpt-5.5, $0 ChatGPT subscription)", family: out-of-family }
-      advisor: { tool: "advisor()", family: in-family, sees: full transcript }
+      brief_reviewer: { tool: "transcript-brief Agent review (fresh-context subagent + session brief; fork where supported)", family: in-family, sees: session brief / inherited conversation }
     decorrelation_discipline:                  # CLAUDE.md §13.1
       - Codex gets a DESCRIPTIVE primer ONLY (what the research/artifact IS) —
         NEVER the council's conclusions, NEVER the adversarial findings, NEVER
-        advisor's eval. Hand Codex Claude-family conclusions and you re-correlate
+        the brief-reviewer's eval. Hand Codex Claude-family conclusions and you re-correlate
         it and lose the decorrelation you are paying for.
-      - advisor() is transcript-aware (it saw the whole arc) — it is the other half.
-      - The SIGNAL is where Codex DISAGREES with advisor or the adversarial.
+      - The brief-reviewer is transcript-aware (through the session brief; a fork saw the whole arc) — it is the other half.
+      - The SIGNAL is where Codex DISAGREES with the brief-reviewer or the adversarial.
         3-way convergence -> ship with confidence; divergence -> dig there.
     out: 03-codex-advisor/{codex-eval,advisor-eval}.md
 
   - id: E3b
-    name: Codex/advisor <-> council reconcile-to-zero
+    name: Codex/brief-reviewer <-> council reconcile-to-zero
     full_council_convening: true               # => HIL gate
-    who: council voices respond to the Codex+advisor findings
+    who: council voices respond to the Codex+brief-reviewer findings
     gate: reconciled-to-zero
 
   - id: E4
@@ -160,7 +160,7 @@ reorder_options:
   consolidated_reconcile:
     rule: >
       The operator may collapse E2b + E3b into ONE consolidated reconcile AFTER
-      all reviewer input (adversarial + Codex + advisor) is gathered — the
+      all reviewer input (adversarial + Codex + the brief-reviewer) is gathered — the
       council responds to the merged finding-set in one pass. Preserves
       reconcile-to-zero; reduces full-council convenings. (This arc did so.)
 
@@ -185,7 +185,7 @@ hil_gates:
       debate. Do NOT run all voices blind-parallel; consultants must be
       INTRODUCED to react to the primaries' real output.
   - id: decorrelated-reviewer-wiring
-    rule: Codex cold (descriptive primer only) + advisor transcript-aware; weight divergence.
+    rule: Codex cold (descriptive primer only) + the brief-reviewer transcript-aware (session brief); weight divergence.
   - id: reconcile-to-zero-per-gate
     rule: Close each pairwise reviewer<->council gate to zero before advancing.
   - id: genuine-invocation

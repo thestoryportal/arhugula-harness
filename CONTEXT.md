@@ -36,7 +36,7 @@ resolving pointer; the safety kernel (§1.3, §3.1/§3.2, §4.3/§4.4, §5, §8,
 | `docs/governance/skills-and-subphases.md` | §6, §7 | choosing a Phase 7 skill / routing a sub-phase |
 | `docs/governance/design-phase-principles.md` | §10, §10.1–§10.9 | **design-phase posture only** |
 | `docs/governance/roadmap-protocol.md` | §12, §12.1–§12.3, §12.5.x | hand-running the audit / post-merge refresh / drift reconcile |
-| `docs/governance/orchestration.md` | §13.2–§13.5 | choosing solo / advisor / codex-review / council / fan-out |
+| `docs/governance/orchestration.md` | §13.2–§13.5 | choosing solo / transcript-brief review / codex-review / council / fan-out |
 
 ## Pointers
 

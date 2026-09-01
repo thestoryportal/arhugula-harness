@@ -36,7 +36,7 @@ artifacts so the operator only sees genuine bugs.
      encodes a real contract): this is the one to fix.
 4. **Fix the logic** (posture-correct per §11; design-substrate is out of scope — a failing
    test against a spec contract may be a Class 1 fork, route per §4.3, do not silently edit
-   the spec). Call `advisor()` before a non-trivial fix (§13.1).
+   the spec). Run the §13.1 transcript-brief review before a non-trivial fix.
 5. **Re-run to a fixed point.** Repeat 1–4 until two consecutive clean runs agree (green, or
    the only reds are documented env-artifacts/credential-skips). Bound the loop — if it will
    not converge after a few passes, STOP and surface the sticking failure with its repro;

@@ -1,7 +1,7 @@
 # Council Workflow - GENERIC variant
 # ============================================================================
 # A reusable, council-skill-agnostic workflow for running a genuine
-# multi-perspective council -> adversarial -> out-of-family/advisor
+# multi-perspective council -> adversarial -> out-of-family/transcript-brief
 # reconcile-to-zero loop over any design/planning decision with a nameable
 # cross-perspective tension.
 #
@@ -19,8 +19,9 @@ pre_convening:
     rule: >
       Convene a council ONLY if a tension between two or more perspectives can
       be NAMED in advance. If no cross-perspective tension exists, route to a
-      single responsible voice plus advisor/reviewer instead.
-    on_fail: route_single_voice_plus_advisor
+      single responsible voice plus a transcript-brief review (a
+      fresh-context agent handed a written session brief) instead.
+    on_fail: route_single_voice_plus_brief_review
   build_voice_roster:
     question: Which distinct perspectives must deliberate this task?
     drives: voice_roster
@@ -114,24 +115,24 @@ stages:
     gate: reconciled-to-zero before decorrelated review handoff
 
   - id: E3
-    name: Out-of-family + advisor review
+    name: Out-of-family + transcript-brief review
     who:
       out_of_family:
         role: reviewer that did not see the council transcript
         context: descriptive primer only
-      advisor:
-        role: transcript-aware reviewer
-        context: full transcript or fullest available local record
+      transcript_brief_reviewer:
+        role: transcript-aware reviewer — a fresh-context agent handed a written session brief
+        context: written session brief (fullest available local record)
     decorrelation_discipline:
-      - The out-of-family reviewer gets a descriptive primer only: no council conclusions, adversarial findings, or advisor evaluation.
-      - The advisor is transcript-aware and checks continuity, hidden assumptions, and local-policy fit.
+      - The out-of-family reviewer gets a descriptive primer only: no council conclusions, adversarial findings, or the brief-reviewer's evaluation.
+      - The brief-reviewer is transcript-aware through the session brief and checks continuity, hidden assumptions, and local-policy fit.
       - Divergence between reviewers is signal; convergence is supporting evidence, not proof.
     out: decorrelated review finding set
 
   - id: E3b
     name: Decorrelated review <-> council reconcile-to-zero
     full_council_convening: true
-    who: council voices respond to the out-of-family and advisor findings
+    who: council voices respond to the out-of-family and brief-reviewer findings
     gate: reconciled-to-zero
 
   - id: E4
@@ -174,8 +175,9 @@ hil_gates:
       primaries is required.
   - id: decorrelated-reviewer-wiring
     rule: >
-      Out-of-family reviewer gets a cold descriptive primer; advisor is
-      transcript-aware; divergence receives extra weight.
+      Out-of-family reviewer gets a cold descriptive primer; the brief-reviewer
+      is transcript-aware through the session brief; divergence receives extra
+      weight.
   - id: reconcile-to-zero-per-gate
     rule: Close each reviewer<->council gate before advancing.
   - id: genuine-invocation

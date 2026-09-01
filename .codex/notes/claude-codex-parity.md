@@ -34,7 +34,7 @@ that file routes to, then follow that workflow with only these runner translatio
 - `AskUserQuestion` becomes the Codex user-input surface only for a genuine user-owned fork.
 - Claude scratch output becomes `/tmp` or another ignored scratch path.
 - Reviewer routing follows authorship: Claude author → Codex review; Codex author → Antigravity.
-- Transcript-aware advisor judgment remains the interactive controller's job and is complemented, never silently replaced, by the out-of-family artifact review.
+- Transcript-aware judgment is the transcript-brief review: an ISOLATED fresh-context reviewer — a separate `codex exec` call handed a written session brief, never the interactive controller reviewing its own work — complemented, never silently replaced, by the out-of-family artifact review. Where the approval surface exposes no isolated exec shape (unattended loops), the discipline is not dischargeable in this venue: the arc HALTS at the owing decision-fork/pre-done point (recorded as DEFERRED-HIL / a handoff row) and resumes where an isolated reviewer is invocable — the Claude-venue transcript-brief Agent review on the same written brief. A merge-gate lens is not a discharge (no brief; doc-only skips the gate). Never controller self-review, never a silent skip.
 
 The Codex-native `roadmap-continue`, `ship-pr`, `codex-autonomous-loop`, and
 `merge-gate` skills encode the current runner-specific fixed point explicitly.

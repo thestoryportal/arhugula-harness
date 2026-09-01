@@ -15,13 +15,13 @@ kind: generic
 
 applicability:
   use_when: "A decision/design/plan has a NAMEABLE tension between two or more distinct perspectives, and decorrelated multi-voice deliberation + adversarial + out-of-family review materially de-risks it."
-  do_not_use_when: "The task is linear/mechanical, single-perspective, or has one obvious approach — route to a single voice/agent + advisor() instead. A council with no nameable tension collapses to one voice + cosmetic consultants."
+  do_not_use_when: "The task is linear/mechanical, single-perspective, or has one obvious approach — route to a single voice/agent + a transcript-brief review instead. A council with no nameable tension collapses to one voice + cosmetic consultants."
 
 # --- 0. Pre-convening (define the roster — the only part the caller supplies) -
 pre_convening:
   nameable_tension_gate:
-    rule: "Convene ONLY if a cross-perspective tension can be named in advance; else single voice + advisor()."
-    on_fail: route_single_voice_plus_advisor
+    rule: "Convene ONLY if a cross-perspective tension can be named in advance; else single voice + a transcript-brief review."
+    on_fail: route_single_voice_plus_brief_review
   voice_roster:               # <-- PARAMETERIZE THIS per task (the agnostic seam)
     how_to_build:
       - "List the distinct PERSPECTIVES the task genuinely spans (domains, stakes, lenses)."
@@ -68,7 +68,7 @@ stages:
     name: Decorrelated evaluators (out-of-family + transcript-aware)
     who:
       out_of_family: "Codex / a different model family — fed a DESCRIPTIVE primer ONLY (never the council's conclusions or the adversarial findings)"
-      transcript_aware: "advisor() — sees the whole arc"
+      transcript_aware: "a transcript-brief Agent reviewer — briefed on the whole arc (a fork subagent inherits it outright where supported)"
     decorrelation_discipline: "The signal is where the out-of-family reviewer DISAGREES with the transcript-aware one or the adversarial. Converge -> ship; diverge -> dig."
   - id: E3b
     name: evaluators <-> council reconcile-to-zero

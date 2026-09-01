@@ -22,7 +22,7 @@ load-bearing and flag the question instead of cutting.
 > the most tempting "this §section could be tighter" target precisely because the qualifier reads as
 > wordiness — but the qualifier is *where the behavior lives*. (And the routing target of an
 > exception is a common sole-home for an anchor — "routes through the Posture gate" may be the only
-> place `Posture`/`secret`/`advisor()` appears; compressing it out drops the anchor and
+> place `Posture`/`secret`/`transcript-brief` appears; compressing it out drops the anchor and
 > `guardrails_preserved` hard-fails.) Tighten the *prose* of a conditional rule if it is genuinely
 > verbose, but every branch — the prohibition, each exception, and each exception's routing/handling
 > — must survive the edit intact. When in doubt, keep the whole conditional verbatim and win your
@@ -75,7 +75,7 @@ bounds for an "optimization":
 - **§11 Posture declaration** + **§11.5 enforcement layers** — mode auto-detection + enforcement.
 - **§12 Roadmap + drift-detection protocol** — §12.1 session-start audit, §12.2 post-PR-merge
   audit, §12.3 halt-and-reconcile. The deterministic next-action machinery.
-- **§13.1 Always-on disciplines** — advisor-before-substantive-work, decorrelated review.
+- **§13.1 Always-on disciplines** — transcript-brief-review-before-substantive-work, decorrelated review.
 - **The paid-call / secret boundary**, wherever stated — never fire a paid provider call or
   relocate secrets unilaterally (operator feedback, load-bearing). An optimization must not
   soften this.
@@ -101,5 +101,5 @@ contracts never appear). The optimization pass must touch nothing outside that s
 
 After producing the optimized file, diff old→new and confirm every keep-list rule is still
 present and still imperative. `scripts/check_pointers.py` covers the cross-reference half
-(links/paths/§refs still resolve). The two decorrelated reviewers (Codex + advisor) are the
+(links/paths/§refs still resolve). The two decorrelated reviewers (Codex + the brief-reviewer) are the
 backstop — but the keep-list is the *first* gate, and you run it yourself before proposing.
