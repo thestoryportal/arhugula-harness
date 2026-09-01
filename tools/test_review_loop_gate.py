@@ -586,6 +586,53 @@ def test_template_failed_publish_leaves_no_partial_and_retry_succeeds(
     assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/answers.md").read_text()
 
 
+def test_template_with_placeholders_deleted_does_not_attest(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r2 P1 (escalating the r1-rejected P2): the template writes every
+    # label itself, so token PRESENCE stopped evidencing authorship — deleting the
+    # placeholder substring, or its whole bullet line, must still refuse: 'answered'
+    # means a content line, not a heading the tool wrote
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/answers.md").read_text()
+    # deletion arm 1: strip the placeholder substring, keep the bare bullet
+    (repo / ".harness/answers.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
+    assert _attest_at(repo) != 0
+    # deletion arm 2: drop every bullet line, keep only headings + header comments
+    headings_only = "\n".join(ln for ln in text.splitlines() if not ln.startswith("- "))
+    (repo / ".harness/answers.md").write_text(headings_only)
+    assert _attest_at(repo) != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
+def test_sweep_template_with_placeholders_deleted_does_not_attest(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # same r2 P1, id half: the sweep template writes every finding id — the id's own
+    # line must carry residue beyond the id and template chrome
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(json.dumps(_row(1, "finding", "cw:aa:11:1")) + "\n")
+    assert _template(repo, "template-sweep", ".harness/sweep.md") == 0
+    text = (repo / ".harness/sweep.md").read_text()
+    (repo / ".harness/sweep.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
+    rc = rlg.main(
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+    assert rc != 0
+    assert rlg.load_state(repo).sweeps == ()
+
+
 def test_gate_refusal_recipes_route_through_the_template_verbs():
     # codex u-sr-04 r1 P2 (integration): an agent following the gate's own refusal
     # text must land on the labels-before-answers flow, not on attest-by-trial —

@@ -503,7 +503,9 @@ HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>` — it 
 `preflight-grep.sh` over the attested range and writes every hit label into a
 fresh template ([B] F14: three attest calls failed by trial only because answers
 were authored before the labels existed). Fill every placeholder with the named
-answer — attestation refuses a file still carrying one — then attest with the
+answer — attestation refuses a file still carrying one, and a deleted placeholder
+is not an answer either: every label section and finding line must carry content
+beyond what the template wrote — then attest with the
 same-prefixed `just review-attest-preflight <answers-file>`. The inline prefix is
 REQUIRED on both verbs exactly as for the review itself (they resolve the arc via
 env_arc_and_lane(); a bare invocation binds the branch-* fallback arc, not the

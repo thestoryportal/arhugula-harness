@@ -726,16 +726,62 @@ def _read_answers(path: Path) -> str:
     return text
 
 
+def _has_residue(line: str, *tokens: str) -> bool:
+    """Author-supplied answer content on the line: non-whitespace beyond the named
+    obligation tokens, the placeholder, and bullet/heading punctuation. This is what
+    makes 'answered' mean answered (codex u-sr-04 r2 P1): the template writes every
+    label and finding id itself, so mere token presence stopped evidencing that an
+    author ever looked — a deletion-only edit of the template must not attest."""
+    s = line
+    for t in (*tokens, TEMPLATE_PLACEHOLDER, "finding"):
+        s = s.replace(t, " ")
+    return bool(s.strip(" \t-—:*[]().,#"))
+
+
 def _unanswered_labels(labels: tuple[str, ...], answers: str) -> list[str]:
-    # hit labels are fixed multi-word strings from the sweep script — substring is exact
-    return [n for n in labels if n not in answers]
+    # a label is ANSWERED in either authored shape: inline ("label: the answer" —
+    # residue on the label's own line), or template-heading style ("[label]" followed,
+    # before the next heading, by a content line). Labels are fixed multi-word strings
+    # from the sweep script, so plain substring locates them exactly.
+    lines = answers.splitlines()
+    out = []
+    for label in labels:
+        answered = False
+        for i, ln in enumerate(lines):
+            if label not in ln:
+                continue
+            if _has_residue(ln, label):
+                answered = True
+                break
+            # heading line: scan its section for a content line (comment lines are
+            # tool/template chrome, never an answer)
+            for follower in lines[i + 1 :]:
+                if follower.lstrip().startswith("["):
+                    break
+                if not follower.lstrip().startswith("#") and _has_residue(follower):
+                    answered = True
+                    break
+            if answered:
+                break
+        if not answered:
+            out.append(label)
+    return out
 
 
 def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
     # token-exact, not substring (codex r2 P2: an answer naming ...:10 must not
-    # satisfy the sibling ...:1) — ids are whitespace/punctuation-delimited tokens
-    tokens = set(re.split(r"[\s,;()\[\]{}'\"`]+", answers))
-    return [n for n in ids if n not in tokens]
+    # satisfy the sibling ...:1) — ids are whitespace/punctuation-delimited tokens.
+    # And the id's line must carry residue beyond the id itself (codex u-sr-04 r2
+    # P1): the sweep template writes every id, so presence alone is not an answer.
+    out = []
+    for n in ids:
+        answered = any(
+            n in set(re.split(r"[\s,;()\[\]{}'\"`]+", ln)) and _has_residue(ln, n)
+            for ln in answers.splitlines()
+        )
+        if not answered:
+            out.append(n)
+    return out
 
 
 def _template_text(
