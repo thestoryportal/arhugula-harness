@@ -75,7 +75,7 @@ bounds for an "optimization":
 - **§11 Posture declaration** + **§11.5 enforcement layers** — mode auto-detection + enforcement.
 - **§12 Roadmap + drift-detection protocol** — §12.1 session-start audit, §12.2 post-PR-merge
   audit, §12.3 halt-and-reconcile. The deterministic next-action machinery.
-- **§13.1 Always-on disciplines** — advisor-before-substantive-work, decorrelated review.
+- **§13.1 Always-on disciplines** — transcript-brief-review-before-substantive-work, decorrelated review.
 - **The paid-call / secret boundary**, wherever stated — never fire a paid provider call or
   relocate secrets unilaterally (operator feedback, load-bearing). An optimization must not
   soften this.
@@ -101,5 +101,5 @@ contracts never appear). The optimization pass must touch nothing outside that s
 
 After producing the optimized file, diff old→new and confirm every keep-list rule is still
 present and still imperative. `scripts/check_pointers.py` covers the cross-reference half
-(links/paths/§refs still resolve). The two decorrelated reviewers (Codex + advisor) are the
+(links/paths/§refs still resolve). The two decorrelated reviewers (Codex + the brief-reviewer) are the
 backstop — but the keep-list is the *first* gate, and you run it yourself before proposing.

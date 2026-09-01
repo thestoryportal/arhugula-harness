@@ -29,7 +29,7 @@ The resolver Reading A-vs-B decision (identity resolver / *vacuous* floor **vs**
 ### 13.5 Cross-references
 
 - Council activation + standing posture: §10.7 + §10.9. Voices at `.claude/skills/council/c1..c11` + `council-orchestrator`. Optional out-of-family **Codex decorator** on a convened tension (U-HK-19).
-- Out-of-family review: `just codex-review` / `just codex-review-uncommitted` (justfile); pilot record `R-600-codex-out-of-family-review`; division-of-labor-with-advisor ratified 2026-06-03 (U-HK-18); `[[hooks-codex-pilots-decorrelation-validated]]`.
+- Out-of-family review: `just codex-review` / `just codex-review-uncommitted` (justfile); pilot record `R-600-codex-out-of-family-review`; division-of-labor with the transcript-brief reviewer ratified 2026-06-03 (U-HK-18); `[[hooks-codex-pilots-decorrelation-validated]]`.
 - Cite-grounding + code-side/cross-axis-seam drift instrument: the spec ↔ code ↔ CXA-seam ↔ substitution overlay at `tools/semantic_overlay/` (R-IF-112) + the `overlay-query` skill — the agent-facing `just overlay-query`/`overlay-check` surface for §13.1 (it resolves cites to code carriers + catches code↔cite/seam decay; it does NOT scan `design-substrate/**` sibling specs, so it complements — not replaces — the cross-spec `rg`). `--seam` is the cross-axis layer Understand-Anything's per-package code graph can't show (`[[overlay-query-agent-workflow]]`).
 - Transcript-brief review / memory / checkpoint composition: §12.5.
 - Posture (design-phase / Phase 7 / mode-agnostic): §11.

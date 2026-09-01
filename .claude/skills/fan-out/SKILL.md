@@ -77,5 +77,5 @@ u-sr-03 r10 P2 — an earlier draft said "always", which forbade a path step 4 e
 ## Notes
 
 - Decorrelation by construction: distinct angles surface failure modes a single pass misses —
-  the same thesis as the Codex/advisor pairing (§13.1), applied within-family across angles.
+  the same thesis as the Codex/brief-reviewer pairing (§13.1), applied within-family across angles.
 - Lower priority than the rest of Wave 3 — use it when the problem is genuinely wide-open.

@@ -80,4 +80,4 @@ operator notices friction or after a wave of substantive convention changes has 
 
 - This skill **proposes**; the operator + reviewers **dispose**. It never silently rewrites
   the rules the agent runs under.
-- Division of labor mirrors §13.1: Codex = out-of-family artifact read; advisor = transcript-aware guardrail check. `[[hooks-codex-pilots-decorrelation-validated]]`.
+- Division of labor mirrors §13.1: Codex = out-of-family artifact read; the brief-reviewer = transcript-aware guardrail check. `[[hooks-codex-pilots-decorrelation-validated]]`.

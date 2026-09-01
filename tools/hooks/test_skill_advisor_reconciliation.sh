@@ -65,18 +65,25 @@ for f in "${CARRIERS[@]}"; do
   [ -f "$f" ] || { echo "FATAL: missing carrier $f"; exit 1; }
 done
 
-# The needle is every CALL-form — 'advisor(' catches advisor() and argument
+# Two needles. 'advisor(' catches every CALL-form — advisor() and argument
 # shapes like advisor(transcript-aware) (codex r1 P1: the bare token missed the
-# argument form) without tripping on the plain word in role prose ("advisory",
-# "the advisor is transcript-aware"), which names no instrument.
+# argument form). The BARE word catches operational reviewer identities
+# ("advisor = transcript-aware guardrail check" — codex r6): the standalone
+# word with no letter/underscore/hyphen/paren on either side, which spares
+# "advisory", joined labels (codex-advisor, advisor-eval, advisor_required),
+# and [[advisor-...]] memory slugs — proper nouns, not instrument claims.
 CLEAN=1
 for f in "${CARRIERS[@]}"; do
   if grep -qF 'advisor(' "$f"; then
     bad "phantom instrument call-form named at ${f#"$ROOT"/}"
     CLEAN=0
   fi
+  if grep -Eq '(^|[^A-Za-z_-])advisor([^A-Za-z_(-]|$)' "$f"; then
+    bad "bare advisor reviewer identity named at ${f#"$ROOT"/}"
+    CLEAN=0
+  fi
 done
-[ "$CLEAN" -eq 1 ] && ok "zero live carriers name a phantom advisor call-form (${#CARRIERS[@]} files swept)"
+[ "$CLEAN" -eq 1 ] && ok "zero live carriers name a phantom advisor call-form or bare identity (${#CARRIERS[@]} files swept)"
 
 # No command frontmatter may GRANT the phantom as a tool: an allowed-tools list
 # containing a bare 'advisor' entry is the strongest phantom-instrument shape —

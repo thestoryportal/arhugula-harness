@@ -6,7 +6,7 @@
 
 ## 0. Change note + scope
 
-**What this is.** A machine-readable (by Claude) roadmap that lets a fresh session pick its next action from a structured queue without operator AskUserQuestion. Per-action discipline encoding (skill, posture, advisor/council requirements, verification shape, close shape) means future-Claude knows not only *what* to do but *how* to do it correctly.
+**What this is.** A machine-readable (by Claude) roadmap that lets a fresh session pick its next action from a structured queue without operator AskUserQuestion. Per-action discipline encoding (skill, posture, review/council requirements, verification shape, close shape) means future-Claude knows not only *what* to do but *how* to do it correctly.
 
 **What this is not.** A planning narrative. A status report. A re-synthesis of design substrate. A commitment device against execution drift (workspaces drift; this doc detects + handles drift, doesn't prevent it).
 
@@ -122,7 +122,7 @@ R-NNN:
 - **depends_on** vs **blocks** — depends_on is what must close before this opens; blocks is what this opens once closed (inverse view; both populated for fast traversal both directions).
 - **posture** — `design-phase` = edits `design-substrate/**`; `phase-7` = edits `harness-*/src/**`; `mode-agnostic` = workspace-operational (root, `.github/`, `.claude/`, this roadmap, status dashboard); `halt-route-to-operator` = requires operator AUQ before execution.
 - **skills.primary** — invoke this first. **skills.secondary** — invoke during execution as triggered.
-- **advisor_required** — `yes` = run the §13.1 transcript-brief review before substantive work; `conditional:<reason>` = run it if the condition holds; `satisfied:<YYYY-MM-DD>` = a `yes` entry whose review already happened on that date and resolved the cross-axis blocker — re-run only if a NEW cross-axis question surfaces. Used on a paused entry (with `resume:`) so a fresh session does not redundantly re-consult. (The field keeps its legacy name — recorded entries predate the U-SR-06 rename of the advisor prose to the transcript-brief review.)
+- **advisor_required** — `yes` = run the §13.1 transcript-brief review before substantive work; `conditional:<reason>` = run it if the condition holds; `satisfied:<YYYY-MM-DD>` = a `yes` entry whose review already happened on that date and resolved the cross-axis blocker — re-run only if a NEW cross-axis question surfaces. Used on a paused entry (with `resume:`) so a fresh session does not redundantly re-consult. (The field keeps its legacy name — recorded entries predate the U-SR-06 rename of the legacy reviewer prose to the transcript-brief review.)
 - **council_required** — `yes` = open council per `.claude/skills/council/council-orchestrator/`; `conditional:nameable-tension` = open council only if a tension between two voices can be named in advance (per workspace CLAUDE.md §10.9 amendment 1).
 - **verification.shape** — `e2e` = real workflow execution; `integration` = cross-module test; `unit` = single-module test; `grep` = static verification; `none` = doc-only or process-only.
 - **close_shape.cascade** — downstream R-NNN entries that should be refreshed (status check, next_pointer recompute) upon close.
