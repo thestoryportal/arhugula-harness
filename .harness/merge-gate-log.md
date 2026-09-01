@@ -813,3 +813,13 @@ no verdict was produced either way, so none is recorded for those two lenses.
 Per the merge-gate rule, all three must APPROVE before `gh pr merge`. One approval plus two
 non-verdicts is not an all-approve, so **#1479 was not merged** and is left open at CI-green
 for the gate to be re-run when the venue permits.
+
+**#1479 gate note, addendum.** A third attempt was made for lens 2 alone — sequentially, on
+an otherwise idle system, with a tightened prompt and freshly published bindings at the then
+head `ac34350f` (the earlier bindings had gone stale when the gate-row commit moved the head,
+and the content-addressed name changed accordingly, `f7efc475…` → `1fe6f4c9…`, which is the
+WR-09 mechanism behaving as designed). It progressed faster than the concurrent attempts but
+plateaued the same way. Lens 1's APPROVE was re-checked against the moved head with
+`just merge-gate-landing-delta cd16adb9…`: 0 non-gate-row files in the delta, so that
+approval TRANSFERS. The gate therefore stands at 1 APPROVE + 2 lenses that this venue cannot
+run to a verdict.
