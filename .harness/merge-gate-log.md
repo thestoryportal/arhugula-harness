@@ -823,3 +823,23 @@ plateaued the same way. Lens 1's APPROVE was re-checked against the moved head w
 `just merge-gate-landing-delta cd16adb9…`: 0 non-gate-row files in the delta, so that
 approval TRANSFERS. The gate therefore stands at 1 APPROVE + 2 lenses that this venue cannot
 run to a verdict.
+
+**#1479 gate round 2 — L2 BLOCK, and the whole gate resets.** Lens 2 (spec-conformance)
+completed on a solo run and returned **BLOCK** with a P1 that ten out-of-family codex rounds
+had not found: WR-08a names `merge-gate` / `fan-out` / `council-workflow`, and the arc wired
+`council-orchestrator` instead — a different skill that convenes voices inside one model call
+and shells out through `just codex-review`, spawning no subagent prompt to author. The real
+carrier, `.claude/commands/council-workflow.md` (`allowed-tools` includes `Agent`), was left
+bare. Its L2 P2 was the same defect in the witness: the `CARRIERS` array encoded the identical
+wrong target, so the suite passed green over it. Both accepted and fixed at `04cc50d7c`.
+
+Consequence for the gate: the absorption touched three non-gate-row files, so
+`just merge-gate-landing-delta cd16adb9…` now exits 1 — **lens 1's earlier APPROVE no longer
+transfers**, and all three lenses must re-run against the new head. The gate is therefore
+0 of 3 at `04cc50d7c`, not 1 of 3. Lens 2's own verdict is likewise bound to the pre-fix head
+`ac34350f` and is superseded rather than recorded as a verdict for this head.
+
+This is the documented reason the 3-lens gate runs alongside the codex loop rather than
+instead of it: the finding was invisible to ten rounds of out-of-family review and to every
+test in the arc, because both were reasoning about the file that had been named rather than
+the file that spawns agents.
