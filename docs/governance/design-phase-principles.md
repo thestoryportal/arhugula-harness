@@ -110,7 +110,7 @@ Standing posture amendments from the H_T-IS-2 cascade-scope council pilot (2026-
 
 **Council orchestrator (`.claude/skills/council/council-orchestrator/`):**
 
-1. **Nameable-tension discriminator at activation.** Before convening, ask: can I name in advance a tension I expect between two voices? If no, route to single voice + advisor(). The pilot's lesson — councils that converge to single-voice + cosmetic consultants are primary-collapse failures. Tension-surfacing is the load-bearing value.
+1. **Nameable-tension discriminator at activation.** Before convening, ask: can I name in advance a tension I expect between two voices? If no, route to single voice + a transcript-brief review (CLAUDE.md §13.1). The pilot's lesson — councils that converge to single-voice + cosmetic consultants are primary-collapse failures. Tension-surfacing is the load-bearing value.
 2. **Dyadic mode default.** Default convening size is 2 voices (primary + 1 consultant), not 3. Expand to 3 only when you can name a distinct third axis-specific concern AND Layer C scoring places a 3rd voice meaningfully above threshold. Hard cap at 5 unchanged.
 3. **Slim CCR.** Enumerate Touched concerns only with one-sentence pre-check notes; collapse Not-Touched concerns into a single `n/a` line listing unaddressed concerns by name. CCR ritualization (6 verbose rows every time) is the failure mode being corrected.
 4. **Pre-bind to current spec versions.** Each convened voice's first cite MUST be from the canonical spec at the current version recorded in workspace `CLAUDE.md` §2 at session-start (not freelance from SKILL.md memory). External authority citations from `.harness/01-planning/` are encouraged when intra-spec authority is insufficient.

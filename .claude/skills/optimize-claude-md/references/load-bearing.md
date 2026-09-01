@@ -22,7 +22,7 @@ load-bearing and flag the question instead of cutting.
 > the most tempting "this §section could be tighter" target precisely because the qualifier reads as
 > wordiness — but the qualifier is *where the behavior lives*. (And the routing target of an
 > exception is a common sole-home for an anchor — "routes through the Posture gate" may be the only
-> place `Posture`/`secret`/`advisor()` appears; compressing it out drops the anchor and
+> place `Posture`/`secret`/`transcript-brief` appears; compressing it out drops the anchor and
 > `guardrails_preserved` hard-fails.) Tighten the *prose* of a conditional rule if it is genuinely
 > verbose, but every branch — the prohibition, each exception, and each exception's routing/handling
 > — must survive the edit intact. When in doubt, keep the whole conditional verbatim and win your

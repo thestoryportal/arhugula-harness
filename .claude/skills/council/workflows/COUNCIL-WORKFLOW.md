@@ -13,7 +13,7 @@
 
 ## 1. What it is
 
-A council is **decorrelated multi-perspective deliberation**, pressure-tested by **adversarial** + **out-of-family** review, converged by **reconcile-to-zero**. Its value is *surfaced tension*, not consensus — so the whole design fights two failure modes: **primary-collapse** (consultants rubber-stamp the primary) and **correlation** (every reviewer is the same model family seeing the same thing). Use it only when a tension between two or more voices can be **named in advance**; otherwise route to a single voice + `advisor()`.
+A council is **decorrelated multi-perspective deliberation**, pressure-tested by **adversarial** + **out-of-family** review, converged by **reconcile-to-zero**. Its value is *surfaced tension*, not consensus — so the whole design fights two failure modes: **primary-collapse** (consultants rubber-stamp the primary) and **correlation** (every reviewer is the same model family seeing the same thing). Use it only when a tension between two or more voices can be **named in advance**; otherwise route to a single voice + a transcript-brief review (CLAUDE.md §13.1).
 
 ## 2. The shape / flow
 

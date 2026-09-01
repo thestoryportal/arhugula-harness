@@ -6,16 +6,16 @@ description: Decorrelated 3-lens pre-merge review gate — launches three parall
 # merge-gate — decorrelated 3-lens pre-merge review
 
 An **addition** to the existing pre-merge apparatus (`just review-with-failover` — the fail-closed
-`codex-review` wrapper with the `gemini-review` failover — + `advisor()`), not a
-replacement. It composes with `ship-pr`'s pre-flight — see the wiring note at the end.
+`codex-review` wrapper with the `gemini-review` failover — + the §13.1 transcript-brief
+review), not a replacement. It composes with `ship-pr`'s pre-flight — see the wiring note at the end.
 
 ## Honesty caveat — read this before trusting an all-approve
 
 The three subagents below are Claude Agent-tool subagents: **lens-decorrelated, not
 vendor-decorrelated.** Same model family, same training-time blind spots. Their value is that
 each goes *deep on one specialty* the generic pass skips, not that they're independent eyes in
-the way Codex (`just codex-review`, out-of-family, $0 subscription) or `advisor()`
-(transcript-aware) are. This gate does **not** replace either — it runs alongside them. If a
+the way Codex (`just codex-review`, out-of-family, $0 subscription) or the
+transcript-brief review (the §13.1 transcript-aware half) are. This gate does **not** replace either — it runs alongside them. If a
 finding matters and you want real cross-vendor confidence, that's still Codex's job.
 
 This gate is **instruction-level, not a hard hook.** `permission-guard.sh` is a shell script —

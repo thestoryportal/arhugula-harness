@@ -666,8 +666,9 @@ r820-managed-agents-live-e2e config *args:
 
 # ─── out-of-family review — Codex CLI (pilot) ──────────────────────────────
 #
-# Decorrelated second opinion alongside Claude's advisor(). advisor = Claude
-# reviewing Claude = correlated blind spots; Codex (OpenAI, out-of-family) gives
+# Decorrelated second opinion alongside Claude's transcript-brief review
+# (CLAUDE.md §13.1). That half = Claude reviewing Claude = correlated blind
+# spots; Codex (OpenAI, out-of-family) gives
 # DECORRELATED errors. The strongest signal is DISAGREEMENT between the two —
 # surface that to the operator. See CLAUDE.md §10.9 (pre-merge adversarial gate).
 #

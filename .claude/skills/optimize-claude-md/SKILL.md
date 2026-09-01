@@ -1,6 +1,6 @@
 ---
 name: optimize-claude-md
-description: Review the workspace CLAUDE.md governance files for optimization (clarity, staleness, contradiction, byte-cap pressure) using the two decorrelated reviewers (out-of-family Codex + transcript-aware advisor) and propose the result as a REVIEWABLE PR — never a silent in-place edit. Use when the operator says "/optimize-claude-md", "tidy CLAUDE.md", "the instructions have drifted", or on a periodic cadence (~every N PRs / SessionEnd). Self-improvement of the agent's own governance docs (U-HK-20). Do NOT use to edit design-substrate, specs, or plans — those are out of scope by hard rule.
+description: Review the workspace CLAUDE.md governance files for optimization (clarity, staleness, contradiction, byte-cap pressure) using the two decorrelated reviewers (out-of-family Codex + a transcript-brief Agent reviewer) and propose the result as a REVIEWABLE PR — never a silent in-place edit. Use when the operator says "/optimize-claude-md", "tidy CLAUDE.md", "the instructions have drifted", or on a periodic cadence (~every N PRs / SessionEnd). Self-improvement of the agent's own governance docs (U-HK-20). Do NOT use to edit design-substrate, specs, or plans — those are out of scope by hard rule.
 ---
 
 # optimize-claude-md — self-improving governance docs (U-HK-20)
@@ -56,8 +56,9 @@ source tools/hooks/lib.sh   # hook_project_dir, conventions
    - **Codex** (out-of-family, $0): `just codex-review-uncommitted` after staging a draft,
      or frame the file + your proposed deltas to `resolve_codex` — fresh eyes on the
      artifact, no transcript.
-   - **advisor()** (transcript-aware): does the proposed delta drop a guardrail / contradict
-     a committed surface this session established? It sees what Codex cannot.
+   - **Transcript-brief review** (transcript-aware): spawn a fresh-context Agent reviewer
+     briefed on this session — does the proposed delta drop a guardrail / contradict
+     a committed surface this session established? It weighs what Codex cannot.
    - Apply only deltas BOTH reviewers (or the operator) accept. A disagreement is a signal —
      surface it, take the more-conservative (keep-the-guardrail) option.
 4. **Diff discipline.** Keep the PR small and legible — one theme per PR (staleness, OR

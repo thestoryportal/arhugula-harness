@@ -103,7 +103,8 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
    `C-*`/`U-*`/seam/`H_T-*` cite, resolve it with `just overlay-query` (the `overlay-query`
-   skill, R-IF-112) before ad-hoc grep. Call `advisor()` before substantive cross-axis work (§13.1).
+   skill, R-IF-112) before ad-hoc grep. Run the §13.1 transcript-brief review (a fresh-context
+   Agent reviewer briefed on the session) before substantive cross-axis work.
 4. **Implement with tests.** Posture-correct edits (§11). Adopt the
    `defect-class-preflight` skill and run its sweep on the diff BEFORE every commit —
    its ten classes are the distilled findings history of this workspace's own

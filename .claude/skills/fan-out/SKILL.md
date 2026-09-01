@@ -67,8 +67,8 @@ u-sr-03 r10 P2 — an earlier draft said "always", which forbade a path step 4 e
 
 - **Subagent self-validation (U-HK-17).** Variant + judge subagents inherit the SubagentStart
   contract / SubagentStop retry guard — they validate their own output shape.
-- **The judge is advisory.** It proposes a winner; the operator (or you, with `advisor()` on
-  the synthesis) disposes. A close score-split is itself signal — surface it.
+- **The judge is advisory.** It proposes a winner; the operator (or you, after a §13.1
+  transcript-brief review of the synthesis) disposes. A close score-split is itself signal — surface it.
 - **No paid/destructive side effects in variants.** Variants explore + propose; they do not
   fire paid calls, relocate secrets, or make irreversible changes
   (`[[feedback-background-agent-no-unilateral-paid-calls-or-secret-relocation]]`). Implementation
