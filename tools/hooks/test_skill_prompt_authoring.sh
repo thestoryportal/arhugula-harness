@@ -16,10 +16,15 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
+# The three carriers WR-08a names, by their charter names: merge-gate / fan-out /
+# council-workflow. `council-workflow` is the COMMAND file, not the similarly-named
+# `council-orchestrator` skill -- an earlier pass wired the paragraph into the orchestrator
+# and left the real carrier bare, and this array encoded the same mistake so the suite
+# passed green over it (codex u-sr-03 merge-gate L2 P1).
 CARRIERS=(
   ".claude/skills/merge-gate/SKILL.md"
   ".claude/skills/fan-out/SKILL.md"
-  ".claude/skills/council/council-orchestrator/SKILL.md"
+  ".claude/commands/council-workflow.md"
 )
 ANCHOR='**Subagent prompts are authored under `laws:prompt` (U-SR-03, charter WR-08).**'
 
@@ -162,6 +167,27 @@ if [ -f "$LENS_README" ]; then
     || bad "lens README still permits a bare VERDICT: BLOCK that emit refuses"
 else
   bad "the Codex lens README is missing"
+fi
+
+# Bind the carrier list to WHY each file is a carrier, not just to its path. A carrier is a
+# file that can spawn subagents; checking only paths is what let the orchestrator/workflow
+# swap pass unnoticed. Each carrier must show it reaches the Agent tool -- via an
+# `allowed-tools` grant (the command file) or by documenting Agent-tool fan-out (the skills).
+for rel in "${CARRIERS[@]}"; do
+  if grep -Eq 'allowed-tools:.*\bAgent\b|`Agent` call|Agent-tool|Agent` calls|one `Agent` call' "$REPO/$rel"; then
+    ok "$rel is a carrier for a reason: it reaches the Agent tool"
+  else
+    bad "$rel carries the rule but never spawns subagents -- wrong carrier?"
+  fi
+done
+
+# ...and the near-miss sibling must NOT carry it, so a future edit cannot quietly put the
+# rule back on a skill that spawns nothing.
+ORCH="$REPO/.claude/skills/council/council-orchestrator/SKILL.md"
+if [ -f "$ORCH" ]; then
+  grep -q 'Subagent prompts are authored under' "$ORCH" \
+    && bad "council-orchestrator carries the rule, but it spawns no subagents (not a WR-08a carrier)" \
+    || ok "council-orchestrator correctly does NOT carry the rule"
 fi
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"

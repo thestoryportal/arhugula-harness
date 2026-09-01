@@ -141,30 +141,6 @@ Before sending, check:
 
 ---
 
-## Prompt authoring — delegate under `laws:prompt`
-
-**Subagent prompts are authored under `laws:prompt` (U-SR-03, charter WR-08).** A subagent
-sees only the prompt you write — no transcript, no CLAUDE.md, no user requirement unless you
-put it there. Delegate the authoring to an agent that adopts `laws:prompt` and use the prompt
-it returns; composing one inline is legal ONLY when instantiating a skill-canonical template
-with literal values. A freehand prompt written in a `laws:code` session is the defect this
-rule exists to stop: the passive memory (`[[feedback-subagent-prompts-are-laws-prompt-medium]]`)
-failed twice in 48h, and delegating costs ~1m13s / 0.11M IET — about 3% of one lens run. The
-`agent-prompt-advisory` PreToolUse hook restates this at every `Agent` call; it is advisory
-and never denies. The delegate's OWN invocation is the base case: launching the
-laws:prompt authoring agent uses the one-line brief `Adopt laws:prompt and author the
-subagent prompt described below; return only the finished prompt.` plus the task
-description, and needs no further delegation -- without a named base case the rule
-recurses forever, since every authoring agent would itself need an authored prompt.
-
-Scoped to the invocations this skill actually spawns as SUBAGENTS -- the adversarial reviewer
-and the E3 out-of-family primer -- and not to the cN voices, which this file's own opening
-paragraph convenes within one model call rather than over separate inference requests (codex
-u-sr-03 r10 P2). A voice is prose you write in your own turn, so there is no subagent prompt to
-delegate; the rule binds where a prompt is handed to something that sees nothing else.
-
----
-
 ## Failure modes to actively prevent
 
 These are the orchestrator's standing failure-mode mitigations. Treat them as live constraints on every response, not just theoretical risks.
