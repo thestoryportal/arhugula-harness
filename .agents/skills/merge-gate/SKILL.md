@@ -36,13 +36,14 @@ Launch one fresh, ephemeral, lifecycle-isolated, read-only `codex exec` per lens
 gets only its lens prompt plus this self-contained tail:
 
 ```text
-PR under review: #<N> on branch <branch>, base main, head <sha>.
+PR under review: #<N> on branch <branch>, base main. The head is in the binding
+file named below -- read it there rather than being told it here.
 Review the local merge-base diff and enough surrounding source to judge it. Do not edit.
 Immediately before your final line, print ONE fenced ```json block with exactly these keys:
 verdict (APPROVE|BLOCK), findings (array of {severity: P1|P2|P3, location, message}; empty on
-APPROVE, non-empty on BLOCK) and these six values copied VERBATIM: head_sha=<...>,
-base_sha=<...>, diff_digest=<...>, reviewer_identity=<lens id>, prompt_version=<...>,
-config_hash=<...> (the output of `just merge-gate-binding <lens id>`). No other keys.
+APPROVE, non-empty on BLOCK) and the six binding values — head_sha, base_sha, diff_digest,
+reviewer_identity, prompt_version, config_hash — copied VERBATIM from the JSON file at
+<binding-file path printed by `just merge-gate-binding <lens id>`>. No other keys.
 End with exactly `VERDICT: APPROVE` or `VERDICT: BLOCK: <one-sentence reason>` as the final
 non-empty line (a bare `VERDICT: BLOCK` without its reason is not a verdict).
 ```
@@ -64,9 +65,60 @@ Validate each invocation separately: exit 0, output file exists and is non-empty
 final non-empty line is exactly one permitted verdict. Missing, malformed, truncated, or
 ambiguous output is `BLOCK`.
 
-Before launching, compute each lens's binding with
-`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`
-and include the six printed values in that lens's prompt; require, immediately before the
+## Prompt authoring — the Codex translation of the laws:prompt rule
+
+The Claude carriers (`merge-gate`, `fan-out`, `council-orchestrator`) require subagent
+prompts to be authored by a delegated `laws:prompt` agent. `laws:prompt` is a Claude-plugin
+skill this runner cannot load, so the rule translates rather than transplants — but it is
+NOT waived here, and the `agent-prompt-advisory` PreToolUse hook does not reach this path:
+these lenses launch through `codex exec`, not an `Agent` tool call, so this text is the only
+thing carrying the rule on the Codex side (codex u-sr-03 r1 P2).
+
+The translation: the canonical templates are the lens files this procedure actually loads —
+`.codex/notes/merge-gate-lenses/lens1-concurrency.md`, `lens2-spec-conformance.md`, and
+`lens3-test-witness.md` — together with the self-contained tail above. Instantiating those
+with this PR's literal values (PR number, branch, blast-radius list, binding-file path) is
+the sanctioned path, and it is what a normal launch already does. Departing from them — a
+re-worded specialty, an added lens, an extra instruction — is AUTHORING, and authoring goes
+through a fresh Codex subagent whose brief is to write the prompt and return only the prompt,
+never through a prompt composed inline while mid-implementation. Both round-3 lens
+corruptions came from an orchestrator hand-assembling lens input mid-task.
+
+**Base case, and where it stops being automatic.** Launching an authoring subagent is itself
+an invocation, so without an exemption the rule would recurse forever. The base case is the
+literal brief `Author the subagent prompt described below; return only the finished prompt.`
+plus the task description, which needs no further delegation.
+
+Be honest about the venue, though: this delegation is **not auto-allowed in loop mode**, and
+no wording here changes that. `_safe_codex_exec_command` in `tools/hooks/permission-guard.sh`
+admits exactly one `codex exec` shape — `env HARNESS_CODEX_REVIEW_ISOLATED=1`, one each of
+`--ephemeral`, `--sandbox read-only`, `-C <project dir>`, and an `--output-last-message`
+matching `/tmp/arhugula-pr-<N>-lens[123]-<40-hex>.md`. An authoring delegate is not a lens,
+so it cannot satisfy that pattern without claiming a lens identity it does not have, and the
+allowlist is deliberately NOT widened to make this sentence true (codex u-sr-03 r3 P2).
+
+The consequence is the right one rather than a gap: instantiating the three canonical
+templates is the normal path and needs no delegation at all, so ordinary gate runs are
+unaffected. Authoring a genuinely new or re-worded lens is rare and judgment-bearing, and it
+surfaces to the operator as an approval — which is the correct gate for changing what the
+reviewers are asked, not an obstacle to route around.
+
+Before launching, publish each lens's binding with
+`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`. It
+writes the six values to a file and prints ONLY that path (U-SR-03, charter WR-09): name the
+printed path in that lens's prompt and have the lens read the values from it, so no binding
+value is transcribed into the prompt or into the verdict block — that is where both round-3
+corruptions came from.
+
+One copy of the head DOES remain on this runner, and it is stated rather than glossed (codex
+u-sr-03 r9 P2): `--output-last-message` must match
+`/tmp/arhugula-pr-<N>-lens[123]-<40-hex>.md`, so the 40-character head is typed into that CLI
+argument. It cannot be removed without widening `_safe_codex_exec_command`, which this arc
+declines to do. It is a different risk from the one WR-09 targets, and a benign one: it is not
+a value the lens copies into its verdict, and getting it wrong fails LOUDLY and before any
+review runs — the permission guard simply refuses the command shape — rather than producing a
+verdict bound to the wrong tree. Require,
+immediately before the
 `VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
 (`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
 the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored) and record it:

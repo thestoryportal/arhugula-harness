@@ -344,7 +344,10 @@ merge-door-status:
 merge-gate-log-check:
     uv run python tools/merge_gate_log.py check
 
-# Six binding values for one merge-gate lens (C-HE-15 §4) -- paste into the lens prompt.
+# Publish one merge-gate lens's six binding values (C-HE-15 §4) to a file and print ONLY
+# that path (U-SR-03, charter WR-09). Name the printed path in the lens prompt and let the
+# lens read it -- never copy the values through the orchestrator, which is where both
+# round-3 corruptions came from.
 merge-gate-binding lens base='main':
     uv run python tools/merge_gate_log.py binding --lens {{lens}} --base {{base}}
 

@@ -13,7 +13,8 @@ row minting through `review_wrapper_common.emit_outcome` (ids and `round_n` mint
 the log lock -- never a per-invocation ordinal, U-HE-01 interface note).
 
 CLI (what `.claude/skills/merge-gate/SKILL.md` calls):
-    merge_gate_log.py binding --lens <id> [--base main]        -> the six fields, JSON
+    merge_gate_log.py binding --lens <id> [--base main]        -> writes the six fields to a
+                                                                  file; prints only that path
     merge_gate_log.py emit --pr N --lens <id> --verdict-json F  -> record; exit 0/1/2
     merge_gate_log.py adjudicate --finding-id I --disposition D --actor A -> §5 row; 0/2
     merge_gate_log.py check                                      -> consistency reducer
@@ -28,15 +29,17 @@ append-only disposition write.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import finding_record as fr
@@ -619,6 +622,86 @@ def reconcile_orphans(
 
 #: Where lens responses live for `emit` (the skills write them here; gitignored).
 LENS_SCRATCH = REPO / ".harness" / "tmp"
+#: The trust root `open_scratch_dir()` walks down from, validating EVERY component below it.
+#: Stated rather than implied, because a containment claim needs a stopping point: this is the
+#: directory holding the module being executed, so an actor who can replace it has already
+#: replaced this code and no check here could bind them. Above the anchor is out of scope by
+#: construction; below it, nothing is (codex r3 P2 -- `O_NOFOLLOW` on `tmp` alone left
+#: `.harness` itself swappable for a symlink containing a real `tmp`).
+SCRATCH_ANCHOR = REPO
+
+
+def open_scratch_dir() -> int:
+    """A descriptor for `LENS_SCRATCH`, refusing a symlink at ANY component (codex r1/r2/r3).
+
+    Returns an fd rather than a path because the path-shaped version of this rule was
+    check-then-use: `is_symlink()` answered a question about the directory, and every later
+    `mkdir` / `os.open` / `os.replace` re-traversed the name, so another process could swap a
+    component in between and the auto-allowed recipe would publish outside the repository.
+    Each component from `SCRATCH_ANCHOR` down is opened `O_DIRECTORY|O_NOFOLLOW` relative to
+    the previous descriptor, so the check and the capture are the same syscall at every level
+    and callers then work `dir_fd`-relative against an inode no later rename can repoint.
+    ONE enforcer, so `binding` and `emit` cannot drift apart.
+
+    The caller owns the returned fd and must close it.
+    """
+    try:
+        parts = LENS_SCRATCH.relative_to(SCRATCH_ANCHOR).parts
+    except ValueError as exc:  # a scratch dir outside its own anchor is a wiring error
+        raise GateLogError(f"{LENS_SCRATCH} is not under {SCRATCH_ANCHOR}") from exc
+    try:
+        fd = os.open(SCRATCH_ANCHOR, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as exc:
+        raise GateLogError(f"{SCRATCH_ANCHOR} is not a usable scratch anchor: {exc}") from exc
+    for part in parts:
+        # Provision descriptor-relative, never through the path. A `mkdir(parents=True)` on
+        # `LENS_SCRATCH` runs BEFORE any of this and follows symlinked ancestors, so a
+        # `.harness` pointing at a writable outside directory with no `tmp` child had the
+        # auto-allowed recipe CREATE that outside `tmp` before the refusal ever fired
+        # (codex r4 P2). Best-effort here on purpose: the open below is the single authority
+        # on whether this component is usable, and it reports the one specific refusal.
+        with contextlib.suppress(OSError):
+            os.mkdir(part, 0o755, dir_fd=fd)
+        try:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError as exc:
+            os.close(fd)
+            raise GateLogError(
+                f"{LENS_SCRATCH} is not a usable scratch directory ({part!r}): {exc}"
+            ) from exc
+        os.close(fd)
+        fd = nxt
+    return fd
+
+
+def binding_path(lens: str, values: Mapping[str, str]) -> Path:
+    """Where `binding` publishes one lens's six values (U-SR-03, charter WR-09).
+
+    A prompt names this path so the orchestrator never handles a value: both round-3 lens
+    corruptions were orchestrator TRANSCRIPTION errors -- a truncated `head_sha` and a
+    spliced `base_sha` -- not lens errors ([B] F3).
+
+    The name is CONTENT-ADDRESSED: a digest over all six values, so the name a prompt quotes
+    records exactly which contract was published under it. Note what that does NOT claim: the
+    file is not immutable after publication, and nothing re-hashes it on read (codex r6 P2).
+    Verifying contents against the filename digest would be the weaker check anyway -- an
+    actor who can rewrite the file can rename it to match -- so the enforcement lives where it
+    cannot be forged from inside the scratch dir: `emit` recomputes all six values from the
+    TREE and refuses any verdict that disagrees, so a tampered binding costs a re-run and can
+    never make a wrong verdict count. Keyed on anything less,
+    it is a mutable cell that two invocations share -- a lens launched against one contract
+    can read values republished under another and copy them into its verdict, and `emit`,
+    which recomputes against the current state, accepts the mismatch (codex r1 P1 on the
+    lens-only key, r2 P1 on lens+head: `base_sha`, `diff_digest`, `config_hash` and
+    `prompt_version` all vary independently of the head, and `config_hash` changes whenever
+    a carrier is edited mid-arc, which this very arc does). Digesting the whole binding
+    closes every dimension at once instead of one per review round. The lens id stays in the
+    name for legibility only; `_LENS_RE` has already accepted it, so it carries no separator.
+    """
+    digest = hashlib.sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return LENS_SCRATCH / f"merge-gate-binding-{lens}-{digest}.json"
 
 
 #: The only files a post-gate "log-only" commit may touch (C-HE-23 §2 sibling + human view).
@@ -663,17 +746,43 @@ def _read_text(arg: str) -> str:
     destination closes that, and the content is never echoed (see the VERDICT-line check)."""
     if arg == "-":
         return sys.stdin.read()
-    path = Path(arg)
-    resolved = path.resolve()
-    if (
-        path.is_symlink()
-        or not resolved.is_file()
-        or LENS_SCRATCH.resolve() not in resolved.parents
-    ):
-        raise GateLogError(
-            f"--verdict-json must be '-' or a regular file under {LENS_SCRATCH} (got {arg!r})"
-        )
-    return resolved.read_text(encoding="utf-8")
+    name = Path(arg).name
+    bad = GateLogError(
+        f"--verdict-json must be '-' or a regular file directly under {LENS_SCRATCH} (got {arg!r})"
+    )
+    # The documented shape is flat (`.harness/tmp/merge-gate-lens-<id>.txt` in both merge-gate
+    # carriers), so the read is `dir_fd`-relative to the captured scratch inode and a name
+    # carrying any separator is refused outright -- no traversal, and no re-walk of a path
+    # another process could repoint between the check and the open (codex R7 P2, r2 P2).
+    if not name or name != arg.rsplit("/", 1)[-1]:
+        raise bad
+    dfd = open_scratch_dir()
+    try:
+        # The supplied directory must BE the captured one, compared by identity. Comparing
+        # its BASENAME accepted `other/tmp/verdict.txt` while the read still came from
+        # `.harness/tmp/verdict.txt` -- emit would record a different, possibly stale verdict
+        # instead of failing closed (codex r4 P2). `samestat` cannot be fooled by naming.
+        try:
+            same = os.path.samestat(os.stat(Path(arg).parent), os.fstat(dfd))
+        except OSError as exc:
+            raise bad from exc
+        if not same:
+            raise bad
+        # `O_NONBLOCK` so the TYPE check can happen at all: a FIFO planted at this
+        # auto-allowed name makes a blocking `O_RDONLY` wait for a writer forever, so
+        # `emit` wedges before `fstat` ever runs and a local actor can stall the gate
+        # (codex r5 P2). This is the class-1 rider's own idiom -- `O_NOFOLLOW|O_NONBLOCK`
+        # plus a post-open `S_ISREG` -- which the first draft applied only by halves. On a
+        # regular file the flag has no further effect.
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+    except OSError as exc:
+        raise bad from exc
+    finally:
+        os.close(dfd)
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise bad
+        return stream.read().decode("utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -720,16 +829,44 @@ def main(argv: list[str] | None = None) -> int:
         # override on either command (codex R5 P2: a shared arbitrary value would let a verdict
         # bind to nothing); tests patch `config_hash` itself.
         try:
-            print(
-                json.dumps(
-                    lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version),
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
+            values = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
+            dfd = open_scratch_dir()  # provisions the chain itself, inside the walk
         except GateLogError as exc:
             print(f"merge-gate-log: {exc}", file=sys.stderr)
             return 2
+        # [LAW:effects-at-boundaries] `lens_binding` computes; the write happens here, at the
+        # CLI edge. The values are published to a FILE and stdout carries only its path
+        # (charter WR-09): a value the orchestrator never sees is a value it cannot mistype.
+        out = binding_path(args.lens, values)
+        # Everything below is relative to the descriptor opened above, never to the name:
+        # temp-then-`os.replace` so a lens never reads a half-written binding, `O_EXCL` so a
+        # pre-planted temp fails loudly instead of being written through, `O_NOFOLLOW` so
+        # neither component is a symlink, and `dir_fd=` so no step can be redirected by a
+        # rename of `.harness/tmp` after the check (codex r2 P2).
+        tmp_name = f"{out.name}.{os.getpid()}.tmp"
+        try:
+            try:
+                fd = os.open(
+                    tmp_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=dfd,
+                )
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    stream.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
+                os.replace(tmp_name, out.name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            except OSError as exc:
+                # A planted temp name, a full disk, or a failed replace is a gate error like
+                # any other -- exit 2 with a message, never an uncaught traceback (codex r3
+                # P3). The temp is removed on the way out so a transient failure cannot make
+                # the NEXT run fail with `O_EXCL` on a leftover it did not create.
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_name, dir_fd=dfd)
+                print(f"merge-gate-log: could not publish {out.name}: {exc}", file=sys.stderr)
+                return 2
+        finally:
+            os.close(dfd)
+        print(out)
         return 0
     if args.cmd == "emit":
         try:

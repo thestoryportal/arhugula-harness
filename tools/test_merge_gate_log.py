@@ -6,6 +6,8 @@ subprocess reaches a real reviewer, and the only git calls are read-only `rev-pa
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +33,8 @@ def _isolated(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("HARNESS_ARC_ID", raising=False)  # adjudicate's arc-binding input
     monkeypatch.setattr(mgl, "config_hash", lambda: "cfg")  # no CLI override exists (R5 P2)
     monkeypatch.setattr(mgl, "LENS_SCRATCH", tmp_path)  # `emit` reads verdict files only here
+    # the containment walk starts at the anchor, so a repointed scratch dir moves both
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", tmp_path.parent)
 
 
 def _binding(lens: str = LENS, head: str = H) -> dict[str, str]:
@@ -788,13 +792,14 @@ def test_cli_emit_reads_only_regular_files_under_the_lens_scratch_dir(
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
     outside = tmp_path / "secret.txt"
     outside.write_text("VERDICT: APPROVE\nTOKEN=hunter2\n")
     link = scratch / "lens.txt"
     link.symlink_to(outside)
     assert mgl.main(_cli(link)) == 2
     err = capsys.readouterr().err
-    assert "must be '-' or a regular file under" in err and "hunter2" not in err
+    assert "must be '-' or a regular file directly under" in err and "hunter2" not in err
     assert mgl.main(_cli(outside)) == 2  # a real file outside the scratch dir
     assert not jl.exists()
     b = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
@@ -803,11 +808,227 @@ def test_cli_emit_reads_only_regular_files_under_the_lens_scratch_dir(
     assert mgl.main(_cli(good)) == 0
 
 
-def test_cli_binding_prints_the_six_fields(capsys):
+def test_cli_binding_publishes_the_six_fields_to_a_file_and_prints_only_its_path(
+    tmp_path, monkeypatch, capsys
+):
+    """U-SR-03 (charter WR-09): the values land in a file; stdout carries the path alone.
+
+    The contract this pins is the ABSENCE of the values from stdout, not merely their
+    presence in the file. Printing both would leave the hand-copy path -- the source of both
+    round-3 lens corruptions -- just as available as before, and a test that only checked the
+    file would stay green through exactly that regression.
+    """
+    scratch = tmp_path / "scratch"
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+    expected = mgl.lens_binding(mgl.REPO, "HEAD", LENS)  # the binding the CLI resolves
     assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert set(out) == set(rw.BINDING_FIELDS) and out["reviewer_identity"] == LENS
+    printed = capsys.readouterr().out.strip()
+    assert printed == str(mgl.binding_path(LENS, expected))
+    written = json.loads(mgl.binding_path(LENS, expected).read_text())
+    assert written == expected and set(written) == set(rw.BINDING_FIELDS)
+
+    # The name is CONTENT-ADDRESSED, so identical name implies identical contents: changing
+    # ANY field -- not just the head -- moves the file, and an in-flight lens's named path
+    # can never be repointed under it (codex r1 P1 on the lens-only key, r2 P1 on lens+head).
+    for field in rw.BINDING_FIELDS:
+        altered = {**expected, field: "different"}
+        assert mgl.binding_path(LENS, altered) != mgl.binding_path(LENS, expected), (
+            f"{field} does not participate in the published name"
+        )
+
+    # No value is copyable off stdout. `reviewer_identity` is the sole exemption because it
+    # IS the `--lens` argument the caller passed -- a value you supplied is not one you can
+    # mistranscribe. Every other value is absent outright, which is what a revert to printing
+    # the JSON would violate.
+    for field, value in written.items():
+        if field == "reviewer_identity":
+            continue
+        assert value not in printed, f"{field} is transcribable off stdout"
+
     assert mgl.main(["binding", "--lens", "nope", "--base", "HEAD"]) == 2
+    assert list(scratch.iterdir()) == [mgl.binding_path(LENS, expected)], (
+        "a refused id published something"
+    )
+
+
+def test_cli_emit_refuses_a_fifo_without_hanging(tmp_path, monkeypatch, capsys):
+    """codex r5 P2: a blocking `O_RDONLY` on a planted FIFO never reaches the type check.
+
+    `.harness/tmp` is where an auto-allowed recipe writes, so a local actor can plant a FIFO
+    at the verdict name; a blocking open then waits for a writer that never comes and wedges
+    `emit` before `fstat` can reject it. The test would HANG rather than fail if the fix were
+    reverted, so it is bounded by an alarm: a hang is reported as a failure, not as a stall.
+    """
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+    fifo = scratch / "lens.txt"
+    os.mkfifo(fifo)
+
+    def _hung(signum, frame):
+        raise AssertionError("emit blocked on the FIFO instead of refusing it")
+
+    previous = signal.signal(signal.SIGALRM, _hung)
+    signal.alarm(5)
+    try:
+        assert mgl.main(_cli(fifo)) == 2
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert "must be '-' or a regular file directly under" in capsys.readouterr().err
+    assert not jl.exists()
+
+
+def test_cli_emit_refuses_a_same_basename_directory_that_is_not_the_scratch_dir(
+    tmp_path, monkeypatch, capsys
+):
+    """codex r4 P2: comparing the parent's BASENAME accepted a different directory.
+
+    `other/tmp/verdict.txt` shares its parent's name with `.harness/tmp`, so the basename
+    check passed and the read then came from the REAL scratch dir -- emit would have recorded
+    a different, possibly stale verdict instead of failing closed. Identity is compared now,
+    which no amount of naming can satisfy.
+    """
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+
+    b = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
+    (scratch / "lens.txt").write_text(_lens_output(b, "APPROVE"))  # the verdict emit must NOT read
+
+    decoy = tmp_path / "other" / "scratch"  # same basename, different directory
+    decoy.mkdir(parents=True)
+    (decoy / "lens.txt").write_text("not a verdict at all\n")
+
+    assert mgl.main(_cli(decoy / "lens.txt")) == 2
+    assert "must be '-' or a regular file directly under" in capsys.readouterr().err
+    assert not jl.exists(), "recorded a verdict from a directory that was not the scratch dir"
+
+
+def test_a_tampered_binding_file_cannot_produce_a_counted_verdict(tmp_path, monkeypatch, capsys):
+    """codex r6 P2: nothing re-hashes the published file, so witness what actually stops it.
+
+    The publisher closes its directory descriptor and hands the lens a PATHNAME, so a
+    concurrent actor can overwrite the file between publication and the lens's read. Checking
+    the contents against the digest in the filename would not help -- whoever can rewrite the
+    file can rename it to match. The enforcement that cannot be forged from inside the scratch
+    dir is `emit`'s INDEPENDENT recomputation from the tree, and this walks the whole path:
+    publish, tamper, have the lens copy the tampered values, emit. Exit 2, nothing recorded.
+    """
+    md, jl = tmp_path / "log.md", tmp_path / "log.jsonl"
+    monkeypatch.setattr(mgl, "GATE_LOG_MD", md)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", jl)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+
+    published = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
+    path = Path(capsys.readouterr().out.strip())
+
+    # A concurrent actor rewrites the published contract in place; the NAME is untouched.
+    tampered = {**published, "head_sha": "0" * 40}
+    path.write_text(json.dumps(tampered, indent=2, sort_keys=True) + "\n")
+    assert path.exists() and json.loads(path.read_text())["head_sha"] == "0" * 40
+
+    # A lens that faithfully copies what it was handed now carries the tampered values.
+    verdict = scratch / "lens.txt"
+    verdict.write_text(_lens_output(tampered, "APPROVE"))
+    assert mgl.main(_cli(verdict)) == 2
+    assert "binding mismatch" in fr.read_rows(jl)[-1]["observed_evidence"]
+    assert not any(r["record_kind"] == "no_finding" for r in fr.read_rows(jl)), (
+        "a verdict bound to a tampered contract was counted"
+    )
+
+
+def test_cli_binding_refuses_a_symlinked_ancestor_of_the_scratch_dir(tmp_path, monkeypatch, capsys):
+    """codex r3 P2: `O_NOFOLLOW` on the final component alone left the parent swappable.
+
+    With the equivalent of `.harness` replaced by a symlink to an external directory that
+    contains a real `tmp`, the old single-component open succeeded and the auto-allowed
+    recipe published outside the repository while the comment still claimed containment.
+    Every component below the anchor is validated now, so the ancestor is refused too.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()  # deliberately WITHOUT a `tmp` child: pre-creating it hid the mkdir
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "harness").symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", root)
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", root / "harness" / "tmp")
+
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 2
+    assert "not a usable scratch directory" in capsys.readouterr().err
+    # Nothing outside the repository was created, let alone written: the provisioning walks
+    # descriptor-relative inside the validated chain, so it never reaches a swapped ancestor
+    # (codex r4 P2 -- the path-based `mkdir(parents=True)` created `outside/tmp` first).
+    assert list(outside.iterdir()) == [], "mutated outside the repository before refusing"
+
+
+def test_cli_binding_refuses_a_symlinked_scratch_directory(tmp_path, monkeypatch, capsys):
+    """codex r1 P2: `O_NOFOLLOW` guards the final component only.
+
+    With `.harness/tmp` itself pre-planted as a symlink, `mkdir(exist_ok=True)` succeeds and
+    the temp open, the write, and the `os.replace` all land in the external target -- the
+    auto-allowed recipe would publish somewhere it never promised to write. Refuse loudly
+    (exit 2, nothing written) rather than silently relocate the publication.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    scratch = tmp_path / "scratch"
+    scratch.symlink_to(elsewhere, target_is_directory=True)
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 2
+    assert "not a usable scratch directory" in capsys.readouterr().err
+    assert list(elsewhere.iterdir()) == [], "published into the symlink target anyway"
+
+    # Same enforcer, other caller: `emit`'s reader resolved through this directory too, so a
+    # symlinked scratch dir would have let a lens file from outside the worktree in. The
+    # sibling is closed by construction rather than by a second, drift-prone check.
+    planted = elsewhere / "lens.txt"
+    planted.write_text("VERDICT: APPROVE\n")
+    with pytest.raises(mgl.GateLogError, match="not a usable scratch directory"):
+        mgl._read_text(str(scratch / "lens.txt"))
+
+
+def test_cli_binding_replaces_a_pre_planted_destination_instead_of_following_it(
+    tmp_path, monkeypatch, capsys
+):
+    """The recipe that writes this file is auto-allowed by the permission guard, and it
+    writes into a gitignored directory any other actor in the worktree can reach first.
+    `os.replace` overwrites the NAME, so a symlink planted at the destination is dropped
+    rather than used to clobber whatever it aimed at -- the containment `emit` already
+    applies to its `--verdict-json` sibling in the same directory."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(mgl, "LENS_SCRATCH", scratch)
+    monkeypatch.setattr(mgl, "SCRATCH_ANCHOR", scratch.parent)
+    expected = mgl.lens_binding(mgl.REPO, "HEAD", LENS)
+    victim = tmp_path / "tracked-file-someone-cares-about.md"
+    victim.write_text("original content\n")
+    mgl.binding_path(LENS, expected).symlink_to(victim)
+
+    assert mgl.main(["binding", "--lens", LENS, "--base", "HEAD"]) == 0
+    capsys.readouterr()
+    assert victim.read_text() == "original content\n", "the symlink target was clobbered"
+    assert not mgl.binding_path(LENS, expected).is_symlink()
+    assert set(json.loads(mgl.binding_path(LENS, expected).read_text())) == set(rw.BINDING_FIELDS)
+    assert [p.name for p in scratch.iterdir()] == [mgl.binding_path(LENS, expected).name], (
+        "a temp file was left behind"
+    )
 
 
 def test_cli_check_is_red_only_on_missing_jsonl(tmp_path: Path, monkeypatch, capsys):

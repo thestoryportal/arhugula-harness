@@ -41,6 +41,28 @@ deliberately, not by default (most harness work is careful-but-linear, §13.3).
    keep full proposals in a scratch file under `$CLAUDE_JOB_DIR/tmp`), then present the scored
    winner + rationale. Never emit one giant response that truncates.
 
+## Prompt authoring — delegate under `laws:prompt`
+
+**Subagent prompts are authored under `laws:prompt` (U-SR-03, charter WR-08).** A subagent
+sees only the prompt you write — no transcript, no CLAUDE.md, no user requirement unless you
+put it there. Delegate the authoring to an agent that adopts `laws:prompt` and use the prompt
+it returns; composing one inline is legal ONLY when instantiating a skill-canonical template
+with literal values. A freehand prompt written in a `laws:code` session is the defect this
+rule exists to stop: the passive memory (`[[feedback-subagent-prompts-are-laws-prompt-medium]]`)
+failed twice in 48h, and delegating costs ~1m13s / 0.11M IET — about 3% of one lens run. The
+`agent-prompt-advisory` PreToolUse hook restates this at every `Agent` call; it is advisory
+and never denies. The delegate's OWN invocation is the base case: launching the
+laws:prompt authoring agent uses the one-line brief `Adopt laws:prompt and author the
+subagent prompt described below; return only the finished prompt.` plus the task
+description, and needs no further delegation -- without a named base case the rule
+recurses forever, since every authoring agent would itself need an authored prompt.
+
+This skill carries no canonical prompt template — every variant brief is written fresh per
+problem, so step 3 is always the delegated path and never the inline exception. Step 4 depends
+on which judge you chose: a SPAWNED judge gets a delegated prompt like any other subagent, while
+judging INLINE authors no subagent prompt at all and the rule simply does not reach it (codex
+u-sr-03 r10 P2 — an earlier draft said "always", which forbade a path step 4 explicitly permits).
+
 ## Guardrails
 
 - **Subagent self-validation (U-HK-17).** Variant + judge subagents inherit the SubagentStart

@@ -796,3 +796,86 @@ blast-radius: 8 consumers (graft grep + callers). tools/review_loop_gate.py:84 (
 | PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | witness-adequacy APPROVE · concurrency APPROVE (re-gated) · spec-conformance **BLOCK** (P1) at `9d1eeafa0` | round 6 — `merge-gate-landing-delta` correctly refused to transfer the two earlier approvals; on re-gate, spec-conformance found this arc's OWN 10 gate-lens findings at `disposition=null`, the state the PR's new SKILL text forbids. All 45 findings now adjudicated (42 accepted, 3 rejected with grounds); PR body's scoped "0 undisposed" claim corrected | blast-radius unchanged (4 consumers) |
 | 2026-08-28T17:15:58Z | #1477 | 28675d3abffa | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
 | PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | **ALL APPROVE** at `28675d3ab` — witness-adequacy · concurrency · spec-conformance | gate closed after 6 rounds and 11 gate findings. The last round's P1 was the arc violating its own new rule (10 gate findings left at `disposition=null` while the PR body claimed "0 undisposed" scoped silently to the codex subset). All 45 findings adjudicated: 42 accepted, 3 rejected with grounds. PR body counts corrected to match the ledger | blast-radius: 4 consumers, unchanged all arc |
+| 2026-09-01T04:01:31Z | #1479 | cd16adb94438 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+
+| #1479 | 2026-08-31 | feat/he-lanes-u-sr-03 | merge-gate-concurrency: APPROVE | merge-gate-spec-conformance: NOT COMPLETED | merge-gate-witness-adequacy: NOT COMPLETED | outcome: GATE PARTIAL — NOT MERGED | blast-radius: 2 consumers (binding_path ← main; open_scratch_dir ← _read_text, main), plus justfile recipe + 2 skill carriers + 3 test files; static edges only, a floor not a ceiling |
+
+**#1479 gate note (U-SR-03).** Lens 1 (concurrency) returned APPROVE and is recorded as a
+bound JSONL row at head `cd16adb9`; it read its six binding values from the published
+content-addressed file and `emit` accepted them against its own independent recomputation —
+the first production exercise of the WR-09 by-file flow. Lenses 2 and 3 did NOT complete:
+both were launched twice and, on each attempt, were progressing (the first pair had reached
+running test suites; the second pair had reached file gathering) but accumulated only ~3
+minutes of active model time over several hours of wall clock. This is environmental
+throttling of subagents in this venue, not a BLOCK and not a reviewer-unavailable verdict —
+no verdict was produced either way, so none is recorded for those two lenses.
+
+Per the merge-gate rule, all three must APPROVE before `gh pr merge`. One approval plus two
+non-verdicts is not an all-approve, so **#1479 was not merged** and is left open at CI-green
+for the gate to be re-run when the venue permits.
+
+**#1479 gate note, addendum.** A third attempt was made for lens 2 alone — sequentially, on
+an otherwise idle system, with a tightened prompt and freshly published bindings at the then
+head `ac34350f` (the earlier bindings had gone stale when the gate-row commit moved the head,
+and the content-addressed name changed accordingly, `f7efc475…` → `1fe6f4c9…`, which is the
+WR-09 mechanism behaving as designed). It progressed faster than the concurrent attempts but
+plateaued the same way. Lens 1's APPROVE was re-checked against the moved head with
+`just merge-gate-landing-delta cd16adb9…`: 0 non-gate-row files in the delta, so that
+approval TRANSFERS. The gate therefore stands at 1 APPROVE + 2 lenses that this venue cannot
+run to a verdict.
+
+**#1479 gate round 2 — L2 BLOCK, and the whole gate resets.** Lens 2 (spec-conformance)
+completed on a solo run and returned **BLOCK** with a P1 that ten out-of-family codex rounds
+had not found: WR-08a names `merge-gate` / `fan-out` / `council-workflow`, and the arc wired
+`council-orchestrator` instead — a different skill that convenes voices inside one model call
+and shells out through `just codex-review`, spawning no subagent prompt to author. The real
+carrier, `.claude/commands/council-workflow.md` (`allowed-tools` includes `Agent`), was left
+bare. Its L2 P2 was the same defect in the witness: the `CARRIERS` array encoded the identical
+wrong target, so the suite passed green over it. Both accepted and fixed at `04cc50d7c`.
+
+Consequence for the gate: the absorption touched three non-gate-row files, so
+`just merge-gate-landing-delta cd16adb9…` now exits 1 — **lens 1's earlier APPROVE no longer
+transfers**, and all three lenses must re-run against the new head. The gate is therefore
+0 of 3 at `04cc50d7c`, not 1 of 3. Lens 2's own verdict is likewise bound to the pre-fix head
+`ac34350f` and is superseded rather than recorded as a verdict for this head.
+
+This is the documented reason the 3-lens gate runs alongside the codex loop rather than
+instead of it: the finding was invisible to ten rounds of out-of-family review and to every
+test in the arc, because both were reasoning about the file that had been named rather than
+the file that spawns agents.
+| 2026-09-01T04:56:14Z | #1479 | d8f024f27df4 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+
+**#1479 gate round 3 (at head `d8f024f27`) — 1 of 3 recorded, session ended.**
+`merge-gate-concurrency` **APPROVE**, recorded as a bound JSONL row at this head (round 2 in
+the emitter's numbering). It read its six values from the published content-addressed file
+and `emit` accepted them against its own recomputation.
+
+`merge-gate-spec-conformance` was re-launched at this head, explicitly tasked to verify its
+own prior P1/P2 absorption rather than trust it; it did not finish before the session closed.
+`merge-gate-witness-adequacy` has not been run at this head. **The gate is 1 of 3 — do not
+merge.** Both outstanding lenses must run against `d8f024f27` (or against whatever head is
+current, re-publishing bindings first: the name is content-addressed, so a moved head yields
+a different file and a stale path is simply not the file the prompt named).
+
+Venue note for whoever resumes: subagents here complete, but slowly — roughly 3-6 minutes of
+ACTIVE model time spread over hours of wall clock, and only when run ONE AT A TIME. Three
+concurrent lenses starved; solo runs finished. `ListAgents` reports active model time, not
+wall clock, so a counter that looks frozen is not evidence of a stall.
+| 2026-09-01T05:17:34Z | #1479 | b121efb9413b | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T05:22:04Z | #1479 | b121efb9413b | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+
+| #1479 | 2026-09-01 | feat/he-lanes-u-sr-03 | merge-gate-concurrency: APPROVE | merge-gate-spec-conformance: APPROVE | merge-gate-witness-adequacy: APPROVE | outcome: ALL APPROVE — proceed to merge | blast-radius: 2 consumers (binding_path ← main; open_scratch_dir ← _read_text, main), plus justfile recipe + 2 skill carriers + 3 test files; static edges only, a floor not a ceiling |
+
+**#1479 gate closed (U-SR-03) — ALL APPROVE at head `b121efb94`.** The concurrency APPROVE
+recorded at `d8f024f27` transferred (`merge-gate-landing-delta d8f024f27` exit 0: the
+delta to this head names only gate-row files). `merge-gate-spec-conformance` re-ran at
+`b121efb94`, tasked to verify — not trust — its earlier P1/P2 absorption at `04cc50d7c`:
+it confirmed the laws:prompt rule byte-identical (md5 `7ae730161b4e...`) across the three
+charter carriers, absent from council-orchestrator, and `test_skill_prompt_authoring.sh`
+CARRIERS + Agent-reachability assertions passing 32/32 by direct execution. APPROVE,
+0 findings. `merge-gate-witness-adequacy` ran at the same head: traced the load-bearing
+tests to real-path execution and empirical mutation-probe kills; noted one grep-shaped
+test in `tools/test_review_loop_gate.py` as redundant-but-informational (behavior already
+pinned by execution tests in `tools/test_merge_gate_log.py`) — explicitly non-blocking.
+APPROVE, 0 findings. Both lenses read their six binding values from published
+content-addressed files; `emit` accepted both against its own recomputation (exit 0 each).
