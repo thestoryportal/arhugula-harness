@@ -128,6 +128,14 @@ done
 # self-review shape the bridge rewrite forbids, pinned at both root authorities.
 needs "$ROOT/AGENTS.md"                                    "AGENTS.md reviewer contract" 'never the interactive controller reviewing its own work'
 needs "$ROOT/.codex/notes/claude-codex-parity.md"          "codex parity note"          'never the interactive controller reviewing its own work'
+# codex r5: the COUNCIL-WORKFLOW prose companion's E3 wiring designated a bare
+# "advisor" reviewer identity — pin the migrated role at BOTH live homes.
+needs "$ROOT/.claude/skills/council/workflows/COUNCIL-WORKFLOW.md" "council prose E3 (.claude home)"  'the transcript-brief reviewer (in-family'
+needs "$ROOT/.harness/council/COUNCIL-WORKFLOW.md"                 "council prose E3 (.harness home)" 'the transcript-brief reviewer (in-family'
+# codex r5: Project_Roadmap_v1.md is excluded from the negative sweep for its
+# HISTORICAL entry rows only — its LIVE checkpoint-on-pause protocol banked an
+# "advisor pass" as satisfiable; pin the migrated banking clause.
+needs "$ROOT/Project_Roadmap_v1.md" "roadmap checkpoint-on-pause banking clause" 'if the transcript-brief review is banked'
 
 # ── Pairing control: both §13.1 halves still stand in the SAME carrier ──
 # The rename must not decouple the transcript-aware half from the out-of-family
