@@ -879,3 +879,6 @@ test in `tools/test_review_loop_gate.py` as redundant-but-informational (behavio
 pinned by execution tests in `tools/test_merge_gate_log.py`) — explicitly non-blocking.
 APPROVE, 0 findings. Both lenses read their six binding values from published
 content-addressed files; `emit` accepted both against its own recomputation (exit 0 each).
+| 2026-09-01T10:00:59Z | #1481 | 80eac66c1a4a | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T10:02:09Z | #1481 | 80eac66c1a4a | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-09-01T10:03:22Z | #1481 | 80eac66c1a4a | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |

@@ -870,6 +870,13 @@ def test_recipe_prefix_falls_back_on_non_grammar_ids():
     assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
     assert "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id>" in d.recipe
     assert "bad arc@id" not in d.recipe
+    # the lane conjunct witnessed from ITS OWN side (merge-gate witness lens r1:
+    # a valid arc with a malformed lane must also fall back — dropping the
+    # lane half of the AND must red here, not stay green behind the arc case)
+    d = _decide(_state(), [], lane_id="bad lane; rm")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id>" in d.recipe
+    assert "bad lane; rm" not in d.recipe
 
 
 def test_malformed_binding_stamp_refuses_loudly(repo: Path, monkeypatch: pytest.MonkeyPatch):
@@ -1466,6 +1473,10 @@ def test_wrapper_refuses_before_any_reviewer(wired, capsys):
     assert rc == 3
     err = capsys.readouterr().err
     assert "codex-review: GATE_REFUSED (PREFLIGHT_MISSING)" in err
+    # the recovery recipe carries the ENV-sourced lane, proving admit()'s
+    # env_arc_and_lane -> decide(lane_id=...) plumbing end-to-end (merge-gate
+    # witness lens r1: deleting that line, or swapping the tuple unpack, must red)
+    assert "HARNESS_LANE_ID=lane-t just" in err
     # NOT a review terminal: no C-HE-24 row, no round consumed
     assert fr.read_rows() == []
 
