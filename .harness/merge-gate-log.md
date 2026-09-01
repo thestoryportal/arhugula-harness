@@ -796,3 +796,20 @@ blast-radius: 8 consumers (graft grep + callers). tools/review_loop_gate.py:84 (
 | PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | witness-adequacy APPROVE · concurrency APPROVE (re-gated) · spec-conformance **BLOCK** (P1) at `9d1eeafa0` | round 6 — `merge-gate-landing-delta` correctly refused to transfer the two earlier approvals; on re-gate, spec-conformance found this arc's OWN 10 gate-lens findings at `disposition=null`, the state the PR's new SKILL text forbids. All 45 findings now adjudicated (42 accepted, 3 rejected with grounds); PR body's scoped "0 undisposed" claim corrected | blast-radius unchanged (4 consumers) |
 | 2026-08-28T17:15:58Z | #1477 | 28675d3abffa | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
 | PR #1477 | 2026-08-28 | `feat/he-lanes-u-sr-02` | **ALL APPROVE** at `28675d3ab` — witness-adequacy · concurrency · spec-conformance | gate closed after 6 rounds and 11 gate findings. The last round's P1 was the arc violating its own new rule (10 gate findings left at `disposition=null` while the PR body claimed "0 undisposed" scoped silently to the codex subset). All 45 findings adjudicated: 42 accepted, 3 rejected with grounds. PR body counts corrected to match the ledger | blast-radius: 4 consumers, unchanged all arc |
+| 2026-09-01T04:01:31Z | #1479 | cd16adb94438 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+
+| #1479 | 2026-08-31 | feat/he-lanes-u-sr-03 | merge-gate-concurrency: APPROVE | merge-gate-spec-conformance: NOT COMPLETED | merge-gate-witness-adequacy: NOT COMPLETED | outcome: GATE PARTIAL — NOT MERGED | blast-radius: 2 consumers (binding_path ← main; open_scratch_dir ← _read_text, main), plus justfile recipe + 2 skill carriers + 3 test files; static edges only, a floor not a ceiling |
+
+**#1479 gate note (U-SR-03).** Lens 1 (concurrency) returned APPROVE and is recorded as a
+bound JSONL row at head `cd16adb9`; it read its six binding values from the published
+content-addressed file and `emit` accepted them against its own independent recomputation —
+the first production exercise of the WR-09 by-file flow. Lenses 2 and 3 did NOT complete:
+both were launched twice and, on each attempt, were progressing (the first pair had reached
+running test suites; the second pair had reached file gathering) but accumulated only ~3
+minutes of active model time over several hours of wall clock. This is environmental
+throttling of subagents in this venue, not a BLOCK and not a reviewer-unavailable verdict —
+no verdict was produced either way, so none is recorded for those two lenses.
+
+Per the merge-gate rule, all three must APPROVE before `gh pr merge`. One approval plus two
+non-verdicts is not an all-approve, so **#1479 was not merged** and is left open at CI-green
+for the gate to be re-run when the venue permits.
