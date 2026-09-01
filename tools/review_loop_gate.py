@@ -801,8 +801,20 @@ def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
     return out
 
 
+#: The template's provenance stamp: attest parses it back and refuses a mismatch
+#: with the freshly recomputed binding (codex u-sr-04 r5 P2: without the check, a
+#: template filled against old bytes could attest a moved tree whenever the new
+#: label set happened to be equal or smaller). One format, written and parsed here.
+_BINDING_STAMP = re.compile(r"^# binding: (\S+) (\S+)\s*$", re.MULTILINE)
+
+
 def _template_text(
-    arc_id: str, kind: str, diff_range: str, labels: tuple[str, ...], finding_ids: tuple[str, ...]
+    arc_id: str,
+    kind: str,
+    diff_range: str,
+    diff_digest: str,
+    labels: tuple[str, ...],
+    finding_ids: tuple[str, ...],
 ) -> str:
     """Answers-template body: every obligation the matching attest verb will enforce,
     pre-filled so authoring happens AGAINST the label set instead of guessing at it
@@ -813,7 +825,7 @@ def _template_text(
     fillable section bodies may carry it."""
     lines = [
         f"# {arc_id} {kind} — named answers",
-        f"# Generated over the attested range {diff_range} by `just review-template-{kind}`.",
+        f"# binding: {diff_range} {diff_digest}",
         "# Replace every placeholder line with the named answer (line number +",
         "# concrete disposition) — attestation refuses an unfilled file.",
         "",
@@ -825,9 +837,11 @@ def _template_text(
     for label in labels:
         lines += [f"[{label}]", f"- {TEMPLATE_PLACEHOLDER}", ""]
     if not finding_ids and not labels:
+        # comment chrome only (codex u-sr-04 r5 P2): non-comment prose here would
+        # survive a placeholder-line deletion and read as authored content
         lines += [
-            "No sweep hits over the attested range. Name the diff-level answers you",
-            "still owe (classes walked; new-consumer inventory if any), then attest.",
+            "# No sweep hits over the attested range. Name the diff-level answers",
+            "# you still owe (classes walked; new-consumer inventory if any).",
             f"- {TEMPLATE_PLACEHOLDER}",
             "",
         ]
@@ -933,7 +947,9 @@ def _template_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) 
     # enforces — the template can never carry labels the attest would not check
     labels = _run_sweep_script(repo, diff_range)
     final = _write_template(
-        repo, answers_path, _template_text(arc_id, "preflight", diff_range, labels, ())
+        repo,
+        answers_path,
+        _template_text(arc_id, "preflight", diff_range, b["diff_digest"], labels, ()),
     )
     print(f"review-gate: preflight template at {final} ({len(labels)} hit labels pre-filled)")
     return 0
@@ -957,7 +973,9 @@ def _template_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> i
     diff_range = f"{b['base_sha']}..{b['head_sha']}"
     labels = _run_sweep_script(repo, diff_range)
     final = _write_template(
-        repo, answers_path, _template_text(arc_id, "sweep", diff_range, labels, tuple(ids))
+        repo,
+        answers_path,
+        _template_text(arc_id, "sweep", diff_range, b["diff_digest"], labels, tuple(ids)),
     )
     print(
         f"review-gate: sweep template at {final} "
@@ -966,10 +984,36 @@ def _template_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> i
     return 0
 
 
+def _vet_answers(answers: str, diff_range: str, diff_digest: str, path: Path) -> None:
+    """Template-provenance + authored-content checks shared by both attest verbs
+    ([LAW:single-enforcer] — one seam, both verbs). A binding stamp, when present,
+    must match the freshly recomputed binding: answers filled against different
+    bytes refuse instead of silently rebinding (codex u-sr-04 r5 P2). And at least
+    one non-comment line must carry author residue: with zero obligations nothing
+    else distinguishes an authored answer set from deletion-only template chrome
+    (r5 P2, completing r2's 'answered means answered' for the hitless arm). A
+    hand-authored file carries no stamp and any real answer line has residue, so
+    the pre-template authoring shapes attest unchanged."""
+    for m in _BINDING_STAMP.finditer(answers):
+        if (m.group(1), m.group(2)) != (diff_range, diff_digest):
+            raise GateError(
+                f"answers file {path} was templated for binding {m.group(1)} "
+                f"{m.group(2)[:12]} but the tree now binds {diff_range} "
+                f"{diff_digest[:12]} — re-run the template verb on a fresh path and "
+                "carry the still-true answers forward"
+            )
+    if not any(not ln.lstrip().startswith("#") and _has_residue(ln) for ln in answers.splitlines()):
+        raise GateError(
+            f"answers file {path} carries no authored answer content — comment "
+            "chrome and template scaffolding alone do not attest"
+        )
+
+
 def _attest_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:
     b = rw.code_binding(repo, base)
     labels = _run_sweep_script(repo, f"{b['base_sha']}..{b['head_sha']}")
     answers = _read_answers(answers_path)
+    _vet_answers(answers, f"{b['base_sha']}..{b['head_sha']}", b["diff_digest"], answers_path)
     missing = _unanswered_labels(labels, answers)
     if missing:
         print(
@@ -1031,6 +1075,7 @@ def _attest_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int
     # class-sibling textual floor over the attested bytes, same enforcer as preflight
     labels = _run_sweep_script(repo, f"{b['base_sha']}..{b['head_sha']}")
     answers = _read_answers(answers_path)
+    _vet_answers(answers, f"{b['base_sha']}..{b['head_sha']}", b["diff_digest"], answers_path)
     missing = _unanswered_ids(tuple(ids), answers) + _unanswered_labels(labels, answers)
     if missing:
         print(

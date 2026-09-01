@@ -633,6 +633,52 @@ def test_sweep_template_with_placeholders_deleted_does_not_attest(
     assert rlg.load_state(repo).sweeps == ()
 
 
+def test_hitless_template_with_deleted_todo_line_does_not_attest(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r5 P2: in the hitless arm the placeholder bullet is the ONLY
+    # fillable line — deleting it must not leave attestable content (the template's
+    # explanatory prose is comment chrome, and attest requires authored residue)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/answers.md").read_text()
+    gutted = "\n".join(ln for ln in text.splitlines() if rlg.TEMPLATE_PLACEHOLDER not in ln)
+    (repo / ".harness/answers.md").write_text(gutted)
+    assert _attest_at(repo) != 0
+    assert rlg.load_state(repo).preflights == ()
+    (repo / ".harness/answers.md").write_text(
+        text.replace(rlg.TEMPLATE_PLACEHOLDER, "no hits; classes walked, no new consumer")
+    )
+    assert _attest_at(repo) == 0
+
+
+def test_stale_template_binding_stamp_refuses_after_tree_moves(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r5 P2: the template's binding stamp is CHECKED, not chrome — a
+    # template filled against old bytes must not attest a moved tree even when the
+    # new label set is unchanged (here: empty both times)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/answers.md").read_text()
+    (repo / ".harness/answers.md").write_text(
+        text.replace(rlg.TEMPLATE_PLACEHOLDER, "answered against the OLD bytes")
+    )
+    (repo / "f.txt").write_text("two\n")
+    _commit_all(repo, "tree moves while the template is being filled")
+    assert _attest_at(repo) != 0
+    assert rlg.load_state(repo).preflights == ()
+    # the recovery the refusal names: re-template on a fresh path, fill, attest
+    assert _template(repo, "template-preflight", ".harness/answers-2.md") == 0
+    fresh = (repo / ".harness/answers-2.md").read_text()
+    (repo / ".harness/answers-2.md").write_text(
+        fresh.replace(rlg.TEMPLATE_PLACEHOLDER, "answered against the moved bytes")
+    )
+    assert _attest_at(repo, ".harness/answers-2.md") == 0
+
+
 def test_gate_refusal_recipes_route_through_the_template_verbs():
     # codex u-sr-04 r1 P2 (integration): an agent following the gate's own refusal
     # text must land on the labels-before-answers flow, not on attest-by-trial —
