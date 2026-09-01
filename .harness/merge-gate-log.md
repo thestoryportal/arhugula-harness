@@ -843,3 +843,21 @@ This is the documented reason the 3-lens gate runs alongside the codex loop rath
 instead of it: the finding was invisible to ten rounds of out-of-family review and to every
 test in the arc, because both were reasoning about the file that had been named rather than
 the file that spawns agents.
+| 2026-09-01T04:56:14Z | #1479 | d8f024f27df4 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+
+**#1479 gate round 3 (at head `d8f024f27`) — 1 of 3 recorded, session ended.**
+`merge-gate-concurrency` **APPROVE**, recorded as a bound JSONL row at this head (round 2 in
+the emitter's numbering). It read its six values from the published content-addressed file
+and `emit` accepted them against its own recomputation.
+
+`merge-gate-spec-conformance` was re-launched at this head, explicitly tasked to verify its
+own prior P1/P2 absorption rather than trust it; it did not finish before the session closed.
+`merge-gate-witness-adequacy` has not been run at this head. **The gate is 1 of 3 — do not
+merge.** Both outstanding lenses must run against `d8f024f27` (or against whatever head is
+current, re-publishing bindings first: the name is content-addressed, so a moved head yields
+a different file and a stale path is simply not the file the prompt named).
+
+Venue note for whoever resumes: subagents here complete, but slowly — roughly 3-6 minutes of
+ACTIVE model time spread over hours of wall clock, and only when run ONE AT A TIME. Three
+concurrent lenses starved; solo runs finished. `ListAgents` reports active model time, not
+wall clock, so a counter that looks frozen is not evidence of a stall.
