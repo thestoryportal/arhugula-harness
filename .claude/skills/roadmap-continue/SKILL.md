@@ -111,7 +111,10 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    how arcs run 9–17 rounds). Hermetic test per new unit;
    `just codex-check` (the superset gate — `just check` omits `codex-parity-check`, so it
    never executes the `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites
-   that lane runs); commit the arc's edits (the out-of-family
+   that lane runs; U-SR-05/WR-12: ALWAYS launch it `run_in_background` and poll the task —
+   the suite outlasts the Bash tool's foreground timeout, and a foreground launch cost a
+   10-minute dead gap at [B] F6; "it'll probably finish in time" is the trap); commit the
+   arc's edits (the out-of-family
    reviewer reads the committed
    branch diff — an uncommitted tree makes HEAD-bound checks stale); **grounding pass** (re-read every
    file:line cite at the now-current HEAD, recompute every count, verify every #NNN,
