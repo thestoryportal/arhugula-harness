@@ -52,9 +52,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   branch-* fallback arc while the prefixed review checks the reserved one and
   refuses; template + attest AFTER the final commit — the attestation binds
   head+digest and goes stale on any later commit). After every BLOCK round: absorb,
-  classify each finding, commit, then the same-prefixed
-  `just review-template-sweep <answers-file>` (pre-fills every outstanding
-  finding_id token-exactly plus the range's hit labels), fill, and
+  classify each finding, commit, then
+  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-template-sweep <answers-file>`
+  (pre-fills every outstanding
+  finding_id token-exactly plus the range's hit labels; a bare invocation queries
+  the branch-* fallback arc's obligations and declines), fill, and
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-attest-sweep <answers-file>`
   (the refusal enumerates anything missing;
   findings are obligations across both loop channels, not per-round rows). The

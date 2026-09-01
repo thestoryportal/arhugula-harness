@@ -63,6 +63,7 @@ sanctioned path.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import hashlib
 import json
@@ -373,8 +374,10 @@ def decide(
             code="SWEEP_MISSING",
             detail="findings without a class-sibling sweep answer: " + ", ".join(unanswered),
             recipe=(
-                "answer each finding_id in a sweep answers file (classify the miss, grep "
-                "the diff for class siblings), commit the absorption, then "
+                "classify the miss, grep the diff for class siblings, commit the "
+                "absorption, then labels-before-answers (WR-10): `just "
+                "review-template-sweep <answers-file>` pre-fills every outstanding "
+                "finding_id and hit label; fill each placeholder, then "
                 "`just review-attest-sweep <answers-file>`"
             ),
         )
@@ -389,8 +392,10 @@ def decide(
                 code="PREFLIGHT_MISSING",
                 detail=f"no preflight attestation for {arc_id}",
                 recipe=(
-                    "run the defect-class-preflight sweep, write the named answers, COMMIT "
-                    "the work, then attest AFTER the final commit: "
+                    "run the defect-class-preflight sweep, COMMIT the work, then "
+                    "labels-before-answers AFTER the final commit (WR-10): `just "
+                    "review-template-preflight <answers-file>` pre-fills every hit "
+                    "label; fill each placeholder, then "
                     "`just review-attest-preflight <answers-file>`"
                 ),
             )
@@ -403,7 +408,9 @@ def decide(
             ),
             recipe=(
                 "re-run `just review-attest-preflight <answers-file>` after the last "
-                "commit (every reviewed byte is attested-swept, always)"
+                "commit (every reviewed byte is attested-swept, always); if it "
+                "enumerates NEW labels, `just review-template-preflight` a fresh "
+                "answers path first"
             ),
         )
     return Allowed(round_n=max((r["round_n"] for r in scoped), default=0) + 1)
@@ -764,34 +771,96 @@ def _template_text(
     return "\n".join(lines)
 
 
-def _write_template(repo: Path, answers_path: Path, text: str) -> Path:
-    """Exclusive-create write of the answers template. Refuses a destination outside
-    the worktree (the template verbs are guard-auto-allowed, so their one file OUTPUT
-    gets the containment discipline _read_answers gives the input) and refuses an
-    existing file — templates never overwrite hand-authored answers
-    ([LAW:no-silent-failure]); per-round answers files get fresh names."""
-    dest = answers_path if answers_path.is_absolute() else repo / answers_path
-    parent = dest.parent.resolve()
-    if not parent.is_relative_to(repo.resolve()):
-        raise GateError(f"template destination {answers_path} resolves outside the worktree")
-    final = parent / dest.name
-    # O_EXCL refuses any survivor at the name — including a pre-planted symlink
-    # (EEXIST, never a follow), the same idiom as the state-file .tmp publication
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW
+#: The one namespace the template verbs may create files in: the answers-file home
+#: (`.harness/.preflight-answers-*`, `.harness/.sweep-answers-*`, `.harness/tmp/...`).
+#: The permission guard validates only the command's FORM, so the auto-allowed verbs
+#: must refuse every other destination here — a template landing in, say,
+#: `design-substrate/` would ride an allowlisted invocation past the ask gate that
+#: venue's edits normally face (codex u-sr-04 r1 P2).
+TEMPLATE_ANCHOR = ".harness"
+
+
+def _template_dir_fd(repo: Path, rel_parts: tuple[str, ...]) -> int:
+    """A descriptor for the template's parent directory, refusing a symlink at ANY
+    component — the open_scratch_dir shape from merge_gate_log (codex u-sr-04 r1 P1:
+    the resolve-then-reopen version was check-then-act; a rename between the resolve
+    and the by-pathname open could route the create outside the worktree, since
+    O_NOFOLLOW protects only the leaf). Each component opens O_DIRECTORY|O_NOFOLLOW
+    relative to the previous descriptor, so check and capture are one syscall at
+    every level. Caller owns the fd."""
     try:
-        fd = os.open(str(final), flags, 0o644)
-    except FileExistsError as exc:
-        raise GateError(
-            f"{answers_path} already exists — the template never overwrites; "
-            "pass this round's fresh answers path or remove the file first"
-        ) from exc
+        fd = os.open(str(repo), os.O_RDONLY | os.O_DIRECTORY)
     except OSError as exc:
-        raise GateError(f"{answers_path} refused (containment): {exc}") from exc
-    try:
-        os.write(fd, text.encode())
-    finally:
+        raise GateError(f"{repo} is not a usable worktree root: {exc}") from exc
+    for part in rel_parts:
+        # provision descriptor-relative (missing .harness/tmp/<arc>-rounds dirs are
+        # legitimate); best-effort on purpose — the open below is the single
+        # authority on whether this component is usable
+        with contextlib.suppress(OSError):
+            os.mkdir(part, 0o755, dir_fd=fd)
+        try:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError as exc:
+            os.close(fd)
+            raise GateError(f"template destination component {part!r} refused: {exc}") from exc
         os.close(fd)
-    return final
+        fd = nxt
+    return fd
+
+
+def _write_template(repo: Path, answers_path: Path, text: str) -> Path:
+    """Publish the answers template under the answers namespace, exclusively.
+
+    Containment (the template verbs are guard-auto-allowed, so their one file OUTPUT
+    gets at least the discipline _read_answers gives the input): the destination must
+    be a `..`-free path under TEMPLATE_ANCHOR, reached by a dir-fd walk, written as a
+    same-directory temp with every byte accounted for, and published by os.link — the
+    exclusive-create CAS, so an existing file (hand-authored answers included) refuses
+    and a crashed writer leaves only a harmless `.tmp` ([LAW:no-silent-failure]:
+    a partial template must never be readable at the final name — a header-only
+    fragment would satisfy _read_answers and attest nothing, codex u-sr-04 r1 P2)."""
+    rel = answers_path
+    if rel.is_absolute():
+        try:
+            rel = rel.relative_to(repo)
+        except ValueError as exc:
+            raise GateError(f"template destination {answers_path} is outside the worktree") from exc
+    if ".." in rel.parts or rel.parts[:1] != (TEMPLATE_ANCHOR,) or len(rel.parts) < 2:
+        raise GateError(
+            f"template destination {answers_path} must live under {TEMPLATE_ANCHOR}/ — "
+            "the answers-file namespace is the only place an auto-allowed template "
+            "verb may create a file"
+        )
+    dfd = _template_dir_fd(repo, rel.parts[:-1])
+    name = rel.parts[-1]
+    tmp = f".{name}.{os.getpid()}.tmp"
+    try:
+        try:
+            wfd = os.open(
+                tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644, dir_fd=dfd
+            )
+        except OSError as exc:
+            raise GateError(f"{answers_path} temp refused (containment): {exc}") from exc
+        try:
+            view = memoryview(text.encode())
+            while view:  # os.write may be short; every byte lands before publication
+                view = view[os.write(wfd, view) :]
+        finally:
+            os.close(wfd)
+        try:
+            os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+        except FileExistsError as exc:
+            raise GateError(
+                f"{answers_path} already exists — the template never overwrites; "
+                "pass this round's fresh answers path or remove the file first"
+            ) from exc
+        except OSError as exc:
+            raise GateError(f"{answers_path} refused (containment): {exc}") from exc
+    finally:
+        with contextlib.suppress(OSError):  # temp is scaffolding either way
+            os.unlink(tmp, dir_fd=dfd)
+        os.close(dfd)
+    return repo / rel
 
 
 def _template_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:

@@ -777,8 +777,10 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-gate-check([[:space:]]+[A-Za-z0-9._/-]+)?$|^just[[:space:]]+review-(attest|template)-(preflight|sweep)[[:space:]]+[A-Za-z0-9._/-]+([[:space:]]+[A-Za-z0-9._/-]+)?$' \
        && _bash_args_safe "$CMD"; then
       # B-215 attest/check verbs + the U-SR-04 template verbs (same two-parameter
-      # arity, write only a fresh in-worktree answers template, never a record),
-      # EXACT-ANCHORED and arity-bounded (codex r3 P1):
+      # arity; the tool itself refuses any destination outside .harness/ — the
+      # answers namespace — so an allowlisted invocation cannot create files in
+      # venues whose edits are ask-gated, and never overwrites), EXACT-ANCHORED
+      # and arity-bounded (codex r3 P1):
       # `just` chains recipes, so a prefix-anchored allow (`just review-gate-check
       # main review-attest-budget 2 ok`) would ride the allowlisted prefix and run
       # the deliberately ask-gated budget verb as a chained second recipe. Each

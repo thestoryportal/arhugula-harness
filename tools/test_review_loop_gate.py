@@ -405,8 +405,24 @@ def test_attest_preflight_real_script_integration(repo: Path, monkeypatch: pytes
 # ── edges: template verbs (U-SR-04, charter WR-10 — labels before answers) ───
 
 
-def _template(repo: Path, cmd: str, answers: str = "answers.md") -> int:
+def _template(repo: Path, cmd: str, answers: str = ".harness/answers.md") -> int:
     return rlg.main([cmd, "--answers", str(repo / answers), "--base", "main", "--repo", str(repo)])
+
+
+def _attest_at(repo: Path, answers: str = ".harness/answers.md") -> int:
+    # attest the file where the template wrote it (the _attest_preflight helper
+    # above reads a root-level fixture path the namespace no longer admits)
+    return rlg.main(
+        [
+            "attest-preflight",
+            "--answers",
+            str(repo / answers),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
 
 
 def test_template_preflight_prefills_labels_then_attests_first_trial(
@@ -419,16 +435,16 @@ def test_template_preflight_prefills_labels_then_attests_first_trial(
     _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     assert _template(repo, "template-preflight") == 0
-    text = (repo / "answers.md").read_text()
+    text = (repo / ".harness/answers.md").read_text()
     assert "[check-then-act on paths]" in text
     assert rlg.TEMPLATE_PLACEHOLDER in text
-    rc = _attest_preflight(repo, answers=None)  # attest the UNEDITED template as-is
+    rc = _attest_at(repo)  # attest the UNEDITED template as-is
     assert rc != 0
     assert rlg.load_state(repo).preflights == ()
-    (repo / "answers.md").write_text(
+    (repo / ".harness/answers.md").write_text(
         text.replace(rlg.TEMPLATE_PLACEHOLDER, "guarded by exclusive create at f.py:3")
     )
-    assert _attest_preflight(repo, answers=None) == 0
+    assert _attest_at(repo) == 0
     (pf,) = rlg.load_state(repo).preflights
     assert pf.hit_labels == ("check-then-act on paths",)
 
@@ -441,8 +457,8 @@ def test_template_no_hits_still_requires_a_filled_answer(
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     assert _template(repo, "template-preflight") == 0
-    assert rlg.TEMPLATE_PLACEHOLDER in (repo / "answers.md").read_text()
-    assert _attest_preflight(repo, answers=None) != 0
+    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/answers.md").read_text()
+    assert _attest_at(repo) != 0
     assert rlg.load_state(repo).preflights == ()
 
 
@@ -450,9 +466,9 @@ def test_template_refuses_existing_destination(repo: Path, monkeypatch: pytest.M
     # templates never overwrite: hand-authored answers at the destination survive
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
-    (repo / "answers.md").write_text("hand-authored\n")
+    (repo / ".harness/answers.md").write_text("hand-authored\n")
     assert _template(repo, "template-preflight") != 0
-    assert (repo / "answers.md").read_text() == "hand-authored\n"
+    assert (repo / ".harness/answers.md").read_text() == "hand-authored\n"
 
 
 def test_template_symlink_destination_refused(repo: Path, monkeypatch: pytest.MonkeyPatch):
@@ -462,7 +478,7 @@ def test_template_symlink_destination_refused(repo: Path, monkeypatch: pytest.Mo
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     victim = repo / "victim.md"
     victim.write_text("precious\n")
-    (repo / "answers.md").symlink_to(victim)
+    (repo / ".harness/answers.md").symlink_to(victim)
     assert _template(repo, "template-preflight") != 0
     assert victim.read_text() == "precious\n"
 
@@ -493,14 +509,22 @@ def test_template_sweep_prefills_outstanding_ids_and_labels(
         + json.dumps(_row(1, "finding", "cw:aa:11:2"))
         + "\n"
     )
-    assert _template(repo, "template-sweep", "sweep.md") == 0
-    text = (repo / "sweep.md").read_text()
+    assert _template(repo, "template-sweep", ".harness/sweep.md") == 0
+    text = (repo / ".harness/sweep.md").read_text()
     assert "cw:aa:11:1" in text and "cw:aa:11:2" in text
     assert "[silent-failure shapes]" in text
     filled = text.replace(rlg.TEMPLATE_PLACEHOLDER, "fixed at f.py:1")
-    (repo / "sweep.md").write_text(filled)
+    (repo / ".harness/sweep.md").write_text(filled)
     rc = rlg.main(
-        ["attest-sweep", "--answers", str(repo / "sweep.md"), "--base", "main", "--repo", str(repo)]
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
     )
     assert rc == 0
     (sw,) = rlg.load_state(repo).sweeps
@@ -514,8 +538,65 @@ def test_template_sweep_without_outstanding_findings_declines(
     # and no file appears
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
-    assert _template(repo, "template-sweep", "sweep.md") == 1
-    assert not (repo / "sweep.md").exists()
+    assert _template(repo, "template-sweep", ".harness/sweep.md") == 1
+    assert not (repo / ".harness/sweep.md").exists()
+
+
+def test_template_destination_outside_answers_namespace_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r1 P2: the guard auto-allows any in-worktree token, so the TOOL
+    # is the enforcer of the answers namespace — a template must never materialize
+    # a file in a venue whose edits are ask-gated (design-substrate), nor at the
+    # repo root, nor via a `..` escape from a legal prefix
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    for dest in ("design-substrate/new.md", "answers.md", ".harness/../answers.md"):
+        assert _template(repo, "template-preflight", dest) != 0, dest
+        assert not (repo / dest).resolve().exists(), dest
+
+
+def test_template_symlinked_harness_component_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+):
+    # codex u-sr-04 r1 P1: the walk is descriptor-relative with O_NOFOLLOW at every
+    # component, so a symlinked directory under .harness cannot route the create
+    # outside the worktree (the resolve-then-reopen draft was check-then-act)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    outside = tmp_path_factory.mktemp("outside-dir")
+    (repo / ".harness" / "sub").symlink_to(outside)
+    assert _template(repo, "template-preflight", ".harness/sub/answers.md") != 0
+    assert list(outside.iterdir()) == []
+
+
+def test_template_failed_publish_leaves_no_partial_and_retry_succeeds(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r1 P2: publication is temp-then-link, so a refused publish
+    # (EEXIST) leaves neither a partial final nor a temp that blocks the retry
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    (repo / ".harness/answers.md").write_text("hand-authored\n")
+    assert _template(repo, "template-preflight") != 0
+    assert (repo / ".harness/answers.md").read_text() == "hand-authored\n"
+    assert [p.name for p in (repo / ".harness").iterdir() if p.name.endswith(".tmp")] == []
+    (repo / ".harness/answers.md").unlink()
+    assert _template(repo, "template-preflight") == 0
+    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/answers.md").read_text()
+
+
+def test_gate_refusal_recipes_route_through_the_template_verbs():
+    # codex u-sr-04 r1 P2 (integration): an agent following the gate's own refusal
+    # text must land on the labels-before-answers flow, not on attest-by-trial —
+    # each refusal recipe names its template verb BEFORE its attest verb
+    d = _decide(_state(), [])
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert d.recipe.index("review-template-preflight") < d.recipe.index("review-attest-preflight")
+    rows = [_row(1, "finding", "cw:aa:11:1")]
+    d = _decide(_state(preflights=(_pf(),)), rows)
+    assert isinstance(d, rlg.Refused) and d.code == "SWEEP_MISSING"
+    assert d.recipe.index("review-template-sweep") < d.recipe.index("review-attest-sweep")
 
 
 def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
@@ -2512,7 +2593,13 @@ def test_carriers_document_the_template_first_attest_flow():
         # squashed: the carriers hard-wrap prose, so verb and argument may split lines
         text = _squash((_repo_root() / rel).read_text(encoding="utf-8"))
         assert "review-template-preflight <answers-file>" in text, rel
-        assert "review-template-sweep <answers-file>" in text, rel
+        # sweep-template must be spelled WITH the arc/lane prefix (codex u-sr-04 r1
+        # P2: a bare invocation queries the branch-* fallback arc's obligations,
+        # finds none, and declines — the documented command must be the working one)
+        assert (
+            "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
+            "just review-template-sweep <answers-file>"
+        ) in text, rel
         # order pin: the template step is documented BEFORE its attest verb, per verb
         for verb in ("preflight", "sweep"):
             assert text.index(f"review-template-{verb}") < text.index(f"review-attest-{verb}"), (

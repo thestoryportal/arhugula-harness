@@ -511,7 +511,10 @@ reserved one). The review wrapper refuses round 1 of a reserved arc without a
 live attestation (`tools/review_loop_gate.py`; the attestation binds head+diff,
 so template + attest after the last commit — the template never overwrites, so
 each round's answers file gets a fresh path). The "after every review round"
-sweep ends the same way: absorb, commit, `just review-template-sweep
-<answers-file>` (pre-fills every outstanding finding_id token-exactly plus the
-range's hit labels; obligations span both loop channels and all rounds), fill,
-then the same-prefixed `just review-attest-sweep <answers-file>`.
+sweep ends the same way: absorb, commit, `HARNESS_ARC_ID=<arc-id>
+HARNESS_LANE_ID=<lane-id> just review-template-sweep <answers-file>` (the prefix
+matters here too — a bare invocation queries the branch-* fallback arc's
+obligations, finds none, and declines; prefixed, it pre-fills every outstanding
+finding_id token-exactly plus the range's hit labels, obligations spanning both
+loop channels and all rounds), fill, then the same-prefixed
+`just review-attest-sweep <answers-file>`.
