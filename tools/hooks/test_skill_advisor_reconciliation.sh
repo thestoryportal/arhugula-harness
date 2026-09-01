@@ -147,6 +147,13 @@ needs "$ROOT/.harness/council/COUNCIL-WORKFLOW.md"                 "council pros
 # HISTORICAL entry rows only — its LIVE checkpoint-on-pause protocol banked an
 # "advisor pass" as satisfiable; pin the migrated banking clause.
 needs "$ROOT/Project_Roadmap_v1.md" "roadmap checkpoint-on-pause banking clause" 'if the transcript-brief review is banked'
+# codex r9: the roadmap's LIVE advisor_required field semantics are their own
+# degree of freedom (the file sits outside the negative sweep) — pin them.
+needs "$ROOT/Project_Roadmap_v1.md" "roadmap advisor_required field semantics" '`yes` = run the §13.1 transcript-brief review before substantive work'
+# codex r9: the venue fallback must not claim a merge-gate lens discharges the
+# brief-review (lenses never see the brief; doc-only PRs skip the gate) — pin
+# the corrected routing at the Codex root authority.
+needs "$ROOT/AGENTS.md" "AGENTS.md fallback names the true discharge" 'a merge-gate lens is NOT a discharge'
 # codex r8: skills whose flow CONSUMES the second vote at decision time
 # (resolve compares votes; optimize-claude-md needs both reviewers' acceptance)
 # cannot use the deferred-routing fallback — their bridges must carry the
