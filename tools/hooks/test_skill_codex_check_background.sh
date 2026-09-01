@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Wiring witness for the U-SR-05 (WR-12) codex-check launch shape. Every Claude loop
 # skill that INSTRUCTS running `just codex-check` (roadmap-continue step 4, ship-pr
-# Green, self-heal step 2) must carry the run_in_background rule WITH its why ([B] F6:
-# a foreground launch hit the Bash tool's 600 s timeout — a 10-minute dead gap).
+# Green, self-heal step 2, two-lane build half — codex r1 P2 caught the two-lane
+# omission) must carry the run_in_background rule WITH its why ([B] F6: a foreground
+# launch hit the Bash tool's 600 s timeout — a 10-minute dead gap).
 # Codex-native mirrors (.agents tree) are deliberately NOT carriers: that venue has no
 # run_in_background parameter, and prose naming a phantom instrument is the WR-13
 # failure mode. Doc-text assertions run against the REAL repo SKILL.md files resolved
@@ -14,12 +15,13 @@ SKILLS="$SCRIPT_DIR/../../.claude/skills"
 CONT="$SKILLS/roadmap-continue/SKILL.md"
 SHIP="$SKILLS/ship-pr/SKILL.md"
 HEAL="$SKILLS/self-heal/SKILL.md"
+LANE="$SKILLS/two-lane/SKILL.md"
 
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-for f in "$CONT" "$SHIP" "$HEAL"; do
+for f in "$CONT" "$SHIP" "$HEAL" "$LANE"; do
   [ -f "$f" ] || { echo "FATAL: missing $f"; exit 1; }
 done
 
@@ -38,10 +40,11 @@ rule() { # $1 = file, $2 = label, $3 = launch-phrase needle
 rule "$CONT" "roadmap-continue step 4" 'ALWAYS launch it `run_in_background` and poll the task'
 rule "$SHIP" "ship-pr Green bullet"    'ALWAYS launch `just codex-check` `run_in_background` and poll the task'
 rule "$HEAL" "self-heal step 2"        'ALWAYS launch it `run_in_background` and poll the task'
+rule "$LANE" "two-lane build half"     'ALWAYS launch it `run_in_background` and poll the task'
 
 # Control: the rule must live in the SAME carrier as the codex-check instruction it
 # governs — a carrier that names codex-check but not the rule is the regression shape.
-for pair in "$CONT:roadmap-continue" "$SHIP:ship-pr" "$HEAL:self-heal"; do
+for pair in "$CONT:roadmap-continue" "$SHIP:ship-pr" "$HEAL:self-heal" "$LANE:two-lane"; do
   f="${pair%%:*}"; lbl="${pair#*:}"
   if grep -qF 'just codex-check' "$f" && grep -qF 'run_in_background' "$f"; then
     ok "$lbl names both codex-check and run_in_background"
