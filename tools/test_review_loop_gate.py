@@ -402,6 +402,531 @@ def test_attest_preflight_real_script_integration(repo: Path, monkeypatch: pytes
     assert "silent-failure shapes" in pf.hit_labels
 
 
+# ── edges: template verbs (U-SR-04, charter WR-10 — labels before answers) ───
+
+
+def _template(repo: Path, cmd: str, answers: str = ".harness/tmp/answers.md") -> int:
+    return rlg.main([cmd, "--answers", str(repo / answers), "--base", "main", "--repo", str(repo)])
+
+
+def _attest_at(repo: Path, answers: str = ".harness/tmp/answers.md") -> int:
+    # attest the file where the template wrote it (the _attest_preflight helper
+    # above reads a root-level fixture path the namespace no longer admits)
+    return rlg.main(
+        [
+            "attest-preflight",
+            "--answers",
+            str(repo / answers),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+
+
+def test_template_preflight_prefills_labels_then_attests_first_trial(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # the WR-10 acceptance witness ([B] F14: 3 attest-by-trial failures → 0): the
+    # template carries every hit label BEFORE any answer is authored; the unedited
+    # template refuses attestation (labels alone are not answers); the filled
+    # template attests on the first trial
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/tmp/answers.md").read_text()
+    assert "[check-then-act on paths]" in text
+    assert rlg.TEMPLATE_PLACEHOLDER in text
+    rc = _attest_at(repo)  # attest the UNEDITED template as-is
+    assert rc != 0
+    assert rlg.load_state(repo).preflights == ()
+    (repo / ".harness/tmp/answers.md").write_text(
+        text.replace(rlg.TEMPLATE_PLACEHOLDER, "guarded by exclusive create at f.py:3")
+    )
+    assert _attest_at(repo) == 0
+    (pf,) = rlg.load_state(repo).preflights
+    assert pf.hit_labels == ("check-then-act on paths",)
+
+
+def test_template_no_hits_still_requires_a_filled_answer(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # symmetry pin: a hitless sweep must not yield a template that attests unedited —
+    # the author still owes the diff-level answer set
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/tmp/answers.md").read_text()
+    assert _attest_at(repo) != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
+def test_template_refuses_existing_destination(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # templates never overwrite: hand-authored answers at the destination survive
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/answers.md").write_text("hand-authored\n")
+    assert _template(repo, "template-preflight") != 0
+    assert (repo / ".harness/tmp/answers.md").read_text() == "hand-authored\n"
+
+
+def test_template_symlink_destination_refused(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # a pre-planted symlink at the destination must refuse loudly, never be written
+    # through (exclusive create: any survivor at the name is EEXIST)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    victim = repo / "victim.md"
+    victim.write_text("precious\n")
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/answers.md").symlink_to(victim)
+    assert _template(repo, "template-preflight") != 0
+    assert victim.read_text() == "precious\n"
+
+
+def test_template_destination_outside_worktree_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+):
+    # the template verbs are guard-auto-allowed, so the one file OUTPUT gets the same
+    # containment discipline as the attest verbs' input — no write escapes the repo
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    outside = tmp_path_factory.mktemp("outside") / "answers.md"
+    rc = rlg.main(
+        ["template-preflight", "--answers", str(outside), "--base", "main", "--repo", str(repo)]
+    )
+    assert rc != 0
+    assert not outside.exists()
+
+
+def test_template_sweep_prefills_outstanding_ids_and_labels(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[silent-failure shapes]\\n1:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(
+        json.dumps(_row(1, "finding", "cw:aa:11:1"))
+        + "\n"
+        + json.dumps(_row(1, "finding", "cw:aa:11:2"))
+        + "\n"
+    )
+    assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 0
+    text = (repo / ".harness/tmp/sweep.md").read_text()
+    assert "cw:aa:11:1" in text and "cw:aa:11:2" in text
+    assert "[silent-failure shapes]" in text
+    filled = text.replace(rlg.TEMPLATE_PLACEHOLDER, "fixed at f.py:1")
+    (repo / ".harness/tmp/sweep.md").write_text(filled)
+    rc = rlg.main(
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/tmp/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+    assert rc == 0
+    (sw,) = rlg.load_state(repo).sweeps
+    assert set(sw.finding_ids) == {"cw:aa:11:1", "cw:aa:11:2"}
+
+
+def test_template_sweep_without_outstanding_findings_declines(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # mirror of attest-sweep's guard: no obligations → nothing to template (rc 1),
+    # and no file appears
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 1
+    assert not (repo / ".harness/tmp/sweep.md").exists()
+
+
+def test_template_destination_outside_answers_namespace_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r1 P2: the guard auto-allows any in-worktree token, so the TOOL
+    # is the enforcer of the answers namespace — a template must never materialize
+    # a file in a venue whose edits are ask-gated (design-substrate), nor at the
+    # repo root, nor via a `..` escape from a legal prefix
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    for dest in (
+        "design-substrate/new.md",
+        "answers.md",
+        ".harness/answers.md",
+        ".harness/review_loop_gate_state.json",
+        ".harness/tmp/../answers.md",
+    ):
+        assert _template(repo, "template-preflight", dest) != 0, dest
+        assert not (repo / dest).resolve().exists(), dest
+
+
+def test_template_symlinked_harness_component_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+):
+    # codex u-sr-04 r1 P1: the walk is descriptor-relative with O_NOFOLLOW at every
+    # component, so a symlinked directory under .harness cannot route the create
+    # outside the worktree (the resolve-then-reopen draft was check-then-act)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    outside = tmp_path_factory.mktemp("outside-dir")
+    (repo / ".harness" / "tmp").mkdir(exist_ok=True)
+    (repo / ".harness" / "tmp" / "sub").symlink_to(outside)
+    assert _template(repo, "template-preflight", ".harness/tmp/sub/answers.md") != 0
+    assert list(outside.iterdir()) == []
+
+
+def test_template_failed_publish_leaves_no_partial_and_retry_succeeds(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r1 P2: publication is temp-then-link, so a refused publish
+    # (EEXIST) leaves neither a partial final nor a temp that blocks the retry
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/answers.md").write_text("hand-authored\n")
+    assert _template(repo, "template-preflight") != 0
+    assert (repo / ".harness/tmp/answers.md").read_text() == "hand-authored\n"
+    assert [p.name for p in (repo / ".harness/tmp").iterdir() if p.name.endswith(".tmp")] == []
+    (repo / ".harness/tmp/answers.md").unlink()
+    assert _template(repo, "template-preflight") == 0
+    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/tmp/answers.md").read_text()
+
+
+def test_template_with_placeholders_deleted_does_not_attest(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r2 P1 (escalating the r1-rejected P2): the template writes every
+    # label itself, so token PRESENCE stopped evidencing authorship — deleting the
+    # placeholder substring, or its whole bullet line, must still refuse: 'answered'
+    # means a content line, not a heading the tool wrote
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/tmp/answers.md").read_text()
+    # deletion arm 1: strip the placeholder substring, keep the bare bullet
+    (repo / ".harness/tmp/answers.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
+    assert _attest_at(repo) != 0
+    # deletion arm 2: drop every bullet line, keep only headings + header comments
+    headings_only = "\n".join(ln for ln in text.splitlines() if not ln.startswith("- "))
+    (repo / ".harness/tmp/answers.md").write_text(headings_only)
+    assert _attest_at(repo) != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
+def test_sweep_template_with_placeholders_deleted_does_not_attest(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # same r2 P1, id half: the sweep template writes every finding id — the id's own
+    # line must carry residue beyond the id and template chrome
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(json.dumps(_row(1, "finding", "cw:aa:11:1")) + "\n")
+    assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 0
+    text = (repo / ".harness/tmp/sweep.md").read_text()
+    (repo / ".harness/tmp/sweep.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
+    rc = rlg.main(
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/tmp/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+    assert rc != 0
+    assert rlg.load_state(repo).sweeps == ()
+
+
+def test_hitless_template_with_deleted_todo_line_does_not_attest(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r5 P2: in the hitless arm the placeholder bullet is the ONLY
+    # fillable line — deleting it must not leave attestable content (the template's
+    # explanatory prose is comment chrome, and attest requires authored residue)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/tmp/answers.md").read_text()
+    gutted = "\n".join(ln for ln in text.splitlines() if rlg.TEMPLATE_PLACEHOLDER not in ln)
+    (repo / ".harness/tmp/answers.md").write_text(gutted)
+    assert _attest_at(repo) != 0
+    assert rlg.load_state(repo).preflights == ()
+    (repo / ".harness/tmp/answers.md").write_text(
+        text.replace(rlg.TEMPLATE_PLACEHOLDER, "no hits; classes walked, no new consumer")
+    )
+    assert _attest_at(repo) == 0
+
+
+def test_stale_template_binding_stamp_refuses_after_tree_moves(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r5 P2: the template's binding stamp is CHECKED, not chrome — a
+    # template filled against old bytes must not attest a moved tree even when the
+    # new label set is unchanged (here: empty both times)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/tmp/answers.md").read_text()
+    (repo / ".harness/tmp/answers.md").write_text(
+        text.replace(rlg.TEMPLATE_PLACEHOLDER, "answered against the OLD bytes")
+    )
+    (repo / "f.txt").write_text("two\n")
+    _commit_all(repo, "tree moves while the template is being filled")
+    assert _attest_at(repo) != 0
+    assert rlg.load_state(repo).preflights == ()
+    # the recovery the refusal names: re-template on a fresh path, fill, attest
+    assert _template(repo, "template-preflight", ".harness/tmp/answers-2.md") == 0
+    fresh = (repo / ".harness/tmp/answers-2.md").read_text()
+    (repo / ".harness/tmp/answers-2.md").write_text(
+        fresh.replace(rlg.TEMPLATE_PLACEHOLDER, "answered against the moved bytes")
+    )
+    assert _attest_at(repo, ".harness/tmp/answers-2.md") == 0
+
+
+def test_capitalized_finding_heading_is_not_an_answer(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r6 P2: 'Finding <id>' (capitalized, no disposition) must not
+    # satisfy the id's residue check — the label word strips case-insensitively
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(json.dumps(_row(1, "finding", "cw:aa:11:1")) + "\n")
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/sweep.md").write_text("Finding cw:aa:11:1\n")
+    rc = rlg.main(
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/tmp/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+    assert rc != 0
+    assert rlg.load_state(repo).sweeps == ()
+    (repo / ".harness/tmp/sweep.md").write_text("Finding cw:aa:11:1 — fixed at f.py:3\n")
+    rc = rlg.main(
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/tmp/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+    assert rc == 0
+
+
+def test_obligation_tokens_do_not_answer_each_other(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r7 P2: a line that merely lists two ids (or two labels) must
+    # not let each token read as the other's answer — residue strips the FULL
+    # obligation set, not just the token under check
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(
+        json.dumps(_row(1, "finding", "cw:aa:11:1"))
+        + "\n"
+        + json.dumps(_row(1, "finding", "cw:aa:11:2"))
+        + "\n"
+    )
+    (repo / ".harness").mkdir(exist_ok=True)
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/sweep.md").write_text("cw:aa:11:1 cw:aa:11:2\n")
+    args = [
+        "attest-sweep",
+        "--answers",
+        str(repo / ".harness/tmp/sweep.md"),
+        "--base",
+        "main",
+        "--repo",
+        str(repo),
+    ]
+    assert rlg.main(args) != 0
+    assert rlg.load_state(repo).sweeps == ()
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "cw:aa:11:1 fixed at f.py:3\ncw:aa:11:2 registered as forward row\n"
+    )
+    assert rlg.main(args) == 0
+    assert len(rlg.load_state(repo).sweeps) == 1
+    # label half of the same class: two bracketed labels on one line answer neither
+    two = ("check-then-act on paths", "silent-failure shapes")
+    assert rlg._unanswered_labels(
+        two, "[check-then-act on paths] [silent-failure shapes]\n"
+    ) == list(two)
+    assert (
+        rlg._unanswered_labels(
+            two, "[check-then-act on paths] [silent-failure shapes] both guarded at f.py:3\n"
+        )
+        == []
+    )
+
+
+def test_overlapping_id_tokens_do_not_shadow(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r8 P1: with ids ...:1 and ...:10, stripping the shorter first
+    # left a stray '0' that read as residue on the longer id's bare template line —
+    # tokens strip longest-first
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(
+        json.dumps(_row(1, "finding", "cw:aa:11:1"))
+        + "\n"
+        + json.dumps(_row(2, "finding", "cw:aa:11:10"))
+        + "\n"
+    )
+    ids = ("cw:aa:11:1", "cw:aa:11:10")
+    assert rlg._unanswered_ids(ids, "cw:aa:11:1 fixed at f.py:3\n- finding cw:aa:11:10 —\n") == [
+        "cw:aa:11:10"
+    ]
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "cw:aa:11:1 fixed at f.py:3\n- finding cw:aa:11:10 —\n"
+    )
+    args = [
+        "attest-sweep",
+        "--answers",
+        str(repo / ".harness/tmp/sweep.md"),
+        "--base",
+        "main",
+        "--repo",
+        str(repo),
+    ]
+    assert rlg.main(args) != 0
+    assert rlg.load_state(repo).sweeps == ()
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "cw:aa:11:1 fixed at f.py:3\ncw:aa:11:10 registered as forward row\n"
+    )
+    assert rlg.main(args) == 0
+
+
+def test_template_swapped_temp_inode_refused(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r8 P2 (the round-log publisher's codex r10 precedent): link(2)
+    # resolves the temp NAME — a swap between write and link must refuse loudly and
+    # leave nothing at the final name
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    real_link = os.link
+
+    def swapping_link(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+        if src.endswith(".tmp") and src_dir_fd is not None:
+            # hold the original inode open across the swap: Linux recycles a freed
+            # inode number immediately, and a recycled number would make the
+            # foreign file compare EQUAL and hide the swap (the first CI run of
+            # this witness caught exactly that on ext4; APFS never recycles)
+            holder = os.open(src, os.O_RDONLY, dir_fd=src_dir_fd)
+            try:
+                os.unlink(src, dir_fd=src_dir_fd)
+                fd = os.open(src, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644, dir_fd=src_dir_fd)
+                os.write(fd, b"foreign bytes\n")
+                os.close(fd)
+                return real_link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+            finally:
+                os.close(holder)
+        return real_link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+    monkeypatch.setattr(os, "link", swapping_link)
+    assert _template(repo, "template-preflight") != 0
+    monkeypatch.setattr(os, "link", real_link)
+    assert not (repo / ".harness/tmp/answers.md").exists()
+    assert _template(repo, "template-preflight") == 0
+
+
+def test_multiline_hand_authored_id_answer_still_attests(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r9 P2: the pre-template hand shape — an id heading with the
+    # answer on the NEXT line — stays valid; the section ends at another id's line,
+    # so a bare heading before the next finding still refuses
+    ids = ("cw:aa:11:1", "cw:aa:11:2")
+    multiline = "Finding cw:aa:11:1\n  fixed at f.py:3\n\nFinding cw:aa:11:2\n  registered\n"
+    assert rlg._unanswered_ids(ids, multiline) == []
+    bare_then_next = "Finding cw:aa:11:1\nFinding cw:aa:11:2\n  registered\n"
+    assert rlg._unanswered_ids(ids, bare_then_next) == ["cw:aa:11:1"]
+
+
+def test_punctuation_only_fill_is_not_an_answer(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r9 P2: replacing the placeholder with an empty quoted/backtick
+    # value must not read as residue
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/tmp/answers.md").read_text()
+    (repo / ".harness/tmp/answers.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, '""'))
+    assert _attest_at(repo, ".harness/tmp/answers.md") != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
+def test_recipe_prefix_falls_back_on_non_grammar_ids():
+    # codex u-sr-04 r9 P2: an id outside the guard's bareword-prefix grammar must
+    # not render a malformed recovery command — the placeholder form renders instead
+    d = _decide(_state(), [], arc_id="bad arc@id", lane_id="lane-7")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id>" in d.recipe
+    assert "bad arc@id" not in d.recipe
+    # the lane conjunct witnessed from ITS OWN side (merge-gate witness lens r1:
+    # a valid arc with a malformed lane must also fall back — dropping the
+    # lane half of the AND must red here, not stay green behind the arc case)
+    d = _decide(_state(), [], lane_id="bad lane; rm")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id>" in d.recipe
+    assert "bad lane; rm" not in d.recipe
+
+
+def test_malformed_binding_stamp_refuses_loudly(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r7 P2: an unparseable '# binding:' line must fail loud, never
+    # silently demote the file to hand-authored semantics (the deliberate-deletion
+    # arm stays out of scope per the module trust boundary — r6 rejection)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    (repo / ".harness/tmp").mkdir(parents=True, exist_ok=True)
+    (repo / ".harness/tmp/answers.md").write_text("# binding: mangled\n- real answer at f.py:3\n")
+    assert _attest_at(repo, ".harness/tmp/answers.md") != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
+def test_gate_refusal_recipes_route_through_the_template_verbs():
+    # codex u-sr-04 r1 P2 (integration): an agent following the gate's own refusal
+    # text must land on the labels-before-answers flow, not on attest-by-trial —
+    # each refusal recipe names its template verb BEFORE its attest verb, on EVERY
+    # branch including PREFLIGHT_STALE (r4 P2: a moved tree can carry new labels),
+    # and every command carries the arc/lane prefix (r4 P2: a bare command binds
+    # the branch-* fallback arc, so the recovery text could never clear this one)
+    def _prefixed(recipe: str, verb: str) -> bool:
+        return f"HARNESS_ARC_ID={ARC} HARNESS_LANE_ID=lane-7 just {verb}" in recipe
+
+    d = _decide(_state(), [], lane_id="lane-7")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert d.recipe.index("review-template-preflight") < d.recipe.index("review-attest-preflight")
+    assert _prefixed(d.recipe, "review-template-preflight") and _prefixed(
+        d.recipe, "review-attest-preflight"
+    )
+    rows = [_row(1, "finding", "cw:aa:11:1")]
+    d = _decide(_state(preflights=(_pf(),)), rows, lane_id="lane-7")
+    assert isinstance(d, rlg.Refused) and d.code == "SWEEP_MISSING"
+    assert d.recipe.index("review-template-sweep") < d.recipe.index("review-attest-sweep")
+    assert _prefixed(d.recipe, "review-template-sweep") and _prefixed(
+        d.recipe, "review-attest-sweep"
+    )
+    d = _decide(_state(preflights=(_pf(head="e" * 40),)), [], lane_id="lane-7")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_STALE"
+    assert d.recipe.index("review-template-preflight") < d.recipe.index("review-attest-preflight")
+    assert _prefixed(d.recipe, "review-template-preflight")
+    d = _decide(
+        _state(preflights=(_pf(),)),
+        [_row(n, "finding", f"cw:aa:11:{n}") for n in range(1, 11)],  # 10 rounds spent
+        lane_id="lane-7",
+    )
+    assert isinstance(d, rlg.Refused) and d.code == "BUDGET_EXHAUSTED"
+    assert _prefixed(d.recipe, "review-attest-budget")
+
+
 def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     """U-SR-01 (charter WR-03) acceptance: each of the four added shapes catches a
     planted fixture, run through the REAL script — a pattern that matches nothing is
@@ -948,6 +1473,10 @@ def test_wrapper_refuses_before_any_reviewer(wired, capsys):
     assert rc == 3
     err = capsys.readouterr().err
     assert "codex-review: GATE_REFUSED (PREFLIGHT_MISSING)" in err
+    # the recovery recipe carries the ENV-sourced lane, proving admit()'s
+    # env_arc_and_lane -> decide(lane_id=...) plumbing end-to-end (merge-gate
+    # witness lens r1: deleting that line, or swapping the tuple unpack, must red)
+    assert "HARNESS_LANE_ID=lane-t just" in err
     # NOT a review terminal: no C-HE-24 row, no round consumed
     assert fr.read_rows() == []
 
@@ -2383,3 +2912,43 @@ def test_binding_publishes_by_file_and_the_recipe_routes_through_it():
 
     recipe = (_repo_root() / "justfile").read_text(encoding="utf-8")
     assert "merge_gate_log.py binding --lens {{lens}} --base {{base}}" in recipe
+
+
+# ── U-SR-04 witnesses: the WR-10 flow + WR-11 rule live at their carriers ────
+
+
+def test_carriers_document_the_template_first_attest_flow():
+    """WR-10's lever is only real if both loop carriers route authors through the
+    template verbs (labels before answers) — a reverted carrier silently restores
+    the attest-by-trial flow while the code side stays green."""
+    for rel in (PREFLIGHT_SKILL_REL, Path(".claude/skills/ship-pr/SKILL.md")):
+        # squashed: the carriers hard-wrap prose, so verb and argument may split lines
+        text = _squash((_repo_root() / rel).read_text(encoding="utf-8"))
+        assert "review-template-preflight <answers-file>" in text, rel
+        # sweep-template must be spelled WITH the arc/lane prefix (codex u-sr-04 r1
+        # P2: a bare invocation queries the branch-* fallback arc's obligations,
+        # finds none, and declines — the documented command must be the working one)
+        assert (
+            "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
+            "just review-template-sweep <answers-file>"
+        ) in text, rel
+        # order pin: the template step is documented BEFORE its attest verb, per verb
+        for verb in ("preflight", "sweep"):
+            assert text.index(f"review-template-{verb}") < text.index(f"review-attest-{verb}"), (
+                f"{rel}: template-{verb} documented after attest-{verb}"
+            )
+    recipe = (_repo_root() / "justfile").read_text(encoding="utf-8")
+    for verb in ("preflight", "sweep"):
+        assert f"review_loop_gate.py template-{verb} --answers" in recipe
+
+
+def test_preflight_carries_the_u_sr_04_mechanism_precedent_rule():
+    """Charter WR-11 lands as grounding-time SKILL prose; pin the load-bearing tells
+    of each of the three steps (sibling-first, corpus grep, skeleton-is-unreviewed),
+    not the surrounding wording."""
+    text = _preflight_skill_text()
+    assert "## The mechanism-precedent search" in text
+    section = _squash(text.split("## The mechanism-precedent search", 1)[1].split("\n## ", 1)[0])
+    assert "adopt its shape or import it outright" in section
+    assert ".harness/merge-gate-log.jsonl" in section
+    assert "plan skeleton as UNREVIEWED input" in section

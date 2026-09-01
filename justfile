@@ -847,6 +847,16 @@ review-with-failover-logged log base='main':
 # entry/sweep attestations the wrapper enforces before any review round.
 # `review-attest-budget` is deliberately NOT guard-allowlisted — extending the
 # round budget stays operator-visible (the loop must never self-extend it).
+# WR-10 (U-SR-04): labels before answers — the template verbs run preflight-grep.sh
+# over the attested range FIRST and write every hit label (sweep: + outstanding
+# finding ids) into a fresh answers template the author fills, so attestation
+# passes on the first trial instead of by label discovery ([B] F14).
+review-template-preflight answers base='main':
+    uv run python tools/review_loop_gate.py template-preflight --answers {{answers}} --base {{base}}
+
+review-template-sweep answers base='main':
+    uv run python tools/review_loop_gate.py template-sweep --answers {{answers}} --base {{base}}
+
 review-attest-preflight answers base='main':
     uv run python tools/review_loop_gate.py attest-preflight --answers {{answers}} --base {{base}}
 

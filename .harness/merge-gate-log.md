@@ -879,3 +879,9 @@ test in `tools/test_review_loop_gate.py` as redundant-but-informational (behavio
 pinned by execution tests in `tools/test_merge_gate_log.py`) — explicitly non-blocking.
 APPROVE, 0 findings. Both lenses read their six binding values from published
 content-addressed files; `emit` accepted both against its own recomputation (exit 0 each).
+| 2026-09-01T10:00:59Z | #1481 | 80eac66c1a4a | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T10:02:09Z | #1481 | 80eac66c1a4a | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-09-01T10:03:22Z | #1481 | 80eac66c1a4a | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T10:15:42Z | #1481 | 9ac6759d177f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-01T10:17:45Z | #1481 | 9ac6759d177f | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| PR #1481 | 2026-09-01 | feat/he-lanes-u-sr-04 | concurrency: APPROVE (r1+r2) | spec-conformance: APPROVE (r1+r2) | witness-adequacy: BLOCK r1 (2 P2, absorbed 9ac6759d1) → APPROVE r2 | outcome: ALL-APPROVE at 9ac6759d177f | blast-radius: 4 production consumers enumerated (codex_review.py:595, agy_review.py:832, guard branch, 2 SKILL carriers) |

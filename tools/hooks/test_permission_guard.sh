@@ -390,6 +390,8 @@ for c in \
   "just review-with-failover main" \
   "just review-attest-preflight .harness/tmp/preflight-answers.md" \
   "just review-attest-sweep .harness/tmp/sweep-answers.md main" \
+  "just review-template-preflight .harness/tmp/preflight-answers.md" \
+  "just review-template-sweep .harness/tmp/sweep-answers.md main" \
   "just review-gate-check" \
   "just merge-gate-binding merge-gate-concurrency" \
   "just merge-gate-binding merge-gate-spec-conformance main" \
@@ -453,6 +455,12 @@ OUT=$(run_on "$(pl Bash "just review-gate-check main review-attest-budget 2 oper
 [ "$(dec "$OUT")" != "allow" ] && ok "chained review-attest-budget after review-gate-check → not auto-allowed" || bad "multi-recipe budget chain auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just review-attest-sweep .harness/tmp/a.md main review-attest-budget 2 ok" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "chained budget after review-attest-sweep → not auto-allowed" || bad "attest-sweep budget chain auto-allowed: $OUT"
+# U-SR-04: the template verbs share the attest shapes' arity bound and containment —
+# same negative surface: no out-of-worktree destination, no chained second recipe.
+OUT=$(run_on "$(pl Bash "just review-template-preflight /tmp/outside-answers.md" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "review-template-preflight with out-of-worktree answers → not auto-allowed" || bad "out-of-worktree template answers auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just review-template-sweep .harness/tmp/a.md main review-attest-budget 2 ok" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "chained budget after review-template-sweep → not auto-allowed" || bad "template-sweep budget chain auto-allowed: $OUT"
 # codex r5 P1: the budget verb chained after ANY generic-prefix allowlisted recipe
 # (the B-217 class) — the load-bearing ask-gate is pinned by a pre-allowlist reject
 # on every `just` line mentioning it, regardless of which prefix fronts the chain.
