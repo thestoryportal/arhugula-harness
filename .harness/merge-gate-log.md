@@ -861,3 +861,21 @@ Venue note for whoever resumes: subagents here complete, but slowly — roughly 
 ACTIVE model time spread over hours of wall clock, and only when run ONE AT A TIME. Three
 concurrent lenses starved; solo runs finished. `ListAgents` reports active model time, not
 wall clock, so a counter that looks frozen is not evidence of a stall.
+| 2026-09-01T05:17:34Z | #1479 | b121efb9413b | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T05:22:04Z | #1479 | b121efb9413b | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+
+| #1479 | 2026-09-01 | feat/he-lanes-u-sr-03 | merge-gate-concurrency: APPROVE | merge-gate-spec-conformance: APPROVE | merge-gate-witness-adequacy: APPROVE | outcome: ALL APPROVE — proceed to merge | blast-radius: 2 consumers (binding_path ← main; open_scratch_dir ← _read_text, main), plus justfile recipe + 2 skill carriers + 3 test files; static edges only, a floor not a ceiling |
+
+**#1479 gate closed (U-SR-03) — ALL APPROVE at head `b121efb94`.** The concurrency APPROVE
+recorded at `d8f024f27` transferred (`merge-gate-landing-delta d8f024f27` exit 0: the
+delta to this head names only gate-row files). `merge-gate-spec-conformance` re-ran at
+`b121efb94`, tasked to verify — not trust — its earlier P1/P2 absorption at `04cc50d7c`:
+it confirmed the laws:prompt rule byte-identical (md5 `7ae730161b4e...`) across the three
+charter carriers, absent from council-orchestrator, and `test_skill_prompt_authoring.sh`
+CARRIERS + Agent-reachability assertions passing 32/32 by direct execution. APPROVE,
+0 findings. `merge-gate-witness-adequacy` ran at the same head: traced the load-bearing
+tests to real-path execution and empirical mutation-probe kills; noted one grep-shaped
+test in `tools/test_review_loop_gate.py` as redundant-but-informational (behavior already
+pinned by execution tests in `tools/test_merge_gate_log.py`) — explicitly non-blocking.
+APPROVE, 0 findings. Both lenses read their six binding values from published
+content-addressed files; `emit` accepted both against its own recomputation (exit 0 each).
