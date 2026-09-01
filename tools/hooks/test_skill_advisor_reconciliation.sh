@@ -109,7 +109,10 @@ needs "$ROOT/docs/governance/orchestration.md"             "orchestration §13.2
 # routing-rule regression in the mutation probe): the no-tension routing rule
 # and the E3 reviewer role.
 needs "$ROOT/.harness/council/council-workflow.generic.yaml" "canonical generic yaml routing rule" 'voice plus a transcript-brief review'
-needs "$ROOT/.harness/council/council-workflow.generic.yaml" "canonical generic yaml E3 role"      'a fresh-context agent handed a written session brief'
+# The E3 pin is the block's UNIQUE structural key, not role prose — the role
+# phrase also appears in the routing rule above, so a prose needle stays green
+# when the E3 hunk alone reverts to the bare advisor schema (codex r3).
+needs "$ROOT/.harness/council/council-workflow.generic.yaml" "canonical generic yaml E3 reviewer key" 'transcript_brief_reviewer:'
 # codex r2: the Codex venue's second reviewer must be ISOLATED — the exact
 # self-review shape the bridge rewrite forbids, pinned at both root authorities.
 needs "$ROOT/AGENTS.md"                                    "AGENTS.md reviewer contract" 'never the interactive controller reviewing its own work'
