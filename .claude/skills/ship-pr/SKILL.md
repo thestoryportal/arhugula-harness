@@ -43,8 +43,9 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   committed diff — run the defect-class-preflight sweep, COMMIT the work, then
   labels-before-answers (U-SR-04, charter WR-10):
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>`
-  writes every hit label from the attested range into a fresh template (it never
-  overwrites — each round's answers file gets a fresh path); fill every placeholder
+  writes every hit label from the attested range into a fresh template under
+  `.harness/tmp/` (the only namespace the verb accepts; it never overwrites — each
+  round's answers file gets a fresh path); fill every placeholder
   (attestation refuses an unfilled file), then
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-attest-preflight <answers-file>`
   (the inline prefix is REQUIRED on all these verbs exactly as for the review itself

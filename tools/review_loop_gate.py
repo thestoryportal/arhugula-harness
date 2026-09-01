@@ -763,7 +763,9 @@ def _unanswered_labels(labels: tuple[str, ...], answers: str) -> list[str]:
     # a label is ANSWERED in either authored shape: inline ("label: the answer" —
     # residue on the label's own line), or template-heading style ("[label]" followed,
     # before the next heading, by a content line). Labels are fixed multi-word strings
-    # from the sweep script, so plain substring locates them exactly.
+    # from the sweep script, so plain substring locates them exactly. Residue strips
+    # EVERY known label, not just the one under check (codex u-sr-04 r7 P2: a line
+    # naming two labels must not let each count as the other's answer).
     lines = answers.splitlines()
     out = []
     for label in labels:
@@ -771,7 +773,7 @@ def _unanswered_labels(labels: tuple[str, ...], answers: str) -> list[str]:
         for i, ln in enumerate(lines):
             if label not in ln:
                 continue
-            if _has_residue(ln, label):
+            if _has_residue(ln, *labels):
                 answered = True
                 break
             # heading line: scan its section for a content line (comment lines are
@@ -792,12 +794,13 @@ def _unanswered_labels(labels: tuple[str, ...], answers: str) -> list[str]:
 def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
     # token-exact, not substring (codex r2 P2: an answer naming ...:10 must not
     # satisfy the sibling ...:1) — ids are whitespace/punctuation-delimited tokens.
-    # And the id's line must carry residue beyond the id itself (codex u-sr-04 r2
-    # P1): the sweep template writes every id, so presence alone is not an answer.
+    # And the id's line must carry residue beyond EVERY known id, not just its own
+    # (codex u-sr-04 r2 P1 + r7 P2: the sweep template writes every id, and a line
+    # that merely lists two ids must not let each read as the other's answer).
     out = []
     for n in ids:
         answered = any(
-            n in set(re.split(r"[\s,;()\[\]{}'\"`]+", ln)) and _has_residue(ln, n)
+            n in set(re.split(r"[\s,;()\[\]{}'\"`]+", ln)) and _has_residue(ln, *ids)
             for ln in answers.splitlines()
         )
         if not answered:
@@ -852,13 +855,16 @@ def _template_text(
     return "\n".join(lines)
 
 
-#: The one namespace the template verbs may create files in: the answers-file home
-#: (`.harness/.preflight-answers-*`, `.harness/.sweep-answers-*`, `.harness/tmp/...`).
-#: The permission guard validates only the command's FORM, so the auto-allowed verbs
-#: must refuse every other destination here — a template landing in, say,
-#: `design-substrate/` would ride an allowlisted invocation past the ask gate that
-#: venue's edits normally face (codex u-sr-04 r1 P2).
-TEMPLATE_ANCHOR = ".harness"
+#: The one namespace the template verbs may create files in: the gitignored scratch
+#: home (`.harness/tmp/...`, where round logs already live). The permission guard
+#: validates only the command's FORM, so the auto-allowed verbs must refuse every
+#: other destination here — a template landing in `design-substrate/` would ride an
+#: allowlisted invocation past the ask gate that venue's edits normally face (codex
+#: u-sr-04 r1 P2), and `.harness/` itself is full of runtime-state authorities an
+#: exclusive create could squat while absent (`review_loop_gate_state.json`, r7 P2).
+#: Scratch-homing also keeps attestation artifacts out of the stop-gate's tree-dirty
+#: view ([B] F6, the WR-12 pollution class).
+TEMPLATE_ANCHOR = (".harness", "tmp")
 
 
 def _template_dir_fd(repo: Path, rel_parts: tuple[str, ...]) -> int:
@@ -906,10 +912,15 @@ def _write_template(repo: Path, answers_path: Path, text: str) -> Path:
             rel = rel.relative_to(repo)
         except ValueError as exc:
             raise GateError(f"template destination {answers_path} is outside the worktree") from exc
-    if ".." in rel.parts or rel.parts[:1] != (TEMPLATE_ANCHOR,) or len(rel.parts) < 2:
+    anchor = "/".join(TEMPLATE_ANCHOR)
+    if (
+        ".." in rel.parts
+        or rel.parts[: len(TEMPLATE_ANCHOR)] != TEMPLATE_ANCHOR
+        or (len(rel.parts) < len(TEMPLATE_ANCHOR) + 1)
+    ):
         raise GateError(
-            f"template destination {answers_path} must live under {TEMPLATE_ANCHOR}/ — "
-            "the answers-file namespace is the only place an auto-allowed template "
+            f"template destination {answers_path} must live under {anchor}/ — the "
+            "scratch answers namespace is the only place an auto-allowed template "
             "verb may create a file"
         )
     dfd = _template_dir_fd(repo, rel.parts[:-1])
@@ -998,7 +1009,19 @@ def _vet_answers(answers: str, diff_range: str, diff_digest: str, path: Path) ->
     (r5 P2, completing r2's 'answered means answered' for the hitless arm). A
     hand-authored file carries no stamp and any real answer line has residue, so
     the pre-template authoring shapes attest unchanged."""
-    for m in _BINDING_STAMP.finditer(answers):
+    for ln in answers.splitlines():
+        if not ln.lstrip().startswith("# binding:"):
+            continue
+        m = _BINDING_STAMP.match(ln.lstrip())
+        if m is None:
+            # fail-loud on a mangled stamp (codex u-sr-04 r7 P2): an unparseable
+            # binding line must not silently demote the file to hand-authored
+            # semantics — the deliberate-deletion arm stays out of scope per the
+            # module trust boundary (r6 rejection, on the ledger)
+            raise GateError(
+                f"answers file {path} carries a malformed '# binding:' stamp "
+                f"({ln.strip()!r}) — regenerate the template or restore the stamp"
+            )
         if (m.group(1), m.group(2)) != (diff_range, diff_digest):
             raise GateError(
                 f"answers file {path} was templated for binding {m.group(1)} "

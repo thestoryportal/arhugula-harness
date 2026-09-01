@@ -499,7 +499,10 @@ commit and invoke the reviewers — they should be confirming, not discovering.
 Since B-215, the named-answer set is ATTESTED, not merely written — and since
 U-SR-04 (charter WR-10) the labels come BEFORE the answers: after the final
 commit, generate the answers file with `HARNESS_ARC_ID=<arc-id>
-HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>` — it runs
+HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>` — the
+destination must live under `.harness/tmp/` (the gitignored scratch namespace; the
+verb refuses anywhere else, keeping attestation artifacts out of the stop-gate's
+tree-dirty view). It runs
 `preflight-grep.sh` over the attested range and writes every hit label into a
 fresh template ([B] F14: three attest calls failed by trial only because answers
 were authored before the labels existed). Fill every placeholder with the named

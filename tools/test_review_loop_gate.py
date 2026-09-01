@@ -405,11 +405,11 @@ def test_attest_preflight_real_script_integration(repo: Path, monkeypatch: pytes
 # ── edges: template verbs (U-SR-04, charter WR-10 — labels before answers) ───
 
 
-def _template(repo: Path, cmd: str, answers: str = ".harness/answers.md") -> int:
+def _template(repo: Path, cmd: str, answers: str = ".harness/tmp/answers.md") -> int:
     return rlg.main([cmd, "--answers", str(repo / answers), "--base", "main", "--repo", str(repo)])
 
 
-def _attest_at(repo: Path, answers: str = ".harness/answers.md") -> int:
+def _attest_at(repo: Path, answers: str = ".harness/tmp/answers.md") -> int:
     # attest the file where the template wrote it (the _attest_preflight helper
     # above reads a root-level fixture path the namespace no longer admits)
     return rlg.main(
@@ -435,13 +435,13 @@ def test_template_preflight_prefills_labels_then_attests_first_trial(
     _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     assert _template(repo, "template-preflight") == 0
-    text = (repo / ".harness/answers.md").read_text()
+    text = (repo / ".harness/tmp/answers.md").read_text()
     assert "[check-then-act on paths]" in text
     assert rlg.TEMPLATE_PLACEHOLDER in text
     rc = _attest_at(repo)  # attest the UNEDITED template as-is
     assert rc != 0
     assert rlg.load_state(repo).preflights == ()
-    (repo / ".harness/answers.md").write_text(
+    (repo / ".harness/tmp/answers.md").write_text(
         text.replace(rlg.TEMPLATE_PLACEHOLDER, "guarded by exclusive create at f.py:3")
     )
     assert _attest_at(repo) == 0
@@ -457,7 +457,7 @@ def test_template_no_hits_still_requires_a_filled_answer(
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     assert _template(repo, "template-preflight") == 0
-    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/answers.md").read_text()
+    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/tmp/answers.md").read_text()
     assert _attest_at(repo) != 0
     assert rlg.load_state(repo).preflights == ()
 
@@ -466,9 +466,10 @@ def test_template_refuses_existing_destination(repo: Path, monkeypatch: pytest.M
     # templates never overwrite: hand-authored answers at the destination survive
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
-    (repo / ".harness/answers.md").write_text("hand-authored\n")
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/answers.md").write_text("hand-authored\n")
     assert _template(repo, "template-preflight") != 0
-    assert (repo / ".harness/answers.md").read_text() == "hand-authored\n"
+    assert (repo / ".harness/tmp/answers.md").read_text() == "hand-authored\n"
 
 
 def test_template_symlink_destination_refused(repo: Path, monkeypatch: pytest.MonkeyPatch):
@@ -478,7 +479,8 @@ def test_template_symlink_destination_refused(repo: Path, monkeypatch: pytest.Mo
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     victim = repo / "victim.md"
     victim.write_text("precious\n")
-    (repo / ".harness/answers.md").symlink_to(victim)
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/answers.md").symlink_to(victim)
     assert _template(repo, "template-preflight") != 0
     assert victim.read_text() == "precious\n"
 
@@ -509,17 +511,17 @@ def test_template_sweep_prefills_outstanding_ids_and_labels(
         + json.dumps(_row(1, "finding", "cw:aa:11:2"))
         + "\n"
     )
-    assert _template(repo, "template-sweep", ".harness/sweep.md") == 0
-    text = (repo / ".harness/sweep.md").read_text()
+    assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 0
+    text = (repo / ".harness/tmp/sweep.md").read_text()
     assert "cw:aa:11:1" in text and "cw:aa:11:2" in text
     assert "[silent-failure shapes]" in text
     filled = text.replace(rlg.TEMPLATE_PLACEHOLDER, "fixed at f.py:1")
-    (repo / ".harness/sweep.md").write_text(filled)
+    (repo / ".harness/tmp/sweep.md").write_text(filled)
     rc = rlg.main(
         [
             "attest-sweep",
             "--answers",
-            str(repo / ".harness/sweep.md"),
+            str(repo / ".harness/tmp/sweep.md"),
             "--base",
             "main",
             "--repo",
@@ -538,8 +540,8 @@ def test_template_sweep_without_outstanding_findings_declines(
     # and no file appears
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
-    assert _template(repo, "template-sweep", ".harness/sweep.md") == 1
-    assert not (repo / ".harness/sweep.md").exists()
+    assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 1
+    assert not (repo / ".harness/tmp/sweep.md").exists()
 
 
 def test_template_destination_outside_answers_namespace_refused(
@@ -551,7 +553,13 @@ def test_template_destination_outside_answers_namespace_refused(
     # repo root, nor via a `..` escape from a legal prefix
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
-    for dest in ("design-substrate/new.md", "answers.md", ".harness/../answers.md"):
+    for dest in (
+        "design-substrate/new.md",
+        "answers.md",
+        ".harness/answers.md",
+        ".harness/review_loop_gate_state.json",
+        ".harness/tmp/../answers.md",
+    ):
         assert _template(repo, "template-preflight", dest) != 0, dest
         assert not (repo / dest).resolve().exists(), dest
 
@@ -565,8 +573,9 @@ def test_template_symlinked_harness_component_refused(
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     outside = tmp_path_factory.mktemp("outside-dir")
-    (repo / ".harness" / "sub").symlink_to(outside)
-    assert _template(repo, "template-preflight", ".harness/sub/answers.md") != 0
+    (repo / ".harness" / "tmp").mkdir(exist_ok=True)
+    (repo / ".harness" / "tmp" / "sub").symlink_to(outside)
+    assert _template(repo, "template-preflight", ".harness/tmp/sub/answers.md") != 0
     assert list(outside.iterdir()) == []
 
 
@@ -577,13 +586,14 @@ def test_template_failed_publish_leaves_no_partial_and_retry_succeeds(
     # (EEXIST) leaves neither a partial final nor a temp that blocks the retry
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
-    (repo / ".harness/answers.md").write_text("hand-authored\n")
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/answers.md").write_text("hand-authored\n")
     assert _template(repo, "template-preflight") != 0
-    assert (repo / ".harness/answers.md").read_text() == "hand-authored\n"
-    assert [p.name for p in (repo / ".harness").iterdir() if p.name.endswith(".tmp")] == []
-    (repo / ".harness/answers.md").unlink()
+    assert (repo / ".harness/tmp/answers.md").read_text() == "hand-authored\n"
+    assert [p.name for p in (repo / ".harness/tmp").iterdir() if p.name.endswith(".tmp")] == []
+    (repo / ".harness/tmp/answers.md").unlink()
     assert _template(repo, "template-preflight") == 0
-    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/answers.md").read_text()
+    assert rlg.TEMPLATE_PLACEHOLDER in (repo / ".harness/tmp/answers.md").read_text()
 
 
 def test_template_with_placeholders_deleted_does_not_attest(
@@ -596,13 +606,13 @@ def test_template_with_placeholders_deleted_does_not_attest(
     _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     assert _template(repo, "template-preflight") == 0
-    text = (repo / ".harness/answers.md").read_text()
+    text = (repo / ".harness/tmp/answers.md").read_text()
     # deletion arm 1: strip the placeholder substring, keep the bare bullet
-    (repo / ".harness/answers.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
+    (repo / ".harness/tmp/answers.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
     assert _attest_at(repo) != 0
     # deletion arm 2: drop every bullet line, keep only headings + header comments
     headings_only = "\n".join(ln for ln in text.splitlines() if not ln.startswith("- "))
-    (repo / ".harness/answers.md").write_text(headings_only)
+    (repo / ".harness/tmp/answers.md").write_text(headings_only)
     assert _attest_at(repo) != 0
     assert rlg.load_state(repo).preflights == ()
 
@@ -615,14 +625,14 @@ def test_sweep_template_with_placeholders_deleted_does_not_attest(
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     fr.GATE_LOG_JSONL.write_text(json.dumps(_row(1, "finding", "cw:aa:11:1")) + "\n")
-    assert _template(repo, "template-sweep", ".harness/sweep.md") == 0
-    text = (repo / ".harness/sweep.md").read_text()
-    (repo / ".harness/sweep.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
+    assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 0
+    text = (repo / ".harness/tmp/sweep.md").read_text()
+    (repo / ".harness/tmp/sweep.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, ""))
     rc = rlg.main(
         [
             "attest-sweep",
             "--answers",
-            str(repo / ".harness/sweep.md"),
+            str(repo / ".harness/tmp/sweep.md"),
             "--base",
             "main",
             "--repo",
@@ -642,12 +652,12 @@ def test_hitless_template_with_deleted_todo_line_does_not_attest(
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     assert _template(repo, "template-preflight") == 0
-    text = (repo / ".harness/answers.md").read_text()
+    text = (repo / ".harness/tmp/answers.md").read_text()
     gutted = "\n".join(ln for ln in text.splitlines() if rlg.TEMPLATE_PLACEHOLDER not in ln)
-    (repo / ".harness/answers.md").write_text(gutted)
+    (repo / ".harness/tmp/answers.md").write_text(gutted)
     assert _attest_at(repo) != 0
     assert rlg.load_state(repo).preflights == ()
-    (repo / ".harness/answers.md").write_text(
+    (repo / ".harness/tmp/answers.md").write_text(
         text.replace(rlg.TEMPLATE_PLACEHOLDER, "no hits; classes walked, no new consumer")
     )
     assert _attest_at(repo) == 0
@@ -662,8 +672,8 @@ def test_stale_template_binding_stamp_refuses_after_tree_moves(
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     assert _template(repo, "template-preflight") == 0
-    text = (repo / ".harness/answers.md").read_text()
-    (repo / ".harness/answers.md").write_text(
+    text = (repo / ".harness/tmp/answers.md").read_text()
+    (repo / ".harness/tmp/answers.md").write_text(
         text.replace(rlg.TEMPLATE_PLACEHOLDER, "answered against the OLD bytes")
     )
     (repo / "f.txt").write_text("two\n")
@@ -671,12 +681,12 @@ def test_stale_template_binding_stamp_refuses_after_tree_moves(
     assert _attest_at(repo) != 0
     assert rlg.load_state(repo).preflights == ()
     # the recovery the refusal names: re-template on a fresh path, fill, attest
-    assert _template(repo, "template-preflight", ".harness/answers-2.md") == 0
-    fresh = (repo / ".harness/answers-2.md").read_text()
-    (repo / ".harness/answers-2.md").write_text(
+    assert _template(repo, "template-preflight", ".harness/tmp/answers-2.md") == 0
+    fresh = (repo / ".harness/tmp/answers-2.md").read_text()
+    (repo / ".harness/tmp/answers-2.md").write_text(
         fresh.replace(rlg.TEMPLATE_PLACEHOLDER, "answered against the moved bytes")
     )
-    assert _attest_at(repo, ".harness/answers-2.md") == 0
+    assert _attest_at(repo, ".harness/tmp/answers-2.md") == 0
 
 
 def test_capitalized_finding_heading_is_not_an_answer(repo: Path, monkeypatch: pytest.MonkeyPatch):
@@ -685,12 +695,13 @@ def test_capitalized_finding_heading_is_not_an_answer(repo: Path, monkeypatch: p
     _plant_script(repo, "#!/bin/sh\nexit 0\n")
     monkeypatch.setenv("HARNESS_ARC_ID", ARC)
     fr.GATE_LOG_JSONL.write_text(json.dumps(_row(1, "finding", "cw:aa:11:1")) + "\n")
-    (repo / ".harness/sweep.md").write_text("Finding cw:aa:11:1\n")
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/sweep.md").write_text("Finding cw:aa:11:1\n")
     rc = rlg.main(
         [
             "attest-sweep",
             "--answers",
-            str(repo / ".harness/sweep.md"),
+            str(repo / ".harness/tmp/sweep.md"),
             "--base",
             "main",
             "--repo",
@@ -699,12 +710,12 @@ def test_capitalized_finding_heading_is_not_an_answer(repo: Path, monkeypatch: p
     )
     assert rc != 0
     assert rlg.load_state(repo).sweeps == ()
-    (repo / ".harness/sweep.md").write_text("Finding cw:aa:11:1 — fixed at f.py:3\n")
+    (repo / ".harness/tmp/sweep.md").write_text("Finding cw:aa:11:1 — fixed at f.py:3\n")
     rc = rlg.main(
         [
             "attest-sweep",
             "--answers",
-            str(repo / ".harness/sweep.md"),
+            str(repo / ".harness/tmp/sweep.md"),
             "--base",
             "main",
             "--repo",
@@ -712,6 +723,62 @@ def test_capitalized_finding_heading_is_not_an_answer(repo: Path, monkeypatch: p
         ]
     )
     assert rc == 0
+
+
+def test_obligation_tokens_do_not_answer_each_other(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r7 P2: a line that merely lists two ids (or two labels) must
+    # not let each token read as the other's answer — residue strips the FULL
+    # obligation set, not just the token under check
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(
+        json.dumps(_row(1, "finding", "cw:aa:11:1"))
+        + "\n"
+        + json.dumps(_row(1, "finding", "cw:aa:11:2"))
+        + "\n"
+    )
+    (repo / ".harness").mkdir(exist_ok=True)
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/sweep.md").write_text("cw:aa:11:1 cw:aa:11:2\n")
+    args = [
+        "attest-sweep",
+        "--answers",
+        str(repo / ".harness/tmp/sweep.md"),
+        "--base",
+        "main",
+        "--repo",
+        str(repo),
+    ]
+    assert rlg.main(args) != 0
+    assert rlg.load_state(repo).sweeps == ()
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "cw:aa:11:1 fixed at f.py:3\ncw:aa:11:2 registered as forward row\n"
+    )
+    assert rlg.main(args) == 0
+    assert len(rlg.load_state(repo).sweeps) == 1
+    # label half of the same class: two bracketed labels on one line answer neither
+    two = ("check-then-act on paths", "silent-failure shapes")
+    assert rlg._unanswered_labels(
+        two, "[check-then-act on paths] [silent-failure shapes]\n"
+    ) == list(two)
+    assert (
+        rlg._unanswered_labels(
+            two, "[check-then-act on paths] [silent-failure shapes] both guarded at f.py:3\n"
+        )
+        == []
+    )
+
+
+def test_malformed_binding_stamp_refuses_loudly(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r7 P2: an unparseable '# binding:' line must fail loud, never
+    # silently demote the file to hand-authored semantics (the deliberate-deletion
+    # arm stays out of scope per the module trust boundary — r6 rejection)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    (repo / ".harness/tmp").mkdir(parents=True, exist_ok=True)
+    (repo / ".harness/tmp/answers.md").write_text("# binding: mangled\n- real answer at f.py:3\n")
+    assert _attest_at(repo, ".harness/tmp/answers.md") != 0
+    assert rlg.load_state(repo).preflights == ()
 
 
 def test_gate_refusal_recipes_route_through_the_template_verbs():
