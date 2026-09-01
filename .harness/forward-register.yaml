@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 225
+  total: 226
   open: 1
   design_substrate_gated: 3
-  registered_finding: 69
+  registered_finding: 70
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 62853ad544381a7d
+  identity_digest: ed2138922aaa2a5c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11011,4 +11011,29 @@ items:
   council: 'NO — venue/policy decision plus a small mechanical change.'
   heading: '### B-225 · loop-venue root checkout permanently dirty — local
     stop-gate never green *(surfaced by u-he-49 preflight, 2026-08-27;
+    REGISTERED)*'
+- id: B-226
+  title: >-
+    Unattended-venue transcript-brief review debt has no executable gate —
+    the halt rule is prose-only
+  pr: 'PR pending (u-sr-06)'
+  status: registered_finding
+  summary: 'SURFACED by codex r10 on u-sr-06 (2026-09-01): the U-SR-06 rename
+    conformed every carrier to the transcript-brief review, and the Codex-venue
+    fallback now says an unattended arc owing a review HALTS at the
+    decision-fork/pre-done point and resumes where an isolated reviewer is
+    invocable — but nothing in the loop state machine ENFORCES that halt: the
+    permission guard auto-allows only the merge-lens exec shape, and the loop
+    recognizes only decorrelated_review and merge-gate review states, so an
+    unattended Codex arc could proceed to merge with the owed review recorded
+    nowhere a gate reads. The prose is fail-closed only by instruction-following.'
+  close_out: 'OPEN — closure = an executable review-debt mechanism: a recorded
+    owed-review state the stop-gate/ship path refuses to pass (or a
+    guard-allowlisted isolated transcript-brief exec shape for the Codex venue,
+    a class-11 four-question surface: guard venue, authority binding, carrier
+    parity, production-call witness).'
+  council: 'NO — single-surface gate mechanism; class-11 checklist applies at
+    build time.'
+  heading: '### B-226 · unattended transcript-brief review debt lacks an
+    executable gate *(surfaced by codex r10 on u-sr-06, 2026-09-01;
     REGISTERED)*'

@@ -154,6 +154,14 @@ needs "$ROOT/Project_Roadmap_v1.md" "roadmap advisor_required field semantics" '
 # brief-review (lenses never see the brief; doc-only PRs skip the gate) — pin
 # the corrected routing at the Codex root authority.
 needs "$ROOT/AGENTS.md" "AGENTS.md fallback names the true discharge" 'a merge-gate lens is NOT a discharge'
+# codex r10: the fallback must be a HALT, not a routed promise (the loop has no
+# review-debt state a gate reads — B-226 registers the executable mechanism),
+# and the venue's isolated exec must be the guard's protected shape.
+needs "$ROOT/AGENTS.md" "AGENTS.md unattended fallback halts" 'HALTS there'
+# Pinned on a representative BRIDGE file — the shared translation line lives in
+# the 30 bridges, not the three native Codex workflows (r10's cite named
+# roadmap-continue, but that native file never carried the line).
+needs "$ROOT/.agents/skills/c1-orchestration-control/SKILL.md" "bridge isolated exec uses the guard shape" 'HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only'
 # codex r8: skills whose flow CONSUMES the second vote at decision time
 # (resolve compares votes; optimize-claude-md needs both reviewers' acceptance)
 # cannot use the deferred-routing fallback — their bridges must carry the
