@@ -2203,12 +2203,19 @@ def test_legacy_attestation_artifact_paths_are_gitignored() -> None:
         assert proc.returncode == 0, f"not gitignored: {rel} (exit {proc.returncode})"
 
 
-def test_tree_with_only_attestation_artifacts_yields_no_status_entries(tmp_path: Path) -> None:
-    """[B] F6 acceptance: a checkout dirty ONLY with attestation artifacts produces
-    zero status entries, so ROOT_CHECKOUT_EDIT and the C-HE-12 isolation skip cannot
-    fire. The fixture adopts the REAL repo .gitignore so this witnesses the shipped
-    rule, never a fixture-local copy; the stray-file control proves the collector
-    still sees genuine dirt — a gate that cannot red is not a gate."""
+def test_tree_with_only_attestation_artifacts_yields_no_status_entries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """[B] F6 acceptance, witnessed end to end (gate r1 P2 — the first cut stopped at
+    the collector seam): the REAL collector's output on an attestation-only tree
+    drives cg.validate through the two finding-emission branches, mirroring the
+    reviewed pattern at test_root_checkout_edits_are_hard_failure — so a mutation to
+    ROOT_CHECKOUT_EDIT's or the C-HE-12 isolation skip's condition reds here, not
+    just a mutation upstream of them. The fixture adopts the REAL repo .gitignore so
+    this witnesses the shipped rule, never a fixture-local copy; the stray-file
+    control proves both branches still fire on genuine dirt — a gate that cannot red
+    is not a gate. The C-HE-12 dispatch itself is stubbed: this test witnesses the
+    skip's discriminator, not the detection suite."""
     repo = _init_repo(tmp_path)
     (repo / ".gitignore").write_text(
         (_REPO_ROOT / ".gitignore").read_text(encoding="utf-8"), encoding="utf-8"
@@ -2220,5 +2227,28 @@ def test_tree_with_only_attestation_artifacts_yields_no_status_entries(tmp_path:
         (repo / rel).write_text("attested answers\n", encoding="utf-8")
     assert cg._status_entries(repo) == []
 
+    monkeypatch.setattr(cg, "_emitting_detections_dispatch", lambda root, lane: [])
+    clean = _state(
+        git_dir=".git",
+        is_linked_worktree=False,
+        branch="main",
+        default_branch="main",
+        status_entries=cg._status_entries(repo),
+    )
+    codes = {f.code for f in cg.validate(clean, mode="check")}
+    assert "ROOT_CHECKOUT_EDIT" not in codes
+    assert "DETECTIONS_UNAVAILABLE" not in codes
+
     (repo / ".harness" / "stray.md").write_text("genuine dirt\n", encoding="utf-8")
-    assert cg._status_entries(repo) != []
+    dirty_entries = cg._status_entries(repo)
+    assert dirty_entries != []
+    dirty = _state(
+        git_dir=".git",
+        is_linked_worktree=False,
+        branch="main",
+        default_branch="main",
+        status_entries=dirty_entries,
+    )
+    codes = {f.code for f in cg.validate(dirty, mode="check")}
+    assert "ROOT_CHECKOUT_EDIT" in codes
+    assert "DETECTIONS_UNAVAILABLE" in codes
