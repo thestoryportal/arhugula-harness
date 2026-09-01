@@ -750,7 +750,9 @@ def _has_residue(line: str, *tokens: str) -> bool:
     label and finding id itself, so mere token presence stopped evidencing that an
     author ever looked — a deletion-only edit of the template must not attest."""
     s = line
-    for t in (*tokens, TEMPLATE_PLACEHOLDER):
+    # longest token first (codex u-sr-04 r8 P1): replacing `...:1` before `...:10`
+    # leaves a stray `0` that reads as residue, answering the longer id's bare line
+    for t in sorted((*tokens, TEMPLATE_PLACEHOLDER), key=len, reverse=True):
         s = s.replace(t, " ")
     # the 'finding' label word strips case-insensitively (codex u-sr-04 r6 P2: a
     # capitalized 'Finding <id>' heading with no disposition must not read as an
@@ -937,6 +939,7 @@ def _write_template(repo: Path, answers_path: Path, text: str) -> Path:
             view = memoryview(text.encode())
             while view:  # os.write may be short; every byte lands before publication
                 view = view[os.write(wfd, view) :]
+            written = os.fstat(wfd)
         finally:
             os.close(wfd)
         try:
@@ -948,6 +951,23 @@ def _write_template(repo: Path, answers_path: Path, text: str) -> Path:
             ) from exc
         except OSError as exc:
             raise GateError(f"{answers_path} refused (containment): {exc}") from exc
+        # link(2) resolves the temp NAME, not the inode we wrote (the round-log
+        # publisher's codex r10 precedent, re-found here as u-sr-04 r8 P2): a
+        # concurrent unlink+replace of the temp between write and link would
+        # install a foreign inode under our name. Verify, and on mismatch remove
+        # the entry we just created and refuse loud.
+        check = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+        try:
+            installed = os.fstat(check)
+        finally:
+            os.close(check)
+        if (installed.st_dev, installed.st_ino) != (written.st_dev, written.st_ino):
+            with contextlib.suppress(OSError):
+                os.unlink(name, dir_fd=dfd)
+            raise GateError(
+                f"{answers_path} refused: installed inode is not the written one — "
+                "temp name was swapped mid-publish"
+            )
     finally:
         with contextlib.suppress(OSError):  # temp is scaffolding either way
             os.unlink(tmp, dir_fd=dfd)

@@ -769,6 +769,66 @@ def test_obligation_tokens_do_not_answer_each_other(repo: Path, monkeypatch: pyt
     )
 
 
+def test_overlapping_id_tokens_do_not_shadow(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r8 P1: with ids ...:1 and ...:10, stripping the shorter first
+    # left a stray '0' that read as residue on the longer id's bare template line —
+    # tokens strip longest-first
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(
+        json.dumps(_row(1, "finding", "cw:aa:11:1"))
+        + "\n"
+        + json.dumps(_row(2, "finding", "cw:aa:11:10"))
+        + "\n"
+    )
+    ids = ("cw:aa:11:1", "cw:aa:11:10")
+    assert rlg._unanswered_ids(ids, "cw:aa:11:1 fixed at f.py:3\n- finding cw:aa:11:10 —\n") == [
+        "cw:aa:11:10"
+    ]
+    (repo / ".harness/tmp").mkdir(exist_ok=True)
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "cw:aa:11:1 fixed at f.py:3\n- finding cw:aa:11:10 —\n"
+    )
+    args = [
+        "attest-sweep",
+        "--answers",
+        str(repo / ".harness/tmp/sweep.md"),
+        "--base",
+        "main",
+        "--repo",
+        str(repo),
+    ]
+    assert rlg.main(args) != 0
+    assert rlg.load_state(repo).sweeps == ()
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "cw:aa:11:1 fixed at f.py:3\ncw:aa:11:10 registered as forward row\n"
+    )
+    assert rlg.main(args) == 0
+
+
+def test_template_swapped_temp_inode_refused(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r8 P2 (the round-log publisher's codex r10 precedent): link(2)
+    # resolves the temp NAME — a swap between write and link must refuse loudly and
+    # leave nothing at the final name
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    real_link = os.link
+
+    def swapping_link(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+        if src.endswith(".tmp") and src_dir_fd is not None:
+            os.unlink(src, dir_fd=src_dir_fd)
+            fd = os.open(src, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644, dir_fd=src_dir_fd)
+            os.write(fd, b"foreign bytes\n")
+            os.close(fd)
+        return real_link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+
+    monkeypatch.setattr(os, "link", swapping_link)
+    assert _template(repo, "template-preflight") != 0
+    monkeypatch.setattr(os, "link", real_link)
+    assert not (repo / ".harness/tmp/answers.md").exists()
+    assert _template(repo, "template-preflight") == 0
+
+
 def test_malformed_binding_stamp_refuses_loudly(repo: Path, monkeypatch: pytest.MonkeyPatch):
     # codex u-sr-04 r7 P2: an unparseable '# binding:' line must fail loud, never
     # silently demote the file to hand-authored semantics (the deliberate-deletion
