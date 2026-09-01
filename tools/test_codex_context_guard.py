@@ -2177,3 +2177,48 @@ def test_unknown_pr_state_fails_loud(monkeypatch) -> None:
         assert "unknown state" in str(exc)
     else:
         raise AssertionError("an unknown state must fail loud")
+
+
+# --- U-SR-05 (WR-12): attestation artifacts must never red a tree-state gate ---
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ATTESTATION_SAMPLES = (
+    ".harness/.preflight-answers-u-sr-05.md",
+    ".harness/.sweep-answers-u-sr-05-r1.md",
+)
+
+
+def test_legacy_attestation_artifact_paths_are_gitignored() -> None:
+    """[LAW:single-enforcer] the shipped .gitignore is the one authority on these
+    paths: git itself classifies them ignored, so every porcelain consumer
+    (ROOT_CHECKOUT_EDIT, the C-HE-12 isolation skip, worktree local-state) is
+    blind to them at once — no per-gate pattern filter to drift."""
+    for rel in _ATTESTATION_SAMPLES:
+        proc = subprocess.run(
+            ["git", "check-ignore", "-q", rel],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, f"not gitignored: {rel} (exit {proc.returncode})"
+
+
+def test_tree_with_only_attestation_artifacts_yields_no_status_entries(tmp_path: Path) -> None:
+    """[B] F6 acceptance: a checkout dirty ONLY with attestation artifacts produces
+    zero status entries, so ROOT_CHECKOUT_EDIT and the C-HE-12 isolation skip cannot
+    fire. The fixture adopts the REAL repo .gitignore so this witnesses the shipped
+    rule, never a fixture-local copy; the stray-file control proves the collector
+    still sees genuine dirt — a gate that cannot red is not a gate."""
+    repo = _init_repo(tmp_path)
+    (repo / ".gitignore").write_text(
+        (_REPO_ROOT / ".gitignore").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "adopt real ignore rules")
+
+    for rel in _ATTESTATION_SAMPLES:
+        (repo / rel).write_text("attested answers\n", encoding="utf-8")
+    assert cg._status_entries(repo) == []
+
+    (repo / ".harness" / "stray.md").write_text("genuine dirt\n", encoding="utf-8")
+    assert cg._status_entries(repo) != []

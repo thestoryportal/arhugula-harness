@@ -43,6 +43,15 @@ routing_manifest/
 .harness/.arc-metrics.jsonl.*
 .harness/merge-gate-log.jsonl.emit.lock
 .harness/tmp/
+# U-SR-05 (WR-12): legacy attestation answer artifacts at the .harness/ root, written by
+# the pre-U-SR-04 attest recipes (the template verbs now write under .harness/tmp/, already
+# ignored above). They are per-arc working artifacts, never tracked records — and an
+# untracked attestation artifact must never red a tree-state gate (ROOT_CHECKOUT_EDIT /
+# the C-HE-12 isolation skip both key off `git status`, which this rule is the single
+# enforcer for; charter WR-12 per [B] F6: two of three U-HE-35 runs red on environment
+# only, ≈20 min avoidable).
+.harness/.preflight-answers-*
+.harness/.sweep-answers-*
 
 # B-40: cross-process ledger advisory-lock sidecars (harness_is.cross_process_ledger_lock),
 # created next to any canonical ledger path (state.jsonl.lock, memory_ops.jsonl.lock, etc).

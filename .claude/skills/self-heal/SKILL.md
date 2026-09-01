@@ -18,7 +18,9 @@ artifacts so the operator only sees genuine bugs.
    (The Wave-1 `precmd-clear-cache.sh` hook does this per-Bash; do it explicitly here too.)
 2. **Run the suite.** `just codex-check` (lint + typecheck + docs/closure gates +
    `uv run pytest` + the `codex-parity-check` shell lane, mechanism-α only — β/γ skip
-   without credentials, by design). For a targeted area, `just test-one <path>`. Prefer
+   without credentials, by design). ALWAYS launch it `run_in_background` and poll the
+   task (U-SR-05/WR-12): the suite outlasts the Bash tool's foreground timeout — a
+   foreground launch cost a 10-minute dead gap at [B] F6. For a targeted area, `just test-one <path>`. Prefer
    `codex-check` over `check` here: the two differ only in that `check` omits
    `codex-parity-check`, and with it BOTH shell globs (`tools/hooks/test_*.sh` *and*
    `tools/statusline/test_*.sh`) — a self-heal pass that never executed them cannot call
