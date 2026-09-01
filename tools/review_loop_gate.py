@@ -750,8 +750,12 @@ def _has_residue(line: str, *tokens: str) -> bool:
     label and finding id itself, so mere token presence stopped evidencing that an
     author ever looked — a deletion-only edit of the template must not attest."""
     s = line
-    for t in (*tokens, TEMPLATE_PLACEHOLDER, "finding"):
+    for t in (*tokens, TEMPLATE_PLACEHOLDER):
         s = s.replace(t, " ")
+    # the 'finding' label word strips case-insensitively (codex u-sr-04 r6 P2: a
+    # capitalized 'Finding <id>' heading with no disposition must not read as an
+    # authored answer); obligation tokens above stay case-exact
+    s = re.sub(r"(?i)\bfinding\b", " ", s)
     return bool(s.strip(" \t-—:*[]().,#"))
 
 

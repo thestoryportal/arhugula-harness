@@ -679,6 +679,41 @@ def test_stale_template_binding_stamp_refuses_after_tree_moves(
     assert _attest_at(repo, ".harness/answers-2.md") == 0
 
 
+def test_capitalized_finding_heading_is_not_an_answer(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r6 P2: 'Finding <id>' (capitalized, no disposition) must not
+    # satisfy the id's residue check — the label word strips case-insensitively
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(json.dumps(_row(1, "finding", "cw:aa:11:1")) + "\n")
+    (repo / ".harness/sweep.md").write_text("Finding cw:aa:11:1\n")
+    rc = rlg.main(
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+    assert rc != 0
+    assert rlg.load_state(repo).sweeps == ()
+    (repo / ".harness/sweep.md").write_text("Finding cw:aa:11:1 — fixed at f.py:3\n")
+    rc = rlg.main(
+        [
+            "attest-sweep",
+            "--answers",
+            str(repo / ".harness/sweep.md"),
+            "--base",
+            "main",
+            "--repo",
+            str(repo),
+        ]
+    )
+    assert rc == 0
+
+
 def test_gate_refusal_recipes_route_through_the_template_verbs():
     # codex u-sr-04 r1 P2 (integration): an agent following the gate's own refusal
     # text must land on the labels-before-answers flow, not on attest-by-trial —
