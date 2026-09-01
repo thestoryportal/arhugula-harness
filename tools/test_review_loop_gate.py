@@ -816,10 +816,19 @@ def test_template_swapped_temp_inode_refused(repo: Path, monkeypatch: pytest.Mon
 
     def swapping_link(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
         if src.endswith(".tmp") and src_dir_fd is not None:
-            os.unlink(src, dir_fd=src_dir_fd)
-            fd = os.open(src, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644, dir_fd=src_dir_fd)
-            os.write(fd, b"foreign bytes\n")
-            os.close(fd)
+            # hold the original inode open across the swap: Linux recycles a freed
+            # inode number immediately, and a recycled number would make the
+            # foreign file compare EQUAL and hide the swap (the first CI run of
+            # this witness caught exactly that on ext4; APFS never recycles)
+            holder = os.open(src, os.O_RDONLY, dir_fd=src_dir_fd)
+            try:
+                os.unlink(src, dir_fd=src_dir_fd)
+                fd = os.open(src, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644, dir_fd=src_dir_fd)
+                os.write(fd, b"foreign bytes\n")
+                os.close(fd)
+                return real_link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+            finally:
+                os.close(holder)
         return real_link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
 
     monkeypatch.setattr(os, "link", swapping_link)

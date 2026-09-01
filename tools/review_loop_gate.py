@@ -972,34 +972,37 @@ def _write_template(repo: Path, answers_path: Path, text: str) -> Path:
             while view:  # os.write may be short; every byte lands before publication
                 view = view[os.write(wfd, view) :]
             written = os.fstat(wfd)
+            try:
+                os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
+            except FileExistsError as exc:
+                raise GateError(
+                    f"{answers_path} already exists — the template never overwrites; "
+                    "pass this round's fresh answers path or remove the file first"
+                ) from exc
+            except OSError as exc:
+                raise GateError(f"{answers_path} refused (containment): {exc}") from exc
+            # link(2) resolves the temp NAME, not the inode we wrote (the round-log
+            # publisher's codex r10 precedent, re-found here as u-sr-04 r8 P2): a
+            # concurrent unlink+replace of the temp between write and link would
+            # install a foreign inode under our name. Verify while wfd is STILL
+            # OPEN — that pins the written inode as allocated, so a recycled inode
+            # number can never alias the comparison (Linux reuses freed inode
+            # numbers immediately; the first CI run of the swap witness proved the
+            # closed-fd ordering compares equal on ext4).
+            check = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
+            try:
+                installed = os.fstat(check)
+            finally:
+                os.close(check)
+            if (installed.st_dev, installed.st_ino) != (written.st_dev, written.st_ino):
+                with contextlib.suppress(OSError):
+                    os.unlink(name, dir_fd=dfd)
+                raise GateError(
+                    f"{answers_path} refused: installed inode is not the written one — "
+                    "temp name was swapped mid-publish"
+                )
         finally:
             os.close(wfd)
-        try:
-            os.link(tmp, name, src_dir_fd=dfd, dst_dir_fd=dfd)
-        except FileExistsError as exc:
-            raise GateError(
-                f"{answers_path} already exists — the template never overwrites; "
-                "pass this round's fresh answers path or remove the file first"
-            ) from exc
-        except OSError as exc:
-            raise GateError(f"{answers_path} refused (containment): {exc}") from exc
-        # link(2) resolves the temp NAME, not the inode we wrote (the round-log
-        # publisher's codex r10 precedent, re-found here as u-sr-04 r8 P2): a
-        # concurrent unlink+replace of the temp between write and link would
-        # install a foreign inode under our name. Verify, and on mismatch remove
-        # the entry we just created and refuse loud.
-        check = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dfd)
-        try:
-            installed = os.fstat(check)
-        finally:
-            os.close(check)
-        if (installed.st_dev, installed.st_ino) != (written.st_dev, written.st_ino):
-            with contextlib.suppress(OSError):
-                os.unlink(name, dir_fd=dfd)
-            raise GateError(
-                f"{answers_path} refused: installed inode is not the written one — "
-                "temp name was swapped mid-publish"
-            )
     finally:
         with contextlib.suppress(OSError):  # temp is scaffolding either way
             os.unlink(tmp, dir_fd=dfd)
