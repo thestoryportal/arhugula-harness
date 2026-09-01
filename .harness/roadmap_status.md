@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `faeec22f45a9` |
+| `workspace_state_hash` | `00bd30133cec` |
 | `last_refreshed` | 2026-09-01T00:00:00Z |
-| `git_head` | `676b3a26` —  |
+| `git_head` | `6af86eef` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1483).** The next implementable unit is one of the remaining §8 R1 levers `U-SR-06…08` (order-free; U-SR-06 — `advisor()` reconciliation, charter WR-13 — is the natural pick: decision #1 is RATIFIED as the REWRITE arm (2026-08-26), so the unit conforms the four governance carriers that name the unprovisioned `advisor()` instrument — `CLAUDE.md` §13.1, `roadmap-continue/SKILL.md`, `merge-gate/SKILL.md`, `resolve/SKILL.md` — to the instruments that exist, with the grep-witness acceptance that zero carriers name an instrument the environment does not expose). U-SR-05 landed at #1483: WR-12's both halves are mechanized — the legacy `.harness/.preflight-answers-*`/`.sweep-answers-*` attestation artifacts are gitignored (the single-enforcer arm: ROOT_CHECKOUT_EDIT, the C-HE-12 isolation skip, and every other porcelain consumer go blind to them at git itself, witnessed end-to-end by a cg.validate-driving hermetic test plus real-repo check-ignore pins, both mutation-probed), and all four Claude loop-skill carriers (roadmap-continue, ship-pr, self-heal, two-lane) now instruct `run_in_background` launch for `just codex-check` with an 8-assertion wiring witness (Codex-native mirrors deliberately excluded — no such parameter in that venue, per WR-13's phantom-instrument rule). Out-of-family loop: r1 BLOCK (1 P2, two-lane carrier omission) → r2 APPROVE → gate-absorption r3 APPROVE; 3-lens merge gate r1 witness BLOCK (collector-seam half-proof) → absorbed → r2 ALL-APPROVE at 3794d019a. Named residuals: 11 legacy answer files from prior arcs remain tracked (the ignore rule governs the untracked go-forward set only); the Codex-mirror launch-shape gap is deliberate, not owed. Remaining §8 sequence: U-SR-06…08 (R1), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it; then U-SR-06 as the next unit.
+**Current next action (post-#1485).** The next implementable unit is one of the remaining §8 R1 levers `U-SR-07…08` (order-free; U-SR-07 — session-shape codification, charter WR-14 — is the natural pick: three habit lines into the loop skills' close-out carriers — facts-brief → fresh-session for heavy audits, cache-warmth handoff before >TTL background waits at >400k context, read-before-grep — with a grep-witness acceptance and wiring suite green). U-SR-06 landed at #1485: WR-13's REWRITE arm is executed — every live governance carrier (61 in the witness enumeration: CLAUDE.md, the loop/council/optimize skills, both commands' allowed-tools, docs/governance + startup routers, the .harness/council canonicals, AGENTS.md + the Codex parity note, all 30 .agents bridges, the roadmap's live schema clauses, the justfile comment) now names the transcript-brief review — a fresh-context Agent reviewer on a written session brief (fork where supported) — instead of the never-provisioned advisor(); the Codex venue's contract is fail-closed (isolated guard-shape exec where invocable; unattended arcs HALT at the owing fork, DEFERRED-HIL shape; resolve/optimize-claude-md carry the decision-time fork-defers exception), witnessed by tools/hooks/test_skill_advisor_reconciliation.sh (25 checks, auto-collected by the codex-parity glob, every check mutation-probed). Out-of-family loop ran the full ten-round budget r1–r10 all-BLOCK-absorbed-adjudicated (r11 GATE_REFUSED at the budget — the register-and-hold point taken as designed); 3-lens merge gate ALL-APPROVE at 470a2b300. Named residuals: B-226 (unattended review-debt halt is a prose floor pending an executable gate — a class-11 surface), historical records keep the old name by design. Remaining §8 sequence: U-SR-07…08 (R1), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it; then U-SR-07 as the next unit.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1485 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1483 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1481 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1479 | 2026-08-31 | U-SR-03 laws:prompt durable wiring + bindings by file (charter WR-08/09) merged; 3-lens merge gate ALL APPROVE. |
 | PR #1477 | 2026-08-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| 1475 | 2026-08-28 | landed through the merge door; 3-lens gate all-approve at round 2; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
