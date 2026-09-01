@@ -1,7 +1,7 @@
 ---
 description: Run the generic (council-skill-agnostic) multi-agent council workflow — same shape/flow as /council-workflow but with the voice roster parameterized for ANY task that has a nameable cross-perspective tension (inside or outside this harness). Use for a wide-open design/decision worth decorrelated multi-voice + adversarial + out-of-family review.
 argument-hint: <the task/decision to deliberate> [optionally name the primary + consultant perspectives, or let the command propose them]
-allowed-tools: Workflow, Agent, Bash, Read, Write, Edit, advisor
+allowed-tools: Workflow, Agent, Bash, Read, Write, Edit
 ---
 Run the **generic council workflow** for this task:
 

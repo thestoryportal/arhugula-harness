@@ -44,6 +44,12 @@ CARRIERS=(
   "$ROOT/.claude/workflows/council-workflow.generic.yaml"
   "$ROOT/.claude/commands/council-workflow.md"
   "$ROOT/.claude/commands/council-generic.md"
+  # The council commands say "follow it exactly" of the .harness/council ROOT
+  # canonicals — a second live home for the same workflow (codex r1 P1). Session
+  # archives under .harness/council/*/ stay historical and excluded.
+  "$ROOT/.harness/council/COUNCIL-WORKFLOW.md"
+  "$ROOT/.harness/council/council-workflow.harness-aware.yaml"
+  "$ROOT/.harness/council/council-workflow.generic.yaml"
 )
 # The Codex-venue bridge skills carry the same discipline translated; the venue
 # exposes no advisor tool either, so they are carriers at the identical bar.
@@ -55,14 +61,30 @@ for f in "${CARRIERS[@]}"; do
   [ -f "$f" ] || { echo "FATAL: missing carrier $f"; exit 1; }
 done
 
+# The needle is every CALL-form — 'advisor(' catches advisor() and argument
+# shapes like advisor(transcript-aware) (codex r1 P1: the bare token missed the
+# argument form) without tripping on the plain word in role prose ("advisory",
+# "the advisor is transcript-aware"), which names no instrument.
 CLEAN=1
 for f in "${CARRIERS[@]}"; do
-  if grep -qF 'advisor()' "$f"; then
-    bad "phantom instrument named at ${f#"$ROOT"/}"
+  if grep -qF 'advisor(' "$f"; then
+    bad "phantom instrument call-form named at ${f#"$ROOT"/}"
     CLEAN=0
   fi
 done
-[ "$CLEAN" -eq 1 ] && ok "zero live carriers name the phantom advisor() instrument (${#CARRIERS[@]} files swept)"
+[ "$CLEAN" -eq 1 ] && ok "zero live carriers name a phantom advisor call-form (${#CARRIERS[@]} files swept)"
+
+# No command frontmatter may GRANT the phantom as a tool: an allowed-tools list
+# containing a bare 'advisor' entry is the strongest phantom-instrument shape —
+# a capability grant for a tool no venue exposes (codex r1 P1).
+GRANTS=0
+for f in "$ROOT"/.claude/commands/*.md; do
+  if grep -E '^allowed-tools:' "$f" | grep -qE '(:|,)[[:space:]]*advisor([[:space:]]*(,|$))'; then
+    bad "allowed-tools grants the phantom advisor tool at ${f#"$ROOT"/}"
+    GRANTS=1
+  fi
+done
+[ "$GRANTS" -eq 0 ] && ok "no command frontmatter grants an advisor tool"
 
 # ── Positive half: the discipline survived — renamed, not deleted ──
 # The unit's four named carriers + the relocated §13.2 matrix must carry the
