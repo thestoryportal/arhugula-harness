@@ -339,7 +339,13 @@ def decide(
     head_sha: str,
     diff_digest: str,
     budget: int = DEFAULT_ROUND_BUDGET,
+    lane_id: str = "<lane-id>",
 ) -> Allowed | Refused:
+    # every recipe command carries the arc/lane prefix (codex u-sr-04 r4 P2): the
+    # attest/template verbs resolve identity via env_arc_and_lane(), so a bare
+    # command in a refusal recipe binds the branch-* fallback arc — an agent
+    # following the gate's own recovery text could never clear the reserved arc
+    pfx = f"HARNESS_ARC_ID={arc_id} HARNESS_LANE_ID={lane_id} "
     scoped = _loop_rounds(rows, arc_id)
     # budget counts review invocations SPENT — distinct (producer, round) pairs, since
     # round numbers are per-producer scales and a max() across them undercounts
@@ -354,7 +360,9 @@ def decide(
                 "round budget spent — this is the register-and-hold point, not a bug to "
                 "keep iterating: register the residual findings as a forward item and "
                 "defer (`bash tools/04-loop/defer.sh <arc> '<reason>'`); an operator may "
-                "instead extend deliberately via `just review-attest-budget` (ask-gated). "
+                f"instead extend deliberately via `{pfx}just review-attest-budget` "
+                "(ask-gated; the prefix binds the extension to this arc, not the "
+                "branch-* fallback). "
                 "Weigh the counter-evidence before holding: on INVENTING arcs late "
                 "rounds have measured productive (all 8 P1s at round >=10, "
                 ".harness/session-audit-2026-08-22-u-he-29.md §4) — extension exists "
@@ -375,10 +383,10 @@ def decide(
             detail="findings without a class-sibling sweep answer: " + ", ".join(unanswered),
             recipe=(
                 "classify the miss, grep the diff for class siblings, commit the "
-                "absorption, then labels-before-answers (WR-10): `just "
+                f"absorption, then labels-before-answers (WR-10): `{pfx}just "
                 "review-template-sweep <answers-file>` pre-fills every outstanding "
                 "finding_id and hit label; fill each placeholder, then "
-                "`just review-attest-sweep <answers-file>`"
+                f"`{pfx}just review-attest-sweep <answers-file>`"
             ),
         )
     # currency invariant (codex r2 P1, subsuming the earlier post-APPROVE residual):
@@ -393,10 +401,10 @@ def decide(
                 detail=f"no preflight attestation for {arc_id}",
                 recipe=(
                     "run the defect-class-preflight sweep, COMMIT the work, then "
-                    "labels-before-answers AFTER the final commit (WR-10): `just "
+                    f"labels-before-answers AFTER the final commit (WR-10): `{pfx}just "
                     "review-template-preflight <answers-file>` pre-fills every hit "
                     "label; fill each placeholder, then "
-                    "`just review-attest-preflight <answers-file>`"
+                    f"`{pfx}just review-attest-preflight <answers-file>`"
                 ),
             )
         return Refused(
@@ -407,10 +415,14 @@ def decide(
                 "preflight or sweep"
             ),
             recipe=(
-                "re-run `just review-attest-preflight <answers-file>` after the last "
-                "commit (every reviewed byte is attested-swept, always); if it "
-                "enumerates NEW labels, `just review-template-preflight` a fresh "
-                "answers path first"
+                # template-first here too (codex u-sr-04 r4 P2): a moved tree can
+                # carry new labels, and attest-first would rediscover them by the
+                # exact failed trial WR-10 eliminates
+                f"labels-before-answers on the moved tree (WR-10): `{pfx}just "
+                "review-template-preflight <fresh-answers-file>` over the new range, "
+                "carry forward the still-true answers and fill the rest, then "
+                f"`{pfx}just review-attest-preflight <fresh-answers-file>` (every "
+                "reviewed byte is attested-swept, always)"
             ),
         )
     return Allowed(round_n=max((r["round_n"] for r in scoped), default=0) + 1)
@@ -490,12 +502,17 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
             recipe="inspect .harness/merge-gate-log.jsonl (or HARNESS_GATE_LOG) — the "
             "gate cannot derive rounds or obligations without it",
         )
+    # the lane comes from the same env boundary that named the arc, so refusal
+    # recipes render the exact working prefix (a fallback lane renders truthfully
+    # as the fallback the verbs would themselves resolve)
+    _, lane_id = rw.env_arc_and_lane()
     return decide(
         state,
         rows,
         arc_id=arc_id,
         head_sha=binding["head_sha"],
         diff_digest=binding["diff_digest"],
+        lane_id=lane_id,
     )
 
 

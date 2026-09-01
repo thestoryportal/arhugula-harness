@@ -636,14 +636,37 @@ def test_sweep_template_with_placeholders_deleted_does_not_attest(
 def test_gate_refusal_recipes_route_through_the_template_verbs():
     # codex u-sr-04 r1 P2 (integration): an agent following the gate's own refusal
     # text must land on the labels-before-answers flow, not on attest-by-trial —
-    # each refusal recipe names its template verb BEFORE its attest verb
-    d = _decide(_state(), [])
+    # each refusal recipe names its template verb BEFORE its attest verb, on EVERY
+    # branch including PREFLIGHT_STALE (r4 P2: a moved tree can carry new labels),
+    # and every command carries the arc/lane prefix (r4 P2: a bare command binds
+    # the branch-* fallback arc, so the recovery text could never clear this one)
+    def _prefixed(recipe: str, verb: str) -> bool:
+        return f"HARNESS_ARC_ID={ARC} HARNESS_LANE_ID=lane-7 just {verb}" in recipe
+
+    d = _decide(_state(), [], lane_id="lane-7")
     assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
     assert d.recipe.index("review-template-preflight") < d.recipe.index("review-attest-preflight")
+    assert _prefixed(d.recipe, "review-template-preflight") and _prefixed(
+        d.recipe, "review-attest-preflight"
+    )
     rows = [_row(1, "finding", "cw:aa:11:1")]
-    d = _decide(_state(preflights=(_pf(),)), rows)
+    d = _decide(_state(preflights=(_pf(),)), rows, lane_id="lane-7")
     assert isinstance(d, rlg.Refused) and d.code == "SWEEP_MISSING"
     assert d.recipe.index("review-template-sweep") < d.recipe.index("review-attest-sweep")
+    assert _prefixed(d.recipe, "review-template-sweep") and _prefixed(
+        d.recipe, "review-attest-sweep"
+    )
+    d = _decide(_state(preflights=(_pf(head="e" * 40),)), [], lane_id="lane-7")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_STALE"
+    assert d.recipe.index("review-template-preflight") < d.recipe.index("review-attest-preflight")
+    assert _prefixed(d.recipe, "review-template-preflight")
+    d = _decide(
+        _state(preflights=(_pf(),)),
+        [_row(n, "finding", f"cw:aa:11:{n}") for n in range(1, 11)],  # 10 rounds spent
+        lane_id="lane-7",
+    )
+    assert isinstance(d, rlg.Refused) and d.code == "BUDGET_EXHAUSTED"
+    assert _prefixed(d.recipe, "review-attest-budget")
 
 
 def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
