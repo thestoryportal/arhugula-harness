@@ -892,3 +892,8 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | 2026-09-01T16:03:00Z | #1483 | 3794d019a4b6 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-09-01T16:05:40Z | #1483 | 3794d019a4b6 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | PR #1483 | 2026-09-01 | feat/he-lanes-u-sr-05 | concurrency: APPROVE (r1+r2) | spec-conformance: APPROVE (r1+r2) | witness-adequacy: BLOCK r1 (1 P2 — witness stopped at the collector seam; absorbed 3794d019a) → APPROVE r2 | outcome: ALL-APPROVE at 3794d019a4b6 | blast-radius: no production symbol changed; .gitignore's 6 porcelain consumers enumerated manually (graft call edges do not model gitignore — codex_context_guard _status_entries/_changed_files, lib.sh hook_worktree_local_state, stop-gate.sh, loop_lib.sh _loop_gc_local_state, codex-parity-check glob); a floor not a ceiling |
+| 2026-09-01T21:38:47Z | #1485 | 470a2b30015a | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T21:39:14Z | #1485 | 470a2b30015a | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-01T21:41:16Z | #1485 | 470a2b30015a | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
+
+**PR #1485** (2026-09-01, `feat/u-sr-06-advisor-reconciliation`, arc u-sr-06): concurrency APPROVE · spec-conformance APPROVE · witness-adequacy APPROVE → ALL-APPROVE at 470a2b30015a, merge without HIL. blast-radius: enumerated mechanically from consumer wiring (prose diff, no Python symbols — parity glob at tools/codex-parity-check.sh:65, forward_register.py --check, merge_gate_log tooling, phrase-pinning wiring suites, permission-guard exec-shape grammar); graft call-graph N/A for prose carriers, stated as a floor.
