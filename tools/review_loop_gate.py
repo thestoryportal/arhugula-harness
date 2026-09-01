@@ -96,6 +96,11 @@ DEFAULT_ROUND_BUDGET = 10
 
 _HIT_LABEL = re.compile(r"^\[(.+)\]$", re.MULTILINE)
 
+#: WR-10 ([B] a2/F14): the template verbs write this token under every pre-filled
+#: obligation; _read_answers refuses any answers file still carrying it, so a
+#: label-complete but answer-empty template can never attest.
+TEMPLATE_PLACEHOLDER = "TODO(answer)"
+
 
 class GateError(Exception):
     """Loud gate failure (unreadable state, unrunnable sweep script)."""
@@ -701,6 +706,16 @@ def _read_answers(path: Path) -> str:
     text = data.decode(errors="replace")
     if not text.strip():
         raise GateError(f"answers file {path} is empty")
+    if TEMPLATE_PLACEHOLDER in text:
+        # [LAW:single-enforcer] WR-10: the template verbs pre-fill every hit label,
+        # which would otherwise let an UNEDITED template attest (labels present,
+        # answers absent). Attest stays the one checkpoint: a file still carrying
+        # the placeholder token has sections nobody answered — refuse it here, the
+        # same seam both attest verbs already cross.
+        raise GateError(
+            f"answers file {path} still carries {TEMPLATE_PLACEHOLDER!r} — "
+            "replace every placeholder with a named answer before attesting"
+        )
     return text
 
 
@@ -714,6 +729,109 @@ def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
     # satisfy the sibling ...:1) — ids are whitespace/punctuation-delimited tokens
     tokens = set(re.split(r"[\s,;()\[\]{}'\"`]+", answers))
     return [n for n in ids if n not in tokens]
+
+
+def _template_text(
+    arc_id: str, kind: str, diff_range: str, labels: tuple[str, ...], finding_ids: tuple[str, ...]
+) -> str:
+    """Answers-template body: every obligation the matching attest verb will enforce,
+    pre-filled so authoring happens AGAINST the label set instead of guessing at it
+    (WR-10, [B] F14: three attest-by-trial failures). Pure text from values —
+    [LAW:dataflow-not-control-flow]: preflight vs sweep differ only in the obligation
+    tuples flowing in, never in which operations run. The header deliberately never
+    spells the placeholder token: attest refuses the whole FILE on it, so only
+    fillable section bodies may carry it."""
+    lines = [
+        f"# {arc_id} {kind} — named answers",
+        f"# Generated over the attested range {diff_range} by `just review-template-{kind}`.",
+        "# Replace every placeholder line with the named answer (line number +",
+        "# concrete disposition) — attestation refuses an unfilled file.",
+        "",
+    ]
+    for fid in finding_ids:
+        # the id stands whitespace-delimited: _unanswered_ids is token-exact, and a
+        # trailing colon would glue into the token and fail its own attest
+        lines += [f"- finding {fid} — {TEMPLATE_PLACEHOLDER}", ""]
+    for label in labels:
+        lines += [f"[{label}]", f"- {TEMPLATE_PLACEHOLDER}", ""]
+    if not finding_ids and not labels:
+        lines += [
+            "No sweep hits over the attested range. Name the diff-level answers you",
+            "still owe (classes walked; new-consumer inventory if any), then attest.",
+            f"- {TEMPLATE_PLACEHOLDER}",
+            "",
+        ]
+    return "\n".join(lines)
+
+
+def _write_template(repo: Path, answers_path: Path, text: str) -> Path:
+    """Exclusive-create write of the answers template. Refuses a destination outside
+    the worktree (the template verbs are guard-auto-allowed, so their one file OUTPUT
+    gets the containment discipline _read_answers gives the input) and refuses an
+    existing file — templates never overwrite hand-authored answers
+    ([LAW:no-silent-failure]); per-round answers files get fresh names."""
+    dest = answers_path if answers_path.is_absolute() else repo / answers_path
+    parent = dest.parent.resolve()
+    if not parent.is_relative_to(repo.resolve()):
+        raise GateError(f"template destination {answers_path} resolves outside the worktree")
+    final = parent / dest.name
+    # O_EXCL refuses any survivor at the name — including a pre-planted symlink
+    # (EEXIST, never a follow), the same idiom as the state-file .tmp publication
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW
+    try:
+        fd = os.open(str(final), flags, 0o644)
+    except FileExistsError as exc:
+        raise GateError(
+            f"{answers_path} already exists — the template never overwrites; "
+            "pass this round's fresh answers path or remove the file first"
+        ) from exc
+    except OSError as exc:
+        raise GateError(f"{answers_path} refused (containment): {exc}") from exc
+    try:
+        os.write(fd, text.encode())
+    finally:
+        os.close(fd)
+    return final
+
+
+def _template_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:
+    b = rw.code_binding(repo, base)
+    diff_range = f"{b['base_sha']}..{b['head_sha']}"
+    # [LAW:one-source-of-truth]: same sweep, same binding range _attest_preflight
+    # enforces — the template can never carry labels the attest would not check
+    labels = _run_sweep_script(repo, diff_range)
+    final = _write_template(
+        repo, answers_path, _template_text(arc_id, "preflight", diff_range, labels, ())
+    )
+    print(f"review-gate: preflight template at {final} ({len(labels)} hit labels pre-filled)")
+    return 0
+
+
+def _template_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:
+    state = _load_state_for_attest(repo)
+    try:
+        rows = fr.read_rows()
+    except Exception as exc:  # unreadable obligation authority: refuse, as attest does
+        raise GateError(f"gate log unreadable: {exc}") from exc
+    ids = unanswered_findings(state, rows, arc_id)
+    if not ids:
+        print(
+            f"review-gate: no unanswered findings for {arc_id} — nothing to template "
+            "(a moved tree re-attests via review-attest-preflight)",
+            file=sys.stderr,
+        )
+        return 1
+    b = rw.code_binding(repo, base)
+    diff_range = f"{b['base_sha']}..{b['head_sha']}"
+    labels = _run_sweep_script(repo, diff_range)
+    final = _write_template(
+        repo, answers_path, _template_text(arc_id, "sweep", diff_range, labels, tuple(ids))
+    )
+    print(
+        f"review-gate: sweep template at {final} "
+        f"({len(ids)} findings + {len(labels)} hit labels pre-filled)"
+    )
+    return 0
 
 
 def _attest_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) -> int:
@@ -825,7 +943,7 @@ def _attest_budget(repo: Path, extra: int, reason: str, arc_id: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("attest-preflight", "attest-sweep"):
+    for name in ("attest-preflight", "attest-sweep", "template-preflight", "template-sweep"):
         sp = sub.add_parser(name)
         sp.add_argument("--answers", required=True, help="in-worktree relative path")
         sp.add_argument("--base", default="main")
@@ -849,6 +967,10 @@ def main(argv: list[str] | None = None) -> int:
             return _attest_preflight(repo, args.base, Path(args.answers), arc_id)
         if args.cmd == "attest-sweep":
             return _attest_sweep(repo, args.base, Path(args.answers), arc_id)
+        if args.cmd == "template-preflight":
+            return _template_preflight(repo, args.base, Path(args.answers), arc_id)
+        if args.cmd == "template-sweep":
+            return _template_sweep(repo, args.base, Path(args.answers), arc_id)
         if args.cmd == "attest-budget":
             return _attest_budget(repo, args.extra, args.reason, arc_id)
     except GateError as exc:

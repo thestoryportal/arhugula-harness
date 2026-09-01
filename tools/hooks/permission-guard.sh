@@ -774,9 +774,11 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # the script takes no arguments, and anything chained, redirected or substituted was
       # already rejected above. A different path after `source` does not match.
       emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-gate-check([[:space:]]+[A-Za-z0-9._/-]+)?$|^just[[:space:]]+review-attest-(preflight|sweep)[[:space:]]+[A-Za-z0-9._/-]+([[:space:]]+[A-Za-z0-9._/-]+)?$' \
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-gate-check([[:space:]]+[A-Za-z0-9._/-]+)?$|^just[[:space:]]+review-(attest|template)-(preflight|sweep)[[:space:]]+[A-Za-z0-9._/-]+([[:space:]]+[A-Za-z0-9._/-]+)?$' \
        && _bash_args_safe "$CMD"; then
-      # B-215 attest/check verbs, EXACT-ANCHORED and arity-bounded (codex r3 P1):
+      # B-215 attest/check verbs + the U-SR-04 template verbs (same two-parameter
+      # arity, write only a fresh in-worktree answers template, never a record),
+      # EXACT-ANCHORED and arity-bounded (codex r3 P1):
       # `just` chains recipes, so a prefix-anchored allow (`just review-gate-check
       # main review-attest-budget 2 ok`) would ride the allowlisted prefix and run
       # the deliberately ask-gated budget verb as a chained second recipe. Each

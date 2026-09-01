@@ -153,6 +153,36 @@ than an in-repo file, the same pause applies, with a three-rung ladder:
    in the inventory table as a case to handle; the probe narrows nothing it did
    not see.
 
+## The mechanism-precedent search (grounding-time — fires BEFORE the first line of a new tool)
+
+The new-consumer pause above covers DATA surfaces. This step covers MECHANISM
+surfaces, and it fires earlier still — at grounding, the moment you can list which
+mechanisms the new tool needs (subprocess lifecycle, signal handling, file
+publication, verdict parsing, guard wiring) and have written none of them. For
+each mechanism on that list:
+
+1. **Read the reviewed sibling that already does it — then adopt its shape or
+   import it outright.** At the 2026-08-26 audit [A] the sibling wrappers
+   (`run_bounded`/`terminate_bounded`, `agy_review`, the guard-allow commits)
+   carried ~90 absorbed findings of reviewer pressure: they are the reviewers'
+   standard in executable form, the local bar. Diverge only with the divergence
+   named in the diff — a silent divergence from the reviewed sibling is a finding
+   either way, same rule as the data-surface precedent search above.
+2. **Grep the gate-log corpus for that surface** (`.harness/merge-gate-log.jsonl`):
+   *what has this reviewer said about code like this?* The findings absorbed on
+   the sibling's own arc are the exact rounds you are otherwise about to re-buy.
+3. **Treat the plan skeleton as UNREVIEWED input.** It sketches shape; it never
+   grants contract. Where it contradicts a spec phrase or a reviewed sibling, the
+   sibling/spec wins and the skeleton is the finding (class 12's plan-over-spec
+   deference — both u-he-35 P1s were exactly this).
+
+The price of skipping, measured (charter WR-11, [A]): at least 7 of the u-he-35
+arc's 29 findings re-derived — one paid round at a time — disciplines the sibling
+wrappers already embodied. The rationalization arrives as *"my tool's case is
+different — faster to just write it."* Whether it is different is precisely what
+the sibling read establishes; unread, "different" is a guess priced at one review
+round per mechanism.
+
 ## The classes, ranked by finding count
 
 *(Counts and order for classes 1–10 regenerated from the committed log by `scripts/refresh-classes.py` at the 2026-08-24 committed corpus of 1,095 findings — rerun the script for live figures; the log only grows, so these are a bound snapshot, not live state. Classes past 10 are appended by the arc that paid for them and carry that arc's count, so they are outside the ranking.)*
@@ -466,14 +496,22 @@ naming is what stops a hold being *silent*, never what makes it *safe*: a held f
 still owes the same-round fail-closed probe (step 4 of the sweep above). Then
 commit and invoke the reviewers — they should be confirming, not discovering.
 
-Since B-215, the named-answer set is ATTESTED, not merely written: after the final
-commit, `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just
-review-attest-preflight <answers-file>` — the inline prefix is REQUIRED exactly as
-for the review itself (the attest verbs resolve the arc via env_arc_and_lane(); a
-bare invocation attests the branch-* fallback arc, not the reserved one). The
-review wrapper refuses round 1 of a reserved arc without a live attestation
-(`tools/review_loop_gate.py`; the attestation binds head+diff, so attest after the
-last commit). The "after every review round" sweep ends the same way: absorb,
-commit, then the same-prefixed `just review-attest-sweep <answers-file>` naming
-every outstanding finding_id (token-exact; obligations span both loop channels and
-all rounds).
+Since B-215, the named-answer set is ATTESTED, not merely written — and since
+U-SR-04 (charter WR-10) the labels come BEFORE the answers: after the final
+commit, generate the answers file with `HARNESS_ARC_ID=<arc-id>
+HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>` — it runs
+`preflight-grep.sh` over the attested range and writes every hit label into a
+fresh template ([B] F14: three attest calls failed by trial only because answers
+were authored before the labels existed). Fill every placeholder with the named
+answer — attestation refuses a file still carrying one — then attest with the
+same-prefixed `just review-attest-preflight <answers-file>`. The inline prefix is
+REQUIRED on both verbs exactly as for the review itself (they resolve the arc via
+env_arc_and_lane(); a bare invocation binds the branch-* fallback arc, not the
+reserved one). The review wrapper refuses round 1 of a reserved arc without a
+live attestation (`tools/review_loop_gate.py`; the attestation binds head+diff,
+so template + attest after the last commit — the template never overwrites, so
+each round's answers file gets a fresh path). The "after every review round"
+sweep ends the same way: absorb, commit, `just review-template-sweep
+<answers-file>` (pre-fills every outstanding finding_id token-exactly plus the
+range's hit labels; obligations span both loop channels and all rounds), fill,
+then the same-prefixed `just review-attest-sweep <answers-file>`.

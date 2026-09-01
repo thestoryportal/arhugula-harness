@@ -40,17 +40,23 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **Admission attestation (B-215) — the wrapper REFUSES unattested rounds.** For a
   reserved arc, `review-with-failover` exits 3 (`GATE_REFUSED`, not a review terminal)
   unless the round is admitted: round 1 needs a preflight attestation bound to the
-  committed diff — run the defect-class-preflight sweep, write the named answers to an
-  in-worktree file, COMMIT the work, then
+  committed diff — run the defect-class-preflight sweep, COMMIT the work, then
+  labels-before-answers (U-SR-04, charter WR-10):
+  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>`
+  writes every hit label from the attested range into a fresh template (it never
+  overwrites — each round's answers file gets a fresh path); fill every placeholder
+  (attestation refuses an unfilled file), then
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-attest-preflight <answers-file>`
-  (the inline prefix is REQUIRED exactly as for the review itself — the attest verbs
-  resolve the arc via env_arc_and_lane(), so a bare invocation attests the branch-*
-  fallback arc while the prefixed review checks the reserved one and refuses; attest
-  AFTER the final commit — the attestation binds head+digest and goes stale on any
-  later commit). After every BLOCK round: absorb, classify each finding, commit, then
+  (the inline prefix is REQUIRED on all these verbs exactly as for the review itself
+  — they resolve the arc via env_arc_and_lane(), so a bare invocation binds the
+  branch-* fallback arc while the prefixed review checks the reserved one and
+  refuses; template + attest AFTER the final commit — the attestation binds
+  head+digest and goes stale on any later commit). After every BLOCK round: absorb,
+  classify each finding, commit, then the same-prefixed
+  `just review-template-sweep <answers-file>` (pre-fills every outstanding
+  finding_id token-exactly plus the range's hit labels), fill, and
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-attest-sweep <answers-file>`
-  — the answers file must name every
-  outstanding finding_id token-exactly (the refusal enumerates any it is missing;
+  (the refusal enumerates anything missing;
   findings are obligations across both loop channels, not per-round rows). The
   round budget is
   `DEFAULT_ROUND_BUDGET` in `tools/review_loop_gate.py` (the one authority on the

@@ -402,6 +402,122 @@ def test_attest_preflight_real_script_integration(repo: Path, monkeypatch: pytes
     assert "silent-failure shapes" in pf.hit_labels
 
 
+# ── edges: template verbs (U-SR-04, charter WR-10 — labels before answers) ───
+
+
+def _template(repo: Path, cmd: str, answers: str = "answers.md") -> int:
+    return rlg.main([cmd, "--answers", str(repo / answers), "--base", "main", "--repo", str(repo)])
+
+
+def test_template_preflight_prefills_labels_then_attests_first_trial(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # the WR-10 acceptance witness ([B] F14: 3 attest-by-trial failures → 0): the
+    # template carries every hit label BEFORE any answer is authored; the unedited
+    # template refuses attestation (labels alone are not answers); the filled
+    # template attests on the first trial
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / "answers.md").read_text()
+    assert "[check-then-act on paths]" in text
+    assert rlg.TEMPLATE_PLACEHOLDER in text
+    rc = _attest_preflight(repo, answers=None)  # attest the UNEDITED template as-is
+    assert rc != 0
+    assert rlg.load_state(repo).preflights == ()
+    (repo / "answers.md").write_text(
+        text.replace(rlg.TEMPLATE_PLACEHOLDER, "guarded by exclusive create at f.py:3")
+    )
+    assert _attest_preflight(repo, answers=None) == 0
+    (pf,) = rlg.load_state(repo).preflights
+    assert pf.hit_labels == ("check-then-act on paths",)
+
+
+def test_template_no_hits_still_requires_a_filled_answer(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # symmetry pin: a hitless sweep must not yield a template that attests unedited —
+    # the author still owes the diff-level answer set
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    assert rlg.TEMPLATE_PLACEHOLDER in (repo / "answers.md").read_text()
+    assert _attest_preflight(repo, answers=None) != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
+def test_template_refuses_existing_destination(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # templates never overwrite: hand-authored answers at the destination survive
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    (repo / "answers.md").write_text("hand-authored\n")
+    assert _template(repo, "template-preflight") != 0
+    assert (repo / "answers.md").read_text() == "hand-authored\n"
+
+
+def test_template_symlink_destination_refused(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # a pre-planted symlink at the destination must refuse loudly, never be written
+    # through (exclusive create: any survivor at the name is EEXIST)
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    victim = repo / "victim.md"
+    victim.write_text("precious\n")
+    (repo / "answers.md").symlink_to(victim)
+    assert _template(repo, "template-preflight") != 0
+    assert victim.read_text() == "precious\n"
+
+
+def test_template_destination_outside_worktree_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+):
+    # the template verbs are guard-auto-allowed, so the one file OUTPUT gets the same
+    # containment discipline as the attest verbs' input — no write escapes the repo
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    outside = tmp_path_factory.mktemp("outside") / "answers.md"
+    rc = rlg.main(
+        ["template-preflight", "--answers", str(outside), "--base", "main", "--repo", str(repo)]
+    )
+    assert rc != 0
+    assert not outside.exists()
+
+
+def test_template_sweep_prefills_outstanding_ids_and_labels(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[silent-failure shapes]\\n1:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    fr.GATE_LOG_JSONL.write_text(
+        json.dumps(_row(1, "finding", "cw:aa:11:1"))
+        + "\n"
+        + json.dumps(_row(1, "finding", "cw:aa:11:2"))
+        + "\n"
+    )
+    assert _template(repo, "template-sweep", "sweep.md") == 0
+    text = (repo / "sweep.md").read_text()
+    assert "cw:aa:11:1" in text and "cw:aa:11:2" in text
+    assert "[silent-failure shapes]" in text
+    filled = text.replace(rlg.TEMPLATE_PLACEHOLDER, "fixed at f.py:1")
+    (repo / "sweep.md").write_text(filled)
+    rc = rlg.main(
+        ["attest-sweep", "--answers", str(repo / "sweep.md"), "--base", "main", "--repo", str(repo)]
+    )
+    assert rc == 0
+    (sw,) = rlg.load_state(repo).sweeps
+    assert set(sw.finding_ids) == {"cw:aa:11:1", "cw:aa:11:2"}
+
+
+def test_template_sweep_without_outstanding_findings_declines(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # mirror of attest-sweep's guard: no obligations → nothing to template (rc 1),
+    # and no file appears
+    _plant_script(repo, "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-sweep", "sweep.md") == 1
+    assert not (repo / "sweep.md").exists()
+
+
 def test_preflight_grep_u_sr_01_shapes_each_catch_a_planted_fixture(repo: Path):
     """U-SR-01 (charter WR-03) acceptance: each of the four added shapes catches a
     planted fixture, run through the REAL script — a pattern that matches nothing is
@@ -2383,3 +2499,37 @@ def test_binding_publishes_by_file_and_the_recipe_routes_through_it():
 
     recipe = (_repo_root() / "justfile").read_text(encoding="utf-8")
     assert "merge_gate_log.py binding --lens {{lens}} --base {{base}}" in recipe
+
+
+# ── U-SR-04 witnesses: the WR-10 flow + WR-11 rule live at their carriers ────
+
+
+def test_carriers_document_the_template_first_attest_flow():
+    """WR-10's lever is only real if both loop carriers route authors through the
+    template verbs (labels before answers) — a reverted carrier silently restores
+    the attest-by-trial flow while the code side stays green."""
+    for rel in (PREFLIGHT_SKILL_REL, Path(".claude/skills/ship-pr/SKILL.md")):
+        # squashed: the carriers hard-wrap prose, so verb and argument may split lines
+        text = _squash((_repo_root() / rel).read_text(encoding="utf-8"))
+        assert "review-template-preflight <answers-file>" in text, rel
+        assert "review-template-sweep <answers-file>" in text, rel
+        # order pin: the template step is documented BEFORE its attest verb, per verb
+        for verb in ("preflight", "sweep"):
+            assert text.index(f"review-template-{verb}") < text.index(f"review-attest-{verb}"), (
+                f"{rel}: template-{verb} documented after attest-{verb}"
+            )
+    recipe = (_repo_root() / "justfile").read_text(encoding="utf-8")
+    for verb in ("preflight", "sweep"):
+        assert f"review_loop_gate.py template-{verb} --answers" in recipe
+
+
+def test_preflight_carries_the_u_sr_04_mechanism_precedent_rule():
+    """Charter WR-11 lands as grounding-time SKILL prose; pin the load-bearing tells
+    of each of the three steps (sibling-first, corpus grep, skeleton-is-unreviewed),
+    not the surrounding wording."""
+    text = _preflight_skill_text()
+    assert "## The mechanism-precedent search" in text
+    section = _squash(text.split("## The mechanism-precedent search", 1)[1].split("\n## ", 1)[0])
+    assert "adopt its shape or import it outright" in section
+    assert ".harness/merge-gate-log.jsonl" in section
+    assert "plan skeleton as UNREVIEWED input" in section
