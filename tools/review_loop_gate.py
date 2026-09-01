@@ -97,6 +97,10 @@ DEFAULT_ROUND_BUDGET = 10
 
 _HIT_LABEL = re.compile(r"^\[(.+)\]$", re.MULTILINE)
 
+#: The permission guard's bareword env-prefix grammar (`HARNESS_*=<value>` strip):
+#: recipe prefixes render ids literally only inside it (codex u-sr-04 r9 P2).
+_RECIPE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+
 #: WR-10 ([B] a2/F14): the template verbs write this token under every pre-filled
 #: obligation; _read_answers refuses any answers file still carrying it, so a
 #: label-complete but answer-empty template can never attest.
@@ -344,8 +348,15 @@ def decide(
     # every recipe command carries the arc/lane prefix (codex u-sr-04 r4 P2): the
     # attest/template verbs resolve identity via env_arc_and_lane(), so a bare
     # command in a refusal recipe binds the branch-* fallback arc — an agent
-    # following the gate's own recovery text could never clear the reserved arc
-    pfx = f"HARNESS_ARC_ID={arc_id} HARNESS_LANE_ID={lane_id} "
+    # following the gate's own recovery text could never clear the reserved arc.
+    # Ids render literally only inside the guard's bareword-prefix grammar
+    # (r9 P2, bound to the permission-guard `HARNESS_*=` charset): an id the guard
+    # could not strip would render a malformed or ask-stranded command, so such an
+    # id falls back to the documented placeholder form.
+    if _RECIPE_ID.match(arc_id) and _RECIPE_ID.match(lane_id):
+        pfx = f"HARNESS_ARC_ID={arc_id} HARNESS_LANE_ID={lane_id} "
+    else:
+        pfx = "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
     scoped = _loop_rounds(rows, arc_id)
     # budget counts review invocations SPENT — distinct (producer, round) pairs, since
     # round numbers are per-producer scales and a max() across them undercounts
@@ -756,9 +767,11 @@ def _has_residue(line: str, *tokens: str) -> bool:
         s = s.replace(t, " ")
     # the 'finding' label word strips case-insensitively (codex u-sr-04 r6 P2: a
     # capitalized 'Finding <id>' heading with no disposition must not read as an
-    # authored answer); obligation tokens above stay case-exact
+    # authored answer); obligation tokens above stay case-exact. Quote/backtick
+    # marks are punctuation too (r9 P2: an empty `- ""` or code span is not a
+    # disposition).
     s = re.sub(r"(?i)\bfinding\b", " ", s)
-    return bool(s.strip(" \t-—:*[]().,#"))
+    return bool(s.strip(" \t-—:*[]().,#\"'`<>"))
 
 
 def _unanswered_labels(labels: tuple[str, ...], answers: str) -> list[str]:
@@ -796,15 +809,34 @@ def _unanswered_labels(labels: tuple[str, ...], answers: str) -> list[str]:
 def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
     # token-exact, not substring (codex r2 P2: an answer naming ...:10 must not
     # satisfy the sibling ...:1) — ids are whitespace/punctuation-delimited tokens.
-    # And the id's line must carry residue beyond EVERY known id, not just its own
-    # (codex u-sr-04 r2 P1 + r7 P2: the sweep template writes every id, and a line
-    # that merely lists two ids must not let each read as the other's answer).
+    # The id's line must carry residue beyond EVERY known id (codex u-sr-04 r2 P1 +
+    # r7 P2), OR — the pre-template multiline hand shape (r9 P2) — its section must:
+    # an id heading followed by the answer on later lines stays valid, the section
+    # ending at the next bracket heading or another id's line.
+    lines = answers.splitlines()
+
+    def line_ids(ln: str) -> set[str]:
+        toks = set(re.split(r"[\s,;()\[\]{}'\"`]+", ln))
+        return {n for n in ids if n in toks}
+
     out = []
     for n in ids:
-        answered = any(
-            n in set(re.split(r"[\s,;()\[\]{}'\"`]+", ln)) and _has_residue(ln, *ids)
-            for ln in answers.splitlines()
-        )
+        answered = False
+        for i, ln in enumerate(lines):
+            if n not in line_ids(ln):
+                continue
+            if _has_residue(ln, *ids):
+                answered = True
+                break
+            for follower in lines[i + 1 :]:
+                fs = follower.lstrip()
+                if fs.startswith("[") or (line_ids(follower) - {n}):
+                    break
+                if not fs.startswith("#") and _has_residue(follower, *ids):
+                    answered = True
+                    break
+            if answered:
+                break
         if not answered:
             out.append(n)
     return out

@@ -829,6 +829,40 @@ def test_template_swapped_temp_inode_refused(repo: Path, monkeypatch: pytest.Mon
     assert _template(repo, "template-preflight") == 0
 
 
+def test_multiline_hand_authored_id_answer_still_attests(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # codex u-sr-04 r9 P2: the pre-template hand shape — an id heading with the
+    # answer on the NEXT line — stays valid; the section ends at another id's line,
+    # so a bare heading before the next finding still refuses
+    ids = ("cw:aa:11:1", "cw:aa:11:2")
+    multiline = "Finding cw:aa:11:1\n  fixed at f.py:3\n\nFinding cw:aa:11:2\n  registered\n"
+    assert rlg._unanswered_ids(ids, multiline) == []
+    bare_then_next = "Finding cw:aa:11:1\nFinding cw:aa:11:2\n  registered\n"
+    assert rlg._unanswered_ids(ids, bare_then_next) == ["cw:aa:11:1"]
+
+
+def test_punctuation_only_fill_is_not_an_answer(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # codex u-sr-04 r9 P2: replacing the placeholder with an empty quoted/backtick
+    # value must not read as residue
+    _plant_script(repo, "#!/bin/sh\nprintf '\\n[check-then-act on paths]\\n3:+x\\n'\nexit 0\n")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    assert _template(repo, "template-preflight") == 0
+    text = (repo / ".harness/tmp/answers.md").read_text()
+    (repo / ".harness/tmp/answers.md").write_text(text.replace(rlg.TEMPLATE_PLACEHOLDER, '""'))
+    assert _attest_at(repo, ".harness/tmp/answers.md") != 0
+    assert rlg.load_state(repo).preflights == ()
+
+
+def test_recipe_prefix_falls_back_on_non_grammar_ids():
+    # codex u-sr-04 r9 P2: an id outside the guard's bareword-prefix grammar must
+    # not render a malformed recovery command — the placeholder form renders instead
+    d = _decide(_state(), [], arc_id="bad arc@id", lane_id="lane-7")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id>" in d.recipe
+    assert "bad arc@id" not in d.recipe
+
+
 def test_malformed_binding_stamp_refuses_loudly(repo: Path, monkeypatch: pytest.MonkeyPatch):
     # codex u-sr-04 r7 P2: an unparseable '# binding:' line must fail loud, never
     # silently demote the file to hand-authored semantics (the deliberate-deletion
