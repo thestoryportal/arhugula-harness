@@ -115,6 +115,19 @@ line "$aship_reflect" "codex ship-pr reflect carries the facts-brief handoff" \
   '[B] F10' \
   '"I already have the context loaded" is the trap'
 
+# Unconditional facts-brief contract (u-sr-07 codex r4): charter WR-14 clause (a)
+# carries NO depth threshold — EVERY heavy audit/document is authored fresh from a
+# brief. The >400k trigger belongs to clause (b) (cache-warmth) alone. A depth
+# qualifier re-imported into any facts-brief carrier is contract drift and must red.
+for spec in "cont_step6:$cont_step6" "ship_reflect:$ship_reflect" "acont_next:$acont_next" "aship_reflect:$aship_reflect"; do
+  lbl="${spec%%:*}"; text="${spec#*:}"
+  if printf '%s' "$text" | grep -qE '>400k|already deep|sits deep|deep in context'; then
+    bad "$lbl facts-brief carrier re-imported a depth qualifier (WR-14 (a) is unconditional)"
+  else
+    ok "$lbl facts-brief carrier is unconditional (no depth qualifier)"
+  fi
+done
+
 # Ordering contract (u-sr-07 codex r3): the facts brief is written BEFORE the
 # checkpoint save, so the checkpoint carries it — pinned by the numbered-step order
 # in the Claude carrier and by the explicit before-clause in both carriers (a reorder

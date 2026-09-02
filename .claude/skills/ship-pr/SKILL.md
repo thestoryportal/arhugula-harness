@@ -509,8 +509,8 @@ ending the turn):
    fold into an existing entry when one matches, don't duplicate. Land the `MEMORY.md` index
    line via `just memory-compact --upsert` (above), never a hand `Edit`.
 3. **Facts-brief handoff for a heavy next item (U-SR-07/WR-14).** If the next action is a
-   heavy audit or document and this closing session sits deep in context (>400k), do not
-   author it here — "I already have all the context loaded" is the trap; the loaded
+   heavy audit or document, do not author it here — "I already have all the context
+   loaded" is the trap; the loaded
    context is what every call re-bills. The closing session writes the facts brief only —
    the findings, cites, and decisions the deliverable needs — BEFORE the `/context-save`
    below, so the checkpoint carries it, and a fresh session authors from the brief: the

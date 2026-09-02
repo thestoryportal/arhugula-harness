@@ -185,13 +185,12 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    Then hand off to the `ship-pr` skill (the PR + fixed-point-refresh half) — including its
    mandatory reflect + `/context-save` step at arc close. Do not hand off to the next arc
    (`ScheduleWakeup`, `/loop-stop`, or ending the turn) before that step has run.
-   Facts-brief handoff (U-SR-07/WR-14): if the NEXT item is a heavy audit or document and
-   this session is already deep (>400k context), do not author it in this session — "I
-   already have all the context loaded" is exactly the trap; the loaded context is what
-   every call re-bills. Write a facts brief — the findings, cites, and decisions the
-   deliverable needs, nothing else — into the handoff, and let a fresh session author
-   from it: the S3 audit authored at 540k context cost 0.93M IET against ≈0.3M fresh
-   ([B] F10).
+   Facts-brief handoff (U-SR-07/WR-14): if the NEXT item is a heavy audit or document,
+   do not author it in this session — "I already have all the context loaded" is exactly
+   the trap; the loaded context is what every call re-bills. Write a facts brief — the
+   findings, cites, and decisions the deliverable needs, nothing else — into the
+   handoff, and let a fresh session author from it: the S3 audit authored at 540k
+   context cost 0.93M IET against ≈0.3M fresh ([B] F10).
 
 ## When the queue is genuinely slice-exhausted
 

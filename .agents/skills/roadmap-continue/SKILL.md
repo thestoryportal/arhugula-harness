@@ -96,8 +96,8 @@ refresh, wait for refresh main CI, sync main, dispose of the worktree/verified m
 run `just codex-loop-check`, reflect, and run the gstack `context-save` skill. Only then derive
 the next live action, create its isolated worktree, and start its new autonomous-arc ledger.
 
-Facts-brief handoff (U-SR-07/WR-14): if the next item is a heavy audit or document and
-this session is already deep, do not author it in this session — "I already have the
+Facts-brief handoff (U-SR-07/WR-14): if the next item is a heavy audit or document, do
+not author it in this session — "I already have the
 context loaded" is the trap: the loaded context is what every call re-bills. Write a
 facts brief (the findings, cites, and decisions the deliverable needs) into the handoff
 and let a fresh session author from it ([B] F10: authored at 540k context cost
