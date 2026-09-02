@@ -157,7 +157,16 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
         walrus, "test_f"
     )
     assert ps.test_slice_digest(imp.replace("[1, 2]", "[lambda: 1]"), "test_f") != base
-    assert ps.test_slice_digest(imp.replace("[1, 2]", "[-1, X.Y]"), "test_f") == base  # literals
+    # codex u-sr-09 r10: an UNBOUND name in a mark argument, default or annotation is looked
+    # up at import -- a dependency, so the sibling is kept; a name the module binds (an
+    # import, a def) or a builtin is inert, so the sibling stays droppable
+    assert ps.test_slice_digest(imp.replace("[1, 2]", "[-1, X.Y]"), "test_f") != base
+    assert ps.test_slice_digest(imp.replace("[1, 2]", "[-1, pytest.mark]"), "test_f") == base
+    assert ps.test_slice_digest(imp.replace("[1, 2]", "[-1, (2, 3)]"), "test_f") == base
+    named = imp.replace("def test_dflt(x=setup()):", "def test_dflt(x=EXISTING):")
+    assert ps.test_slice_digest(
+        named.replace("EXISTING", "MISSING"), "test_f"
+    ) != ps.test_slice_digest(named, "test_f")
     # codex u-sr-09 r8: an ANNOTATION is evaluated at import like a default
     ann = imp.replace("def test_dflt(x=setup()):", "def test_dflt(x: mark(1)) -> ret():")
     assert ps.test_slice_digest(
@@ -166,6 +175,25 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
     plain = imp.replace("def test_dflt(x=setup()):", "def test_dflt(x: int = 1) -> None:")
     assert ps.test_slice_digest(plain.replace("= 1)", "= 2)"), "test_f") == ps.test_slice_digest(
         plain, "test_f"
+    )
+    # an UNBOUND default name keeps the sibling (r10): its text change moves the digest
+    named = imp.replace("def test_dflt(x=setup()):", "def test_dflt(x=EXISTING):")
+    assert ps.test_slice_digest(
+        named.replace("EXISTING", "MISSING"), "test_f"
+    ) != ps.test_slice_digest(named, "test_f")
+    # codex u-sr-09 r10: only `pytest.mark.<x>` (rooted at the pytest module or its alias)
+    # is an inert mark; `custom.mark.register("A")` keeps its sibling
+    custom = imp.replace("@register(1)", '@custom.mark.register("A")')
+    assert ps.test_slice_digest(custom.replace('"A"', '"B"'), "test_f") != ps.test_slice_digest(
+        custom, "test_f"
+    )
+    alias = (
+        "import pytest as pt\n\n\n"
+        '@pt.mark.parametrize("a", [1])\ndef test_o(a):\n    pass\n\n\n'
+        "def test_f():\n    pass\n"
+    )
+    assert ps.test_slice_digest(alias.replace("[1]", "[2]"), "test_f") == ps.test_slice_digest(
+        alias, "test_f"
     )
 
 

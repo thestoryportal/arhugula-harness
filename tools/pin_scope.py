@@ -31,6 +31,7 @@ Pure: text in, digests out. No I/O, no clock, no repo. [LAW:effects-at-boundarie
 from __future__ import annotations
 
 import ast
+import builtins
 import hashlib
 import re
 from dataclasses import dataclass
@@ -167,13 +168,15 @@ def test_slice_digest(source: str, name: str) -> str | None:
     ]
     if len(named) != 1:
         return None
+    pytest_names = _pytest_names(tree)
+    bound = _module_bound_names(tree)
     siblings = {
         n.name: n
         for n in tree.body
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
         and n.name.startswith("test_")
         and n is not named[0]
-        and not _runs_at_import(n)
+        and not _runs_at_import(n, pytest_names, bound)
     }
     # a sibling referenced from the kept nodes stays; iterate until no new name is pulled in
     kept_nodes = [n for n in tree.body if n not in siblings.values()]
@@ -205,24 +208,67 @@ def _node_span(node: ast.AST) -> tuple[int, int]:
 _LITERAL_CONTAINERS = (ast.Tuple, ast.List, ast.Set)
 
 
-def _is_literal(node: ast.AST) -> bool:
-    """A side-effect-free expression: a constant, a bare name or attribute read, a unary op
-    on one, or a tuple/list/set/dict of those. Everything else may run code."""
-    if isinstance(node, ast.Constant | ast.Name | ast.Attribute):
+def _is_literal(node: ast.AST, bound: frozenset[str]) -> bool:
+    """An expression that is INERT at import: a constant; a unary op on one; a tuple/list/
+    set/dict of those; or a name (or attribute chain) whose root the module already BINDS
+    (an import, assignment, def or class -- all kept in every slice) or a builtin. An
+    UNBOUND name is not inert: `def test_side(x=EXISTING)` → `x=MISSING` raises at
+    collection (codex u-sr-09 r10), so a sibling reading one is a dependency and is kept.
+    A bound name (`repo: Path`, `int`) adds nothing the slice does not already digest, so
+    a sibling annotated with one stays droppable -- the [B] F7 churn must not come back."""
+    if isinstance(node, ast.Constant):
         return True
+    if isinstance(node, ast.Name):
+        return node.id in bound
+    if isinstance(node, ast.Attribute):
+        root = node
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        return isinstance(root, ast.Name) and root.id in bound
     if isinstance(node, ast.UnaryOp):
-        return _is_literal(node.operand)
+        return _is_literal(node.operand, bound)
     if isinstance(node, _LITERAL_CONTAINERS):
-        return all(_is_literal(e) for e in node.elts)
+        return all(_is_literal(e, bound) for e in node.elts)
     if isinstance(node, ast.Dict):
         return all(
-            k is not None and _is_literal(k) and _is_literal(v)
+            k is not None and _is_literal(k, bound) and _is_literal(v, bound)
             for k, v in zip(node.keys, node.values, strict=True)
         )
     return False
 
 
-def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+def _module_bound_names(tree: ast.Module) -> frozenset[str]:
+    """Every name the module binds at top level -- imports, assignment targets, defs and
+    classes -- plus the builtins: the names an inert definition-time expression may read."""
+    names: set[str] = set(dir(builtins))
+    for n in tree.body:
+        if isinstance(n, ast.Import | ast.ImportFrom):
+            names.update((a.asname or a.name).split(".")[0] for a in n.names)
+        elif isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(n.name)
+        elif isinstance(n, ast.Assign | ast.AnnAssign | ast.AugAssign):
+            targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+            for t in targets:
+                names.update(sub.id for sub in ast.walk(t) if isinstance(sub, ast.Name))
+    return frozenset(names)
+
+
+def _pytest_names(tree: ast.Module) -> set[str]:
+    """Every local name bound to the pytest module (`import pytest`, `import pytest as pt`)
+    -- the only roots under which `<root>.mark.<x>` is an inert pytest mark (codex u-sr-09
+    r10: `custom.mark.register("A")` had passed for one)."""
+    names: set[str] = set()
+    for n in tree.body:
+        if isinstance(n, ast.Import):
+            for alias in n.names:
+                if alias.name == "pytest":
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _runs_at_import(
+    node: ast.FunctionDef | ast.AsyncFunctionDef, pytest_names: set[str], bound: frozenset[str]
+) -> bool:
     """A sibling whose DEFINITION executes code beyond pytest's own marks -- a decorator
     that is not a plain `pytest.mark.<x>` (or `pytest.mark.<x>(...)` whose arguments call
     nothing), or a parameter default that calls something -- runs at import/collection even
@@ -235,6 +281,8 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
             isinstance(target, ast.Attribute)
             and isinstance(target.value, ast.Attribute)
             and target.value.attr == "mark"
+            and isinstance(target.value.value, ast.Name)
+            and target.value.value.id in pytest_names
         )
         if not is_mark:
             return True
@@ -242,7 +290,7 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         # names/attributes): a call, a walrus, a lambda or a comprehension there executes
         # at import (codex u-sr-09 r6 `make()`, r7 `(state := 1)`)
         if isinstance(d, ast.Call) and not all(
-            _is_literal(a) for a in [*d.args, *(k.value for k in d.keywords)]
+            _is_literal(a, bound) for a in [*d.args, *(k.value for k in d.keywords)]
         ):
             return True
     # defaults AND annotations are evaluated when the module imports (no
@@ -256,7 +304,7 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     evaluated = [
         *node.args.defaults, *node.args.kw_defaults, *(a.annotation for a in params), node.returns
     ]  # fmt: skip
-    return any(e is not None and not _is_literal(e) for e in evaluated)
+    return any(e is not None and not _is_literal(e, bound) for e in evaluated)
 
 
 def _names_used(nodes: list[ast.AST]) -> set[str]:

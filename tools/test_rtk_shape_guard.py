@@ -232,6 +232,14 @@ def test_judge_reason_names_shapes_and_reissue():
     assert only_glob is not None and GLOB in only_glob and PAREN not in only_glob
     only_paren = g.judge("grep -g '*.py' 'f(' tools", "rtk grep -g '*.py' 'f(' tools")
     assert only_paren is not None and PAREN in only_paren and GLOB not in only_paren
+    # codex u-sr-09 r10: a MIXED failure (the original also fails on its own) gets no
+    # re-issue it cannot keep -- the reason says what to fix first instead
+    assert (
+        "Re-issue as" not in only_glob and "fails on its own" in only_glob and "group" in only_glob
+    )
+    assert "Re-issue as" not in only_paren and "no -g/--glob" in only_paren
+    clean = g.judge("rg -g '*.py' x tools", "rtk grep -g '*.py' x tools")
+    assert clean is not None and "Re-issue as: rtk proxy rg -g '*.py' x tools" in clean
     both = g.shapes(g.tokens("rtk grep -g '*.py' 'f(' tools") or [], None)
     assert [w for w in (GLOB, PAREN) if any(w in f for f in both)] == [GLOB, PAREN]
 

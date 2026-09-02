@@ -277,6 +277,24 @@ def original_word(segment: list[str]) -> str | None:
     return next((t for t in segment if t in COMMAND_WORDS), None)
 
 
+def native_failures(rewritten_segment: list[str], original: str | None, at: int) -> list[str]:
+    """What the ORIGINAL command fails on by itself, independent of the rewrite: a paren
+    in a pattern under an `rg` original, a `-g`/`--glob` under a `grep` original. A deny
+    that names a rewrite defect must not promise a re-issue that fails on these
+    (codex u-sr-09 r10)."""
+    parsed = parse_args(rewritten_segment[at + len(REWRITTEN_WORDS) :])
+    out: list[str] = []
+    if (
+        original == "rg"
+        and not regex_safe(parsed)
+        and any(has_unescaped_paren(p) for p in patterns_of(parsed))
+    ):
+        out.append("rg reads a bare `(`/`)` in the pattern as a group")
+    if original == "grep" and has_glob(parsed):
+        out.append("grep has no -g/--glob")
+    return out
+
+
 def shapes(
     rewritten_segment: list[str], original: str | None = None, at: int | None = None
 ) -> list[str]:
@@ -340,25 +358,34 @@ def judge(original: str, rewritten: str) -> str | None:
     osegs = segments(otoks) if otoks is not None else []
     aligned = len(osegs) == len(rsegs)
     found: list[str] = []
+    native: list[str] = []
     segment_text = ""
     for i, seg in enumerate(rsegs):
         oseg = osegs[i] if aligned else None
         at = rewritten_at(seg, oseg)
         if at is None:
             continue
-        hits = shapes(seg, original_word(oseg) if oseg is not None else None, at)
+        word = original_word(oseg) if oseg is not None else None
+        hits = shapes(seg, word, at)
+        native.extend(native_failures(seg, word, at))
         if hits:
             found.extend(hits)
             segment_text = segment_text or _render(seg)
     if not found:
         return None
-    fix = reissue(original)
-    tail = (
-        f" Re-issue as: {fix}"
-        if fix
-        else " Re-issue by hand with `rtk proxy ` before each grep/rg word (a compound command"
-        " is never re-joined for you: quoting, globs and redirections would not survive)."
-    )
+    fix = reissue(original) if not native else None
+    if native:
+        tail = (
+            f" The command also fails on its own ({'; '.join(native)}) -- fix that first;"
+            " then `rtk proxy ` before the grep/rg word skips the rewrite."
+        )
+    elif fix:
+        tail = f" Re-issue as: {fix}"
+    else:
+        tail = (
+            " Re-issue by hand with `rtk proxy ` before each grep/rg word (a compound command"
+            " is never re-joined for you: quoting, globs and redirections would not survive)."
+        )
     return (
         f"[rtk-shape-guard] the rtk PreToolUse rewrite turns this into `{segment_text}`, "
         f"which carries {'; '.join(found)}.{tail}"
