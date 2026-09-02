@@ -82,6 +82,18 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
     ) != _d(sliced)
     assert ps.test_slice_digest("pytestmark = pytest.mark.skip\n" + TEST, "test_f") != _d(sliced)
     assert ps.test_slice_digest(TEST.replace("drop b", "drop a"), "test_f") != _d(sliced)
+    # codex u-sr-09 r2 P2: a sibling test_* the selected test CALLS is part of its judgement
+    # and stays in the slice (transitively); hollowing it changes the digest
+    calls = (
+        "def test_helper():\n    assert f() == 3\n\n\n"
+        "def test_inner():\n    test_helper()\n\n\n"
+        "def test_f():\n    test_inner()\n\n\n"
+        "def test_other():\n    assert True\n"
+    )
+    base = ps.test_slice_digest(calls, "test_f")
+    assert base == _d(calls.replace("def test_other():\n    assert True\n", ""))
+    assert ps.test_slice_digest(calls.replace("assert f() == 3", "pass"), "test_f") != base
+    assert ps.test_slice_digest(calls.replace("assert True", "assert 1"), "test_f") == base
 
 
 def test_test_slice_digest_is_none_when_unresolvable():

@@ -9,12 +9,19 @@ sed-based first cut truncated `'a && f('` at the `&&`, missed the attached `-g'*
 and re-wrote a quoted `'; grep literal'` argument). Runs under the hook shell's
 /usr/bin/python3 (3.9) as well as the workspace 3.12 -- no 3.10+ syntax at runtime.
 
+The option grammar is grep's/rg's, parsed ONCE by `parse_args` (codex u-sr-09 r2: three
+separate scans each got a corner wrong -- `-eF\\(` read as a `-F` flag, `-nA 2` not
+consuming its value, `--` not ending options): a short cluster is flags until its first
+value-taking letter, which takes the rest of the token or the next token; `--` ends
+options; `--opt=value` and `--opt value` both bind.
+
 Two shapes are judged on the `rtk grep …` segment (the ones rtk 0.40.0 mangles
 deterministically -- the header of the wrapper carries the witnessed failures):
-  glob   -- an rg-only `--glob`/`-g` (attached or separate value; any short cluster
-            carrying `g`), which rtk hands to BSD grep: 'unrecognized option', exit 2;
+  glob   -- an rg-only `--glob`/`-g` (attached or separate value; anywhere in a short
+            cluster), which rtk hands to BSD grep: 'unrecognized option', exit 2;
   paren  -- an unescaped `(` or `)` in the PATTERN when no -E/-F/-P makes it mean the
             same thing to grep and rg: 'regex parse error … unclosed group', exit 2.
+            "Unescaped" counts the backslashes: an even run leaves the paren live.
 The re-issue prefixes every command-position `grep`/`rg` of the ORIGINAL with `rtk proxy`:
 verbatim when the command is one simple command, re-joined with `shlex.quote` (equivalent,
 not byte-identical) when it carries separators.
@@ -25,25 +32,32 @@ from __future__ import annotations
 import re
 import shlex
 import sys
+from dataclasses import dataclass, field
 
 SEPARATORS = frozenset({"|", "||", "&&", ";", "&", "(", ")"})
 REWRITTEN_WORDS = ("rtk", "grep")
 COMMAND_WORDS = frozenset({"grep", "rg"})
-# grep/rg options that consume the NEXT token (so it is never mistaken for the pattern)
-VALUE_OPTIONS = frozenset(
+# short options that take a value: the rest of the cluster, or the next token
+VALUE_SHORT = frozenset("efmABCgtTdD")
+# long options that take a value (`--opt value` or `--opt=value`)
+VALUE_LONG = frozenset(
     {
-        "-e", "--regexp", "-f", "--file", "-m", "--max-count", "-A", "--after-context",
-        "-B", "--before-context", "-C", "--context", "-g", "--glob", "--iglob", "-t",
-        "--type", "-T", "--type-not", "-d", "--directories", "-D", "--devices",
+        "--regexp", "--file", "--max-count", "--after-context", "--before-context",
+        "--context", "--glob", "--iglob", "--type", "--type-not", "--directories",
+        "--devices",
     }
 )  # fmt: skip
+REGEX_SAFE_SHORT = frozenset("EFP")
 REGEX_SAFE_LONG = frozenset({"--extended-regexp", "--fixed-strings", "--perl-regexp"})
-_UNESCAPED_PAREN = re.compile(r"(?<!\\)[()]")
-
+GLOB_LONG = frozenset({"--glob", "--iglob"})
+# a paren preceded by an EVEN number of backslashes (zero included) is unescaped
+_UNESCAPED_PAREN = re.compile(r"(?<!\\)(?:\\\\)*[()]")
 
 # Separator characters inside quotes are masked to private-use code points before lexing and
 # restored after, so a word that IS a separator when quoted (`grep '|' f`, `echo '&&'`) stays
 # a word: shlex strips the quotes and would otherwise hand back an indistinguishable `|`.
+# An unquoted newline is a command separator the shell honours and shlex would swallow as
+# whitespace (codex u-sr-09 r2), so it is rewritten to `;` in the same pass.
 _MASK = {c: chr(0xE000 + i) for i, c in enumerate("|;&()")}
 _UNMASK = {v: k for k, v in _MASK.items()}
 
@@ -67,6 +81,8 @@ def _mask_quoted(command: str) -> str:
             out.append(ch)
         elif quote is not None:
             out.append(_MASK.get(ch, ch))
+        elif ch == "\n":
+            out.append(" ; ")
         else:
             out.append(ch)
     return "".join(out)
@@ -104,60 +120,88 @@ def segments(toks: list[str]) -> list[list[str]]:
     return [s for s in out if s]
 
 
-def _is_short_cluster(tok: str) -> bool:
-    return tok.startswith("-") and not tok.startswith("--") and len(tok) > 1
+@dataclass
+class Args:
+    """A grep/rg argument list PARSED once: which short flags and long options are set, the
+    first value each value-taking option received, and the operands in order. Every shape
+    question is answered from this, never from a re-scan of the raw tokens."""
+
+    flags: set[str] = field(default_factory=set)
+    longs: set[str] = field(default_factory=set)
+    values: dict[str, str] = field(default_factory=dict)
+    operands: list[str] = field(default_factory=list)
 
 
-def regex_safe(args: list[str]) -> bool:
-    """-E/-F/-P in any short cluster, or the long forms: a paren means the same to both."""
-    return any(
-        (_is_short_cluster(a) and any(c in "EFP" for c in a[1:])) or a in REGEX_SAFE_LONG
-        for a in args
-    )
-
-
-def has_glob(args: list[str]) -> bool:
-    """`--glob`, `--glob=…`, `-g`, `-g'*.py'` (attached), or `g` inside a short cluster
-    (`-ng`). BSD grep has no `g` option in any spelling, so every form lands on exit 2."""
-    return any(
-        a == "--glob" or a.startswith("--glob=") or (_is_short_cluster(a) and "g" in a[1:])
-        for a in args
-    )
-
-
-def pattern_of(args: list[str]) -> str | None:
-    """The PATTERN operand: the value of the first `-e`/`--regexp` if given, else the first
-    operand that is neither an option nor an option's value. None when there is none."""
-    first_operand: str | None = None
+def parse_args(args: list[str]) -> Args:
+    """grep/rg option grammar: `--` ends options; `--opt=v` / `--opt v` bind a value for
+    VALUE_LONG; a short cluster (`-nA2`, `-nA 2`, `-eF\\(`) is flags up to its first
+    VALUE_SHORT letter, which takes the rest of the token or, if empty, the next token."""
+    parsed = Args()
     i = 0
     while i < len(args):
         a = args[i]
-        if a in ("-e", "--regexp") and i + 1 < len(args):
-            return args[i + 1]
-        if a.startswith("--regexp=") or (a.startswith("-e") and _is_short_cluster(a)):
-            return a.split("=", 1)[1] if a.startswith("--") else a[2:]
-        if a in VALUE_OPTIONS:
-            i += 2
-            continue
-        if a.startswith("-") and len(a) > 1:
+        if a == "--":
+            parsed.operands.extend(args[i + 1 :])
+            break
+        if a.startswith("--") and len(a) > 2:
+            name, eq, val = a.partition("=")
+            parsed.longs.add(name)
+            if name in VALUE_LONG:
+                if eq:
+                    parsed.values.setdefault(name, val)
+                elif i + 1 < len(args):
+                    parsed.values.setdefault(name, args[i + 1])
+                    i += 1
             i += 1
             continue
-        if first_operand is None:
-            first_operand = a
+        if a.startswith("-") and len(a) > 1:
+            for j, c in enumerate(a[1:], start=1):
+                if c in VALUE_SHORT:
+                    rest = a[j + 1 :]
+                    if rest:
+                        parsed.values.setdefault(c, rest)
+                    elif i + 1 < len(args):
+                        parsed.values.setdefault(c, args[i + 1])
+                        i += 1
+                    break
+                parsed.flags.add(c)
+            i += 1
+            continue
+        parsed.operands.append(a)
         i += 1
-    return first_operand
+    return parsed
+
+
+def regex_safe(parsed: Args) -> bool:
+    """-E/-F/-P (or the long forms) are set: a paren means the same thing to grep and rg."""
+    return bool(parsed.flags & REGEX_SAFE_SHORT) or bool(parsed.longs & REGEX_SAFE_LONG)
+
+
+def has_glob(parsed: Args) -> bool:
+    """`-g …` / `--glob …` / `--iglob …` was given. BSD grep has no `g` option in any
+    spelling, so every form lands on exit 2."""
+    return "g" in parsed.values or bool(parsed.longs & GLOB_LONG)
+
+
+def pattern_of(parsed: Args) -> str | None:
+    """The PATTERN operand: the value of `-e`/`--regexp` if given, else the first operand."""
+    if "e" in parsed.values:
+        return parsed.values["e"]
+    if "--regexp" in parsed.values:
+        return parsed.values["--regexp"]
+    return parsed.operands[0] if parsed.operands else None
 
 
 def shapes(rewritten_segment: list[str]) -> list[str]:
     """The mangled shapes one `rtk grep …` segment carries (empty = the rewrite is fine)."""
-    args = rewritten_segment[len(REWRITTEN_WORDS) :]
+    parsed = parse_args(rewritten_segment[len(REWRITTEN_WORDS) :])
     found: list[str] = []
-    if has_glob(args):
+    if has_glob(parsed):
         found.append(
             "an rg-only --glob/-g flag (rtk lands it on BSD grep: 'unrecognized option', exit 2)"
         )
-    pat = pattern_of(args)
-    if pat is not None and not regex_safe(args) and _UNESCAPED_PAREN.search(pat):
+    pat = pattern_of(parsed)
+    if pat is not None and not regex_safe(parsed) and _UNESCAPED_PAREN.search(pat):
         found.append(
             "an unescaped paren in a BRE pattern (a literal to grep, a group to rg: "
             "'regex parse error', exit 2)"

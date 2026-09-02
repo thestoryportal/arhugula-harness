@@ -116,9 +116,12 @@ def test_slice_digest(source: str, name: str) -> str | None:
     verdict: its own body, the imports, fixtures, helpers, constants and module-level marks
     (codex u-sr-09 r1 P2: a body-only digest let a swapped import or a module-wide skip hollow
     the test while its pin stayed live). Only sibling top-level tests -- the [B] F7 churn --
-    are excluded; a test method inside a class keeps its class whole. None when the source
-    does not parse, defines no function `name`, or defines it more than once (which one ran is
-    not knowable from the name, so the caller falls back to the whole artifact)."""
+    are excluded, and a sibling the kept slice REFERENCES by name (a `test_helper()` the
+    selected test calls; transitively, to a fixpoint) is kept too (codex r2 P2: hollowing
+    the helper hollowed the judge). A test method inside a class keeps its class whole. None
+    when the source does not parse, defines no function `name`, or defines it more than once
+    (which one ran is not knowable from the name, so the caller falls back to the whole
+    artifact)."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -130,18 +133,42 @@ def test_slice_digest(source: str, name: str) -> str | None:
     ]
     if len(named) != 1:
         return None
+    siblings = {
+        n.name: n
+        for n in tree.body
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+        and n.name.startswith("test_")
+        and n is not named[0]
+    }
+    # a sibling referenced from the kept nodes stays; iterate until no new name is pulled in
+    kept_nodes = [n for n in tree.body if n not in siblings.values()]
+    referenced = _names_used(kept_nodes)
+    while True:
+        pulled = [n for name, n in siblings.items() if name in referenced and n not in kept_nodes]
+        if not pulled:
+            break
+        kept_nodes.extend(pulled)
+        referenced |= _names_used(pulled)
     dropped: set[int] = set()
-    for n in tree.body:
-        if (
-            isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
-            and n.name.startswith("test_")
-            and n is not named[0]
-        ):
+    for n in siblings.values():
+        if n not in kept_nodes:
             a, b = _span(n)
             dropped.update(range(a, b + 1))
     lines = source.splitlines(keepends=True)
     kept = "".join(line for i, line in enumerate(lines, start=1) if i not in dropped)
     return digest16(kept.encode())
+
+
+def _names_used(nodes: list[ast.AST]) -> set[str]:
+    """Every identifier read or attribute name mentioned under `nodes`."""
+    out: set[str] = set()
+    for node in nodes:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name):
+                out.add(sub.id)
+            elif isinstance(sub, ast.Attribute):
+                out.add(sub.attr)
+    return out
 
 
 @dataclass(frozen=True)

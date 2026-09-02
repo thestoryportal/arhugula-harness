@@ -31,6 +31,12 @@ def test_tokens_keep_quoted_separators_and_flags_whole():
         ["grep", "(", "g"],
     ]
     assert g.tokens('grep "a;b" f; echo') == ["grep", "a;b", "f", ";", "echo"]
+    # codex u-sr-09 r2: an unquoted newline separates commands like `;`; a quoted one does not
+    assert g.segments(g.tokens("cd /tmp\nrg -g '*.py' x") or []) == [
+        ["cd", "/tmp"],
+        ["rg", "-g", "*.py", "x"],
+    ]
+    assert g.tokens("grep 'a\nb' f") == ["grep", "a\nb", "f"]
 
 
 def test_segments_split_at_bare_separators_only():
@@ -54,6 +60,14 @@ def test_segments_split_at_bare_separators_only():
         ('rtk grep -n "a\\|f(" f.txt', [PAREN]),  # the [B] parse-error shape
         ("rtk grep -e 'f(' f.txt", [PAREN]),  # pattern given via -e
         ("rtk grep -g '*.py' 'f(' tools", [GLOB, PAREN]),
+        # codex u-sr-09 r2: option grammar corners
+        ("rtk grep -eF\\( file", [PAREN]),  # -e takes the rest of the cluster: F( is the pattern
+        ("rtk grep -nA 2 'f(' file", [PAREN]),  # clustered -nA consumes its value
+        ("rtk grep -nA2 'f(' file", [PAREN]),
+        ("rtk grep -m1 'f(' file", [PAREN]),
+        ("rtk grep 'f\\\\(' file", [PAREN]),  # even backslash run: the paren is live
+        ("rtk grep --regexp='f(' file", [PAREN]),
+        ("rtk grep -- '(' file", [PAREN]),  # after `--` the paren IS the pattern: rg still chokes
     ],
 )
 def test_shapes_found(rewritten, want):
@@ -76,6 +90,10 @@ def test_shapes_found(rewritten, want):
         'rtk grep -n "f\\(x\\)" file.txt',  # escaped: a BRE group, not a hard failure
         'rtk grep -n plain "dir (x)/file"',  # paren in a PATH operand, not the pattern
         "rtk grep -A 2 pat 'f(x).txt'",  # -A consumes its value; the operand is a path
+        # codex u-sr-09 r2: option grammar corners
+        "rtk grep -- -g file",  # `--` ends options: -g is the pattern operand
+        "rtk grep -nE 'f(' file",
+        "rtk grep -eE file",  # -e takes `E` as its pattern; no -E flag is set
     ],
 )
 def test_shapes_silent(rewritten):
@@ -111,6 +129,17 @@ def test_reissue_is_verbatim_for_one_command_and_quote_safe_otherwise():
     assert g.reissue("ls | grep 'a && f(' f") == "ls | rtk proxy grep 'a && f(' f"
     assert g.reissue("uv run x") is None  # not a grep/rg command: nothing to prefix
     assert g.reissue("grep 'unbalanced") is None
+
+
+def test_parse_args_grammar():
+    p = g.parse_args(["-nA", "2", "-eF\\(", "--glob=*.py", "--", "-g", "x"])
+    assert p.flags == {"n"} and p.values == {"A": "2", "e": "F\\(", "--glob": "*.py"}
+    assert p.longs == {"--glob"} and p.operands == ["-g", "x"]
+    assert g.pattern_of(p) == "F\\(" and not g.regex_safe(p) and g.has_glob(p)
+    p = g.parse_args(["-rnE", "f(", "tools"])
+    assert p.flags == {"r", "n", "E"} and g.regex_safe(p) and g.pattern_of(p) == "f("
+    p = g.parse_args(["--regexp", "f(", "-t", "py", "file"])
+    assert p.values == {"--regexp": "f(", "t": "py"} and p.operands == ["file"]
 
 
 def test_judge_reason_names_shapes_and_reissue():
