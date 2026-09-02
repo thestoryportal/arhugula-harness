@@ -511,6 +511,13 @@ ending the turn):
 3. **Run `/context-save`.** Even if the next action is "stop the loop" — a saved checkpoint is
    what makes the next session's resume cheap and honest, per
    `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`.
+4. **Facts-brief handoff for a heavy next item (U-SR-07/WR-14).** If the next action is a
+   heavy audit or document and this closing session sits deep in context (>400k), do not
+   author it here — "I already have all the context loaded" is the trap; the loaded
+   context is what every call re-bills. The closing session writes the facts brief only —
+   the findings, cites, and decisions the deliverable needs, folded into the
+   `/context-save` above — and a fresh session authors from the brief: the S3 audit
+   authored at 540k context cost 0.93M IET against ≈0.3M fresh ([B] F10).
 
 Skip only when this PR was itself the terminating roadmap-status refresh (§12.2.1) — a
 refresh-only commit has no new learnings to reflect on.
