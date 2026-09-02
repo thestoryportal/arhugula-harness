@@ -103,6 +103,11 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
     )
     assert ps.test_slice_digest(calls.replace("assert f() == 3", "pass"), "test_f") != base
     assert ps.test_slice_digest(calls.replace("assert True", "assert 1"), "test_f") == base
+    # codex u-sr-09 r9: a DYNAMIC reference by string names its target too
+    dyn = calls.replace("    test_inner()\n", '    globals()["test_helper"]()\n')
+    assert ps.test_slice_digest(
+        dyn.replace("assert f() == 3", "pass"), "test_f"
+    ) != ps.test_slice_digest(dyn, "test_f")
     # codex u-sr-09 r3: a test_*-named pytest FIXTURE (autouse or not) is harness, never a
     # removable sibling -- editing it changes the digest
     fixt = (

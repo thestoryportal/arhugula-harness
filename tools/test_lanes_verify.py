@@ -326,6 +326,20 @@ def test_annotation_binds_across_a_multiline_decorator(repo: Path):
         "# mutation-probe: orphaned too\nclass K:\n    pass\n\n\ndef test_last():\n    pass\n"
     )
     assert lv._annotations(repo / "tools" / "test_z.py") == []
+    # codex u-sr-09 r9: two STACKED annotations above one test each bind it (two targets)
+    (repo / "tools" / "test_w.py").write_text(
+        "# mutation-probe(tools/a.py): first\n# mutation-probe(tools/b.py): second\n"
+        "def test_two():\n    pass\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_w.py") == [
+        ("test_two", "tools/a.py"),
+        ("test_two", "tools/b.py"),
+    ]
+    row = _row(mp=True, art="pytest:tools/test_w.py")
+    assert lv.required_probes(row) == [
+        ("tools/test_w.py::test_two", "tools/a.py"),
+        ("tools/test_w.py::test_two", "tools/b.py"),
+    ]
     row = _row(mp=True, art="pytest:tools/test_x.py")
     assert lv.required_probes(row) == [("tools/test_x.py::test_p", "tools/x.py")]
 

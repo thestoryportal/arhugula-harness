@@ -515,10 +515,13 @@ def phase0_verdict(results: list[Result]) -> int:
 # through it to the next test). The bridge accepts only DECORATOR-shaped lines -- starting
 # with `@`, whitespace (a continuation), `)`, `#`, or empty -- so a class, an assignment or
 # any other statement between an annotation and the next test ends the scan instead of
-# carrying the annotation over to it (codex r8).
+# carrying the annotation over to it (codex r8). The bridge and the `def` are a LOOKAHEAD:
+# a match consumes only its own annotation line, so two stacked annotations above one
+# test each bind it (two required targets), instead of the first swallowing the second
+# (codex r9).
 _ANNOT = re.compile(
-    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:(?:[@#) \t][^\n]*)?\n)*?"
-    r"(?:async )?def (?P<name>test_\w+)",
+    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?=(?:(?:[@#) \t][^\n]*)?\n)*?"
+    r"(?:async )?def (?P<name>test_\w+))",
     re.M,
 )
 #: The `red-first` skill's form, `# mutation-probe: <path>:<lines> ...` -- a leading path:lines

@@ -260,7 +260,10 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 
 def _names_used(nodes: list[ast.AST]) -> set[str]:
-    """Every identifier read or attribute name mentioned under `nodes`."""
+    """Every identifier read, attribute name, or STRING CONSTANT mentioned under `nodes` --
+    a string is how a dynamic lookup names its target (`globals()["test_helper"]()`,
+    `getattr(m, "test_helper")`, codex u-sr-09 r9), so a sibling whose name appears as a
+    string is referenced too."""
     out: set[str] = set()
     for node in nodes:
         for sub in ast.walk(node):
@@ -268,6 +271,8 @@ def _names_used(nodes: list[ast.AST]) -> set[str]:
                 out.add(sub.id)
             elif isinstance(sub, ast.Attribute):
                 out.add(sub.attr)
+            elif isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                out.add(sub.value)
     return out
 
 
