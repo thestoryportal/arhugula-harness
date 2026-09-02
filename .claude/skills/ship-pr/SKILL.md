@@ -16,7 +16,12 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites that lane runs are
   never executed by it. ALWAYS launch `just codex-check` `run_in_background` and poll the
   task (U-SR-05/WR-12) — the suite outlasts the Bash tool's foreground timeout, and a
-  foreground launch cost a 10-minute dead gap at [B] F6.
+  foreground launch cost a 10-minute dead gap at [B] F6. Cache-warmth handoff
+  (U-SR-07/WR-14): at >400k context, before ANY background wait expected to outlast the
+  prompt-cache TTL — this launch included, and the CI/door waits later in this skill —
+  prefer closing out to a handoff over idling through the expiry: one cold re-warm
+  re-reads the whole context at ≈0.7M IET ([B] F4); "the wait costs nothing, I'm just
+  sleeping" is the trap — the expiry bills the NEXT call.
 - **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
   the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
   claim from the actual source rather than restating it; (c) confirm every `#NNN` reference

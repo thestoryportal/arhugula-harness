@@ -18,6 +18,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS="$SCRIPT_DIR/../../.claude/skills"
 CONT="$SKILLS/roadmap-continue/SKILL.md"
 SHIP="$SKILLS/ship-pr/SKILL.md"
+HEAL="$SKILLS/self-heal/SKILL.md"
+LANE="$SKILLS/two-lane/SKILL.md"
 AGENTS_SKILLS="$SCRIPT_DIR/../../.agents/skills"
 ACONT="$AGENTS_SKILLS/roadmap-continue/SKILL.md"
 ASHIP="$AGENTS_SKILLS/ship-pr/SKILL.md"
@@ -26,7 +28,7 @@ PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-for f in "$CONT" "$SHIP" "$ACONT" "$ASHIP"; do
+for f in "$CONT" "$SHIP" "$HEAL" "$LANE" "$ACONT" "$ASHIP"; do
   [ -f "$f" ] || { echo "FATAL: missing $f"; exit 1; }
 done
 
@@ -57,8 +59,17 @@ acont_ground=$(section "$ACONT" '^## Grounding' '^## Execute one arc')
 acont_exec=$(section "$ACONT" '^## Execute one arc' '^## Genuine gates')
 acont_next=$(section "$ACONT" '^## Before the next arc' '^## NEVER')
 aship_reflect=$(section "$ASHIP" '^## Reflect and checkpoint' '^## Arc exit report')
+# WR-14(b) carriers beyond roadmap-continue (u-sr-07 codex r5): every independently
+# invocable skill that instructs a background codex-check launch is a background-wait
+# moment and owes the cache-warmth rule — ship-pr's pre-flight (both runners),
+# self-heal step 2, and the two-lane build half. The Codex self-heal/two-lane mirrors
+# instruct no codex-check, so they carry no wait moment and owe nothing.
+ship_preflight=$(section "$SHIP" '^## Pre-flight' '^## Open the PR')
+aship_preflight=$(section "$ASHIP" '^## Preflight and local gates' '^## Grounding pass')
+heal_step2=$(section "$HEAL" '^2[.] [*][*]Run the suite' '^3[.] ')
+lane_setup=$(section "$LANE" '^## Lane setup' '^## The merge lane')
 
-for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec acont_next aship_reflect; do
+for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec acont_next aship_reflect ship_preflight aship_preflight heal_step2 lane_setup; do
   eval "v=\${$pair}"
   [ -n "$v" ] && ok "section anchor resolves: $pair" || bad "section anchor EMPTY: $pair"
 done
@@ -104,6 +115,37 @@ line "$acont_exec" "codex roadmap-continue execute carries the cache-warmth hand
   'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
   '[B] F4' \
   '"the wait costs nothing" bills the next call'
+
+line "$ship_preflight" "ship-pr pre-flight carries the cache-warmth handoff" \
+  'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before ANY background wait expected to outlast the prompt-cache TTL' \
+  '[B] F4' \
+  '"the wait costs nothing, I'"'"'m just sleeping" is the trap'
+
+line "$aship_preflight" "codex ship-pr preflight carries the cache-warmth handoff" \
+  'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
+  '[B] F4' \
+  '"the wait costs nothing" bills the next call'
+
+line "$heal_step2" "self-heal step 2 carries the cache-warmth handoff" \
+  'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
+  '[B] F4' \
+  '"the wait costs nothing" bills the next call'
+
+line "$lane_setup" "two-lane build half carries the cache-warmth handoff" \
+  'cache-warmth handoff, U-SR-07/WR-14: at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
+  '[B] F4' \
+  '"the wait costs nothing" bills the next call'
+
+# WR-14(b) coupling at the sibling carriers: the launch instruction and the
+# cache-warmth rule must share the section (same rule as step 4 above).
+for spec in "ship_preflight:$ship_preflight" "aship_preflight:$aship_preflight" "heal_step2:$heal_step2" "lane_setup:$lane_setup"; do
+  lbl="${spec%%:*}"; text="${spec#*:}"
+  if printf '%s' "$text" | grep -qF 'codex-check' && printf '%s' "$text" | grep -qiF 'cache-warmth'; then
+    ok "$lbl couples codex-check with the cache-warmth rule"
+  else
+    bad "$lbl decouples codex-check from the cache-warmth rule"
+  fi
+done
 
 line "$acont_next" "codex roadmap-continue before-next-arc carries the facts-brief handoff" \
   'Facts-brief handoff (U-SR-07/WR-14): if the next item is a heavy audit or document' \

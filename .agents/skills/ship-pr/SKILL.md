@@ -16,6 +16,11 @@ before executing; those authorities win if this summary drifts.
 2. Recompute affected roadmap, register, ledger, and cite surfaces before committing.
 3. Run the narrow witness first, then `just codex-check` for a substantive PR. Run
    `just overlay-check` for cite/CXA-bearing changes and `bash -n` for shell changes.
+   Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait
+   expected to outlast the prompt-cache TTL (this gate, the CI/door waits later in this
+   skill), prefer closing out to a handoff over idling through the expiry — one cold
+   re-warm re-reads the whole context (≈0.7M IET on the [B] F4 baseline); "the wait
+   costs nothing" bills the next call.
 4. Run `just codex-closeout`. If the diff changes afterward, re-run every affected gate.
 5. Review the actual diff, stage only explicit paths, and inspect the staged diff.
 

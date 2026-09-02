@@ -20,7 +20,11 @@ artifacts so the operator only sees genuine bugs.
    `uv run pytest` + the `codex-parity-check` shell lane, mechanism-α only — β/γ skip
    without credentials, by design). ALWAYS launch it `run_in_background` and poll the
    task (U-SR-05/WR-12): the suite outlasts the Bash tool's foreground timeout — a
-   foreground launch cost a 10-minute dead gap at [B] F6. For a targeted area, `just test-one <path>`. Prefer
+   foreground launch cost a 10-minute dead gap at [B] F6. Cache-warmth handoff
+   (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast
+   the prompt-cache TTL, prefer closing out to a handoff over idling through the
+   expiry — one cold re-warm re-reads the whole context at ≈0.7M IET ([B] F4); "the
+   wait costs nothing" bills the next call. For a targeted area, `just test-one <path>`. Prefer
    `codex-check` over `check` here: the two differ only in that `check` omits
    `codex-parity-check`, and with it BOTH shell globs (`tools/hooks/test_*.sh` *and*
    `tools/statusline/test_*.sh`) — a self-heal pass that never executed them cannot call
