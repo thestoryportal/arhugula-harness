@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Witness for U-SR-09 b4 (plan §8 R2): the rtk grep-rewrite shape guard.
+#
+# Sections 1-3 are hermetic: a STUB `rtk` on PATH answers `hook check` the way rtk 0.40.0
+# does (prints `rtk grep …` when the command-position word is grep/rg, else "No rewrite
+# for: …") and records every invocation, so the guard's plumbing -- pre-check, oracle,
+# shape judgement, correction, deny JSON, silence -- is exercised in CI where rtk is absent.
+# Section 4 runs only where the REAL rtk is installed and is the guard's EXIT PLAN: it
+# asserts each guarded shape still fails under `rtk grep` and works under `rtk proxy`; the
+# day a newer rtk translates them correctly it reds with the instruction to delete the guard.
+#
+# The hook runs IN PLACE (bash "$SCRIPT_DIR/<hook>"; copying it out breaks its lib.sh
+# source and it exits 0 silently -- a vacuous green), with CLAUDE_PROJECT_DIR pointed at a
+# throwaway dir and HARNESS_CODEX_REVIEW_ISOLATED unset (hooks early-exit on it).
+
+# mutation-probe: tools/hooks/rtk-shape-guard.sh:72-74 the --glob/-g shape branch (drop it -> no deny -> section 2 reds)
+
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK="$SCRIPT_DIR/rtk-shape-guard.sh"
+
+PASS=0; FAIL=0
+ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
+bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
+
+REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
+trap 'rm -rf "$REPO"' EXIT
+OUT="$REPO/out.txt"
+STUBDIR="$REPO/stubbin"; mkdir -p "$STUBDIR"
+CALLS="$REPO/rtk-calls.log"
+
+# The stub: rtk 0.40.0's dry-run shape, witnessed at U-SR-09 -- `grep`/`rg` at a command
+# position (start, after `;`/`&&`) becomes `rtk grep`; a pipeline's SECOND command and every
+# other word are untouched ("rtk ls | grep …"); egrep / git grep / rtk proxy are never rewritten.
+cat > "$STUBDIR/rtk" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${RTK_STUB_CALLS:?}"
+[ "$1" = hook ] && [ "$2" = check ] || { echo "stub: unsupported $*" >&2; exit 2; }
+shift 2; cmd="$*"
+out=$(printf '%s' "$cmd" | sed -E 's/(^[[:space:]]*|[;&][[:space:]]*)(grep|rg)([[:space:]])/\1rtk grep\3/g')
+if [ "$out" = "$cmd" ]; then echo "No rewrite for: $cmd"; else echo "$out"; fi
+EOF
+chmod +x "$STUBDIR/rtk"
+
+# payload <cmd>: the PreToolUse JSON for a Bash command, JSON-escaped by python (the shapes
+# under test carry backslashes and quotes a printf template would corrupt), written to a
+# file and fed on stdin by redirection -- never a pipe: a hook that exits before reading
+# stdin would EPIPE the writer, and under pipefail that status masks the hook's own.
+PAYLOAD="$REPO/payload.json"
+payload() { python3 -c 'import json,sys; print(json.dumps({"session_id":"probe","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1" > "$PAYLOAD"; }
+# run_guard <bash-command>: PATH = stub first; stdout+stderr -> $OUT; echoes the exit code.
+run_guard() {
+  payload "$1"
+  env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1
+  echo $?
+}
+bytes() { wc -c < "$OUT" | tr -d ' '; }
+calls() { [ -f "$CALLS" ] && wc -l < "$CALLS" | tr -d ' ' || echo 0; }
+# deny_reason: the output is exactly one closed PreToolUse deny decision; prints its reason.
+deny_reason() { python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+h = d["hookSpecificOutput"]
+assert set(d) == {"hookSpecificOutput"}, d
+assert set(h) == {"hookEventName", "permissionDecision", "permissionDecisionReason"}, h
+assert h["hookEventName"] == "PreToolUse" and h["permissionDecision"] == "deny", h
+print(h["permissionDecisionReason"])
+' "$1" 2>/dev/null; }
+
+expect_silent() { # <label> <cmd>
+  rc=$(run_guard "$2"); b=$(bytes)
+  [ "$rc" -eq 0 ] && [ "$b" -eq 0 ] && ok "$1: '$2' -> exit 0, 0 bytes" || bad "$1: '$2' -> exit $rc, $b bytes: $(head -c 300 "$OUT")"
+}
+expect_deny() { # <label> <cmd> <expected re-issue substring> <expected shape word>
+  rc=$(run_guard "$2")
+  reason=$(deny_reason "$OUT") || { bad "$1: '$2' -> not a closed deny decision (rc=$rc): $(head -c 300 "$OUT")"; return; }
+  case "$reason" in
+    *"Re-issue verbatim as: $3"*) ok "$1: '$2' -> deny with re-issue '$3'" ;;
+    *) bad "$1: '$2' -> deny but re-issue missing '$3': $reason" ;;
+  esac
+  case "$reason" in *"$4"*) ok "$1: reason names the shape ($4)" ;; *) bad "$1: reason does not name '$4': $reason" ;; esac
+}
+
+# --- 1. silence: plain commands, clean rewrites, escape flags, pipeline greps --------------
+: > "$CALLS"
+expect_silent "plain non-grep" 'ls -la /tmp'
+[ "$(calls)" -eq 0 ] && ok "pre-check: the oracle is never spawned for a non-grep command" || bad "oracle spawned $(calls)x for 'ls -la /tmp'"
+expect_silent "clean rewrite" 'grep -n foo file.txt'
+[ "$(calls)" -eq 1 ] && ok "oracle consulted exactly once for a grep command" || bad "oracle calls after one grep: $(calls)"
+expect_silent "alternation alone (round-trips on 0.40.0 -- NOT guarded)" 'grep -n "a\|b" file.txt'
+expect_silent "-E makes the paren a group on both sides" 'grep -nE "f(x)" file.txt'
+expect_silent "-F makes the paren literal on both sides" 'grep -F "f(" file.txt'
+expect_silent "-P" 'grep -P "f(x)" file.txt'
+expect_silent "combined short flags carry the escape" 'grep -rnE "f(" tools'
+expect_silent "escaped paren is a BRE group, not a hard failure (out of scope)" 'grep -n "f\(x\)" file.txt'
+expect_silent "pipeline grep is not rewritten by rtk" 'ls | grep "f(" '
+expect_silent "egrep is not rewritten by rtk" 'egrep "f(x)" file.txt'
+expect_silent "rtk proxy is left alone" 'rtk proxy grep -n "f(" file.txt'
+expect_silent "rtk proxy rg --glob is left alone" 'rtk proxy rg --glob "*.py" main tools'
+
+# --- 2. the two guarded shapes, with the exact re-issue ----------------------------------
+expect_deny "--glob" 'rg --glob "*.py" "def main" tools' 'rtk proxy rg --glob "*.py" "def main" tools' '--glob/-g'
+expect_deny "-g short form" 'rg -g "*.py" main tools' 'rtk proxy rg -g "*.py" main tools' '--glob/-g'
+expect_deny "bare paren" 'grep -rn "hook_emit(" tools/hooks' 'rtk proxy grep -rn "hook_emit(" tools/hooks' 'unescaped paren'
+expect_deny "closing paren" 'grep -n "x)" f.txt' 'rtk proxy grep -n "x)" f.txt' 'unescaped paren'
+expect_deny "alternation + paren (the [B] parse-error shape)" 'grep -n "a\|f(" f.txt' 'rtk proxy grep -n "a\|f(" f.txt' 'unescaped paren'
+expect_deny "after ; the re-issue prefixes only the grep" 'cd /tmp; grep -n "f(" f' 'cd /tmp; rtk proxy grep -n "f(" f' 'unescaped paren'
+expect_deny "before && the re-issue keeps the tail" 'grep -n "f(" f && echo ok' 'rtk proxy grep -n "f(" f && echo ok' 'unescaped paren'
+rc=$(run_guard 'rg -g "*.py" "f(" tools'); reason=$(deny_reason "$OUT")
+case "$reason" in *'--glob/-g'*'unescaped paren'*) ok "both shapes named when both present" ;; *) bad "both shapes expected in one reason: $reason" ;; esac
+
+# --- 3. no rtk on PATH / review-isolated -> silent even on a guarded shape ----------------
+# "rtk absent" = the caller's PATH minus every directory that holds an rtk (the stub's and
+# the real one's), so jq/sed/grep stay reachable and only the oracle binary is gone.
+NORTK_PATH=$(python3 -c 'import os,sys; print(":".join(d for d in os.environ["PATH"].split(":") if d and not os.access(os.path.join(d,"rtk"), os.X_OK)))')
+if env PATH="$NORTK_PATH" bash -c 'command -v rtk' >/dev/null 2>&1; then
+  bad "could not build an rtk-free PATH (rtk still resolves): $NORTK_PATH"
+else
+  payload 'grep -rn "hook_emit(" tools/hooks'
+  env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$NORTK_PATH" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1; rc=$?
+  [ "$rc" -eq 0 ] && [ "$(bytes)" -eq 0 ] && ok "rtk absent -> exit 0, 0 bytes (nothing rewrites, nothing to guard)" || bad "rtk absent -> rc=$rc $(bytes) bytes: $(head -c 200 "$OUT")"
+fi
+payload 'grep -rn "hook_emit(" tools/hooks'
+env HARNESS_CODEX_REVIEW_ISOLATED=1 PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ "$(bytes)" -eq 0 ] && ok "review-isolated -> exit 0, 0 bytes" || bad "review-isolated -> rc=$rc $(bytes) bytes"
+
+# --- 4. EXIT PLAN -- the real rtk (presence-gated, stated loudly) ---------------------------
+# Each guarded shape must STILL fail under `rtk grep` and work under `rtk proxy`; `\|` alone
+# must still round-trip (the reason it is not guarded). A flip here means rtk changed: on a
+# fix, delete rtk-shape-guard.sh + this test + the lanes_verify row + the settings entry.
+if command -v rtk >/dev/null 2>&1 && command -v rg >/dev/null 2>&1; then
+  echo "  rtk present: $(rtk --version 2>&1 | head -1)"
+  FX="$REPO/fx/sub"; mkdir -p "$FX"; printf 'alpha\nbeta\nf(x)\n' > "$FX/f.txt"
+  ( cd "$REPO/fx" && rtk grep --glob "*.txt" alpha sub >/dev/null 2>&1 ); rc_bad=$?
+  ( cd "$REPO/fx" && rtk proxy rg --glob "*.txt" alpha sub >/dev/null 2>&1 ); rc_good=$?
+  [ "$rc_bad" -ne 0 ] && [ "$rc_good" -eq 0 ] && ok "real rtk: --glob still fails under rtk grep (rc=$rc_bad) and works under rtk proxy" \
+    || bad "real rtk: --glob shape changed (rtk grep rc=$rc_bad, rtk proxy rc=$rc_good) -- rtk fixed this: DELETE the guard"
+  ( cd "$REPO/fx" && rtk grep -n "f(" sub/f.txt >/dev/null 2>&1 ); rc_bad=$?
+  good=$(cd "$REPO/fx" && rtk proxy grep -n "f(" sub/f.txt 2>/dev/null)
+  [ "$rc_bad" -ne 0 ] && [ "$good" = "3:f(x)" ] && ok "real rtk: bare paren still fails under rtk grep (rc=$rc_bad) and works under rtk proxy" \
+    || bad "real rtk: paren shape changed (rtk grep rc=$rc_bad, rtk proxy '$good') -- rtk fixed this: DELETE the guard"
+  alt=$(cd "$REPO/fx" && rtk grep -n "alpha\|beta" sub/f.txt 2>/dev/null)
+  case "$alt" in *alpha*beta*) ok "real rtk: \\| alone still round-trips (the reason it is not guarded)" ;; *) bad "real rtk: \\| alone no longer round-trips: '$alt' -- add it to the guard" ;; esac
+  # the re-issue shape through rtk's REAL hook (the dry-run's print form varies; the JSON
+  # hook is the mechanism): zero bytes = no rewrite.
+  payload 'rtk proxy grep -n "f(" x'
+  chk=$(rtk hook claude < "$PAYLOAD" 2>/dev/null | wc -c | tr -d ' ')
+  [ "$chk" -eq 0 ] && ok "real rtk: the re-issue shape is not re-rewritten (0 bytes from rtk hook claude)" || bad "real rtk re-rewrites 'rtk proxy grep' ($chk bytes)"
+else
+  echo "  rtk or rg absent: section 4 (exit-plan witness on the real binary) NOT run -- recorded on the U-SR-09 PR"
+fi
+
+echo "---"; echo "PASS=$PASS FAIL=$FAIL"
+[ "$FAIL" -eq 0 ] || exit 1

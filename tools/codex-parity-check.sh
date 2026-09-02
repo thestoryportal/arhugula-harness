@@ -22,6 +22,7 @@ uv run pytest -q \
   tools/test_codex_worktree_gc.py \
   tools/test_arc_exit_report.py \
   tools/test_mutation_probe.py \
+  tools/test_pin_scope.py \
   tools/test_arc_metrics.py \
   tools/test_round_log_publish.py \
   tools/test_arc_metrics_lanes.py \

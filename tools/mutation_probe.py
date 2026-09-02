@@ -130,6 +130,11 @@ from typing import NamedTuple
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import pin_scope
+from pin_scope import parse_line_range
+
 #: Spec §8.1 / §0.3 (spec-he-loop-lanes): every probe verdict is appended here so
 #: `just mutation-probe-coverage-check` (tools/lanes_verify.py) can assert that every
 #: manifest row marked mutation-probe has a PINNED result. A derived run log, tracked.
@@ -144,14 +149,43 @@ PROBE_LOG = Path(
 #: target lock -- the target from its in-memory original (the restore authority), the test
 #: artifact before the baseline and re-checked after step 3 (a change in between voids it).
 #: `log_result` writes these, never a fresh read after the lock is released (codex R2/R3 P2).
-MEASURED: dict[str, str | None] = {"target_sha": None, "test_sha": None}
+#: U-SR-09 b1 adds the SCOPED pair: `block_sha` (the probed lines' bytes) and
+#: `test_body_sha` (the judging test's `def`, when the command names one node id) -- the
+#: theorem `lanes_verify._pin_is_live` reads; `target_sha`/`test_sha` stay as provenance.
+MEASURED: dict[str, str | None] = {
+    "target_sha": None,
+    "test_sha": None,
+    "block_sha": None,
+    "test_body_sha": None,
+}
+
+
+def _reset_measured() -> None:
+    MEASURED.update(dict.fromkeys(MEASURED))
 
 
 def _sha16(path: Path) -> str | None:
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        return pin_scope.digest16(path.read_bytes())
     except OSError:
         return None
+
+
+def _test_digests(path: Path, node: str | None) -> tuple[str | None, str | None]:
+    """(whole-artifact digest, test-body digest) of the test artifact from ONE read, so
+    the two describe the same bytes. The body digest is None unless `node` names exactly
+    one function in a parseable Python file (`pin_scope.test_body_digest`)."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None, None
+    body = None
+    if node is not None:
+        try:
+            body = pin_scope.test_body_digest(data.decode("utf-8"), node)
+        except UnicodeDecodeError:
+            body = None
+    return pin_scope.digest16(data), body
 
 
 def test_file_of(test_cmd: str) -> Path | None:
@@ -165,6 +199,19 @@ def test_file_of(test_cmd: str) -> Path | None:
         return None
     if toks[:1] == ["bash"] and len(toks) > 1:
         return Path(toks[1])
+    return None
+
+
+def test_node_of(test_cmd: str) -> str | None:
+    """The test FUNCTION a pytest command names via its first `::` node-id token
+    (`pin_scope.node_tail`); None for a bare-file target, a `-k` selector (which can match
+    several tests) or a shell suite -- those bind the whole artifact."""
+    toks = test_cmd.split()
+    if "pytest" not in toks:
+        return None
+    for tok in toks[toks.index("pytest") + 1 :]:
+        if not tok.startswith("-") and "::" in tok:
+            return pin_scope.node_tail(tok)
     return None
 
 
@@ -366,23 +413,6 @@ def pid_alive(pid: int) -> bool:
 
 
 # --- pure helpers -----------------------------------------------------------------------
-
-
-def parse_line_range(spec: str) -> tuple[int, int]:
-    """`"12-20"` or `"12"` → (12, 20) / (12, 12), 1-indexed inclusive. Raises ValueError."""
-    text = spec.strip()
-    m = re.fullmatch(r"(\d+)(?:\s*-\s*(\d+))?", text)
-    if not m:
-        return _bad_range(spec)
-    a = int(m.group(1))
-    b = int(m.group(2)) if m.group(2) else a
-    if a < 1 or b < a:
-        return _bad_range(spec)
-    return a, b
-
-
-def _bad_range(spec: str) -> tuple[int, int]:
-    raise ValueError(f"--lines must be A or A-B with 1 <= A <= B (got {spec!r})")
 
 
 def comment_out(text: str, start: int, end: int, prefix: str = COMMENT_PREFIX) -> str:
@@ -1412,10 +1442,12 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
 
     # The test artifact's bytes BEFORE the baseline; re-checked after step 3 so the logged
     # digest names exactly the witness both runs executed (or None if it moved in between).
-    MEASURED["target_sha"] = MEASURED["test_sha"] = None
+    _reset_measured()
     tf = test_file_of(test_cmd)
     test_path = (repo_root / tf) if tf is not None else None
-    test_sha_before = _sha16(test_path) if test_path is not None else None
+    test_sha_before, test_body_before = (
+        _test_digests(test_path, test_node_of(test_cmd)) if test_path is not None else (None, None)
+    )
 
     # Step 1 — the baseline MUST be green.
     print(f"[1/3] baseline: {test_cmd}")
@@ -1462,12 +1494,15 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
         return _refuse(f"cannot read {target} ({e}).")
     except UnicodeDecodeError:
         return _refuse(f"{target} is not UTF-8 text — refusing to mutate it.")
-    MEASURED["target_sha"] = hashlib.sha256(original).hexdigest()[:16]
+    MEASURED["target_sha"] = pin_scope.digest16(original)
 
     try:
         mutated_text = comment_out(text, start, end)
     except ValueError as e:
         return _refuse(str(e))
+    # The scoped pin (U-SR-09 b1): the bytes the probe is about to comment out, from the
+    # restore authority -- the range was validated by comment_out one line up.
+    MEASURED["block_sha"] = pin_scope.block_digest(text, start, end)
 
     # Step 2b — reject an unprobeable range BEFORE writing anything.
     err = syntax_error(kind, mutated_text, str(target))
@@ -1529,6 +1564,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             verdict, reason = classify_step3(res.rc, mutation_output, looks_like_pytest(test_cmd))
             if test_path is not None and _sha16(test_path) == test_sha_before:
                 MEASURED["test_sha"] = test_sha_before
+                MEASURED["test_body_sha"] = test_body_before
             # SECOND GUARD (merge-gate lens 1). Independent of the lock and deliberately
             # kept alongside it: a verdict is only about the removed lines if the removed
             # lines were still gone when the test finished. Anything else on disk means the
@@ -1605,7 +1641,7 @@ def main(argv: list[str] | None = None) -> int:
         help="per-run timeout in seconds for --test (default 600); a timeout is INDETERMINATE",
     )
     args = ap.parse_args(argv)
-    MEASURED["target_sha"] = MEASURED["test_sha"] = None
+    _reset_measured()
     rc = _run(args)
     log_result(args.file, args.lines, args.test, rc)  # EVERY exit, refusals included (R7 P3)
     return rc
@@ -1632,7 +1668,10 @@ def _run(args: argparse.Namespace) -> int:
 
 def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = None) -> None:
     """Append one verdict line to PROBE_LOG: `{ts, file, lines, test, rc, head, target_sha,
-    test_sha}`. The digests bind the verdict to the exact source + test bytes it measured, so
+    test_sha, pin_scope, block_sha, test_scope, test_body_sha}` (the last four are U-SR-09 b1:
+    `pin_scope` is always `block` for a row this version writes -- a pre-U-SR-09 row has no
+    field and reads as `file`; `test_scope` is `body` exactly when the command named one test
+    function). The digests bind the verdict to the exact source + test bytes it measured, so
     `lanes_verify` can tell a live pin from a stale one after either file changes (codex R2
     P2: rc alone let an old success stand after the guarded line was reverted). The verdict
     was already printed and IS the exit code; a log that cannot be written is reported on
@@ -1651,6 +1690,14 @@ def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = Non
         "head": head.out if head.rc == 0 else None,
         "target_sha": MEASURED["target_sha"],
         "test_sha": MEASURED["test_sha"],
+        "pin_scope": pin_scope.PIN_SCOPE_BLOCK,
+        "block_sha": MEASURED["block_sha"],
+        "test_scope": (
+            pin_scope.TEST_SCOPE_BODY
+            if MEASURED["test_body_sha"] is not None
+            else pin_scope.TEST_SCOPE_ARTIFACT
+        ),
+        "test_body_sha": MEASURED["test_body_sha"],
     }
     data = (json.dumps(entry, sort_keys=True) + "\n").encode()
     try:

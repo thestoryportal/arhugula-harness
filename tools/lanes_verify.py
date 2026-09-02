@@ -11,13 +11,16 @@ never one. Rows are appended by the unit that lands each artifact; keep them in 
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import pin_scope  # [LAW:one-source-of-truth] the pin digest format + theorem live there
 
 REPO = Path(__file__).resolve().parent.parent
 PROBE_LOG = REPO / ".harness" / "mutation-probe-log.jsonl"
@@ -437,6 +440,18 @@ MANIFEST: list[Row] = [
         "local + CI",
         False,
     ),
+    # §8 R2 / U-SR-09 b4 -- rtk grep-rewrite shape guard: the two shapes rtk 0.40.0 mangles
+    # deterministically deny with the `rtk proxy` re-issue; every other Bash call is silent.
+    # mutation-probe True: the guard's deny path is deletion-expressible (drop a shape
+    # branch -> the deny disappears -> red).
+    Row("§8-R2", "shell:tools/hooks/test_rtk_shape_guard.sh", "phase0", "local + CI", True),
+    # §8 R2 / U-SR-09 b5 -- the graft post-edit hook replaced by a dirty-flag-only shim
+    # (graft's `check` ran 46 s inside an 8 s budget on every edit: 8.8 s for a value that
+    # is always 0). mutation-probe `—`: the shim is JavaScript, outside the probe tool's
+    # language set (.py/.sh/.yaml/.yml).
+    Row("§8-R2", "shell:tools/hooks/test_graft_mark_dirty.sh", "phase0", "local + CI", False),
+    # §8 R2 / U-SR-09 b1 -- the scoped pin theorem (pin_scope.py), pure and probed.
+    Row("§8-R2", "pytest:tools/test_pin_scope.py", "phase0", "local + CI", True),
     # §8.1 / §0.3 (U-HE-05)
     Row("§8.1", "pytest:tools/test_lanes_verify.py", "phase0", "local + CI", True),
     Row("§0.3", "just:mutation-probe-coverage-check", "phase0", "local + CI", False),
@@ -513,7 +528,7 @@ def _relative(token: str) -> str:
 
 def _sha16(path: Path) -> str | None:
     try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        return pin_scope.digest16(path.read_bytes())
     except OSError:
         return None
 
@@ -525,11 +540,16 @@ def default_probe_target(test_artifact: str) -> str:
 
 
 def _pin_is_live(e: dict, target: str, probe_file: str) -> bool:
-    """A PINNED entry is evidence only while the bytes it measured are the bytes at HEAD: the
-    mutated source file (`file` + `target_sha`) AND the test artifact (`test_sha`) must both
-    still digest to the logged values (codex R2 P2). Entries without digests never count. The
-    probed file must be THE annotated target (`probe_file`), an existing source file -- never
-    the test artifact itself, never an unrelated module (codex R3/R4 P2)."""
+    """A PINNED entry is evidence only while the bytes it measured are the bytes at HEAD.
+    Which bytes is the row's `pin_scope` (U-SR-09 b1; `pin_scope.py` owns the theorem):
+    `file` (absent -- every pre-U-SR-09 row) -- the mutated source file (`file` +
+    `target_sha`) AND the test artifact (`test_sha`) must both still digest to the logged
+    values (codex R2 P2); `block` -- the probed lines still occur verbatim in the file and
+    the test BODY (or whole artifact, per `test_scope`) is unchanged, so an unrelated edit in
+    either file no longer stales the pin ([B] F7). Entries without digests never count; an
+    unknown scope never counts. The probed file must be THE annotated target (`probe_file`),
+    an existing source file -- never the test artifact itself, never an unrelated module
+    (codex R3/R4 P2)."""
     tsha, fsha = e.get("target_sha"), e.get("test_sha")
     if not tsha or not fsha or not e.get("file"):
         return False
@@ -537,7 +557,16 @@ def _pin_is_live(e: dict, target: str, probe_file: str) -> bool:
     test_file = Path(target.split("::", 1)[0])
     if src == test_file or str(src) != probe_file or not (REPO / src).is_file():
         return False
-    return _sha16(REPO / src) == tsha and _sha16(REPO / test_file) == fsha
+    scope = e.get("pin_scope", pin_scope.PIN_SCOPE_FILE)
+    if scope == pin_scope.PIN_SCOPE_FILE:
+        return _sha16(REPO / src) == tsha and _sha16(REPO / test_file) == fsha
+    pin = pin_scope.BlockPin.from_row(e, target) if scope == pin_scope.PIN_SCOPE_BLOCK else None
+    if pin is None:
+        return False
+    try:
+        return pin.live((REPO / src).read_text("utf-8"), (REPO / test_file).read_bytes())
+    except (OSError, UnicodeDecodeError):
+        return False
 
 
 def _pinned_nodeids(log_path: Path) -> set[tuple[str, str]]:

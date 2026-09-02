@@ -1705,10 +1705,32 @@ def test_verdict_is_logged_with_the_test_command_and_rc(repo, _probe_log_isolate
         entry["test_sha"] == hashlib.sha256((repo / "test_real.py").read_bytes()).hexdigest()[:16]
     )
     assert entry["head"] == git(repo, "rev-parse", "HEAD").stdout.strip()
+    # U-SR-09 b1: the SCOPED pair rides the same row -- the probed lines' digest (from the
+    # restored source, which equals the original) and, for a bare-file command, artifact scope
+    a, b = mp.parse_line_range(PINNED)
+    assert entry["pin_scope"] == "block"
+    assert entry["block_sha"] == mp.pin_scope.block_digest((repo / "src.py").read_text(), a, b)
+    assert entry["test_scope"] == "artifact" and entry["test_body_sha"] is None
     # a PROBE FAILED verdict is logged too, with its own rc -- never mistaken for a pin
     r = run_probe(repo, "src.py", PINNED, pytest_cmd("test_vacuous.py"))
     assert r.returncode == 1
     assert json.loads(log.read_text().splitlines()[-1])["rc"] == 1
+
+
+# mutation-probe: drop the `MEASURED["test_body_sha"] = test_body_before` line in probe()
+def test_a_node_id_command_pins_the_judging_tests_body(repo, _probe_log_isolated: Path):
+    """U-SR-09 b1: when the command names ONE test function, the row carries `test_scope`
+    body with that function's source-segment digest; the whole-file `test_sha` stays as
+    provenance."""
+    cmd = pytest_cmd("test_real.py::test_negative")
+    r = run_probe(repo, "src.py", PINNED, cmd)
+    assert r.returncode == 0, r.stdout + r.stderr
+    entry = json.loads(_probe_log_isolated.read_text().splitlines()[-1])
+    assert entry["test_scope"] == "body"
+    assert entry["test_body_sha"] == mp.pin_scope.test_body_digest(
+        (repo / "test_real.py").read_text(), "test_negative"
+    )
+    assert entry["test_sha"] == mp.pin_scope.digest16((repo / "test_real.py").read_bytes())
 
 
 def test_a_test_artifact_that_changes_during_the_probe_voids_its_digest(repo, _probe_log_isolated):
