@@ -35,13 +35,19 @@ done
 
 # section <file> <start-regex> <end-regex>: the carrier slice, whitespace-normalized.
 # The start line is included; extraction stops BEFORE the first later line matching
-# the end regex. An empty result means the anchor itself moved — every assertion on
-# the slice then fails loud rather than passing on vacuous emptiness.
+# the end regex. An empty result means the START anchor moved — every assertion on
+# the slice then fails loud rather than passing on vacuous emptiness. The END anchor's
+# failure mode is asymmetric (merge-gate witness lens, u-sr-07 gate r1): a miss does
+# not empty the slice, it silently widens it to EOF — so the extractor appends a
+# @@BOUNDED@@ marker ONLY when it exited via a real END match, and the boundedness
+# loop below requires the marker on every slice except the one deliberate to-EOF
+# extraction (acont_next, whose '^## NEVER' sentinel never matches by design).
 section() {
   awk -v s="$2" -v e="$3" '
-    found && $0 ~ e { exit }
+    found && $0 ~ e { bounded=1; exit }
     $0 ~ s { found=1 }
     found { print }
+    END { if (bounded) print "@@BOUNDED@@" }
   ' "$1" | tr '\n' ' ' | tr -s ' '
 }
 
@@ -85,6 +91,23 @@ for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exe
   eval "v=\${$pair}"
   [ -n "$v" ] && ok "section anchor resolves: $pair" || bad "section anchor EMPTY: $pair"
 done
+
+# Boundedness (u-sr-07 merge-gate witness lens): every slice must have terminated at a
+# REAL end-anchor match — a slice missing @@BOUNDED@@ ran to EOF because its END anchor
+# no longer matches (renamed heading, renumbered step), silently absorbing sibling
+# sections. acont_next is the one deliberate to-EOF slice and must NOT be bounded (its
+# sentinel matching something would mean a heading landed after the section by mistake).
+for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec aship_reflect ship_green aship_item3 heal_step2 lane_setup acont_item5 aloop_plan aloop_gate7 aloop_reflect; do
+  eval "v=\${$pair}"
+  case "$v" in
+    *@@BOUNDED@@*) ok "section terminates at its end anchor: $pair" ;;
+    *) bad "section ran to EOF — end anchor no longer matches: $pair" ;;
+  esac
+done
+case "$acont_next" in
+  *@@BOUNDED@@*) bad "acont_next unexpectedly bounded — a heading matched the deliberate to-EOF sentinel" ;;
+  *) ok "acont_next is the deliberate to-EOF slice (sentinel unmatched)" ;;
+esac
 
 # $1=section-text $2=label $3=rule-phrase $4=why-cite $5=trap-phrase — all three must
 # sit inside the SAME carrier section: the composed rule phrase, its measured [B]
