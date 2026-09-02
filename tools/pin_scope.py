@@ -118,9 +118,10 @@ def test_slice_digest(source: str, name: str) -> str | None:
     the test while its pin stayed live). Only sibling top-level tests -- the [B] F7 churn --
     are excluded, and a sibling the kept slice REFERENCES by name (a `test_helper()` the
     selected test calls; transitively, to a fixpoint) is kept too (codex r2 P2: hollowing
-    the helper hollowed the judge), as is any `test_*` decorated as a pytest fixture (an
-    autouse `test_setup` is harness, not a sibling -- codex r3). A test method inside a
-    class keeps its class whole. None
+    the helper hollowed the judge), as is any sibling whose DEFINITION runs code at import --
+    a decorator other than a plain `pytest.mark.<x>` (which covers every pytest fixture,
+    aliased or not: an autouse `test_setup` is harness, codex r3/r4) or a default that
+    calls something (codex r6). A test method inside a class keeps its class whole. None
     when the source does not parse, defines no function `name`, or defines it more than once
     (which one ran is not knowable from the name, so the caller falls back to the whole
     artifact)."""
@@ -135,14 +136,12 @@ def test_slice_digest(source: str, name: str) -> str | None:
     ]
     if len(named) != 1:
         return None
-    fixture_names = _fixture_names(tree)
     siblings = {
         n.name: n
         for n in tree.body
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
         and n.name.startswith("test_")
         and n is not named[0]
-        and not _is_fixture(n, fixture_names)
         and not _runs_at_import(n)
     }
     # a sibling referenced from the kept nodes stays; iterate until no new name is pulled in
@@ -177,7 +176,8 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     that is not a plain `pytest.mark.<x>` (or `pytest.mark.<x>(...)` whose arguments call
     nothing), or a parameter default that calls something -- runs at import/collection even
     when only the selected test is collected, so it can change that test's verdict and is
-    never a removable sibling (codex u-sr-09 r6: `@register(1)` on a sibling)."""
+    never a removable sibling (codex u-sr-09 r6: `@register(1)` on a sibling; this rule
+    subsumes the r3/r4 fixture-decorator rule -- a mutation probe found that rule dead)."""
     for d in node.decorator_list:
         target = d.func if isinstance(d, ast.Call) else d
         is_mark = (
@@ -197,32 +197,6 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return any(
         isinstance(sub, ast.Call) for dflt in defaults if dflt is not None for sub in ast.walk(dflt)
     )
-
-
-def _fixture_names(tree: ast.Module) -> set[str]:
-    """Every local name bound to pytest's `fixture`: the attribute name itself plus any
-    `from pytest import fixture as fx` alias (codex u-sr-09 r4 -- an aliased decorator hid
-    an autouse fixture from `_is_fixture`)."""
-    names = {"fixture"}
-    for n in tree.body:
-        if isinstance(n, ast.ImportFrom) and n.module == "pytest":
-            for alias in n.names:
-                if alias.name == "fixture":
-                    names.add(alias.asname or alias.name)
-    return names
-
-
-def _is_fixture(node: ast.FunctionDef | ast.AsyncFunctionDef, fixture_names: set[str]) -> bool:
-    """A `test_*`-named function decorated as a pytest fixture (`@pytest.fixture`,
-    `@pytest.fixture(autouse=True)`, `@fixture`, `@fx` under an import alias) is part of the
-    harness, not a sibling test: an autouse one can change the selected test's verdict
-    (codex u-sr-09 r3/r4)."""
-    for d in node.decorator_list:
-        target = d.func if isinstance(d, ast.Call) else d
-        name = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", "")
-        if name in fixture_names:
-            return True
-    return False
 
 
 def _names_used(nodes: list[ast.AST]) -> set[str]:
