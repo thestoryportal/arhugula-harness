@@ -233,6 +233,30 @@ def test_synthetic_api_error_row_with_tokens_still_refused(tmp_path: Path) -> No
         ac.cost_report([_write(tmp_path / "t.jsonl", [*DUPED, err])], cuts=[])
 
 
+@pytest.mark.parametrize(
+    "widen",
+    [
+        pytest.param({"requestId": ""}, id="present-empty-requestId"),
+        pytest.param({"requestId": 0}, id="present-zero-requestId"),
+        pytest.param({"model": "claude-opus-5"}, id="non-synthetic-model"),
+        pytest.param({"flag": False}, id="flag-false"),
+    ],
+)
+def test_carve_out_is_the_observed_shape_and_nothing_wider(tmp_path: Path, widen: dict) -> None:
+    """codex r1: `not rid` would also have swallowed a PRESENT malformed
+    requestId, and the model was never checked. Each widening of the observed
+    shape keeps the fail-closed refusal."""
+    err = _synthetic_error("2026-09-02T11:36:42.188Z")
+    if "requestId" in widen:
+        err["requestId"] = widen["requestId"]
+    if "model" in widen:
+        err["message"]["model"] = widen["model"]
+    if "flag" in widen:
+        err["isApiErrorMessage"] = widen["flag"]
+    with pytest.raises(ac.CostError, match="no requestId"):
+        ac.cost_report([_write(tmp_path / "t.jsonl", [*DUPED, err])], cuts=[])
+
+
 def test_transcript_with_no_usage_refused_never_a_zero_cost_arc(tmp_path: Path) -> None:
     with pytest.raises(ac.CostError, match="no assistant usage with non-zero"):
         ac.cost_report([_write(tmp_path / "t.jsonl", [{"type": "user"}])], cuts=[])

@@ -133,12 +133,16 @@ def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
         # it stores a usage block and no requestId, so the refusal below read it
         # as a dedupe failure and aborted the u-sr-09 queue step (2026-09-02).
         # Skipping the all-zero shape is not silent: a zero row adds nothing to
-        # any total (54 such rows across 1,012 transcripts at 2026-09-02, none
-        # with tokens). A synthetic row WITH tokens falls through to the refusal
-        # -- the producer contradicting itself is the loud path already written.
+        # any total (54 such rows across 1,012 transcripts at 2026-09-02, every
+        # one with the key ABSENT and model "<synthetic>", none with tokens).
+        # The theorem is the observed shape and nothing wider (codex r1): a
+        # PRESENT requestId of any value, another model, or any token falls
+        # through to the refusal -- a producer contradicting itself is the loud
+        # path already written. [LAW:types-are-the-program]
         if (
-            not rid
+            "requestId" not in r
             and r.get("isApiErrorMessage") is True
+            and msg.get("model") == "<synthetic>"
             and all(
                 _tok(usage, k, f"{source}: record {i} (synthetic)") == 0
                 for k in (
