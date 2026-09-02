@@ -204,6 +204,35 @@ def test_usage_without_request_id_refused_not_guessed(tmp_path: Path) -> None:
         ac.cost_report([_write(tmp_path / "t.jsonl", [rec])], cuts=[])
 
 
+def _synthetic_error(ts: str, **tokens: int) -> dict:
+    """The transport's own error row: `isApiErrorMessage`, model "<synthetic>",
+    a usage block, no requestId (the 2026-09-02 WAN-outage shape)."""
+    rec = _rec("unused", ts, **({"out": 0, "inp": 0, "cw": 0, "cr": 0} | tokens))
+    del rec["requestId"]
+    rec["isApiErrorMessage"] = True
+    rec["message"]["model"] = "<synthetic>"
+    return rec
+
+
+# mutation-probe(tools/arc_cost.py): drop the zero-usage `isApiErrorMessage` skip
+def test_synthetic_api_error_row_without_request_id_is_skipped(tmp_path: Path) -> None:
+    """u-sr-09 close (2026-09-02): the queue step aborted on one such row --
+    it is not a call, and skipping its zero usage changes no total."""
+    err = _synthetic_error("2026-09-02T11:36:42.188Z")
+    report = ac.cost_report([_write(tmp_path / "t.jsonl", [*DUPED, err])], cuts=[])
+    assert report["main"]["calls"] == 2
+
+
+def test_synthetic_api_error_row_with_tokens_still_refused(tmp_path: Path) -> None:
+    """The carve-out is the all-zero shape only: a synthetic row that claims
+    tokens is a producer contradiction and keeps the no-requestId refusal
+    (0 of 54 synthetic rows across 1,012 transcripts carried tokens at
+    2026-09-02, so this pins a shape not yet observed)."""
+    err = _synthetic_error("2026-09-02T11:36:42.188Z", out=3)
+    with pytest.raises(ac.CostError, match="no requestId"):
+        ac.cost_report([_write(tmp_path / "t.jsonl", [*DUPED, err])], cuts=[])
+
+
 def test_transcript_with_no_usage_refused_never_a_zero_cost_arc(tmp_path: Path) -> None:
     with pytest.raises(ac.CostError, match="no assistant usage with non-zero"):
         ac.cost_report([_write(tmp_path / "t.jsonl", [{"type": "user"}])], cuts=[])
