@@ -153,6 +153,15 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
     )
     assert ps.test_slice_digest(imp.replace("[1, 2]", "[lambda: 1]"), "test_f") != base
     assert ps.test_slice_digest(imp.replace("[1, 2]", "[-1, X.Y]"), "test_f") == base  # literals
+    # codex u-sr-09 r8: an ANNOTATION is evaluated at import like a default
+    ann = imp.replace("def test_dflt(x=setup()):", "def test_dflt(x: mark(1)) -> ret():")
+    assert ps.test_slice_digest(
+        ann.replace("mark(1)", "mark(0)"), "test_f"
+    ) != ps.test_slice_digest(ann, "test_f")
+    plain = imp.replace("def test_dflt(x=setup()):", "def test_dflt(x: int = 1) -> None:")
+    assert ps.test_slice_digest(plain.replace("= 1)", "= 2)"), "test_f") == ps.test_slice_digest(
+        plain, "test_f"
+    )
 
 
 def test_test_slice_digest_is_none_when_unresolvable():

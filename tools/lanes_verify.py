@@ -512,9 +512,12 @@ def phase0_verdict(results: list[Result]) -> int:
 # form silently dropped a parametrized test from `required_probes`). A line starting with
 # `def ` or `async def ` that is not a test stops the scan (the annotation is then bound
 # to nothing); an `async def test_*` binds like a `def` (codex r7: the bridge had walked
-# through it to the next test).
+# through it to the next test). The bridge accepts only DECORATOR-shaped lines -- starting
+# with `@`, whitespace (a continuation), `)`, `#`, or empty -- so a class, an assignment or
+# any other statement between an annotation and the next test ends the scan instead of
+# carrying the annotation over to it (codex r8).
 _ANNOT = re.compile(
-    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:(?!(?:async )?def )[^\n]*\n)*?"
+    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:(?:[@#) \t][^\n]*)?\n)*?"
     r"(?:async )?def (?P<name>test_\w+)",
     re.M,
 )

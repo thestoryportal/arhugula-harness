@@ -319,6 +319,13 @@ def test_annotation_binds_across_a_multiline_decorator(repo: Path):
         "# mutation-probe: b\ndef test_b():\n    pass\n"
     )
     assert lv._annotations(repo / "tools" / "test_y.py") == [("test_a", None), ("test_b", None)]
+    # codex u-sr-09 r8: a statement between the annotation and the next test ends the
+    # bridge -- the annotation binds nothing rather than the later test
+    (repo / "tools" / "test_z.py").write_text(
+        "# mutation-probe: orphaned\nX = 1\n\n\ndef test_later():\n    pass\n\n\n"
+        "# mutation-probe: orphaned too\nclass K:\n    pass\n\n\ndef test_last():\n    pass\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_z.py") == []
     row = _row(mp=True, art="pytest:tools/test_x.py")
     assert lv.required_probes(row) == [("tools/test_x.py::test_p", "tools/x.py")]
 

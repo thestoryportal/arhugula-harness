@@ -136,6 +136,24 @@ def test_shapes_are_judged_against_the_original_executable():
     )
     assert g.rewritten_at(["env", "FOO=1", "rtk", "grep", "x"]) == 2
     assert g.rewritten_at(["rtk", "ls"]) is None
+    # codex u-sr-09 r8: a rewrite is the original with `rtk` inserted before its grep/rg
+    # word -- an `rtk grep` pair that is DATA in the original is not one
+    assert g.rewritten_at(["env", "FOO=1", "rtk", "grep", "x"], ["env", "FOO=1", "grep", "x"]) == 2
+    assert g.rewritten_at(["rtk", "grep", "-g", "x"], ["rg", "-g", "x"]) == 0
+    assert (
+        g.rewritten_at(["printf", "%s", "rtk", "grep", "f("], ["printf", "%s", "rtk", "grep", "f("])
+        is None
+    )
+    assert (
+        g.judge(
+            "grep foo file; printf %s rtk grep 'f('", "rtk grep foo file; printf %s rtk grep 'f('"
+        )
+        is None
+    )
+    assert (
+        g.judge("grep 'f(' file; printf %s rtk grep", "rtk grep 'f(' file; printf %s rtk grep")
+        is not None
+    )
     assert g.original_word(["env", "FOO=1", "rg", "x"]) == "rg"
 
 

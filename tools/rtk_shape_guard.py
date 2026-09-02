@@ -249,12 +249,24 @@ def has_unescaped_paren(pattern: str) -> bool:
     return _UNESCAPED_PAREN.search(_BRACKET_EXPR.sub(r"\1", pattern)) is not None
 
 
-def rewritten_at(segment: list[str]) -> int | None:
-    """Index of the `rtk grep` pair inside a segment, wherever a prefix (`env FOO=1`,
-    `command`, `sudo`) put it (codex u-sr-09 r6: rtk rewrites the command word in place),
-    or None when the segment carries no rewrite."""
+def rewritten_at(segment: list[str], original: list[str] | None = None) -> int | None:
+    """Index of the `rtk grep` pair that IS the rewrite of `original`: the rewritten segment
+    equals the original with `rtk` inserted before its grep/rg word (`env FOO=1 grep x` ->
+    `env FOO=1 rtk grep x`; an `rg` word becomes `grep`). A stray `rtk grep` pair that is
+    data (`printf %s rtk grep 'f('`, codex u-sr-09 r8) does not satisfy that relation and
+    is not a rewrite. Without an original (segments could not be aligned) the first pair
+    counts -- the conservative reading. None when the segment carries no rewrite."""
     for i in range(len(segment) - 1):
-        if tuple(segment[i : i + 2]) == REWRITTEN_WORDS:
+        if tuple(segment[i : i + 2]) != REWRITTEN_WORDS:
+            continue
+        if original is None:
+            return i
+        if (
+            i < len(original)
+            and original[i] in COMMAND_WORDS
+            and segment[:i] == original[:i]
+            and segment[i + 2 :] == original[i + 1 :]
+        ):
             return i
     return None
 
@@ -265,13 +277,16 @@ def original_word(segment: list[str]) -> str | None:
     return next((t for t in segment if t in COMMAND_WORDS), None)
 
 
-def shapes(rewritten_segment: list[str], original: str | None = None) -> list[str]:
+def shapes(
+    rewritten_segment: list[str], original: str | None = None, at: int | None = None
+) -> list[str]:
     """The mangled shapes one rewritten segment carries (empty = the rewrite is fine).
     `original` is the word the caller actually ran: a paren is judged only for a `grep`
     original (BRE; `rg "f("` fails natively and no remedy helps -- codex r6) and a glob
     only for an `rg` original (`grep -g` never worked); an unknown original is judged for
-    both, the conservative reading."""
-    at = rewritten_at(rewritten_segment)
+    both, the conservative reading. `at` is the rewrite's index when the caller already
+    established it against the original segment."""
+    at = rewritten_at(rewritten_segment) if at is None else at
     if at is None:
         return []
     parsed = parse_args(rewritten_segment[at + len(REWRITTEN_WORDS) :])
@@ -327,9 +342,11 @@ def judge(original: str, rewritten: str) -> str | None:
     found: list[str] = []
     segment_text = ""
     for i, seg in enumerate(rsegs):
-        if rewritten_at(seg) is None:
+        oseg = osegs[i] if aligned else None
+        at = rewritten_at(seg, oseg)
+        if at is None:
             continue
-        hits = shapes(seg, original_word(osegs[i]) if aligned else None)
+        hits = shapes(seg, original_word(oseg) if oseg is not None else None, at)
         if hits:
             found.extend(hits)
             segment_text = segment_text or _render(seg)

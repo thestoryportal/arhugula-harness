@@ -245,10 +245,18 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
             _is_literal(a) for a in [*d.args, *(k.value for k in d.keywords)]
         ):
             return True
-    defaults = [*node.args.defaults, *node.args.kw_defaults]
-    return any(
-        isinstance(sub, ast.Call) for dflt in defaults if dflt is not None for sub in ast.walk(dflt)
-    )
+    # defaults AND annotations are evaluated when the module imports (no
+    # `from __future__ import annotations` is assumed): a call in either runs code
+    # (codex u-sr-09 r8: `def test_side(x: mark(1))`)
+    params = [
+        *node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
+        *([node.args.vararg] if node.args.vararg else []),
+        *([node.args.kwarg] if node.args.kwarg else []),
+    ]  # fmt: skip
+    evaluated = [
+        *node.args.defaults, *node.args.kw_defaults, *(a.annotation for a in params), node.returns
+    ]  # fmt: skip
+    return any(e is not None and not _is_literal(e) for e in evaluated)
 
 
 def _names_used(nodes: list[ast.AST]) -> set[str]:

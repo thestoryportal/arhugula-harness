@@ -38,7 +38,9 @@ cat > "$STUBDIR/rtk" <<'EOF'
 printf '%s\n' "$*" >> "${RTK_STUB_CALLS:?}"
 [ "$1" = hook ] && [ "$2" = check ] || { echo "stub: unsupported $*" >&2; exit 2; }
 shift 2; cmd="$*"
-out=$(printf '%s' "$cmd" | sed -E 's/(^[[:space:]]*|[;&][[:space:]]*)(grep|rg)([[:space:]])/\1rtk grep\3/g')
+# (a `;`/`&` right after a quote character is inside a quoted argument: real rtk leaves
+# `'; grep literal'` alone -- witnessed at U-SR-09 r8 -- so the stub does too)
+out=$(printf '%s' "$cmd" | sed -E "s/(^[[:space:]]*|[^'\"][;&][[:space:]]*)(grep|rg)([[:space:]])/\\1rtk grep\\3/g")
 # rtk 0.40.0 sometimes echoes an unrewritten command back verbatim instead of "No rewrite
 # for:" (both forms seen at U-SR-09); RTK_STUB_ECHO=1 reproduces the echo form.
 if [ "$out" = "$cmd" ] && [ -n "${RTK_STUB_ECHO:-}" ]; then echo "$cmd"; exit 0; fi
