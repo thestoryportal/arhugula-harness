@@ -18,12 +18,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS="$SCRIPT_DIR/../../.claude/skills"
 CONT="$SKILLS/roadmap-continue/SKILL.md"
 SHIP="$SKILLS/ship-pr/SKILL.md"
+AGENTS_SKILLS="$SCRIPT_DIR/../../.agents/skills"
+ACONT="$AGENTS_SKILLS/roadmap-continue/SKILL.md"
+ASHIP="$AGENTS_SKILLS/ship-pr/SKILL.md"
 
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-for f in "$CONT" "$SHIP"; do
+for f in "$CONT" "$SHIP" "$ACONT" "$ASHIP"; do
   [ -f "$f" ] || { echo "FATAL: missing $f"; exit 1; }
 done
 
@@ -46,8 +49,16 @@ cont_step3=$(section "$CONT" '^3[.] [*][*]Ground first' '^4[.] ')
 cont_step4=$(section "$CONT" '^4[.] [*][*]Implement with tests' '^5[.] ')
 cont_step6=$(section "$CONT" '^6[.] [*][*]Ship' '^## ')
 ship_reflect=$(section "$SHIP" '^## Reflect' '^## Arc exit report')
+# Codex-native mirrors (.agents tree) are carriers too — their own workflow text has
+# the same three decision moments, and all three habits are venue-neutral (no phantom
+# instrument; u-sr-07 codex r2 P2). The "Before the next arc" slice runs to EOF (no
+# later heading), which is that section's real extent.
+acont_ground=$(section "$ACONT" '^## Grounding' '^## Execute one arc')
+acont_exec=$(section "$ACONT" '^## Execute one arc' '^## Genuine gates')
+acont_next=$(section "$ACONT" '^## Before the next arc' '^## NEVER')
+aship_reflect=$(section "$ASHIP" '^## Reflect and checkpoint' '^## Arc exit report')
 
-for pair in cont_step3 cont_step4 cont_step6 ship_reflect; do
+for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec acont_next aship_reflect; do
   eval "v=\${$pair}"
   [ -n "$v" ] && ok "section anchor resolves: $pair" || bad "section anchor EMPTY: $pair"
 done
@@ -83,6 +94,26 @@ line "$ship_reflect" "ship-pr reflect block carries the facts-brief handoff" \
   'Facts-brief handoff for a heavy next item (U-SR-07/WR-14).' \
   '[B] F10' \
   '"I already have all the context loaded" is the trap'
+
+line "$acont_ground" "codex roadmap-continue grounding carries read-before-grep" \
+  'Read-before-grep (U-SR-07/WR-14): for a file you will read anyway, read it once' \
+  '[B] F5/d3' \
+  '"one more targeted grep is cheaper" stops being true'
+
+line "$acont_exec" "codex roadmap-continue execute carries the cache-warmth handoff" \
+  'Cache-warmth handoff (U-SR-07/WR-14): deep in a long session, before any background wait expected to outlast the prompt-cache TTL' \
+  '[B] F4' \
+  '"the wait costs nothing" bills the next call'
+
+line "$acont_next" "codex roadmap-continue before-next-arc carries the facts-brief handoff" \
+  'Facts-brief handoff (U-SR-07/WR-14): if the next item is a heavy audit or document' \
+  '[B] F10' \
+  '"I already have the context loaded" is the trap'
+
+line "$aship_reflect" "codex ship-pr reflect carries the facts-brief handoff" \
+  'Facts-brief handoff for a heavy next item (U-SR-07/WR-14): if the next action is a heavy audit or document' \
+  '[B] F10' \
+  '"I already have the context loaded" is the trap'
 
 # Coupling controls — the rule must live in the SAME SECTION as the moment it governs
 # (same-file co-occurrence proved nothing when either half could drift to an appendix).

@@ -22,6 +22,11 @@ check them rather than trusting remembered or checkpointed remaining work.
    grounding and every buildable slice up to the genuine credential/operator boundary.
 5. Resolve formal cites with the `overlay-query` skill. Trace runtime premises to shipped
    call sites; a resolving cite proves presence, not reachability or correctness.
+   Read-before-grep (U-SR-07/WR-14): for a file you will read anyway, read it once — or
+   run one script over it — instead of a chain of `sed -n`/grep probes; every probe is a
+   full API call ([B] F5/d3: 33 `sed -n` + 101 grep-shaped calls on the baseline arc),
+   and "one more targeted grep is cheaper" stops being true the moment the file is one
+   you will open regardless.
 
 ## Execute one arc
 
@@ -35,7 +40,11 @@ check them rather than trusting remembered or checkpointed remaining work.
    without an explicit back-flow arc.
 4. Recount any stated condition/cardinality set programmatically after every review round.
 5. Run narrow verification, then `just codex-check`; add `just overlay-check`, shell tests,
-   or live/integration checks when the claim requires them.
+   or live/integration checks when the claim requires them. Cache-warmth handoff
+   (U-SR-07/WR-14): deep in a long session, before any background wait expected to
+   outlast the prompt-cache TTL, prefer closing out to a handoff over idling through the
+   expiry — one cold re-warm re-reads the whole context (≈0.7M IET on the [B] F4
+   baseline); "the wait costs nothing" bills the next call.
 6. Grounding pass (U-WT-01) first: re-read every `file:line` cite against the
    staged/worktree content under review (the commit lands later, in ship-pr), recompute
    every count/arithmetic claim from source, verify every `#NNN` reference is the PR it
@@ -86,6 +95,13 @@ merge if authorized, wait for the substantive merge's main CI, land the immediat
 refresh, wait for refresh main CI, sync main, dispose of the worktree/verified merged branch,
 run `just codex-loop-check`, reflect, and run the gstack `context-save` skill. Only then derive
 the next live action, create its isolated worktree, and start its new autonomous-arc ledger.
+
+Facts-brief handoff (U-SR-07/WR-14): if the next item is a heavy audit or document and
+this session is already deep, do not author it in this session — "I already have the
+context loaded" is the trap: the loaded context is what every call re-bills. Write a
+facts brief (the findings, cites, and decisions the deliverable needs) into the handoff
+and let a fresh session author from it ([B] F10: authored at 540k context cost
+0.93M IET against ≈0.3M fresh).
 
 If no forward slice remains after honest grounding, report the exact gate and resume command;
 do not invent work or silently stop an authorized loop.
