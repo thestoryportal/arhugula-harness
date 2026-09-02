@@ -223,16 +223,7 @@ def test_synthetic_api_error_row_without_request_id_is_skipped(tmp_path: Path) -
     assert report["main"]["calls"] == 2
 
 
-def test_synthetic_api_error_row_with_tokens_still_refused(tmp_path: Path) -> None:
-    """The carve-out is the all-zero shape only: a synthetic row that claims
-    tokens is a producer contradiction and keeps the no-requestId refusal
-    (0 of 54 synthetic rows across 1,012 transcripts carried tokens at
-    2026-09-02, so this pins a shape not yet observed)."""
-    err = _synthetic_error("2026-09-02T11:36:42.188Z", out=3)
-    with pytest.raises(ac.CostError, match="no requestId"):
-        ac.cost_report([_write(tmp_path / "t.jsonl", [*DUPED, err])], cuts=[])
-
-
+# mutation-probe(tools/arc_cost.py): drop one key from the all-zero counter tuple
 @pytest.mark.parametrize(
     "widen",
     [
@@ -240,13 +231,22 @@ def test_synthetic_api_error_row_with_tokens_still_refused(tmp_path: Path) -> No
         pytest.param({"requestId": 0}, id="present-zero-requestId"),
         pytest.param({"model": "claude-opus-5"}, id="non-synthetic-model"),
         pytest.param({"flag": False}, id="flag-false"),
+        pytest.param({"tokens": {"inp": 1}}, id="input_tokens"),
+        pytest.param({"tokens": {"cw": 1}}, id="cache_creation_input_tokens"),
+        pytest.param({"tokens": {"cr": 1}}, id="cache_read_input_tokens"),
+        pytest.param({"tokens": {"out": 1}}, id="output_tokens"),
     ],
 )
 def test_carve_out_is_the_observed_shape_and_nothing_wider(tmp_path: Path, widen: dict) -> None:
     """codex r1: `not rid` would also have swallowed a PRESENT malformed
-    requestId, and the model was never checked. Each widening of the observed
-    shape keeps the fail-closed refusal."""
-    err = _synthetic_error("2026-09-02T11:36:42.188Z")
+    requestId, and the model was never checked; gate r1: only `output_tokens`
+    was ever driven, so a key dropped from the all-zero tuple shipped green.
+    One case per conjunct-and-key: a present requestId of either value, another
+    model, the flag off, or ONE token in any of the four counters each keeps
+    the fail-closed refusal (0 of 54 synthetic rows across 1,012 transcripts
+    carried tokens at 2026-09-02, so the token cases pin a shape not yet
+    observed)."""
+    err = _synthetic_error("2026-09-02T11:36:42.188Z", **widen.get("tokens", {}))
     if "requestId" in widen:
         err["requestId"] = widen["requestId"]
     if "model" in widen:
