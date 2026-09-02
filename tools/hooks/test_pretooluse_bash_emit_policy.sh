@@ -44,22 +44,34 @@ OUT="$REPO/out.txt"
 
 payload() { printf '{"session_id":"probe","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"%s"}}' "$1"; }
 # run_hook <hook-script> <bash-command>: stdout AND stderr -> $OUT (an attachment records
-# both streams, so both must be silent), echoes the exit code.
+# both streams, so both must be silent), echoes the exit code. The caller's env is NOT
+# inherited for the two variables that change a hook's behaviour (codex u-sr-08 r3 P2): the
+# autonomous child exports HARNESS_LOOP=1, under which the guard emits an allow decision for
+# a plain command and the loop-off probes would red inside the very workflow they gate; and
+# HARNESS_CODEX_REVIEW_ISOLATED=1 (a merge-gate lens) makes every hook early-exit, a vacuous
+# green. Loop-on behaviour is probed explicitly in section 3.
 run_hook() {
-  payload "$2" | CLAUDE_PROJECT_DIR="$REPO" bash "$1" > "$OUT" 2>&1
+  payload "$2" | env -u HARNESS_LOOP -u HARNESS_CODEX_REVIEW_ISOLATED CLAUDE_PROJECT_DIR="$REPO" bash "$1" > "$OUT" 2>&1
   echo $?
 }
 bytes() { wc -c < "$OUT" | tr -d ' '; }
 # JSON-parsed shape checks (codex u-sr-08 r1 P3: a substring match let prose containing the
-# word "permissionDecision" pass as a decision). decision_json: exactly one top-level key,
-# hookSpecificOutput, carrying permissionDecision. rewrite_json: hookSpecificOutput carries
-# updatedInput.command and NO additionalContext (the one field that reaches the model).
+# word "permissionDecision" pass as a decision; r3 P3: a decision carrying additionalContext
+# or an invalid value is not decision-only either). decision_json: exactly one top-level key,
+# hookSpecificOutput, whose keys are a subset of {hookEventName, permissionDecision,
+# permissionDecisionReason} — the closed decision shape from the hooks doc's PreToolUse
+# table (no updatedInput: the guard never rewrites; no additionalContext: nothing reaches the
+# model) — with permissionDecision in the documented enum. rewrite_json: hookSpecificOutput
+# carries updatedInput.command and NO additionalContext.
 decision_json() { python3 -c '
 import json, sys
 try: d = json.load(open(sys.argv[1]))
 except Exception: sys.exit(1)
 h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
-sys.exit(0 if isinstance(h, dict) and "permissionDecision" in h and set(d) == {"hookSpecificOutput"} else 1)
+ok = (isinstance(d, dict) and set(d) == {"hookSpecificOutput"} and isinstance(h, dict)
+      and set(h) <= {"hookEventName", "permissionDecision", "permissionDecisionReason"}
+      and h.get("permissionDecision") in ("allow", "deny", "ask", "defer"))
+sys.exit(0 if ok else 1)
 ' "$1"; }
 rewrite_json() { python3 -c '
 import json, sys
@@ -119,14 +131,14 @@ done <<< "$HOOKS"
 GUARD="$SCRIPT_DIR/permission-guard.sh"
 export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
 mkdir -p "$REPO/.harness"
-payload "git push --force origin main" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$GUARD" > "$OUT" 2>&1; rc=$?
+payload "git push --force origin main" | env -u HARNESS_CODEX_REVIEW_ISOLATED HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$GUARD" > "$OUT" 2>&1; rc=$?
 b=$(bytes)
 if [ "$b" -gt 0 ] && decision_json "$OUT"; then
   ok "permission-guard (loop on) emits a decision JSON for a force-push ($b bytes) — emission is observable"
 else
   bad "permission-guard (loop on) emitted no decision for a force-push (rc=$rc, $b bytes) — the zero-byte checks above would be vacuous"
 fi
-payload "ls -la /tmp" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$GUARD" > "$OUT" 2>&1
+payload "ls -la /tmp" | env -u HARNESS_CODEX_REVIEW_ISOLATED HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$GUARD" > "$OUT" 2>&1
 b=$(bytes)
 if [ "$b" -eq 0 ] || decision_json "$OUT"; then
   ok "permission-guard (loop on) plain command -> $b bytes, decision-only (parsed JSON or nothing)"

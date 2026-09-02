@@ -19,8 +19,9 @@ Two properties this copy holds because other tools depend on them:
 
 - The checkpoint directory, filename shape, and file format are the gstack ones, so the
   user-level gstack `/context-restore` loads these files unchanged.
-- The confirmation block ends with the `File:` line; ship-pr passes that exact path to
-  `just arc-exit-report --checkpoint`, which is what binds the exit report to this arc.
+- The confirmation block carries a `File:` line naming the PUBLISHED path; ship-pr passes
+  that exact path to `just arc-exit-report --checkpoint`, which is what binds the exit report
+  to this arc.
 
 **HARD GATE:** Do NOT implement code changes. This skill captures state only.
 
@@ -233,12 +234,16 @@ case "$COMMON:$SLUG" in
   :*|*:|*:.|*:..) echo "FATAL: could not derive the project slug (git common dir: '${COMMON:-none}')"; exit 1 ;;
 esac
 CHECKPOINT_DIR="${GSTACK_STATE_ROOT:-$HOME/.gstack}/projects/$SLUG/checkpoints"
-if [ -d "$CHECKPOINT_DIR" ]; then
-  echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
-  # find + sort, not ls -1t: the YYYYMMDD-HHMMSS prefix is the canonical order.
-  find "$CHECKPOINT_DIR" -maxdepth 1 -name "*.md" -type f 2>/dev/null | sort -r
-else
+# Three outcomes, kept apart: no directory / empty directory -> NO_CHECKPOINTS; a directory
+# that exists but cannot be read or listed -> FATAL ("no contexts" must never stand in for
+# "could not look"). find + sort, not ls -1t: the YYYYMMDD-HHMMSS prefix is the canonical order.
+if [ ! -d "$CHECKPOINT_DIR" ]; then
   echo "NO_CHECKPOINTS"
+else
+  echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
+  [ -r "$CHECKPOINT_DIR" ] && [ -x "$CHECKPOINT_DIR" ] || { echo "FATAL: cannot read $CHECKPOINT_DIR"; exit 1; }
+  LIST=$(find "$CHECKPOINT_DIR" -maxdepth 1 -name "*.md" -type f) || { echo "FATAL: listing $CHECKPOINT_DIR failed"; exit 1; }
+  if [ -n "$LIST" ]; then printf '%s\n' "$LIST" | sort -r; else echo "NO_CHECKPOINTS"; fi
 fi
 ```
 
@@ -255,8 +260,9 @@ SAVED CONTEXTS ({branch} branch)
 ════════════════════════════════════════
 ```
 
-No files → "No saved contexts yet. Run `/context-save-lean` to save your current
-working state."
+`NO_CHECKPOINTS` → "No saved contexts yet. Run `/context-save-lean` to save your current
+working state." A `FATAL:` line means discovery FAILED — report that failure verbatim, never
+"no contexts".
 
 ---
 

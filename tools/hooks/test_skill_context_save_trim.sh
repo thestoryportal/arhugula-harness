@@ -79,7 +79,7 @@ done
 for n in 'projects/$SLUG/checkpoints' '--git-common-dir' 'FATAL: could not derive the project slug' \
          'status: in-progress' 'branch: {current branch name}' 'timestamp: {ISO-8601' 'files_modified:' \
          'CONTEXT SAVED' 'File: {path to saved file}' 'Restore later with /context-restore' \
-         'append-only' 'ln "$PART" "$FILE"' 'never wrapped in `bash -c' "TITLE_RAW='" \
+         'append-only' 'ln "$PART" "$FILE"' 'never wrapped in `bash -c' "TITLE_RAW='" 'FATAL: cannot read' \
          'supersedes checkpoints' 'CLAUDE.md §12.5' 'facts brief' 'personal overrides project'; do
   printf '%s' "$NORM" | grep -qF -- "$n" && ok "carrier present: $n" || bad "carrier missing: $n"
 done
@@ -225,6 +225,26 @@ case "$FB" in *"/20990101-000000-same-title-"????".md") ok "the loser carries a 
 FI=$(save "$REPO" 'ab $(touch pwned) cd' "")
 [ ! -e "$REPO/pwned" ] && [ ! -e "$TMPD/pwned" ] && case "$FI" in *"-ab-touch-pwned-cd.md") true ;; *) false ;; esac \
   && ok "a title with \$(...) is sanitized, never executed" || bad "injection title handled wrongly: '$FI'"
+
+# 4c. the List flow block (carries NO_CHECKPOINTS) keeps three outcomes apart (codex r3 P2):
+#     an existing populated dir lists the published files newest-first; no dir / empty dir
+#     -> NO_CHECKPOINTS; a dir that exists but cannot be read -> FATAL, never NO_CHECKPOINTS.
+LISTB=$(grep -l 'NO_CHECKPOINTS' "$TMPD"/block*.sh 2>/dev/null | head -1)
+[ -n "$LISTB" ] || { bad "list-flow block not found"; LISTB=/dev/null; }
+run_list() { (cd "$REPO" && GSTACK_STATE_ROOT="$1" bash "$LISTB" 2>&1); }
+LO=$(run_list "$STATE"); LRC=$?
+[ "$LRC" -eq 0 ] && printf '%s\n' "$LO" | grep -q "^$D1/20990101-000000-same-title" && ! printf '%s' "$LO" | grep -q NO_CHECKPOINTS \
+  && ok "list flow lists the published checkpoints (rc=$LRC)" || bad "list flow over a populated dir: rc=$LRC $(printf '%s' "$LO" | head -c 160)"
+LE=$(run_list "$TMPD/state-none"); LERC=$?
+[ "$LERC" -eq 0 ] && [ "$LE" = "NO_CHECKPOINTS" ] && ok "list flow: absent dir -> NO_CHECKPOINTS" || bad "absent dir: rc=$LERC '$LE'"
+mkdir -p "$TMPD/state-empty/projects/slug-probe-main/checkpoints"
+LM=$(run_list "$TMPD/state-empty"); LMRC=$?
+[ "$LMRC" -eq 0 ] && printf '%s' "$LM" | grep -q '^NO_CHECKPOINTS$' && ok "list flow: empty dir -> NO_CHECKPOINTS" || bad "empty dir: rc=$LMRC '$LM'"
+UNR="$TMPD/state-unreadable/projects/slug-probe-main/checkpoints"; mkdir -p "$UNR"; chmod 000 "$UNR"
+LU=$(run_list "$TMPD/state-unreadable"); LURC=$?
+chmod 755 "$UNR"
+[ "$LURC" -ne 0 ] && printf '%s' "$LU" | grep -q 'FATAL: cannot read' && ! printf '%s' "$LU" | grep -q NO_CHECKPOINTS \
+  && ok "list flow: unreadable dir -> FATAL, not NO_CHECKPOINTS (rc=$LURC)" || bad "unreadable dir: rc=$LURC '$LU'"
 
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
