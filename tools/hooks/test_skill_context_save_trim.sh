@@ -131,8 +131,9 @@ done
 #     or tool text; historical .harness/ documents are not carriers. The lean skill's own
 #     "never `/context-save`" rule and this witness are the two legitimate mentions.
 STALE=$(cd "$ROOT" && git grep -nE 'gstack `context-save`|`/context-save`([^-]|$)' -- .codex .claude .agents CLAUDE.md docs justfile tools \
-  ':!tools/hooks/test_skill_context_save_trim.sh' ':!.claude/skills/context-save-lean' ':!.agents/skills/context-save-lean' 2>/dev/null)
-[ -z "$STALE" ] && ok "no live carrier prescribes the gstack context-save (repo-wide)" || bad "stale carriers: $(printf '%s' "$STALE" | head -c 400)"
+  ':!tools/hooks/test_skill_context_save_trim.sh' ':!.claude/skills/context-save-lean' ':!.agents/skills/context-save-lean' 2>&1)
+# stderr is captured INTO the checked value: a broken pathspec reads as a failure, never as "clean".
+[ -z "$STALE" ] && ok "no live carrier prescribes the gstack context-save (repo-wide)" || bad "stale carriers or grep failure: $(printf '%s' "$STALE" | head -c 400)"
 
 # The exact shadowed invocation (closing backtick) must be gone from both Claude carriers; the
 # bare word `context-save` may remain in prose that names the gstack family.
