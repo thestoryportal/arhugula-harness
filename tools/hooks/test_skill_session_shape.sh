@@ -40,8 +40,10 @@ done
 # failure mode is asymmetric (merge-gate witness lens, u-sr-07 gate r1): a miss does
 # not empty the slice, it silently widens it to EOF — so the extractor appends a
 # @@BOUNDED@@ marker ONLY when it exited via a real END match, and the boundedness
-# loop below requires the marker on every slice except the one deliberate to-EOF
-# extraction (acont_next, whose '^## NEVER' sentinel never matches by design).
+# loop below requires the marker on every slice whose section a later heading follows
+# at HEAD. acont_next's end anchor is the generic '^## ' (u-sr-07 codex r9 — an
+# impossible sentinel let a relocated paragraph hide in a later appendix): it stops
+# at ANY next heading and legally runs to EOF only while no heading follows.
 section() {
   awk -v s="$2" -v e="$3" '
     found && $0 ~ e { bounded=1; exit }
@@ -60,11 +62,12 @@ cont_step6=$(section "$CONT" '^6[.] [*][*]Ship' '^## ')
 ship_reflect=$(section "$SHIP" '^## Reflect' '^## Arc exit report')
 # Codex-native mirrors (.agents tree) are carriers too — their own workflow text has
 # the same three decision moments, and all three habits are venue-neutral (no phantom
-# instrument; u-sr-07 codex r2 P2). The "Before the next arc" slice runs to EOF (no
-# later heading), which is that section's real extent.
+# instrument; u-sr-07 codex r2 P2). The "Before the next arc" slice ends at the next
+# heading if one ever appears (today none does, so it runs to EOF — its real extent);
+# a paragraph relocated into a later appendix section leaves the slice, and reds.
 acont_ground=$(section "$ACONT" '^## Grounding' '^## Execute one arc')
 acont_exec=$(section "$ACONT" '^## Execute one arc' '^## Genuine gates')
-acont_next=$(section "$ACONT" '^## Before the next arc' '^## NEVER')
+acont_next=$(section "$ACONT" '^## Before the next arc' '^## ')
 aship_reflect=$(section "$ASHIP" '^## Reflect and checkpoint' '^## Arc exit report')
 # WR-14(b) carriers beyond roadmap-continue (u-sr-07 codex r5): every independently
 # invocable skill that instructs a background codex-check launch is a background-wait
@@ -95,8 +98,9 @@ done
 # Boundedness (u-sr-07 merge-gate witness lens): every slice must have terminated at a
 # REAL end-anchor match — a slice missing @@BOUNDED@@ ran to EOF because its END anchor
 # no longer matches (renamed heading, renumbered step), silently absorbing sibling
-# sections. acont_next is the one deliberate to-EOF slice and must NOT be bounded (its
-# sentinel matching something would mean a heading landed after the section by mistake).
+# sections. acont_next is exempt: its '^## ' anchor stops at ANY later heading, so at
+# HEAD (no heading follows its section) it legally runs to EOF — either state is
+# structurally valid for it, and its needle assertions above carry the content pin.
 for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec aship_reflect ship_green aship_item3 heal_step2 lane_setup acont_item5 aloop_plan aloop_gate7 aloop_reflect; do
   eval "v=\${$pair}"
   case "$v" in
@@ -104,10 +108,6 @@ for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exe
     *) bad "section ran to EOF — end anchor no longer matches: $pair" ;;
   esac
 done
-case "$acont_next" in
-  *@@BOUNDED@@*) bad "acont_next unexpectedly bounded — a heading matched the deliberate to-EOF sentinel" ;;
-  *) ok "acont_next is the deliberate to-EOF slice (sentinel unmatched)" ;;
-esac
 
 # $1=section-text $2=label $3=rule-phrase $4=why-cite $5=trap-phrase — all three must
 # sit inside the SAME carrier section: the composed rule phrase, its measured [B]
