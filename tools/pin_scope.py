@@ -48,7 +48,7 @@ TEST_SCOPE_ARTIFACT = "artifact"  # `test_sha` = the whole test file / shell scr
 
 def digest16(data: bytes) -> str:
     """The 16-hex-char sha256 prefix every probe-log digest uses (`target_sha`, `test_sha`,
-    `block_sha`, `test_body_sha`) -- the one place the digest format lives."""
+    `block_sha`, `test_slice_sha`) -- the one place the digest format lives."""
     return hashlib.sha256(data).hexdigest()[:16]
 
 
