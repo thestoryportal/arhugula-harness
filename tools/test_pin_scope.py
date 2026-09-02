@@ -69,9 +69,14 @@ def test_node_tail(nodeid, tail):
 
 # mutation-probe: drop the `dropped.update(...)` sibling removal in test_slice_digest
 def test_test_slice_digest_drops_only_sibling_top_level_tests():
-    # the slice = the file with `test_other` (and only it) removed
-    sliced = TEST.replace("def test_other():\n    assert True\n", "")
+    # the slice = the kept top-level nodes' own segments (the import; the annotated,
+    # decorated test_f), concatenated -- `test_other` and every inter-node blank line gone
+    sliced = "import pytest\n" + "@pytest.mark.x\ndef test_f():\n    assert f() == 3\n"
     assert ps.test_slice_digest(TEST, "test_f") == _d(sliced)
+    # INSERTING a sibling anywhere (with its blank lines) leaves the digest alone -- this is the
+    # churn the slice exists to remove (found on the arc's own witness file, u-sr-09 r4)
+    assert ps.test_slice_digest("def test_zero():\n    pass\n\n\n" + TEST, "test_f") == _d(sliced)
+    assert ps.test_slice_digest(TEST + "\n\n\ndef test_more():\n    pass\n", "test_f") == _d(sliced)
     # editing an UNRELATED test leaves the digest alone; editing the body changes it
     assert ps.test_slice_digest(TEST.replace("assert True", "assert 1"), "test_f") == _d(sliced)
     assert ps.test_slice_digest(TEST.replace("== 3", "== 4"), "test_f") != _d(sliced)
@@ -81,7 +86,9 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
         TEST.replace("import pytest", "import pytest as _p"), "test_f"
     ) != _d(sliced)
     assert ps.test_slice_digest("pytestmark = pytest.mark.skip\n" + TEST, "test_f") != _d(sliced)
-    assert ps.test_slice_digest(TEST.replace("drop b", "drop a"), "test_f") != _d(sliced)
+    # a comment BETWEEN nodes (the annotation line) is not part of any node's segment: its
+    # target path is enforced by `required_probes`, not by this digest
+    assert ps.test_slice_digest(TEST.replace("drop b", "drop a"), "test_f") == _d(sliced)
     # codex u-sr-09 r2 P2: a sibling test_* the selected test CALLS is part of its judgement
     # and stays in the slice (transitively); hollowing it changes the digest
     calls = (
@@ -91,7 +98,9 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
         "def test_other():\n    assert True\n"
     )
     base = ps.test_slice_digest(calls, "test_f")
-    assert base == _d(calls.replace("def test_other():\n    assert True\n", ""))
+    assert base == ps.test_slice_digest(
+        calls.replace("def test_other():\n    assert True\n", ""), "test_f"
+    )
     assert ps.test_slice_digest(calls.replace("assert f() == 3", "pass"), "test_f") != base
     assert ps.test_slice_digest(calls.replace("assert True", "assert 1"), "test_f") == base
     # codex u-sr-09 r3: a test_*-named pytest FIXTURE (autouse or not) is harness, never a
@@ -104,9 +113,22 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
         "def test_other():\n    assert True\n"
     )
     base = ps.test_slice_digest(fixt, "test_f")
-    assert base == _d(fixt.replace("def test_other():\n    assert True\n", ""))
+    assert base == ps.test_slice_digest(
+        fixt.replace("def test_other():\n    assert True\n", ""), "test_f"
+    )
     assert ps.test_slice_digest(fixt.replace("yield 1", "yield 0"), "test_f") != base
     assert ps.test_slice_digest(fixt.replace("return 2", "return 0"), "test_f") != base
+    # codex u-sr-09 r4: the fixture decorator under an import alias is still a fixture
+    aliased = (
+        "from pytest import fixture as fx\n\n\n"
+        "@fx(autouse=True)\ndef test_setup():\n    yield 1\n\n\n"
+        "def test_f():\n    assert f() == 3\n\n\n"
+        "def test_other():\n    assert True\n"
+    )
+    base = ps.test_slice_digest(aliased, "test_f")
+    without = aliased.replace("def test_other():\n    assert True\n", "")
+    assert base == ps.test_slice_digest(without, "test_f")
+    assert ps.test_slice_digest(aliased.replace("yield 1", "yield 0"), "test_f") != base
 
 
 def test_test_slice_digest_is_none_when_unresolvable():

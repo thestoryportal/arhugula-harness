@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 226
+  total: 227
   open: 1
   design_substrate_gated: 3
-  registered_finding: 70
+  registered_finding: 71
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: ed2138922aaa2a5c
+  identity_digest: 1e8e5bd10d93cc30
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11037,3 +11037,33 @@ items:
   heading: '### B-226 · unattended transcript-brief review debt lacks an
     executable gate *(surfaced by codex r10 on u-sr-06, 2026-09-01;
     REGISTERED)*'
+- id: B-227
+  title: >-
+    rtk-shape-guard models a finite set of shell/grep grammar corners; the
+    class is open-ended and each further corner costs a review round
+  pr: 'PR pending (u-sr-09)'
+  status: registered_finding
+  summary: 'SURFACED by codex r1–r4 on u-sr-09 (2026-09-02): the PreToolUse guard
+    (tools/hooks/rtk-shape-guard.sh + tools/rtk_shape_guard.py) judges whether the
+    rtk grep→rg rewrite will break a command, which means modelling shell lexing and
+    the grep/rg option + BRE grammar. Four consecutive rounds each found a real new
+    corner — quoted/escaped/newline separators, attached and clustered value options,
+    `--`, backslash-run parity, bracket expressions and escaped `[`, every `-e`,
+    redirections and globs in a re-joined re-issue — and each was absorbed (the
+    re-join itself was deleted at r4: no compound command is ever re-joined). The
+    remaining class (intervals `\{n\}`, `[[:class:]]`, `\<`/`\>`, `-f FILE`
+    patterns, locale collating, `$(…)`/backtick substitution inside the command,
+    …) is unbounded and NOT worth pre-emptive modelling: by construction a missed
+    shape costs nothing against the pre-arc baseline (the guard is fail-open — the
+    mangled call runs exactly as it did before) and a false deny costs one wasted
+    call with an exact reason. Registered so the next grammar finding maps here
+    instead of buying another round.'
+  close_out: 'OPEN — closure = either (a) rtk fixes its grep→rg translation, at
+    which point tools/hooks/test_rtk_shape_guard.sh section 4 reds with "delete the
+    guard" and the whole mechanism (hook, module, tests, manifest row, adapter
+    CLAUDE_ONLY_HOOKS entry, settings entry) is deleted; or (b) a corner is WITNESSED
+    on the real binary (a wasted call or a false deny in a transcript) and added
+    with one case in tools/test_rtk_shape_guard.py. No further pre-emptive grammar
+    work; a reviewer finding in this class is adjudicated against this row.'
+  council: 'NO — a bounded, fail-open tool residual; no cross-axis tension.'
+  heading: '### B-227 · rtk-shape-guard grammar corners beyond the modelled set *(surfaced by codex r1–r4 on u-sr-09, 2026-09-02; REGISTERED)*'

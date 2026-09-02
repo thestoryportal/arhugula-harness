@@ -206,16 +206,21 @@ def test_file_of(test_cmd: str) -> Path | None:
 def test_node_of(test_cmd: str) -> str | None:
     """The test FUNCTION a pytest command names via its ONE `::` node-id token
     (`pin_scope.node_tail`); None for a bare-file target, a `-k` selector (which can match
-    several tests), a command naming MORE than one node id (a failure caused by the second
-    would be credited to the first -- codex u-sr-09 r3), or a shell suite -- those bind the
+    several tests), a command naming MORE than one collection target -- node id, file or
+    directory (a failure caused by the second would be credited to the first -- codex
+    u-sr-09 r3/r4), or a shell suite -- those bind the
     whole artifact."""
     toks = test_cmd.split()
     if "pytest" not in toks:
         return None
-    nodes = [
-        tok for tok in toks[toks.index("pytest") + 1 :] if not tok.startswith("-") and "::" in tok
+    # every collection target counts, not only `::` ones: `a.py::test_x b.py` has two judges
+    # (codex u-sr-09 r4)
+    targets = [
+        tok
+        for tok in toks[toks.index("pytest") + 1 :]
+        if not tok.startswith("-") and (".py" in tok or "::" in tok or "/" in tok)
     ]
-    return pin_scope.node_tail(nodes[0]) if len(nodes) == 1 else None
+    return pin_scope.node_tail(targets[0]) if len(targets) == 1 and "::" in targets[0] else None
 
 
 # Extension → (mutation-comment prefix, syntax-check kind). Anything else is REFUSED: a

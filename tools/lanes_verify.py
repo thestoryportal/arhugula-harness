@@ -566,7 +566,9 @@ def _pin_is_live(e: dict, target: str, probe_file: str) -> bool:
     if pin is None:
         return False
     try:
-        return pin.live((REPO / src).read_text("utf-8"), (REPO / test_file).read_bytes())
+        # bytes -> decode, NOT read_text(): universal newlines would turn a CRLF source's
+        # block into LF and never match the producer's digest (codex u-sr-09 r4)
+        return pin.live((REPO / src).read_bytes().decode("utf-8"), (REPO / test_file).read_bytes())
     except (OSError, UnicodeDecodeError):
         return False
 

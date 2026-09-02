@@ -295,6 +295,30 @@ def test_block_scoped_pin_survives_unrelated_edits_and_stales_on_the_block_or_bo
     assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
 
 
+def test_block_scoped_pin_on_a_crlf_source_is_live(repo: Path, monkeypatch):
+    """codex u-sr-09 r4: the producer digests the block from bytes (CRLF kept); the consumer
+    must decode bytes too -- `read_text()`'s universal newlines would never match."""
+    src = repo / "tools" / "x.py"
+    src.write_bytes(b"def f():\r\n    return 1\r\n")
+    (repo / "tools" / "test_x.py").write_text(
+        "# mutation-probe: a\ndef test_f():\n    assert f() == 1\n"
+    )
+    log = repo / "mp.jsonl"
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::test_f")])
+    a, b = 2, 2
+    row = _entry(
+        repo,
+        "uv run pytest -q tools/test_x.py::test_f",
+        lines="2",
+        pin_scope=lv.pin_scope.PIN_SCOPE_BLOCK,
+        block_sha=lv.pin_scope.block_digest(src.read_bytes().decode("utf-8"), a, b),
+        test_scope=lv.pin_scope.TEST_SCOPE_ARTIFACT,
+        test_slice_sha=None,
+    )
+    log.write_text(row)
+    assert lv.coverage_gaps(log) == []
+
+
 def test_block_scoped_pin_with_artifact_scope_binds_the_whole_shell_suite(repo: Path, monkeypatch):
     """A shell suite has no `def` to bind, so its block pin carries `test_scope` artifact: the
     probed block is content-anchored as before, but ANY edit to the script stales the pin."""

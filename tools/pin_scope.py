@@ -135,13 +135,14 @@ def test_slice_digest(source: str, name: str) -> str | None:
     ]
     if len(named) != 1:
         return None
+    fixture_names = _fixture_names(tree)
     siblings = {
         n.name: n
         for n in tree.body
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
         and n.name.startswith("test_")
         and n is not named[0]
-        and not _is_fixture(n)
+        and not _is_fixture(n, fixture_names)
     }
     # a sibling referenced from the kept nodes stays; iterate until no new name is pulled in
     kept_nodes = [n for n in tree.body if n not in siblings.values()]
@@ -152,24 +153,46 @@ def test_slice_digest(source: str, name: str) -> str | None:
             break
         kept_nodes.extend(pulled)
         referenced |= _names_used(pulled)
-    dropped: set[int] = set()
-    for n in siblings.values():
-        if n not in kept_nodes:
-            a, b = _span(n)
-            dropped.update(range(a, b + 1))
+    # The slice is the kept nodes' OWN source segments, concatenated in file order -- never the
+    # file minus the dropped lines: that kept the blank lines around a dropped sibling, so
+    # INSERTING a sibling test anywhere re-staled every pin in the file (found on the arc's own
+    # witness file at u-sr-09 r4), which is exactly the churn the slice exists to remove.
     lines = source.splitlines(keepends=True)
-    kept = "".join(line for i, line in enumerate(lines, start=1) if i not in dropped)
+    kept = "".join("".join(lines[a - 1 : b]) for a, b in sorted(_node_span(n) for n in kept_nodes))
     return digest16(kept.encode())
 
 
-def _is_fixture(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+def _node_span(node: ast.AST) -> tuple[int, int]:
+    """1-indexed inclusive line span of any top-level node (decorators included)."""
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return _span(node)
+    decorators = getattr(node, "decorator_list", [])
+    first = min([node.lineno, *(d.lineno for d in decorators)])
+    return first, node.end_lineno or node.lineno
+
+
+def _fixture_names(tree: ast.Module) -> set[str]:
+    """Every local name bound to pytest's `fixture`: the attribute name itself plus any
+    `from pytest import fixture as fx` alias (codex u-sr-09 r4 -- an aliased decorator hid
+    an autouse fixture from `_is_fixture`)."""
+    names = {"fixture"}
+    for n in tree.body:
+        if isinstance(n, ast.ImportFrom) and n.module == "pytest":
+            for alias in n.names:
+                if alias.name == "fixture":
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _is_fixture(node: ast.FunctionDef | ast.AsyncFunctionDef, fixture_names: set[str]) -> bool:
     """A `test_*`-named function decorated as a pytest fixture (`@pytest.fixture`,
-    `@pytest.fixture(autouse=True)`, `@fixture`) is part of the harness, not a sibling test:
-    an autouse one can change the selected test's verdict (codex u-sr-09 r3)."""
+    `@pytest.fixture(autouse=True)`, `@fixture`, `@fx` under an import alias) is part of the
+    harness, not a sibling test: an autouse one can change the selected test's verdict
+    (codex u-sr-09 r3/r4)."""
     for d in node.decorator_list:
         target = d.func if isinstance(d, ast.Call) else d
         name = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", "")
-        if name == "fixture":
+        if name in fixture_names:
             return True
     return False
 

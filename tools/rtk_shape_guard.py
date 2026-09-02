@@ -24,13 +24,12 @@ deterministically -- the header of the wrapper carries the witnessed failures):
             a literal to both engines -- codex r3), when no -E/-F/-P makes it mean the
             same thing to grep and rg: 'regex parse error … unclosed group', exit 2.
             "Unescaped" counts the backslashes: an even run leaves the paren live.
-The re-issue prefixes every command-position `grep`/`rg` of the ORIGINAL with `rtk proxy`:
-verbatim when the command is one simple command; re-joined with `shlex.quote` (equivalent,
-not byte-identical) when it carries separators; and NOT OFFERED when it carries a
-redirection (`2>/dev/null`), because shlex cannot say whether the `2` was attached to the
-`>` and a fabricated `2 > /dev/null` would silently change the command (codex r3) -- the
-deny then tells the caller to add the prefix by hand. A guard that only removes wasted
-calls must never invent a command it cannot vouch for. [LAW:no-silent-failure]
+The re-issue is offered ONLY for one simple command -- `rtk proxy ` prepended to the
+original text, byte-exact -- and never for a compound one: a token-by-token re-join cannot
+be faithful (a redirection loses whether `2` was attached to `>`, codex r3; a quoted glob
+`'*.py'` stops expanding, codex r4; `$VAR`, `~` and `$(…)` would follow), so the deny then
+tells the caller to add the prefix by hand. A guard that only removes wasted calls must
+never invent a command it cannot vouch for. [LAW:no-silent-failure]
 """
 
 from __future__ import annotations
@@ -59,8 +58,9 @@ REGEX_SAFE_LONG = frozenset({"--extended-regexp", "--fixed-strings", "--perl-reg
 GLOB_LONG = frozenset({"--glob", "--iglob"})
 # a paren preceded by an EVEN number of backslashes (zero included) is unescaped
 _UNESCAPED_PAREN = re.compile(r"(?<!\\)(?:\\\\)*[()]")
-# a bracket expression (`[()]`, `[^)]`, `[]abc]`): parens inside are literals to both engines
-_BRACKET_EXPR = re.compile(r"\[\^?\]?[^\]]*\]")
+# a bracket expression (`[()]`, `[^)]`, `[]abc]`): parens inside are literals to both engines;
+# an ESCAPED `[` (odd backslash run) opens none (codex r4)
+_BRACKET_EXPR = re.compile(r"(?<!\\)((?:\\\\)*)\[\^?\]?[^\]]*\]")
 # a bare punctuation token that is a redirection, not a separator (`>`, `>>`, `>&`, `<`, …)
 _REDIRECT = re.compile(r"^[<>&]*[<>][<>&]*$")
 
@@ -68,7 +68,9 @@ _REDIRECT = re.compile(r"^[<>&]*[<>][<>&]*$")
 # restored after, so a word that IS a separator when quoted (`grep '|' f`, `echo '&&'`) stays
 # a word: shlex strips the quotes and would otherwise hand back an indistinguishable `|`.
 # An unquoted newline is a command separator the shell honours and shlex would swallow as
-# whitespace (codex u-sr-09 r2), so it is rewritten to `;` in the same pass.
+# whitespace (codex u-sr-09 r2), so it is rewritten to `;` in the same pass. A backslash-
+# ESCAPED separator (`\|`) is data too -- shlex drops the backslash and would hand back a
+# bare `|` (codex r4) -- so the escaped character is masked exactly like a quoted one.
 _MASK = {c: chr(0xE000 + i) for i, c in enumerate("|;&()<>")}
 _UNMASK = {v: k for k, v in _MASK.items()}
 
@@ -79,7 +81,7 @@ def _mask_quoted(command: str) -> str:
     escaped = False
     for ch in command:
         if escaped:
-            out.append(ch)
+            out.append(_MASK.get(ch, ch))
             escaped = False
         elif ch == "\\" and quote != "'":
             out.append(ch)
@@ -235,7 +237,7 @@ def patterns_of(parsed: Args) -> list[str]:
 
 def has_unescaped_paren(pattern: str) -> bool:
     """A live `(`/`)` outside any bracket expression, with an even backslash run before it."""
-    return _UNESCAPED_PAREN.search(_BRACKET_EXPR.sub("", pattern)) is not None
+    return _UNESCAPED_PAREN.search(_BRACKET_EXPR.sub(r"\1", pattern)) is not None
 
 
 def shapes(rewritten_segment: list[str]) -> list[str]:
@@ -255,35 +257,21 @@ def shapes(rewritten_segment: list[str]) -> list[str]:
 
 
 def reissue(original: str) -> str | None:
-    """The ORIGINAL command with `rtk proxy` before every command-position grep/rg. Verbatim
-    for one simple command; otherwise re-joined token by token (separators bare, words
-    `shlex.quote`d) -- shell-equivalent, and quoted data is never touched. None when the
-    original does not lex, is not a grep/rg command, or carries a redirection the re-join
-    could not reproduce faithfully (the caller then re-issues by hand)."""
+    """`rtk proxy ` prepended to the ORIGINAL text, byte-exact -- offered only when the
+    original is ONE simple grep/rg command (no separator, no redirection). None otherwise:
+    for anything compound the caller re-issues by hand, because no re-join of shlex tokens
+    is faithful to the shell (codex r3 redirections, r4 globs)."""
     toks = tokens(original)
-    if toks is None:
+    if toks is None or not toks or toks[0] not in COMMAND_WORDS:
         return None
-    if not any(isinstance(t, (Sep, Redirect)) for t in toks):  # a tuple: 3.9 has no X | Y here
-        return "rtk proxy " + original.lstrip() if toks[:1] and toks[0] in COMMAND_WORDS else None
-    if any(isinstance(t, Redirect) for t in toks):
+    if any(isinstance(t, (Sep, Redirect)) for t in toks):  # a tuple: 3.9 has no X | Y here
         return None
-    out: list[str] = []
-    at_command_position = True
-    for t in toks:
-        if isinstance(t, Sep):
-            out.append(t)
-            at_command_position = t != ")"
-            continue
-        if at_command_position and t in COMMAND_WORDS:
-            out.extend(["rtk", "proxy"])
-        out.append(t)
-        at_command_position = False
-    return _render(out)
+    return "rtk proxy " + original.lstrip()
 
 
 def _render(toks: list[str]) -> str:
-    """Tokens back to one shell line: bare separators/redirections stay bare, every other
-    word is `shlex.quote`d -- the one place a token list becomes text."""
+    """Tokens back to one shell line for the REASON's segment echo only (never a command to
+    run): bare separators/redirections stay bare, every other word is `shlex.quote`d."""
     return " ".join(t if isinstance(t, (Sep, Redirect)) else shlex.quote(t) for t in toks)
 
 
@@ -308,8 +296,8 @@ def judge(original: str, rewritten: str) -> str | None:
     tail = (
         f" Re-issue as: {fix}"
         if fix
-        else " Re-issue by hand with `rtk proxy ` before the grep/rg word (this command carries a"
-        " redirection or a shape the guard will not re-join for you)."
+        else " Re-issue by hand with `rtk proxy ` before each grep/rg word (a compound command"
+        " is never re-joined for you: quoting, globs and redirections would not survive)."
     )
     return (
         f"[rtk-shape-guard] the rtk PreToolUse rewrite turns this into `{segment_text}`, "

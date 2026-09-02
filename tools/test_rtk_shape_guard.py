@@ -37,6 +37,9 @@ def test_tokens_keep_quoted_separators_and_flags_whole():
         ["rg", "-g", "*.py", "x"],
     ]
     assert g.tokens("grep 'a\nb' f") == ["grep", "a\nb", "f"]
+    # codex u-sr-09 r4: a backslash-ESCAPED separator is data, like a quoted one
+    assert g.segments(g.tokens('grep "f(" \\| wc') or []) == [["grep", "f(", "|", "wc"]]
+    assert g.segments(g.tokens("a \\; b") or []) == [["a", ";", "b"]]
 
 
 def test_segments_split_at_bare_separators_only():
@@ -68,6 +71,7 @@ def test_segments_split_at_bare_separators_only():
         ("rtk grep 'f\\\\(' file", [PAREN]),  # even backslash run: the paren is live
         ("rtk grep --regexp='f(' file", [PAREN]),
         ("rtk grep -- '(' file", [PAREN]),  # after `--` the paren IS the pattern: rg still chokes
+        ("rtk grep '\\[(]' file", [PAREN]),  # codex r4: an ESCAPED `[` opens no bracket expression
         # codex u-sr-09 r3: EVERY -e pattern is judged; a bracket expression is not a group
         ("rtk grep -e ok -e 'f(' file", [PAREN]),
         ("rtk grep --regexp ok --regexp='f(' file", [PAREN]),
@@ -103,6 +107,7 @@ def test_shapes_found(rewritten, want):
         "rtk grep '[()]' file",
         "rtk grep '[^)]x' file",
         "rtk grep -e ok -e '[(]' file",
+        "rtk grep '\\\\[(]' file",  # an ESCAPED escape: `\\` then a real bracket expression
         "rtk grep x 2>/dev/null",  # the redirection target is not an operand
     ],
 )
@@ -118,6 +123,8 @@ def test_judge_only_looks_at_rtk_grep_segments():
     assert g.judge('grep "f(" f', "grep 'f(") is None  # the rewrite does not lex: no verdict
     reason = g.judge('cd /tmp; grep -n "f(" f', 'cd /tmp; rtk grep -n "f(" f')
     assert reason is not None and PAREN in reason and "`rtk grep -n 'f(' f`" in reason
+    # codex r4: an escaped `\|` is an operand, so the second grep is the pipeline's, untouched
+    assert g.judge('grep "f(" \\| wc', 'rtk grep "f(" \\| wc') is not None
 
 
 # mutation-probe: drop the `if not any(t in SEPARATORS ...)` verbatim arm in reissue()
@@ -133,10 +140,17 @@ def test_reissue_is_verbatim_for_one_command_and_quote_safe_otherwise():
     # quoted data is never rewritten (codex r1 P2): the argument '; grep literal' survives
     fix = g.reissue("grep -g '*.py' needle '; grep literal'")
     assert fix == "rtk proxy grep -g '*.py' needle '; grep literal'"
-    # separators: every command-position grep/rg prefixed, the rest re-joined equivalently
-    assert g.reissue('cd /tmp; grep -n "f(" f') == "cd /tmp ; rtk proxy grep -n 'f(' f"
-    assert g.reissue('grep -n "f(" f && echo ok') == "rtk proxy grep -n 'f(' f && echo ok"
-    assert g.reissue("ls | grep 'a && f(' f") == "ls | rtk proxy grep 'a && f(' f"
+    # a compound command is NEVER re-joined (codex r4: a quoted glob `'*.py'` would stop
+    # expanding; r3: a redirection would lose its fd) -- the caller re-issues by hand
+    assert g.reissue('cd /tmp; grep -n "f(" *.py') is None
+    assert g.reissue('grep -n "f(" f && echo ok') is None
+    assert g.reissue("ls | grep 'a && f(' f") is None
+    reason = g.judge('cd /tmp; grep -n "f(" *.py', 'cd /tmp; rtk grep -n "f(" *.py')
+    assert (
+        reason is not None
+        and "Re-issue by hand" in reason
+        and "'*.py'" not in reason.split("Re-issue")[1]
+    )
     assert g.reissue("uv run x") is None  # not a grep/rg command: nothing to prefix
     assert g.reissue("grep 'unbalanced") is None
     # codex u-sr-09 r3: a redirection cannot be re-joined faithfully (`2>` vs `2 >`), so no
@@ -164,6 +178,7 @@ def test_parse_args_grammar():
     assert p.patterns == ["a", "b", "c"] and g.patterns_of(p) == ["a", "b", "c"]
     assert g.patterns_of(g.parse_args(["x", "y"])) == ["x"]
     assert g.has_unescaped_paren("[()]") is False and g.has_unescaped_paren("[a]f(") is True
+    assert g.has_unescaped_paren("\\[(]") is True and g.has_unescaped_paren("\\\\[(]") is False
 
 
 def test_judge_reason_names_shapes_and_reissue():

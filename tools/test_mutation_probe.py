@@ -1724,6 +1724,10 @@ def test_test_node_of_binds_one_node_id_only():
         mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/test_x.py::test_b") is None
     )
     assert mp.test_node_of("uv run pytest -q tools/test_x.py -k test_a") is None
+    # codex u-sr-09 r4: a second collection target of ANY shape is a second judge
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/test_y.py") is None
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/") is None
+    assert mp.test_node_of("uv run pytest -q --basetemp=/tmp/h tools/test_x.py::test_a") == "test_a"
     assert mp.test_node_of("bash tools/hooks/test_x.sh") is None
 
 

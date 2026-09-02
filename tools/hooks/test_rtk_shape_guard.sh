@@ -111,10 +111,19 @@ expect_deny "-g short form" 'rg -g "*.py" main tools' 'rtk proxy rg -g "*.py" ma
 expect_deny "bare paren" 'grep -rn "hook_emit(" tools/hooks' 'rtk proxy grep -rn "hook_emit(" tools/hooks' 'unescaped paren'
 expect_deny "closing paren" 'grep -n "x)" f.txt' 'rtk proxy grep -n "x)" f.txt' 'unescaped paren'
 expect_deny "alternation + paren (the [B] parse-error shape)" 'grep -n "a\|f(" f.txt' 'rtk proxy grep -n "a\|f(" f.txt' 'unescaped paren'
-# a compound command is re-joined token by token (shell-equivalent, quotes normalized);
-# a single simple command is prefixed VERBATIM (the cases above)
-expect_deny "after ; the re-issue prefixes only the grep" 'cd /tmp; grep -n "f(" f' "cd /tmp ; rtk proxy grep -n 'f(' f" 'unescaped paren'
-expect_deny "before && the re-issue keeps the tail" 'grep -n "f(" f && echo ok' "rtk proxy grep -n 'f(' f && echo ok" 'unescaped paren'
+# a compound command is NEVER re-joined (codex r3/r4: redirections and globs would not survive a
+# token re-join) -- the deny still fires, with "re-issue by hand"; a single simple command is
+# prefixed VERBATIM (the cases above)
+expect_deny_by_hand() { # <label> <cmd>
+  rc=$(run_guard "$2")
+  reason=$(deny_reason "$OUT") || { bad "$1: '$2' -> not a closed deny decision (rc=$rc): $(head -c 300 "$OUT")"; return; }
+  case "$reason" in
+    *"Re-issue by hand"*) ok "$1: '$2' -> deny, re-issue by hand (never a fabricated compound command)" ;;
+    *) bad "$1: '$2' -> deny but no by-hand instruction: $reason" ;;
+  esac
+}
+expect_deny_by_hand "after ; no re-join is offered" 'cd /tmp; grep -n "f(" *.py'
+expect_deny_by_hand "before && no re-join is offered" 'grep -n "f(" f && echo ok'
 rc=$(run_guard 'rg -g "*.py" "f(" tools'); reason=$(deny_reason "$OUT")
 case "$reason" in *'--glob/-g'*'unescaped paren'*) ok "both shapes named when both present" ;; *) bad "both shapes expected in one reason: $reason" ;; esac
 # codex u-sr-09 r1 (three P2s on the sed-based first cut): quote-aware end to end
