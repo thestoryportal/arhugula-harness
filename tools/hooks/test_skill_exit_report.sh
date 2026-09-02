@@ -2,7 +2,7 @@
 # Hermetic test for the U-WT-04 arc-exit-report ship-pr wiring. Asserts the step is
 # PRESENT in BOTH ship-pr carriers (the Claude tree and its Codex-native mirror under
 # .agents/, which encodes its rituals independently — a Claude-only step is invisible to
-# the Codex flow) and, in the Claude carrier, ORDERED after the reflect/`/context-save`
+# the Codex flow) and, in the Claude carrier, ORDERED after the reflect/`/context-save-lean`
 # block. That ordering is the unit's whole point (plan Feature 3, codex round 11): emitted
 # earlier, `checkpoint{path,confirmed}` would record a stale checkpoint, and the merge
 # SHA / post-merge CI conclusion / refresh commit would not exist yet.

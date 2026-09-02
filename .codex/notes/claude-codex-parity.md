@@ -15,7 +15,7 @@ repo churn; it does not mean reduced parity.
 | Operator-installed design skills | ~~`frontend-design`, `impeccable`, `taste-skill`, `ui-ux-pro-max` under the root checkout's project `.claude/skills/`~~ — **REMOVED 2026-08-10** (R-CTX-1 D2 ratification: both runners drop the four operator-installed design skills; see `.harness/r-ctx-1-implementation-plan-v1.md` U-CTX-16) | ~~Same source bodies adopted through tracked Codex bridge entrypoints; no copy, deletion, shortening, or deprecation~~ — superseded by the D2 removal above |
 | Global gstack skills | Claude skill catalog | Same gstack packages are already present in Codex's discovered skill catalog |
 | Project memory | Claude project `memory/MEMORY.md` plus linked topic files | Mandatory discipline digest at startup; task-relevant index/topic lookup remains available and required |
-| Context checkpoints | gstack `context-save` / `context-restore` and repo handoffs | Same gstack skills plus `.harness/handoff/README-resume.md` and Codex deterministic checkpoints; all advisory until HEAD verification |
+| Context checkpoints | `context-save-lean` (the workspace copy of the gstack save flow, U-SR-08/WR-15) / gstack `context-restore` and repo handoffs | Same gstack skills plus `.harness/handoff/README-resume.md` and Codex deterministic checkpoints; all advisory until HEAD verification |
 | Orchestration models | Fable 5 interactive orchestrator/planner with Opus 5 subagent implementers | `gpt-5.6-sol` high controller via `arhugula-forward`; `gpt-5.6-terra` high implementer legs via `arhugula-implementer` |
 | Out-of-family review | Codex reviewed Claude-authored diffs | OAuth-authenticated Antigravity (`agy`) pinned to Gemini 3.1 Pro High through `just gemini-review` reviews Codex-authored diffs |
 | Pre-merge review | Three fresh agent lenses | Three fresh ephemeral, lifecycle-isolated, read-only `codex exec` lenses; all-approve and logged |
@@ -174,6 +174,6 @@ For a substantive Codex-authored arc:
 7. merge SHA's own `main` push CI green
 8. immediate terminating refresh when owed; refresh `main` CI green
 9. local main sync, worktree/branch disposition, loop check
-10. reflection + gstack `context-save`, then initialize the next arc
+10. reflection + `context-save-lean` (the workspace copy of the gstack save flow), then initialize the next arc
 
 No forward arc begins between steps 6 and 10.

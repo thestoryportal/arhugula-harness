@@ -125,6 +125,15 @@ for f in "$ASHIP" "$ACONT" "$ALOOP"; do
     || ok "$(basename "$(dirname "$f")") (codex) no longer instructs the gstack context-save skill"
 done
 
+# 3b. NO live carrier anywhere in the workspace still prescribes the gstack flow (codex r5
+#     P2: the .codex/notes digests are binding authorities for the Codex runner and were
+#     missed by the skill-only scan). Scope = every directory a runner reads as instruction
+#     or tool text; historical .harness/ documents are not carriers. The lean skill's own
+#     "never `/context-save`" rule and this witness are the two legitimate mentions.
+STALE=$(cd "$ROOT" && git grep -nE 'gstack `context-save`|`/context-save`([^-]|$)' -- .codex .claude .agents CLAUDE.md docs justfile tools \
+  ':!tools/hooks/test_skill_context_save_trim.sh' ':!.claude/skills/context-save-lean' ':!.agents/skills/context-save-lean' 2>/dev/null)
+[ -z "$STALE" ] && ok "no live carrier prescribes the gstack context-save (repo-wide)" || bad "stale carriers: $(printf '%s' "$STALE" | head -c 400)"
+
 # The exact shadowed invocation (closing backtick) must be gone from both Claude carriers; the
 # bare word `context-save` may remain in prose that names the gstack family.
 for f in "$SHIP" "$CONT"; do
@@ -204,7 +213,9 @@ D1=$(field "$OUT1" CHECKPOINT_DIR); D2=$(field "$OUT2" CHECKPOINT_DIR)
 [ "$RC2" -eq 0 ] && [ "$D2" = "$STATE/projects/slug-probe-main/checkpoints" ] \
   && ok "linked worktree -> projects/slug-probe-main/checkpoints (not the worktree name)" || bad "worktree: rc=$RC2 dir='$D2'"
 P1=$(field "$OUT1" PART); F1=$(field "$OUT1" FILE)
-case "$P1" in "$D1"/.*.part) ok "staging path is a .part dotfile under the checkpoint dir" ;; *) bad "unexpected staging path: '$P1'" ;; esac
+rm -f "$(field "$OUT2" PART)"   # the worktree probe's own staging file; never published
+case "$P1" in "$D1"/.*.part.??????) ok "staging path is a mktemp .part dotfile under the checkpoint dir" ;; *) bad "unexpected staging path: '$P1'" ;; esac
+[ -f "$P1" ] && [ ! -s "$P1" ] && ok "the staging file is allocated (exists, empty) — exclusive by mktemp" || bad "staging file not allocated: '$P1'"
 [ ! -e "$F1" ] && [ -z "$(ls "$D1"/*.md 2>/dev/null)" ] && ok "allocate creates no .md (no empty checkpoint window)" || bad "allocate left a .md behind: $F1"
 mkdir -p "$TMPD/nogit"
 OUT3=$(run_alloc "$TMPD/nogit" "probe title"); RC3=$?
@@ -227,10 +238,21 @@ POUT=$(run_pub "$PC" "$FC"); FB=$(field "$POUT" FILE)
 [ -n "$FB" ] && [ "$FB" != "$FC" ] && [ -s "$FB" ] && [ "$(cat "$FC")" = "other session" ] \
   && ok "a name already published by another session gets a suffix; the other file is untouched" || bad "collision not resolved: '$FC' vs '$FB'"
 case "$FB" in "${FC%.md}-"????".md") ok "the loser carries a 4-char random suffix" ;; *) bad "unexpected loser name: $FB" ;; esac
-[ -z "$(ls -A "$D1"/.*.part 2>/dev/null)" ] && ok "no .part staging file survives a publish" || bad "staging files left behind: $(ls -A "$D1"/.*.part)"
+[ -z "$(ls -A "$D1"/.*.part.* 2>/dev/null)" ] && ok "no .part staging file survives a publish" || bad "staging files left behind: $(ls -A "$D1"/.*.part.*)"
 FI=$(save "$REPO" 'ab $(touch pwned) cd')
 [ ! -e "$REPO/pwned" ] && [ ! -e "$TMPD/pwned" ] && case "$FI" in *"-ab-touch-pwned-cd.md") true ;; *) false ;; esac \
   && ok "a title with \$(...) is sanitized, never executed" || bad "injection title handled wrongly: '$FI'"
+
+# 4d. the Step-1 block (carries RECENT LOG) succeeds in a repo and FAILS LOUD outside one
+#     (codex r5 P2: a half-readable repo must never yield a quietly incomplete checkpoint).
+S1B=$(grep -l 'RECENT LOG' "$TMPD"/block*.sh 2>/dev/null | head -1)
+[ -n "$S1B" ] || { bad "step-1 block not found"; S1B=/dev/null; }
+S1O=$(cd "$REPO" && bash "$S1B" 2>&1); S1RC=$?
+[ "$S1RC" -eq 0 ] && printf '%s' "$S1O" | grep -q '^=== BRANCH ===' && printf '%s' "$S1O" | grep -q '^=== RECENT LOG ===' \
+  && ok "step 1 gathers state in a repo (rc=0, all five sections)" || bad "step 1 in a repo: rc=$S1RC $(printf '%s' "$S1O" | head -c 160)"
+S1N=$(cd "$TMPD/nogit" && bash "$S1B" 2>&1); S1NRC=$?
+[ "$S1NRC" -ne 0 ] && printf '%s' "$S1N" | grep -q 'FATAL: git state unreadable' \
+  && ok "step 1 fails loud outside a repo (rc=$S1NRC)" || bad "step 1 outside a repo did not fail loud: rc=$S1NRC"
 
 # 4c. the List flow block (carries NO_CHECKPOINTS) keeps three outcomes apart (codex r3 P2):
 #     an existing populated dir lists the published files newest-first; no dir / empty dir

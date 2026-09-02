@@ -53,6 +53,7 @@ After final PR CI is green, re-read the head SHA, merge with
 `--match-head-commit`, and wait for that merge SHA's own `main` push CI to pass.
 Only then perform the terminating roadmap/ledger refresh. The refresh commit's
 own `main` CI must pass before forward work begins. Finish the arc with reflection
-and the gstack `context-save` workflow; restored checkpoint work lists remain
+and the `context-save-lean` workflow (the workspace copy of the gstack save flow,
+U-SR-08/WR-15); restored checkpoint work lists remain
 advisory until verified against current repo state. CodeRabbit remains optional
 advisory review through `just coderabbit-review ...`.

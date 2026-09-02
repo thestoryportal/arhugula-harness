@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreCompact checkpoint — fires before context compaction. Writes a lightweight
 # state snapshot to .harness/.checkpoints/ so the essentials survive compaction
-# (U-HK-06 re-injects it after). A safety-net complement to the richer /context-save
+# (U-HK-06 re-injects it after). A safety-net complement to the richer /context-save-lean
 # skill, not a replacement. Gitignored — never dirties the tree. Wired SYNCHRONOUSLY
 # (not async): PostCompact reinject reads the session-specific latest pointer, so the write must
 # finish before compaction completes or the snapshot races its own reader and the

@@ -45,16 +45,15 @@ words) from the current work.
 ### Step 1: Gather state
 
 ```bash
-echo "=== BRANCH ==="
-git rev-parse --abbrev-ref HEAD 2>/dev/null
-echo "=== STATUS ==="
-git status --short 2>/dev/null
-echo "=== DIFF STAT ==="
-git diff --stat 2>/dev/null
-echo "=== STAGED DIFF STAT ==="
-git diff --cached --stat 2>/dev/null
-echo "=== RECENT LOG ==="
-git log --oneline -10 2>/dev/null
+# Every probe must SUCCEED: a checkpoint written from a half-readable repo (a corrupt
+# index, say) would look valid while missing its modified-file state, and a recovery
+# artifact must never be quietly incomplete. Any failure is FATAL — fix the repo first.
+g() { echo "=== $1 ==="; shift; "$@" || { echo "FATAL: git state unreadable ($*)"; exit 1; }; }
+g BRANCH git rev-parse --abbrev-ref HEAD
+g STATUS git status --short
+g "DIFF STAT" git diff --stat
+g "STAGED DIFF STAT" git diff --cached --stat
+g "RECENT LOG" git log --oneline -10
 ```
 
 ### Step 2: Summarize context
@@ -130,21 +129,20 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RAW="${TITLE_RAW:-untitled}"
 TITLE_SLUG=$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]' | tr -s ' \t' '-' | tr -cd 'a-z0-9.-' | cut -c1-60)
 TITLE_SLUG="${TITLE_SLUG:-untitled}"
-# Staging path: a DOTFILE with a random token — no `*.md` listing (this skill's list flow,
-# gstack /context-restore, arc_exit_report) can ever see it, and it is never a restorable
-# checkpoint. It is not created here: the Write tool creates it in one step, so there is
-# no empty file at any moment under a name anything reads.
-TOKEN=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 6)
-[ "${#TOKEN}" -eq 6 ] || TOKEN=$(printf '%06x' "$$")   # a pipeline's status is head's — check the VALUE
-PART="${CHECKPOINT_DIR}/.${TIMESTAMP}-${TITLE_SLUG}-${TOKEN}.part"
+# Staging file: a DOTFILE — no `*.md` listing (this skill's list flow, gstack
+# /context-restore, arc_exit_report) can ever see it, and it is never a restorable
+# checkpoint — created EMPTY and EXCLUSIVELY by mktemp, so two sessions can never be
+# handed one staging path (BSD and GNU mktemp both want the trailing XXXXXX).
+PART=$(mktemp "${CHECKPOINT_DIR}/.${TIMESTAMP}-${TITLE_SLUG}.part.XXXXXX") || { echo "FATAL: cannot allocate a staging file in $CHECKPOINT_DIR"; exit 1; }
 echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
 echo "TIMESTAMP=$TIMESTAMP"
 echo "PART=$PART"
 echo "FILE=${CHECKPOINT_DIR}/${TIMESTAMP}-${TITLE_SLUG}.md"
 ```
 
-Write the full checkpoint content to the `$PART` path printed above (the exact string; a
-new file, so the Write tool needs no prior Read). Then publish it:
+Write the full checkpoint content to the `$PART` path printed above (the exact string). It
+exists and is empty: Read it once first (the Write tool refuses to overwrite a file it has
+not read; a venue whose write tool overwrites freely needs no read). Then publish it:
 
 **4b — publish** (first lines: `PART='<printed PART>'` and `FILE='<printed FILE>'`)
 
