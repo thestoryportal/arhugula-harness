@@ -13,7 +13,7 @@
 # source and it exits 0 silently -- a vacuous green), with CLAUDE_PROJECT_DIR pointed at a
 # throwaway dir and HARNESS_CODEX_REVIEW_ISOLATED unset (hooks early-exit on it).
 
-# mutation-probe: tools/hooks/rtk-shape-guard.sh:72-74 the --glob/-g shape branch (drop it -> no deny -> section 2 reds)
+# mutation-probe: tools/hooks/rtk-shape-guard.sh:79-81 the --glob/-g shape branch (drop it -> no deny -> section 2 reds)
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

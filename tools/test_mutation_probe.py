@@ -1717,7 +1717,11 @@ def test_verdict_is_logged_with_the_test_command_and_rc(repo, _probe_log_isolate
     assert json.loads(log.read_text().splitlines()[-1])["rc"] == 1
 
 
-# mutation-probe: drop the `MEASURED["test_body_sha"] = test_body_before` line in probe()
+# Probe (NOT pinnable through the tool -- a probe of mutation_probe.py from its own suite
+# leaves the outer probe's sidecar in tools/ and `_no_stray_sidecars_in_the_real_repo`
+# fails the teardown, so the tool refuses INDETERMINATE; no self-probe row has ever pinned):
+# dropping the `MEASURED["test_body_sha"] = test_body_before` line in probe() reds this
+# test at `assert entry["test_scope"] == "body"` -- observed by hand at U-SR-09.
 def test_a_node_id_command_pins_the_judging_tests_body(repo, _probe_log_isolated: Path):
     """U-SR-09 b1: when the command names ONE test function, the row carries `test_scope`
     body with that function's source-segment digest; the whole-file `test_sha` stays as
