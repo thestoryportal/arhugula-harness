@@ -48,12 +48,15 @@ words) from the current work.
 # Every probe must SUCCEED: a checkpoint written from a half-readable repo (a corrupt
 # index, say) would look valid while missing its modified-file state, and a recovery
 # artifact must never be quietly incomplete. Any failure is FATAL — fix the repo first.
-g() { echo "=== $1 ==="; shift; "$@" || { echo "FATAL: git state unreadable ($*)"; exit 1; }; }
-g BRANCH git rev-parse --abbrev-ref HEAD
-g STATUS git status --short
-g "DIFF STAT" git diff --stat
-g "STAGED DIFF STAT" git diff --cached --stat
-g "RECENT LOG" git log --oneline -10
+# Written as five explicit lines, not a positional helper: the skill loader rewrites
+# positional parameters (dollar-one through dollar-nine) in this body when the skill is
+# invoked with arguments — a label helper that echoed its first parameter rendered the
+# argument word instead on the skill's first real run.
+echo "=== BRANCH ==="; git rev-parse --abbrev-ref HEAD || { echo "FATAL: git state unreadable (branch)"; exit 1; }
+echo "=== STATUS ==="; git status --short || { echo "FATAL: git state unreadable (status)"; exit 1; }
+echo "=== DIFF STAT ==="; git diff --stat || { echo "FATAL: git state unreadable (diff)"; exit 1; }
+echo "=== STAGED DIFF STAT ==="; git diff --cached --stat || { echo "FATAL: git state unreadable (staged diff)"; exit 1; }
+echo "=== RECENT LOG ==="; git log --oneline -10 || { echo "FATAL: git state unreadable (log)"; exit 1; }
 ```
 
 ### Step 2: Summarize context

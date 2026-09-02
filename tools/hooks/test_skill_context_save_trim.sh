@@ -69,6 +69,15 @@ else
   echo "  note: no user-level context-save skill on this host — before/after size comparison not run (1 check)"
 fi
 
+# --- 1b. no positional-parameter tokens anywhere in the body -------------------------
+# The skill loader substitutes $1..$9 (and $ARGUMENTS) in a SKILL.md body when the skill is
+# invoked with arguments — the first real `/context-save-lean <title>` run rendered a
+# `g() { echo "=== $1 ==="` helper's label as the argument word. A raw-file witness cannot
+# observe the loader's rendering, so the property pinned here is the absence of the tokens.
+# (`$$`, `$@`, `$*` and `${...}` are not rewritten and stay legal.)
+POS=$(grep -nE '\$[0-9]|\$ARGUMENTS' "$SKILL")
+[ -z "$POS" ] && ok "no positional-parameter tokens in the skill body (loader substitution hazard)" || bad "positional-parameter tokens in the skill body: $(printf '%s' "$POS" | head -c 200)"
+
 # --- 2. trim: preamble absent, save-flow carriers present ---------------------------
 NORM=$(tr '\n' ' ' < "$SKILL" | tr -s ' ')
 for h in '## Preamble' '## Artifacts Sync' '## Telemetry' '## AskUserQuestion Format' \
