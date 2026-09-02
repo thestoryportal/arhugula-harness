@@ -23,12 +23,13 @@ LANE="$SKILLS/two-lane/SKILL.md"
 AGENTS_SKILLS="$SCRIPT_DIR/../../.agents/skills"
 ACONT="$AGENTS_SKILLS/roadmap-continue/SKILL.md"
 ASHIP="$AGENTS_SKILLS/ship-pr/SKILL.md"
+ALOOP="$AGENTS_SKILLS/codex-autonomous-loop/SKILL.md"
 
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-for f in "$CONT" "$SHIP" "$HEAL" "$LANE" "$ACONT" "$ASHIP"; do
+for f in "$CONT" "$SHIP" "$HEAL" "$LANE" "$ACONT" "$ASHIP" "$ALOOP"; do
   [ -f "$f" ] || { echo "FATAL: missing $f"; exit 1; }
 done
 
@@ -72,8 +73,15 @@ aship_item3=$(section "$ASHIP" '^3[.] Run the narrow witness' '^4[.] ')
 heal_step2=$(section "$HEAL" '^2[.] [*][*]Run the suite' '^3[.] ')
 lane_setup=$(section "$LANE" '^## Lane setup' '^## The merge lane')
 acont_item5=$(section "$ACONT" '^5[.] Run narrow verification' '^6[.] ')
+# codex-autonomous-loop (u-sr-07 codex r7): a third independently invocable loop
+# controller — codex-check at gate 7, CI waits at 13/16/18, checkpoint at gate 20,
+# next-arc init — that routes through neither covered skill. Its own gates carry the
+# three habits, item-scoped like the rest.
+aloop_plan=$(section "$ALOOP" '^3[.] .plan.: record owned scope' '^4[.] ')
+aloop_gate7=$(section "$ALOOP" '^7[.] .local_gate' '^8[.] ')
+aloop_reflect=$(section "$ALOOP" '^20[.] Reflect' '^21[.] ')
 
-for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec acont_next aship_reflect ship_green aship_item3 heal_step2 lane_setup acont_item5; do
+for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec acont_next aship_reflect ship_green aship_item3 heal_step2 lane_setup acont_item5 aloop_plan aloop_gate7 aloop_reflect; do
   eval "v=\${$pair}"
   [ -n "$v" ] && ok "section anchor resolves: $pair" || bad "section anchor EMPTY: $pair"
 done
@@ -110,6 +118,25 @@ line "$ship_reflect" "ship-pr reflect block carries the facts-brief handoff" \
   '[B] F10' \
   '"I already have all the context loaded" is the trap'
 
+line "$aloop_plan" "codex-autonomous-loop plan gate carries read-before-grep" \
+  'Read-before-grep (U-SR-07/WR-14): for a file you will read anyway, read it once' \
+  '[B] F5/d3' \
+  '"one more targeted grep is cheaper" stops being true'
+
+line "$aloop_gate7" "codex-autonomous-loop local_gate carries the cache-warmth handoff" \
+  'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
+  '[B] F4' \
+  '"the wait costs nothing" bills the next call'
+
+line "$aloop_reflect" "codex-autonomous-loop reflect gate carries the facts-brief handoff" \
+  'Facts-brief handoff (U-SR-07/WR-14): if the next item is a heavy audit or document' \
+  '[B] F10' \
+  '"I already have the context loaded" is the trap'
+
+printf '%s' "$aloop_reflect" | grep -qF -- 'BEFORE running context-save' \
+  && ok "codex-autonomous-loop facts-brief names the before-save ordering" \
+  || bad "codex-autonomous-loop facts-brief lost the before-save ordering clause"
+
 line "$acont_ground" "codex roadmap-continue grounding carries read-before-grep" \
   'Read-before-grep (U-SR-07/WR-14): for a file you will read anyway, read it once' \
   '[B] F5/d3' \
@@ -144,7 +171,7 @@ line "$lane_setup" "two-lane build half carries the cache-warmth handoff" \
 # cache-warmth rule must share the ITEM-scoped slice that instructs the launch
 # (u-sr-07 codex r6 — same-section co-occurrence let a later-step relocation pass;
 # the two-lane needle above pins its inline adjacency to the launch parenthetical).
-for spec in "ship_green:$ship_green" "aship_item3:$aship_item3" "heal_step2:$heal_step2" "acont_item5:$acont_item5"; do
+for spec in "ship_green:$ship_green" "aship_item3:$aship_item3" "heal_step2:$heal_step2" "acont_item5:$acont_item5" "aloop_gate7:$aloop_gate7"; do
   lbl="${spec%%:*}"; text="${spec#*:}"
   if printf '%s' "$text" | grep -qF 'codex-check' && printf '%s' "$text" | grep -qiF 'cache-warmth'; then
     ok "$lbl couples codex-check with the cache-warmth rule in the same step"
@@ -167,7 +194,7 @@ line "$aship_reflect" "codex ship-pr reflect carries the facts-brief handoff" \
 # carries NO depth threshold — EVERY heavy audit/document is authored fresh from a
 # brief. The >400k trigger belongs to clause (b) (cache-warmth) alone. A depth
 # qualifier re-imported into any facts-brief carrier is contract drift and must red.
-for spec in "cont_step6:$cont_step6" "ship_reflect:$ship_reflect" "acont_next:$acont_next" "aship_reflect:$aship_reflect"; do
+for spec in "cont_step6:$cont_step6" "ship_reflect:$ship_reflect" "acont_next:$acont_next" "aship_reflect:$aship_reflect" "aloop_reflect:$aloop_reflect"; do
   lbl="${spec%%:*}"; text="${spec#*:}"
   if printf '%s' "$text" | grep -qE '>400k|already deep|sits deep|deep in context'; then
     bad "$lbl facts-brief carrier re-imported a depth qualifier (WR-14 (a) is unconditional)"

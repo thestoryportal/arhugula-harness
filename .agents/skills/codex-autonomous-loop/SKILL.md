@@ -38,10 +38,20 @@ not acceptance evidence.
 1. `worktree_ready`: prove clean linked worktree and current-main base.
 2. `preflight`: run `just codex-preflight`.
 3. `plan`: record owned scope, authority, RED witness, verification, and tracking surfaces.
+   Read-before-grep (U-SR-07/WR-14): for a file you will read anyway, read it once — or
+   run one script over it — instead of a chain of `sed -n`/grep probes; every probe is a
+   full API call ([B] F5/d3: 33 `sed -n` + 101 grep-shaped calls on the baseline arc),
+   and "one more targeted grep is cheaper" stops being true the moment the file is one
+   you will open regardless.
 4. `red`: observe the expected failure; record `status=failed`.
 5. `implementation`: smallest complete scoped change.
 6. `narrow_verify`: targeted witness passes, including mutation/real-path proof where owed.
 7. `local_gate`: `just codex-check`, plus overlay/shell/live gates required by the claim.
+   Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait
+   expected to outlast the prompt-cache TTL (this gate, the CI waits at gates 13, 16,
+   and 18), prefer closing out to a handoff over idling through the expiry — one cold
+   re-warm re-reads the whole context (≈0.7M IET on the [B] F4 baseline); "the wait
+   costs nothing" bills the next call.
 8. `decorrelated_review`: when Codex authored, run `just gemini-review` through the
    OAuth-authenticated Antigravity `agy` CLI only and require the report to end
    `VERDICT: APPROVE`; never use provider API keys, service-account/Vertex routing, or a direct
@@ -64,7 +74,13 @@ not acceptance evidence.
     record a narrowly justified non-applicability for a refresh itself.
 18. Wait for the refresh merge's own main CI to be green.
 19. `main_synced`: local `main` equals final `origin/main`.
-20. Reflect and run the gstack `context-save` skill.
+20. Reflect and run the gstack `context-save` skill. Facts-brief handoff (U-SR-07/WR-14):
+    if the next item is a heavy audit or document, do not author it in this session —
+    "I already have the context loaded" is the trap: the loaded context is what every
+    call re-bills. Write a facts brief (the findings, cites, and decisions the
+    deliverable needs) BEFORE running context-save so the checkpoint carries it, and
+    let a fresh session author from it ([B] F10: authored at 540k context cost
+    0.93M IET against ≈0.3M fresh).
 21. Emit the arc exit report (U-WT-03/04) WHILE the arc worktree still exists — its
     ledger carries this arc's pending-HIL rows, which disposition deletes:
     `just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>`
