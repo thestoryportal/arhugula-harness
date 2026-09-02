@@ -190,17 +190,36 @@ def _test_digests(path: Path, node: str | None) -> tuple[str | None, str | None]
 
 
 def test_file_of(test_cmd: str) -> Path | None:
-    """The test ARTIFACT a probe command exercises: for a pytest command the first non-flag
-    token naming a `.py` path (node id's file part); for `bash <script>` the script."""
+    """The test ARTIFACT a probe command exercises: for a pytest command naming exactly ONE
+    collection target, that target's file; for `bash <script>` the script. A pytest command
+    with several targets has no single judge and gets NO artifact (its digests stay None,
+    so its row is never a live pin -- codex u-sr-09 r6: binding only the first file let a
+    second file's hollowing pass unnoticed)."""
     toks = test_cmd.split()
     if "pytest" in toks:
-        for tok in toks[toks.index("pytest") + 1 :]:
-            if not tok.startswith("-") and ".py" in tok:
-                return Path(tok.split("::", 1)[0])
-        return None
+        targets = pytest_targets(toks)
+        return Path(targets[0].split("::", 1)[0]) if len(targets) == 1 else None
     if toks[:1] == ["bash"] and len(toks) > 1:
         return Path(toks[1])
     return None
+
+
+def pytest_targets(toks: list[str]) -> list[str]:
+    """Every collection target after `pytest`: an operand is a target unless it is the value
+    of a value-taking option (`PYTEST_VALUE_OPTIONS`); `a.py::test_x b.py` and `a.py::test_x
+    tests` both have two (codex u-sr-09 r4/r5)."""
+    targets: list[str] = []
+    args = toks[toks.index("pytest") + 1 :]
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in PYTEST_VALUE_OPTIONS:
+            i += 2
+            continue
+        if not tok.startswith("-"):
+            targets.append(tok)
+        i += 1
+    return targets
 
 
 #: pytest options that consume the NEXT token (the `--opt=value` spelling needs no entry:
@@ -224,20 +243,7 @@ def test_node_of(test_cmd: str) -> str | None:
     toks = test_cmd.split()
     if "pytest" not in toks:
         return None
-    # every collection target counts: an operand is a target unless it is the value of a
-    # value-taking pytest option (`-k EXPR`, `-p plugin`, …) -- `a.py::test_x b.py` and
-    # `a.py::test_x tests` both have two judges (codex u-sr-09 r4/r5)
-    targets: list[str] = []
-    args = toks[toks.index("pytest") + 1 :]
-    i = 0
-    while i < len(args):
-        tok = args[i]
-        if tok in PYTEST_VALUE_OPTIONS:
-            i += 2
-            continue
-        if not tok.startswith("-"):
-            targets.append(tok)
-        i += 1
+    targets = pytest_targets(toks)
     return pin_scope.node_tail(targets[0]) if len(targets) == 1 and "::" in targets[0] else None
 
 
@@ -1470,6 +1476,13 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     # digest names exactly the witness both runs executed (or None if it moved in between).
     _reset_measured()
     tf = test_file_of(test_cmd)
+    if tf is None and "pytest" in test_cmd.split():
+        print(
+            "WARNING: the probe command names no single collection target; its verdict is "
+            "logged without test digests and can never read as a live pin -- probe with ONE "
+            "node id, file or directory.",
+            file=sys.stderr,
+        )
     test_path = (repo_root / tf) if tf is not None else None
     test_sha_before, test_slice_before = (
         _test_digests(test_path, test_node_of(test_cmd)) if test_path is not None else (None, None)

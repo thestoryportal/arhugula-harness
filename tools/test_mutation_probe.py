@@ -1731,6 +1731,12 @@ def test_test_node_of_binds_one_node_id_only():
     assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tests") is None
     assert mp.test_node_of("uv run pytest -q -k smoke tools/test_x.py::test_a") == "test_a"
     assert mp.test_node_of("uv run pytest -p no:cacheprovider tools/test_x.py::test_a") == "test_a"
+    # codex u-sr-09 r6: several targets -> NO artifact either (never a live pin)
+    assert mp.test_file_of("uv run pytest -q tools/test_x.py::test_a tools/test_y.py") is None
+    assert mp.test_file_of("uv run pytest -q -k smoke tools/test_x.py::test_a") == Path(
+        "tools/test_x.py"
+    )
+    assert mp.test_file_of("bash tools/hooks/test_x.sh") == Path("tools/hooks/test_x.sh")
     assert mp.test_node_of("uv run pytest -q --basetemp=/tmp/h tools/test_x.py::test_a") == "test_a"
     assert mp.test_node_of("bash tools/hooks/test_x.sh") is None
 

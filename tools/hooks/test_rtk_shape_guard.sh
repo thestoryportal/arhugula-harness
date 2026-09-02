@@ -125,11 +125,18 @@ expect_deny_by_hand() { # <label> <cmd>
 expect_deny_by_hand "after ; no re-join is offered" 'cd /tmp; grep -n "f(" *.py'
 expect_deny_by_hand "before && no re-join is offered" 'grep -n "f(" f && echo ok'
 rc=$(run_guard 'rg -g "*.py" "f(" tools'); reason=$(deny_reason "$OUT")
-case "$reason" in *'--glob/-g'*'unescaped paren'*) ok "both shapes named when both present" ;; *) bad "both shapes expected in one reason: $reason" ;; esac
+# codex r6: only the ORIGINAL executable's shape is a rewrite defect -- an rg original is
+# denied for the glob alone (rg chokes on the paren natively), a grep original for the paren
+# alone (grep never had -g)
+case "$reason" in *'--glob/-g'*'unescaped paren'*) bad "rg original: the paren is rg's own failure, not the rewrite's: $reason" ;; *'--glob/-g'*) ok "rg original with both shapes: glob named, paren not (rg fails on it natively)" ;; *) bad "rg original: glob expected: $reason" ;; esac
+rc=$(run_guard 'grep -g "*.py" "f(" tools'); reason=$(deny_reason "$OUT")
+case "$reason" in *'--glob/-g'*) bad "grep original: -g never worked on grep, not a rewrite defect: $reason" ;; *'unescaped paren'*) ok "grep original with both shapes: paren named, glob not (grep never had -g)" ;; *) bad "grep original: paren expected: $reason" ;; esac
+expect_silent "rg original with only a paren (fails on rg natively; no remedy helps)" 'rg "f(" x'
+expect_silent "grep original with only -g (never worked on grep)" 'grep -g "*.py" x'
 # codex u-sr-09 r1 (three P2s on the sed-based first cut): quote-aware end to end
 expect_deny "quoted && inside the pattern is not a separator" "grep -n 'a && f(' file" "rtk proxy grep -n 'a && f(' file" 'unescaped paren'
 expect_deny "attached -g value" "rg -g'*.py' needle tree" "rtk proxy rg -g'*.py' needle tree" '--glob/-g'
-expect_deny "quoted '; grep literal' argument is left alone in the re-issue" "grep -g '*.py' needle '; grep literal'" "rtk proxy grep -g '*.py' needle '; grep literal'" '--glob/-g'
+expect_deny "quoted '; grep literal' argument is left alone in the re-issue" "rg -g '*.py' needle '; grep literal'" "rtk proxy rg -g '*.py' needle '; grep literal'" '--glob/-g'
 expect_silent "a quoted separator word as the pattern is a word" "grep '|' file.txt"
 
 # --- 2b. registration (codex u-sr-09 r1 P3): settings.json runs this guard on Bash -----------

@@ -117,6 +117,26 @@ def test_shapes_silent(rewritten):
     assert g.shapes(g.segments(toks)[0]) == []
 
 
+def test_shapes_are_judged_against_the_original_executable():
+    """codex u-sr-09 r6: a paren is a rewrite defect only for a grep original (rg chokes on
+    it natively, so no remedy helps); a glob only for an rg original (grep never had -g); a
+    prefixed command still carries the `rtk grep` pair mid-segment."""
+    assert g.judge('rg "f(" x', 'rtk grep "f(" x') is None  # the original fails on its own
+    assert g.judge('grep -g "*.py" x', 'rtk grep -g "*.py" x') is None  # grep never had -g
+    assert g.judge('grep "f(" x', 'rtk grep "f(" x') is not None
+    assert g.judge('rg -g "*.py" x', 'rtk grep -g "*.py" x') is not None
+    reason = g.judge('env FOO=1 grep "f(" x', 'env FOO=1 rtk grep "f(" x')
+    assert reason is not None and PAREN in reason and "Re-issue by hand" in reason
+    assert g.judge('sudo rg -g "*.py" x', 'sudo rtk grep -g "*.py" x') is not None
+    # an unknown original (segment counts disagree) is judged conservatively for both
+    assert g.shapes(g.tokens('rtk grep -g "*.py" "f(" x') or [], None) == g.shapes(
+        g.tokens('rtk grep -g "*.py" "f(" x') or []
+    )
+    assert g.rewritten_at(["env", "FOO=1", "rtk", "grep", "x"]) == 2
+    assert g.rewritten_at(["rtk", "ls"]) is None
+    assert g.original_word(["env", "FOO=1", "rg", "x"]) == "rg"
+
+
 def test_judge_only_looks_at_rtk_grep_segments():
     assert g.judge('ls | grep "f("', 'rtk ls | grep "f("') is None  # pipeline grep untouched
     assert g.judge("egrep 'f(x)' f", "No rewrite for: egrep 'f(x)' f") is None
@@ -158,7 +178,7 @@ def test_reissue_is_verbatim_for_one_command_and_quote_safe_otherwise():
     assert g.reissue("grep -g '*.py' x 2>/dev/null | wc -l") is None
     assert g.reissue("grep -g '*.py' x >out.txt") is None
     reason = g.judge(
-        "grep -g '*.py' x 2>/dev/null | wc -l", "rtk grep -g '*.py' x 2>/dev/null | wc -l"
+        "rg -g '*.py' x 2>/dev/null | wc -l", "rtk grep -g '*.py' x 2>/dev/null | wc -l"
     )
     assert reason is not None and "Re-issue by hand" in reason and "2 '>'" not in reason
     assert "`rtk grep -g '*.py' x 2 > /dev/null`" in reason  # the segment echo keeps operators bare
@@ -185,8 +205,15 @@ def test_judge_reason_names_shapes_and_reissue():
     reason = g.judge("rg -g'*.py' needle tree", "rtk grep -g'*.py' needle tree")
     assert reason is not None
     assert GLOB in reason and "Re-issue as: rtk proxy rg -g'*.py' needle tree" in reason
-    both = g.judge("rg -g '*.py' 'f(' tools", "rtk grep -g '*.py' 'f(' tools")
-    assert both is not None and GLOB in both and PAREN in both
+    # codex r6: per original word only ITS shape is a rewrite defect -- an rg original with
+    # both a glob and a paren is denied for the glob alone (the paren fails on rg natively);
+    # both shapes appear together only for an unknown original
+    only_glob = g.judge("rg -g '*.py' 'f(' tools", "rtk grep -g '*.py' 'f(' tools")
+    assert only_glob is not None and GLOB in only_glob and PAREN not in only_glob
+    only_paren = g.judge("grep -g '*.py' 'f(' tools", "rtk grep -g '*.py' 'f(' tools")
+    assert only_paren is not None and PAREN in only_paren and GLOB not in only_paren
+    both = g.shapes(g.tokens("rtk grep -g '*.py' 'f(' tools") or [], None)
+    assert [w for w in (GLOB, PAREN) if any(w in f for f in both)] == [GLOB, PAREN]
 
 
 def test_cli_prints_the_reason_or_nothing_and_always_exits_0(capsys):

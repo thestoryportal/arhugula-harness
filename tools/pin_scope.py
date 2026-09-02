@@ -143,6 +143,7 @@ def test_slice_digest(source: str, name: str) -> str | None:
         and n.name.startswith("test_")
         and n is not named[0]
         and not _is_fixture(n, fixture_names)
+        and not _runs_at_import(n)
     }
     # a sibling referenced from the kept nodes stays; iterate until no new name is pulled in
     kept_nodes = [n for n in tree.body if n not in siblings.values()]
@@ -169,6 +170,33 @@ def _node_span(node: ast.AST) -> tuple[int, int]:
     decorators = getattr(node, "decorator_list", [])
     first = min([node.lineno, *(d.lineno for d in decorators)])
     return first, node.end_lineno or node.lineno
+
+
+def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A sibling whose DEFINITION executes code beyond pytest's own marks -- a decorator
+    that is not a plain `pytest.mark.<x>` (or `pytest.mark.<x>(...)` whose arguments call
+    nothing), or a parameter default that calls something -- runs at import/collection even
+    when only the selected test is collected, so it can change that test's verdict and is
+    never a removable sibling (codex u-sr-09 r6: `@register(1)` on a sibling)."""
+    for d in node.decorator_list:
+        target = d.func if isinstance(d, ast.Call) else d
+        is_mark = (
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Attribute)
+            and target.value.attr == "mark"
+        )
+        if not is_mark:
+            return True
+        if isinstance(d, ast.Call) and any(
+            isinstance(sub, ast.Call)
+            for a in [*d.args, *(k.value for k in d.keywords)]
+            for sub in ast.walk(a)
+        ):
+            return True
+    defaults = [*node.args.defaults, *node.args.kw_defaults]
+    return any(
+        isinstance(sub, ast.Call) for dflt in defaults if dflt is not None for sub in ast.walk(dflt)
+    )
 
 
 def _fixture_names(tree: ast.Module) -> set[str]:

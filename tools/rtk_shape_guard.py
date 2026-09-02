@@ -240,15 +240,42 @@ def has_unescaped_paren(pattern: str) -> bool:
     return _UNESCAPED_PAREN.search(_BRACKET_EXPR.sub(r"\1", pattern)) is not None
 
 
-def shapes(rewritten_segment: list[str]) -> list[str]:
-    """The mangled shapes one `rtk grep …` segment carries (empty = the rewrite is fine)."""
-    parsed = parse_args(rewritten_segment[len(REWRITTEN_WORDS) :])
+def rewritten_at(segment: list[str]) -> int | None:
+    """Index of the `rtk grep` pair inside a segment, wherever a prefix (`env FOO=1`,
+    `command`, `sudo`) put it (codex u-sr-09 r6: rtk rewrites the command word in place),
+    or None when the segment carries no rewrite."""
+    for i in range(len(segment) - 1):
+        if tuple(segment[i : i + 2]) == REWRITTEN_WORDS:
+            return i
+    return None
+
+
+def original_word(segment: list[str]) -> str | None:
+    """The grep/rg word an ORIGINAL segment ran (the first COMMAND_WORDS token, past any
+    prefix), or None when it ran neither."""
+    return next((t for t in segment if t in COMMAND_WORDS), None)
+
+
+def shapes(rewritten_segment: list[str], original: str | None = None) -> list[str]:
+    """The mangled shapes one rewritten segment carries (empty = the rewrite is fine).
+    `original` is the word the caller actually ran: a paren is judged only for a `grep`
+    original (BRE; `rg "f("` fails natively and no remedy helps -- codex r6) and a glob
+    only for an `rg` original (`grep -g` never worked); an unknown original is judged for
+    both, the conservative reading."""
+    at = rewritten_at(rewritten_segment)
+    if at is None:
+        return []
+    parsed = parse_args(rewritten_segment[at + len(REWRITTEN_WORDS) :])
     found: list[str] = []
-    if has_glob(parsed):
+    if original in (None, "rg") and has_glob(parsed):
         found.append(
             "an rg-only --glob/-g flag (rtk lands it on BSD grep: 'unrecognized option', exit 2)"
         )
-    if not regex_safe(parsed) and any(has_unescaped_paren(p) for p in patterns_of(parsed)):
+    if (
+        original in (None, "grep")
+        and not regex_safe(parsed)
+        and any(has_unescaped_paren(p) for p in patterns_of(parsed))
+    ):
         found.append(
             "an unescaped paren in a BRE pattern (a literal to grep, a group to rg: "
             "'regex parse error', exit 2)"
@@ -263,7 +290,7 @@ def reissue(original: str) -> str | None:
     is faithful to the shell (codex r3 redirections, r4 globs)."""
     toks = tokens(original)
     if toks is None or not toks or toks[0] not in COMMAND_WORDS:
-        return None
+        return None  # a prefixed command (`env FOO=1 grep …`) is re-issued by hand too
     if any(isinstance(t, (Sep, Redirect)) for t in toks):  # a tuple: 3.9 has no X | Y here
         return None
     return "rtk proxy " + original.lstrip()
@@ -281,12 +308,19 @@ def judge(original: str, rewritten: str) -> str | None:
     rtoks = tokens(rewritten)
     if rtoks is None:
         return None
+    # rtk rewrites command words in place, so the original's segments align with the
+    # rewritten ones by index; a count mismatch (a shape this lexer reads differently from
+    # rtk) leaves the original word unknown and both shapes judged (conservative)
+    otoks = tokens(original)
+    rsegs = segments(rtoks)
+    osegs = segments(otoks) if otoks is not None else []
+    aligned = len(osegs) == len(rsegs)
     found: list[str] = []
     segment_text = ""
-    for seg in segments(rtoks):
-        if seg[: len(REWRITTEN_WORDS)] != list(REWRITTEN_WORDS):
+    for i, seg in enumerate(rsegs):
+        if rewritten_at(seg) is None:
             continue
-        hits = shapes(seg)
+        hits = shapes(seg, original_word(osegs[i]) if aligned else None)
         if hits:
             found.extend(hits)
             segment_text = segment_text or _render(seg)

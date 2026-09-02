@@ -129,6 +129,22 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
     without = aliased.replace("def test_other():\n    assert True\n", "")
     assert base == ps.test_slice_digest(without, "test_f")
     assert ps.test_slice_digest(aliased.replace("yield 1", "yield 0"), "test_f") != base
+    # codex u-sr-09 r6: a sibling whose decorator or default RUNS AT IMPORT (`@register(1)`,
+    # `def test_s(x=setup())`) is kept -- a plain pytest mark or a mark with literal args
+    # is not (its sibling stays droppable)
+    imp = (
+        "import pytest\n\n\n"
+        "@register(1)\ndef test_side():\n    pass\n\n\n"
+        "def test_dflt(x=setup()):\n    pass\n\n\n"
+        '@pytest.mark.parametrize("a", [1, 2])\ndef test_param(a):\n    pass\n\n\n'
+        '@pytest.mark.parametrize("a", make())\ndef test_call(a):\n    pass\n\n\n'
+        "def test_f():\n    assert f() == 3\n"
+    )
+    base = ps.test_slice_digest(imp, "test_f")
+    assert ps.test_slice_digest(imp.replace("@register(1)", "@register(0)"), "test_f") != base
+    assert ps.test_slice_digest(imp.replace("x=setup()", "x=setup(1)"), "test_f") != base
+    assert ps.test_slice_digest(imp.replace("make()", "make(2)"), "test_f") != base
+    assert ps.test_slice_digest(imp.replace("[1, 2]", "[1, 3]"), "test_f") == base
 
 
 def test_test_slice_digest_is_none_when_unresolvable():
