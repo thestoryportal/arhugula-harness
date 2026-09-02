@@ -414,8 +414,10 @@ MANIFEST: list[Row] = [
     ),
     # WR-15 (U-SR-08) — context-save preamble trim: the project skill
     # context-save-lean carries the gstack save flow only; callers point at it.
-    # mutation-probe `—`: the probed artifact is markdown skill prose (C-HE-30 /
-    # WR-14 static-doc-witness precedent).
+    # mutation-probe `—`: the probed artifact is a markdown skill body, outside the
+    # probe tool's language set (.py/.sh/.yaml/.yml — the C-HE-30 / WR-14 rows share
+    # this reason); unlike those static-doc rows, the witness EXECUTES the skill's
+    # fenced blocks in a hermetic repo (merge-gate witness lens, PR #1489).
     Row(
         "WR-15",
         "shell:tools/hooks/test_skill_context_save_trim.sh",
