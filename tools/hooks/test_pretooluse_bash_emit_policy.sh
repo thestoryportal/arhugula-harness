@@ -103,8 +103,10 @@ printf '%s\n' "$HOOKS" | grep -q 'permission-guard.sh' && ok "enumeration reache
 printf '%s\n' "$HOOKS" | grep -q 'rtk hook' && bad "project settings register a second rtk rewrite hook" || ok "no project-level rtk rewrite hook (the user-level one is the single rewriter)"
 
 # --- 2. every workspace hook: plain commands -> exit 0, zero stdout bytes ---------------
-# Two plain shapes: one rtk would rewrite (so the SILENCE here is the workspace hooks',
-# not a no-op path) and one nothing rewrites.
+# Three plain shapes: one rtk would rewrite (so the SILENCE here is the workspace hooks',
+# not a no-op path), one nothing rewrites, and one that ACTIVATES precmd-clear-cache.sh's
+# real work (its pytest/pyright/uv-run trigger; codex r4 P2 — the early-exit path alone
+# never observes the hook doing anything) against the throwaway project dir.
 while IFS= read -r cmd; do
   [ -n "$cmd" ] || continue
   case "$cmd" in
@@ -114,7 +116,7 @@ while IFS= read -r cmd; do
   script="${script%% *}"
   [ -f "$script" ] || { bad "hook script missing: $script"; continue; }
   label=$(basename "$script")
-  for plain in 'ls -la /tmp' 'echo hi'; do
+  for plain in 'ls -la /tmp' 'echo hi' 'uv run pytest -q'; do
     rc=$(run_hook "$script" "$plain")
     b=$(bytes)
     [ "$rc" -eq 0 ] && [ "$b" -eq 0 ] && ok "$label: '$plain' -> exit 0, 0 bytes" \

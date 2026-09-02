@@ -166,11 +166,10 @@ REPO="$TMPD/wsroot/slug-probe-main"; mkdir -p "$REPO"
 git -C "$REPO" init -q 2>/dev/null
 git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init 2>/dev/null
 git -C "$REPO" worktree add -q "$TMPD/wsroot/linked-wt" -b probe-wt 2>/dev/null
-# run_alloc <cwd> <title> <timestamp-or-empty>: documented shape — assignment lines + block.
+# run_alloc <cwd> <title>: documented shape — assignment line + block.
 run_alloc() {
   (cd "$1" && GSTACK_STATE_ROOT="$STATE" bash -s 2>&1 <<EOS
 TITLE_RAW='$2'
-TIMESTAMP='$3'
 $(cat "$ALLOC")
 EOS
   )
@@ -185,10 +184,10 @@ EOS
   )
 }
 field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
-# save <cwd> <title> <timestamp>: full allocate -> write -> publish; prints the published FILE.
+# save <cwd> <title>: full allocate -> write -> publish; prints the published FILE.
 save() {
   local out part file pout
-  out=$(run_alloc "$1" "$2" "$3") || return 1
+  out=$(run_alloc "$1" "$2") || return 1
   part=$(field "$out" PART); file=$(field "$out" FILE)
   [ -n "$part" ] && [ -n "$file" ] || return 1
   # (a pre-existing $file here is the collision case 4b resolves — not a premature .md;
@@ -197,8 +196,8 @@ save() {
   pout=$(run_pub "$part" "$file") || return 1
   field "$pout" FILE
 }
-OUT1=$(run_alloc "$REPO" "probe title" ""); RC1=$?
-OUT2=$(run_alloc "$TMPD/wsroot/linked-wt" "probe title" ""); RC2=$?
+OUT1=$(run_alloc "$REPO" "probe title"); RC1=$?
+OUT2=$(run_alloc "$TMPD/wsroot/linked-wt" "probe title"); RC2=$?
 D1=$(field "$OUT1" CHECKPOINT_DIR); D2=$(field "$OUT2" CHECKPOINT_DIR)
 [ "$RC1" -eq 0 ] && [ "$D1" = "$STATE/projects/slug-probe-main/checkpoints" ] \
   && ok "main checkout -> projects/slug-probe-main/checkpoints" || bad "main checkout: rc=$RC1 dir='$D1'"
@@ -208,7 +207,7 @@ P1=$(field "$OUT1" PART); F1=$(field "$OUT1" FILE)
 case "$P1" in "$D1"/.*.part) ok "staging path is a .part dotfile under the checkpoint dir" ;; *) bad "unexpected staging path: '$P1'" ;; esac
 [ ! -e "$F1" ] && [ -z "$(ls "$D1"/*.md 2>/dev/null)" ] && ok "allocate creates no .md (no empty checkpoint window)" || bad "allocate left a .md behind: $F1"
 mkdir -p "$TMPD/nogit"
-OUT3=$(run_alloc "$TMPD/nogit" "probe title" ""); RC3=$?
+OUT3=$(run_alloc "$TMPD/nogit" "probe title"); RC3=$?
 [ "$RC3" -ne 0 ] && printf '%s' "$OUT3" | grep -q 'FATAL: could not derive the project slug' && ! printf '%s' "$OUT3" | grep -q '^CHECKPOINT_DIR=' \
   && ok "non-git cwd fails loud (no CHECKPOINT_DIR, rc=$RC3)" || bad "non-git cwd did not fail loud: rc=$RC3 $(printf '%s' "$OUT3" | head -c 160)"
 [ ! -e "$STATE/projects/checkpoints" ] && ok "no projects/./checkpoints sink was created" || bad "a dot-slug sink was created"
@@ -217,12 +216,19 @@ POUT=$(run_pub "$P1" "$F1"); PRC=$?
 [ "$PRC" -ne 0 ] && printf '%s' "$POUT" | grep -q 'missing or empty' && [ ! -e "$F1" ] \
   && ok "publish refuses an empty staging file (the Write never happened)" || bad "publish accepted an empty staging file: rc=$PRC '$POUT'"
 rm -f "$P1"
-FA=$(save "$REPO" "same title" "20990101-000000"); FB=$(save "$REPO" "same title" "20990101-000000")
-[ -n "$FA" ] && [ -n "$FB" ] && [ "$FA" != "$FB" ] && [ -s "$FA" ] && [ -s "$FB" ] \
-  && ok "same-second same-title saves publish two different complete files" || bad "collision not resolved: '$FA' vs '$FB'"
-case "$FB" in *"/20990101-000000-same-title-"????".md") ok "the loser carries a 4-char random suffix" ;; *) bad "unexpected loser name: $FB" ;; esac
+# Collision, planted (codex r4 P2: no timestamp seam in the skill): allocate, then PLANT a
+# complete file under the exact final name — the other session published first — then
+# write + publish; the loser must land on a suffixed name and the planted file must be
+# untouched.
+OC=$(run_alloc "$REPO" "same title"); PC=$(field "$OC" PART); FC=$(field "$OC" FILE)
+printf 'other session\n' > "$FC"
+printf -- '---\nstatus: in-progress\n---\n## Working on: same title\n' > "$PC"
+POUT=$(run_pub "$PC" "$FC"); FB=$(field "$POUT" FILE)
+[ -n "$FB" ] && [ "$FB" != "$FC" ] && [ -s "$FB" ] && [ "$(cat "$FC")" = "other session" ] \
+  && ok "a name already published by another session gets a suffix; the other file is untouched" || bad "collision not resolved: '$FC' vs '$FB'"
+case "$FB" in "${FC%.md}-"????".md") ok "the loser carries a 4-char random suffix" ;; *) bad "unexpected loser name: $FB" ;; esac
 [ -z "$(ls -A "$D1"/.*.part 2>/dev/null)" ] && ok "no .part staging file survives a publish" || bad "staging files left behind: $(ls -A "$D1"/.*.part)"
-FI=$(save "$REPO" 'ab $(touch pwned) cd' "")
+FI=$(save "$REPO" 'ab $(touch pwned) cd')
 [ ! -e "$REPO/pwned" ] && [ ! -e "$TMPD/pwned" ] && case "$FI" in *"-ab-touch-pwned-cd.md") true ;; *) false ;; esac \
   && ok "a title with \$(...) is sanitized, never executed" || bad "injection title handled wrongly: '$FI'"
 
@@ -233,7 +239,7 @@ LISTB=$(grep -l 'NO_CHECKPOINTS' "$TMPD"/block*.sh 2>/dev/null | head -1)
 [ -n "$LISTB" ] || { bad "list-flow block not found"; LISTB=/dev/null; }
 run_list() { (cd "$REPO" && GSTACK_STATE_ROOT="$1" bash "$LISTB" 2>&1); }
 LO=$(run_list "$STATE"); LRC=$?
-[ "$LRC" -eq 0 ] && printf '%s\n' "$LO" | grep -q "^$D1/20990101-000000-same-title" && ! printf '%s' "$LO" | grep -q NO_CHECKPOINTS \
+[ "$LRC" -eq 0 ] && printf '%s\n' "$LO" | grep -qF "$FB" && ! printf '%s' "$LO" | grep -q NO_CHECKPOINTS \
   && ok "list flow lists the published checkpoints (rc=$LRC)" || bad "list flow over a populated dir: rc=$LRC $(printf '%s' "$LO" | head -c 160)"
 LE=$(run_list "$TMPD/state-none"); LERC=$?
 [ "$LERC" -eq 0 ] && [ "$LE" = "NO_CHECKPOINTS" ] && ok "list flow: absent dir -> NO_CHECKPOINTS" || bad "absent dir: rc=$LERC '$LE'"

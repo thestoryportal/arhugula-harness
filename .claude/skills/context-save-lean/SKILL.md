@@ -126,9 +126,7 @@ case "$COMMON:$SLUG" in
 esac
 CHECKPOINT_DIR="${GSTACK_STATE_ROOT:-$HOME/.gstack}/projects/$SLUG/checkpoints"
 mkdir -p "$CHECKPOINT_DIR"
-# TIMESTAMP is overridable (the trim witness pins a same-second collision); digits and
-# hyphens only, empty falls back to now.
-TIMESTAMP=$(printf '%s' "${TIMESTAMP:-}" | tr -cd '0-9-'); TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d-%H%M%S)}"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 RAW="${TITLE_RAW:-untitled}"
 TITLE_SLUG=$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]' | tr -s ' \t' '-' | tr -cd 'a-z0-9.-' | cut -c1-60)
 TITLE_SLUG="${TITLE_SLUG:-untitled}"
@@ -136,7 +134,8 @@ TITLE_SLUG="${TITLE_SLUG:-untitled}"
 # gstack /context-restore, arc_exit_report) can ever see it, and it is never a restorable
 # checkpoint. It is not created here: the Write tool creates it in one step, so there is
 # no empty file at any moment under a name anything reads.
-TOKEN=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 6 || printf '%06x' "$$")
+TOKEN=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 6)
+[ "${#TOKEN}" -eq 6 ] || TOKEN=$(printf '%06x' "$$")   # a pipeline's status is head's — check the VALUE
 PART="${CHECKPOINT_DIR}/.${TIMESTAMP}-${TITLE_SLUG}-${TOKEN}.part"
 echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
 echo "TIMESTAMP=$TIMESTAMP"
@@ -161,7 +160,8 @@ until ln "$PART" "$FILE" 2>/dev/null; do
   [ -e "$FILE" ] || { echo "FATAL: cannot publish $FILE (is $(dirname "$FILE") writable?)"; exit 1; }
   tries=$((tries + 1))
   [ "$tries" -lt 3 ] || { echo "FATAL: could not publish after 3 name collisions"; exit 1; }
-  SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 4 || printf '%04x' "$$")
+  SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 4)
+  [ "${#SUFFIX}" -eq 4 ] || SUFFIX=$(printf '%04x' "$$")
   FILE="${FILE%.md}-${SUFFIX}.md"
 done
 rm -f "$PART"
@@ -169,8 +169,9 @@ echo "FILE=$FILE"
 ```
 
 The published `FILE` is what the confirmation block reports. A crash between the Write and
-4b leaves only a `.part` dotfile — invisible to every `*.md` listing; delete it on sight,
-never publish it by hand. The directory name is `checkpoints/`; the gstack restore side
+4b leaves only a `.part` dotfile — invisible to every `*.md` listing, and harmless. Never
+delete a `.part` this session did not allocate (the roadmap authorizes a parallel frontier:
+another live session may be one step from publishing it), and never publish one by hand. The directory name is `checkpoints/`; the gstack restore side
 keys on the `YYYYMMDD-HHMMSS` filename prefix, so keep the shape.
 
 The file format (identical to gstack's, which is what keeps it restorable):
