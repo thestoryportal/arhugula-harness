@@ -256,7 +256,7 @@ arc-cost *ARGS:
     uv run python tools/arc_cost.py "$@"
 
 # ─── arc EXIT REPORT — machine-readable arc-closure record (U-WT-03) ────────
-# Run as the FINAL ship-pr step, AFTER the reflect / context-save block: only there do
+# Run as the FINAL ship-pr step, AFTER the reflect / context-save-lean block: only there do
 # the merge SHA, post-merge main-CI conclusion, terminating-refresh commit and the
 # just-written checkpoint all exist. Writes the gitignored
 # .harness/.checkpoints/arc-exit-report-pr<NNN>.md (PR-keyed, overwritten on re-run) and

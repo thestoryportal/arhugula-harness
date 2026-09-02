@@ -204,7 +204,7 @@ def gstack(tmp_path):
 
 def mk_ckpt(tmp_path, mtime: int, name: str = "bound.md") -> Path:
     """A checkpoint file at a controlled mtime, standing in for the one this arc's own
-    `/context-save` step reported."""
+    `/context-save-lean` step reported."""
     p = tmp_path / name
     p.write_text("bound checkpoint", encoding="utf-8")
     os.utime(p, (mtime, mtime))

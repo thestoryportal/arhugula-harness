@@ -156,7 +156,7 @@ line "$aloop_reflect" "codex-autonomous-loop reflect gate carries the facts-brie
   '[B] F10' \
   '"I already have the context loaded" is the trap'
 
-printf '%s' "$aloop_reflect" | grep -qF -- 'BEFORE running context-save' \
+printf '%s' "$aloop_reflect" | grep -qF -- 'BEFORE running context-save-lean' \
   && ok "codex-autonomous-loop facts-brief names the before-save ordering" \
   || bad "codex-autonomous-loop facts-brief lost the before-save ordering clause"
 
@@ -230,13 +230,13 @@ done
 # checkpoint save, so the checkpoint carries it — pinned by the numbered-step order
 # in the Claude carrier and by the explicit before-clause in both carriers (a reorder
 # that saves first strands the fresh author without the brief).
-grep -qF '3. **Facts-brief handoff for a heavy next item' "$SHIP" && grep -qF '4. **Run `/context-save`.**' "$SHIP" \
+grep -qF '3. **Facts-brief handoff for a heavy next item' "$SHIP" && grep -qF '4. **Run `/context-save-lean`**' "$SHIP" \
   && ok "ship-pr numbers the facts-brief step before the /context-save step" \
   || bad "ship-pr close-out order drifted: facts-brief must be step 3, /context-save step 4"
-printf '%s' "$ship_reflect" | grep -qF -- 'BEFORE the `/context-save` below' \
+printf '%s' "$ship_reflect" | grep -qF -- 'BEFORE the `/context-save-lean` below' \
   && ok "ship-pr facts-brief names the before-save ordering" \
   || bad "ship-pr facts-brief lost the before-save ordering clause"
-printf '%s' "$aship_reflect" | grep -qF -- 'written BEFORE running context-save' \
+printf '%s' "$aship_reflect" | grep -qF -- 'written BEFORE running context-save-lean' \
   && ok "codex ship-pr facts-brief names the before-save ordering" \
   || bad "codex ship-pr facts-brief lost the before-save ordering clause"
 

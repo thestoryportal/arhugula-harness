@@ -15,7 +15,7 @@ check them rather than trusting remembered or checkpointed remaining work.
    `just codex-preflight`; re-run it after a resume, merge, rebase, or compaction.
 2. Read `.harness/handoff/README-resume.md` for in-flight cross-runner state, then the
    current roadmap status and relevant register/axis guidance.
-3. Treat gstack context-save checkpoints as decision/evidence aids, not current-state
+3. Treat context-save-lean checkpoints (gstack format) as decision/evidence aids, not current-state
    authority. Reconcile their branch/PR claims against HEAD and GitHub.
 4. Take the live `## Next action`. If the automatic queue is empty, apply no-parking:
    choose the highest-value implementable forward slice. A nominally gated item still owes
@@ -93,7 +93,7 @@ reported; do not park on them.
 The current arc is not complete at PR CI. `ship-pr` must finish the fresh three-lens gate,
 merge if authorized, wait for the substantive merge's main CI, land the immediate terminating
 refresh, wait for refresh main CI, sync main, dispose of the worktree/verified merged branch,
-run `just codex-loop-check`, reflect, and run the gstack `context-save` skill. Only then derive
+run `just codex-loop-check`, reflect, and run the `context-save-lean` skill (the workspace copy of the gstack save flow, U-SR-08/WR-15). Only then derive
 the next live action, create its isolated worktree, and start its new autonomous-arc ledger.
 
 Facts-brief handoff (U-SR-07/WR-14): if the next item is a heavy audit or document, do

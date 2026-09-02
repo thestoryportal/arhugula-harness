@@ -191,7 +191,7 @@ See `Sub_Agent_Boundary_Specification_v1.md` at workspace root for sub-agent cou
 
 ## 6. Skill activation
 
-Four Phase 7 skills ship at `.claude/skills/`: `phase-7-implementation`, `phase-7-cross-axis-composition`, `phase-7-substitution-retirement`, `phase-7-back-flow-routing`. Project-level skills take priority over user-level on name collision. Activation surfaces at `docs/governance/skills-and-subphases.md` §6.
+Four Phase 7 skills ship at `.claude/skills/`: `phase-7-implementation`, `phase-7-cross-axis-composition`, `phase-7-substitution-retirement`, `phase-7-back-flow-routing`. On a name collision the personal (`~/.claude/skills/`) skill takes priority over the project skill — Claude Code skills doc: "enterprise overrides personal, and personal overrides project", and the command comes from the directory name — so a workspace variant of a user-level skill needs its own directory name, e.g. `context-save-lean` (U-SR-08). Activation surfaces at `docs/governance/skills-and-subphases.md` §6.
 
 ## 7. Phase 7 sub-phase enumeration
 
@@ -405,7 +405,7 @@ Save patterns at cardinality ≥2; save feedback symmetrically; update rather th
 
 #### 12.5.2 Checkpoint disciplines (event-driven)
 
-`/context-save` fires near compaction, mid-arc, or before risky operations; `/context-restore` at session start when prior work was in flight. Body at `docs/governance/roadmap-protocol.md` §12.5.2.
+`/context-save-lean` (the workspace's trimmed copy of the gstack save flow, U-SR-08/WR-15) fires near compaction, mid-arc, or before risky operations; `/context-restore` at session start when prior work was in flight. Body at `docs/governance/roadmap-protocol.md` §12.5.2.
 
 #### 12.5.3 R-NNN closure cascade (post-close audit)
 
@@ -423,7 +423,7 @@ Verify any memory or checkpoint claim empirically against HEAD before authoring 
 - Audit recipes: `Project_Roadmap_v1.md` §7
 - Refresh + update protocol: `Project_Roadmap_v1.md` §8
 - Auto-memory discipline: global `~/.claude/CLAUDE.md` § auto memory
-- Checkpoint skills: `~/.claude/skills/context-save/` + `~/.claude/skills/context-restore/`
+- Checkpoint skills: `.claude/skills/context-save-lean/` (save — workspace copy, U-SR-08) + `~/.claude/skills/context-restore/` (restore — user-level gstack)
 
 ---
 

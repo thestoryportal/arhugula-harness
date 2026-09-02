@@ -2,7 +2,7 @@
 # Hermetic test for the U-WT-04 arc-exit-report ship-pr wiring. Asserts the step is
 # PRESENT in BOTH ship-pr carriers (the Claude tree and its Codex-native mirror under
 # .agents/, which encodes its rituals independently — a Claude-only step is invisible to
-# the Codex flow) and, in the Claude carrier, ORDERED after the reflect/`/context-save`
+# the Codex flow) and, in the Claude carrier, ORDERED after the reflect/`/context-save-lean`
 # block. That ordering is the unit's whole point (plan Feature 3, codex round 11): emitted
 # earlier, `checkpoint{path,confirmed}` would record a stale checkpoint, and the merge
 # SHA / post-merge CI conclusion / refresh commit would not exist yet.
@@ -39,7 +39,7 @@ fi
 # --- 2. Claude ship-pr: ordered AFTER the reflect/context-save anchor ---
 # Both anchors guarded: a renamed heading or a moved context-save bullet yields an empty
 # lineno and must FAIL CLOSED rather than compare against an implicit 0.
-L_CTX=$(lineno "$SHIP" 'Run `/context-save`')
+L_CTX=$(lineno "$SHIP" 'Run `/context-save-lean`')
 L_SECT=$(lineno "$SHIP" '## Arc exit report')
 if [ -n "$L_CTX" ] && [ -n "$L_SECT" ] && [ -n "$L_CMD" ]; then
   if [ "$L_SECT" -gt "$L_CTX" ] && [ "$L_CMD" -gt "$L_CTX" ]; then
@@ -62,7 +62,7 @@ else
 fi
 NORM=$(printf '%s' "$BLK" | tr '\n' ' ' | tr -s ' ')
 miss=""
-printf '%s' "$NORM" | grep -qF -- 'After** the reflect + `/context-save` block above, not before it' \
+printf '%s' "$NORM" | grep -qF -- 'After** the reflect + `/context-save-lean` block above, not before it' \
   || miss="$miss after-context-save-rationale"
 printf '%s' "$NORM" | grep -qF -- 'Paste the emitted `yaml` block' || miss="$miss paste-yaml-block"
 printf '%s' "$NORM" | grep -qF -- 'machine-readable closure record' || miss="$miss closure-record"
@@ -98,7 +98,7 @@ fi
 ABLK=$(awk '/^## Arc exit report/{f=1;next} /^## /{f=0} f' "$ASHIP")
 ANORM=$(printf '%s' "$ABLK" | tr '\n' ' ' | tr -s ' ')
 amiss=""
-printf '%s' "$ANORM" | grep -qF -- 'after the reflect and `context-save` step above, never before it' \
+printf '%s' "$ANORM" | grep -qF -- 'after the reflect and `context-save-lean` step above, never before it' \
   || amiss="$amiss after-context-save-rationale"
 printf '%s' "$ANORM" | grep -qF -- 'Paste the emitted `yaml` block' || amiss="$amiss paste-yaml-block"
 printf '%s' "$ANORM" | grep -qF -- 'machine-readable closure record' || amiss="$amiss closure-record"
@@ -124,13 +124,13 @@ printf '%s' "$ANORM" | grep -qF -- 'Skip entirely for a pure terminating-refresh
 #         workspace-newest file as an unconfirmed heuristic. The command shape must carry
 #         --checkpoint, and the rationale must name the parallel frontier — a bare flag
 #         with no reason gets dropped by the next editor.
-printf '%s' "$NORM" | grep -qF -- '--checkpoint <the-path-/context-save-just-reported>' \
+printf '%s' "$NORM" | grep -qF -- '--checkpoint <the-path-/context-save-lean-just-reported>' \
   && ok "claude carrier binds the checkpoint on the command line" \
   || bad "claude carrier command omits --checkpoint"
 printf '%s' "$NORM" | grep -qF -- 'parallel frontier' \
   && ok "claude carrier states WHY the checkpoint must be bound" \
   || bad "claude carrier missing the parallel-frontier rationale"
-printf '%s' "$ANORM" | grep -qF -- '--checkpoint <the-path-context-save-just-reported>' \
+printf '%s' "$ANORM" | grep -qF -- '--checkpoint <the-path-context-save-lean-just-reported>' \
   && ok "codex carrier binds the checkpoint on the command line" \
   || bad "codex carrier command omits --checkpoint"
 printf '%s' "$ANORM" | grep -qF -- 'parallel frontier' \
