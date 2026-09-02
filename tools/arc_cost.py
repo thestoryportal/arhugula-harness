@@ -128,8 +128,35 @@ def dedupe_calls(records: list[dict], *, source: str) -> list[Call]:
         if not isinstance(usage, dict) or not usage:
             raise CostError(f"{source}: assistant record {i} usage is not a non-empty object")
         rid = r.get("requestId")
+        # A synthetic API-error row (`isApiErrorMessage`, model "<synthetic>",
+        # every counter zero) is the transport's own note that NO call happened;
+        # it stores a usage block and no requestId, so the refusal below read it
+        # as a dedupe failure and aborted the u-sr-09 queue step (2026-09-02).
+        # Skipping the all-zero shape is not silent: a zero row adds nothing to
+        # any total (54 such rows across 1,012 transcripts at 2026-09-02, every
+        # one with the key ABSENT and model "<synthetic>", none with tokens).
+        # The theorem is the observed shape and nothing wider (codex r1): a
+        # PRESENT requestId of any value, another model, or any token falls
+        # through to the refusal -- a producer contradicting itself is the loud
+        # path already written. [LAW:types-are-the-program]
+        if (
+            "requestId" not in r
+            and r.get("isApiErrorMessage") is True
+            and msg.get("model") == "<synthetic>"
+            and all(
+                _tok(usage, k, f"{source}: record {i} (synthetic)") == 0
+                for k in (
+                    "input_tokens",
+                    "cache_creation_input_tokens",
+                    "cache_read_input_tokens",
+                    "output_tokens",
+                )
+            )
+        ):
+            continue
         # [LAW:no-silent-failure] a usage block with no requestId cannot be
         # deduplicated; a fallback key would silently change the count's meaning
+        # (the one carve-out is the zero-usage synthetic error row above)
         if not rid or not isinstance(rid, str):
             raise CostError(f"{source}: assistant record {i} carries usage but no requestId")
         ts = r.get("timestamp")

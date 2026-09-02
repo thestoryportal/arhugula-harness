@@ -204,6 +204,59 @@ def test_usage_without_request_id_refused_not_guessed(tmp_path: Path) -> None:
         ac.cost_report([_write(tmp_path / "t.jsonl", [rec])], cuts=[])
 
 
+def _synthetic_error(ts: str, **tokens: int) -> dict:
+    """The transport's own error row: `isApiErrorMessage`, model "<synthetic>",
+    a usage block, no requestId (the 2026-09-02 WAN-outage shape)."""
+    rec = _rec("unused", ts, **({"out": 0, "inp": 0, "cw": 0, "cr": 0} | tokens))
+    del rec["requestId"]
+    rec["isApiErrorMessage"] = True
+    rec["message"]["model"] = "<synthetic>"
+    return rec
+
+
+# mutation-probe(tools/arc_cost.py): drop the zero-usage `isApiErrorMessage` skip
+def test_synthetic_api_error_row_without_request_id_is_skipped(tmp_path: Path) -> None:
+    """u-sr-09 close (2026-09-02): the queue step aborted on one such row --
+    it is not a call, and skipping its zero usage changes no total."""
+    err = _synthetic_error("2026-09-02T11:36:42.188Z")
+    report = ac.cost_report([_write(tmp_path / "t.jsonl", [*DUPED, err])], cuts=[])
+    assert report["main"]["calls"] == 2
+
+
+# mutation-probe(tools/arc_cost.py): drop one key from the all-zero counter tuple
+@pytest.mark.parametrize(
+    "widen",
+    [
+        pytest.param({"requestId": ""}, id="present-empty-requestId"),
+        pytest.param({"requestId": 0}, id="present-zero-requestId"),
+        pytest.param({"model": "claude-opus-5"}, id="non-synthetic-model"),
+        pytest.param({"flag": False}, id="flag-false"),
+        pytest.param({"tokens": {"inp": 1}}, id="input_tokens"),
+        pytest.param({"tokens": {"cw": 1}}, id="cache_creation_input_tokens"),
+        pytest.param({"tokens": {"cr": 1}}, id="cache_read_input_tokens"),
+        pytest.param({"tokens": {"out": 1}}, id="output_tokens"),
+    ],
+)
+def test_carve_out_is_the_observed_shape_and_nothing_wider(tmp_path: Path, widen: dict) -> None:
+    """codex r1: `not rid` would also have swallowed a PRESENT malformed
+    requestId, and the model was never checked; gate r1: only `output_tokens`
+    was ever driven, so a key dropped from the all-zero tuple shipped green.
+    One case per conjunct-and-key: a present requestId of either value, another
+    model, the flag off, or ONE token in any of the four counters each keeps
+    the fail-closed refusal (0 of 54 synthetic rows across 1,012 transcripts
+    carried tokens at 2026-09-02, so the token cases pin a shape not yet
+    observed)."""
+    err = _synthetic_error("2026-09-02T11:36:42.188Z", **widen.get("tokens", {}))
+    if "requestId" in widen:
+        err["requestId"] = widen["requestId"]
+    if "model" in widen:
+        err["message"]["model"] = widen["model"]
+    if "flag" in widen:
+        err["isApiErrorMessage"] = widen["flag"]
+    with pytest.raises(ac.CostError, match="no requestId"):
+        ac.cost_report([_write(tmp_path / "t.jsonl", [*DUPED, err])], cuts=[])
+
+
 def test_transcript_with_no_usage_refused_never_a_zero_cost_arc(tmp_path: Path) -> None:
     with pytest.raises(ac.CostError, match="no assistant usage with non-zero"):
         ac.cost_report([_write(tmp_path / "t.jsonl", [{"type": "user"}])], cuts=[])
