@@ -63,13 +63,17 @@ aship_reflect=$(section "$ASHIP" '^## Reflect and checkpoint' '^## Arc exit repo
 # invocable skill that instructs a background codex-check launch is a background-wait
 # moment and owes the cache-warmth rule — ship-pr's pre-flight (both runners),
 # self-heal step 2, and the two-lane build half. The Codex self-heal/two-lane mirrors
-# instruct no codex-check, so they carry no wait moment and owe nothing.
-ship_preflight=$(section "$SHIP" '^## Pre-flight' '^## Open the PR')
-aship_preflight=$(section "$ASHIP" '^## Preflight and local gates' '^## Grounding pass')
+# instruct no codex-check, so they carry no wait moment and owe nothing. Slices are
+# ITEM-scoped, not section-scoped (u-sr-07 codex r6): the rule must sit in the same
+# numbered step / bullet as the launch it governs — a within-section relocation to a
+# later step reds.
+ship_green=$(section "$SHIP" '^- [*][*]Green' '^- [*][*]Grounding pass')
+aship_item3=$(section "$ASHIP" '^3[.] Run the narrow witness' '^4[.] ')
 heal_step2=$(section "$HEAL" '^2[.] [*][*]Run the suite' '^3[.] ')
 lane_setup=$(section "$LANE" '^## Lane setup' '^## The merge lane')
+acont_item5=$(section "$ACONT" '^5[.] Run narrow verification' '^6[.] ')
 
-for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec acont_next aship_reflect ship_preflight aship_preflight heal_step2 lane_setup; do
+for pair in cont_step3 cont_step4 cont_step6 ship_reflect acont_ground acont_exec acont_next aship_reflect ship_green aship_item3 heal_step2 lane_setup acont_item5; do
   eval "v=\${$pair}"
   [ -n "$v" ] && ok "section anchor resolves: $pair" || bad "section anchor EMPTY: $pair"
 done
@@ -111,17 +115,17 @@ line "$acont_ground" "codex roadmap-continue grounding carries read-before-grep"
   '[B] F5/d3' \
   '"one more targeted grep is cheaper" stops being true'
 
-line "$acont_exec" "codex roadmap-continue execute carries the cache-warmth handoff" \
+line "$acont_item5" "codex roadmap-continue item 5 carries the cache-warmth handoff" \
   'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
   '[B] F4' \
   '"the wait costs nothing" bills the next call'
 
-line "$ship_preflight" "ship-pr pre-flight carries the cache-warmth handoff" \
+line "$ship_green" "ship-pr Green bullet carries the cache-warmth handoff" \
   'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before ANY background wait expected to outlast the prompt-cache TTL' \
   '[B] F4' \
   '"the wait costs nothing, I'"'"'m just sleeping" is the trap'
 
-line "$aship_preflight" "codex ship-pr preflight carries the cache-warmth handoff" \
+line "$aship_item3" "codex ship-pr item 3 carries the cache-warmth handoff" \
   'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
   '[B] F4' \
   '"the wait costs nothing" bills the next call'
@@ -132,16 +136,18 @@ line "$heal_step2" "self-heal step 2 carries the cache-warmth handoff" \
   '"the wait costs nothing" bills the next call'
 
 line "$lane_setup" "two-lane build half carries the cache-warmth handoff" \
-  'cache-warmth handoff, U-SR-07/WR-14: at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
+  'dead gap at [B] F6; cache-warmth handoff, U-SR-07/WR-14: at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
   '[B] F4' \
   '"the wait costs nothing" bills the next call'
 
 # WR-14(b) coupling at the sibling carriers: the launch instruction and the
-# cache-warmth rule must share the section (same rule as step 4 above).
-for spec in "ship_preflight:$ship_preflight" "aship_preflight:$aship_preflight" "heal_step2:$heal_step2" "lane_setup:$lane_setup"; do
+# cache-warmth rule must share the ITEM-scoped slice that instructs the launch
+# (u-sr-07 codex r6 — same-section co-occurrence let a later-step relocation pass;
+# the two-lane needle above pins its inline adjacency to the launch parenthetical).
+for spec in "ship_green:$ship_green" "aship_item3:$aship_item3" "heal_step2:$heal_step2" "acont_item5:$acont_item5"; do
   lbl="${spec%%:*}"; text="${spec#*:}"
   if printf '%s' "$text" | grep -qF 'codex-check' && printf '%s' "$text" | grep -qiF 'cache-warmth'; then
-    ok "$lbl couples codex-check with the cache-warmth rule"
+    ok "$lbl couples codex-check with the cache-warmth rule in the same step"
   else
     bad "$lbl decouples codex-check from the cache-warmth rule"
   fi
