@@ -19,6 +19,16 @@ DEFAULT_UV_CACHE_DIR = "/tmp/arhugula-uv-cache"
 PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Add|Update) File:\s+(.+?)\s*$", re.MULTILINE)
 COMMIT_RE = re.compile(r"^\s*(?:(?:/usr/local/bin/)?rtk\s+)?(?:/usr/bin/)?git\s+commit(?:\s|$)")
 TERMINATION_GRACE_SECONDS = 5.0
+# Claude hooks that MUST NOT be mirrored into .codex/hooks.json, each with the reason --
+# `test_codex_workflow_parity.py` asserts every entry is absent from the Codex map and every
+# unmirrored Claude hook is either a `.claude/helpers/` graft helper or listed here.
+CLAUDE_ONLY_HOOKS: dict[str, str] = {
+    "tools/hooks/rtk-shape-guard.sh": (
+        "compensates for the rtk PreToolUse REWRITE hook, which is registered only in the Claude "
+        "user settings (`rtk hook claude`); Codex never rewrites, so a mirrored deny would refuse "
+        "grep shapes Codex runs unmangled (U-SR-09 b4)"
+    ),
+}
 
 
 def terminate_bounded(process: subprocess.Popen[str]) -> None:

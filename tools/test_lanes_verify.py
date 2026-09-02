@@ -159,9 +159,10 @@ def _entry(repo: Path, test: str, file: str | None = None, rc: int = 0, **over) 
     """A probe-log line as `mutation_probe.log_result` writes it, digests from the repo. The
     probed `file` defaults to the test's sibling module (the annotation's default target)."""
     tf = test.split()
-    tf = tf[tf.index("pytest") + 1 :] if "pytest" in tf else tf[1:]
-    tfile = next(x for x in tf if not x.startswith("-") and (".py" in x or x.endswith(".sh")))
-    tfile = tfile.split("::")[0]
+    # the producer's own target grammar (codex u-sr-09 r7): the FIRST collection target's
+    # file is the artifact this row digests, never an option's value
+    targets = lv.pin_scope.pytest_targets(tf) if "pytest" in tf else tf[1:2]
+    tfile = targets[0].split("::")[0]
     file = file or lv.default_probe_target(lv._relative(tfile))
     e = {
         "ts": "2026-08-19T00:00:00Z",
@@ -210,6 +211,191 @@ def test_pin_is_stale_once_the_source_or_the_test_changes(repo: Path, monkeypatc
     assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]  # no digests
     log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::t", target_sha="0" * 16))
     assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::t"]
+
+
+def _block_entry(
+    repo: Path, test: str, lines: str, node: str | None, file: str = "tools/x.py", **over
+) -> str:
+    """A U-SR-09 block-scoped row as `mutation_probe.log_result` writes it: `pin_scope` block,
+    `block_sha` over the probed lines of `file`, `test_scope` slice (the test file minus its
+    other top-level tests, cut for `node`) or artifact."""
+    a, b = lv.pin_scope.parse_line_range(lines)
+    tfile = next(t for t in test.split() if ".py" in t or t.endswith(".sh")).split("::")[0]
+    body = lv.pin_scope.test_slice_digest((repo / tfile).read_text(), node) if node else None
+    fields = {
+        "lines": lines,
+        "pin_scope": lv.pin_scope.PIN_SCOPE_BLOCK,
+        "block_sha": lv.pin_scope.block_digest((repo / file).read_text(), a, b),
+        "test_scope": lv.pin_scope.TEST_SCOPE_SLICE if body else lv.pin_scope.TEST_SCOPE_ARTIFACT,
+        "test_slice_sha": body,
+    }
+    fields.update(over)  # a caller's override wins (an unknown scope, a missing digest)
+    return _entry(repo, test, file=file, **fields)
+
+
+# mutation-probe: drop the `if scope == pin_scope.PIN_SCOPE_FILE:` legacy arm in _pin_is_live()
+def test_block_scoped_pin_survives_unrelated_edits_and_stales_on_the_block_or_body(
+    repo: Path, monkeypatch
+):
+    """U-SR-09 b1 ([B] F7/c1): the pin binds the probed BLOCK and the judging test's SLICE (the
+    file minus its other top-level tests), so an edit elsewhere in the source or in a sibling
+    test keeps it live; the block, the test body, or the test's imports moving stales it; a
+    legacy (scope-less) row keeps the whole-file rule."""
+    src, tst = repo / "tools" / "x.py", repo / "tools" / "test_x.py"
+    src.write_text("import os\n\n\ndef f():\n    return 1\n\n\ndef g():\n    return 2\n")
+    tst.write_text(
+        "# mutation-probe: a\ndef test_f():\n    assert f() == 1\n\n\n"
+        "def test_g():\n    assert g() == 2\n"
+    )
+    log = repo / "mp.jsonl"
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::test_f")])
+    log.write_text(_block_entry(repo, "uv run pytest -q tools/test_x.py::test_f", "5", "test_f"))
+    assert lv.coverage_gaps(log) == []
+    # an unrelated edit ABOVE the block shifts its line but not its bytes: still live
+    src.write_text(
+        "import os\nimport sys\n\n\ndef f():\n    return 1\n\n\ndef g():\n    return 2\n"
+    )
+    assert lv.coverage_gaps(log) == []
+    # an unrelated edit BELOW the block: still live
+    src.write_text(src.read_text().replace("return 2", "return 3"))
+    assert lv.coverage_gaps(log) == []
+    # a SIBLING test edited: still live (slice scope)
+    tst.write_text(tst.read_text().replace("assert g() == 2", "assert g() == 3"))
+    assert lv.coverage_gaps(log) == []
+    # the block itself edited: stale
+    src.write_text(src.read_text().replace("return 1", "return 0"))
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    src.write_text(src.read_text().replace("return 0", "return 1"))
+    assert lv.coverage_gaps(log) == []
+    # the judging test's body edited: stale
+    tst.write_text(tst.read_text().replace("assert f() == 1", "assert f() == 1  # weaker?"))
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    tst.write_text(tst.read_text().replace("  # weaker?", ""))
+    assert lv.coverage_gaps(log) == []
+    # the test's IMPORTS edited (codex u-sr-09 r1: a swapped import hollows the test): stale
+    tst.write_text("import os\n" + tst.read_text())
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    tst.write_text(tst.read_text().removeprefix("import os\n"))
+    assert lv.coverage_gaps(log) == []
+    # the probed block DUPLICATED elsewhere in the source: stale (no copy may vouch)
+    src.write_text(src.read_text() + "\n\ndef h():\n    return 1\n")
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    src.write_text(src.read_text().removesuffix("\n\ndef h():\n    return 1\n"))
+    assert lv.coverage_gaps(log) == []
+    # a legacy row (no pin_scope) still lives by the whole-file rule -- the 1,300-row log
+    # written before U-SR-09 is not mass-staled by the landing
+    log.write_text(_entry(repo, "uv run pytest -q tools/test_x.py::test_f"))
+    assert lv.coverage_gaps(log) == []
+    src.write_text(src.read_text().replace("return 3", "return 2"))
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    # an unknown scope, or a block row missing its digest, never counts
+    cmd = "uv run pytest -q tools/test_x.py::test_f"
+    log.write_text(_block_entry(repo, cmd, "5", "test_f", pin_scope="quantum"))
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    log.write_text(_block_entry(repo, cmd, "5", "test_f", block_sha=None))
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+
+
+def test_annotation_binds_across_a_multiline_decorator(repo: Path):
+    """codex u-sr-09 r5: an annotation above `@pytest.mark.parametrize(` spanning several
+    lines names that test; one above a non-test `def` binds nothing."""
+    (repo / "tools" / "test_x.py").write_text(
+        "import pytest\n\n\n"
+        "# mutation-probe: drop the glob arm\n"
+        "@pytest.mark.parametrize(\n"
+        '    ("a", "b"),\n'
+        "    [(1, 2)],\n"
+        ")\n"
+        "def test_p(a, b):\n    assert a < b\n\n\n"
+        "# mutation-probe: bound to nothing\n"
+        "def helper():\n    pass\n\n\n"
+        "def test_q():\n    assert True\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_x.py") == [("test_p", None)]
+    # codex u-sr-09 r7: an `async def test_*` binds its own annotation; the bridge never
+    # walks through it to the next test
+    (repo / "tools" / "test_y.py").write_text(
+        "# mutation-probe: a\nasync def test_a():\n    pass\n\n\n"
+        "# mutation-probe: b\ndef test_b():\n    pass\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_y.py") == [("test_a", None), ("test_b", None)]
+    # codex u-sr-09 r8: a statement between the annotation and the next test ends the
+    # bridge -- the annotation binds nothing rather than the later test
+    (repo / "tools" / "test_z.py").write_text(
+        "# mutation-probe: orphaned\nX = 1\n\n\ndef test_later():\n    pass\n\n\n"
+        "# mutation-probe: orphaned too\nclass K:\n    pass\n\n\ndef test_last():\n    pass\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_z.py") == []
+    # codex u-sr-09 r9: two STACKED annotations above one test each bind it (two targets)
+    (repo / "tools" / "test_w.py").write_text(
+        "# mutation-probe(tools/a.py): first\n# mutation-probe(tools/b.py): second\n"
+        "def test_two():\n    pass\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_w.py") == [
+        ("test_two", "tools/a.py"),
+        ("test_two", "tools/b.py"),
+    ]
+    row = _row(mp=True, art="pytest:tools/test_w.py")
+    assert lv.required_probes(row) == [
+        ("tools/test_w.py::test_two", "tools/a.py"),
+        ("tools/test_w.py::test_two", "tools/b.py"),
+    ]
+    row = _row(mp=True, art="pytest:tools/test_x.py")
+    assert lv.required_probes(row) == [("tools/test_x.py::test_p", "tools/x.py")]
+
+
+def test_block_scoped_pin_on_a_crlf_source_is_live(repo: Path, monkeypatch):
+    """codex u-sr-09 r4: the producer digests the block from bytes (CRLF kept); the consumer
+    must decode bytes too -- `read_text()`'s universal newlines would never match."""
+    src = repo / "tools" / "x.py"
+    src.write_bytes(b"def f():\r\n    return 1\r\n")
+    (repo / "tools" / "test_x.py").write_text(
+        "# mutation-probe: a\ndef test_f():\n    assert f() == 1\n"
+    )
+    log = repo / "mp.jsonl"
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="pytest:tools/test_x.py::test_f")])
+    a, b = 2, 2
+    row = _entry(
+        repo,
+        "uv run pytest -q tools/test_x.py::test_f",
+        lines="2",
+        pin_scope=lv.pin_scope.PIN_SCOPE_BLOCK,
+        block_sha=lv.pin_scope.block_digest(src.read_bytes().decode("utf-8"), a, b),
+        test_scope=lv.pin_scope.TEST_SCOPE_ARTIFACT,
+        test_slice_sha=None,
+    )
+    log.write_text(row)
+    assert lv.coverage_gaps(log) == []
+
+
+def test_block_scoped_pin_with_artifact_scope_binds_the_whole_shell_suite(repo: Path, monkeypatch):
+    """A shell suite has no `def` to bind, so its block pin carries `test_scope` artifact: the
+    probed block is content-anchored as before, but ANY edit to the script stales the pin."""
+    hk = repo / "tools" / "hooks"
+    hk.mkdir(parents=True, exist_ok=True)
+    (hk / "y.sh").write_text("#!/usr/bin/env bash\necho 1\necho 2\n")
+    (hk / "test_y.sh").write_text("#!/usr/bin/env bash\nbash tools/hooks/y.sh | grep -q 2\n")
+    log = repo / "mp.jsonl"
+    monkeypatch.setattr(lv, "MANIFEST", [_row(mp=True, art="shell:tools/hooks/test_y.sh")])
+    log.write_text(
+        _block_entry(repo, "bash tools/hooks/test_y.sh", "3", None, file="tools/hooks/y.sh")
+    )
+    assert lv.coverage_gaps(log) == []
+    (hk / "y.sh").write_text("#!/usr/bin/env bash\n# a comment above the block\necho 1\necho 2\n")
+    assert lv.coverage_gaps(log) == []  # the block moved down: still present verbatim
+    (hk / "test_y.sh").write_text("#!/usr/bin/env bash\nbash tools/hooks/y.sh | grep -q 2  # x\n")
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/hooks/test_y.sh"]  # the script changed
+
+
+def test_pinned_nodeid_parser_uses_the_producers_target_grammar(repo: Path):
+    """codex u-sr-09 r7: `--ignore tools/helper.py a.py::t` names a.py, not helper.py; two
+    targets name nothing (the producer bound nothing either)."""
+    log = repo / "mp.jsonl"
+    log.write_text(
+        _entry(repo, "uv run pytest -q --ignore tools/helper.py tools/test_x.py::t")
+        + _entry(repo, "uv run pytest -q tools/test_x.py::t tools/test_y.py")
+    )
+    assert lv._pinned_nodeids(log) == {("tools/test_x.py::t", "tools/x.py")}
 
 
 def test_pinned_nodeid_parser_skips_flags_and_normalizes_absolute_paths(repo: Path):

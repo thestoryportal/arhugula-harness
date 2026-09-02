@@ -1705,10 +1705,60 @@ def test_verdict_is_logged_with_the_test_command_and_rc(repo, _probe_log_isolate
         entry["test_sha"] == hashlib.sha256((repo / "test_real.py").read_bytes()).hexdigest()[:16]
     )
     assert entry["head"] == git(repo, "rev-parse", "HEAD").stdout.strip()
+    # U-SR-09 b1: the SCOPED pair rides the same row -- the probed lines' digest (from the
+    # restored source, which equals the original) and, for a bare-file command, artifact scope
+    a, b = mp.parse_line_range(PINNED)
+    assert entry["pin_scope"] == "block"
+    assert entry["block_sha"] == mp.pin_scope.block_digest((repo / "src.py").read_text(), a, b)
+    assert entry["test_scope"] == "artifact" and entry["test_slice_sha"] is None
     # a PROBE FAILED verdict is logged too, with its own rc -- never mistaken for a pin
     r = run_probe(repo, "src.py", PINNED, pytest_cmd("test_vacuous.py"))
     assert r.returncode == 1
     assert json.loads(log.read_text().splitlines()[-1])["rc"] == 1
+
+
+def test_test_node_of_binds_one_node_id_only():
+    """codex u-sr-09 r3: two node ids on one command have no single judge -- artifact scope."""
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a") == "test_a"
+    assert (
+        mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/test_x.py::test_b") is None
+    )
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py -k test_a") is None
+    # codex u-sr-09 r4: a second collection target of ANY shape is a second judge
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/test_y.py") is None
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/") is None
+    # codex u-sr-09 r5: a bare directory name is a target too; an option VALUE is not
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tests") is None
+    assert mp.test_node_of("uv run pytest -q -k smoke tools/test_x.py::test_a") == "test_a"
+    assert mp.test_node_of("uv run pytest -p no:cacheprovider tools/test_x.py::test_a") == "test_a"
+    # codex u-sr-09 r6: several targets -> NO artifact either (never a live pin)
+    assert mp.test_file_of("uv run pytest -q tools/test_x.py::test_a tools/test_y.py") is None
+    assert mp.test_file_of("uv run pytest -q -k smoke tools/test_x.py::test_a") == Path(
+        "tools/test_x.py"
+    )
+    assert mp.test_file_of("bash tools/hooks/test_x.sh") == Path("tools/hooks/test_x.sh")
+    assert mp.test_node_of("uv run pytest -q --basetemp=/tmp/h tools/test_x.py::test_a") == "test_a"
+    assert mp.test_node_of("bash tools/hooks/test_x.sh") is None
+
+
+# Probe (NOT pinnable through the tool -- a probe of mutation_probe.py from its own suite
+# leaves the outer probe's sidecar in tools/ and `_no_stray_sidecars_in_the_real_repo`
+# fails the teardown, so the tool refuses INDETERMINATE; no self-probe row has ever pinned):
+# dropping the `MEASURED["test_slice_sha"] = test_slice_before` line in probe() reds this
+# test at `assert entry["test_scope"] == "slice"` -- observed by hand at U-SR-09.
+def test_a_node_id_command_pins_the_judging_tests_slice(repo, _probe_log_isolated: Path):
+    """U-SR-09 b1: when the command names ONE test function, the row carries `test_scope`
+    slice with the digest of the test file minus its other top-level tests; the whole-file
+    `test_sha` stays as provenance."""
+    cmd = pytest_cmd("test_real.py::test_negative")
+    r = run_probe(repo, "src.py", PINNED, cmd)
+    assert r.returncode == 0, r.stdout + r.stderr
+    entry = json.loads(_probe_log_isolated.read_text().splitlines()[-1])
+    assert entry["test_scope"] == "slice"
+    assert entry["test_slice_sha"] == mp.pin_scope.test_slice_digest(
+        (repo / "test_real.py").read_text(), "test_negative"
+    )
+    assert entry["test_sha"] == mp.pin_scope.digest16((repo / "test_real.py").read_bytes())
 
 
 def test_a_test_artifact_that_changes_during_the_probe_voids_its_digest(repo, _probe_log_isolated):

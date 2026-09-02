@@ -12,6 +12,11 @@
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/precmd-clear-cache.sh",
             "statusMessage": "Clearing stale caches..."
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/tools/hooks/rtk-shape-guard.sh",
+            "statusMessage": "Checking grep shape against the rtk rewrite..."
           }
         ]
       },
@@ -238,8 +243,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-hooks.cjs\" post-edit",
-            "timeout": 10
+            "command": "node \"${CLAUDE_PROJECT_DIR:-.}/.claude/helpers/graft-mark-dirty.cjs\"",
+            "timeout": 5
           }
         ]
       },
