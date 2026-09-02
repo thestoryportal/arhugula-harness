@@ -90,38 +90,57 @@ If the duration is unknown, omit the `session_duration_s` field from the file.
 
 ### Step 4: Write the checkpoint file
 
-Compute the path in bash, never in the LLM layer, so a user-supplied title cannot inject
-shell metacharacters into a later command. The sanitizer is an allowlist: only
-`a-z 0-9 - .` survive.
+Compute the path in bash, never in the LLM layer. The filename sanitizer is an allowlist
+(only `a-z 0-9 - .` survive) but it runs INSIDE the shell, so the raw title must reach the
+shell single-quoted: `TITLE_RAW='<title, any single quotes removed>' bash -c '<block>'`.
+WRONG: `TITLE_RAW="<title>"` or `TITLE_RAW="$TITLE"` — double quotes expand `$(...)` and
+backticks before the sanitizer ever sees them.
 
 ```bash
 # Slug = the MAIN checkout's directory name, resolved through the git common dir so a
 # linked worktree lands in the same sink (arhugula-v2 — the first slug
-# tools/arc_exit_report.py searches). Fail loud on an empty slug rather than writing to
-# projects//checkpoints.
-SLUG=$(basename "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" | tr -cd 'a-zA-Z0-9._-')
-[ -n "$SLUG" ] || { echo "FATAL: could not derive the project slug"; exit 1; }
+# tools/arc_exit_report.py searches). Any failure of that resolution is FATAL: an empty
+# result would otherwise collapse to "." through dirname/basename, pass the allowlist,
+# and write recovery state to projects/./checkpoints exactly when repository resolution
+# is broken.
+COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || COMMON=""
+SLUG=$(basename "$(dirname "$COMMON")" | tr -cd 'a-zA-Z0-9._-')
+case "$COMMON:$SLUG" in
+  :*|*:|*:.|*:..) echo "FATAL: could not derive the project slug (git common dir: '${COMMON:-none}')"; exit 1 ;;
+esac
 CHECKPOINT_DIR="${GSTACK_STATE_ROOT:-$HOME/.gstack}/projects/$SLUG/checkpoints"
 mkdir -p "$CHECKPOINT_DIR"
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-# Pass the raw title as TITLE_RAW when running this block: TITLE_RAW="u-sr-08 closed" bash -c '...'
+# TIMESTAMP is overridable (the trim witness pins a same-second collision); digits and
+# hyphens only, empty falls back to now.
+TIMESTAMP=$(printf '%s' "${TIMESTAMP:-}" | tr -cd '0-9-'); TIMESTAMP="${TIMESTAMP:-$(date +%Y%m%d-%H%M%S)}"
 RAW="${TITLE_RAW:-untitled}"
 TITLE_SLUG=$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]' | tr -s ' \t' '-' | tr -cd 'a-z0-9.-' | cut -c1-60)
 TITLE_SLUG="${TITLE_SLUG:-untitled}"
-# Append-only: a same-second save with the same title gets a random suffix, never an overwrite.
+# Append-only, atomically: the name is RESERVED by an exclusive create (noclobber = O_EXCL),
+# so two sessions saving the same title in the same second can never end up on one file —
+# the loser retries with a random suffix; a lost third try is FATAL, never an overwrite.
+set -o noclobber
 FILE="${CHECKPOINT_DIR}/${TIMESTAMP}-${TITLE_SLUG}.md"
-if [ -e "$FILE" ]; then
+tries=0
+until { : > "$FILE"; } 2>/dev/null; do
+  # Only an EXISTING file is a collision; any other create failure (unwritable dir) is its own FATAL.
+  [ -e "$FILE" ] || { echo "FATAL: cannot create $FILE (is $CHECKPOINT_DIR writable?)"; exit 1; }
+  tries=$((tries + 1))
+  [ "$tries" -lt 3 ] || { echo "FATAL: could not reserve a checkpoint filename after 3 tries"; exit 1; }
   SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 4 || printf '%04x' "$$")
   FILE="${CHECKPOINT_DIR}/${TIMESTAMP}-${TITLE_SLUG}-${SUFFIX}.md"
-fi
+done
+set +o noclobber
 echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
 echo "TIMESTAMP=$TIMESTAMP"
 echo "FILE=$FILE"
 ```
 
 Write the file to the `$FILE` path printed above — the exact string, not a path rebuilt in
-the LLM layer. The directory name is `checkpoints/`; the gstack restore side keys on the
-`YYYYMMDD-HHMMSS` filename prefix, so keep the shape.
+the LLM layer. The reservation left `$FILE` as an empty file: Read it once (the Write tool
+refuses to overwrite a file it has not read), then Write the full content to that path. The
+directory name is `checkpoints/`; the gstack restore side keys on the `YYYYMMDD-HHMMSS`
+filename prefix, so keep the shape.
 
 The file format (identical to gstack's, which is what keeps it restorable):
 
@@ -178,7 +197,11 @@ Restore later with /context-restore.
 ## List flow
 
 ```bash
-SLUG=$(basename "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")" | tr -cd 'a-zA-Z0-9._-')
+COMMON=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || COMMON=""
+SLUG=$(basename "$(dirname "$COMMON")" | tr -cd 'a-zA-Z0-9._-')
+case "$COMMON:$SLUG" in
+  :*|*:|*:.|*:..) echo "FATAL: could not derive the project slug (git common dir: '${COMMON:-none}')"; exit 1 ;;
+esac
 CHECKPOINT_DIR="${GSTACK_STATE_ROOT:-$HOME/.gstack}/projects/$SLUG/checkpoints"
 if [ -d "$CHECKPOINT_DIR" ]; then
   echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"

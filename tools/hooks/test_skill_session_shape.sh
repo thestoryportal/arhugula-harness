@@ -156,7 +156,7 @@ line "$aloop_reflect" "codex-autonomous-loop reflect gate carries the facts-brie
   '[B] F10' \
   '"I already have the context loaded" is the trap'
 
-printf '%s' "$aloop_reflect" | grep -qF -- 'BEFORE running context-save' \
+printf '%s' "$aloop_reflect" | grep -qF -- 'BEFORE running context-save-lean' \
   && ok "codex-autonomous-loop facts-brief names the before-save ordering" \
   || bad "codex-autonomous-loop facts-brief lost the before-save ordering clause"
 
@@ -236,7 +236,7 @@ grep -qF '3. **Facts-brief handoff for a heavy next item' "$SHIP" && grep -qF '4
 printf '%s' "$ship_reflect" | grep -qF -- 'BEFORE the `/context-save-lean` below' \
   && ok "ship-pr facts-brief names the before-save ordering" \
   || bad "ship-pr facts-brief lost the before-save ordering clause"
-printf '%s' "$aship_reflect" | grep -qF -- 'written BEFORE running context-save' \
+printf '%s' "$aship_reflect" | grep -qF -- 'written BEFORE running context-save-lean' \
   && ok "codex ship-pr facts-brief names the before-save ordering" \
   || bad "codex ship-pr facts-brief lost the before-save ordering clause"
 

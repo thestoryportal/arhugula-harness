@@ -50,6 +50,25 @@ run_hook() {
   echo $?
 }
 bytes() { wc -c < "$OUT" | tr -d ' '; }
+# JSON-parsed shape checks (codex u-sr-08 r1 P3: a substring match let prose containing the
+# word "permissionDecision" pass as a decision). decision_json: exactly one top-level key,
+# hookSpecificOutput, carrying permissionDecision. rewrite_json: hookSpecificOutput carries
+# updatedInput.command and NO additionalContext (the one field that reaches the model).
+decision_json() { python3 -c '
+import json, sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: sys.exit(1)
+h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
+sys.exit(0 if isinstance(h, dict) and "permissionDecision" in h and set(d) == {"hookSpecificOutput"} else 1)
+' "$1"; }
+rewrite_json() { python3 -c '
+import json, sys
+try: d = json.load(open(sys.argv[1]))
+except Exception: sys.exit(1)
+h = d.get("hookSpecificOutput") if isinstance(d, dict) else None
+ok = isinstance(h, dict) and isinstance(h.get("updatedInput"), dict) and "command" in h["updatedInput"] and "additionalContext" not in h
+sys.exit(0 if ok else 1)
+' "$1"; }
 
 # --- 1. enumerate every PreToolUse hook command that fires on a Bash call ---------------
 # (matcher "Bash", "*", or absent). The list must not be empty and must not carry a second
@@ -102,15 +121,15 @@ export HARNESS_LOOP_STATUS_PATH="$REPO/shared-loop_status.md"
 mkdir -p "$REPO/.harness"
 payload "git push --force origin main" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$GUARD" > "$OUT" 2>&1; rc=$?
 b=$(bytes)
-if [ "$b" -gt 0 ] && grep -q '"permissionDecision"' "$OUT"; then
+if [ "$b" -gt 0 ] && decision_json "$OUT"; then
   ok "permission-guard (loop on) emits a decision JSON for a force-push ($b bytes) — emission is observable"
 else
   bad "permission-guard (loop on) emitted no decision for a force-push (rc=$rc, $b bytes) — the zero-byte checks above would be vacuous"
 fi
 payload "ls -la /tmp" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$GUARD" > "$OUT" 2>&1
 b=$(bytes)
-if [ "$b" -eq 0 ] || grep -q '"permissionDecision"' "$OUT"; then
-  ok "permission-guard (loop on) plain command -> $b bytes, decision-only (no prose)"
+if [ "$b" -eq 0 ] || decision_json "$OUT"; then
+  ok "permission-guard (loop on) plain command -> $b bytes, decision-only (parsed JSON or nothing)"
 else
   bad "permission-guard (loop on) plain command emitted non-decision output: $(head -c 200 "$OUT")"
 fi
@@ -122,9 +141,8 @@ if command -v rtk >/dev/null 2>&1; then
   payload "echo hi" | rtk hook claude > "$OUT" 2>&1; b=$(bytes)
   [ "$b" -eq 0 ] && ok "rtk: no-rewrite command -> 0 bytes" || bad "rtk: no-rewrite command emitted $b bytes: $(head -c 200 "$OUT")"
   payload "cat foo.txt" | rtk hook claude > "$OUT" 2>&1; b=$(bytes)
-  grep -q '"updatedInput"' "$OUT" && ok "rtk: rewrite command -> updatedInput JSON ($b bytes)" || bad "rtk: rewrite command emitted no updatedInput: $(head -c 200 "$OUT")"
-  grep -q '"additionalContext"' "$OUT" && bad "rtk: rewrite JSON carries additionalContext (would reach the model)" \
-    || ok "rtk: rewrite JSON carries no additionalContext (nothing reaches the model)"
+  rewrite_json "$OUT" && ok "rtk: rewrite command -> parsed updatedInput JSON without additionalContext ($b bytes)" \
+    || bad "rtk: rewrite output is not a clean updatedInput JSON: $(head -c 200 "$OUT")"
 else
   echo "  rtk absent: 3 rtk checks NOT run (the user-level rewrite hook is not workspace-owned; the local run is recorded on the U-SR-08 PR)"
 fi

@@ -149,9 +149,11 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
 
 ## Reflect and checkpoint
 
-Before the next arc, reflect on new recurrent lessons and run the gstack `context-save` skill.
+Before the next arc, reflect on new recurrent lessons and run the `context-save-lean` skill
+(`.agents/skills/context-save-lean/`, the workspace copy of the gstack save flow — U-SR-08/WR-15;
+the gstack-level `context-save` skill re-injects ~54 KB of preamble per call).
 Update durable agent memory only when the operator explicitly requests it and the active host
-memory policy permits it; context-save itself remains mandatory. A checkpoint's remaining-work
+memory policy permits it; context-save-lean itself remains mandatory. A checkpoint's remaining-work
 prose is advisory, so verify it against HEAD when resuming. After the fixed point **and the
 arc exit report below**, create the next isolated worktree and run
 `just codex-autonomous-arc <next-arc-id>` — launching the next arc first would let it alter
@@ -160,14 +162,14 @@ for a pure terminating-refresh PR.
 
 Facts-brief handoff for a heavy next item (U-SR-07/WR-14): if the next action is a heavy
 audit or document, the closing session writes the facts brief only — the findings, cites,
-and decisions the deliverable needs, written BEFORE running context-save so the
+and decisions the deliverable needs, written BEFORE running context-save-lean so the
 checkpoint carries it — and a fresh session authors from the brief; "I already have the
 context loaded" is the trap ([B] F10: authored at 540k context cost 0.93M IET against
 ≈0.3M fresh).
 
 ## Arc exit report (U-WT-03/04)
 
-Run this as the last REPORTING step — after the reflect and `context-save` step above, never
+Run this as the last REPORTING step — after the reflect and `context-save-lean` step above, never
 before it, BEFORE the arc worktree's disposition, and BEFORE launching the next arc. (The
 pending-HIL ledger it reads is the SHARED venue since U-HE-29, so disposition no longer
 destroys it — the ordering now exists for the closure facts below, not to outrun a delete.)
@@ -184,14 +186,14 @@ launched. Disposing or moving on after the report — which an earlier reading o
 exactly the Codex-cohort gap the capture section exists to close.
 
 ```bash
-just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-lean-just-reported>
 ```
 
 Pass `--checkpoint` explicitly. The roadmap authorizes a parallel frontier, so another live
 session can write a checkpoint between this arc's save and this collection; mtime cannot
 discriminate ownership, so an unbound run reports the workspace-newest file as an
 unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path this arc's own
-`context-save` step reported binds the report to this arc.
+`context-save-lean` step reported binds the report to this arc.
 
 Validate the call before using its output: require exit 0 and the named report path. The
 recipe writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed, so a

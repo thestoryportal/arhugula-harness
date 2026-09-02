@@ -74,16 +74,16 @@ not acceptance evidence.
     record a narrowly justified non-applicability for a refresh itself.
 18. Wait for the refresh merge's own main CI to be green.
 19. `main_synced`: local `main` equals final `origin/main`.
-20. Reflect and run the gstack `context-save` skill. Facts-brief handoff (U-SR-07/WR-14):
+20. Reflect and run the `context-save-lean` skill (the workspace copy of the gstack save flow, U-SR-08/WR-15). Facts-brief handoff (U-SR-07/WR-14):
     if the next item is a heavy audit or document, do not author it in this session —
     "I already have the context loaded" is the trap: the loaded context is what every
     call re-bills. Write a facts brief (the findings, cites, and decisions the
-    deliverable needs) BEFORE running context-save so the checkpoint carries it, and
+    deliverable needs) BEFORE running context-save-lean so the checkpoint carries it, and
     let a fresh session author from it ([B] F10: authored at 540k context cost
     0.93M IET against ≈0.3M fresh).
 21. Emit the arc exit report (U-WT-03/04) WHILE the arc worktree still exists — its
     ledger carries this arc's pending-HIL rows, which disposition deletes:
-    `just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-just-reported>`
+    `just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-lean-just-reported>`
     (run from the arc worktree; the report and its index land in the MAIN checkout).
     Require exit 0 and the named report path — a nonzero exit includes a failed
     `EXIT-REPORT` index append and fails this gate closed. Skip only for a pure

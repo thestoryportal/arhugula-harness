@@ -98,7 +98,7 @@ fi
 ABLK=$(awk '/^## Arc exit report/{f=1;next} /^## /{f=0} f' "$ASHIP")
 ANORM=$(printf '%s' "$ABLK" | tr '\n' ' ' | tr -s ' ')
 amiss=""
-printf '%s' "$ANORM" | grep -qF -- 'after the reflect and `context-save` step above, never before it' \
+printf '%s' "$ANORM" | grep -qF -- 'after the reflect and `context-save-lean` step above, never before it' \
   || amiss="$amiss after-context-save-rationale"
 printf '%s' "$ANORM" | grep -qF -- 'Paste the emitted `yaml` block' || amiss="$amiss paste-yaml-block"
 printf '%s' "$ANORM" | grep -qF -- 'machine-readable closure record' || amiss="$amiss closure-record"
@@ -130,7 +130,7 @@ printf '%s' "$NORM" | grep -qF -- '--checkpoint <the-path-/context-save-lean-jus
 printf '%s' "$NORM" | grep -qF -- 'parallel frontier' \
   && ok "claude carrier states WHY the checkpoint must be bound" \
   || bad "claude carrier missing the parallel-frontier rationale"
-printf '%s' "$ANORM" | grep -qF -- '--checkpoint <the-path-context-save-just-reported>' \
+printf '%s' "$ANORM" | grep -qF -- '--checkpoint <the-path-context-save-lean-just-reported>' \
   && ok "codex carrier binds the checkpoint on the command line" \
   || bad "codex carrier command omits --checkpoint"
 printf '%s' "$ANORM" | grep -qF -- 'parallel frontier' \
