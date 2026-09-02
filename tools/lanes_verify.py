@@ -452,6 +452,8 @@ MANIFEST: list[Row] = [
     Row("§8-R2", "shell:tools/hooks/test_graft_mark_dirty.sh", "phase0", "local + CI", False),
     # §8 R2 / U-SR-09 b1 -- the scoped pin theorem (pin_scope.py), pure and probed.
     Row("§8-R2", "pytest:tools/test_pin_scope.py", "phase0", "local + CI", True),
+    # §8 R2 / U-SR-09 b4 -- the quote-aware shape judgement behind the guard, pure and probed.
+    Row("§8-R2", "pytest:tools/test_rtk_shape_guard.py", "phase0", "local + CI", True),
     # §8.1 / §0.3 (U-HE-05)
     Row("§8.1", "pytest:tools/test_lanes_verify.py", "phase0", "local + CI", True),
     Row("§0.3", "just:mutation-probe-coverage-check", "phase0", "local + CI", False),
