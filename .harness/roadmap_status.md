@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `1b3f1b288648` |
+| `workspace_state_hash` | `3efa40ef5547` |
 | `last_refreshed` | 2026-09-02T00:00:00Z |
-| `git_head` | `9032fead` —  |
+| `git_head` | `056c6c84` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1489).** The next implementable unit is the §8 R2 mechanical sweep U-SR-09 — charter §2 "deliberately absent" + [B] b1/b4/b5 (c1 subsumed): b1 pin scope (bind the mutation pin to the probed block's digest or pin once at ship — implementer picks the arm and records why; witness: edit an unrelated line, the pin stays fresh; baseline 12 re-pins, 13 of 29 commits, 1.07M IET [B] F7), b4 rtk rewrite shapes (`\|` alternation → rg parse error, `--glob` landing on BSD grep, `(`/`)` in fixed-string greps — fix or pass-through, each shape round-trips; [B] F5: 29 wasted calls), b5 edit-hook timing (time `postedit-lint.sh` and `graft-hooks.cjs post-edit` separately on one `.py` edit; put `ruff` on the hook-shell PATH if `uv run ruff` is the path taken; measured numbers in the commit message, post-fix median < the [B] F8 baseline of 8.9 s). U-SR-08 landed at #1489: WR-15 as `.claude/skills/context-save-lean/` (the gstack save flow only, 12,548 bytes against the 54,977-byte gstack skill; a project-level `context-save` can never run because personal overrides project — CLAUDE.md §6 corrected) with every Claude/Codex carrier, the Codex binding notes, governance body and tool prose repointed and a repo-wide negative sweep pinning it; WR-16 premise-corrected (rtk 0.40.0 emits nothing on a no-rewrite; PreToolUse stdout never reaches model context) and pinned by tools/hooks/test_pretooluse_bash_emit_policy.sh; six out-of-family rounds (19 findings, all accepted; r6 APPROVE) and the 3-lens merge gate. Named residuals: `/context-save` typed by hand still resolves to the gstack skill; the §8.1 pin on tools/lanes_verify.py is stale again after the row append (re-pin owed by the next arc touching that pair, 66 unprobed annotations pre-existing). Remaining §8 sequence after U-SR-09: U-HE-36-as-R3 with U-HE-51 riding it; then U-SR-09 as the next unit.
+**Current next action (post-#1491).** The next implementable unit is the §8 R2 mechanical sweep U-SR-09 — charter §2 "deliberately absent" + [B] b1/b4/b5 (c1 subsumed): b1 pin scope (bind the mutation pin to the probed block's digest or pin once at ship — implementer picks the arm and records why; witness: edit an unrelated line, the pin stays fresh; baseline 12 re-pins, 13 of 29 commits, 1.07M IET [B] F7), b4 rtk rewrite shapes (`\|` alternation → rg parse error, `--glob` landing on BSD grep, `(`/`)` in fixed-string greps — fix or pass-through, each shape round-trips; [B] F5: 29 wasted calls), b5 edit-hook timing (time `postedit-lint.sh` and `graft-hooks.cjs post-edit` separately on one `.py` edit; put `ruff` on the hook-shell PATH if `uv run ruff` is the path taken; measured numbers in the commit message, post-fix median < the [B] F8 baseline of 8.9 s). #1491 landed the U-SR-08 follow-up: the lean skill body carries no positional parameters (the skill loader rewrites them at invocation — found on the skill's first real run) and the trim witness pins their absence (77 checks). U-SR-08 itself landed at #1489 (see its refresh #1490 round). Remaining §8 sequence after U-SR-09: U-HE-36-as-R3 with U-HE-51 riding it; then U-SR-09 as the next unit.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1491 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1489 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1487 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1485 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1483 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1481 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
