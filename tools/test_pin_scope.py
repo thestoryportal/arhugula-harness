@@ -67,7 +67,7 @@ def test_node_tail(nodeid, tail):
     assert ps.node_tail(nodeid) == tail
 
 
-# mutation-probe: drop the `dropped.update(...)` sibling removal in test_slice_digest
+# mutation-probe: drop the `and not _is_fixture(n, fixture_names)` clause in test_slice_digest
 def test_test_slice_digest_drops_only_sibling_top_level_tests():
     # the slice = the kept top-level nodes' own segments (the import; the annotated,
     # decorated test_f), concatenated -- `test_other` and every inter-node blank line gone

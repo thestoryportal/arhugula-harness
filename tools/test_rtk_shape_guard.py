@@ -127,7 +127,7 @@ def test_judge_only_looks_at_rtk_grep_segments():
     assert g.judge('grep "f(" \\| wc', 'rtk grep "f(" \\| wc') is not None
 
 
-# mutation-probe: drop the `if not any(t in SEPARATORS ...)` verbatim arm in reissue()
+# mutation-probe: drop the `if any(isinstance(t, (Sep, Redirect)) …)` refusal in reissue()
 def test_reissue_is_verbatim_for_one_command_and_quote_safe_otherwise():
     assert (
         g.reissue('grep -rn "hook_emit(" tools/hooks')
