@@ -70,7 +70,7 @@ The roadmap is one of three durable persistence mechanisms; this section names h
 |---|---|---|---|
 | **Roadmap + status** | `Project_Roadmap_v1.md` + `.harness/roadmap_status.md` | Cross-session next-action + workspace state | This §12 |
 | **Auto-memory** | `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/memory/` | Patterns, feedback, project context, references, learnings | Global `~/.claude/CLAUDE.md` auto-memory section |
-| **Checkpoints** | `~/.gstack/projects/thestoryportal-arhugula-harness/checkpoints/` | Mid-arc transient state for cross-session resume | gstack `/context-save` + `/context-restore` skills |
+| **Checkpoints** | `~/.gstack/projects/arhugula-v2/checkpoints/` (the checkout-derived slug; `~/.gstack/projects/thestoryportal-arhugula-harness/checkpoints/` holds pre-2026-08-16 history only) | Mid-arc transient state for cross-session resume | `/context-save-lean` (save — the workspace copy of the gstack save flow, U-SR-08/WR-15) + gstack `/context-restore` |
 
 **Distinction by scope.**
 

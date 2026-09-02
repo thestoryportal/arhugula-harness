@@ -79,8 +79,8 @@ done
 for n in 'projects/$SLUG/checkpoints' '--git-common-dir' 'FATAL: could not derive the project slug' \
          'status: in-progress' 'branch: {current branch name}' 'timestamp: {ISO-8601' 'files_modified:' \
          'CONTEXT SAVED' 'File: {path to saved file}' 'Restore later with /context-restore' \
-         'append-only' 'set -o noclobber' "TITLE_RAW='" 'supersedes checkpoints' 'CLAUDE.md §12.5' \
-         'facts brief' 'personal overrides project'; do
+         'append-only' 'ln "$PART" "$FILE"' 'never wrapped in `bash -c' "TITLE_RAW='" \
+         'supersedes checkpoints' 'CLAUDE.md §12.5' 'facts brief' 'personal overrides project'; do
   printf '%s' "$NORM" | grep -qF -- "$n" && ok "carrier present: $n" || bad "carrier missing: $n"
 done
 
@@ -88,6 +88,11 @@ done
 # only documented handoff is single-quoted, and the WRONG example carries no live command.
 printf '%s' "$NORM" | grep -qF -- 'TITLE_RAW="$TITLE"' && ok "WRONG example names the double-quoted shape" || bad "WRONG double-quoted example missing"
 printf '%s' "$NORM" | grep -qF -- "TITLE_RAW=\"<raw title>\" bash" && bad "a double-quoted TITLE_RAW handoff is still documented" || ok "no double-quoted TITLE_RAW handoff documented"
+# The prescribed shape is plain command text; `bash -c '<block>'` would split on the block's
+# own single quotes (codex r2 P2) and survives only as the WRONG example.
+printf '%s' "$NORM" | grep -qF -- "removed>' bash -c" && bad "bash -c is still the prescribed handoff" || ok "bash -c is not the prescribed handoff"
+grep -qF -- 'projects/arhugula-v2/checkpoints/' "$ROOT/docs/governance/roadmap-protocol.md" && grep -qF -- '/context-save-lean' "$ROOT/docs/governance/roadmap-protocol.md" \
+  && ok "roadmap-protocol persistence table names the arhugula-v2 sink and the lean skill" || bad "roadmap-protocol persistence table still names the legacy sink or skill"
 
 # --- 3. callers invoke the workspace name; the shadowed name is no longer instructed ---
 # ship-pr reflect block (section-scoped, u-sr-07 precedent: a whole-file match lets a
@@ -140,48 +145,84 @@ awk -v d="$TMPD" '
   inb {print > f}
 ' "$SKILL"
 NB=$(ls "$TMPD"/block*.sh 2>/dev/null | wc -l | tr -d ' ')
-[ "$NB" -ge 4 ] && ok "extracted $NB fenced bash blocks" || bad "expected >=4 fenced bash blocks, found $NB"
+[ "$NB" -ge 5 ] && ok "extracted $NB fenced bash blocks" || bad "expected >=5 fenced bash blocks, found $NB"
 for b in "$TMPD"/block*.sh; do
   bash -n "$b" 2>/dev/null && ok "parses: $(basename "$b")" || bad "syntax error in $(basename "$b")"
 done
 
-# 4b. run the REAL Step-4 block (the fenced block carrying the noclobber reservation) as a
-#     script, in three cwds, against a throwaway state root. Main checkout and linked
-#     worktree must both resolve the MAIN checkout's directory name (the arc_exit_report
-#     sink); a non-git cwd must FAIL LOUD (codex r1 P2: an empty git result collapsed to "."
-#     and passed the allowlist). Same-second same-title saves must reserve two DIFFERENT
-#     files (codex r1 P2: append-only was a check-then-act). A title carrying $(...) is
-#     sanitized to letters and never executed.
-BLOCK=$(grep -l 'set -o noclobber' "$TMPD"/block*.sh 2>/dev/null | head -1)
-[ -n "$BLOCK" ] || { bad "no fenced block carries the noclobber reservation"; BLOCK=/dev/null; }
+# 4b. run the REAL Step-4 blocks (4a allocate = the block carrying PART=, 4b publish = the
+#     block carrying ln "$PART") in the DOCUMENTED shape: single-quoted assignments on the
+#     first lines, then the block verbatim, fed to bash as one command text (codex r2 P2:
+#     a `bash -c '<block>'` wrapper splits on the block's own quotes; the witness must
+#     execute the shape the skill prescribes). Main checkout and linked worktree resolve
+#     the MAIN checkout's directory name; a non-git cwd fails loud (r1 P2); no `.md` exists
+#     until publish, and publish refuses an empty staging file (r2 P2); same-second
+#     same-title saves publish two different files (r1 P2); a $(...) title is sanitized.
+ALLOC=$(grep -l '^PART=' "$TMPD"/block*.sh 2>/dev/null | head -1)
+PUB=$(grep -l 'ln "$PART" "$FILE"' "$TMPD"/block*.sh 2>/dev/null | head -1)
+[ -n "$ALLOC" ] && [ -n "$PUB" ] || { bad "allocate/publish blocks not both found (alloc='$ALLOC' pub='$PUB')"; ALLOC=/dev/null; PUB=/dev/null; }
 STATE="$TMPD/state"
 REPO="$TMPD/wsroot/slug-probe-main"; mkdir -p "$REPO"
 git -C "$REPO" init -q 2>/dev/null
 git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init 2>/dev/null
 git -C "$REPO" worktree add -q "$TMPD/wsroot/linked-wt" -b probe-wt 2>/dev/null
-run_block() { # $1=cwd $2=TITLE_RAW $3=TIMESTAMP-or-empty ; prints the block's stdout
-  (cd "$1" && env GSTACK_STATE_ROOT="$STATE" TITLE_RAW="$2" TIMESTAMP="$3" bash "$BLOCK" 2>&1)
+# run_alloc <cwd> <title> <timestamp-or-empty>: documented shape — assignment lines + block.
+run_alloc() {
+  (cd "$1" && GSTACK_STATE_ROOT="$STATE" bash -s 2>&1 <<EOS
+TITLE_RAW='$2'
+TIMESTAMP='$3'
+$(cat "$ALLOC")
+EOS
+  )
 }
-OUT1=$(run_block "$REPO" "probe title" ""); RC1=$?
-OUT2=$(run_block "$TMPD/wsroot/linked-wt" "probe title" ""); RC2=$?
-D1=$(printf '%s\n' "$OUT1" | sed -n 's/^CHECKPOINT_DIR=//p'); D2=$(printf '%s\n' "$OUT2" | sed -n 's/^CHECKPOINT_DIR=//p')
+# run_pub <part> <file>: documented shape for 4b.
+run_pub() {
+  (cd "$REPO" && bash -s 2>&1 <<EOS
+PART='$1'
+FILE='$2'
+$(cat "$PUB")
+EOS
+  )
+}
+field() { printf '%s\n' "$1" | sed -n "s/^$2=//p"; }
+# save <cwd> <title> <timestamp>: full allocate -> write -> publish; prints the published FILE.
+save() {
+  local out part file pout
+  out=$(run_alloc "$1" "$2" "$3") || return 1
+  part=$(field "$out" PART); file=$(field "$out" FILE)
+  [ -n "$part" ] && [ -n "$file" ] || return 1
+  # (a pre-existing $file here is the collision case 4b resolves — not a premature .md;
+  #  the no-empty-window property is asserted on the first allocation above)
+  printf -- '---\nstatus: in-progress\n---\n## Working on: %s\n' "$2" > "$part"
+  pout=$(run_pub "$part" "$file") || return 1
+  field "$pout" FILE
+}
+OUT1=$(run_alloc "$REPO" "probe title" ""); RC1=$?
+OUT2=$(run_alloc "$TMPD/wsroot/linked-wt" "probe title" ""); RC2=$?
+D1=$(field "$OUT1" CHECKPOINT_DIR); D2=$(field "$OUT2" CHECKPOINT_DIR)
 [ "$RC1" -eq 0 ] && [ "$D1" = "$STATE/projects/slug-probe-main/checkpoints" ] \
   && ok "main checkout -> projects/slug-probe-main/checkpoints" || bad "main checkout: rc=$RC1 dir='$D1'"
 [ "$RC2" -eq 0 ] && [ "$D2" = "$STATE/projects/slug-probe-main/checkpoints" ] \
   && ok "linked worktree -> projects/slug-probe-main/checkpoints (not the worktree name)" || bad "worktree: rc=$RC2 dir='$D2'"
-F1=$(printf '%s\n' "$OUT1" | sed -n 's/^FILE=//p')
-[ -n "$F1" ] && [ -f "$F1" ] && ok "the reported FILE is reserved on disk (exclusive create)" || bad "FILE not reserved: '$F1'"
+P1=$(field "$OUT1" PART); F1=$(field "$OUT1" FILE)
+case "$P1" in "$D1"/.*.part) ok "staging path is a .part dotfile under the checkpoint dir" ;; *) bad "unexpected staging path: '$P1'" ;; esac
+[ ! -e "$F1" ] && [ -z "$(ls "$D1"/*.md 2>/dev/null)" ] && ok "allocate creates no .md (no empty checkpoint window)" || bad "allocate left a .md behind: $F1"
 mkdir -p "$TMPD/nogit"
-OUT3=$(run_block "$TMPD/nogit" "probe title" ""); RC3=$?
+OUT3=$(run_alloc "$TMPD/nogit" "probe title" ""); RC3=$?
 [ "$RC3" -ne 0 ] && printf '%s' "$OUT3" | grep -q 'FATAL: could not derive the project slug' && ! printf '%s' "$OUT3" | grep -q '^CHECKPOINT_DIR=' \
   && ok "non-git cwd fails loud (no CHECKPOINT_DIR, rc=$RC3)" || bad "non-git cwd did not fail loud: rc=$RC3 $(printf '%s' "$OUT3" | head -c 160)"
-[ ! -e "$STATE/projects/./checkpoints" ] && [ ! -e "$STATE/projects/checkpoints" ] && ok "no projects/./checkpoints sink was created" || bad "a dot-slug sink was created"
-OA=$(run_block "$REPO" "same title" "20990101-000000"); OB=$(run_block "$REPO" "same title" "20990101-000000")
-FA=$(printf '%s\n' "$OA" | sed -n 's/^FILE=//p'); FB=$(printf '%s\n' "$OB" | sed -n 's/^FILE=//p')
-[ -n "$FA" ] && [ -n "$FB" ] && [ "$FA" != "$FB" ] && [ -f "$FA" ] && [ -f "$FB" ] \
-  && ok "same-second same-title saves reserve two different files" || bad "collision not resolved: '$FA' vs '$FB'"
+[ ! -e "$STATE/projects/checkpoints" ] && ok "no projects/./checkpoints sink was created" || bad "a dot-slug sink was created"
+: > "$P1"
+POUT=$(run_pub "$P1" "$F1"); PRC=$?
+[ "$PRC" -ne 0 ] && printf '%s' "$POUT" | grep -q 'missing or empty' && [ ! -e "$F1" ] \
+  && ok "publish refuses an empty staging file (the Write never happened)" || bad "publish accepted an empty staging file: rc=$PRC '$POUT'"
+rm -f "$P1"
+FA=$(save "$REPO" "same title" "20990101-000000"); FB=$(save "$REPO" "same title" "20990101-000000")
+[ -n "$FA" ] && [ -n "$FB" ] && [ "$FA" != "$FB" ] && [ -s "$FA" ] && [ -s "$FB" ] \
+  && ok "same-second same-title saves publish two different complete files" || bad "collision not resolved: '$FA' vs '$FB'"
 case "$FB" in *"/20990101-000000-same-title-"????".md") ok "the loser carries a 4-char random suffix" ;; *) bad "unexpected loser name: $FB" ;; esac
-OI=$(run_block "$REPO" 'ab $(touch pwned) cd' ""); FI=$(printf '%s\n' "$OI" | sed -n 's/^FILE=//p')
+[ -z "$(ls -A "$D1"/.*.part 2>/dev/null)" ] && ok "no .part staging file survives a publish" || bad "staging files left behind: $(ls -A "$D1"/.*.part)"
+FI=$(save "$REPO" 'ab $(touch pwned) cd' "")
 [ ! -e "$REPO/pwned" ] && [ ! -e "$TMPD/pwned" ] && case "$FI" in *"-ab-touch-pwned-cd.md") true ;; *) false ;; esac \
   && ok "a title with \$(...) is sanitized, never executed" || bad "injection title handled wrongly: '$FI'"
 

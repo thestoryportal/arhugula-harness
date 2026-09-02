@@ -90,11 +90,26 @@ If the duration is unknown, omit the `session_duration_s` field from the file.
 
 ### Step 4: Write the checkpoint file
 
-Compute the path in bash, never in the LLM layer. The filename sanitizer is an allowlist
-(only `a-z 0-9 - .` survive) but it runs INSIDE the shell, so the raw title must reach the
-shell single-quoted: `TITLE_RAW='<title, any single quotes removed>' bash -c '<block>'`.
+Compute every path in bash, never in the LLM layer. Two blocks bracket the Write: **4a**
+allocates a hidden staging path, the Write tool fills it, **4b** publishes it under its
+final `.md` name by `link(2)` — so a `*.md` file either does not exist or is complete, and
+two sessions can never share a name.
+
+Run each block as ONE Bash command: its inputs as plain single-quoted assignments on the
+first line(s), then the block verbatim — never wrapped in `bash -c '…'` (the blocks contain
+single quotes, which would split the outer string). The filename sanitizer is an allowlist
+(only `a-z 0-9 - .` survive) but it runs inside the shell, so the raw title reaches it
+single-quoted with any single quotes removed:
+
+```
+TITLE_RAW='<title, any single quotes removed>'
+<block 4a verbatim>
+```
+
 WRONG: `TITLE_RAW="<title>"` or `TITLE_RAW="$TITLE"` — double quotes expand `$(...)` and
-backticks before the sanitizer ever sees them.
+backticks before the sanitizer ever sees them. WRONG: `bash -c '<block>'`.
+
+**4a — allocate**
 
 ```bash
 # Slug = the MAIN checkout's directory name, resolved through the git common dir so a
@@ -116,31 +131,46 @@ TIMESTAMP=$(printf '%s' "${TIMESTAMP:-}" | tr -cd '0-9-'); TIMESTAMP="${TIMESTAM
 RAW="${TITLE_RAW:-untitled}"
 TITLE_SLUG=$(printf '%s' "$RAW" | tr '[:upper:]' '[:lower:]' | tr -s ' \t' '-' | tr -cd 'a-z0-9.-' | cut -c1-60)
 TITLE_SLUG="${TITLE_SLUG:-untitled}"
-# Append-only, atomically: the name is RESERVED by an exclusive create (noclobber = O_EXCL),
-# so two sessions saving the same title in the same second can never end up on one file —
-# the loser retries with a random suffix; a lost third try is FATAL, never an overwrite.
-set -o noclobber
-FILE="${CHECKPOINT_DIR}/${TIMESTAMP}-${TITLE_SLUG}.md"
-tries=0
-until { : > "$FILE"; } 2>/dev/null; do
-  # Only an EXISTING file is a collision; any other create failure (unwritable dir) is its own FATAL.
-  [ -e "$FILE" ] || { echo "FATAL: cannot create $FILE (is $CHECKPOINT_DIR writable?)"; exit 1; }
-  tries=$((tries + 1))
-  [ "$tries" -lt 3 ] || { echo "FATAL: could not reserve a checkpoint filename after 3 tries"; exit 1; }
-  SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 4 || printf '%04x' "$$")
-  FILE="${CHECKPOINT_DIR}/${TIMESTAMP}-${TITLE_SLUG}-${SUFFIX}.md"
-done
-set +o noclobber
+# Staging path: a DOTFILE with a random token — no `*.md` listing (this skill's list flow,
+# gstack /context-restore, arc_exit_report) can ever see it, and it is never a restorable
+# checkpoint. It is not created here: the Write tool creates it in one step, so there is
+# no empty file at any moment under a name anything reads.
+TOKEN=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 6 || printf '%06x' "$$")
+PART="${CHECKPOINT_DIR}/.${TIMESTAMP}-${TITLE_SLUG}-${TOKEN}.part"
 echo "CHECKPOINT_DIR=$CHECKPOINT_DIR"
 echo "TIMESTAMP=$TIMESTAMP"
+echo "PART=$PART"
+echo "FILE=${CHECKPOINT_DIR}/${TIMESTAMP}-${TITLE_SLUG}.md"
+```
+
+Write the full checkpoint content to the `$PART` path printed above (the exact string; a
+new file, so the Write tool needs no prior Read). Then publish it:
+
+**4b — publish** (first lines: `PART='<printed PART>'` and `FILE='<printed FILE>'`)
+
+```bash
+# Publish = link(2): exclusive on the final name, atomic, and only ever of a COMPLETE
+# file. Two sessions saving the same title in the same second cannot end up on one
+# name — the loser gets a random suffix; a lost third try is FATAL, never an overwrite.
+# An empty or missing staging file means the Write never happened: refuse.
+[ -s "$PART" ] || { echo "FATAL: staging file $PART is missing or empty — nothing to publish"; exit 1; }
+tries=0
+until ln "$PART" "$FILE" 2>/dev/null; do
+  # Only an EXISTING final name is a collision; any other link failure is its own FATAL.
+  [ -e "$FILE" ] || { echo "FATAL: cannot publish $FILE (is $(dirname "$FILE") writable?)"; exit 1; }
+  tries=$((tries + 1))
+  [ "$tries" -lt 3 ] || { echo "FATAL: could not publish after 3 name collisions"; exit 1; }
+  SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom 2>/dev/null | head -c 4 || printf '%04x' "$$")
+  FILE="${FILE%.md}-${SUFFIX}.md"
+done
+rm -f "$PART"
 echo "FILE=$FILE"
 ```
 
-Write the file to the `$FILE` path printed above — the exact string, not a path rebuilt in
-the LLM layer. The reservation left `$FILE` as an empty file: Read it once (the Write tool
-refuses to overwrite a file it has not read), then Write the full content to that path. The
-directory name is `checkpoints/`; the gstack restore side keys on the `YYYYMMDD-HHMMSS`
-filename prefix, so keep the shape.
+The published `FILE` is what the confirmation block reports. A crash between the Write and
+4b leaves only a `.part` dotfile — invisible to every `*.md` listing; delete it on sight,
+never publish it by hand. The directory name is `checkpoints/`; the gstack restore side
+keys on the `YYYYMMDD-HHMMSS` filename prefix, so keep the shape.
 
 The file format (identical to gstack's, which is what keeps it restorable):
 
