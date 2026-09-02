@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `00bd30133cec` |
-| `last_refreshed` | 2026-09-01T00:00:00Z |
-| `git_head` | `6af86eef` —  |
+| `workspace_state_hash` | `bc6ae2794248` |
+| `last_refreshed` | 2026-09-02T00:00:00Z |
+| `git_head` | `9794d440` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1485).** The next implementable unit is one of the remaining §8 R1 levers `U-SR-07…08` (order-free; U-SR-07 — session-shape codification, charter WR-14 — is the natural pick: three habit lines into the loop skills' close-out carriers — facts-brief → fresh-session for heavy audits, cache-warmth handoff before >TTL background waits at >400k context, read-before-grep — with a grep-witness acceptance and wiring suite green). U-SR-06 landed at #1485: WR-13's REWRITE arm is executed — every live governance carrier (61 in the witness enumeration: CLAUDE.md, the loop/council/optimize skills, both commands' allowed-tools, docs/governance + startup routers, the .harness/council canonicals, AGENTS.md + the Codex parity note, all 30 .agents bridges, the roadmap's live schema clauses, the justfile comment) now names the transcript-brief review — a fresh-context Agent reviewer on a written session brief (fork where supported) — instead of the never-provisioned advisor(); the Codex venue's contract is fail-closed (isolated guard-shape exec where invocable; unattended arcs HALT at the owing fork, DEFERRED-HIL shape; resolve/optimize-claude-md carry the decision-time fork-defers exception), witnessed by tools/hooks/test_skill_advisor_reconciliation.sh (25 checks, auto-collected by the codex-parity glob, every check mutation-probed). Out-of-family loop ran the full ten-round budget r1–r10 all-BLOCK-absorbed-adjudicated (r11 GATE_REFUSED at the budget — the register-and-hold point taken as designed); 3-lens merge gate ALL-APPROVE at 470a2b300. Named residuals: B-226 (unattended review-debt halt is a prose floor pending an executable gate — a class-11 surface), historical records keep the old name by design. Remaining §8 sequence: U-SR-07…08 (R1), then U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it; then U-SR-07 as the next unit.
+**Current next action (post-#1487).** The next implementable unit is the last §8 R1 lever U-SR-08 — context-noise deletions, charter WR-15/16: trim the context-save preamble to the workspace-relevant subset (WR-15, [B] c2/F11: 53.8 KB of gstack-generic preamble per invocation while the only sink used is the local checkpoint directory) and make the PreToolUse:Bash hook emit only on an actual rewrite or guard decision (WR-16, [B] c3/F12: 143 attachments ≈108 KB, mostly "rewrote nothing" chatter), each closing on the mechanical witness its plan unit names. U-SR-07 landed at #1487: WR-14's three session-shape habits sit at their decision moments across all seven codex-check-naming loop-skill carriers in both runners (read-before-grep at the grounding/plan steps; the >400k cache-warmth handoff at every background-launch/CI-wait instruction; the unconditional facts-brief handoff at every close-out, the brief written BEFORE context-save so the checkpoint carries it), witnessed by tools/hooks/test_skill_session_shape.sh — 67 item-scoped checks with @@BOUNDED@@ slice-termination guards, registered as the WR-14 manifest row (static-doc-witness, probe tool refuses .md). Out-of-family loop: r1–r7 BLOCK absorbed (every finding accepted + adjudicated), r8 APPROVE, gate-fix rounds r9–r10 re-converged APPROVE; 3-lens merge gate r1 witness BLOCK (section() END-anchor silent widening) absorbed via the boundedness marker → r2 ALL-APPROVE at ec486d066. Named residuals: figure pins cover the four primary slices while secondary slices pin the [B] label only (gate r2 witness P3, non-blocking); the Codex self-heal/two-lane mirrors carry no WR-14 lines by design (they instruct no codex-check). Remaining §8 sequence: U-SR-09 (R2), then U-HE-36-as-R3 with U-HE-51 riding it; then U-SR-08 as the next unit.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1487 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1485 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1483 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1481 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1479 | 2026-08-31 | U-SR-03 laws:prompt durable wiring + bindings by file (charter WR-08/09) merged; 3-lens merge gate ALL APPROVE. |
-| PR #1477 | 2026-08-28 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
