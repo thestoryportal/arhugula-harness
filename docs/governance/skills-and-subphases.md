@@ -8,7 +8,7 @@ pointer to this file. Query this pack for the detail; do not preload it.*
 
 ## 6. Skill activation
 
-This workspace ships with 4 Phase 7-specific skills at `<workspace_root>/.claude/skills/`. Skills activate per `tool_search`-driven trigger evaluation against YAML frontmatter description. Project-level skills (this workspace) take priority over user-level skills (`~/.claude/skills/`) on name collision per Anthropic Claude Code skill-directory precedence.
+This workspace ships with 4 Phase 7-specific skills at `<workspace_root>/.claude/skills/`. Skills activate per `tool_search`-driven trigger evaluation against YAML frontmatter description. On a name collision the user-level skill (`~/.claude/skills/`) takes priority over the project-level one, per the Claude Code skills doc ("enterprise overrides personal, and personal overrides project"; the command comes from the directory name) — a workspace variant of a user-level skill needs its own directory name, e.g. `context-save-lean` (U-SR-08).
 
 | Skill | Path | Activation surface |
 |---|---|---|

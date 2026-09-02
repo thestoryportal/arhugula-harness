@@ -183,7 +183,7 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    uv run python tools/reservations.py phase --arc-id <arc-id> --phase execute --edge end --lane-id <lane-id>
    ```
    Then hand off to the `ship-pr` skill (the PR + fixed-point-refresh half) — including its
-   mandatory reflect + `/context-save` step at arc close. Do not hand off to the next arc
+   mandatory reflect + `/context-save-lean` step at arc close. Do not hand off to the next arc
    (`ScheduleWakeup`, `/loop-stop`, or ending the turn) before that step has run.
    Facts-brief handoff (U-SR-07/WR-14): if the NEXT item is a heavy audit or document,
    do not author it in this session — "I already have all the context loaded" is exactly

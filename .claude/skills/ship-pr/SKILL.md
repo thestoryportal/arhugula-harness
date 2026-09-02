@@ -491,7 +491,7 @@ writing. (Checkpoint hygiene per §12.5.3: a checkpoint is "resolved" when its `
 merged; PreCompact snapshots are keep-10-pruned by `session-end-cleanup.sh`; resolved-checkpoint
 archival is optional and not automated — no standing "archive Remaining-Work-addressed" step.)
 
-## Reflect + `/context-save` — mandatory, every arc close (not just R-NNN closes)
+## Reflect + `/context-save-lean` — mandatory, every arc close (not just R-NNN closes)
 
 **This step is not optional and does not wait to be asked.** CLAUDE.md §15 (reflect for
 self-improvement) + §12.5.2 (checkpoint disciplines) both fire at every arc's completion —
@@ -517,10 +517,12 @@ ending the turn):
    heavy audit or document, do not author it here — "I already have all the context
    loaded" is the trap; the loaded
    context is what every call re-bills. The closing session writes the facts brief only —
-   the findings, cites, and decisions the deliverable needs — BEFORE the `/context-save`
+   the findings, cites, and decisions the deliverable needs — BEFORE the `/context-save-lean`
    below, so the checkpoint carries it, and a fresh session authors from the brief: the
    S3 audit authored at 540k context cost 0.93M IET against ≈0.3M fresh ([B] F10).
-4. **Run `/context-save`.** Even if the next action is "stop the loop" — a saved checkpoint is
+4. **Run `/context-save-lean`** — the workspace copy of the gstack save flow; the
+   gstack-level `context-save` skill re-injects ~54 KB of preamble per call (U-SR-08/WR-15). Even if the
+   next action is "stop the loop" — a saved checkpoint is
    what makes the next session's resume cheap and honest, per
    `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`. When step 3
    produced a facts brief, this save is what carries it to the fresh session.
@@ -530,7 +532,7 @@ refresh-only commit has no new learnings to reflect on.
 
 ## Arc exit report — the last reporting step (U-WT-03/04)
 
-**After** the reflect + `/context-save` block above, not before it. That ordering is the
+**After** the reflect + `/context-save-lean` block above, not before it. That ordering is the
 whole point: the merge SHA, the post-merge main-CI conclusion, the §12.2.1 refresh commit
 **and** the checkpoint you just wrote all exist only at this point, so the report records
 the arc's *real* final checkpoint rather than a stale or fabricated one. **Skip this step
@@ -539,14 +541,14 @@ same rule as the reflect block above: a refresh-only PR is not an arc, owes no r
 running it would mislabel its structurally-absent refresh as an open obligation. Run:
 
 ```
-just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-/context-save-just-reported>
+just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-/context-save-lean-just-reported>
 ```
 
 Pass `--checkpoint` explicitly — the roadmap authorizes a **parallel frontier**, so another
-live session can `/context-save` between your save and this collection; mtime cannot tell
+live session can `/context-save-lean` between your save and this collection; mtime cannot tell
 whose checkpoint is whose, so an unbound run reports the workspace-newest file as an
 unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path *your*
-`/context-save` step just reported binds the report to this arc.
+`/context-save-lean` step just reported binds the report to this arc.
 
 It writes `.harness/.checkpoints/arc-exit-report-pr<NNN>.md` (gitignored, PR-keyed — a
 re-run overwrites it) and indexes one `EXIT-REPORT` row into the shared `loop_status.md` (`$(loop_status_path)`; default `~/.gstack/projects/arhugula-v2/loop_status.md`).

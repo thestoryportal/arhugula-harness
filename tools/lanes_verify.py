@@ -412,6 +412,29 @@ MANIFEST: list[Row] = [
         "local + CI",
         False,
     ),
+    # WR-15 (U-SR-08) — context-save preamble trim: the project skill
+    # context-save-lean carries the gstack save flow only; callers point at it.
+    # mutation-probe `—`: the probed artifact is markdown skill prose (C-HE-30 /
+    # WR-14 static-doc-witness precedent).
+    Row(
+        "WR-15",
+        "shell:tools/hooks/test_skill_context_save_trim.sh",
+        "phase0",
+        "local + CI",
+        False,
+    ),
+    # WR-16 (U-SR-08) — PreToolUse:Bash emit policy: zero bytes on a plain command,
+    # JSON only on a rewrite or guard decision. mutation-probe `—`: zero-emission is
+    # not deletion-expressible (removing lines cannot create output); the manual
+    # INSERTION probe (an unconditional echo in precmd-clear-cache.sh -> red) is
+    # recorded on the u-sr-08 commit.
+    Row(
+        "WR-16",
+        "shell:tools/hooks/test_pretooluse_bash_emit_policy.sh",
+        "phase0",
+        "local + CI",
+        False,
+    ),
     # §8.1 / §0.3 (U-HE-05)
     Row("§8.1", "pytest:tools/test_lanes_verify.py", "phase0", "local + CI", True),
     Row("§0.3", "just:mutation-probe-coverage-check", "phase0", "local + CI", False),

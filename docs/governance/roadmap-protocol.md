@@ -93,7 +93,7 @@ The roadmap is one of three durable persistence mechanisms; this section names h
 
 #### 12.5.2 Checkpoint disciplines (event-driven)
 
-`/context-save` fires when:
+`/context-save-lean` (the workspace copy of the gstack save flow, U-SR-08/WR-15) fires when:
 
 - Session approaches compaction or substantive multi-step arc is mid-flight.
 - Session ends with uncommitted state operator may want to resume.
