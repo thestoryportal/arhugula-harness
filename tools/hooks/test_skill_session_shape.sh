@@ -101,7 +101,7 @@ line "$acont_ground" "codex roadmap-continue grounding carries read-before-grep"
   '"one more targeted grep is cheaper" stops being true'
 
 line "$acont_exec" "codex roadmap-continue execute carries the cache-warmth handoff" \
-  'Cache-warmth handoff (U-SR-07/WR-14): deep in a long session, before any background wait expected to outlast the prompt-cache TTL' \
+  'Cache-warmth handoff (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast the prompt-cache TTL' \
   '[B] F4' \
   '"the wait costs nothing" bills the next call'
 
@@ -114,6 +114,20 @@ line "$aship_reflect" "codex ship-pr reflect carries the facts-brief handoff" \
   'Facts-brief handoff for a heavy next item (U-SR-07/WR-14): if the next action is a heavy audit or document' \
   '[B] F10' \
   '"I already have the context loaded" is the trap'
+
+# Ordering contract (u-sr-07 codex r3): the facts brief is written BEFORE the
+# checkpoint save, so the checkpoint carries it — pinned by the numbered-step order
+# in the Claude carrier and by the explicit before-clause in both carriers (a reorder
+# that saves first strands the fresh author without the brief).
+grep -qF '3. **Facts-brief handoff for a heavy next item' "$SHIP" && grep -qF '4. **Run `/context-save`.**' "$SHIP" \
+  && ok "ship-pr numbers the facts-brief step before the /context-save step" \
+  || bad "ship-pr close-out order drifted: facts-brief must be step 3, /context-save step 4"
+printf '%s' "$ship_reflect" | grep -qF -- 'BEFORE the `/context-save` below' \
+  && ok "ship-pr facts-brief names the before-save ordering" \
+  || bad "ship-pr facts-brief lost the before-save ordering clause"
+printf '%s' "$aship_reflect" | grep -qF -- 'written BEFORE running context-save' \
+  && ok "codex ship-pr facts-brief names the before-save ordering" \
+  || bad "codex ship-pr facts-brief lost the before-save ordering clause"
 
 # Coupling controls — the rule must live in the SAME SECTION as the moment it governs
 # (same-file co-occurrence proved nothing when either half could drift to an appendix).

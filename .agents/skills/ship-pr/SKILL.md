@@ -155,9 +155,10 @@ for a pure terminating-refresh PR.
 
 Facts-brief handoff for a heavy next item (U-SR-07/WR-14): if the next action is a heavy
 audit or document, the closing session writes the facts brief only — the findings, cites,
-and decisions the deliverable needs, folded into the context-save — and a fresh session
-authors from the brief; "I already have the context loaded" is the trap ([B] F10:
-authored at 540k context cost 0.93M IET against ≈0.3M fresh).
+and decisions the deliverable needs, written BEFORE running context-save so the
+checkpoint carries it — and a fresh session authors from the brief; "I already have the
+context loaded" is the trap ([B] F10: authored at 540k context cost 0.93M IET against
+≈0.3M fresh).
 
 ## Arc exit report (U-WT-03/04)
 

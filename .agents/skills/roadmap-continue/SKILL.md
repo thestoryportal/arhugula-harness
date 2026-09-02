@@ -41,8 +41,8 @@ check them rather than trusting remembered or checkpointed remaining work.
 4. Recount any stated condition/cardinality set programmatically after every review round.
 5. Run narrow verification, then `just codex-check`; add `just overlay-check`, shell tests,
    or live/integration checks when the claim requires them. Cache-warmth handoff
-   (U-SR-07/WR-14): deep in a long session, before any background wait expected to
-   outlast the prompt-cache TTL, prefer closing out to a handoff over idling through the
+   (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast
+   the prompt-cache TTL, prefer closing out to a handoff over idling through the
    expiry — one cold re-warm re-reads the whole context (≈0.7M IET on the [B] F4
    baseline); "the wait costs nothing" bills the next call.
 6. Grounding pass (U-WT-01) first: re-read every `file:line` cite against the
