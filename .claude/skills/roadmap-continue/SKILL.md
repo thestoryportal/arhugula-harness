@@ -43,7 +43,24 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    them), re-read `.harness/.lane-id` rather than trusting memory; its content IS this
    lane's id, and a fresh mint per session would generate a new random suffix and make the
    same-lane resume below misclassify this lane's own reservation as another's.
-   - `selectable` exit 0 (free) → reserve it, then export for this shell:
+   - `selectable` exit 0 (free) → run the selection-time disjointness gate FIRST (U-HE-36;
+     C-HE-13 §5: declared `scope.files` is a scheduling hint, actual-write is the gate —
+     the candidate head is merge-tree'd against every other lane's live head, i.e. the
+     branch of every `pending`/`open` reservation; guard-allowlisted in exactly this shape):
+     ```bash
+     uv run python tools/arc_disjoint_check.py check --candidate HEAD
+     ```
+     Exit 0 (`disjoint: …`) → reserve below. Exit 1 → each
+     `CONFLICT <arc> [<lane>] <branch>: <path>` line names a live sibling whose head no
+     longer merges cleanly with the candidate: textual conflict with an open lane — do NOT
+     reserve; re-derive and pick the next unit. (At selection the candidate is `main`, so
+     the conflict is that sibling's WIP against what landed since it branched; it fences
+     selection until the sibling rebases or is abandoned, and `BASE_TOCTOU` at landing
+     catches what selection-time cannot.) Exit 2 (`UNRESOLVED …` / `INCOMPLETE …`) → the
+     gate could not run — never read it as clean: surface the printed cause (a sibling
+     reservation whose branch has no local or origin ref is a C-HE-03 §5 HITL case) and do
+     not reserve.
+   - gate exit 0 → reserve it, then export for this shell:
      ```bash
      uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>
      export HARNESS_ARC_ID=<arc-id>   # same-shell only — restate inline later

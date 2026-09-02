@@ -29,6 +29,7 @@ uv run pytest -q \
   tools/test_arc_metrics_lanes.py \
   tools/test_arc_lever_report.py \
   tools/test_arc_cost.py \
+  tools/test_arc_disjoint_check.py \
   tools/test_ci_yml_concurrency.py \
   tools/test_finding_record.py \
   tools/test_lanes_verify.py \
