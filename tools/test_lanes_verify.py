@@ -295,6 +295,26 @@ def test_block_scoped_pin_survives_unrelated_edits_and_stales_on_the_block_or_bo
     assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
 
 
+def test_annotation_binds_across_a_multiline_decorator(repo: Path):
+    """codex u-sr-09 r5: an annotation above `@pytest.mark.parametrize(` spanning several
+    lines names that test; one above a non-test `def` binds nothing."""
+    (repo / "tools" / "test_x.py").write_text(
+        "import pytest\n\n\n"
+        "# mutation-probe: drop the glob arm\n"
+        "@pytest.mark.parametrize(\n"
+        '    ("a", "b"),\n'
+        "    [(1, 2)],\n"
+        ")\n"
+        "def test_p(a, b):\n    assert a < b\n\n\n"
+        "# mutation-probe: bound to nothing\n"
+        "def helper():\n    pass\n\n\n"
+        "def test_q():\n    assert True\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_x.py") == [("test_p", None)]
+    row = _row(mp=True, art="pytest:tools/test_x.py")
+    assert lv.required_probes(row) == [("tools/test_x.py::test_p", "tools/x.py")]
+
+
 def test_block_scoped_pin_on_a_crlf_source_is_live(repo: Path, monkeypatch):
     """codex u-sr-09 r4: the producer digests the block from bytes (CRLF kept); the consumer
     must decode bytes too -- `read_text()`'s universal newlines would never match."""

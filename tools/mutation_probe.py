@@ -203,6 +203,17 @@ def test_file_of(test_cmd: str) -> Path | None:
     return None
 
 
+#: pytest options that consume the NEXT token (the `--opt=value` spelling needs no entry:
+#: it starts with `-` and carries its value). Anything else after `pytest` that does not
+#: start with `-` is a collection target.
+PYTEST_VALUE_OPTIONS = frozenset(
+    {
+        "-k", "-m", "-p", "-o", "-W", "-c", "-n", "--basetemp", "--rootdir", "--deselect",
+        "--ignore", "--tb", "--durations", "--confcutdir", "--import-mode", "--maxfail",
+    }
+)  # fmt: skip
+
+
 def test_node_of(test_cmd: str) -> str | None:
     """The test FUNCTION a pytest command names via its ONE `::` node-id token
     (`pin_scope.node_tail`); None for a bare-file target, a `-k` selector (which can match
@@ -213,13 +224,20 @@ def test_node_of(test_cmd: str) -> str | None:
     toks = test_cmd.split()
     if "pytest" not in toks:
         return None
-    # every collection target counts, not only `::` ones: `a.py::test_x b.py` has two judges
-    # (codex u-sr-09 r4)
-    targets = [
-        tok
-        for tok in toks[toks.index("pytest") + 1 :]
-        if not tok.startswith("-") and (".py" in tok or "::" in tok or "/" in tok)
-    ]
+    # every collection target counts: an operand is a target unless it is the value of a
+    # value-taking pytest option (`-k EXPR`, `-p plugin`, …) -- `a.py::test_x b.py` and
+    # `a.py::test_x tests` both have two judges (codex u-sr-09 r4/r5)
+    targets: list[str] = []
+    args = toks[toks.index("pytest") + 1 :]
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in PYTEST_VALUE_OPTIONS:
+            i += 2
+            continue
+        if not tok.startswith("-"):
+            targets.append(tok)
+        i += 1
     return pin_scope.node_tail(targets[0]) if len(targets) == 1 and "::" in targets[0] else None
 
 

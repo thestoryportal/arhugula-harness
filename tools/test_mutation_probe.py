@@ -1727,6 +1727,10 @@ def test_test_node_of_binds_one_node_id_only():
     # codex u-sr-09 r4: a second collection target of ANY shape is a second judge
     assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/test_y.py") is None
     assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/") is None
+    # codex u-sr-09 r5: a bare directory name is a target too; an option VALUE is not
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tests") is None
+    assert mp.test_node_of("uv run pytest -q -k smoke tools/test_x.py::test_a") == "test_a"
+    assert mp.test_node_of("uv run pytest -p no:cacheprovider tools/test_x.py::test_a") == "test_a"
     assert mp.test_node_of("uv run pytest -q --basetemp=/tmp/h tools/test_x.py::test_a") == "test_a"
     assert mp.test_node_of("bash tools/hooks/test_x.sh") is None
 

@@ -507,8 +507,12 @@ def phase0_verdict(results: list[Result]) -> int:
 #: counts only if its logged `file` IS that target (codex R3/R4 P2: a pin credited to the test
 #: node alone could come from probing an unrelated file). The LINES the annotation names stay a
 #: human contract -- the gate proves a live pin of the named file exists for the annotated test.
+# An annotation binds the NEXT `def test_*`, across any decorator lines between -- including
+# a multi-line `@pytest.mark.parametrize(...)` (codex u-sr-09 r5: the single-line-decorator
+# form silently dropped a parametrized test from `required_probes`). A line starting with
+# `def ` that is not a test stops the scan (the annotation is then bound to nothing).
 _ANNOT = re.compile(
-    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:@[^\n]*\n)*"
+    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:(?!def )[^\n]*\n)*?"
     r"def (?P<name>test_\w+)",
     re.M,
 )
