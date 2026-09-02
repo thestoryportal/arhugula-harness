@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `3efa40ef5547` |
+| `workspace_state_hash` | `709dc231fa07` |
 | `last_refreshed` | 2026-09-02T00:00:00Z |
-| `git_head` | `056c6c84` —  |
+| `git_head` | `f28c4edc` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1491).** The next implementable unit is the §8 R2 mechanical sweep U-SR-09 — charter §2 "deliberately absent" + [B] b1/b4/b5 (c1 subsumed): b1 pin scope (bind the mutation pin to the probed block's digest or pin once at ship — implementer picks the arm and records why; witness: edit an unrelated line, the pin stays fresh; baseline 12 re-pins, 13 of 29 commits, 1.07M IET [B] F7), b4 rtk rewrite shapes (`\|` alternation → rg parse error, `--glob` landing on BSD grep, `(`/`)` in fixed-string greps — fix or pass-through, each shape round-trips; [B] F5: 29 wasted calls), b5 edit-hook timing (time `postedit-lint.sh` and `graft-hooks.cjs post-edit` separately on one `.py` edit; put `ruff` on the hook-shell PATH if `uv run ruff` is the path taken; measured numbers in the commit message, post-fix median < the [B] F8 baseline of 8.9 s). #1491 landed the U-SR-08 follow-up: the lean skill body carries no positional parameters (the skill loader rewrites them at invocation — found on the skill's first real run) and the trim witness pins their absence (77 checks). U-SR-08 itself landed at #1489 (see its refresh #1490 round). Remaining §8 sequence after U-SR-09: U-HE-36-as-R3 with U-HE-51 riding it; then U-SR-09 as the next unit.
+**Current next action (post-#1493).** The §8 R2 mechanical sweep U-SR-09 landed (b1 block+slice pin scope in `tools/pin_scope.py`, b4 the rtk grep-rewrite shape guard `tools/hooks/rtk-shape-guard.sh` + `tools/rtk_shape_guard.py` with B-227 registering the open-ended grammar-corner class, b5 the dirty-flag-only graft edit hook `.claude/helpers/graft-mark-dirty.cjs`; two [B] premises corrected by measurement: `\|` alone round-trips on rtk 0.40.0 and the edit-hook cost was graft's 46 s `check` inside an 8 s budget, not ruff). The next implementable unit is **U-HE-36 as the R3 eval arc** (`arc_disjoint_check`, plan §8.5 decision #2 arm (a) RATIFIED) with **U-HE-51** riding it (the X6f mid-budget lens trial, judged against the [B] baseline: 13 rounds, ≈25.6M IET, 29 commits / 13 pins, 418 main API calls, 29 wasted rtk calls, 12 re-pins), measured by the repaired R0 instruments; open it via `/roadmap-continue` — the reservation store dedups the terminal u-sr-09 head, then U-HE-36 as the next unit.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1493 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1491 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1489 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1487 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1485 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1483 | 2026-09-01 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
