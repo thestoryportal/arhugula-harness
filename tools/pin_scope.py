@@ -6,18 +6,21 @@ file, so an edit ANYWHERE in either file -- a docstring, an unrelated function, 
 another test -- staled every pin in the pair and forced a re-pin (12 of 13 pin commits on the
 U-HE-35 arc, 1.07M IET). This module owns the scoped theorem the pin now carries instead:
 
-    block  -- the probed lines' bytes still occur verbatim, contiguously, somewhere in the file
-              (content-anchored: an insertion ABOVE the block shifts its line numbers but not
-              its bytes, so the pin stays live and `lines` becomes provenance-at-probe-time,
-              not a live locator);
-    test   -- the judging test's BODY (the `def` plus its decorators, by AST) is unchanged when
-              the probe command names one node id; the whole artifact otherwise (`-k` selectors
-              can match several tests, a shell suite has no `def`).
+    block  -- the probed lines' bytes still occur verbatim, contiguously, EXACTLY ONCE in the
+              file (content-anchored: an insertion ABOVE the block shifts its line numbers but
+              not its bytes, so the pin stays live and `lines` becomes provenance-at-probe-time,
+              not a live locator; a block that occurs twice is never live -- deleting the
+              probed copy would leave the other to vouch for it, codex u-sr-09 r1);
+    test   -- the judging test's SLICE -- the test file with every OTHER top-level `test_*`
+              function removed, so imports, fixtures, constants, helpers and marks stay bound
+              (a swapped import or a module-wide skip hollows the test; only sibling-test
+              churn, the [B] F7 cost, is excluded) -- is unchanged when the probe command names
+              one node id; the whole artifact otherwise (`-k` selectors can match several
+              tests, a shell suite has no `def`).
 
 What the weaker theorem gives up, stated once so no reader re-derives it: an edit OUTSIDE the
-block that makes the block dead code (or a fixture change that hollows the test) is not caught
--- the merge-gate witness lens re-probes contested changes, and charter §4 names whole-file
-scope as the one defect. The producer (`mutation_probe.log_result`) writes the digests; the
+block that makes the block dead code is not caught -- the merge-gate witness lens re-probes
+contested changes, and charter §4 names whole-file scope as the one defect. The producer (`mutation_probe.log_result`) writes the digests; the
 consumer (`lanes_verify._pin_is_live`) re-derives them at HEAD. Both import from here so the
 format has ONE home. [LAW:one-source-of-truth]
 
@@ -37,7 +40,7 @@ from dataclasses import dataclass
 PIN_SCOPE_FILE = "file"
 PIN_SCOPE_BLOCK = "block"
 # How a block-scoped row binds its test (`test_scope` field).
-TEST_SCOPE_BODY = "body"  # `test_body_sha` = the named test function's source segment
+TEST_SCOPE_SLICE = "slice"  # `test_slice_sha` = the test file minus its OTHER top-level tests
 TEST_SCOPE_ARTIFACT = "artifact"  # `test_sha` = the whole test file / shell script
 
 
@@ -70,17 +73,24 @@ def block_digest(text: str, start: int, end: int) -> str:
     return digest16("".join(lines[start - 1 : end]).encode())
 
 
-def block_is_present(text: str, n_lines: int, digest: str) -> bool:
-    """True when SOME contiguous window of `n_lines` lines in `text` digests to `digest` --
-    the content anchor. Every window is hashed (files are small; a 3,000-line file is 3,000
-    sha256 calls), and the FIRST hit answers: a block that appears twice is present."""
+def block_occurrences(text: str, n_lines: int, digest: str) -> int:
+    """How many contiguous windows of `n_lines` lines in `text` digest to `digest` -- the
+    content anchor. Every window is hashed (files are small; a 3,000-line file is 3,000
+    sha256 calls)."""
     lines = text.splitlines(keepends=True)
     if n_lines < 1 or n_lines > len(lines):
-        return False
-    return any(
+        return 0
+    return sum(
         digest16("".join(lines[i : i + n_lines]).encode()) == digest
         for i in range(len(lines) - n_lines + 1)
     )
+
+
+def block_is_present(text: str, n_lines: int, digest: str) -> bool:
+    """The block occurs EXACTLY ONCE: present, and unambiguous (codex u-sr-09 r1 P2 -- a
+    duplicated one-liner would let the other copy vouch for a deleted probed copy). A probe
+    of a non-unique block is warned about at probe time (`mutation_probe`) and never live."""
+    return block_occurrences(text, n_lines, digest) == 1
 
 
 def node_tail(nodeid: str) -> str | None:
@@ -93,27 +103,44 @@ def node_tail(nodeid: str) -> str | None:
     return tail.split("[", 1)[0] or None
 
 
-def test_body_digest(source: str, name: str) -> str | None:
-    """Digest of the source segment of the ONE function `name` defines in `source` -- from its
-    first decorator (or the `def` line) through `end_lineno`, line endings included. None when
-    the source does not parse, defines no such function, or defines it more than once (two
-    classes with a `test_f` each: which one ran is not knowable from the name, so the caller
-    falls back to the whole artifact rather than pin the wrong body)."""
+def _span(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[int, int]:
+    """1-indexed inclusive line span of a function INCLUDING its decorators."""
+    first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+    return first, node.end_lineno or node.lineno
+
+
+def test_slice_digest(source: str, name: str) -> str | None:
+    """Digest of `source` with every top-level `test_*` function OTHER than `name` removed
+    (decorators included) -- the slice of the test file that can change the named test's
+    verdict: its own body, the imports, fixtures, helpers, constants and module-level marks
+    (codex u-sr-09 r1 P2: a body-only digest let a swapped import or a module-wide skip hollow
+    the test while its pin stayed live). Only sibling top-level tests -- the [B] F7 churn --
+    are excluded; a test method inside a class keeps its class whole. None when the source
+    does not parse, defines no function `name`, or defines it more than once (which one ran is
+    not knowable from the name, so the caller falls back to the whole artifact)."""
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return None
-    defs = [
+    named = [
         n
         for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == name
     ]
-    if len(defs) != 1:
+    if len(named) != 1:
         return None
-    node = defs[0]
-    first = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+    dropped: set[int] = set()
+    for n in tree.body:
+        if (
+            isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
+            and n.name.startswith("test_")
+            and n is not named[0]
+        ):
+            a, b = _span(n)
+            dropped.update(range(a, b + 1))
     lines = source.splitlines(keepends=True)
-    return digest16("".join(lines[first - 1 : node.end_lineno]).encode())
+    kept = "".join(line for i, line in enumerate(lines, start=1) if i not in dropped)
+    return digest16(kept.encode())
 
 
 @dataclass(frozen=True)
@@ -124,14 +151,14 @@ class BlockPin:
 
     block_sha: str
     n_lines: int
-    test_scope: str  # TEST_SCOPE_BODY | TEST_SCOPE_ARTIFACT
-    test_digest: str  # `test_body_sha` under BODY, `test_sha` under ARTIFACT
-    test_node: str | None  # the function BODY binds (None under ARTIFACT)
+    test_scope: str  # TEST_SCOPE_SLICE | TEST_SCOPE_ARTIFACT
+    test_digest: str  # `test_slice_sha` under SLICE, `test_sha` under ARTIFACT
+    test_node: str | None  # the function the SLICE is cut for (None under ARTIFACT)
 
     @classmethod
     def from_row(cls, row: dict, nodeid: str) -> BlockPin | None:
         """None when the row is not a well-formed block pin: no/garbled `lines`, a missing
-        digest, an unknown `test_scope`, or a BODY scope whose node id names no function --
+        digest, an unknown `test_scope`, or a SLICE scope whose node id names no function --
         such a row is never live (the same disposition a digest-less legacy row gets)."""
         try:
             start, end = parse_line_range(str(row.get("lines") or ""))
@@ -139,26 +166,26 @@ class BlockPin:
             return None
         block_sha = row.get("block_sha")
         scope = row.get("test_scope")
-        node = node_tail(nodeid) if scope == TEST_SCOPE_BODY else None
+        node = node_tail(nodeid) if scope == TEST_SCOPE_SLICE else None
         by_scope = {
-            TEST_SCOPE_BODY: row.get("test_body_sha"),
+            TEST_SCOPE_SLICE: row.get("test_slice_sha"),
             TEST_SCOPE_ARTIFACT: row.get("test_sha"),
         }
         digest = by_scope.get(str(scope))
-        if not block_sha or not digest or (scope == TEST_SCOPE_BODY and node is None):
+        if not block_sha or not digest or (scope == TEST_SCOPE_SLICE and node is None):
             return None
         return cls(str(block_sha), end - start + 1, str(scope), str(digest), node)
 
     def live(self, src_text: str, test_data: bytes) -> bool:
         """The scoped theorem, evaluated against the CURRENT bytes: the block still occurs
-        verbatim in `src_text`, and the test binding (body or whole artifact) still digests
-        to what the probe measured."""
+        verbatim, exactly once, in `src_text`, and the test binding (slice or whole artifact)
+        still digests to what the probe measured."""
         if not block_is_present(src_text, self.n_lines, self.block_sha):
             return False
-        if self.test_scope == TEST_SCOPE_BODY:
+        if self.test_scope == TEST_SCOPE_SLICE:
             try:
-                body = test_body_digest(test_data.decode("utf-8"), self.test_node or "")
+                digest = test_slice_digest(test_data.decode("utf-8"), self.test_node or "")
             except UnicodeDecodeError:
                 return False
-            return body == self.test_digest
+            return digest == self.test_digest
         return digest16(test_data) == self.test_digest

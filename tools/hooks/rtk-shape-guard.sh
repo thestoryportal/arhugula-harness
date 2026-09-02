@@ -25,23 +25,33 @@
 # command is `rtk proxy <original>` -- rtk's own raw-execution verb, which its hook leaves
 # alone (witnessed: `rtk hook claude` emits 0 bytes for every `rtk proxy` shape).
 #
-# Oracle, not re-implementation: `rtk hook check <cmd>` (rtk's dry-run) says whether THIS
-# command gets rewritten to `rtk grep …`; only then is the shape judged. Its print form
-# varies (the rewritten command; "No rewrite for: <cmd>"; or the command echoed back
-# verbatim -- all three seen on 0.40.0), so the guard keys on ONE token that appears only
-# in a real rewrite: `rtk grep `. rtk absent (CI, another machine) -> nothing rewrites ->
-# nothing to guard -> silent exit 0; an oracle that fails or exceeds its bound is treated
-# the same way -- the call proceeds exactly as it did before this guard existed (the guard
-# can only ever REMOVE a wasted call, never add a stall). A plain command emits ZERO bytes
-# (WR-16 emit policy; test_pretooluse_bash_emit_policy.sh pins it). The oracle's 5 s bound
-# is the sibling hooks' bounded-subprocess budget (postedit-lint.sh's ruff step); the
-# dry-run itself returns in milliseconds.
+# Three preconditions, each a fact about the venue and not a guess:
+#   - rtk's rewrite hook is REGISTERED in the Claude user settings
+#     (`${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json`, a PreToolUse command carrying
+#     `rtk hook claude`). That registration is the mechanism this guard compensates for;
+#     without it nothing rewrites and the guard is silent -- which is also why it is NOT
+#     mirrored into `.codex/hooks.json`: Codex never runs rtk's hook, so a mirrored deny
+#     would refuse commands Codex runs unmangled (`CLAUDE_ONLY_HOOKS` in the Codex adapter).
+#   - `rtk` is on PATH (CI and other machines: no rtk, no rewrite, silent exit 0).
+#   - rtk's own dry-run (`rtk hook check <cmd>`) says THIS command is rewritten. Its print
+#     form varies (the rewritten command; "No rewrite for: <cmd>"; or the command echoed
+#     back verbatim -- all three seen on 0.40.0); the judgement keys on the one token that
+#     appears only in a real rewrite: `rtk grep`. An oracle that fails or exceeds its bound
+#     is read as "no rewrite" -- the call proceeds exactly as it did before this guard
+#     existed (the guard can only ever REMOVE a wasted call, never add a stall).
+# The judgement itself -- separators, quoting, attached flag values, the pattern operand,
+# the re-issue -- is `tools/rtk_shape_guard.py`, run with the hook shell's /usr/bin/python3
+# (the sibling hooks' interpreter; 3.9-compatible) and unit-tested on its own. A plain
+# command emits ZERO bytes (WR-16 emit policy; test_pretooluse_bash_emit_policy.sh pins it).
+# The two 5 s bounds are the sibling hooks' bounded-subprocess budget (postedit-lint.sh's
+# YAML step); the dry-run and the judgement each return in milliseconds.
 #
 # EXIT PLAN ([LAW:no-mode-explosion]): this guard exists for a defect in an external tool at
 # a known version. test_rtk_shape_guard.sh section 4 (runs only where rtk is installed)
 # asserts each shape STILL fails under `rtk grep` and works under `rtk proxy`; when a newer
 # rtk translates them correctly that section reds with "rtk fixed this -- delete the guard",
-# and the deletion is this file, its test, its manifest row and its settings.json entry.
+# and the deletion is this file, tools/rtk_shape_guard.py + its tests, the manifest row,
+# the adapter's CLAUDE_ONLY_HOOKS entry and the settings.json entry.
 
 set -uo pipefail
 
@@ -55,42 +65,25 @@ PAYLOAD=$(hook_read_stdin)
 CMD=$(hook_json "$PAYLOAD" '.tool_input.command')
 [ -z "$CMD" ] && exit 0
 
-# Cheap pre-check so an unrelated Bash call never pays for the oracle subprocess.
+# Cheap pre-check so an unrelated Bash call never pays for a subprocess.
 case "$CMD" in *grep*|*rg*) ;; *) exit 0 ;; esac
 command -v rtk >/dev/null 2>&1 || exit 0
 
+# rtk's rewrite hook must be registered for THIS venue (see the header).
+SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+[ -f "$SETTINGS" ] || exit 0
+jq -e '[.hooks.PreToolUse[]?.hooks[]?.command // empty] | any(contains("rtk hook claude"))' \
+  "$SETTINGS" >/dev/null 2>&1 || exit 0
+
 # The oracle: rtk's own dry-run of its rewrite. Bounded; any failure = no rewrite = no guard.
 REWRITE=$(hook_bounded 5 rtk hook check "$CMD" 2>/dev/null) || exit 0
-case "$REWRITE" in *"rtk grep "*) ;; *) exit 0 ;; esac
+case "$REWRITE" in *"rtk grep"*) ;; *) exit 0 ;; esac
 
-# The `rtk grep …` segment the shapes are judged on: from the (last) `rtk grep ` to the next
-# space-delimited shell separator. A `\|` inside a quoted pattern has no spaces around it,
-# so it never cuts the segment.
-SEG=$(printf '%s' "$REWRITE" | sed -E 's/^.*rtk grep /rtk grep /; s/ (\||&&|\|\||;) .*$//')
+JUDGE="$(dirname "${BASH_SOURCE[0]}")/../rtk_shape_guard.py"
+[ -f "$JUDGE" ] || exit 0
+REASON=$(hook_bounded 5 /usr/bin/python3 "$JUDGE" "$CMD" "$REWRITE" 2>/dev/null) || exit 0
+[ -z "$REASON" ] && exit 0
 
-# -E / -F / -P (or their long forms) make a paren mean the same thing to grep and rg.
-if printf '%s' "$SEG" | grep -qE -- '(^|[[:space:]])(-[[:alnum:]]*[EFP][[:alnum:]]*|--extended-regexp|--fixed-strings|--perl-regexp)([[:space:]]|$)'; then
-  REGEX_SAFE=1
-else
-  REGEX_SAFE=0
-fi
-
-SHAPES=""
-if printf '%s' "$SEG" | grep -qE -- '(^|[[:space:]])(-g|--glob)([[:space:]=]|$)'; then
-  SHAPES="${SHAPES}an rg-only --glob/-g flag (rtk lands it on BSD grep: 'unrecognized option', exit 2); "
-fi
-if [ "$REGEX_SAFE" -eq 0 ] && printf '%s' "$SEG" | grep -qE -- '(^|[^\\])[()]'; then
-  SHAPES="${SHAPES}an unescaped paren in a BRE pattern (a literal to grep, a group to rg: 'regex parse error', exit 2); "
-fi
-[ -z "$SHAPES" ] && exit 0
-
-# The re-issue, built from the ORIGINAL command (the dry-run collapses `rg` into `grep`, and
-# `rtk proxy grep -g` would fail exactly like today): every command-position grep/rg gets
-# rtk's raw-execution prefix. Command position = start of the string, after `;`/`&`/`|`, or
-# inside `$(`. A quoted `; grep` would be prefixed too -- the reason text is a suggestion,
-# the deny is the mechanism.
-FIX=$(printf '%s' "$CMD" | sed -E 's/(^[[:space:]]*|[;&|][[:space:]]*|\$\([[:space:]]*)(grep|rg)([[:space:]])/\1rtk proxy \2\3/g')
-
-jq -nc --arg r "[rtk-shape-guard] the rtk PreToolUse rewrite turns this into \`${SEG}\`, which carries ${SHAPES%; }. Re-issue verbatim as: ${FIX}" \
+jq -nc --arg r "$REASON" \
   '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":$r}}'
 exit 0

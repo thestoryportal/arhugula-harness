@@ -544,8 +544,8 @@ def _pin_is_live(e: dict, target: str, probe_file: str) -> bool:
     Which bytes is the row's `pin_scope` (U-SR-09 b1; `pin_scope.py` owns the theorem):
     `file` (absent -- every pre-U-SR-09 row) -- the mutated source file (`file` +
     `target_sha`) AND the test artifact (`test_sha`) must both still digest to the logged
-    values (codex R2 P2); `block` -- the probed lines still occur verbatim in the file and
-    the test BODY (or whole artifact, per `test_scope`) is unchanged, so an unrelated edit in
+    values (codex R2 P2); `block` -- the probed lines still occur verbatim, once, in the file
+    and the test SLICE (or whole artifact, per `test_scope`) is unchanged, so an unrelated edit in
     either file no longer stales the pin ([B] F7). Entries without digests never count; an
     unknown scope never counts. The probed file must be THE annotated target (`probe_file`),
     an existing source file -- never the test artifact itself, never an unrelated module

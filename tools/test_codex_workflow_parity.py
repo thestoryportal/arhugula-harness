@@ -378,6 +378,20 @@ def test_codex_hooks_cover_supported_claude_lifecycle(
 _CLAUDE_ONLY_HELPER_DIR = ".claude/helpers/"
 
 
+def _adapter_claude_only_hooks() -> dict[str, str]:
+    """`CLAUDE_ONLY_HOOKS` as the adapter module defines it (imported, not regexed -- the
+    adapter's import is side-effect-free; `main()` runs only under `__main__`)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("codex_hook_adapter", ADAPTER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    hooks = getattr(module, "CLAUDE_ONLY_HOOKS", {})
+    assert isinstance(hooks, dict)
+    return dict(hooks)
+
+
 def _claude_only_helper(command: str) -> str | None:
     """Repo-relative helper path if `command` is an exempt Claude-only hook, else None."""
     marker = f"{_CLAUDE_ONLY_HELPER_DIR}"
@@ -428,6 +442,14 @@ def test_codex_hook_map_tracks_every_canonical_claude_hook_command() -> None:
         "tools/hooks/session-end-cleanup.sh": "session-end-cleanup.sh",
     }
 
+    # U-SR-09: a hook the adapter declares CLAUDE_ONLY (with its reason) is asserted ABSENT
+    # from the Codex map -- the exemption is data the adapter carries, not a silent skip.
+    claude_only = _adapter_claude_only_hooks()
+    for relative, reason in claude_only.items():
+        assert reason.strip(), f"CLAUDE_ONLY_HOOKS[{relative!r}] carries no reason"
+        assert (ROOT / relative).exists(), f"CLAUDE_ONLY_HOOKS names a missing hook: {relative}"
+        assert relative not in codex_commands, f"{relative} is CLAUDE_ONLY yet mirrored"
+
     assert set(claude) - set(codex) == {"PostToolUseFailure", "StopFailure"}
     for groups in claude.values():
         for group in groups:
@@ -440,6 +462,8 @@ def test_codex_hook_map_tracks_every_canonical_claude_hook_command() -> None:
                     relative = command.removeprefix(prefix)
                     if relative in wrapper_targets:
                         assert wrapper_targets[relative] in wrappers
+                    elif relative in claude_only:
+                        continue
                     else:
                         assert relative in implementation
                 else:

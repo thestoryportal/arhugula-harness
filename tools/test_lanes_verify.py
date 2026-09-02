@@ -216,17 +216,17 @@ def _block_entry(
     repo: Path, test: str, lines: str, node: str | None, file: str = "tools/x.py", **over
 ) -> str:
     """A U-SR-09 block-scoped row as `mutation_probe.log_result` writes it: `pin_scope` block,
-    `block_sha` over the probed lines of `file`, `test_scope` body (with the named function's
-    digest) or artifact."""
+    `block_sha` over the probed lines of `file`, `test_scope` slice (the test file minus its
+    other top-level tests, cut for `node`) or artifact."""
     a, b = lv.pin_scope.parse_line_range(lines)
     tfile = next(t for t in test.split() if ".py" in t or t.endswith(".sh")).split("::")[0]
-    body = lv.pin_scope.test_body_digest((repo / tfile).read_text(), node) if node else None
+    body = lv.pin_scope.test_slice_digest((repo / tfile).read_text(), node) if node else None
     fields = {
         "lines": lines,
         "pin_scope": lv.pin_scope.PIN_SCOPE_BLOCK,
         "block_sha": lv.pin_scope.block_digest((repo / file).read_text(), a, b),
-        "test_scope": lv.pin_scope.TEST_SCOPE_BODY if body else lv.pin_scope.TEST_SCOPE_ARTIFACT,
-        "test_body_sha": body,
+        "test_scope": lv.pin_scope.TEST_SCOPE_SLICE if body else lv.pin_scope.TEST_SCOPE_ARTIFACT,
+        "test_slice_sha": body,
     }
     fields.update(over)  # a caller's override wins (an unknown scope, a missing digest)
     return _entry(repo, test, file=file, **fields)
@@ -236,8 +236,9 @@ def _block_entry(
 def test_block_scoped_pin_survives_unrelated_edits_and_stales_on_the_block_or_body(
     repo: Path, monkeypatch
 ):
-    """U-SR-09 b1 ([B] F7/c1): the pin binds the probed BLOCK and the judging test's BODY, so an
-    edit elsewhere in either file keeps it live; the block or the body moving stales it; a
+    """U-SR-09 b1 ([B] F7/c1): the pin binds the probed BLOCK and the judging test's SLICE (the
+    file minus its other top-level tests), so an edit elsewhere in the source or in a sibling
+    test keeps it live; the block, the test body, or the test's imports moving stales it; a
     legacy (scope-less) row keeps the whole-file rule."""
     src, tst = repo / "tools" / "x.py", repo / "tools" / "test_x.py"
     src.write_text("import os\n\n\ndef f():\n    return 1\n\n\ndef g():\n    return 2\n")
@@ -257,7 +258,7 @@ def test_block_scoped_pin_survives_unrelated_edits_and_stales_on_the_block_or_bo
     # an unrelated edit BELOW the block: still live
     src.write_text(src.read_text().replace("return 2", "return 3"))
     assert lv.coverage_gaps(log) == []
-    # a SIBLING test edited: still live (body scope)
+    # a SIBLING test edited: still live (slice scope)
     tst.write_text(tst.read_text().replace("assert g() == 2", "assert g() == 3"))
     assert lv.coverage_gaps(log) == []
     # the block itself edited: stale
@@ -269,6 +270,16 @@ def test_block_scoped_pin_survives_unrelated_edits_and_stales_on_the_block_or_bo
     tst.write_text(tst.read_text().replace("assert f() == 1", "assert f() == 1  # weaker?"))
     assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
     tst.write_text(tst.read_text().replace("  # weaker?", ""))
+    assert lv.coverage_gaps(log) == []
+    # the test's IMPORTS edited (codex u-sr-09 r1: a swapped import hollows the test): stale
+    tst.write_text("import os\n" + tst.read_text())
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    tst.write_text(tst.read_text().removeprefix("import os\n"))
+    assert lv.coverage_gaps(log) == []
+    # the probed block DUPLICATED elsewhere in the source: stale (no copy may vouch)
+    src.write_text(src.read_text() + "\n\ndef h():\n    return 1\n")
+    assert _nodes(lv.coverage_gaps(log)) == ["tools/test_x.py::test_f"]
+    src.write_text(src.read_text().removesuffix("\n\ndef h():\n    return 1\n"))
     assert lv.coverage_gaps(log) == []
     # a legacy row (no pin_scope) still lives by the whole-file rule -- the 1,300-row log
     # written before U-SR-09 is not mass-staled by the landing

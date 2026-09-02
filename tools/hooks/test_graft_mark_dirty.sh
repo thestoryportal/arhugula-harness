@@ -11,13 +11,30 @@
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHIM="$SCRIPT_DIR/graft-mark-dirty.cjs"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SHIM="$ROOT/.claude/helpers/graft-mark-dirty.cjs"
+SETTINGS="$ROOT/.claude/settings.json"
 BASELINE_MEDIAN_S="8.9"   # [B] F8: the pre-fix per-edit hook median this unit is judged against
 
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 command -v node >/dev/null 2>&1 || { echo "FATAL: node not on PATH"; exit 1; }
+[ -f "$SHIM" ] || { echo "FATAL: missing $SHIM"; exit 1; }
+
+# --- 0. the registration (codex u-sr-09 r1 P3): the PostToolUse edit matcher runs THIS shim
+# and no longer the stock `graft-hooks.cjs post-edit` -- reverting the settings line must red.
+python3 - "$SETTINGS" <<'EOF' && ok "settings.json: a Write|Edit|MultiEdit PostToolUse group runs graft-mark-dirty.cjs and no hook runs graft-hooks.cjs post-edit" || bad "settings.json registration drifted (see python output above)"
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]
+cmds = [(row.get("matcher"), h["command"]) for row in d.get("PostToolUse", []) for h in row.get("hooks", [])]
+shim = [m for m, c in cmds if c.endswith('/.claude/helpers/graft-mark-dirty.cjs"')]
+stock = [c for _, c in cmds if "graft-hooks.cjs\" post-edit" in c]
+ok = shim and all(set(str(m).split("|")) >= {"Write", "Edit", "MultiEdit"} for m in shim) and not stock
+if not ok:
+    print(f"shim matchers={shim} stock post-edit entries={stock}")
+sys.exit(0 if ok else 1)
+EOF
 
 REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL: mktemp -d failed"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT

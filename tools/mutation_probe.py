@@ -150,13 +150,14 @@ PROBE_LOG = Path(
 #: artifact before the baseline and re-checked after step 3 (a change in between voids it).
 #: `log_result` writes these, never a fresh read after the lock is released (codex R2/R3 P2).
 #: U-SR-09 b1 adds the SCOPED pair: `block_sha` (the probed lines' bytes) and
-#: `test_body_sha` (the judging test's `def`, when the command names one node id) -- the
+#: `test_slice_sha` (the test file minus its other top-level tests, when the command names
+#: one node id) -- the
 #: theorem `lanes_verify._pin_is_live` reads; `target_sha`/`test_sha` stay as provenance.
 MEASURED: dict[str, str | None] = {
     "target_sha": None,
     "test_sha": None,
     "block_sha": None,
-    "test_body_sha": None,
+    "test_slice_sha": None,
 }
 
 
@@ -172,9 +173,9 @@ def _sha16(path: Path) -> str | None:
 
 
 def _test_digests(path: Path, node: str | None) -> tuple[str | None, str | None]:
-    """(whole-artifact digest, test-body digest) of the test artifact from ONE read, so
-    the two describe the same bytes. The body digest is None unless `node` names exactly
-    one function in a parseable Python file (`pin_scope.test_body_digest`)."""
+    """(whole-artifact digest, test-slice digest) of the test artifact from ONE read, so
+    the two describe the same bytes. The slice digest is None unless `node` names exactly
+    one function in a parseable Python file (`pin_scope.test_slice_digest`)."""
     try:
         data = path.read_bytes()
     except OSError:
@@ -182,7 +183,7 @@ def _test_digests(path: Path, node: str | None) -> tuple[str | None, str | None]
     body = None
     if node is not None:
         try:
-            body = pin_scope.test_body_digest(data.decode("utf-8"), node)
+            body = pin_scope.test_slice_digest(data.decode("utf-8"), node)
         except UnicodeDecodeError:
             body = None
     return pin_scope.digest16(data), body
@@ -1445,7 +1446,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     _reset_measured()
     tf = test_file_of(test_cmd)
     test_path = (repo_root / tf) if tf is not None else None
-    test_sha_before, test_body_before = (
+    test_sha_before, test_slice_before = (
         _test_digests(test_path, test_node_of(test_cmd)) if test_path is not None else (None, None)
     )
 
@@ -1503,6 +1504,14 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
     # The scoped pin (U-SR-09 b1): the bytes the probe is about to comment out, from the
     # restore authority -- the range was validated by comment_out one line up.
     MEASURED["block_sha"] = pin_scope.block_digest(text, start, end)
+    occurrences = pin_scope.block_occurrences(text, end - start + 1, MEASURED["block_sha"])
+    if occurrences != 1:
+        print(
+            f"WARNING: the probed block {target}:{start}-{end} occurs {occurrences} times in the "
+            "file; its pin can never read live (a duplicate could vouch for a deleted copy) -- "
+            "widen --lines to a unique range and re-probe.",
+            file=sys.stderr,
+        )
 
     # Step 2b — reject an unprobeable range BEFORE writing anything.
     err = syntax_error(kind, mutated_text, str(target))
@@ -1564,7 +1573,7 @@ def probe(target: Path, start: int, end: int, test_cmd: str, timeout: int) -> in
             verdict, reason = classify_step3(res.rc, mutation_output, looks_like_pytest(test_cmd))
             if test_path is not None and _sha16(test_path) == test_sha_before:
                 MEASURED["test_sha"] = test_sha_before
-                MEASURED["test_body_sha"] = test_body_before
+                MEASURED["test_slice_sha"] = test_slice_before
             # SECOND GUARD (merge-gate lens 1). Independent of the lock and deliberately
             # kept alongside it: a verdict is only about the removed lines if the removed
             # lines were still gone when the test finished. Anything else on disk means the
@@ -1668,9 +1677,9 @@ def _run(args: argparse.Namespace) -> int:
 
 def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = None) -> None:
     """Append one verdict line to PROBE_LOG: `{ts, file, lines, test, rc, head, target_sha,
-    test_sha, pin_scope, block_sha, test_scope, test_body_sha}` (the last four are U-SR-09 b1:
+    test_sha, pin_scope, block_sha, test_scope, test_slice_sha}` (the last four are U-SR-09 b1:
     `pin_scope` is always `block` for a row this version writes -- a pre-U-SR-09 row has no
-    field and reads as `file`; `test_scope` is `body` exactly when the command named one test
+    field and reads as `file`; `test_scope` is `slice` exactly when the command named one test
     function). The digests bind the verdict to the exact source + test bytes it measured, so
     `lanes_verify` can tell a live pin from a stale one after either file changes (codex R2
     P2: rc alone let an old success stand after the guarded line was reverted). The verdict
@@ -1693,11 +1702,11 @@ def log_result(file: str, lines: str, test: str, rc: int, log: Path | None = Non
         "pin_scope": pin_scope.PIN_SCOPE_BLOCK,
         "block_sha": MEASURED["block_sha"],
         "test_scope": (
-            pin_scope.TEST_SCOPE_BODY
-            if MEASURED["test_body_sha"] is not None
+            pin_scope.TEST_SCOPE_SLICE
+            if MEASURED["test_slice_sha"] is not None
             else pin_scope.TEST_SCOPE_ARTIFACT
         ),
-        "test_body_sha": MEASURED["test_body_sha"],
+        "test_slice_sha": MEASURED["test_slice_sha"],
     }
     data = (json.dumps(entry, sort_keys=True) + "\n").encode()
     try:

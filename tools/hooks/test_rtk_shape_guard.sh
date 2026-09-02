@@ -17,6 +17,7 @@
 
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 HOOK="$SCRIPT_DIR/rtk-shape-guard.sh"
 
 PASS=0; FAIL=0
@@ -48,10 +49,16 @@ chmod +x "$STUBDIR/rtk"
 # stdin would EPIPE the writer, and under pipefail that status masks the hook's own.
 PAYLOAD="$REPO/payload.json"
 payload() { python3 -c 'import json,sys; print(json.dumps({"session_id":"probe","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1" > "$PAYLOAD"; }
+# The guard fires only where rtk's rewrite hook is REGISTERED (Claude user settings); the
+# fixture registers it under a throwaway CLAUDE_CONFIG_DIR, and one case below omits it.
+CFG="$REPO/claude-config"; mkdir -p "$CFG"
+printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"rtk hook claude"}]}]}}\n' > "$CFG/settings.json"
+NOCFG="$REPO/claude-config-none"; mkdir -p "$NOCFG"
+printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo other"}]}]}}\n' > "$NOCFG/settings.json"
 # run_guard <bash-command>: PATH = stub first; stdout+stderr -> $OUT; echoes the exit code.
 run_guard() {
   payload "$1"
-  env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1
+  env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS" CLAUDE_CONFIG_DIR="$CFG" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1
   echo $?
 }
 bytes() { wc -c < "$OUT" | tr -d ' '; }
@@ -75,7 +82,7 @@ expect_deny() { # <label> <cmd> <expected re-issue substring> <expected shape wo
   rc=$(run_guard "$2")
   reason=$(deny_reason "$OUT") || { bad "$1: '$2' -> not a closed deny decision (rc=$rc): $(head -c 300 "$OUT")"; return; }
   case "$reason" in
-    *"Re-issue verbatim as: $3"*) ok "$1: '$2' -> deny with re-issue '$3'" ;;
+    *"Re-issue as: $3"*) ok "$1: '$2' -> deny with re-issue '$3'" ;;
     *) bad "$1: '$2' -> deny but re-issue missing '$3': $reason" ;;
   esac
   case "$reason" in *"$4"*) ok "$1: reason names the shape ($4)" ;; *) bad "$1: reason does not name '$4': $reason" ;; esac
@@ -104,10 +111,31 @@ expect_deny "-g short form" 'rg -g "*.py" main tools' 'rtk proxy rg -g "*.py" ma
 expect_deny "bare paren" 'grep -rn "hook_emit(" tools/hooks' 'rtk proxy grep -rn "hook_emit(" tools/hooks' 'unescaped paren'
 expect_deny "closing paren" 'grep -n "x)" f.txt' 'rtk proxy grep -n "x)" f.txt' 'unescaped paren'
 expect_deny "alternation + paren (the [B] parse-error shape)" 'grep -n "a\|f(" f.txt' 'rtk proxy grep -n "a\|f(" f.txt' 'unescaped paren'
-expect_deny "after ; the re-issue prefixes only the grep" 'cd /tmp; grep -n "f(" f' 'cd /tmp; rtk proxy grep -n "f(" f' 'unescaped paren'
-expect_deny "before && the re-issue keeps the tail" 'grep -n "f(" f && echo ok' 'rtk proxy grep -n "f(" f && echo ok' 'unescaped paren'
+# a compound command is re-joined token by token (shell-equivalent, quotes normalized);
+# a single simple command is prefixed VERBATIM (the cases above)
+expect_deny "after ; the re-issue prefixes only the grep" 'cd /tmp; grep -n "f(" f' "cd /tmp ; rtk proxy grep -n 'f(' f" 'unescaped paren'
+expect_deny "before && the re-issue keeps the tail" 'grep -n "f(" f && echo ok' "rtk proxy grep -n 'f(' f && echo ok" 'unescaped paren'
 rc=$(run_guard 'rg -g "*.py" "f(" tools'); reason=$(deny_reason "$OUT")
 case "$reason" in *'--glob/-g'*'unescaped paren'*) ok "both shapes named when both present" ;; *) bad "both shapes expected in one reason: $reason" ;; esac
+# codex u-sr-09 r1 (three P2s on the sed-based first cut): quote-aware end to end
+expect_deny "quoted && inside the pattern is not a separator" "grep -n 'a && f(' file" "rtk proxy grep -n 'a && f(' file" 'unescaped paren'
+expect_deny "attached -g value" "rg -g'*.py' needle tree" "rtk proxy rg -g'*.py' needle tree" '--glob/-g'
+expect_deny "quoted '; grep literal' argument is left alone in the re-issue" "grep -g '*.py' needle '; grep literal'" "rtk proxy grep -g '*.py' needle '; grep literal'" '--glob/-g'
+expect_silent "a quoted separator word as the pattern is a word" "grep '|' file.txt"
+
+# --- 2b. registration (codex u-sr-09 r1 P3): settings.json runs this guard on Bash -----------
+python3 - "$ROOT/.claude/settings.json" <<'EOF' && ok "settings.json: a PreToolUse Bash group runs rtk-shape-guard.sh" || bad "settings.json no longer registers rtk-shape-guard.sh on PreToolUse Bash"
+import json, sys
+d = json.load(open(sys.argv[1]))["hooks"]
+hits = [row.get("matcher") for row in d.get("PreToolUse", []) for h in row.get("hooks", []) if h.get("command", "").endswith("/tools/hooks/rtk-shape-guard.sh")]
+sys.exit(0 if any(m in (None, "", "*", "Bash") or "Bash" in str(m).split("|") for m in hits) else 1)
+EOF
+# rtk's rewrite hook NOT registered for the venue -> silent even on a guarded shape
+payload 'grep -rn "hook_emit(" tools/hooks'
+env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS" CLAUDE_CONFIG_DIR="$NOCFG" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ "$(bytes)" -eq 0 ] && ok "rtk hook not registered in the venue's settings -> exit 0, 0 bytes" || bad "unregistered venue -> rc=$rc $(bytes) bytes: $(head -c 200 "$OUT")"
+env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS" CLAUDE_CONFIG_DIR="$REPO/no-such-dir" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ "$(bytes)" -eq 0 ] && ok "no settings file at all -> exit 0, 0 bytes" || bad "missing settings -> rc=$rc $(bytes) bytes"
 
 # --- 3. no rtk on PATH / review-isolated -> silent even on a guarded shape ----------------
 # "rtk absent" = the caller's PATH minus every directory that holds an rtk (the stub's and

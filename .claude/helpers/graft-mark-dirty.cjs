@@ -23,6 +23,11 @@
 // median over 5 runs with the real package on this repo (U-SR-09) -- with ~30x headroom
 // for a loaded machine; the stock entry carried 10 s because its child alone needed 8.
 //
+// Lives beside graft's own generated shims under .claude/helpers/ because it IS a graft
+// Claude-runtime hook -- the same Codex-mirror exemption as graft-hooks.cjs applies
+// (`.codex/notes/claude-codex-parity.md`, Graft row; `test_codex_workflow_parity.py`
+// asserts every .claude/helpers/ hook command references a tracked helper).
+//
 // Known re-entry: `graft init` re-merges its own `post-edit` entry into .claude/settings.json
 // (mergeGraftSettings); after any re-init, drop that entry again or both hooks fire.
 // Exit plan: delete this shim once an upstream graft post-edit no longer runs `graft check`
