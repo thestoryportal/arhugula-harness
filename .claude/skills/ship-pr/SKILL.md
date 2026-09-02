@@ -16,7 +16,12 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites that lane runs are
   never executed by it. ALWAYS launch `just codex-check` `run_in_background` and poll the
   task (U-SR-05/WR-12) — the suite outlasts the Bash tool's foreground timeout, and a
-  foreground launch cost a 10-minute dead gap at [B] F6.
+  foreground launch cost a 10-minute dead gap at [B] F6. Cache-warmth handoff
+  (U-SR-07/WR-14): at >400k context, before ANY background wait expected to outlast the
+  prompt-cache TTL — this launch included, and the CI/door waits later in this skill —
+  prefer closing out to a handoff over idling through the expiry: one cold re-warm
+  re-reads the whole context at ≈0.7M IET ([B] F4); "the wait costs nothing, I'm just
+  sleeping" is the trap — the expiry bills the NEXT call.
 - **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
   the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
   claim from the actual source rather than restating it; (c) confirm every `#NNN` reference
@@ -508,9 +513,17 @@ ending the turn):
    patterns and any explicit user feedback (correction OR confirmation) get saved/updated —
    fold into an existing entry when one matches, don't duplicate. Land the `MEMORY.md` index
    line via `just memory-compact --upsert` (above), never a hand `Edit`.
-3. **Run `/context-save`.** Even if the next action is "stop the loop" — a saved checkpoint is
+3. **Facts-brief handoff for a heavy next item (U-SR-07/WR-14).** If the next action is a
+   heavy audit or document, do not author it here — "I already have all the context
+   loaded" is the trap; the loaded
+   context is what every call re-bills. The closing session writes the facts brief only —
+   the findings, cites, and decisions the deliverable needs — BEFORE the `/context-save`
+   below, so the checkpoint carries it, and a fresh session authors from the brief: the
+   S3 audit authored at 540k context cost 0.93M IET against ≈0.3M fresh ([B] F10).
+4. **Run `/context-save`.** Even if the next action is "stop the loop" — a saved checkpoint is
    what makes the next session's resume cheap and honest, per
-   `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`.
+   `[[feedback-checkpoint-remaining-work-is-advisory-not-authoritative]]`. When step 3
+   produced a facts brief, this save is what carries it to the fresh session.
 
 Skip only when this PR was itself the terminating roadmap-status refresh (§12.2.1) — a
 refresh-only commit has no new learnings to reflect on.

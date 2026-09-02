@@ -45,7 +45,10 @@ any other session's SessionStart hook fetches on every start and can advance the
 the two adds). Each lane then runs its arc's BUILD
 half normally — build, test, `just codex-check` (ALWAYS launch it `run_in_background` and poll
 the task, U-SR-05/WR-12: the suite outlasts the Bash tool's foreground timeout, and a foreground
-launch cost a 10-minute dead gap at [B] F6), grounding pass, out-of-family review — entirely
+launch cost a 10-minute dead gap at [B] F6; cache-warmth handoff, U-SR-07/WR-14: at >400k
+context, before any background wait expected to outlast the prompt-cache TTL, prefer closing
+out to a handoff over idling through the expiry — one cold re-warm re-reads the whole context
+at ≈0.7M IET ([B] F4), and "the wait costs nothing" bills the next call), grounding pass, out-of-family review — entirely
 inside its own worktree. Nothing about the build half is serialized. **`merge-gate` and the
 final-head CI check are NOT build-half steps**: the gate runs immediately before merge, appends
 the shared `.harness/merge-gate-log.md`, and its approvals must cover the branch that will

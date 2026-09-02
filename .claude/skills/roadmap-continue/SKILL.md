@@ -103,7 +103,12 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    (`[[r-cxa-seam-wiring-is-producer-discovery]]`, `[[grounding-reveals-claude-closeable-slice-close-honestly]]`). Grounding usually reveals a real Claude-closeable slice inside a
    nominally "gated" item — or reveals the genuine gate. When the premise involves a
    `C-*`/`U-*`/seam/`H_T-*` cite, resolve it with `just overlay-query` (the `overlay-query`
-   skill, R-IF-112) before ad-hoc grep. Run the §13.1 transcript-brief review (a fresh-context
+   skill, R-IF-112) before ad-hoc grep. Read-before-grep (U-SR-07/WR-14): for a file you
+   will read anyway, Read it once — or run ONE script over it — instead of a chain of
+   `sed -n`/grep probes; every probe is a full API call, and the U-HE-35 baseline burned
+   134 of them that way (33 `sed -n` + 101 grep-shaped, [B] F5/d3). "One more targeted
+   grep is cheaper than reading it" is the trap — it stops being true the moment the
+   file is one you will open regardless. Run the §13.1 transcript-brief review (a fresh-context
    Agent reviewer briefed on the session) before substantive cross-axis work.
 4. **Implement with tests.** Posture-correct edits (§11). Adopt the
    `defect-class-preflight` skill and run its sweep on the diff BEFORE every commit —
@@ -114,7 +119,11 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    never executes the `tools/hooks/test_*.sh` + `tools/statusline/test_*.sh` shell suites
    that lane runs; U-SR-05/WR-12: ALWAYS launch it `run_in_background` and poll the task —
    the suite outlasts the Bash tool's foreground timeout, and a foreground launch cost a
-   10-minute dead gap at [B] F6; "it'll probably finish in time" is the trap); commit the
+   10-minute dead gap at [B] F6; "it'll probably finish in time" is the trap). Cache-warmth
+   handoff (U-SR-07/WR-14): at >400k context, before ANY background wait expected to
+   outlast the prompt-cache TTL, prefer closing out to a handoff over idling through the
+   expiry — one cold re-warm re-reads the whole context at ≈0.7M IET ([B] F4); "the wait
+   costs nothing, I'm just sleeping" is the trap — the expiry bills the NEXT call. Commit the
    arc's edits (the out-of-family
    reviewer reads the committed
    branch diff — an uncommitted tree makes HEAD-bound checks stale); **grounding pass** (re-read every
@@ -176,6 +185,12 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
    Then hand off to the `ship-pr` skill (the PR + fixed-point-refresh half) — including its
    mandatory reflect + `/context-save` step at arc close. Do not hand off to the next arc
    (`ScheduleWakeup`, `/loop-stop`, or ending the turn) before that step has run.
+   Facts-brief handoff (U-SR-07/WR-14): if the NEXT item is a heavy audit or document,
+   do not author it in this session — "I already have all the context loaded" is exactly
+   the trap; the loaded context is what every call re-bills. Write a facts brief — the
+   findings, cites, and decisions the deliverable needs, nothing else — into the
+   handoff, and let a fresh session author from it: the S3 audit authored at 540k
+   context cost 0.93M IET against ≈0.3M fresh ([B] F10).
 
 ## When the queue is genuinely slice-exhausted
 

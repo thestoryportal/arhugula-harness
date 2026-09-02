@@ -897,3 +897,10 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | 2026-09-01T21:41:16Z | #1485 | 470a2b30015a | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
 
 **PR #1485** (2026-09-01, `feat/u-sr-06-advisor-reconciliation`, arc u-sr-06): concurrency APPROVE · spec-conformance APPROVE · witness-adequacy APPROVE → ALL-APPROVE at 470a2b30015a, merge without HIL. blast-radius: enumerated mechanically from consumer wiring (prose diff, no Python symbols — parity glob at tools/codex-parity-check.sh:65, forward_register.py --check, merge_gate_log tooling, phrase-pinning wiring suites, permission-guard exec-shape grammar); graft call-graph N/A for prose carriers, stated as a floor.
+| 2026-09-02T02:09:23Z | #1487 | 184bbecd7441 | merge-gate-concurrency | APPROVE | 0 finding(s) | r1 |
+| 2026-09-02T02:13:24Z | #1487 | 184bbecd7441 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-02T02:16:28Z | #1487 | 184bbecd7441 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
+| 2026-09-02T02:31:19Z | #1487 | ec486d066e01 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-09-02T02:35:12Z | #1487 | ec486d066e01 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-09-02T02:42:09Z | #1487 | ec486d066e01 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-02 | #1487 | feat/he-lanes-u-sr-07 | 3-lens r1: concurrency APPROVE / spec-conformance APPROVE / witness-adequacy BLOCK (section() END-anchor widening) → absorbed (@@BOUNDED@@ marker, codex r9-r10 re-converged APPROVE) → r2 ALL-APPROVE at ec486d066e01 | outcome: MERGE | blast-radius: 12 named consumers (graft+grep enumeration — lanes_verify modes, test_lanes_verify, 3 just recipes, mutation_probe, codex-parity-check glob, 5 sibling SKILL wiring suites; static floor, runtime skill loaders unmodeled) |
