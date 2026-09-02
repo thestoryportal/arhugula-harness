@@ -63,10 +63,13 @@ function dist() {
 let input = {};
 try { input = JSON.parse(fs.readFileSync(0, 'utf8')); } catch { /* no/invalid payload: nothing to mark */ }
 
+// Any failure to mark dirty exits 1 (PostToolUse: non-blocking, stderr shown to the user)
+// rather than 0 -- an exit 0 with `dirty` still false would let the Stop hook skip the
+// rebuild and serve a stale graph without anyone knowing (codex u-sr-09 r3).
 const d = dist();
 if (!d) {
   console.error('[graft-mark-dirty] @nanonets/graft not resolvable -- graph NOT marked dirty');
-  process.exit(0);
+  process.exit(1);
 }
 Promise.all([
   import(pathToFileURL(path.join(d, 'hooks.js')).href),
@@ -79,4 +82,5 @@ Promise.all([
   state.patchStats(dir, { dirty: true, lastFile: path.basename(file) });
 }).catch((e) => {
   console.error(`[graft-mark-dirty] ${e && e.message ? e.message : e} -- graph NOT marked dirty`);
+  process.exitCode = 1;
 });

@@ -13,18 +13,24 @@ The option grammar is grep's/rg's, parsed ONCE by `parse_args` (codex u-sr-09 r2
 separate scans each got a corner wrong -- `-eF\\(` read as a `-F` flag, `-nA 2` not
 consuming its value, `--` not ending options): a short cluster is flags until its first
 value-taking letter, which takes the rest of the token or the next token; `--` ends
-options; `--opt=value` and `--opt value` both bind.
+options; `--opt=value` and `--opt value` both bind; EVERY `-e`/`--regexp` is a pattern
+(codex r3: only the first was judged).
 
 Two shapes are judged on the `rtk grep …` segment (the ones rtk 0.40.0 mangles
 deterministically -- the header of the wrapper carries the witnessed failures):
   glob   -- an rg-only `--glob`/`-g` (attached or separate value; anywhere in a short
             cluster), which rtk hands to BSD grep: 'unrecognized option', exit 2;
-  paren  -- an unescaped `(` or `)` in the PATTERN when no -E/-F/-P makes it mean the
+  paren  -- an unescaped `(` or `)` in a PATTERN, outside a bracket expression (`[()]` is
+            a literal to both engines -- codex r3), when no -E/-F/-P makes it mean the
             same thing to grep and rg: 'regex parse error … unclosed group', exit 2.
             "Unescaped" counts the backslashes: an even run leaves the paren live.
 The re-issue prefixes every command-position `grep`/`rg` of the ORIGINAL with `rtk proxy`:
-verbatim when the command is one simple command, re-joined with `shlex.quote` (equivalent,
-not byte-identical) when it carries separators.
+verbatim when the command is one simple command; re-joined with `shlex.quote` (equivalent,
+not byte-identical) when it carries separators; and NOT OFFERED when it carries a
+redirection (`2>/dev/null`), because shlex cannot say whether the `2` was attached to the
+`>` and a fabricated `2 > /dev/null` would silently change the command (codex r3) -- the
+deny then tells the caller to add the prefix by hand. A guard that only removes wasted
+calls must never invent a command it cannot vouch for. [LAW:no-silent-failure]
 """
 
 from __future__ import annotations
@@ -47,18 +53,23 @@ VALUE_LONG = frozenset(
         "--devices",
     }
 )  # fmt: skip
+PATTERN_OPTIONS = frozenset({"e", "--regexp"})
 REGEX_SAFE_SHORT = frozenset("EFP")
 REGEX_SAFE_LONG = frozenset({"--extended-regexp", "--fixed-strings", "--perl-regexp"})
 GLOB_LONG = frozenset({"--glob", "--iglob"})
 # a paren preceded by an EVEN number of backslashes (zero included) is unescaped
 _UNESCAPED_PAREN = re.compile(r"(?<!\\)(?:\\\\)*[()]")
+# a bracket expression (`[()]`, `[^)]`, `[]abc]`): parens inside are literals to both engines
+_BRACKET_EXPR = re.compile(r"\[\^?\]?[^\]]*\]")
+# a bare punctuation token that is a redirection, not a separator (`>`, `>>`, `>&`, `<`, …)
+_REDIRECT = re.compile(r"^[<>&]*[<>][<>&]*$")
 
 # Separator characters inside quotes are masked to private-use code points before lexing and
 # restored after, so a word that IS a separator when quoted (`grep '|' f`, `echo '&&'`) stays
 # a word: shlex strips the quotes and would otherwise hand back an indistinguishable `|`.
 # An unquoted newline is a command separator the shell honours and shlex would swallow as
 # whitespace (codex u-sr-09 r2), so it is rewritten to `;` in the same pass.
-_MASK = {c: chr(0xE000 + i) for i, c in enumerate("|;&()")}
+_MASK = {c: chr(0xE000 + i) for i, c in enumerate("|;&()<>")}
 _UNMASK = {v: k for k, v in _MASK.items()}
 
 
@@ -96,21 +107,40 @@ class Sep(str):
     __slots__ = ()
 
 
+class Redirect(str):
+    """A BARE redirection operator token (`>`, `>>`, `>&`, `<`, …). Not a separator -- it
+    stays inside its simple command -- but a re-join cannot reproduce it faithfully (shlex
+    drops whether a leading fd digit was attached), so its presence forbids a fabricated
+    re-issue. [LAW:types-are-the-program]"""
+
+    __slots__ = ()
+
+
+def _typed(raw: str) -> str:
+    if raw in SEPARATORS:
+        return Sep(raw)
+    if _REDIRECT.match(raw):
+        return Redirect(raw)
+    return "".join(_UNMASK.get(c, c) for c in raw)
+
+
 def tokens(command: str) -> list[str] | None:
-    """The command as shell words, bare separators typed `Sep` (quoted ones stay plain words
-    inside their quotes); None when the command does not lex (an unbalanced quote) -- the
-    caller treats that as "no verdict"."""
+    """The command as shell words, bare separators typed `Sep` and bare redirections typed
+    `Redirect` (quoted ones stay plain words inside their quotes); None when the command does
+    not lex (an unbalanced quote) -- the caller treats that as "no verdict"."""
     lex = shlex.shlex(_mask_quoted(command), posix=True, punctuation_chars=True)
     lex.whitespace_split = True
     try:
         raw = list(lex)
     except ValueError:
         return None
-    return [Sep(t) if t in SEPARATORS else "".join(_UNMASK.get(c, c) for c in t) for t in raw]
+    return [_typed(t) for t in raw]
 
 
 def segments(toks: list[str]) -> list[list[str]]:
-    """The simple commands of a token list, split at bare separators (separators dropped)."""
+    """The simple commands of a token list, split at bare separators (separators dropped;
+    redirection tokens stay in their command as plain words for the option parser, which
+    treats them as operands it never judges)."""
     out: list[list[str]] = [[]]
     for t in toks:
         if isinstance(t, Sep):
@@ -123,23 +153,35 @@ def segments(toks: list[str]) -> list[list[str]]:
 @dataclass
 class Args:
     """A grep/rg argument list PARSED once: which short flags and long options are set, the
-    first value each value-taking option received, and the operands in order. Every shape
-    question is answered from this, never from a re-scan of the raw tokens."""
+    first value each value-taking option received, EVERY pattern given via `-e`/`--regexp`,
+    and the operands in order. Every shape question is answered from this, never from a
+    re-scan of the raw tokens."""
 
     flags: set[str] = field(default_factory=set)
     longs: set[str] = field(default_factory=set)
     values: dict[str, str] = field(default_factory=dict)
+    patterns: list[str] = field(default_factory=list)
     operands: list[str] = field(default_factory=list)
 
 
 def parse_args(args: list[str]) -> Args:
     """grep/rg option grammar: `--` ends options; `--opt=v` / `--opt v` bind a value for
     VALUE_LONG; a short cluster (`-nA2`, `-nA 2`, `-eF\\(`) is flags up to its first
-    VALUE_SHORT letter, which takes the rest of the token or, if empty, the next token."""
+    VALUE_SHORT letter, which takes the rest of the token or, if empty, the next token.
+    Every `-e`/`--regexp` value is appended to `patterns` (grep ORs them all)."""
     parsed = Args()
+
+    def bind(key: str, value: str) -> None:
+        parsed.values.setdefault(key, value)
+        if key in PATTERN_OPTIONS:
+            parsed.patterns.append(value)
+
     i = 0
     while i < len(args):
         a = args[i]
+        if isinstance(a, Redirect):
+            i += 2  # the operator and its target are shell syntax, not grep's
+            continue
         if a == "--":
             parsed.operands.extend(args[i + 1 :])
             break
@@ -148,9 +190,9 @@ def parse_args(args: list[str]) -> Args:
             parsed.longs.add(name)
             if name in VALUE_LONG:
                 if eq:
-                    parsed.values.setdefault(name, val)
+                    bind(name, val)
                 elif i + 1 < len(args):
-                    parsed.values.setdefault(name, args[i + 1])
+                    bind(name, args[i + 1])
                     i += 1
             i += 1
             continue
@@ -159,9 +201,9 @@ def parse_args(args: list[str]) -> Args:
                 if c in VALUE_SHORT:
                     rest = a[j + 1 :]
                     if rest:
-                        parsed.values.setdefault(c, rest)
+                        bind(c, rest)
                     elif i + 1 < len(args):
-                        parsed.values.setdefault(c, args[i + 1])
+                        bind(c, args[i + 1])
                         i += 1
                     break
                 parsed.flags.add(c)
@@ -183,13 +225,17 @@ def has_glob(parsed: Args) -> bool:
     return "g" in parsed.values or bool(parsed.longs & GLOB_LONG)
 
 
-def pattern_of(parsed: Args) -> str | None:
-    """The PATTERN operand: the value of `-e`/`--regexp` if given, else the first operand."""
-    if "e" in parsed.values:
-        return parsed.values["e"]
-    if "--regexp" in parsed.values:
-        return parsed.values["--regexp"]
-    return parsed.operands[0] if parsed.operands else None
+def patterns_of(parsed: Args) -> list[str]:
+    """The PATTERN operands: every `-e`/`--regexp` value if any were given, else the first
+    operand (grep's positional pattern). Empty when there is none."""
+    if parsed.patterns:
+        return list(parsed.patterns)
+    return parsed.operands[:1]
+
+
+def has_unescaped_paren(pattern: str) -> bool:
+    """A live `(`/`)` outside any bracket expression, with an even backslash run before it."""
+    return _UNESCAPED_PAREN.search(_BRACKET_EXPR.sub("", pattern)) is not None
 
 
 def shapes(rewritten_segment: list[str]) -> list[str]:
@@ -200,8 +246,7 @@ def shapes(rewritten_segment: list[str]) -> list[str]:
         found.append(
             "an rg-only --glob/-g flag (rtk lands it on BSD grep: 'unrecognized option', exit 2)"
         )
-    pat = pattern_of(parsed)
-    if pat is not None and not regex_safe(parsed) and _UNESCAPED_PAREN.search(pat):
+    if not regex_safe(parsed) and any(has_unescaped_paren(p) for p in patterns_of(parsed)):
         found.append(
             "an unescaped paren in a BRE pattern (a literal to grep, a group to rg: "
             "'regex parse error', exit 2)"
@@ -213,12 +258,15 @@ def reissue(original: str) -> str | None:
     """The ORIGINAL command with `rtk proxy` before every command-position grep/rg. Verbatim
     for one simple command; otherwise re-joined token by token (separators bare, words
     `shlex.quote`d) -- shell-equivalent, and quoted data is never touched. None when the
-    original does not lex."""
+    original does not lex, is not a grep/rg command, or carries a redirection the re-join
+    could not reproduce faithfully (the caller then re-issues by hand)."""
     toks = tokens(original)
     if toks is None:
         return None
-    if not any(isinstance(t, Sep) for t in toks):
+    if not any(isinstance(t, (Sep, Redirect)) for t in toks):  # a tuple: 3.9 has no X | Y here
         return "rtk proxy " + original.lstrip() if toks[:1] and toks[0] in COMMAND_WORDS else None
+    if any(isinstance(t, Redirect) for t in toks):
+        return None
     out: list[str] = []
     at_command_position = True
     for t in toks:
@@ -228,9 +276,15 @@ def reissue(original: str) -> str | None:
             continue
         if at_command_position and t in COMMAND_WORDS:
             out.extend(["rtk", "proxy"])
-        out.append(shlex.quote(t))
+        out.append(t)
         at_command_position = False
-    return " ".join(out)
+    return _render(out)
+
+
+def _render(toks: list[str]) -> str:
+    """Tokens back to one shell line: bare separators/redirections stay bare, every other
+    word is `shlex.quote`d -- the one place a token list becomes text."""
+    return " ".join(t if isinstance(t, (Sep, Redirect)) else shlex.quote(t) for t in toks)
 
 
 def judge(original: str, rewritten: str) -> str | None:
@@ -247,11 +301,16 @@ def judge(original: str, rewritten: str) -> str | None:
         hits = shapes(seg)
         if hits:
             found.extend(hits)
-            segment_text = segment_text or shlex.join(seg)
+            segment_text = segment_text or _render(seg)
     if not found:
         return None
     fix = reissue(original)
-    tail = f" Re-issue as: {fix}" if fix else ""
+    tail = (
+        f" Re-issue as: {fix}"
+        if fix
+        else " Re-issue by hand with `rtk proxy ` before the grep/rg word (this command carries a"
+        " redirection or a shape the guard will not re-join for you)."
+    )
     return (
         f"[rtk-shape-guard] the rtk PreToolUse rewrite turns this into `{segment_text}`, "
         f"which carries {'; '.join(found)}.{tail}"

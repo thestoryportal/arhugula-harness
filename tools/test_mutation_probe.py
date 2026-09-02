@@ -1717,6 +1717,16 @@ def test_verdict_is_logged_with_the_test_command_and_rc(repo, _probe_log_isolate
     assert json.loads(log.read_text().splitlines()[-1])["rc"] == 1
 
 
+def test_test_node_of_binds_one_node_id_only():
+    """codex u-sr-09 r3: two node ids on one command have no single judge -- artifact scope."""
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py::test_a") == "test_a"
+    assert (
+        mp.test_node_of("uv run pytest -q tools/test_x.py::test_a tools/test_x.py::test_b") is None
+    )
+    assert mp.test_node_of("uv run pytest -q tools/test_x.py -k test_a") is None
+    assert mp.test_node_of("bash tools/hooks/test_x.sh") is None
+
+
 # Probe (NOT pinnable through the tool -- a probe of mutation_probe.py from its own suite
 # leaves the outer probe's sidecar in tools/ and `_no_stray_sidecars_in_the_real_repo`
 # fails the teardown, so the tool refuses INDETERMINATE; no self-probe row has ever pinned):

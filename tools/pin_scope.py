@@ -118,7 +118,9 @@ def test_slice_digest(source: str, name: str) -> str | None:
     the test while its pin stayed live). Only sibling top-level tests -- the [B] F7 churn --
     are excluded, and a sibling the kept slice REFERENCES by name (a `test_helper()` the
     selected test calls; transitively, to a fixpoint) is kept too (codex r2 P2: hollowing
-    the helper hollowed the judge). A test method inside a class keeps its class whole. None
+    the helper hollowed the judge), as is any `test_*` decorated as a pytest fixture (an
+    autouse `test_setup` is harness, not a sibling -- codex r3). A test method inside a
+    class keeps its class whole. None
     when the source does not parse, defines no function `name`, or defines it more than once
     (which one ran is not knowable from the name, so the caller falls back to the whole
     artifact)."""
@@ -139,6 +141,7 @@ def test_slice_digest(source: str, name: str) -> str | None:
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
         and n.name.startswith("test_")
         and n is not named[0]
+        and not _is_fixture(n)
     }
     # a sibling referenced from the kept nodes stays; iterate until no new name is pulled in
     kept_nodes = [n for n in tree.body if n not in siblings.values()]
@@ -157,6 +160,18 @@ def test_slice_digest(source: str, name: str) -> str | None:
     lines = source.splitlines(keepends=True)
     kept = "".join(line for i, line in enumerate(lines, start=1) if i not in dropped)
     return digest16(kept.encode())
+
+
+def _is_fixture(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A `test_*`-named function decorated as a pytest fixture (`@pytest.fixture`,
+    `@pytest.fixture(autouse=True)`, `@fixture`) is part of the harness, not a sibling test:
+    an autouse one can change the selected test's verdict (codex u-sr-09 r3)."""
+    for d in node.decorator_list:
+        target = d.func if isinstance(d, ast.Call) else d
+        name = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", "")
+        if name == "fixture":
+            return True
+    return False
 
 
 def _names_used(nodes: list[ast.AST]) -> set[str]:

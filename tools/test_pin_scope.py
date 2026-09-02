@@ -94,6 +94,19 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
     assert base == _d(calls.replace("def test_other():\n    assert True\n", ""))
     assert ps.test_slice_digest(calls.replace("assert f() == 3", "pass"), "test_f") != base
     assert ps.test_slice_digest(calls.replace("assert True", "assert 1"), "test_f") == base
+    # codex u-sr-09 r3: a test_*-named pytest FIXTURE (autouse or not) is harness, never a
+    # removable sibling -- editing it changes the digest
+    fixt = (
+        "import pytest\n\n\n"
+        "@pytest.fixture(autouse=True)\ndef test_setup():\n    yield 1\n\n\n"
+        "@pytest.fixture\ndef test_thing():\n    return 2\n\n\n"
+        "def test_f():\n    assert f() == 3\n\n\n"
+        "def test_other():\n    assert True\n"
+    )
+    base = ps.test_slice_digest(fixt, "test_f")
+    assert base == _d(fixt.replace("def test_other():\n    assert True\n", ""))
+    assert ps.test_slice_digest(fixt.replace("yield 1", "yield 0"), "test_f") != base
+    assert ps.test_slice_digest(fixt.replace("return 2", "return 0"), "test_f") != base
 
 
 def test_test_slice_digest_is_none_when_unresolvable():

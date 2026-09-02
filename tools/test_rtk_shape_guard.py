@@ -68,6 +68,11 @@ def test_segments_split_at_bare_separators_only():
         ("rtk grep 'f\\\\(' file", [PAREN]),  # even backslash run: the paren is live
         ("rtk grep --regexp='f(' file", [PAREN]),
         ("rtk grep -- '(' file", [PAREN]),  # after `--` the paren IS the pattern: rg still chokes
+        # codex u-sr-09 r3: EVERY -e pattern is judged; a bracket expression is not a group
+        ("rtk grep -e ok -e 'f(' file", [PAREN]),
+        ("rtk grep --regexp ok --regexp='f(' file", [PAREN]),
+        ("rtk grep '[a]f(' file", [PAREN]),  # a paren OUTSIDE the bracket expression
+        ("rtk grep -n 'f(' file 2>/dev/null", [PAREN]),  # a redirection is not a pattern
     ],
 )
 def test_shapes_found(rewritten, want):
@@ -94,6 +99,11 @@ def test_shapes_found(rewritten, want):
         "rtk grep -- -g file",  # `--` ends options: -g is the pattern operand
         "rtk grep -nE 'f(' file",
         "rtk grep -eE file",  # -e takes `E` as its pattern; no -E flag is set
+        # codex u-sr-09 r3: parens inside a bracket expression are literals to both engines
+        "rtk grep '[()]' file",
+        "rtk grep '[^)]x' file",
+        "rtk grep -e ok -e '[(]' file",
+        "rtk grep x 2>/dev/null",  # the redirection target is not an operand
     ],
 )
 def test_shapes_silent(rewritten):
@@ -129,17 +139,31 @@ def test_reissue_is_verbatim_for_one_command_and_quote_safe_otherwise():
     assert g.reissue("ls | grep 'a && f(' f") == "ls | rtk proxy grep 'a && f(' f"
     assert g.reissue("uv run x") is None  # not a grep/rg command: nothing to prefix
     assert g.reissue("grep 'unbalanced") is None
+    # codex u-sr-09 r3: a redirection cannot be re-joined faithfully (`2>` vs `2 >`), so no
+    # command is fabricated -- the reason tells the caller to re-issue by hand
+    assert g.reissue("grep -g '*.py' x 2>/dev/null | wc -l") is None
+    assert g.reissue("grep -g '*.py' x >out.txt") is None
+    reason = g.judge(
+        "grep -g '*.py' x 2>/dev/null | wc -l", "rtk grep -g '*.py' x 2>/dev/null | wc -l"
+    )
+    assert reason is not None and "Re-issue by hand" in reason and "2 '>'" not in reason
+    assert "`rtk grep -g '*.py' x 2 > /dev/null`" in reason  # the segment echo keeps operators bare
 
 
 def test_parse_args_grammar():
     p = g.parse_args(["-nA", "2", "-eF\\(", "--glob=*.py", "--", "-g", "x"])
     assert p.flags == {"n"} and p.values == {"A": "2", "e": "F\\(", "--glob": "*.py"}
     assert p.longs == {"--glob"} and p.operands == ["-g", "x"]
-    assert g.pattern_of(p) == "F\\(" and not g.regex_safe(p) and g.has_glob(p)
+    assert g.patterns_of(p) == ["F\\("] and not g.regex_safe(p) and g.has_glob(p)
     p = g.parse_args(["-rnE", "f(", "tools"])
-    assert p.flags == {"r", "n", "E"} and g.regex_safe(p) and g.pattern_of(p) == "f("
+    assert p.flags == {"r", "n", "E"} and g.regex_safe(p) and g.patterns_of(p) == ["f("]
     p = g.parse_args(["--regexp", "f(", "-t", "py", "file"])
     assert p.values == {"--regexp": "f(", "t": "py"} and p.operands == ["file"]
+    assert p.patterns == ["f("] and g.patterns_of(p) == ["f("]
+    p = g.parse_args(["-e", "a", "-eb", "--regexp=c", "file"])
+    assert p.patterns == ["a", "b", "c"] and g.patterns_of(p) == ["a", "b", "c"]
+    assert g.patterns_of(g.parse_args(["x", "y"])) == ["x"]
+    assert g.has_unescaped_paren("[()]") is False and g.has_unescaped_paren("[a]f(") is True
 
 
 def test_judge_reason_names_shapes_and_reissue():

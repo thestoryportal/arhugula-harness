@@ -54,6 +54,7 @@ EOF
 cat > "$PKG/dist/claude/state.js" <<'EOF'
 import { mkdirSync, writeFileSync } from 'node:fs';
 export function patchStats(dir, patch) {
+  if (process.env.GRAFT_FAKE_THROW) throw new Error('fake patchStats failure');
   mkdirSync(`${dir}/graft/.cache`, { recursive: true });
   writeFileSync(`${dir}/graft/.cache/fake-patch.json`, JSON.stringify({ dir, patch }));
 }
@@ -85,6 +86,11 @@ rc=$(run_shim '{"tool_name":"Edit","tool_input":{}}')
 [ "$rc" -eq 0 ] && [ ! -f "$RECORD" ] && [ "$(bytes)" -eq 0 ] && ok "no file_path -> nothing written, silent" || bad "no file_path: rc=$rc $(bytes) bytes"
 rc=$(run_shim 'not json')
 [ "$rc" -eq 0 ] && [ ! -f "$RECORD" ] && ok "garbage payload -> exit 0, nothing written" || bad "garbage payload: rc=$rc"
+# codex u-sr-09 r3: a failure AFTER resolution (patchStats throwing) is not an exit 0 --
+# the stderr line names it and the exit is 1, so a stale graph never hides behind a green hook
+rm -f "$RECORD"
+printf '%s' "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REPO/tools/x.py\"}}" | GRAFT_FAKE_THROW=1 CLAUDE_PROJECT_DIR="$REPO" node "$SHIM" > "$OUT" 2>&1; rc=$?
+[ "$rc" -eq 1 ] && grep -q 'fake patchStats failure' "$OUT" && grep -q 'NOT marked dirty' "$OUT" && ok "patchStats failure -> exit 1 with the cause on stderr" || bad "patchStats failure -> rc=$rc: $(head -c 300 "$OUT")"
 
 # --- 4. timing against the [B] F8 baseline (the unit's stated witness) --------------------
 # The hermetic path (fake package) measures the shim's own cost: node start + two dynamic
@@ -111,7 +117,7 @@ REAL="$(mktemp -d)"; trap 'rm -rf "$REPO" "$REAL"' EXIT
 printf '%s' "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$REAL/a.py\"}}" | CLAUDE_PROJECT_DIR="$REAL" node "$SHIM" > "$OUT" 2>&1; rc=$?
 if grep -q "not resolvable" "$OUT"; then
   echo "  @nanonets/graft not installed: real-package check NOT run (the shim reported it and exited $rc) -- recorded on the U-SR-09 PR"
-  [ "$rc" -eq 0 ] && ok "unresolvable package -> exit 0 with a stderr notice, never a crash" || bad "unresolvable package -> rc=$rc"
+  [ "$rc" -eq 1 ] && ok "unresolvable package -> exit 1 with a stderr notice (codex r3: never a silent green)" || bad "unresolvable package -> rc=$rc"
 else
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("dirty") is True and d.get("lastFile")=="a.py" else 1)' "$REAL/graft/.cache/stats.json" 2>/dev/null \
     && ok "real graft: stats.json now carries dirty:true, lastFile a.py (rc=$rc, $(bytes) bytes)" \
