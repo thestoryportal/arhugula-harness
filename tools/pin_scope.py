@@ -20,9 +20,10 @@ U-HE-35 arc, 1.07M IET). This module owns the scoped theorem the pin now carries
 
 What the weaker theorem gives up, stated once so no reader re-derives it: an edit OUTSIDE the
 block that makes the block dead code is not caught -- the merge-gate witness lens re-probes
-contested changes, and charter §4 names whole-file scope as the one defect. The producer (`mutation_probe.log_result`) writes the digests; the
-consumer (`lanes_verify._pin_is_live`) re-derives them at HEAD. Both import from here so the
-format has ONE home. [LAW:one-source-of-truth]
+contested changes, and charter §4 names whole-file scope as the one defect. The producer
+(`mutation_probe.log_result`) writes the digests; the consumer (`lanes_verify._pin_is_live`)
+re-derives them at HEAD. Both import from here so the format has ONE home.
+[LAW:one-source-of-truth]
 
 Pure: text in, digests out. No I/O, no clock, no repo. [LAW:effects-at-boundaries]
 """
