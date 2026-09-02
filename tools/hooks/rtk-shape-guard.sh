@@ -76,7 +76,12 @@ jq -e '[.hooks.PreToolUse[]?.hooks[]?.command // empty] | any(contains("rtk hook
   "$SETTINGS" >/dev/null 2>&1 || exit 0
 
 # The oracle: rtk's own dry-run of its rewrite. Bounded; any failure = no rewrite = no guard.
+# Only a REAL rewrite is judged: rtk's "No rewrite for: <cmd>" echo, or the command echoed
+# back unchanged, is not one even when the command itself contains the words `rtk grep`
+# (codex u-sr-09 r7: `echo rtk grep 'f('` was denied off the echo).
 REWRITE=$(hook_bounded 5 rtk hook check "$CMD" 2>/dev/null) || exit 0
+case "$REWRITE" in "No rewrite for:"*) exit 0 ;; esac
+[ "$REWRITE" = "$CMD" ] && exit 0
 case "$REWRITE" in *"rtk grep"*) ;; *) exit 0 ;; esac
 
 JUDGE="$(dirname "${BASH_SOURCE[0]}")/../rtk_shape_guard.py"

@@ -39,6 +39,9 @@ printf '%s\n' "$*" >> "${RTK_STUB_CALLS:?}"
 [ "$1" = hook ] && [ "$2" = check ] || { echo "stub: unsupported $*" >&2; exit 2; }
 shift 2; cmd="$*"
 out=$(printf '%s' "$cmd" | sed -E 's/(^[[:space:]]*|[;&][[:space:]]*)(grep|rg)([[:space:]])/\1rtk grep\3/g')
+# rtk 0.40.0 sometimes echoes an unrewritten command back verbatim instead of "No rewrite
+# for:" (both forms seen at U-SR-09); RTK_STUB_ECHO=1 reproduces the echo form.
+if [ "$out" = "$cmd" ] && [ -n "${RTK_STUB_ECHO:-}" ]; then echo "$cmd"; exit 0; fi
 if [ "$out" = "$cmd" ]; then echo "No rewrite for: $cmd"; else echo "$out"; fi
 EOF
 chmod +x "$STUBDIR/rtk"
@@ -104,6 +107,12 @@ expect_silent "pipeline grep is not rewritten by rtk" 'ls | grep "f(" '
 expect_silent "egrep is not rewritten by rtk" 'egrep "f(x)" file.txt'
 expect_silent "rtk proxy is left alone" 'rtk proxy grep -n "f(" file.txt'
 expect_silent "rtk proxy rg --glob is left alone" 'rtk proxy rg --glob "*.py" main tools'
+# codex u-sr-09 r7: the words `rtk grep` INSIDE an unrewritten command are not a rewrite --
+# neither under the "No rewrite for:" form nor the verbatim-echo form of the dry-run
+expect_silent "'No rewrite for:' echo carrying the words rtk grep" "echo rtk grep 'f('"
+payload "echo rtk grep 'f('"
+env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS" RTK_STUB_ECHO=1 CLAUDE_CONFIG_DIR="$CFG" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" < "$PAYLOAD" > "$OUT" 2>&1; rc=$?
+[ "$rc" -eq 0 ] && [ "$(bytes)" -eq 0 ] && ok "verbatim-echo form carrying the words rtk grep -> exit 0, 0 bytes" || bad "verbatim echo denied: rc=$rc $(head -c 200 "$OUT")"
 
 # --- 2. the two guarded shapes, with the exact re-issue ----------------------------------
 expect_deny "--glob" 'rg --glob "*.py" "def main" tools' 'rtk proxy rg --glob "*.py" "def main" tools' '--glob/-g'

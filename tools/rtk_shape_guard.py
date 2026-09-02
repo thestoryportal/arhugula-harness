@@ -182,7 +182,16 @@ def parse_args(args: list[str]) -> Args:
     while i < len(args):
         a = args[i]
         if isinstance(a, Redirect):
-            i += 2  # the operator and its target are shell syntax, not grep's
+            # the operator and its target are shell syntax, not grep's -- and so is a
+            # leading fd digit shlex split off (`2>/dev/null` -> `2`, `>`, `/dev/null`;
+            # codex u-sr-09 r7: the `2` had become the pattern)
+            if (
+                parsed.operands
+                and parsed.operands[-1].isdigit()
+                and args[i - 1] is parsed.operands[-1]
+            ):
+                parsed.operands.pop()
+            i += 2
             continue
         if a == "--":
             parsed.operands.extend(args[i + 1 :])

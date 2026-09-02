@@ -94,6 +94,37 @@ def block_is_present(text: str, n_lines: int, digest: str) -> bool:
     return block_occurrences(text, n_lines, digest) == 1
 
 
+def pytest_targets(toks: list[str]) -> list[str]:
+    """Every collection target of a split pytest command: an operand is a target unless it
+    is the value of a value-taking option (`PYTEST_VALUE_OPTIONS`); `a.py::test_x b.py` and
+    `a.py::test_x tests` both have two. The ONE parser both the producer (`mutation_probe`)
+    and the consumer (`lanes_verify`) use (codex u-sr-09 r7: the consumer's own `.py` scan
+    picked `--ignore`'s value)."""
+    targets: list[str] = []
+    args = toks[toks.index("pytest") + 1 :]
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in PYTEST_VALUE_OPTIONS:
+            i += 2
+            continue
+        if not tok.startswith("-"):
+            targets.append(tok)
+        i += 1
+    return targets
+
+
+#: pytest options that consume the NEXT token (the `--opt=value` spelling needs no entry:
+#: it starts with `-` and carries its value). Anything else after `pytest` that does not
+#: start with `-` is a collection target.
+PYTEST_VALUE_OPTIONS = frozenset(
+    {
+        "-k", "-m", "-p", "-o", "-W", "-c", "-n", "--basetemp", "--rootdir", "--deselect",
+        "--ignore", "--tb", "--durations", "--confcutdir", "--import-mode", "--maxfail",
+    }
+)  # fmt: skip
+
+
 def node_tail(nodeid: str) -> str | None:
     """The test FUNCTION a pytest node id names: the last `::` component with any `[params]`
     stripped -- `tools/test_x.py::TestK::test_f[a-b]` → `test_f`. None for a bare file (no
@@ -171,6 +202,26 @@ def _node_span(node: ast.AST) -> tuple[int, int]:
     return first, node.end_lineno or node.lineno
 
 
+_LITERAL_CONTAINERS = (ast.Tuple, ast.List, ast.Set)
+
+
+def _is_literal(node: ast.AST) -> bool:
+    """A side-effect-free expression: a constant, a bare name or attribute read, a unary op
+    on one, or a tuple/list/set/dict of those. Everything else may run code."""
+    if isinstance(node, ast.Constant | ast.Name | ast.Attribute):
+        return True
+    if isinstance(node, ast.UnaryOp):
+        return _is_literal(node.operand)
+    if isinstance(node, _LITERAL_CONTAINERS):
+        return all(_is_literal(e) for e in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(
+            k is not None and _is_literal(k) and _is_literal(v)
+            for k, v in zip(node.keys, node.values, strict=True)
+        )
+    return False
+
+
 def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """A sibling whose DEFINITION executes code beyond pytest's own marks -- a decorator
     that is not a plain `pytest.mark.<x>` (or `pytest.mark.<x>(...)` whose arguments call
@@ -187,10 +238,11 @@ def _runs_at_import(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         )
         if not is_mark:
             return True
-        if isinstance(d, ast.Call) and any(
-            isinstance(sub, ast.Call)
-            for a in [*d.args, *(k.value for k in d.keywords)]
-            for sub in ast.walk(a)
+        # a mark's arguments may only be literals (constants, containers of literals, bare
+        # names/attributes): a call, a walrus, a lambda or a comprehension there executes
+        # at import (codex u-sr-09 r6 `make()`, r7 `(state := 1)`)
+        if isinstance(d, ast.Call) and not all(
+            _is_literal(a) for a in [*d.args, *(k.value for k in d.keywords)]
         ):
             return True
     defaults = [*node.args.defaults, *node.args.kw_defaults]

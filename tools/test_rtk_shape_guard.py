@@ -77,6 +77,8 @@ def test_segments_split_at_bare_separators_only():
         ("rtk grep --regexp ok --regexp='f(' file", [PAREN]),
         ("rtk grep '[a]f(' file", [PAREN]),  # a paren OUTSIDE the bracket expression
         ("rtk grep -n 'f(' file 2>/dev/null", [PAREN]),  # a redirection is not a pattern
+        ("rtk grep 2>/dev/null 'f(' file", [PAREN]),  # codex r7: the fd digit is not the pattern
+        ("rtk grep 'f(' 2>&1 file", [PAREN]),
     ],
 )
 def test_shapes_found(rewritten, want):

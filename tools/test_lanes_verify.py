@@ -159,9 +159,10 @@ def _entry(repo: Path, test: str, file: str | None = None, rc: int = 0, **over) 
     """A probe-log line as `mutation_probe.log_result` writes it, digests from the repo. The
     probed `file` defaults to the test's sibling module (the annotation's default target)."""
     tf = test.split()
-    tf = tf[tf.index("pytest") + 1 :] if "pytest" in tf else tf[1:]
-    tfile = next(x for x in tf if not x.startswith("-") and (".py" in x or x.endswith(".sh")))
-    tfile = tfile.split("::")[0]
+    # the producer's own target grammar (codex u-sr-09 r7): the FIRST collection target's
+    # file is the artifact this row digests, never an option's value
+    targets = lv.pin_scope.pytest_targets(tf) if "pytest" in tf else tf[1:2]
+    tfile = targets[0].split("::")[0]
     file = file or lv.default_probe_target(lv._relative(tfile))
     e = {
         "ts": "2026-08-19T00:00:00Z",
@@ -311,6 +312,13 @@ def test_annotation_binds_across_a_multiline_decorator(repo: Path):
         "def test_q():\n    assert True\n"
     )
     assert lv._annotations(repo / "tools" / "test_x.py") == [("test_p", None)]
+    # codex u-sr-09 r7: an `async def test_*` binds its own annotation; the bridge never
+    # walks through it to the next test
+    (repo / "tools" / "test_y.py").write_text(
+        "# mutation-probe: a\nasync def test_a():\n    pass\n\n\n"
+        "# mutation-probe: b\ndef test_b():\n    pass\n"
+    )
+    assert lv._annotations(repo / "tools" / "test_y.py") == [("test_a", None), ("test_b", None)]
     row = _row(mp=True, art="pytest:tools/test_x.py")
     assert lv.required_probes(row) == [("tools/test_x.py::test_p", "tools/x.py")]
 
@@ -356,6 +364,17 @@ def test_block_scoped_pin_with_artifact_scope_binds_the_whole_shell_suite(repo: 
     assert lv.coverage_gaps(log) == []  # the block moved down: still present verbatim
     (hk / "test_y.sh").write_text("#!/usr/bin/env bash\nbash tools/hooks/y.sh | grep -q 2  # x\n")
     assert _nodes(lv.coverage_gaps(log)) == ["tools/hooks/test_y.sh"]  # the script changed
+
+
+def test_pinned_nodeid_parser_uses_the_producers_target_grammar(repo: Path):
+    """codex u-sr-09 r7: `--ignore tools/helper.py a.py::t` names a.py, not helper.py; two
+    targets name nothing (the producer bound nothing either)."""
+    log = repo / "mp.jsonl"
+    log.write_text(
+        _entry(repo, "uv run pytest -q --ignore tools/helper.py tools/test_x.py::t")
+        + _entry(repo, "uv run pytest -q tools/test_x.py::t tools/test_y.py")
+    )
+    assert lv._pinned_nodeids(log) == {("tools/test_x.py::t", "tools/x.py")}
 
 
 def test_pinned_nodeid_parser_skips_flags_and_normalizes_absolute_paths(repo: Path):

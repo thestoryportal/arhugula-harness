@@ -510,10 +510,12 @@ def phase0_verdict(results: list[Result]) -> int:
 # An annotation binds the NEXT `def test_*`, across any decorator lines between -- including
 # a multi-line `@pytest.mark.parametrize(...)` (codex u-sr-09 r5: the single-line-decorator
 # form silently dropped a parametrized test from `required_probes`). A line starting with
-# `def ` that is not a test stops the scan (the annotation is then bound to nothing).
+# `def ` or `async def ` that is not a test stops the scan (the annotation is then bound
+# to nothing); an `async def test_*` binds like a `def` (codex r7: the bridge had walked
+# through it to the next test).
 _ANNOT = re.compile(
-    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:(?!def )[^\n]*\n)*?"
-    r"def (?P<name>test_\w+)",
+    r"^# mutation-probe(?:\((?P<target>[^)]+)\))?: (?P<desc>.*)\n(?:(?!(?:async )?def )[^\n]*\n)*?"
+    r"(?:async )?def (?P<name>test_\w+)",
     re.M,
 )
 #: The `red-first` skill's form, `# mutation-probe: <path>:<lines> ...` -- a leading path:lines
@@ -595,11 +597,10 @@ def _pinned_nodeids(log_path: Path) -> set[tuple[str, str]]:
         toks = str(e["test"]).split()
         target = None
         if "pytest" in toks:
-            rest = toks[toks.index("pytest") + 1 :]
-            for tok in rest:
-                if not tok.startswith("-") and ".py" in tok:
-                    target = _relative(tok)
-                    break
+            # the producer's parser (codex u-sr-09 r7: a private `.py` scan here picked
+            # `--ignore`'s value); a row with several targets binds nothing on either side
+            targets = pin_scope.pytest_targets(toks)
+            target = _relative(targets[0]) if len(targets) == 1 else None
         elif toks[:1] == ["bash"] and len(toks) > 1:
             target = _relative(toks[1])
         if target is None:

@@ -145,6 +145,14 @@ def test_test_slice_digest_drops_only_sibling_top_level_tests():
     assert ps.test_slice_digest(imp.replace("x=setup()", "x=setup(1)"), "test_f") != base
     assert ps.test_slice_digest(imp.replace("make()", "make(2)"), "test_f") != base
     assert ps.test_slice_digest(imp.replace("[1, 2]", "[1, 3]"), "test_f") == base
+    # codex u-sr-09 r7: a non-literal mark argument (a walrus, a lambda) runs at import too
+    walrus = imp.replace("[1, 2]", "[(state := 1)]")
+    assert ps.test_slice_digest(walrus, "test_f") != base
+    assert ps.test_slice_digest(walrus.replace(":= 1", ":= 2"), "test_f") != ps.test_slice_digest(
+        walrus, "test_f"
+    )
+    assert ps.test_slice_digest(imp.replace("[1, 2]", "[lambda: 1]"), "test_f") != base
+    assert ps.test_slice_digest(imp.replace("[1, 2]", "[-1, X.Y]"), "test_f") == base  # literals
 
 
 def test_test_slice_digest_is_none_when_unresolvable():
