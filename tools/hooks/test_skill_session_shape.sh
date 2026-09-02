@@ -13,8 +13,6 @@
 # line's carrier, so a paragraph relocated to an appendix reds instead of staying
 # green on a whole-file match (u-sr-07 codex r1 P2).
 
-# mutation-probe: .claude/skills/roadmap-continue/SKILL.md:188-194 the step-6 facts-brief handoff block stays load-bearing (WR-14)
-
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS="$SCRIPT_DIR/../../.claude/skills"

@@ -401,13 +401,16 @@ MANIFEST: list[Row] = [
     # C-HE-30 (U-HE-14)
     # spec §8.1: mutation-probe `—` (static doc witness; no deletion-expressible target)
     Row("C-HE-30", "pytest:tools/test_store_audit.py", "phase0", "local + CI", False),
-    # WR-14 (U-SR-07) — session-shape habit lines at their loop-skill carriers
+    # WR-14 (U-SR-07) — session-shape habit lines at their loop-skill carriers.
+    # mutation-probe `—`: the probed artifact is markdown skill prose, outside the
+    # probe tool's language set (C-HE-30 static-doc-witness precedent); the manual
+    # appendix-relocation probes are recorded on the u-sr-07 absorption commit.
     Row(
         "WR-14",
         "shell:tools/hooks/test_skill_session_shape.sh",
         "phase0",
         "local + CI",
-        True,
+        False,
     ),
     # §8.1 / §0.3 (U-HE-05)
     Row("§8.1", "pytest:tools/test_lanes_verify.py", "phase0", "local + CI", True),
