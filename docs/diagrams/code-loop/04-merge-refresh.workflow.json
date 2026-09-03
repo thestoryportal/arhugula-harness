@@ -278,7 +278,7 @@
       "title": "One lease, one merge string",
       "items": [
         "The wrapper aborts pre-lease (exit 69) if the refresh producer lacks --emit-refresh-pr-json",
-        "Lease acquire is fail-fast; on held the caller yields, does the next gate pass, and retries with backoff to HITL-recoverable",
+        "Lease acquire is fail-fast; on held, wait_for_door sleeps and retries in place (base 30 s ×2, cap 10 min, 12 attempts ≈ 1 h) then routes HITL-recoverable — the caller does not get control back",
         "Exit 0 landed + refreshed · 3 blocked (DEFERRED-HIL row) · 4 re-gate · 5 budget exhausted"
       ]
     },

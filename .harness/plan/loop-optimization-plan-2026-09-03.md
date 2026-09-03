@@ -247,7 +247,7 @@ Insert before the first job in `.github/workflows/ci.yml` (line 56 today):
     outputs:
       bookkeeping: ${{ steps.classify.outputs.bookkeeping }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4 — the SHA every other job in ci.yml pins (codex r2 on b-230-register: this job decides whether five heavy checks run, so a movable tag here is a bypass)
         with:
           fetch-depth: 0
       - id: classify
@@ -294,7 +294,7 @@ git commit -m "ci: bookkeeping fast path — skip heavy jobs when only roadmap_s
 
 **Files:**
 - Modify: `tools/hooks/lib.sh:267-286` (`hook_roadmap_next`)
-- Modify: the emitter of the "a .codex-worktrees/ lane is present" line (find with `rg -n "codex-worktrees/ lane is present" tools/`)
+- Modify: `tools/hooks/loop_lib.sh` `loop_notify_summary` (line 661), the reducer that renders `NOTIFY` rows into the banner. The emitter (`tools/merge_door.py:1254`) writes one row per landing and is correct; the repeats are rows from successive landings that the reducer renders verbatim (codex r2 on b-230-register).
 - Test: `tools/hooks/test_lib_roadmap_next.sh` (bash, same shape as `tools/hooks/test_permission_guard.sh`)
 
 - [ ] **Step 0: Diagnosis (done 2026-09-03, re-run before editing)**
@@ -354,14 +354,14 @@ In `hook_roadmap_next` (`tools/hooks/lib.sh:267-286`) insert two rules before th
 Run: `bash tools/hooks/test_lib_roadmap_next.sh`
 Expected: `ok`, and a fresh prompt in a new session shows `[roadmap] next=U-HE-37` (or the plan pointer once Task 9 installs it).
 
-- [ ] **Step 5: Deduplicate the banner line**
+- [ ] **Step 5: Deduplicate the banner line in the reducer**
 
-Locate the emitter (`rg -n "codex-worktrees/ lane is present" tools/`). Wrap its output collection in `sort -u` before emission so one lane prints once per session. Witness: start a new session with a `.codex-worktrees/` lane present and count the line in the banner: expected 1.
+In `loop_notify_summary` (`tools/hooks/loop_lib.sh:661`) pass the rendered detail lines through `sort -u` before the cap, so a notice repeated by N landings prints once. Add a case to `tools/hooks/test_lib_roadmap_next.sh`'s sibling `tools/hooks/test_loop_lib_notify.sh` (same shape as `tools/hooks/test_permission_guard.sh`): a fixture ledger with the same `NOTIFY` detail on three rows renders one line; two different details render two. Witness: a new session with a `.codex-worktrees/` lane present shows the line once.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add tools/hooks/lib.sh tools/hooks/test_lib_roadmap_next.sh <emitter file>
+git add tools/hooks/lib.sh tools/hooks/test_lib_roadmap_next.sh tools/hooks/loop_lib.sh tools/hooks/test_loop_lib_notify.sh
 git commit -m "fix(hooks): prompt-context next= recognizes plan pointers; dedupe worktree lane notice"
 ```
 
@@ -372,32 +372,42 @@ git commit -m "fix(hooks): prompt-context next= recognizes plan pointers; dedupe
 The close-out after the door releases is eight serial steps (`.claude/skills/ship-pr/SKILL.md:387-644`). Reflect and `/context-save-lean` need the session; the exit report, metrics queue, and deferral rows do not. Fold those three into one recipe. The queue half keeps `arc-metrics queue`'s own contract — `--transcript` is omitted when no transcript matches unambiguously and `--levers` is zero or many separate tokens (`ship-pr/SKILL.md:587-602`; `tools/arc_metrics.py` declares `--levers` with `nargs="*"`) — so the recipe forwards everything after its three exit-report positionals verbatim instead of naming them (codex r1 on b-230-register: fixed positionals could not express a valid close-out).
 
 **Files:**
-- Modify: `justfile` (add `arc-close` next to `arc-exit-report` at line 265; the justfile sets `positional-arguments`, so `$4` onward is the forwarded tail)
+- Modify: `justfile` (add `arc-close` next to `arc-exit-report` at line 265; the justfile sets `positional-arguments` and no `shell`, so each line runs under `sh -cu` — POSIX only, no `${@:4}` (codex r2 on b-230-register))
 - Modify: `.claude/skills/ship-pr/SKILL.md:541-624` (replace the two separate invocations with `just arc-close`)
 - Test: `tools/test_arc_close_recipe.py`
 
-- [ ] **Step 1: Write the failing test** (behaviour through `just -n`, which prints the recipe's lines without running them)
+- [ ] **Step 1: Write the failing test** (the recipe EXECUTES; the inner `just` calls are captured by a shim ahead of the real binary on `PATH`, so the shell's positional handling is exercised, not printed — `just -n` would not expand `$@`)
 
 ```python
 # tools/test_arc_close_recipe.py
-import subprocess
+import os, shutil, subprocess, sys
 
-def _dry(*args):
-    p = subprocess.run(["just", "-n", "arc-close", *args], capture_output=True, text=True)
-    return p.returncode, p.stdout + p.stderr
+def _run(tmp_path, *args):
+    shim = tmp_path / "bin"; shim.mkdir()
+    log = tmp_path / "calls.txt"
+    (shim / "just").write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\n")
+    (shim / "just").chmod(0o755)
+    real = shutil.which("just")
+    env = {**os.environ, "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
+    p = subprocess.run([real, "arc-close", *args], capture_output=True, text=True, env=env)
+    return p.returncode, log.read_text().splitlines() if log.exists() else []
 
-def test_forwards_full_queue_tail():
-    rc, out = _dry("12", "abc123", "cp.md", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0",
-                   "--round-logs", "logs/*.log", "--transcript", "t.jsonl", "--levers", "B-1", "B-2")
+def test_forwards_full_queue_tail(tmp_path):
+    rc, calls = _run(tmp_path, "12", "abc123", "cp.md", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0",
+                     "--round-logs", "logs/*.log", "--transcript", "t.jsonl", "--levers", "B-1", "B-2")
     assert rc == 0
-    assert "arc-exit-report --pr 12 --merge-sha abc123 --checkpoint cp.md" in out
-    assert "arc-metrics queue --pr 12 --arc-id u-x --arc-type applying --decisions 0 --round-logs logs/*.log --transcript t.jsonl --levers B-1 B-2" in out
+    assert calls == [
+        "arc-exit-report --pr 12 --merge-sha abc123 --checkpoint cp.md",
+        "arc-metrics queue --pr 12 --arc-id u-x --arc-type applying --decisions 0 --round-logs logs/*.log --transcript t.jsonl --levers B-1 B-2",
+    ]
 
-def test_omitting_transcript_and_levers_is_representable():
-    rc, out = _dry("12", "abc123", "cp.md", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0", "--round-logs", "logs/*.log")
+def test_omitting_transcript_and_levers_is_representable(tmp_path):
+    rc, calls = _run(tmp_path, "12", "abc123", "cp.md", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0", "--round-logs", "logs/*.log")
     assert rc == 0
-    assert "--transcript" not in out and "--levers" not in out
+    assert calls[1] == "arc-metrics queue --pr 12 --arc-id u-x --arc-type applying --decisions 0 --round-logs logs/*.log"
 ```
+
+The glob survives because `positional-arguments` hands each argument through `"$@"` unexpanded; the shim proves it.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -409,12 +419,12 @@ Expected: FAIL (unknown recipe).
 ```just
 # Loop optimization plan Task 3: the non-interactive close-out tail in one call. Three
 # positionals feed arc-exit-report; everything after them is arc-metrics queue's own
-# argument list, forwarded verbatim ("$@" from $4 on) so its contract is unchanged:
+# argument list, forwarded verbatim (POSIX `shift 3` then "$@" — the recipe shell is `sh -cu`) so its contract is unchanged:
 # omit --transcript when ambiguous, pass zero or many --levers tokens. Each line runs in
 # its own shell and just stops at the first non-zero exit.
 arc-close pr merge_sha checkpoint *QUEUE_ARGS:
     just arc-exit-report --pr "$1" --merge-sha "$2" --checkpoint "$3"
-    just arc-metrics queue --pr "$1" "${@:4}"
+    pr="$1"; shift 3; just arc-metrics queue --pr "$pr" "$@"
 ```
 
 - [ ] **Step 4: Run the test**
@@ -449,7 +459,7 @@ The parser and the producer must agree on one row shape (codex r1 on b-230-regis
 **Interfaces:**
 - Produces: `python tools/branch_hygiene_batch.py --pending <loop_status.md>` prints one line per verified-merged branch as `<branch> <head_oid>` and, with `--emit-command`, prints the single guarded push:
   `git push --force-with-lease=refs/heads/A:<oidA> --force-with-lease=refs/heads/B:<oidB> origin :refs/heads/A :refs/heads/B`
-  A pending row with no `<branch> (PR #N, merged` pair is printed to stderr as `unreadable pending row: <row>` and makes the exit non-zero; it is never skipped silently.
+  A pending row with no `<branch> (PR #N, merged` pair is printed to stderr as `unreadable pending row: <row>` and makes the exit non-zero; it is never skipped silently. A branch whose PR is not `MERGED` or whose head branch differs aborts the whole batch (exit 1, `verification mismatch: <branch> PR #N: <reason>` on stderr, no command printed): a partially stale queue must never become a partially executed destructive push (codex r2 on b-230-register). Input is the loop's pending-HIL reducer (`loop_pending_hil_list`, `tools/hooks/loop_lib.sh:392`, last-write-wins so a `RESOLVED-HIL` row clears its item), read from stdin — never the raw ledger, which would resurrect resolved rows — and the ledger path is the canonical `loop_status_path()` (`loop_lib.sh:31`), which honours alternate venues.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -477,6 +487,12 @@ def test_parse_pending_row_finds_both_branches():
 def test_bare_branch_row_is_refused_not_skipped():
     with pytest.raises(UnreadableRow):
         parse_pending("u-x — branch hygiene close-out pending: feat/u-x — run the guarded block")
+
+def test_one_mismatch_aborts_the_batch(monkeypatch):
+    import branch_hygiene_batch as m
+    monkeypatch.setattr(m, "pr_view", lambda pr: {"state": "MERGED", "headRefName": "feat/a" if pr == "1" else "other", "headRefOid": "aaa"})
+    with pytest.raises(m.VerificationMismatch):
+        m.verify_all([("feat/a", "1"), ("feat/b", "2")])
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -526,23 +542,38 @@ def build_push_command(branches: list[tuple[str, str]]) -> str:
     refs = " ".join(f":refs/heads/{b}" for b, _ in branches)
     return f"git push {leases} origin {refs}"
 
-def verified(branch: str, pr: str) -> tuple[str, str] | None:
-    info = json.loads(subprocess.run(["gh", "pr", "view", pr, "--json", "state,headRefName,headRefOid"], capture_output=True, text=True, check=True).stdout)
-    if info["state"] != "MERGED" or info["headRefName"] != branch:
-        return None
-    return (branch, info["headRefOid"])
+class VerificationMismatch(RuntimeError):
+    """One branch failed verification; the whole batch is refused (no partial destructive push)."""
+
+def pr_view(pr: str) -> dict:
+    return json.loads(subprocess.run(["gh", "pr", "view", pr, "--json", "state,headRefName,headRefOid"], capture_output=True, text=True, check=True).stdout)
+
+def verify_all(found: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for branch, pr in found:
+        info = pr_view(pr)
+        if info["state"] != "MERGED":
+            raise VerificationMismatch(f"{branch} PR #{pr}: state {info['state']}, not MERGED")
+        if info["headRefName"] != branch:
+            raise VerificationMismatch(f"{branch} PR #{pr}: head branch is {info['headRefName']}")
+        out.append((branch, info["headRefOid"]))
+    return out
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pending", required=True)
+    ap.add_argument("--pending", required=True, help="pending-HIL reducer output; '-' reads stdin")
     ap.add_argument("--emit-command", action="store_true")
     a = ap.parse_args()
+    text = sys.stdin.read() if a.pending == "-" else open(a.pending).read()
     try:
-        found = parse_pending(open(a.pending).read())
+        found = parse_pending(text)
+        ok = verify_all(found)
     except UnreadableRow as e:
         print(f"unreadable pending row: {e}", file=sys.stderr)
         return 2
-    ok = [v for v in (verified(b, pr) for b, pr in found) if v]
+    except VerificationMismatch as e:
+        print(f"verification mismatch: {e}", file=sys.stderr)
+        return 1
     for b, oid in ok:
         print(f"{b} {oid}")
     if a.emit_command:
@@ -556,14 +587,16 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the test**
 
 Run: `uv run pytest tools/test_branch_hygiene_batch.py -v`
-Expected: 4 passed.
+Expected: 5 passed.
 
 - [ ] **Step 5: Recipe and skill text**
 
 ```just
 # Task 4: list verified-merged deferred branches and print the ONE guarded delete to run by hand.
+# The input is the pending-HIL REDUCER (last-write-wins; a RESOLVED-HIL row clears its item)
+# over the canonical loop_status_path() venue — never the raw ledger.
 branch-hygiene-pending:
-    uv run python tools/branch_hygiene_batch.py --pending "$HOME/.gstack/projects/arhugula-v2/loop_status.md" --emit-command
+    bash -c 'source tools/hooks/loop_lib.sh; loop_pending_hil_list' | uv run python tools/branch_hygiene_batch.py --pending - --emit-command
 ```
 
 In `ship-pr/SKILL.md:471-480`, replace the canonical defer text with the one shape the parser reads — `bash tools/04-loop/defer.sh <arc-id> "branch hygiene close-out pending: <branch> (PR #<N>, merged <merge-sha>, main run green) and roadmap-refresh-post-<N> (PR #<refresh-N>, merged <refresh-merge-sha>, main run green)"` — and after it add: "In the next interactive session run `just branch-hygiene-pending` and paste the printed push; one approval clears every verified row." The parser docstring and this skill sentence are the two carriers of the shape; `parse_pending` is the authority.
@@ -608,7 +641,7 @@ The second disjointness check at ship time stays: HEAD changed since selection, 
 
 ### Task 6: Concurrency lens on demand (duplicate reviews, spec-gated)
 
-Basis: the concurrency lens has 1 raw / 0 net unique catches in 88 findings; witness-adequacy has 22 raw / 19 net and spec-conformance 10 (§0). Running the concurrency lens only when the diff touches a shared-state or process-isolation surface removes one subagent from the gate rounds the detector clears; Step 5 measures how many that is. Running fewer lenses is what C-HE-34 forecloses — "No collapsing of review layers to cut the 68%" (`Spec_HE_Loop_Lanes_v1.md:823`) — so an operator answer cannot enable it directly (codex r1 on b-230-register): Steps 1–5 build the detector and the measurement (mode-agnostic), Step 6 asks once, and a *yes* opens a spec leg (v1.8 change note qualifying C-HE-34 for a detector-gated lens, clearance marker, HE plan update, landed as a doc-only PR) before the skill edit lands.
+Basis: the concurrency lens has 1 raw / 0 net unique catches in 88 findings; witness-adequacy has 22 raw / 19 net and spec-conformance 10 (§0). Running the concurrency lens only when the diff touches a shared-state or process-isolation surface removes one subagent from the gate rounds the detector clears; Step 5 measures how many that is. Running fewer lenses is what C-HE-34 forecloses — "No collapsing of review layers to cut the 68%" (`Spec_HE_Loop_Lanes_v1.md:823`) — so an operator answer cannot enable it directly (codex r1 on b-230-register): Steps 1–5 build the detector and the measurement (mode-agnostic), Step 6 asks once, and a *yes* opens a spec leg (a change note qualifying C-HE-34 for a detector-gated lens, clearance marker, HE plan update, landed as a doc-only PR) before the skill edit lands. Spec versions are allocated serially at the moment a leg opens — the next number after the cleared head at that time (v1.8 while v1.7 is the head) — never pre-assigned here, since Tasks 6, 7 and 8 may each be accepted (codex r2 on b-230-register).
 
 **Files:**
 - Create: `tools/concurrency_surface.py`
@@ -635,6 +668,10 @@ def test_deleted_fcntl_file_is_a_surface():
 def test_shell_flock_is_a_surface():
     assert touches_concurrency("+++ b/tools/hooks/x.sh\n+flock -n 9 || exit 1\n") is True
 
+def test_timeout_and_cancellation_are_surfaces():
+    assert touches_concurrency("+++ b/e.py\n+async with asyncio.timeout(5):\n") is True
+    assert touches_concurrency("+++ b/f.py\n-except asyncio.CancelledError:\n+except Exception:\n") is True
+
 def test_plain_async_def_is_not_a_surface():
     assert touches_concurrency("+++ b/d.py\n+import asyncio\n+async def x(): await y()\n") is False
 
@@ -655,8 +692,11 @@ path are scanned, so a deleted file, a removed lock, and a shell/workflow change
 from __future__ import annotations
 import re, sys
 
-PATTERN = re.compile(r"\b(asyncio\.(gather|create_task|Lock|Semaphore|Queue)|threading|multiprocessing|concurrent\.futures|fcntl|flock|os\.link|O_EXCL|subprocess\.Popen|Lock\(|Semaphore\()")
-# Deliberately not `await ` or bare `asyncio`: nearly every harness diff is async; the lens is for shared-state and process-isolation surfaces.
+PATTERN = re.compile(r"\b(asyncio\.(gather|create_task|Lock|Semaphore|Queue|timeout|wait_for|shield)|CancelledError|\.cancel\(|TimeoutError|threading|multiprocessing|concurrent\.futures|fcntl|flock|os\.link|O_EXCL|subprocess\.Popen|Lock\(|Semaphore\()")
+# Deliberately not `await ` or bare `asyncio`: nearly every harness diff is async; the lens is for shared-state,
+# process-isolation AND timeout/cancellation surfaces — every construct the lens prompt names
+# (`.claude/skills/merge-gate/SKILL.md:110-169`) has a term here; a surface the prompt names and this
+# pattern misses is a detector defect, and the detector fails CLOSED on it (the lens runs).
 
 def touches_concurrency(diff: str) -> bool:
     changed = (l[1:] for l in diff.splitlines() if l[:1] in "+-" and not l.startswith(("+++", "---")))
@@ -680,8 +720,8 @@ Deleting the topic branch inside the door removes the deferral queue Task 4 batc
 The permission guard is not on the path (codex r1 on b-230-register, P1): the door runs `gh pr merge` from a Python subprocess inside `tools/merge_door.py`, which the Bash PreToolUse guard never sees, so no allowlist carve-out is needed and the two guard tests that deny the raw verbs — `gh pr merge … --delete-branch` at `tools/hooks/test_permission_guard.sh:174` and `gh pr close … --delete-branch` at `:279` — stay exactly as they are. Allowing the raw merge would bypass the lease-enforcing wrapper; the close verb is unrelated destructive behaviour. Both remain denied under every outcome of this task.
 
 **Files (only after the decision):**
-- Modify: `.harness/spec/Spec_HE_Loop_Lanes_v1.md:294` (C-HE-06 §4 iv) and `:334-338` (C-HE-07 §1), bump to v1.8 with a change note.
-- Create: `.harness/clearance/spec-he-loop-lanes-v1.8-cleared-<date>.md`
+- Modify: `.harness/spec/Spec_HE_Loop_Lanes_v1.md:294` (C-HE-06 §4 iv) and `:334-338` (C-HE-07 §1), bump to the next unallocated version at the time the leg opens (v1.8 if it opens first; the number after any leg cleared before it), with a change note.
+- Create: `.harness/clearance/spec-he-loop-lanes-v<that version>-cleared-<date>.md`
 - Modify: `tools/merge_door.py:896` (the fixed string), `tools/hooks/safe-merge.sh:2-4` (its comment quoting the string), `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`, and `tools/test_merge_door.py` (the fixed-string witness). No permission-guard or guard-test change.
 
 - [ ] **Step 1:** Present the decision in the same AskUserQuestion as Task 6 Step 6, recommending **no** for now: Task 4 already collapses the cost to one approval per session, and the rule exists because deletion is irreversible.
@@ -694,7 +734,7 @@ Releasing the lease after the content merge and letting one refresh cover N merg
 
 - [ ] **Step 1: Make contention visible — out of the repo.** A row appended to the tracked `.harness/merge-gate-log.jsonl` while `wait_for_door` is running lands *after* the PR's final committed head and CI gate; when contention clears the door merges the committed head and the row is left as dirty, unmerged worktree state that blocks cleanup and never reaches durable history (codex r1 on b-230-register; the u-he-36 `refresh_pr_ci_not_green` row this registration PR had to carry is the same defect on the door's post-merge path). The yield therefore goes to the shared, append-only, out-of-repo `loop_status.md` through the writer the door already uses for its `DEFERRED-HIL` rows — `_notify` (`tools/merge_door.py:986`) over `reservations.emit_loop_row` (`tools/reservations.py:750`): at the point where `wait_for_door` first observes `held` (the caller-side backoff near `:1714`), emit one `NOTIFY` row with cause `merge-door-lease-acquire:lease_held_yield` and a detail naming the holder's arc id and the backoff index. This adds a loop-status row; it does not touch acquire, release, the gate log, or the invariants at `Spec_HE_Loop_Lanes_v1.md:317-321`. Test: `tools/test_merge_door.py` gains one case asserting the `NOTIFY` row is written (through a patched `emit_loop_row`) when acquire returns `held`, and that the tracked gate log is untouched.
 - [ ] **Step 2:** Register a forward-register row (the id after Task 9's umbrella, `B-231` if nothing else lands first) titled "Merge-door lease released after content merge; refresh covers N merges", with the trigger "more than 5 `lease_held_yield` rows in any 30-day window after Task 1 lands" and the three cites above.
-- [ ] **Step 3:** Extend `tools/loop_cost_baseline.py` with `--loop-status PATH` counting `lease_held_yield` NOTIFY rows, re-run it at each roadmap refresh; when the trigger fires, open the spec leg as a Class 2 decision with a proposed v1.9 text.
+- [ ] **Step 3:** Extend `tools/loop_cost_baseline.py` with `--loop-status PATH` counting `lease_held_yield` NOTIFY rows, re-run it at each roadmap refresh; when the trigger fires, open the spec leg as a Class 2 decision with a proposed text at the next unallocated version (serial allocation, as for Tasks 6 and 7).
 ---
 
 ### Task 9: Register the plan so the loop can find it (do this first)
@@ -757,5 +797,6 @@ Each task is its own PR and its own arc through the loop it optimizes. Re-run `u
 - Registration: Task 9 first, so the loop derives the next task instead of parking the plan.
 - Coverage: CI runs → Task 1; serialization → Task 1 (duration) + Task 8 (trigger); duplicate reviews → Task 6 (gated) with the Codex re-run kept; hooks → Task 2 (the two real defects); close-out tail and cross-arc coupling → Task 3 (tail) with the coupling left in place for a stated reason; smaller items → Tasks 4 and 5, disjointness check kept.
 - No task edits the fixed merge string, releases the lease early, drops the CI-at-final-head rule, or runs fewer review lenses without a spec leg (C-HE-06, C-HE-07, C-HE-34); no task touches the permission guard's denial of the raw `gh pr merge` / `gh pr close --delete-branch` verbs.
+- Codex r2 (head `2a3c66b8b`) found eight more — a movable `actions/checkout@v4` tag on the job that decides whether heavy checks run, dedupe placed at the emitter instead of the banner reducer, a Bash-only `${@:4}` in an `sh -cu` recipe with a dry-run test that could not exercise it, a hard-coded ledger path bypassing `loop_status_path()` and the pending reducer, a batch that dropped failed verifications instead of aborting, a detector missing the timeout/cancellation surfaces the lens prompt names, pre-assigned spec versions that collide, and a diagram label (and the same sentence in ship-pr) saying a held lease *yields* when `wait_for_door` sleeps and retries synchronously — all absorbed, each marked "codex r2 on b-230-register".
 - Codex r1 on the registration PR (b-230-register, head `02f656c72`) found eight design defects in the task bodies — clean rounds and rejected adjudications missing from the baseline, fixed positionals that could not express a valid close-out, a parser and producer disagreeing on the deferral row shape, a just recipe that stopped at a recorded BLOCK, a detector reading surviving files instead of the diff, lens gating and `--delete-branch` mis-classified as operator-only decisions, and a mid-door gate-log write that could never reach merged history — and every one is absorbed above, each marked "codex r1 on b-230-register" at the sentence it changed.
-- Names used across tasks: `classify`, `build_push_command`, `parse_pending`, `UnreadableRow`, `touches_concurrency`, `summarize` are each defined in the task that introduces them.
+- Names used across tasks: `classify`, `build_push_command`, `parse_pending`, `UnreadableRow`, `verify_all`, `VerificationMismatch`, `touches_concurrency`, `summarize` are each defined in the task that introduces them.
