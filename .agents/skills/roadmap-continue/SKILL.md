@@ -31,13 +31,14 @@ check them rather than trusting remembered or checkpointed remaining work.
 ## Execute one arc
 
 1. Create or reuse a clean isolated worktree based on current `main`. Never edit the shared
-   root checkout. Run `just codex-autonomous-arc <arc-id>` in that worktree.
-2. **Arc open — selection fence, then reservation (C-HE-03 §4; C-HE-13 §5).** Selection IS
-   arc open: the instant the unit is chosen, before any work, and ONLY from inside the lane
-   worktree created in step 1 (`.harness/.lane-id` is per-worktree — sourcing lane-init from
-   the shared checkout would reserve under the wrong holder identity; codex u-he-36 r2).
-   Definition home: `.claude/skills/roadmap-continue/SKILL.md` step 2; every value a LITERAL,
-   one command per invocation (the permission guard allowlists exactly these shapes):
+   root checkout. Run `just codex-autonomous-arc <arc-id>` in that worktree. Then, still
+   inside that worktree, **arc open — selection fence, then reservation (C-HE-03 §4;
+   C-HE-13 §5)**: selection IS arc open — the instant the unit is chosen, before any work,
+   and ONLY from inside the lane worktree just created (`.harness/.lane-id` is per-worktree;
+   sourcing lane-init from the shared checkout would reserve under the wrong holder
+   identity — codex u-he-36 r2). Definition home: `.claude/skills/roadmap-continue/SKILL.md`
+   step 2; every value a LITERAL, one command per invocation (the permission guard
+   allowlists exactly these shapes):
    - `source tools/hooks/lane-init.sh` — exports `HARNESS_LANE_ID` (persisted at this
      worktree's `.harness/.lane-id`; lane-init is its one writer and the marker is the
      authority ahead of the environment).
@@ -54,21 +55,21 @@ check them rather than trusting remembered or checkpointed remaining work.
      committed heads only: a sibling that reserves inside that window, or whose work is
      still uncommitted, is caught at landing by `BASE_TOCTOU` (C-HE-13 §5), not here.
    - `uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>`,
-     then the queue-start span edge (the `phase` shape in step 8 below).
-3. Record a concise plan with owned files, authority, RED witness, verification, and tracking
+     then the queue-start span edge (the `phase` shape in step 7 below).
+2. Record a concise plan with owned files, authority, RED witness, verification, and tracking
    surfaces. If code contradicts the arc premise, stop and classify instead of reworking the
    premise to save the arc.
-4. Write or preserve the failing witness and record `red` with `status=failed`. Implement
+3. Write or preserve the failing witness and record `red` with `status=failed`. Implement
    the smallest posture-correct slice; never mix `design-substrate/**` and implementation
    without an explicit back-flow arc.
-5. Recount any stated condition/cardinality set programmatically after every review round.
-6. Run narrow verification, then `just codex-check`; add `just overlay-check`, shell tests,
+4. Recount any stated condition/cardinality set programmatically after every review round.
+5. Run narrow verification, then `just codex-check`; add `just overlay-check`, shell tests,
    or live/integration checks when the claim requires them. Cache-warmth handoff
    (U-SR-07/WR-14): at >400k context, before any background wait expected to outlast
    the prompt-cache TTL, prefer closing out to a handoff over idling through the
    expiry — one cold re-warm re-reads the whole context (≈0.7M IET on the [B] F4
    baseline); "the wait costs nothing" bills the next call.
-7. Grounding pass (U-WT-01) first: re-read every `file:line` cite against the
+6. Grounding pass (U-WT-01) first: re-read every `file:line` cite against the
    staged/worktree content under review (the commit lands later, in ship-pr), recompute
    every count/arithmetic claim from source, verify every `#NNN` reference is the PR it
    claims, confirm local gates ran against the *current* staged/worktree fingerprint
@@ -81,7 +82,7 @@ check them rather than trusting remembered or checkpointed remaining work.
    review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` (the logged wrapper;
    a bare `just codex-review` writes fallback ids and emits no spans). Validate
    exit status, non-empty output, and the final verdict before recording the review gate.
-8. **Phase-span carrier (U-HE-50; C-HE-27 §5 X6a; interim until B-218).** The logged
+7. **Phase-span carrier (U-HE-50; C-HE-27 §5 X6a; interim until B-218).** The logged
    wrapper emits the `verify` start/end edges at its own process boundaries — never emit
    `verify` by hand on that path (a re-emission is only a no-op replay). The remaining
    edges are session-emitted: single literal-id commands in the canonical flag order,
@@ -102,7 +103,7 @@ check them rather than trusting remembered or checkpointed remaining work.
    final round is NOT repairable: it stays null — a post-verdict start would fabricate
    a late window. This copy is
    deleted in the same PR that completes wrapper emission of absorb/edit (B-218).
-9. Run `just codex-closeout`, then hand the complete arc to the `ship-pr` skill.
+8. Run `just codex-closeout`, then hand the complete arc to the `ship-pr` skill.
 
 ## Genuine gates only
 
