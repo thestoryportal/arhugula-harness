@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 228
+  total: 229
   open: 1
   design_substrate_gated: 3
-  registered_finding: 72
+  registered_finding: 73
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 560024cd2911c28c
+  identity_digest: 5b6a0298bcf779ca
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11095,3 +11095,26 @@ items:
   council: 'NO at registration — a contract-reading disagreement on one clause; the closure
     is a v1.8 spec decision, which may convene one if arm (b) is chosen.'
   heading: '### B-228 · selection-time disjointness gate reads committed heads — two fresh lanes on the same main always pass it *(surfaced by codex r2/r6/r7 on u-he-36, 2026-09-02; REGISTERED)*'
+- id: B-229
+  title: >-
+    O3 replay population is the 172 file-overlapping pairs; a directory-vs-file
+    conflict between path-disjoint branches falls outside it
+  pr: 'PR pending (u-he-36)'
+  status: registered_finding
+  summary: 'SURFACED by codex r10 on u-he-36 (2026-09-03): C-HE-13 §4 fixes the O3
+    population as "the 172 historical colliding pairs" — P-R3''s own definition, pairs
+    whose changed-file sets intersect after the four-file governance exclusion — and
+    tools/arc_disjoint_check.py historical replays exactly that set (derive-pairs
+    reproduces it: 150 PRs / 444 window pairs / 172 colliding). git can also conflict
+    between DISJOINT path sets (one side adds `x`, the other adds `x/y`; rename
+    detection), so a pair with no shared file can still be a merge-tree conflict and
+    the 172/444 figure bounds file overlap, not every possible merge-tree conflict.
+    The replay measures the contract''s population faithfully; the observation is
+    about what that population omits.'
+  close_out: 'OPEN — closure = run the replay over all 444 window pairs (the
+    non-colliding 272 can conflict only through dir/file or rename collisions; ~+2 min
+    under the scratch object dir) and, if any conflict, add the count as a named
+    third term of the X7b interval via a v1.8 note; if none, record the zero and close.
+    A measurement task, not a review task.'
+  council: 'NO — a measurement-scope note on one recipe; no cross-axis tension.'
+  heading: '### B-229 · O3 replay population is the 172 file-overlapping pairs — dir/file conflicts between path-disjoint branches fall outside it *(surfaced by codex r10 on u-he-36, 2026-09-03; REGISTERED)*'
