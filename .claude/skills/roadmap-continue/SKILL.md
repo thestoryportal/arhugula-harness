@@ -56,7 +56,9 @@ the source of truth (the §10.5 stale-carry failure mode). Read the cited sectio
      reserve; re-derive and pick the next unit. (At selection the candidate is `main`, so
      the conflict is that sibling's WIP against what landed since it branched; it fences
      selection until the sibling rebases or is abandoned, and `BASE_TOCTOU` at landing
-     catches what selection-time cannot.) Exit 2 (`UNRESOLVED …` / `INCOMPLETE …`) → the
+     catches what selection-time cannot — including a sibling that reserves between this
+     scan and your `reserve`, and sibling work still uncommitted: the gate reads committed
+     branch tips only.) Exit 2 (`UNRESOLVED …` / `INCOMPLETE …`) → the
      gate could not run — never read it as clean: surface the printed cause (a sibling
      reservation whose branch has no local or origin ref is a C-HE-03 §5 HITL case) and do
      not reserve.

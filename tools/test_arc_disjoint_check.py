@@ -147,15 +147,18 @@ def test_resolve_ref_local_then_origin_only_when_fresh(repo: Path) -> None:
     assert adc.resolve_ref(repo, "never-created", origin_fresh=True) is None
 
 
-def test_lane_id_env_then_file_then_incomplete(
+def test_lane_id_marker_wins_then_env_then_incomplete(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """lane-init's rule: the per-worktree marker is the authority ahead of the environment
+    (codex r2 P2 — an export equal to a peer's id must not hide that peer)."""
     f = tmp_path / ".lane-id"
     monkeypatch.setattr(adc, "LANE_ID_FILE", f)
     monkeypatch.setenv("HARNESS_LANE_ID", "from-env")
-    assert adc.lane_id() == "from-env"
-    monkeypatch.delenv("HARNESS_LANE_ID")
+    assert adc.lane_id() == "from-env"  # no marker yet: the export is all there is
     f.write_text("from-file\n", encoding="utf-8")
+    assert adc.lane_id() == "from-file"  # marker present: it wins over the export
+    monkeypatch.delenv("HARNESS_LANE_ID")
     assert adc.lane_id() == "from-file"
     f.unlink()
     with pytest.raises(adc.CheckIncompleteError):
@@ -166,8 +169,9 @@ def test_lane_id_env_then_file_then_incomplete(
 
 
 @pytest.fixture
-def cli(repo: Path, qdir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def cli(repo: Path, qdir: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(adc, "REPO", repo)
+    monkeypatch.setattr(adc, "LANE_ID_FILE", tmp_path / "absent-marker")
     monkeypatch.setenv("HARNESS_LANE_ID", "me")
     return repo
 
@@ -182,6 +186,16 @@ def _add_origin(repo: Path, tmp_path: Path) -> Path:
 
 def test_check_exit_0_disjoint(cli: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rs.reserve("arc-c", lane_id="other", branch="lane-c", arc_type="applying")
+    assert adc.main(["check", "--candidate", "lane-a"]) == 0
+    assert "disjoint: lane-a vs 1 other lane head(s)" in capsys.readouterr().out
+
+
+def test_check_reads_committed_tips_only(cli: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Named limit (C-HE-13 §5 pairs selection-time with BASE_TOCTOU at landing): a sibling
+    whose branch tip is still `main` — no commits yet, or work uncommitted — is disjoint
+    here regardless of what it is about to change."""
+    rs.reserve("arc-fresh", lane_id="other", branch="main", arc_type="applying")
+    (cli / "a.txt").write_text("uncommitted sibling edit\n", encoding="utf-8")
     assert adc.main(["check", "--candidate", "lane-a"]) == 0
     assert "disjoint: lane-a vs 1 other lane head(s)" in capsys.readouterr().out
 

@@ -9,6 +9,10 @@ of every NON-terminal reservation: C-HE-03 §4 keeps a lane ``pending`` for its 
 build and flips it ``open`` only at drain start, so an ``open``-only read would see no
 lane until it was already landing.
 
+``check`` reads committed branch tips: sibling work still uncommitted, and a sibling that
+reserves between one lane's scan and its ``reserve``, are outside its reach by
+construction — C-HE-13 §5 pairs it with ``BASE_TOCTOU`` at landing for exactly those.
+
 ``check`` exit codes are a contract: 0 disjoint · 1 textual conflict (one ``CONFLICT``
 line per path) · 2 the check could not complete (unknown lane id, an other-lane branch
 with no local or origin ref, a merge-tree error) — fail closed, never a clean pass by
@@ -191,18 +195,19 @@ def other_lane_heads(repo: Path, me: str, *, origin_fresh: bool) -> list[LaneHea
 
 
 def lane_id() -> str:
-    """This lane's id: ``HARNESS_LANE_ID`` (same shell as lane-init) else the persisted file.
+    """This lane's id: the persisted per-worktree marker, else ``HARNESS_LANE_ID``.
 
-    Shell exports do not survive across Bash tool calls; ``.harness/.lane-id`` is the durable
-    form (U-HE-31). Neither present → the check cannot tell its own reservation from a
-    sibling's and must not guess.
+    The marker is the authority ahead of the environment (``lane-init.sh``: per-worktree
+    and durable; a stale or foreign export is corrected, never trusted — codex r2: an
+    export equal to a peer's id would make ``other_lane_heads`` skip that peer). Neither
+    present → the check cannot tell its own reservation from a sibling's and must not
+    guess.
     """
-    v = os.environ.get("HARNESS_LANE_ID", "")
-    if not v:
-        try:  # the arc_exit_report read shape: an unreadable marker is "absent"
-            v = LANE_ID_FILE.read_text(encoding="utf-8").strip()
-        except OSError:
-            v = ""
+    try:  # the arc_exit_report read shape: an unreadable marker is "absent"
+        v = LANE_ID_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        v = ""
+    v = v or os.environ.get("HARNESS_LANE_ID", "")
     if not v:
         raise CheckIncompleteError(
             "lane id unknown: export HARNESS_LANE_ID (source tools/hooks/lane-init.sh) first"
