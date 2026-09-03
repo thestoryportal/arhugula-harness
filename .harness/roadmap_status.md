@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `4531b15333bb` |
+| `workspace_state_hash` | `13d7f6e2eff2` |
 | `last_refreshed` | 2026-09-03T00:00:00Z |
-| `git_head` | `a8df62d5` —  |
+| `git_head` | `41663b69` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1505).** B-230 Task 3 landed at #1505 — `just arc-close` folds the exit report and the arc-metrics queue into one call (CI now installs `just`; the guard allows the explicit-path form and pins the glob / out-of-worktree-transcript forms at ask), and `strip_pointer_label` in `roadmap_status_refresh.py` ends the doubled-label door blocks; Task 1's §0 measurements and checkbox ticks are in the plan, and `just main-protection-apply` was surfaced once there for the two missing `— blocking` contexts. Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 4 (batched branch hygiene: shlex-quoted refs, `--atomic`, two rerunnable phases, resolve keyed on `ls-remote` exit 2, reducer input via `loop_pending_hil_list`) under the lean protocol — one codex round, no lens — with the standing deferral queue (#1489/#1490 through #1505/its refresh) as its first live batch; then Task 5 (emit-all in `merge_gate_log.py`, one witness-adequacy lens), then Task 2 hooks, then Task 6 Steps 1–5 plus the one batched AskUserQuestion (Task 6 Step 6, Task 7, Task 1 Step 8); then U-HE-37.
+**Current next action (post-#1507).** B-230 Task 4 landed at #1507 — `tools/branch_hygiene_batch.py` with `just branch-hygiene-pending` / `just branch-hygiene-resolve` (four-fact verification per branch, origin presence partition, whole-row grammar, one `--atomic` force-with-lease push; both ship-pr carriers emit the one row shape), and the first live batch already resolved the four items whose branches were gone while the four remaining items (#1499/#1500, #1501/#1502, #1503/#1504, #1505/#1506, plus this arc's own pair once its refresh lands) wait on the operator pasting the printed push in an interactive session and then running the resolve recipe. Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 5 (emit-all in `merge_gate_log.py`: all three lenses always, resume only against a persisted full binding, guard allowlist entry) under the lean protocol — one codex round plus the one witness-adequacy lens Task 5 owes — carrying the Task 4 §0 rows owed to the plan (the #1507 content-merge and refresh-merge `main` run wall clocks, a baseline re-run) and `just arc-metrics drain`; then Task 2 hooks (parser precedence plan-pointer / bold / FIRST `then`; notify dedupe preserving last-occurrence order before `tail -5`), then Task 6 Steps 1–5 plus the one batched AskUserQuestion (Task 6 Step 6, Task 7, Task 1 Step 8); then U-HE-37.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1507 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1505 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1503 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1501 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1499 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1497 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
