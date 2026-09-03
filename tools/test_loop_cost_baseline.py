@@ -382,7 +382,8 @@ def test_lens_round_numbers_are_ranked_per_head_into_one_pass() -> None:
 
 
 def test_door_only_arc_counts_in_arcs_but_not_reviewed_arcs() -> None:
-    rows = _rows() + [
+    rows = [
+        *_rows(),
         {
             "record_kind": "finding",
             "finding_type": "HITL-recoverable",
