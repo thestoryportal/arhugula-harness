@@ -123,24 +123,26 @@ def test_baseline_reports_expected_keys(tmp_path: Path) -> None:
     assert data["unique_catch_rejected_or_suppressed"] == 1
     assert data["unique_catch_unadjudicated"] == 1
     assert data["lease_acquire_events"] == 1
+    assert data["rounds_per_arc_max"] == 3
+    assert data["codex_rows"] == 1
     assert (
         data["lease_held_yields"] is None
     )  # no --loop-status given: an honest could-not-look, never a zero
 
 
-def test_last_disposition_wins_regardless_of_row_order() -> None:
+def test_last_appended_row_wins_not_the_latest_ts() -> None:
+    # C-HE-24 §5: readers reduce by finding_id -> LAST ROW (append order). A row appended
+    # later with an OLDER ts is still the reducer's answer; ts must not reorder it.
     rows = _rows()
-    # the accepted row for s1 arrives LATER in ts than the rejected one, but earlier in the file
-    rows.insert(
-        0,
+    rows.append(
         {
             "record_kind": "finding_adjudication",
             "arc_id": "a",
             "round_n": 2,
             "finding_id": "s1",
             "disposition": "accepted",
-            "ts": "2026-09-03T10:00:02Z",
-        },
+            "ts": "2026-09-03T09:00:00Z",
+        }
     )
     data = summarize(rows)
     assert data["unique_catch_by_producer"] == {
@@ -148,6 +150,41 @@ def test_last_disposition_wins_regardless_of_row_order() -> None:
         "merge-gate-spec-conformance": 1,
     }
     assert data["unique_catch_rejected_or_suppressed"] == 0
+
+
+def test_same_core_retry_is_one_finding() -> None:
+    rows = _rows()
+    # w1 re-emitted under the same finding_id (a same-core retry before adjudication)
+    rows.insert(2, dict(rows[1]))
+    data = summarize(rows)
+    assert data["rows"] == 10
+    assert data["unique_catch_raw"] == 3
+    assert data["unique_catch_by_producer"] == {"merge-gate-witness-adequacy": 1}
+
+
+def test_lease_event_is_the_door_row_not_its_adjudication() -> None:
+    rows = _rows()
+    rows.append(
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": None,
+            "finding_id": "door-1",
+            "producer": "merge-door-lease-acquire",
+            "disposition": "accepted",
+            "ts": "2026-09-03T11:00:00Z",
+        }
+    )
+    rows.append(
+        {
+            "record_kind": "finding",
+            "finding_type": "terminal-block",
+            "arc_id": "a",
+            "round_n": 1,
+            "producer": "merge-door-lease-acquire",
+        }
+    )
+    assert summarize(rows)["lease_acquire_events"] == 1
 
 
 def test_suppressed_is_not_a_catch() -> None:

@@ -8,8 +8,14 @@ Rules the numbers follow (each one a reviewer finding on the registration PR):
   * a round is any (arc_id, round_n) named by ANY record kind — a clean `no_finding`
     round and a clean-only arc count; door rows carry round_n null and are not rounds;
   * a `unique_catch` flag counts only when the finding's LAST `finding_adjudication`
-    (by ts) is `accepted` (C-HE-29); rejected / suppressed and never-adjudicated flags
-    are reported in their own counters and never folded into the catch;
+    row is `accepted` — last in APPEND order, the reducer authority C-HE-24 §5 names
+    ("readers reduce by finding_id → last row"), never by ts; rejected / suppressed and
+    never-adjudicated flags are reported in their own counters and never folded in;
+  * catches are counted per DISTINCT finding_id (C-HE-24 §5 N6 shape): a same-core retry
+    re-emits a finding row under the same id before adjudication and is one finding;
+  * `lease_acquire_events` are the door's own rows only — `record_kind: finding` with
+    `finding_type: HITL-recoverable` from producer `merge-door-lease-acquire`; a later
+    adjudication row of such an event is not a second event;
   * `--loop-status` counts the NOTIFY rows whose cause is exactly
     `merge-door-lease-acquire:lease_held_yield` (Task 8's out-of-repo contention row);
     without the flag that field is null — an honest could-not-look, never a zero.
@@ -31,6 +37,7 @@ from pathlib import Path
 
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
 LEASE_PRODUCER = "merge-door-lease-acquire"
+CODEX_PRODUCER = "codex_review_wrapper"
 
 
 def _is_lens(producer: object) -> bool:
@@ -38,16 +45,12 @@ def _is_lens(producer: object) -> bool:
 
 
 def _last_dispositions(rows: list[dict]) -> dict[str, str]:
-    """finding_id -> disposition of its LAST adjudication row by ts (file order breaks ties)."""
-    latest: dict[str, tuple[str, int, str]] = {}
-    for i, r in enumerate(rows):
-        if r.get("record_kind") != "finding_adjudication":
-            continue
-        fid = str(r.get("finding_id"))
-        key = (str(r.get("ts") or ""), i, str(r.get("disposition")))
-        if fid not in latest or key[:2] > latest[fid][:2]:
-            latest[fid] = key
-    return {fid: v[2] for fid, v in latest.items()}
+    """finding_id -> disposition of its LAST adjudication row in APPEND order (C-HE-24 §5)."""
+    latest: dict[str, str] = {}
+    for r in rows:
+        if r.get("record_kind") == "finding_adjudication":
+            latest[str(r.get("finding_id"))] = str(r.get("disposition"))
+    return latest
 
 
 def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> dict:
@@ -64,16 +67,26 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
     single = [k for k in gate_rounds if sum(1 for p in by_round[k] if _is_lens(p)) == 1]
 
     last = _last_dispositions(rows)
-    flagged = [
-        r for r in rows if r.get("record_kind") == "finding" and r.get("unique_catch") is True
-    ]
+    # one entry per DISTINCT flagged finding_id (a same-core retry repeats the id)
+    flagged: dict[str, object] = {}
+    for r in rows:
+        if r.get("record_kind") == "finding" and r.get("unique_catch") is True:
+            flagged.setdefault(str(r.get("finding_id")), r.get("producer"))
     accepted = collections.Counter(
-        r.get("producer") for r in flagged if last.get(str(r.get("finding_id"))) == "accepted"
+        producer for fid, producer in flagged.items() if last.get(fid) == "accepted"
     )
     rejected_or_suppressed = sum(
-        1 for r in flagged if last.get(str(r.get("finding_id"))) in ("rejected", "suppressed")
+        1 for fid in flagged if last.get(fid) in ("rejected", "suppressed")
     )
-    unadjudicated = sum(1 for r in flagged if str(r.get("finding_id")) not in last)
+    unadjudicated = sum(1 for fid in flagged if fid not in last)
+    lease_events = sum(
+        1
+        for r in rows
+        if r.get("record_kind") == "finding"
+        and r.get("finding_type") == "HITL-recoverable"
+        and r.get("producer") == LEASE_PRODUCER
+    )
+    codex_rows = sum(1 for r in rows if r.get("producer") == CODEX_PRODUCER)
 
     yields: int | None = None
     if loop_status_rows is not None:
@@ -85,13 +98,15 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         "rounds_per_arc_median": statistics.median(len(v) for v in per_arc.values())
         if per_arc
         else 0,
+        "rounds_per_arc_max": max((len(v) for v in per_arc.values()), default=0),
+        "codex_rows": codex_rows,
         "gate_rounds_with_findings": len(gate_rounds),
         "single_lens_rounds": len(single),
         "unique_catch_raw": len(flagged),
         "unique_catch_by_producer": dict(accepted),
         "unique_catch_rejected_or_suppressed": rejected_or_suppressed,
         "unique_catch_unadjudicated": unadjudicated,
-        "lease_acquire_events": sum(1 for r in rows if r.get("producer") == LEASE_PRODUCER),
+        "lease_acquire_events": lease_events,
         "lease_held_yields": yields,
     }
 
