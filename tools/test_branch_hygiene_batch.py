@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -105,18 +106,49 @@ def test_crafted_item_id_is_refused() -> None:
         )
 
 
-def test_one_mismatch_aborts_the_batch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        m,
-        "pr_view",
-        lambda pr: {
-            "state": "MERGED",
-            "headRefName": "feat/a" if pr == "1" else "other",
-            "headRefOid": "aaa",
-        },
-    )
+def _merged(
+    head: str, oid: str = "aaa", base: str = "main", state: str = "MERGED"
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "baseRefName": base,
+        "headRefName": head,
+        "headRefOid": oid,
+        "mergeCommit": {"oid": "m" + oid},
+    }
+
+
+@pytest.fixture
+def green_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(m, "default_branch", lambda: "main")
+    monkeypatch.setattr(m, "main_run_conclusion", lambda sha: "success")
+
+
+def test_one_mismatch_aborts_the_batch(monkeypatch: pytest.MonkeyPatch, green_main: None) -> None:
+    monkeypatch.setattr(m, "pr_view", lambda pr: _merged("feat/a" if pr == "1" else "other"))
     with pytest.raises(m.VerificationMismatch):
         m.verify_all([Deferral("u-a", [("feat/a", "1")]), Deferral("u-b", [("feat/b", "2")])])
+
+
+@pytest.mark.parametrize(
+    ("info", "conclusion", "reason"),
+    [
+        (_merged("feat/a", state="OPEN"), "success", "state is OPEN"),
+        (_merged("feat/a", base="release/1"), "success", "merged into release/1, not main"),
+        (_merged("feat/a"), "cancelled", "post-merge CI on main is cancelled, not success"),
+        (_merged("feat/a"), "", "post-merge CI on main is empty, not success"),
+    ],
+)
+def test_verify_requires_default_branch_and_green_post_merge_run(
+    monkeypatch: pytest.MonkeyPatch, info: dict[str, Any], conclusion: str, reason: str
+) -> None:
+    """codex r1 P1 on b-230-task-4: the ship-pr close-out block checks all four facts before
+    ONE delete; a batch that checked two would turn a side-branch merge into a force-delete."""
+    monkeypatch.setattr(m, "default_branch", lambda: "main")
+    monkeypatch.setattr(m, "main_run_conclusion", lambda sha: conclusion)
+    monkeypatch.setattr(m, "pr_view", lambda pr: info)
+    with pytest.raises(m.VerificationMismatch, match=reason):
+        m.verify_all([Deferral("u-a", [("feat/a", "1")])])
 
 
 def test_resolve_only_items_whose_branches_are_all_gone(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,6 +198,24 @@ def test_another_gates_deferral_is_a_foreign_row_not_an_error() -> None:
 def test_unshaped_line_is_unreadable() -> None:
     with pytest.raises(UnreadableRow):
         parse_rows("not a reducer row at all")
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        " and roadmap-refresh-post-1",  # second pair truncated before its parenthesis
+        " and roadmap-refresh-post-1 (PR #2, merged",  # second pair never closes
+        " and roadmap-refresh-post-1 (merged bbb)",  # second pair without its PR
+        " roadmap-refresh-post-1 (PR #2, merged bbb)",  # pairs not joined by ` and `
+    ],
+)
+def test_a_malformed_second_pair_is_unreadable_not_a_one_branch_item(tail: str) -> None:
+    """codex r1 P2 on b-230-task-4: a row that parsed as ONE branch would have its refresh
+    branch hidden forever once the first was deleted and the item resolved."""
+    with pytest.raises(UnreadableRow):
+        parse_pending(
+            f"[l] u-a — branch hygiene close-out pending: feat/a (PR #1, merged aaa1111){tail}"
+        )
 
 
 # ── the effectful edges ──────────────────────────────────────────────────────
@@ -261,11 +311,12 @@ def test_cli_unreadable_row_exits_2_with_nothing_on_stdout(
 
 
 def test_cli_mismatch_exits_1_with_nothing_on_stdout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    green_main: None,
 ) -> None:
-    monkeypatch.setattr(
-        m, "pr_view", lambda pr: {"state": "OPEN", "headRefName": "x", "headRefOid": "a"}
-    )
+    monkeypatch.setattr(m, "pr_view", lambda pr: _merged("x", state="OPEN"))
     rc, out, err = _cli(tmp_path, ROW_A, "--emit-command", capsys=capsys)
     assert (rc, out) == (1, "")
     assert (
@@ -274,14 +325,13 @@ def test_cli_mismatch_exits_1_with_nothing_on_stdout(
 
 
 def test_cli_emit_prints_the_review_table_on_stderr_and_the_push_on_stdout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    green_main: None,
 ) -> None:
     names = {"1489": "feat/u-sr-08-context-noise-deletions", "1490": "roadmap-refresh-post-1489"}
-    monkeypatch.setattr(
-        m,
-        "pr_view",
-        lambda pr: {"state": "MERGED", "headRefName": names[pr], "headRefOid": "oid" + pr},
-    )
+    monkeypatch.setattr(m, "pr_view", lambda pr: _merged(names[pr], "oid" + pr))
     monkeypatch.setattr(m, "remote_absent", lambda branch: False)
     foreign = "[l] r-830 — needs the AWS profile r830 login"
     rc, out, err = _cli(tmp_path, foreign + "\n" + ROW_A, "--emit-command", capsys=capsys)
@@ -300,17 +350,16 @@ def test_cli_emit_prints_the_review_table_on_stderr_and_the_push_on_stdout(
 
 
 def test_cli_emit_leaves_already_deleted_branches_out_of_the_lease(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    green_main: None,
 ) -> None:
     """Witnessed on the first live batch: a merged PR still reports a head OID after its
     branch was deleted, and a lease on an absent ref is rejected — under --atomic, the
     whole push. The absent branch is named on stderr and left to the resolve phase."""
     names = {"1489": "feat/u-sr-08-context-noise-deletions", "1490": "roadmap-refresh-post-1489"}
-    monkeypatch.setattr(
-        m,
-        "pr_view",
-        lambda pr: {"state": "MERGED", "headRefName": names[pr], "headRefOid": "o" + pr},
-    )
+    monkeypatch.setattr(m, "pr_view", lambda pr: _merged(names[pr], "o" + pr))
     monkeypatch.setattr(m, "remote_absent", lambda branch: branch.startswith("roadmap-refresh"))
     rc, out, err = _cli(tmp_path, ROW_A, "--emit-command", capsys=capsys)
     assert rc == 0
@@ -326,14 +375,13 @@ def test_cli_emit_leaves_already_deleted_branches_out_of_the_lease(
 
 
 def test_cli_emit_with_every_branch_already_gone_prints_no_push(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    green_main: None,
 ) -> None:
     names = {"1489": "feat/u-sr-08-context-noise-deletions", "1490": "roadmap-refresh-post-1489"}
-    monkeypatch.setattr(
-        m,
-        "pr_view",
-        lambda pr: {"state": "MERGED", "headRefName": names[pr], "headRefOid": "o" + pr},
-    )
+    monkeypatch.setattr(m, "pr_view", lambda pr: _merged(names[pr], "o" + pr))
     monkeypatch.setattr(m, "remote_absent", lambda branch: True)
     rc, out, err = _cli(tmp_path, ROW_A, "--emit-command", capsys=capsys)
     assert (rc, out) == (1, "")
@@ -341,14 +389,13 @@ def test_cli_emit_with_every_branch_already_gone_prints_no_push(
 
 
 def test_cli_emit_aborts_when_origin_cannot_be_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    green_main: None,
 ) -> None:
     names = {"1489": "feat/u-sr-08-context-noise-deletions", "1490": "roadmap-refresh-post-1489"}
-    monkeypatch.setattr(
-        m,
-        "pr_view",
-        lambda pr: {"state": "MERGED", "headRefName": names[pr], "headRefOid": "o" + pr},
-    )
+    monkeypatch.setattr(m, "pr_view", lambda pr: _merged(names[pr], "o" + pr))
 
     def _unreachable(branch: str) -> bool:
         raise m.RemoteStateError(f"ls-remote exit 128 for {branch}: could not read from remote")

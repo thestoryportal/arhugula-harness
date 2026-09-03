@@ -39,6 +39,10 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from arc_metrics import ci_is_green  # sibling tool; the ONE C-HE-19 predicate
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -52,9 +56,14 @@ CANONICAL_DEFER_SHAPE = (
 
 _ROW = re.compile(r"^\[(?P<lane>[^\]]*)\] (?P<item>\S+) — (?P<detail>.*)$")
 _ITEM_ID = re.compile(r"^[A-Za-z0-9._-]+$")
-# `<branch> (PR #N, merged <sha>` — the trailing text after the sha is free (older rows
-# carry no "main run green", some carry a run id or a parenthetical note).
-_PAIR = re.compile(r"(\S+) \(PR #(\d+), merged [0-9a-f]{7,40}")
+# One pair is `<branch> (PR #N, merged <sha>[, …])`; the text after the sha inside the
+# parenthesis is free (older rows carry no "main run green", some carry a run id). The
+# pair list must be consumed WHOLE — `A (…) and B (…)`, optionally followed by ` — <note>`
+# — so a truncated or malformed second pair is an unreadable row, never a one-branch item
+# whose refresh branch would be hidden forever once the first is resolved (codex r1 P2).
+_PAIR = r"(\S+) \(PR #(\d+), merged [0-9a-f]{7,40}[^()]*\)"
+_PAIRS = re.compile(rf"^(?P<pairs>{_PAIR}(?: and {_PAIR})*)(?: — .*)?$")
+_ONE_PAIR = re.compile(_PAIR)
 
 
 class UnreadableRow(Exception):  # noqa: N818 — B-230 Task 4 plan signature verbatim
@@ -99,9 +108,10 @@ def parse_rows(text: str) -> list[Deferral | ForeignRow]:
             out.append(ForeignRow(row))
             continue
         item = m.group("item")
-        pairs = _PAIR.findall(detail.removeprefix(MARKER))
-        if not _ITEM_ID.match(item) or not pairs:
+        pm = _PAIRS.match(detail.removeprefix(MARKER))
+        if not _ITEM_ID.match(item) or pm is None:
             raise UnreadableRow(row)
+        pairs = _ONE_PAIR.findall(pm.group("pairs"))
         out.append(Deferral(item, [(branch, pr) for branch, pr in pairs]))
     return out
 
@@ -115,17 +125,40 @@ def parse_pending(text: str) -> list[Deferral]:
 # live here; verify_all / build_push_command / resolve_cleared only combine their results.
 
 
-def pr_view(pr: str) -> dict[str, str]:
-    proc = subprocess.run(
-        ["gh", "pr", "view", pr, "--json", "state,headRefName,headRefOid"],
-        capture_output=True,
-        text=True,
-    )
+def _gh(*args: str) -> str:
+    proc = subprocess.run(["gh", *args], capture_output=True, text=True)
     if proc.returncode != 0:
         raise VerificationMismatch(
-            f"gh pr view failed (exit {proc.returncode}): {proc.stderr.strip()}"
+            f"gh {args[0]} {args[1]} failed (exit {proc.returncode}): {proc.stderr.strip()}"
         )
-    return json.loads(proc.stdout)
+    return proc.stdout
+
+
+def pr_view(pr: str) -> dict[str, Any]:
+    return json.loads(
+        _gh("pr", "view", pr, "--json", "state,baseRefName,headRefName,headRefOid,mergeCommit")
+    )
+
+
+def default_branch() -> str:
+    return _gh(
+        "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"
+    ).strip()
+
+
+def main_run_conclusion(merge_sha: str) -> str:
+    """The merge commit's OWN post-merge run on main — the PR's pre-merge checks are not
+    a substitute (the ship-pr close-out block, and C-HE-19 via `arc_metrics.ci_is_green`)."""
+    return _gh(
+        "run",
+        "list",
+        "--commit",
+        merge_sha,
+        "--json",
+        "conclusion",
+        "--jq",
+        ".[0].conclusion // empty",
+    ).strip()
 
 
 def remote_absent(branch: str) -> bool:
@@ -165,19 +198,30 @@ def loop_resolve(item_id: str, note: str) -> None:
 
 
 def verify_all(deferrals: list[Deferral]) -> dict[str, str]:
+    """The same four facts the ship-pr close-out block requires before ONE delete, for
+    every branch in the batch: the PR is MERGED, into the default branch, its head branch
+    is the one the row names, and the merge commit's own main run is green (codex r1 P1
+    on b-230-task-4: a deferral is data — a PR merged into a side branch must not become
+    a force-delete)."""
+    base = default_branch()
     oids: dict[str, str] = {}
     for d in deferrals:
         for branch, pr in d.branches:
             info = pr_view(pr)
-            if info["state"] != "MERGED":
-                raise VerificationMismatch(
-                    f"verification mismatch: {branch} PR #{pr}: state is {info['state']}"
-                )
-            if info["headRefName"] != branch:
-                head = info["headRefName"]
-                raise VerificationMismatch(
-                    f"verification mismatch: {branch} PR #{pr}: head branch is {head}"
-                )
+            concl = main_run_conclusion(info["mergeCommit"]["oid"]) if info["mergeCommit"] else ""
+            reason = (
+                f"state is {info['state']}"
+                if info["state"] != "MERGED"
+                else f"merged into {info['baseRefName']}, not {base}"
+                if info["baseRefName"] != base
+                else f"head branch is {info['headRefName']}"
+                if info["headRefName"] != branch
+                else f"post-merge CI on {base} is {concl or 'empty'}, not success"
+                if not ci_is_green(concl)
+                else None
+            )
+            if reason is not None:
+                raise VerificationMismatch(f"verification mismatch: {branch} PR #{pr}: {reason}")
             oids[branch] = info["headRefOid"]
     return oids
 
