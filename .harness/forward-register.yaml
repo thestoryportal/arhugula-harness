@@ -11127,8 +11127,9 @@ items:
   status: open
   summary: 'SURFACED by the Archify loop diagrams (docs/diagrams/code-loop/, 2026-09-03)
     and grounded the same day: five CI runs per landed unit with pytest at 450 s each,
-    a merge-door lease held across two of them, 33 of 48 gate rounds raised by a single
-    lens, and a prompt hook printing next=? because the pointer prose stopped quoting
+    a merge-door lease held across two of them, 35 of 49 gate passes raised by a single
+    lens (Task 0''s head-bound count; the pre-registration read was 33 of 48), and a
+    prompt hook printing next=? because the pointer prose stopped quoting
     unit ids. Plan with per-task witnesses at
     .harness/plan/loop-optimization-plan-2026-09-03.md.'
   close_out: 'OPEN — closes when Tasks 0-5 are merged with their witnesses recorded in

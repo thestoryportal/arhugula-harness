@@ -111,6 +111,8 @@ def test_baseline_reports_expected_keys(tmp_path: Path) -> None:
     data = _run(log)
     assert data["rows"] == 9
     assert data["arcs"] == 1
+    assert data["reviewed_arcs"] == 1
+    assert data["lens_rows"] == 4
     assert (
         data["rounds_per_arc_median"] == 3
     )  # the clean round 3 counts; the door row (round_n null) does not
@@ -334,6 +336,65 @@ def test_rounds_and_gate_passes_are_head_bound() -> None:
     assert data["rounds_per_arc_median"] == 4
     assert data["gate_rounds_with_findings"] == 2
     assert data["single_lens_rounds"] == 2
+
+
+def test_lens_round_numbers_are_ranked_per_head_into_one_pass() -> None:
+    # PR 1414's shape: at one head, concurrency ran its 3rd round while the other two lenses
+    # ran their 2nd — ONE pass with three lenses, not two passes
+    rows = [
+        {
+            "record_kind": "finding",
+            "arc_id": "f",
+            "round_n": 3,
+            "head_sha": "h9",
+            "producer": "merge-gate-concurrency",
+            "finding_id": "k5",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "f",
+            "round_n": 2,
+            "head_sha": "h9",
+            "producer": "merge-gate-spec-conformance",
+            "finding_id": "s5",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "f",
+            "round_n": 2,
+            "head_sha": "h9",
+            "producer": "merge-gate-witness-adequacy",
+        },
+        # spec-conformance re-run at the same head: its 2nd rank there is a SECOND pass, spec-only
+        {
+            "record_kind": "finding",
+            "arc_id": "f",
+            "round_n": 5,
+            "head_sha": "h9",
+            "producer": "merge-gate-spec-conformance",
+            "finding_id": "s6",
+        },
+    ]
+    data = summarize(rows)
+    assert data["rounds_per_arc_median"] == 2
+    assert data["gate_rounds_with_findings"] == 2
+    assert data["single_lens_rounds"] == 1
+
+
+def test_door_only_arc_counts_in_arcs_but_not_reviewed_arcs() -> None:
+    rows = _rows() + [
+        {
+            "record_kind": "finding",
+            "finding_type": "HITL-recoverable",
+            "arc_id": "door-only",
+            "round_n": None,
+            "producer": "merge-door-lease-acquire",
+        },
+    ]
+    data = summarize(rows)
+    assert data["arcs"] == 2
+    assert data["reviewed_arcs"] == 1
+    assert data["lease_acquire_events"] == 2
 
 
 def test_single_lens_round_and_clean_only_arc() -> None:
