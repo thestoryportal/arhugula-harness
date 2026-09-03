@@ -292,6 +292,50 @@ def test_codex_rows_exclude_adjudications_the_absorber_wrote() -> None:
     assert summarize(rows)["codex_rows"] == 1
 
 
+def test_rounds_and_gate_passes_are_head_bound() -> None:
+    rows = [
+        # the same channel + round_n on two review heads is TWO rounds
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 0,
+            "head_sha": "h1",
+            "producer": "codex_review_wrapper",
+            "finding_id": "x1",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 0,
+            "head_sha": "h2",
+            "producer": "codex_review_wrapper",
+            "finding_id": "x2",
+        },
+        # two lenses each at round_n 1 but on DIFFERENT heads:
+        # two single-lens passes, not one two-lens pass
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 1,
+            "head_sha": "h1",
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "w3",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 1,
+            "head_sha": "h2",
+            "producer": "merge-gate-spec-conformance",
+            "finding_id": "s3",
+        },
+    ]
+    data = summarize(rows)
+    assert data["rounds_per_arc_median"] == 4
+    assert data["gate_rounds_with_findings"] == 2
+    assert data["single_lens_rounds"] == 2
+
+
 def test_single_lens_round_and_clean_only_arc() -> None:
     rows = [
         {
@@ -325,7 +369,9 @@ def test_single_lens_round_and_clean_only_arc() -> None:
     ]
     data = summarize(rows)
     assert data["arcs"] == 2  # the clean-only arc c counts
-    assert data["rounds_per_arc_median"] == 2  # b: codex r1 + gate pass 1; c: gate pass 1 + codex r2
+    assert (
+        data["rounds_per_arc_median"] == 2
+    )  # b: codex r1 + gate pass 1; c: gate pass 1 + codex r2
     assert data["gate_rounds_with_findings"] == 1
     assert data["single_lens_rounds"] == 1  # codex rows do not make a round multi-lens
 

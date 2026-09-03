@@ -5,31 +5,11 @@ Read-only. Feeds the §0 table of .harness/plan/loop-optimization-plan-2026-09-0
 re-run after each of the plan's merges so every saving is measured against the same rows.
 
 Rules the numbers follow (each one a reviewer finding on the registration PR):
-  * a round is a distinct (channel, round_n) per arc, named by ANY record kind, over the
-    two REVIEW channels only: out-of-family (`codex_review_wrapper`, with
-    `gemini_review_wrapper` as the failover of the SAME round) and the merge gate (the
-    three `merge-gate-*` lenses share one pass number). Round numbers are scoped per
-    channel — codex r1 and gate pass 1 are two rounds, never one — so an arc with 10
-    codex rounds and 3 gate passes has 13. A clean `no_finding` round and a clean-only
-    arc count; probe producers (`reviewer_concurrency_probe`, whose round_n is an
-    iteration index) and door producers (round_n null) are not rounds;
-  * a `unique_catch` flag counts only when the finding's LAST `finding_adjudication`
-    row is `accepted` — last in APPEND order, the reducer authority C-HE-24 §5 names
-    ("readers reduce by finding_id → last row"), never by ts; rejected / suppressed and
-    never-adjudicated flags are reported in their own counters and never folded in;
-  * catches are counted per DISTINCT finding_id (C-HE-24 §5 N6 shape): a same-core retry
-    re-emits a finding row under the same id before adjudication and is one finding;
-  * `codex_rows` are the rows the out-of-family wrapper WROTE — `finding`, `no_finding`,
-    `reviewer_unavailable` — never `finding_adjudication` rows, which keep the wrapper's
-    `producer` but are written by the absorber (`disposition_actor`);
-  * `lease_acquire_events` are the door's own rows only — `record_kind: finding` with
-    `finding_type: HITL-recoverable` from producer `merge-door-lease-acquire`; a later
-    adjudication row of such an event is not a second event;
-  * `--loop-status` counts the NOTIFY rows whose cause is exactly
-    `merge-door-lease-acquire:lease_held_yield` (Task 8's out-of-repo contention row);
-    without the flag that field is null — an honest could-not-look, never a zero.
-
-Usage:
+  * a round is a distinct (channel, head_sha, round_n) per arc, named by ANY record kind,
+    over the two REVIEW channels only. Head-bound, because round_n is reused across the
+    review heads of one arc (branch-he-lanes-s1 has codex round 0 on six heads), and a
+    gate lens mints its own round_n, so a gate PASS is (head_sha, round_n), never round_n
+    alone. The channels:
     uv run python tools/loop_cost_baseline.py [--log PATH] [--loop-status PATH]
 Exit 0 with the JSON object on stdout; exit 2 when the log has no rows (a measurement
 over nothing is a defect in the invocation, not a baseline of zeros).
@@ -80,9 +60,9 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         channel = _channel(r.get("producer"))
         if r.get("round_n") is None or channel is None:
             continue
-        per_arc[str(r.get("arc_id"))].add((channel, r.get("round_n")))
+        per_arc[str(r.get("arc_id"))].add((channel, r.get("head_sha"), r.get("round_n")))
         if r.get("record_kind") == "finding":
-            by_round[(r.get("arc_id"), r.get("round_n"))][r.get("producer")] += 1
+            by_round[(r.get("arc_id"), r.get("head_sha"), r.get("round_n"))][r.get("producer")] += 1
 
     gate_rounds = [k for k, c in by_round.items() if any(_is_lens(p) for p in c)]
     single = [k for k in gate_rounds if sum(1 for p in by_round[k] if _is_lens(p)) == 1]
