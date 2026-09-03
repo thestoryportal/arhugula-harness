@@ -379,6 +379,7 @@ def merged_prs(repo: Path, first: int, last: int) -> list[MergedPr]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=GIT_TIMEOUT_S,  # the same per-call bound as every git call (lens r2 note)
     )
     if p.returncode != 0:
         raise MergeTreeError(f"gh pr list failed ({p.returncode}): {p.stderr.strip()}")
@@ -419,7 +420,10 @@ def write_pairs(path: Path, prs: list[MergedPr], pairs: list[tuple[MergedPr, Mer
         "# <sha earlier> <sha later> #<pr earlier> #<pr later>",
     ]
     lines += [f"{a.sha} {b.sha} #{a.number} #{b.number}" for a, b in pairs]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # same-directory temp + os.replace: a reader never sees a half-written pair list
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def read_pairs(path: Path) -> PairList:
