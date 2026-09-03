@@ -282,6 +282,22 @@ arc-close pr merge_sha checkpoint *QUEUE_ARGS:
     just arc-exit-report --pr "$1" --merge-sha "$2" --checkpoint "$3"
     pr="$1"; shift 3; just arc-metrics queue --pr "$pr" "$@"
 
+# ─── branch hygiene batch — ONE guarded push for every deferred deletion (B-230 Task 4) ──
+# Phase 1 reads the pending-HIL reducer (last-write-wins per item; the shared ledger at
+# `loop_status_path()`), verifies every branch against its PR, and prints one `--atomic`
+# force-with-lease push for the operator to PASTE in an interactive session — the guard
+# denies force pushes to the loop by design; this collapses N approvals into one. One
+# mismatch aborts the batch with nothing on stdout. Phase 2 appends the RESOLVED-HIL row
+# for each item whose branches are gone on origin (ls-remote exit 2, nothing else), which
+# is what stops the reducer re-presenting them; rerunnable — it reports `still present:`
+# and never re-issues a push. `bash -o pipefail`: an unreadable ledger must fail the
+# recipe, not read as an empty queue.
+branch-hygiene-pending:
+    bash -o pipefail -c 'source tools/hooks/lib.sh; source tools/hooks/loop_lib.sh; loop_pending_hil_list | uv run python tools/branch_hygiene_batch.py --pending - --emit-command'
+
+branch-hygiene-resolve:
+    bash -o pipefail -c 'source tools/hooks/lib.sh; source tools/hooks/loop_lib.sh; loop_pending_hil_list | uv run python tools/branch_hygiene_batch.py --pending - --resolve'
+
 # ─── mutation probe — prove a test PINS named source lines (U-WT-06) ────────
 # Comments the range out, re-runs the test, and restores from memory (never git
 # stash / git checkout). Refuses a dirty file, an already-red test, or a range whose
