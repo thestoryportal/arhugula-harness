@@ -48,7 +48,7 @@ The hooks category collapses to two defects (the empty `next=` token and duplica
 
 **Files:** create `tools/loop_cost_baseline.py`; test `tools/test_loop_cost_baseline.py`; wire the test into `tools/codex-parity-check.sh`.
 
-**Interface.** `python tools/loop_cost_baseline.py [--log PATH] [--loop-status PATH]` prints one JSON object: `rows`, `arcs`, `rounds_per_arc_median`, `gate_rounds_with_findings`, `single_lens_rounds`, `unique_catch_by_producer` (accepted only), `unique_catch_raw`, `unique_catch_rejected_or_suppressed`, `unique_catch_unadjudicated`, `lease_acquire_events`, and — once Task 8 Step 1 lands — `lease_held_yields` from `--loop-status`. Read-only; exit 0.
+**Interface.** `python tools/loop_cost_baseline.py [--log PATH] [--loop-status PATH]` prints one JSON object: `rows`, `arcs`, `rounds_per_arc_median`, `gate_rounds_with_findings`, `single_lens_rounds`, `unique_catch_by_producer` (accepted only), `unique_catch_raw`, `unique_catch_rejected_or_suppressed`, `unique_catch_unadjudicated`, `lease_acquire_events`, and — once Task 8 Step 1 lands — `lease_held_yields` and `lease_held_yields_30d_max` from `--loop-status`. Read-only; exit 0.
 
 **Design constraints** (each a reviewer finding on b-230-register unless marked otherwise):
 - A round is any `(arc_id, round_n)` named by ANY record kind (`finding`, `no_finding`, `finding_adjudication`, `reviewer_unavailable`); a clean round and a clean-only arc count toward rounds-per-arc. Door rows carry `round_n: null` and are not rounds. (r1)
@@ -113,7 +113,7 @@ Two of the five CI runs per unit verify a diff that is only `.harness/roadmap_st
 - The `changes` job's checkout uses the SHA every other job in `ci.yml` pins (`actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4`, `ci.yml:61,93,121`): this job decides whether five heavy checks run, so a movable tag here is a bypass. (r2)
 - Every gated job carries `needs: changes` and `if: always() && needs.changes.outputs.bookkeeping != 'true'`. `always()` is load-bearing: without it a failing classifier marks every dependent job `skipped`, GitHub reports them as Success, and a broken classifier makes pytest disappear from a mergeable PR; with it a failed classifier leaves the output empty and every heavy job runs.
 - `lint`, `codex-context-guard`, `arc-ledger`, `substitution-ledger`, `claude-md-citations`, `semantic-overlay`, `q1-review-gate`, `q3-evidence-and-closure-gate`, `split-brain`, `clearance-corpus` stay unconditional: together under a minute, and `codex-context-guard` is the check a status-only PR exists to pass.
-- The fast path skips pytest (which runs `tools/test_merge_gate_log.py`) on exactly the commits that append gate rows, and no unconditional job today runs the JSONL↔Markdown consistency reducer (`rg merge-gate-log .github/workflows/ci.yml` is empty). Add an unconditional `gate-log-consistency` job running `python3 tools/merge_gate_log.py check` (the module and its two sibling imports are stdlib-only; if a later change pulls a dependency, the job moves to `uv run`) so a sibling mismatch cannot receive green final-head CI. (r5)
+- The fast path skips pytest (which runs `tools/test_merge_gate_log.py`) on exactly the commits that append gate rows, and no unconditional job today runs the JSONL↔Markdown consistency reducer (`rg merge-gate-log .github/workflows/ci.yml` is empty). Add an unconditional `gate-log-consistency` job so a sibling mismatch cannot receive green final-head CI. `merge_gate_log.py` is NOT stdlib-only — its siblings `finding_record` and `review_wrapper_common` import the declared `jsonschema` dependency — so the job installs the project (the same `uv sync` step the light `lint` job uses) and runs `uv run python tools/merge_gate_log.py check`; a no-setup `python3` invocation would fail at import on a clean runner and red every CI run. (r5, r6)
 - Base/head for the classifier: `pull_request` → `github.event.pull_request.base.sha..head.sha`; `push` → `github.event.before..github.sha`. The output line is appended to `$GITHUB_OUTPUT` verbatim.
 
 - [ ] **Step 1: Write the failing test**
@@ -208,7 +208,7 @@ echo "ok"
 
 The close-out after the door releases is eight serial steps (`.claude/skills/ship-pr/SKILL.md:387-644`). Reflect and `/context-save-lean` need the session; the exit report, metrics queue, and deferral rows do not. Fold those into one recipe.
 
-**Files:** modify `justfile` (add `arc-close` next to `arc-exit-report` at line 265); modify both ship-pr carriers (`.claude/skills/ship-pr/SKILL.md:541-624` and the matching sections of `.agents/skills/ship-pr/SKILL.md`) to invoke `just arc-close`; test `tools/test_arc_close_recipe.py` (wired into `tools/codex-parity-check.sh`) plus a carrier-parity case in the shape of `tools/test_codex_workflow_parity.py`.
+**Files:** modify `justfile` (add `arc-close` next to `arc-exit-report` at line 265); modify `tools/hooks/permission-guard.sh` and `tools/hooks/test_permission_guard.sh` (the loop-mode allowlist entry); modify both ship-pr carriers (`.claude/skills/ship-pr/SKILL.md:541-624` and the matching sections of `.agents/skills/ship-pr/SKILL.md`) to invoke `just arc-close`; test `tools/test_arc_close_recipe.py` (wired into `tools/codex-parity-check.sh`) plus a carrier-parity case in the shape of `tools/test_codex_workflow_parity.py`.
 
 **Interface.** `just arc-close <pr> <merge_sha> <checkpoint> [<arc-metrics queue arguments…>]` runs `just arc-exit-report --pr <pr> --merge-sha <merge_sha> --checkpoint <checkpoint>` then `just arc-metrics queue --pr <pr> <arguments…>`; each line in its own shell; `just` stops at the first non-zero exit.
 
@@ -217,36 +217,41 @@ The close-out after the door releases is eight serial steps (`.claude/skills/shi
 - The justfile sets `positional-arguments` and no `shell`, so recipe lines run under `sh -cu`: POSIX only — `shift 3` then `"$@"`, never `${@:4}`. (r2)
 - The test EXECUTES the recipe: a shim `just` ahead of the real binary on `PATH` records the inner calls' argv (the real binary is resolved with `shutil.which` before the shim is prepended), so positional handling and glob preservation are exercised, not printed — `just -n` does not expand `$@`. (r2)
 - Both ship-pr carriers change together with a parity witness; the cross-arc metrics drain stays as it is (its reason is durability, `ship-pr/SKILL.md:604-611`, `justfile:232-234`). (r5)
+- The shim records each argv element separately (one NUL- or newline-delimited element per line, or JSON), never `"$*"`: a recipe that forwarded the whole tail as ONE argument via `"$*"` would produce the same flattened log as correct `"$@"` forwarding and the test would stay green while `arc_metrics` argparse failed. The assertions compare argument ARRAYS. (r6)
+- `just arc-close` is added to the permission guard's loop-mode allowlist (arity-bounded exact shape, in the style of the existing `just arc-exit-report` / `just arc-metrics` entries) with `test_permission_guard.sh` cases; without it the new carrier command falls through to an approval prompt and is denied unattended. Task 3's file list includes `tools/hooks/permission-guard.sh` and its tests. (r6)
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tools/test_arc_close_recipe.py
-import os, shutil, subprocess
+import json, os, shutil, subprocess
 
 def _run(tmp_path, *args):
     shim = tmp_path / "bin"; shim.mkdir()
     log = tmp_path / "calls.txt"
-    (shim / "just").write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + str(log) + "\n")
+    # one JSON array per inner call: argv ELEMENTS, so "$*" flattening cannot pass as "$@" forwarding
+    (shim / "just").write_text("#!/usr/bin/env python3\nimport json, sys\nopen(" + repr(str(log)) + ", 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n")
     (shim / "just").chmod(0o755)
     real = shutil.which("just")
     env = {**os.environ, "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
     p = subprocess.run([real, "arc-close", *args], capture_output=True, text=True, env=env)
-    return p.returncode, log.read_text().splitlines() if log.exists() else []
+    calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    return p.returncode, calls
 
 def test_forwards_full_queue_tail(tmp_path):
     rc, calls = _run(tmp_path, "12", "abc123", "cp.md", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0",
                      "--round-logs", "logs/*.log", "--transcript", "t.jsonl", "--levers", "B-1", "B-2")
     assert rc == 0
     assert calls == [
-        "arc-exit-report --pr 12 --merge-sha abc123 --checkpoint cp.md",
-        "arc-metrics queue --pr 12 --arc-id u-x --arc-type applying --decisions 0 --round-logs logs/*.log --transcript t.jsonl --levers B-1 B-2",
+        ["arc-exit-report", "--pr", "12", "--merge-sha", "abc123", "--checkpoint", "cp.md"],
+        ["arc-metrics", "queue", "--pr", "12", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0",
+         "--round-logs", "logs/*.log", "--transcript", "t.jsonl", "--levers", "B-1", "B-2"],
     ]
 
 def test_omitting_transcript_and_levers_is_representable(tmp_path):
     rc, calls = _run(tmp_path, "12", "abc123", "cp.md", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0", "--round-logs", "logs/*.log")
     assert rc == 0
-    assert calls[1] == "arc-metrics queue --pr 12 --arc-id u-x --arc-type applying --decisions 0 --round-logs logs/*.log"
+    assert calls[1] == ["arc-metrics", "queue", "--pr", "12", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0", "--round-logs", "logs/*.log"]
 ```
 
 - [ ] **Step 2: Run to verify it fails** — unknown recipe.
@@ -277,6 +282,7 @@ def test_omitting_transcript_and_levers_is_representable(tmp_path):
 - Two phases, each rerunnable. Phase 2 (`--resolve`) is keyed on the remote's state — every branch of the item absent (`git ls-remote --exit-code --heads origin refs/heads/<b>` exit 2, the one "genuinely absent" signal ship-pr already uses; any other non-zero aborts) — and only then appends the row through `loop_resolve` (`loop_lib.sh:286`). After a partial failure, rerunning resolves what is gone and reports `still present: <item> <branches>` for the rest without re-issuing a force-with-lease against OIDs that no longer exist. (r4)
 - Ledger tokens are data, not program text: item ids are validated against `[A-Za-z0-9._-]+` at parse time (a row whose id fails is `UnreadableRow`), the resolve runs in-process through `subprocess` with `shlex.quote` on every argument, and no generated shell block is pasted. (r4, P1)
 - The push is `--atomic`: one rejected `--force-with-lease` must not leave earlier refs deleted with the rest intact. (r5)
+- Branch names are git refs and may legally contain `;`, `&`, `$()` and other shell metacharacters; the printed push is pasted by the operator, so `build_push_command` passes EVERY generated argument (branch, OID, ref spec) through `shlex.quote`, and a test feeds a hostile branch name (`feat/a;touch pwned`) and asserts the output contains no unquoted metacharacter. Item-id validation alone does not cover this. (r6, P1)
 - The push itself is still typed by the operator in an interactive session — the permission guard denies force pushes to the loop by design; this tool collapses N approvals into one.
 
 - [ ] **Step 1: Write the failing test**
@@ -295,6 +301,12 @@ def test_two_branches_one_atomic_command():
     assert cmd == ("git push --atomic --force-with-lease=refs/heads/feat/a:aaa111 "
                    "--force-with-lease=refs/heads/roadmap-refresh-post-1:bbb222 "
                    "origin :refs/heads/feat/a :refs/heads/roadmap-refresh-post-1")
+
+def test_hostile_branch_name_is_quoted():
+    import shlex
+    cmd = build_push_command([("feat/a;touch pwned", "aaa111")])
+    assert shlex.split(cmd)[3] == "--force-with-lease=refs/heads/feat/a;touch pwned"   # one argv element, not two
+    assert ";touch" not in cmd.replace(shlex.quote("--force-with-lease=refs/heads/feat/a;touch pwned:aaa111"), "")
 
 def test_empty_list_is_an_error():
     with pytest.raises(ValueError):
@@ -347,7 +359,7 @@ Today the gate publishes three bindings, then emits three verdicts, each as its 
 
 **Design constraints:**
 - A recorded BLOCK is a result, not an abort: the loop lives in Python and all three lenses are always emitted (a multi-line just recipe would stop at the first exit 1 and leave later lenses unrecorded, breaching the all-three-verdicts audit contract). (r1)
-- Resumable per lens: a lens is skipped only when an existing JSONL row matches the COMPLETE current binding — the identity a row carries (`arc_id`, `head_sha`, `producer`; there is no `pr` field on the JSONL row, the Markdown sibling is the PR authority) AND the fields gate validity is bound to (`base_sha`, `diff_digest`, the lens prompt version from `lens_binding`); a row matching on head alone but reviewed against an older base is not a match. (r3, r4, r5)
+- Resumable per lens ONLY if the complete binding is persisted. The JSONL envelope (`Spec_HE_Loop_Lanes_v1.md:632`) persists `arc_id`, `head_sha`, `base_sha`, `diff_digest`, `producer` but NOT the lens `prompt_version` or the carrier `config_hash` that `lens_binding` also binds gate validity to, so a row cannot tell a verdict produced before a lens-prompt or carrier change from a current one. Two admissible designs, the arc picks one and states it: (a) `emit-all` writes its own resume record (out-of-repo or under `.harness/tmp/`) carrying the full six-field binding per emitted lens, and resumes only against that record; (b) no resumption — a re-run re-emits all three lenses. Skipping on the JSONL row alone is foreclosed. (r3, r4, r5, r6)
 - A skipped lens's RECORDED outcome contributes to the exit code: a resume that skips a recorded BLOCK and records an APPROVE for the missing lens exits 1, never 0 — a split verdict must never read as all-approve. (r5, P1)
 - `just merge-gate-emit-all` is added to the permission guard's loop-mode allowlist in the same exact-shape style as the existing `merge-gate-emit` entry, with `test_permission_guard.sh` cases (allowed in loop mode; the raw denied verbs unchanged); without it the recipe falls through to ask and is denied unattended. (r5)
 - One skill carrier (`.claude/skills/merge-gate/SKILL.md`; `.agents/skills/merge-gate/` holds no `SKILL.md`).
@@ -453,7 +465,7 @@ Releasing the lease after the content merge and letting one refresh cover N merg
 
 - [ ] **Step 1: Make contention visible.** Emit the row per the constraints; touch nothing in acquire, release, the gate log, or the invariants at `Spec_HE_Loop_Lanes_v1.md:317-321`. Test: `tools/test_merge_door.py` gains one case driving `wait_for_door` through three `held` observations before success (patched `sleep`, patched `emit_loop_row` recording every call) and asserting exactly ONE row, kind `NOTIFY`, the exact cause, the holder's arc id and `backoff=0` in the detail, and the tracked gate log byte-identical before and after.
 - [ ] **Step 2:** Register a forward-register row (the id after Task 9's umbrella, `B-231` if nothing else lands first) titled "Merge-door lease released after content merge; refresh covers N merges", with the trigger "more than 5 `lease_held_yield` rows in any 30-day window after Task 1 lands" and the three cites above.
-- [ ] **Step 3:** Extend `tools/loop_cost_baseline.py` with `--loop-status PATH` counting the `lease_held_yield` NOTIFY rows; re-run it at each roadmap refresh; when the trigger fires, open the spec leg as a Class 2 decision with a proposed text at the next unallocated version.
+- [ ] **Step 3:** Extend `tools/loop_cost_baseline.py` with `--loop-status PATH` evaluating the Step 2 trigger as a ROLLING window — the maximum number of `lease_held_yield` NOTIFY rows whose timestamps fall in any 30-day span (reported as `lease_held_yields_30d_max` beside the lifetime `lease_held_yields`); a lifetime count would stay "triggered" forever after six events spread over years. Boundary tests: six rows 29 days apart end-to-end → 6; six rows spanning 31 days → 5; timestamps parsed from the ledger's ISO column. Re-run it at each roadmap refresh; when the trigger fires, open the spec leg as a Class 2 decision with a proposed text at the next unallocated version. (r6)
 
 B-230 closes only after Steps 1–3 are all landed: an umbrella closed after Step 1 alone would strand the observations with no reachable trigger. (r4)
 
@@ -524,9 +536,10 @@ Five codex rounds against this plan while it still carried draft implementations
 | r2 | `2a3c66b8b` | 8 | a movable `actions/checkout@v4` tag on the job that decides whether heavy checks run; dedupe at the emitter instead of the reducer; Bash-only `${@:4}` under `sh -cu` with a dry-run test that could not exercise it; a hard-coded ledger path bypassing `loop_status_path()` and the pending reducer; a batch dropping failed verifications instead of aborting; timeout/cancellation surfaces missing from the detector; pre-assigned spec versions that collide; the diagram and ship-pr saying a held lease *yields* when `wait_for_door` sleeps in place |
 | r3 | `034b392ee` | 7 | a last-`then` rule returning U-HE-38 on the live prose; a batch that never appended the `RESOLVED-HIL` rows the last-write-wins reducer needs; a non-resumable emit-all; a fail-closed claim a token allowlist cannot make; a `lens skipped` row with no emitter; a contention test that let an every-retry emitter pass; the diagram's primary held node |
 | r4 | `4ff4006ac` | 8 (1 P1) | a ledger item id interpolated unquoted into `bash -c`; a push-then-resolve block not rerunnable after a partial failure; `sort -u` reordering the newest-five cap; a resume key naming a `pr` field the JSONL row does not carry; an empty or binary diff read as "no surface"; bare sibling imports the importlib suite rejects; two tools tests left out of the parity list; an umbrella close_out that could close before its trigger existed |
+| r6 | `66e451ed9` | 7 (1 P1) | on the rescoped plan: unquoted git ref names in the pasted push (refs may carry `;`/`&`/`$()`); the "stdlib-only" consistency job importing `jsonschema` through two siblings; `just arc-close` missing from the guard allowlist; a `"$*"` shim that could not tell flattened forwarding from `"$@"`; a resume key naming `prompt_version`/`config_hash` the JSONL envelope does not persist; a lifetime yield count that cannot evaluate a 30-day window; the diagram's main path bypassing the merge-SHA CI node |
 | r5 | `3d5b1e127` | 8 (2 P1) | a resume that could skip a recorded BLOCK and exit 0; a skip row any caller could claim without running the detector; a resume key ignoring `base_sha`/`diff_digest`; `merge-gate-emit-all` missing from the guard allowlist; "net of rejected" where C-HE-29 requires a last disposition of `accepted`; the fast path skipping the only job that runs the gate-log consistency check; a non-atomic multi-ref push; the `.agents` ship-pr carrier left out |
 
-After r5 the plan was rescoped to interfaces, tests and constraints (this revision): five rounds at eight findings each on draft code that every task's arc rewrites is the "yield is not front-loaded when inventing" pattern, and the lean review protocol for doc PRs (operator directive 2026-08-11) closes a non-convergent loop at that point with the residual classes recorded. Residual class recorded: any further finding against a task's design is absorbed in that task's own arc, which carries the reviewer of record for its code.
+After r5 the plan was rescoped to interfaces, tests and constraints; r6 ran on the rescoped text and still produced seven new design findings (absorbed above as constraints, the P1 with its test). Six rounds, 46 findings, 46 accepted, none rejected, no APPROVE: this is the "yield is not front-loaded when inventing" pattern, and the lean review protocol for doc PRs (operator directive 2026-08-11: codex capped at one round for doc/config PRs; close a non-convergent loop at the arms-race point with the residual class recorded) closes the loop here — no r7. **Residual class recorded:** the plan is a design; further findings against any task's design are expected and are absorbed in that task's own arc, which writes the code, runs its own codex rounds against it, and is the reviewer of record. The six rounds' constraints are the floor each arc starts from, not a claim that the designs are complete.
 
 ## Self-review
 

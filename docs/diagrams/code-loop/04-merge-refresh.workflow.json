@@ -55,6 +55,7 @@
     "safemerge",
     "lease",
     "merge",
+    "mainci",
     "refresh",
     "refreshmerge",
     "release",
@@ -131,7 +132,7 @@
       "col": 3,
       "type": "cloud",
       "label": "main CI on merge SHA",
-      "sublabel": "gh run list --commit",
+      "sublabel": "green → refresh · red → exit 3",
       "width": 140
     },
     {
@@ -231,8 +232,9 @@
     {
       "from": "merge",
       "to": "mainci",
-      "role": "branch",
-      "variant": "dashed"
+      "role": "main",
+      "label": "MERGED confirmed",
+      "variant": "emphasis"
     },
     {
       "from": "lease",
@@ -241,7 +243,7 @@
       "variant": "security"
     },
     {
-      "from": "merge",
+      "from": "mainci",
       "to": "refresh",
       "role": "main",
       "label": "main CI green",
@@ -279,6 +281,7 @@
       "items": [
         "The wrapper aborts pre-lease (exit 69) if the refresh producer lacks --emit-refresh-pr-json",
         "Lease acquire is fail-fast; on held, wait_for_door sleeps and retries in place (base 30 s ×2, cap 10 min, 12 attempts ≈ 1 h) then routes HITL-recoverable — the caller does not get control back",
+        "The merge SHA's own main run must be `success` before the refresh continuation; any other conclusion blocks the door (exit 3, DEFERRED-HIL row) with the lease still held",
         "Exit 0 landed + refreshed · 3 blocked (DEFERRED-HIL row) · 4 re-gate · 5 budget exhausted"
       ]
     },
