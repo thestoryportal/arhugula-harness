@@ -670,7 +670,14 @@ loop_notify_summary() {
       # An unparseable now/ts is not evidence of recency -- drop the row rather than
       # render a notice whose age is unknown.
       if (now < 0 || ts < 0 || now - ts > horizon) next
-      print "[" lane "] " d
+      n++; line[n] = "[" lane "] " d
+    }
+    # B-230 Task 2: successive landings append the same notice verbatim; render each
+    # once at its LAST occurrence, in ledger order, BEFORE the newest-5 cap (a `sort -u`
+    # would trade chronology for lexicographic order and could hide a newer notice).
+    END {
+      for (i = n; i >= 1; i--) if (!(line[i] in seen)) { seen[line[i]] = 1; keep[i] = 1 }
+      for (i = 1; i <= n; i++) if (i in keep) print line[i]
     }' "$p" 2>/dev/null | tail -5 | sed 's/\\|/|/g')
   [ -n "$rows" ] && printf '[loop] ℹ notify: %s' "$(printf '%s\n' "$rows" | paste -sd';' - | sed 's/;/; /g')"
   return 0
