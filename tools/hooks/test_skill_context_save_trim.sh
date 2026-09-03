@@ -111,7 +111,9 @@ ship_exit=$(awk '/^## Arc exit report/ {f=1} f && /^## Notes/ {exit} f' "$SHIP" 
 [ -n "$ship_reflect" ] && [ -n "$ship_exit" ] || { echo "FATAL: ship-pr section anchors moved"; exit 1; }
 printf '%s' "$ship_reflect" | grep -qF -- '4. **Run `/context-save-lean`**' \
   && ok "ship-pr step 4 runs /context-save-lean" || bad "ship-pr step 4 does not run /context-save-lean"
-printf '%s' "$ship_exit" | grep -qF -- '--checkpoint <the-path-/context-save-lean-just-reported>' \
+# B-230 Task 3: the exit report rides `just arc-close`, whose THIRD positional is the
+# checkpoint path — the binding is the same, the flag is gone.
+printf '%s' "$ship_exit" | grep -qF -- 'just arc-close <NNN> <merge-sha> <the-path-/context-save-lean-just-reported>' \
   && ok "ship-pr exit report binds the workspace save's reported path" || bad "ship-pr exit report does not bind the workspace save path"
 cont_step6=$(awk '/^6[.] [*][*]Ship/ {f=1} f && /^## / {exit} f' "$CONT" | tr '\n' ' ' | tr -s ' ')
 [ -n "$cont_step6" ] || { echo "FATAL: roadmap-continue step 6 anchor moved"; exit 1; }
@@ -121,7 +123,7 @@ printf '%s' "$cont_step6" | grep -qF -- '`/context-save-lean`' \
 # must name the lean skill at their own close-out moments, not the gstack one).
 printf '%s' "$(tr '\n' ' ' < "$ASHIP" | tr -s ' ')" | grep -qF -- 'reflect on new recurrent lessons and run the `context-save-lean` skill' \
   && ok "codex ship-pr close-out runs context-save-lean" || bad "codex ship-pr close-out does not run context-save-lean"
-printf '%s' "$(tr '\n' ' ' < "$ASHIP" | tr -s ' ')" | grep -qF -- '--checkpoint <the-path-context-save-lean-just-reported>' \
+printf '%s' "$(tr '\n' ' ' < "$ASHIP" | tr -s ' ')" | grep -qF -- 'just arc-close <NNN> <merge-sha> <the-path-context-save-lean-just-reported>' \
   && ok "codex ship-pr exit report binds the lean save path" || bad "codex ship-pr exit report does not bind the lean save path"
 grep -qF -- 'reflect, and run the `context-save-lean` skill' "$ACONT" \
   && ok "codex roadmap-continue close-out runs context-save-lean" || bad "codex roadmap-continue close-out does not run context-save-lean"

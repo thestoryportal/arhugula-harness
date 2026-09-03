@@ -208,7 +208,7 @@ only with explicit round-log paths (no `*` — the `just` token grammar has none
 `--round-logs` takes many paths); the quoted glob above surfaces one approval, as
 `arc-metrics queue` always did. Headless, pass the paths.
 
-Pass `--checkpoint` explicitly. The roadmap authorizes a parallel frontier, so another live
+The third positional is the checkpoint path — pass it explicitly, never a guess. The roadmap authorizes a parallel frontier, so another live
 session can write a checkpoint between this arc's save and this collection; mtime cannot
 discriminate ownership, so an unbound run reports the workspace-newest file as an
 unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path this arc's own

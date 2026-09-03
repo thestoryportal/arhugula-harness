@@ -563,7 +563,7 @@ paths (no `*` — the `just` token grammar has none; `--round-logs` takes many p
 `--transcript` outside the worktree; a transcript-bearing call surfaces one approval, as
 `arc-metrics queue` always did. The transcript rule itself is unchanged (next section).
 
-Pass `--checkpoint` explicitly — the roadmap authorizes a **parallel frontier**, so another
+The third positional is the checkpoint path — pass it explicitly, never a guess: the roadmap authorizes a **parallel frontier**, so another
 live session can `/context-save-lean` between your save and this collection; mtime cannot tell
 whose checkpoint is whose, so an unbound run reports the workspace-newest file as an
 unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path *your*
