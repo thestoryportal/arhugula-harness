@@ -23,11 +23,6 @@ before executing; those authorities win if this summary drifts.
    costs nothing" bills the next call.
 4. Run `just codex-closeout`. If the diff changes afterward, re-run every affected gate.
 5. Review the actual diff, stage only explicit paths, and inspect the staged diff.
-6. Disjointness re-check at ship (U-HE-36; B-228): with the arc's commits on the candidate,
-   run `uv run python tools/arc_disjoint_check.py check --candidate HEAD` (the same
-   guard-allowlisted shape as at arc open). Exit 1 names the live sibling whose head
-   textually conflicts — rebase or resolve before opening the PR (the door's `BASE_TOCTOU`
-   refuses the landing otherwise; C-HE-13 §5); exit 2 → surface the printed cause.
 
 Use the real worktree as `cwd` rather than `git -C` so durable command-prefix approvals
 match. The normal command shapes are:
@@ -79,18 +74,25 @@ review the new diff again. Never count self-review by the authoring model as dec
 ## Commit, PR, and CI
 
 1. Commit the explicit staged scope and push the topic branch.
-2. Open or update the PR. Its body names the tracking surfaces updated (or why none apply),
+2. Disjointness re-check at ship (U-HE-36; B-228) — AFTER that commit, so `HEAD` carries
+   the arc's changes (codex u-he-36 r8: before it, staged work is invisible to the gate):
+   run `uv run python tools/arc_disjoint_check.py check --candidate HEAD` (the same
+   guard-allowlisted shape as at arc open). Exit 1 names the live sibling whose head
+   textually conflicts — rebase or resolve, re-commit, and re-run before opening the PR
+   (the door's `BASE_TOCTOU` refuses the landing otherwise; C-HE-13 §5); exit 2 → surface
+   the printed cause.
+3. Open or update the PR. Its body names the tracking surfaces updated (or why none apply),
    exact verification results, skipped checks, and design/back-flow posture.
-3. Watch every required PR check on the final PR HEAD and every required check on the current
+4. Watch every required PR check on the final PR HEAD and every required check on the current
    base `main` HEAD to a terminal green conclusion. Pending, missing, empty, cancelled, or
    skipped-required checks are not green. Inventory open PR and remote topic branches before
    merge; if a stale prior branch exists, inspect its PR/worktree/unique commits and reconcile
    it without deleting or overwriting work.
-4. Run the `merge-gate` skill for every substantive code or hook PR after PR CI is green
+5. Run the `merge-gate` skill for every substantive code or hook PR after PR CI is green
    and out-of-family review has converged. This is the fresh three-lens gate, not a second
    generic review. A documentation-only or terminating-refresh PR may take a proportional
    skip, but the skip and evidence must be logged.
-5. Append the result to `.harness/merge-gate-log.md`, commit and push that row, then wait
+6. Append the result to `.harness/merge-gate-log.md`, commit and push that row, then wait
    for CI on the final PR HEAD to be green again. If a code fix follows any approval,
    re-run out-of-family review and the affected lens against the delta.
 

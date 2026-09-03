@@ -20,7 +20,7 @@ omission.
 
 ``historical`` is the O3 base-rate recipe: replay the 172 historical colliding pairs
 (``derive-pairs`` rebuilds the list from the P-R3 window) as concurrent lanes and report
-the real textual-conflict rate against the 38.7 % file-overlap upper bound, with the
+the real textual-conflict rate against the file-overlap upper bound (172/444 = 38.7 %), with the
 semantic-conflict rate reported as unmeasured, not zero.
 """
 
@@ -46,7 +46,6 @@ import reservations as rs
 REPO = Path(__file__).resolve().parent.parent
 LANE_ID_FILE = REPO / ".harness" / ".lane-id"
 O3_PAIRS = REPO / ".harness" / "plan" / "o3-colliding-pairs.txt"
-UPPER_BOUND = 0.387
 #: P-R3 conflict-surface window (parallel-lanes-2026-08-17): the 150 merged PRs
 #: #1239..#1391 in merge order, paired PR i vs each of the next 3 (a 4-lane window).
 O3_WINDOW = (1239, 1391)
@@ -420,10 +419,13 @@ def write_pairs(path: Path, prs: list[MergedPr], pairs: list[tuple[MergedPr, Mer
         "# <sha earlier> <sha later> #<pr earlier> #<pr later>",
     ]
     lines += [f"{a.sha} {b.sha} #{a.number} #{b.number}" for a, b in pairs]
-    # same-directory temp + os.replace: a reader never sees a half-written pair list
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    # unique same-directory temp + os.replace: a reader never sees a half-written pair
+    # list, and two concurrent derive-pairs runs never share a temp inode (codex r8)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False
+    ) as fh:
+        fh.write("\n".join(lines) + "\n")
+    os.replace(fh.name, path)
 
 
 def read_pairs(path: Path) -> PairList:
@@ -456,7 +458,7 @@ def historical(repo: Path, pairs_path: Path) -> int:
     print(
         f"O3: textual-conflict rate {certain}/{n_win} = {certain / n_win:.3f} of window pairs,"
         f" at most {upper}/{n_win} = {upper / n_win:.3f} counting the {masked_only} pair(s)"
-        f" whose only changed paths are masked (file-overlap upper bound {UPPER_BOUND}"
+        f" whose only changed paths are masked (file-overlap upper bound {n_col / n_win:.3f}"
         f" = {n_col}/{n_win}); conditional on file overlap {certain}/{n_col}"
         f" = {certain / n_col if n_col else 0.0:.3f}; governance files excluded"
     )

@@ -630,6 +630,8 @@ for c in 'uv run python tools/arc_disjoint_check.py derive-pairs' \
          'uv run python tools/arc_disjoint_check.py check --candidate=HEAD' \
          'uv run python tools/arc_disjoint_check.py check --candidate -x' \
          'uv run python tools/arc_disjoint_check.py check --candidate HEAD~1' \
+         'HARNESS_LANE_ID=peer uv run python tools/arc_disjoint_check.py check --candidate HEAD' \
+         'HARNESS_ARC_ID=x HARNESS_LANE_ID=peer uv run python tools/arc_disjoint_check.py check' \
          'uv run python tools/arc_disjoint_check.py check --pairs x'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "arc_disjoint_check hardening: '$c' → not allow" || bad "arc_disjoint_check over-matched: $c"

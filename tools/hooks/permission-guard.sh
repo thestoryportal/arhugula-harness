@@ -827,8 +827,13 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/arc_disjoint_check\.py[[:space:]]+check([[:space:]]|$)' \
        && _disjoint_check_shape "$TRIM" \
+       && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*uv[[:space:]]' \
        && _bash_args_safe "$CMD"; then
-      # U-HE-36: the selection-time disjointness gate — see _disjoint_check_shape.
+      # U-HE-36: the selection-time disjointness gate — see _disjoint_check_shape. The
+      # bare form ONLY (codex r8 P2): TRIM strips a leading HARNESS_LANE_ID= prefix, and the
+      # tool falls back to that export when no marker is persisted, so an auto-allowed
+      # `HARNESS_LANE_ID=<peer> …` could make the gate skip that peer. Identity comes from
+      # the marker lane-init wrote, never from the command line.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+merge-gate-adjudicate([[:space:]]|$)' \
        && _adjudicate_exact_shape "$TRIM" \

@@ -471,7 +471,7 @@ def test_historical_reports_interval_and_unmeasured_semantic_line(
     assert f"conflict {s['A'][:12]} {s['B'][:12]}: a.txt" in out
     assert (
         "O3: textual-conflict rate 1/5 = 0.200 of window pairs, at most 1/5 = 0.200 counting"
-        " the 0 pair(s) whose only changed paths are masked (file-overlap upper bound 0.387"
+        " the 0 pair(s) whose only changed paths are masked (file-overlap upper bound 0.400"
         " = 2/5); conditional on file overlap 1/2 = 0.500"
     ) in out
     assert "semantic-conflict rate: unmeasured" in out
@@ -481,7 +481,8 @@ def test_committed_pair_list_has_the_172_p_r3_pairs() -> None:
     """The derived artifact is the P-R3 measurement re-run: 172 colliding 4-lane-window
     pairs over #1239..#1391 after the four-file governance exclusion."""
     pl = adc.read_pairs(adc.O3_PAIRS)
-    assert pl.window_pairs == 444 and len(pl.pairs) == 172  # 172/444 = the 38.7 % bound
+    assert pl.window_pairs == 444 and len(pl.pairs) == 172
+    assert round(len(pl.pairs) / pl.window_pairs, 3) == 0.387  # P-R3's bound, derived not typed
     assert all(len(a) == 40 and len(b) == 40 for a, b in pl.pairs)
 
 
