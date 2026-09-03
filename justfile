@@ -271,10 +271,14 @@ arc-exit-report *ARGS:
 # `arc-metrics queue`, whose contract is unchanged: omit --transcript when no transcript
 # matches unambiguously, --levers is zero or many separate tokens. Recipe lines run
 # under `sh -cu` (positional-arguments, no `shell` set): POSIX only — `shift 3` then
-# `"$@"`, never `${@:4}`; each line is its own shell, so the shift is local to line 2.
+# `"$@"`, never `${@:4}`; each line is its own shell, so a shift is local to its line.
+# The tail is checked BEFORE anything runs: `--pr` is bound to the first positional, and
+# a second `--pr` in the tail would let argparse's last-wins write the exit report for
+# one PR and queue metrics for another (codex r1 on b-230-task-3).
 #   just arc-close 1503 b897542dc .harness/.checkpoints/<cp>.md --arc-id b-230-task-1 \
 #     --arc-type applying --decisions 0 --round-logs .harness/tmp/b-230-task-1-rounds/r1.log
 arc-close pr merge_sha checkpoint *QUEUE_ARGS:
+    shift 3; for a; do case "$a" in --pr|--pr=*) echo "arc-close: --pr is bound to the first positional; drop it from the queue tail" >&2; exit 2;; esac; done
     just arc-exit-report --pr "$1" --merge-sha "$2" --checkpoint "$3"
     pr="$1"; shift 3; just arc-metrics queue --pr "$pr" "$@"
 

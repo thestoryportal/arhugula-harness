@@ -203,6 +203,11 @@ after the three positionals forwarded verbatim; `just` stops at the first non-ze
 so a failed report never queues a metrics row. The queue's argument rules are in the
 arc-metrics section below.
 
+Loop-mode note (same as the Claude carrier): the permission guard auto-allows this call
+only with explicit round-log paths (no `*` — the `just` token grammar has none;
+`--round-logs` takes many paths); the quoted glob above surfaces one approval, as
+`arc-metrics queue` always did. Headless, pass the paths.
+
 Pass `--checkpoint` explicitly. The roadmap authorizes a parallel frontier, so another live
 session can write a checkpoint between this arc's save and this collection; mtime cannot
 discriminate ownership, so an unbound run reports the workspace-newest file as an
