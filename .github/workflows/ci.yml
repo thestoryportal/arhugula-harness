@@ -85,12 +85,25 @@ jobs:
         # diff) fails the step through the tee; on that path the script writes nothing
         # to stdout, so no partial line reaches $GITHUB_OUTPUT. Same base/head
         # expression as the codex-context-guard job.
+        #
+        # Self-guard first (codex r1 P1 on b-230-task-1): the classifier executes from
+        # the PR head, so a diff that changes the classifier or this workflow may not be
+        # judged by it — a regression that prints `bookkeeping=true` would skip the very
+        # pytest job that tests it. Those diffs are `bookkeeping=false` by fiat, decided
+        # here in the step; for every other diff the head classifier is byte-identical
+        # to the base classifier, so running from head IS running from base.
         shell: bash
-        run: >
-          /usr/bin/python3 tools/ci_bookkeeping_diff.py
-          "${{ github.event.pull_request.base.sha || github.event.before }}"
-          "${{ github.event.pull_request.head.sha || github.sha }}"
-          | tee -a "$GITHUB_OUTPUT"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          self_changed="$(git diff --name-only --no-renames "$BASE...$HEAD" -- tools/ci_bookkeeping_diff.py .github/workflows/ci.yml)"
+          if [ -n "$self_changed" ]; then
+            echo "self-guard: classifier/workflow changed on $BASE...$HEAD — full run" >&2
+            echo "bookkeeping=false" | tee -a "$GITHUB_OUTPUT"
+          else
+            /usr/bin/python3 tools/ci_bookkeeping_diff.py "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
+          fi
 
   test:
     runs-on: ubuntu-latest
@@ -562,8 +575,11 @@ jobs:
     # B-230 Task 1 — the fast path above skips pytest (which runs
     # tools/test_merge_gate_log.py through codex-parity-check.sh) on exactly the commits
     # that append gate rows, and no other job ran the C-HE-23 §2 JSONL↔Markdown
-    # consistency reducer, so a sibling mismatch could have received green final-head
-    # CI. Unconditional (no `needs`, no `if`). merge_gate_log.py is NOT stdlib-only —
+    # consistency reducer. `check` exits 1 on a Markdown verdict row with no JSONL
+    # authority row (its hard condition); an orphan JSONL row is the contract's WARN
+    # class and reconciles on the next gate run, which is why the classifier refuses the
+    # fast path for a JSONL change without its Markdown sibling (codex r1 P2).
+    # Unconditional (no `needs`, no `if`). merge_gate_log.py is NOT stdlib-only —
     # its siblings finding_record + review_wrapper_common import the declared jsonschema
     # dependency — so this job installs the project like the light `lint` job does; a
     # bare python3 invocation would fail at import on a clean runner.

@@ -48,6 +48,19 @@ def test_empty_diff_raises():
         classify([])
 
 
+def test_jsonl_without_markdown_sibling_is_not_bookkeeping():
+    # codex r1 P2: `merge_gate_log.py check` exits 0 on orphan JSONL rows (they reconcile on
+    # the next gate run), so a JSONL-only gate-rows head must take the full run.
+    assert classify([".harness/merge-gate-log.jsonl"]) is False
+    assert classify([".harness/roadmap_status.md", ".harness/merge-gate-log.jsonl"]) is False
+
+
+def test_markdown_only_is_bookkeeping():
+    # `reconcile` re-emits the derived Markdown view alone; a forged Markdown row with no
+    # JSONL authority is what the consistency job's exit 1 catches.
+    assert classify([".harness/merge-gate-log.md"]) is True
+
+
 # --- the fenced copy: every owner's set is inside ours --------------------------------
 
 
@@ -196,6 +209,19 @@ def test_changes_job_is_pinned_and_has_no_uv_setup():
     classify_step = next(s for s in _steps(changes) if s.get("id") == "classify")
     assert classify_step["shell"] == "bash"
     assert 'tee -a "$GITHUB_OUTPUT"' in classify_step["run"]
+
+
+def test_changes_step_refuses_fast_path_when_classifier_or_workflow_changed():
+    # codex r1 P1: a classifier executed from the PR head may not judge a change to itself
+    # or to the workflow that gates on it — the step decides `bookkeeping=false` for those
+    # diffs before the classifier runs. Pinned by SHAPE: the self-file list is the guard's
+    # own allowlist, and the false-line is what the guard writes.
+    run = _jobs()["changes"]["steps"]
+    step = next(s for s in run if s.get("id") == "classify")["run"]
+    self_guard, _, classify_call = step.partition('ci_bookkeeping_diff.py "$BASE"')
+    assert "-- tools/ci_bookkeeping_diff.py .github/workflows/ci.yml" in self_guard
+    assert 'echo "bookkeeping=false"' in self_guard
+    assert classify_call, "the classifier call must follow the self-guard"
 
 
 def test_gate_log_consistency_is_unconditional_and_blocking():
