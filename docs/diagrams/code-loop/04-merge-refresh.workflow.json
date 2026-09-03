@@ -112,8 +112,8 @@
       "lane": "blocked",
       "col": 2,
       "type": "security",
-      "label": "lease held → yield",
-      "sublabel": "held → yield · retry",
+      "label": "lease held → retry",
+      "sublabel": "sleeps in place ≈1 h → HITL",
       "width": 140
     },
     {
