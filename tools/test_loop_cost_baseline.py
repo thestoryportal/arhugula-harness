@@ -204,6 +204,94 @@ def test_suppressed_is_not_a_catch() -> None:
     assert data["unique_catch_rejected_or_suppressed"] == 2
 
 
+def test_rounds_are_scoped_per_channel_and_probes_are_not_rounds() -> None:
+    rows = [
+        # codex r1 and gate pass 1 are TWO rounds; the three lenses share pass 1
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c9",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 2,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c10",
+        },
+        {
+            "record_kind": "reviewer_unavailable",
+            "arc_id": "d",
+            "round_n": 3,
+            "producer": "gemini_review_wrapper",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "merge-gate-concurrency",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "merge-gate-spec-conformance",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "w9",
+        },
+        # a probe iteration index and a door row are not review rounds
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 0,
+            "producer": "reviewer_concurrency_probe",
+            "finding_id": "p1",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 4,
+            "producer": "reviewer_concurrency_probe",
+            "finding_id": "p2",
+        },
+        {
+            "record_kind": "finding",
+            "finding_type": "HITL-recoverable",
+            "arc_id": "d",
+            "round_n": None,
+            "producer": "merge-door-post-merge-ci",
+        },
+    ]
+    data = summarize(rows)
+    assert data["rounds_per_arc_median"] == 4  # codex 1, 2, 3 (gemini failover of r3) + gate pass 1
+    assert data["rounds_per_arc_max"] == 4
+    assert data["codex_rows"] == 2
+
+
+def test_codex_rows_exclude_adjudications_the_absorber_wrote() -> None:
+    rows = _rows()
+    rows.append(
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": 1,
+            "finding_id": "c1",
+            "producer": "codex_review_wrapper",
+            "disposition": "accepted",
+            "disposition_actor": "claude_absorber",
+            "ts": "2026-09-03T12:00:00Z",
+        }
+    )
+    assert summarize(rows)["codex_rows"] == 1
+
+
 def test_single_lens_round_and_clean_only_arc() -> None:
     rows = [
         {
@@ -237,7 +325,7 @@ def test_single_lens_round_and_clean_only_arc() -> None:
     ]
     data = summarize(rows)
     assert data["arcs"] == 2  # the clean-only arc c counts
-    assert data["rounds_per_arc_median"] == 1.5
+    assert data["rounds_per_arc_median"] == 2  # b: codex r1 + gate pass 1; c: gate pass 1 + codex r2
     assert data["gate_rounds_with_findings"] == 1
     assert data["single_lens_rounds"] == 1  # codex rows do not make a round multi-lens
 

@@ -5,14 +5,23 @@ Read-only. Feeds the §0 table of .harness/plan/loop-optimization-plan-2026-09-0
 re-run after each of the plan's merges so every saving is measured against the same rows.
 
 Rules the numbers follow (each one a reviewer finding on the registration PR):
-  * a round is any (arc_id, round_n) named by ANY record kind — a clean `no_finding`
-    round and a clean-only arc count; door rows carry round_n null and are not rounds;
+  * a round is a distinct (channel, round_n) per arc, named by ANY record kind, over the
+    two REVIEW channels only: out-of-family (`codex_review_wrapper`, with
+    `gemini_review_wrapper` as the failover of the SAME round) and the merge gate (the
+    three `merge-gate-*` lenses share one pass number). Round numbers are scoped per
+    channel — codex r1 and gate pass 1 are two rounds, never one — so an arc with 10
+    codex rounds and 3 gate passes has 13. A clean `no_finding` round and a clean-only
+    arc count; probe producers (`reviewer_concurrency_probe`, whose round_n is an
+    iteration index) and door producers (round_n null) are not rounds;
   * a `unique_catch` flag counts only when the finding's LAST `finding_adjudication`
     row is `accepted` — last in APPEND order, the reducer authority C-HE-24 §5 names
     ("readers reduce by finding_id → last row"), never by ts; rejected / suppressed and
     never-adjudicated flags are reported in their own counters and never folded in;
   * catches are counted per DISTINCT finding_id (C-HE-24 §5 N6 shape): a same-core retry
     re-emits a finding row under the same id before adjudication and is one finding;
+  * `codex_rows` are the rows the out-of-family wrapper WROTE — `finding`, `no_finding`,
+    `reviewer_unavailable` — never `finding_adjudication` rows, which keep the wrapper's
+    `producer` but are written by the absorber (`disposition_actor`);
   * `lease_acquire_events` are the door's own rows only — `record_kind: finding` with
     `finding_type: HITL-recoverable` from producer `merge-door-lease-acquire`; a later
     adjudication row of such an event is not a second event;
@@ -38,10 +47,21 @@ from pathlib import Path
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
 LEASE_PRODUCER = "merge-door-lease-acquire"
 CODEX_PRODUCER = "codex_review_wrapper"
+OUT_OF_FAMILY = frozenset({CODEX_PRODUCER, "gemini_review_wrapper"})
+WRAPPER_WRITTEN_KINDS = frozenset({"finding", "no_finding", "reviewer_unavailable"})
 
 
 def _is_lens(producer: object) -> bool:
     return isinstance(producer, str) and producer.startswith("merge-gate")
+
+
+def _channel(producer: object) -> str | None:
+    """The review channel a producer's round_n is scoped to; None for non-review producers."""
+    if producer in OUT_OF_FAMILY:
+        return "out-of-family"
+    if _is_lens(producer):
+        return "gate"
+    return None
 
 
 def _last_dispositions(rows: list[dict]) -> dict[str, str]:
@@ -57,9 +77,10 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
     per_arc: dict[str, set] = collections.defaultdict(set)
     by_round: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
     for r in rows:
-        if r.get("round_n") is None:
+        channel = _channel(r.get("producer"))
+        if r.get("round_n") is None or channel is None:
             continue
-        per_arc[str(r.get("arc_id"))].add(r.get("round_n"))
+        per_arc[str(r.get("arc_id"))].add((channel, r.get("round_n")))
         if r.get("record_kind") == "finding":
             by_round[(r.get("arc_id"), r.get("round_n"))][r.get("producer")] += 1
 
@@ -86,7 +107,11 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         and r.get("finding_type") == "HITL-recoverable"
         and r.get("producer") == LEASE_PRODUCER
     )
-    codex_rows = sum(1 for r in rows if r.get("producer") == CODEX_PRODUCER)
+    codex_rows = sum(
+        1
+        for r in rows
+        if r.get("producer") == CODEX_PRODUCER and r.get("record_kind") in WRAPPER_WRITTEN_KINDS
+    )
 
     yields: int | None = None
     if loop_status_rows is not None:
