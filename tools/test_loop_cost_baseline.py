@@ -272,7 +272,7 @@ def test_rounds_are_scoped_per_channel_and_probes_are_not_rounds() -> None:
         },
     ]
     data = summarize(rows)
-    assert data["rounds_per_arc_median"] == 4  # codex 1, 2, 3 (gemini failover of r3) + gate pass 1
+    assert data["rounds_per_arc_median"] == 4  # codex 1, 2 + a standalone gemini r3 + gate pass 1
     assert data["rounds_per_arc_max"] == 4
     assert data["codex_rows"] == 2
 
@@ -444,6 +444,45 @@ def test_retry_that_lowers_the_flag_is_not_a_catch() -> None:
     data = summarize(rows)
     assert data["unique_catch_raw"] == 2
     assert data["unique_catch_by_producer"] == {}
+
+
+def test_gemini_is_its_own_round_unless_it_is_the_failover_child() -> None:
+    base = {"arc_id": "i", "head_sha": "h7"}
+    standalone = [
+        # a standalone `just gemini-review` at the same producer-local round number as codex r1
+        {
+            **base,
+            "record_kind": "finding",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c20",
+        },
+        {
+            **base,
+            "record_kind": "finding",
+            "round_n": 1,
+            "producer": "gemini_review_wrapper",
+            "finding_id": "g20",
+        },
+    ]
+    assert summarize(standalone)["rounds_per_arc_median"] == 2
+    failover = [
+        # the D-C chain: codex unavailable at r1, the gemini child forced to r1 — ONE round
+        {
+            **base,
+            "record_kind": "reviewer_unavailable",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+        },
+        {
+            **base,
+            "record_kind": "finding",
+            "round_n": 1,
+            "producer": "gemini_review_wrapper",
+            "finding_id": "g21",
+        },
+    ]
+    assert summarize(failover)["rounds_per_arc_median"] == 1
 
 
 def test_single_lens_round_and_clean_only_arc() -> None:

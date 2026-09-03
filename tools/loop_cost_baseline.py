@@ -6,9 +6,13 @@ re-run after each of the plan's merges so every saving is measured against the s
 
 Rules the numbers follow (each one a reviewer finding on the registration PR or this arc):
   * a round is a distinct (channel, head_sha, pass) per arc, named by ANY record kind, over
-    the two REVIEW channels only: out-of-family (`codex_review_wrapper`, with
-    `gemini_review_wrapper` the failover of the SAME round, so pass = round_n) and the merge
-    gate (three `merge-gate-*` lenses). Head-bound, because round_n is reused across an
+    the REVIEW producers only: `codex_review_wrapper` and `gemini_review_wrapper` (each its
+    own paid round, scoped per producer — `just gemini-review` runs standalone) and the merge
+    gate (three `merge-gate-*` lenses). The ONE exception: the C-HE-17 D-C failover child is
+    a gemini run forced to the primary's round number (review_wrapper_common.round_n_for),
+    and it fires only after the primary reported `reviewer_unavailable`; so a gemini round
+    merges into the codex round iff a codex `reviewer_unavailable` row exists at the same
+    (arc, head_sha, round_n) — the log carries no other failover marker. Head-bound, because round_n is reused across an
     arc's review heads (branch-he-lanes-s1 has codex round 0 on six heads). A gate lens
     mints its round_n INDEPENDENTLY (PR 1414 recorded one three-lens pass as concurrency r3
     beside spec/witness r2), so a gate pass at a head is the per-lens RANK of the lens's
@@ -61,7 +65,8 @@ from pathlib import Path
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
 LEASE_PRODUCER = "merge-door-lease-acquire"
 CODEX_PRODUCER = "codex_review_wrapper"
-OUT_OF_FAMILY = frozenset({CODEX_PRODUCER, "gemini_review_wrapper"})
+GEMINI_PRODUCER = "gemini_review_wrapper"
+OUT_OF_FAMILY = frozenset({CODEX_PRODUCER, GEMINI_PRODUCER})
 WRAPPER_WRITTEN_KINDS = frozenset({"finding", "no_finding", "reviewer_unavailable"})
 
 
@@ -80,12 +85,22 @@ def _is_lens_verdict_row(r: dict) -> bool:
 
 
 def _channel(producer: object) -> str | None:
-    """The review channel a producer's round_n is scoped to; None for non-review producers."""
+    """The round namespace a producer's round_n lives in; None for non-review producers."""
     if producer in OUT_OF_FAMILY:
-        return "out-of-family"
+        return str(producer)
     if _is_lens(producer):
         return "gate"
     return None
+
+
+def _failover_rounds(rows: list[dict]) -> set[tuple]:
+    """(arc_id, head_sha, round_n) where the primary reported unavailable — the only rounds
+    in which a gemini row is the D-C failover child of the codex round, not its own round."""
+    return {
+        (r.get("arc_id"), r.get("head_sha"), r.get("round_n"))
+        for r in rows
+        if r.get("producer") == CODEX_PRODUCER and r.get("record_kind") == "reviewer_unavailable"
+    }
 
 
 def _last_dispositions(rows: list[dict]) -> dict[str, str]:
@@ -114,6 +129,7 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
     per_arc: dict[str, set] = collections.defaultdict(set)
     by_round: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
     ranks = _gate_pass_ranks(rows)
+    failover = _failover_rounds(rows)
     for r in rows:
         channel = _channel(r.get("producer"))
         if r.get("round_n") is None or channel is None:
@@ -121,6 +137,8 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         arc, head, n = r.get("arc_id"), r.get("head_sha"), r.get("round_n")
         if channel == "gate":
             n = ranks[(arc, head, r.get("producer"), n)]
+        elif channel == GEMINI_PRODUCER and (arc, head, n) in failover:
+            channel = CODEX_PRODUCER  # the failover child of that codex round, not a new round
         per_arc[str(arc)].add((channel, head, n))
         if r.get("record_kind") == "finding" and channel == "gate" and _is_lens_verdict_row(r):
             by_round[(arc, head, n)][r.get("producer")] += 1
