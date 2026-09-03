@@ -31,14 +31,16 @@ check them rather than trusting remembered or checkpointed remaining work.
 ## Execute one arc
 
 1. Create or reuse a clean isolated worktree based on current `main`. Never edit the shared
-   root checkout. Run `just codex-autonomous-arc <arc-id>` in that worktree. Then, still
-   inside that worktree, **arc open — selection fence, then reservation (C-HE-03 §4;
-   C-HE-13 §5)**: selection IS arc open — the instant the unit is chosen, before any work,
-   and ONLY from inside the lane worktree just created (`.harness/.lane-id` is per-worktree;
-   sourcing lane-init from the shared checkout would reserve under the wrong holder
-   identity — codex u-he-36 r2). Definition home: `.claude/skills/roadmap-continue/SKILL.md`
-   step 2; every value a LITERAL, one command per invocation (the permission guard
-   allowlists exactly these shapes):
+   root checkout. Then, still inside that worktree and BEFORE `just codex-autonomous-arc`
+   (that recipe starts the arc's loop-state ledger and binds `.harness/codex_loop_state.json`
+   to the arc — ownership must be established first, or a refused fence / lost reserve leaves
+   live loop state for an arc this lane must not run; codex u-he-36 r6), **arc open —
+   selection fence, then reservation (C-HE-03 §4; C-HE-13 §5)**: selection IS arc open —
+   the instant the unit is chosen, before any work, and ONLY from inside the lane worktree
+   just created (`.harness/.lane-id` is per-worktree; sourcing lane-init from the shared
+   checkout would reserve under the wrong holder identity — codex u-he-36 r2). Definition
+   home: `.claude/skills/roadmap-continue/SKILL.md` step 2; every value a LITERAL, one
+   command per invocation (the permission guard allowlists exactly these shapes):
    - `source tools/hooks/lane-init.sh` — exports `HARNESS_LANE_ID` (persisted at this
      worktree's `.harness/.lane-id`; lane-init is its one writer and the marker is the
      authority ahead of the environment).
@@ -55,7 +57,8 @@ check them rather than trusting remembered or checkpointed remaining work.
      committed heads only: a sibling that reserves inside that window, or whose work is
      still uncommitted, is caught at landing by `BASE_TOCTOU` (C-HE-13 §5), not here.
    - `uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>`,
-     then the queue-start span edge (the `phase` shape in step 7 below).
+     then the queue-start span edge (the `phase` shape in step 7 below). Only now run
+     `just codex-autonomous-arc <arc-id>` in that worktree.
 2. Record a concise plan with owned files, authority, RED witness, verification, and tracking
    surfaces. If code contradicts the arc premise, stop and classify instead of reworking the
    premise to save the arc.

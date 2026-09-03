@@ -1213,6 +1213,12 @@ def test_roadmap_continue_carriers_wire_the_selection_time_disjointness_gate() -
         assert gate in text, path
         assert text.index("reservations.py selectable") < text.index(gate), path
         assert text.index(gate) < text.index("reservations.py reserve "), path
+    # codex u-he-36 r6: the Codex carrier's loop-state start must follow the reservation —
+    # `codex-autonomous-arc` binds .harness/codex_loop_state.json to the arc.
+    codex = (ROOT / ".agents/skills/roadmap-continue/SKILL.md").read_text(encoding="utf-8")
+    assert codex.index("reservations.py reserve ") < codex.index(
+        "just codex-autonomous-arc <arc-id>` in that worktree"
+    )
 
 
 def test_forward_profile_template_preserves_current_codex_home_and_review_boundary() -> None:
