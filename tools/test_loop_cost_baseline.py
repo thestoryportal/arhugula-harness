@@ -1,0 +1,579 @@
+"""Witness for tools/loop_cost_baseline.py (loop optimization plan, Task 0).
+
+The fixture is the contract: a round is any (arc_id, round_n) named by ANY record kind,
+door rows (round_n null) are not rounds, and a unique_catch flag counts only when the
+finding's LAST adjudication is `accepted` (C-HE-29) — rejected, suppressed and unadjudicated
+flags are each reported in their own counter, never folded into the catch.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from loop_cost_baseline import summarize
+
+SCRIPT = Path(__file__).resolve().parent / "loop_cost_baseline.py"
+YIELD = "merge-door-lease-acquire:lease_held_yield"
+
+
+def _rows() -> list[dict]:
+    return [
+        {
+            "record_kind": "finding",
+            "arc_id": "a",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c1",
+            "unique_catch": False,
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "a",
+            "round_n": 2,
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "w1",
+            "unique_catch": True,
+        },
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": 2,
+            "finding_id": "w1",
+            "disposition": "accepted",
+            "ts": "2026-09-03T10:00:00Z",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "a",
+            "round_n": 2,
+            "producer": "merge-gate-spec-conformance",
+            "finding_id": "s1",
+            "unique_catch": True,
+        },
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": 2,
+            "finding_id": "s1",
+            "disposition": "accepted",
+            "ts": "2026-09-03T10:00:00Z",
+        },
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": 2,
+            "finding_id": "s1",
+            "disposition": "rejected",
+            "ts": "2026-09-03T10:00:01Z",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "a",
+            "round_n": 2,
+            "producer": "merge-gate-concurrency",
+            "finding_id": "k1",
+            "unique_catch": True,
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "a",
+            "round_n": 3,
+            "producer": "merge-gate-concurrency",
+        },
+        {
+            "record_kind": "finding",
+            "finding_type": "HITL-recoverable",
+            "arc_id": "a",
+            "round_n": None,
+            "producer": "merge-door-lease-acquire",
+        },
+    ]
+
+
+def _run(log: Path, *extra: str) -> dict:
+    out = subprocess.run(
+        [sys.executable, str(SCRIPT), "--log", str(log), *extra],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return json.loads(out)
+
+
+def test_baseline_reports_expected_keys(tmp_path: Path) -> None:
+    log = tmp_path / "log.jsonl"
+    log.write_text("\n".join(json.dumps(r) for r in _rows()) + "\n")
+    data = _run(log)
+    assert data["rows"] == 9
+    assert data["arcs"] == 1
+    assert data["reviewed_arcs"] == 1
+    assert data["lens_rows"] == 4
+    assert (
+        data["rounds_per_arc_median"] == 3
+    )  # the clean round 3 counts; the door row (round_n null) does not
+    assert data["gate_rounds_with_findings"] == 1
+    assert data["single_lens_rounds"] == 0  # round 2 had three lenses
+    assert data["unique_catch_raw"] == 3
+    assert data["unique_catch_by_producer"] == {
+        "merge-gate-witness-adequacy": 1
+    }  # s1's LAST disposition is rejected; k1 is unadjudicated
+    assert data["unique_catch_rejected_or_suppressed"] == 1
+    assert data["unique_catch_unadjudicated"] == 1
+    assert data["lease_acquire_events"] == 1
+    assert data["rounds_per_arc_max"] == 3
+    assert data["codex_rows"] == 1
+    assert (
+        data["lease_held_yields"] is None
+    )  # no --loop-status given: an honest could-not-look, never a zero
+
+
+def test_last_appended_row_wins_not_the_latest_ts() -> None:
+    # C-HE-24 §5: readers reduce by finding_id -> LAST ROW (append order). A row appended
+    # later with an OLDER ts is still the reducer's answer; ts must not reorder it.
+    rows = _rows()
+    rows.append(
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": 2,
+            "finding_id": "s1",
+            "disposition": "accepted",
+            "ts": "2026-09-03T09:00:00Z",
+        }
+    )
+    data = summarize(rows)
+    assert data["unique_catch_by_producer"] == {
+        "merge-gate-witness-adequacy": 1,
+        "merge-gate-spec-conformance": 1,
+    }
+    assert data["unique_catch_rejected_or_suppressed"] == 0
+
+
+def test_same_core_retry_is_one_finding() -> None:
+    rows = _rows()
+    # w1 re-emitted under the same finding_id (a same-core retry before adjudication)
+    rows.insert(2, dict(rows[1]))
+    data = summarize(rows)
+    assert data["rows"] == 10
+    assert data["unique_catch_raw"] == 3
+    assert data["unique_catch_by_producer"] == {"merge-gate-witness-adequacy": 1}
+
+
+def test_lease_event_is_the_door_row_not_its_adjudication() -> None:
+    rows = _rows()
+    rows.append(
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": None,
+            "finding_id": "door-1",
+            "producer": "merge-door-lease-acquire",
+            "disposition": "accepted",
+            "ts": "2026-09-03T11:00:00Z",
+        }
+    )
+    rows.append(
+        {
+            "record_kind": "finding",
+            "finding_type": "terminal-block",
+            "arc_id": "a",
+            "round_n": 1,
+            "producer": "merge-door-lease-acquire",
+        }
+    )
+    assert summarize(rows)["lease_acquire_events"] == 1
+
+
+def test_suppressed_is_not_a_catch() -> None:
+    rows = _rows()
+    rows.append(
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": 2,
+            "finding_id": "w1",
+            "disposition": "suppressed",
+            "ts": "2026-09-03T10:00:05Z",
+        }
+    )
+    data = summarize(rows)
+    assert data["unique_catch_by_producer"] == {}
+    assert data["unique_catch_rejected_or_suppressed"] == 2
+
+
+def test_rounds_are_scoped_per_channel_and_probes_are_not_rounds() -> None:
+    rows = [
+        # codex r1 and gate pass 1 are TWO rounds; the three lenses share pass 1
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c9",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 2,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c10",
+        },
+        {
+            "record_kind": "reviewer_unavailable",
+            "arc_id": "d",
+            "round_n": 3,
+            "producer": "gemini_review_wrapper",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "merge-gate-concurrency",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "merge-gate-spec-conformance",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 1,
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "w9",
+        },
+        # a probe iteration index and a door row are not review rounds
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 0,
+            "producer": "reviewer_concurrency_probe",
+            "finding_id": "p1",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "d",
+            "round_n": 4,
+            "producer": "reviewer_concurrency_probe",
+            "finding_id": "p2",
+        },
+        {
+            "record_kind": "finding",
+            "finding_type": "HITL-recoverable",
+            "arc_id": "d",
+            "round_n": None,
+            "producer": "merge-door-post-merge-ci",
+        },
+    ]
+    data = summarize(rows)
+    assert data["rounds_per_arc_median"] == 4  # codex 1, 2 + a standalone gemini r3 + gate pass 1
+    assert data["rounds_per_arc_max"] == 4
+    assert data["codex_rows"] == 2
+
+
+def test_codex_rows_exclude_adjudications_the_absorber_wrote() -> None:
+    rows = _rows()
+    rows.append(
+        {
+            "record_kind": "finding_adjudication",
+            "arc_id": "a",
+            "round_n": 1,
+            "finding_id": "c1",
+            "producer": "codex_review_wrapper",
+            "disposition": "accepted",
+            "disposition_actor": "claude_absorber",
+            "ts": "2026-09-03T12:00:00Z",
+        }
+    )
+    assert summarize(rows)["codex_rows"] == 1
+
+
+def test_rounds_and_gate_passes_are_head_bound() -> None:
+    rows = [
+        # the same channel + round_n on two review heads is TWO rounds
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 0,
+            "head_sha": "h1",
+            "producer": "codex_review_wrapper",
+            "finding_id": "x1",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 0,
+            "head_sha": "h2",
+            "producer": "codex_review_wrapper",
+            "finding_id": "x2",
+        },
+        # two lenses each at round_n 1 but on DIFFERENT heads:
+        # two single-lens passes, not one two-lens pass
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 1,
+            "head_sha": "h1",
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "w3",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "e",
+            "round_n": 1,
+            "head_sha": "h2",
+            "producer": "merge-gate-spec-conformance",
+            "finding_id": "s3",
+        },
+    ]
+    data = summarize(rows)
+    assert data["rounds_per_arc_median"] == 4
+    assert data["gate_rounds_with_findings"] == 2
+    assert data["single_lens_rounds"] == 2
+
+
+def test_lens_round_numbers_are_ranked_per_head_into_one_pass() -> None:
+    # PR 1414's shape: at one head, concurrency ran its 3rd round while the other two lenses
+    # ran their 2nd — ONE pass with three lenses, not two passes
+    rows = [
+        {
+            "record_kind": "finding",
+            "arc_id": "f",
+            "round_n": 3,
+            "head_sha": "h9",
+            "producer": "merge-gate-concurrency",
+            "finding_id": "k5",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "f",
+            "round_n": 2,
+            "head_sha": "h9",
+            "producer": "merge-gate-spec-conformance",
+            "finding_id": "s5",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "f",
+            "round_n": 2,
+            "head_sha": "h9",
+            "producer": "merge-gate-witness-adequacy",
+        },
+        # spec-conformance re-run at the same head: its 2nd rank there is a SECOND pass, spec-only
+        {
+            "record_kind": "finding",
+            "arc_id": "f",
+            "round_n": 5,
+            "head_sha": "h9",
+            "producer": "merge-gate-spec-conformance",
+            "finding_id": "s6",
+        },
+    ]
+    data = summarize(rows)
+    assert data["rounds_per_arc_median"] == 2
+    assert data["gate_rounds_with_findings"] == 2
+    assert data["single_lens_rounds"] == 1
+
+
+def test_door_only_arc_counts_in_arcs_but_not_reviewed_arcs() -> None:
+    rows = [
+        *_rows(),
+        {
+            "record_kind": "finding",
+            "finding_type": "HITL-recoverable",
+            "arc_id": "door-only",
+            "round_n": None,
+            "producer": "merge-door-lease-acquire",
+        },
+    ]
+    data = summarize(rows)
+    assert data["arcs"] == 2
+    assert data["reviewed_arcs"] == 1
+    assert data["lease_acquire_events"] == 2
+
+
+def test_wrapper_md_failure_row_is_not_a_lens_finding() -> None:
+    # merge_gate_log emits its markdown-sibling write failure as a finding under the LENS's
+    # producer (lineage_claim=wrapper); a clean no_finding pass must stay clean
+    rows = [
+        {
+            "record_kind": "no_finding",
+            "arc_id": "g",
+            "round_n": 1,
+            "head_sha": "h5",
+            "producer": "merge-gate-witness-adequacy",
+            "lineage_claim": "wrapper",
+        },
+        {
+            "record_kind": "reviewer_unavailable",
+            "arc_id": "g",
+            "round_n": 1,
+            "head_sha": "h5",
+            "producer": "merge-gate-concurrency",
+            "lineage_claim": "wrapper",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "g",
+            "round_n": 1,
+            "head_sha": "h5",
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "md1",
+            "finding_type": "transient-retry",
+            "lineage_claim": "wrapper",
+        },
+    ]
+    data = summarize(rows)
+    assert data["gate_rounds_with_findings"] == 0
+    assert data["single_lens_rounds"] == 0
+    assert data["lens_rows"] == 2  # the marker rows are the lenses' verdicts; the md row is not
+    assert data["rounds_per_arc_median"] == 1
+
+
+def test_retry_that_lowers_the_flag_is_not_a_catch() -> None:
+    rows = _rows()
+    # w1 re-emitted (same id, same core) with unique_catch False after its accepted adjudication
+    retry = dict(rows[1])
+    retry["unique_catch"] = False
+    rows.append(retry)
+    data = summarize(rows)
+    assert data["unique_catch_raw"] == 2
+    assert data["unique_catch_by_producer"] == {}
+
+
+def test_gemini_is_always_its_own_round_and_ambiguity_is_counted() -> None:
+    base = {"arc_id": "i", "head_sha": "h7"}
+    standalone = [
+        # a standalone `just gemini-review` at the same producer-local round number as codex r1
+        {
+            **base,
+            "record_kind": "finding",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c20",
+        },
+        {
+            **base,
+            "record_kind": "finding",
+            "round_n": 1,
+            "producer": "gemini_review_wrapper",
+            "finding_id": "g20",
+        },
+    ]
+    assert summarize(standalone)["rounds_per_arc_median"] == 2
+    assert summarize(standalone)["failover_ambiguous_rounds"] == 0
+    failover = [
+        # the D-C chain shape: codex unavailable at r1, a gemini row forced to r1. The log carries
+        # no marker, so it counts as two rounds and ONE ambiguous key (the overcount's bound).
+        {
+            **base,
+            "record_kind": "reviewer_unavailable",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+        },
+        {
+            **base,
+            "record_kind": "finding",
+            "round_n": 1,
+            "producer": "gemini_review_wrapper",
+            "finding_id": "g21",
+        },
+    ]
+    assert summarize(failover)["rounds_per_arc_median"] == 2
+    assert summarize(failover)["failover_ambiguous_rounds"] == 1
+
+
+def test_typed_skip_row_is_not_lens_work() -> None:
+    rows = [
+        {
+            "record_kind": "no_finding",
+            "arc_id": "j",
+            "round_n": 1,
+            "head_sha": "h8",
+            "producer": "merge-gate-witness-adequacy",
+            "lineage_claim": "wrapper",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "j",
+            "round_n": 1,
+            "head_sha": "h8",
+            "producer": "merge-gate-concurrency",
+            "finding_type": "lens_skipped",
+            "cause_attribution": "detector_no_surface",
+        },
+    ]
+    data = summarize(rows)
+    assert data["lens_rows"] == 1
+    assert data["rounds_per_arc_median"] == 1
+
+
+def test_single_lens_round_and_clean_only_arc() -> None:
+    rows = [
+        {
+            "record_kind": "finding",
+            "arc_id": "b",
+            "round_n": 1,
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "w2",
+            "unique_catch": False,
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "b",
+            "round_n": 1,
+            "producer": "codex_review_wrapper",
+            "finding_id": "c2",
+            "unique_catch": False,
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "c",
+            "round_n": 1,
+            "producer": "merge-gate-concurrency",
+        },
+        {
+            "record_kind": "reviewer_unavailable",
+            "arc_id": "c",
+            "round_n": 2,
+            "producer": "codex_review_wrapper",
+        },
+    ]
+    data = summarize(rows)
+    assert data["arcs"] == 2  # the clean-only arc c counts
+    assert (
+        data["rounds_per_arc_median"] == 2
+    )  # b: codex r1 + gate pass 1; c: gate pass 1 + codex r2
+    assert data["gate_rounds_with_findings"] == 1
+    assert data["single_lens_rounds"] == 1  # codex rows do not make a round multi-lens
+
+
+def test_loop_status_counts_only_the_yield_cause(tmp_path: Path) -> None:
+    log = tmp_path / "log.jsonl"
+    log.write_text(json.dumps(_rows()[0]) + "\n")
+    status = tmp_path / "loop_status.md"
+    status.write_text(
+        "| ts | kind | lane;cause | detail |\n|---|---|---|---|\n"
+        f"| 2026-09-03T01:00:00Z | NOTIFY | lane=L;cause={YIELD} | holder=u-x backoff=0 |\n"
+        "| 2026-09-03T02:00:00Z | NOTIFY | lane=L;cause=- | a .codex-worktrees/ lane is present |\n"
+        f"| 2026-09-03T03:00:00Z | DEFERRED-HIL | lane=L;cause={YIELD} | not a NOTIFY row |\n"
+        f"| 2026-09-03T04:00:00Z | NOTIFY | lane=L;cause={YIELD} | holder=u-y backoff=0 |\n"
+    )
+    data = _run(log, "--loop-status", str(status))
+    assert data["lease_held_yields"] == 2
+
+
+def test_empty_log_is_an_error(tmp_path: Path) -> None:
+    log = tmp_path / "empty.jsonl"
+    log.write_text("")
+    p = subprocess.run(
+        [sys.executable, str(SCRIPT), "--log", str(log)], capture_output=True, text=True
+    )
+    assert p.returncode == 2
+    assert "no rows" in p.stderr

@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 230
+  total: 231
   open: 2
   design_substrate_gated: 3
-  registered_finding: 73
+  registered_finding: 74
   operator_gated: 0
   held: 2
   closed: 150
-  identity_digest: 8f49bb15635317c8
+  identity_digest: d54a53e467e06def
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11127,8 +11127,9 @@ items:
   status: open
   summary: 'SURFACED by the Archify loop diagrams (docs/diagrams/code-loop/, 2026-09-03)
     and grounded the same day: five CI runs per landed unit with pytest at 450 s each,
-    a merge-door lease held across two of them, 33 of 48 gate rounds raised by a single
-    lens, and a prompt hook printing next=? because the pointer prose stopped quoting
+    a merge-door lease held across two of them, 35 of 49 gate passes raised by a single
+    lens (Task 0''s head-bound count; the pre-registration read was 33 of 48), and a
+    prompt hook printing next=? because the pointer prose stopped quoting
     unit ids. Plan with per-task witnesses at
     .harness/plan/loop-optimization-plan-2026-09-03.md.'
   close_out: 'OPEN — closes when Tasks 0-5 are merged with their witnesses recorded in
@@ -11139,3 +11140,23 @@ items:
   council: 'NO — workspace-ops tooling; the two spec legs (Tasks 7-8) are separately
     decision-gated inside the plan.'
   heading: '### B-230 · Loop optimization program *(surfaced by the Archify loop diagrams, 2026-09-03)*'
+- id: B-231
+  title: >-
+    Gate-log rows carry no failover-child marker; a gemini row forced to the codex round
+    number cannot be told from a standalone gemini review
+  pr: 'PR pending (b-230-task-0)'
+  status: registered_finding
+  summary: 'SURFACED by codex r6/r7 on b-230-task-0 (2026-09-03): review_wrapper_common.round_n_for
+    forces the C-HE-17 D-C failover child to the primary''s round number, but the row it
+    writes carries no marker (cause_attribution null, lineage_claim fresh), so a reducer over
+    .harness/merge-gate-log.jsonl cannot distinguish that child from a standalone `just
+    gemini-review` sharing the (arc, head, round_n) key. Inferring lineage from key
+    coincidence was tried and reversed; tools/loop_cost_baseline.py counts every gemini row
+    as its own round and reports failover_ambiguous_rounds (4 keys at the Task 0 head) as
+    the overcount''s upper bound.'
+  close_out: 'OPEN — closure = the failover child writes an explicit marker on its rows
+    (a cause_attribution or lineage_claim value the wrapper sets under HARNESS_FAILOVER_CHILD)
+    with a witness, and loop_cost_baseline consumes it in place of the ambiguity count.
+    A wrapper-side change with its own codex round; not part of B-230.'
+  council: 'NO — one producer field on one wrapper; no cross-axis tension.'
+  heading: '### B-231 · gate-log rows carry no failover-child marker — a gemini round cannot be told from a standalone review *(surfaced by codex r6/r7 on b-230-task-0, 2026-09-03; REGISTERED)*'
