@@ -97,6 +97,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          exit 2  # NEGATIVE WITNESS (B-230 Task 1 Step 6): a failing classifier step must still run every heavy job via always(); reverted in the next commit
           self_changed="$(git diff --name-only --no-renames "$BASE...$HEAD" -- tools/ci_bookkeeping_diff.py .github/workflows/ci.yml)"
           if [ -n "$self_changed" ]; then
             echo "self-guard: classifier/workflow changed on $BASE...$HEAD — full run" >&2
