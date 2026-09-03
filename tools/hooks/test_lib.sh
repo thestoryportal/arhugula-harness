@@ -165,6 +165,43 @@ eq "hook_roadmap_next stops at next ## heading, no --- present" "$(hook_roadmap_
 eq "hook_roadmap_next empty on missing file" "$(hook_roadmap_next "$REPO/nope.md")" ""
 printf '# d\nno next-action heading here\n' > "$DASHF"
 eq "hook_roadmap_next empty when no section" "$(hook_roadmap_next "$DASHF")" ""
+# B-230 Task 2 (2026-09-03): the live pointer prose names its unit WITHOUT backticks —
+# in bold, or after a `then ` — and may point at a plan doc. Precedence: a backticked
+# plan pointer → the first bold U/R token → the unit after the FIRST `then ` → the
+# backticked rules above. Fixtures mirror the live shapes; the live file is never
+# asserted against (it goes stale with every refresh).
+cat > "$DASHF" <<'EOF'
+## Next action
+**Current next action (post-#1497).** U-HE-36 landed as the R3 eval arc. The next implementable unit is **U-HE-37** (S6 pilot gate), then U-HE-38.
+EOF
+eq "hook_roadmap_next live shape: bold next unit wins over the then-tail" "$(hook_roadmap_next "$DASHF")" "U-HE-37"
+cat > "$DASHF" <<'EOF'
+## Next action
+**Current next action (post-#1497).** U-HE-36 landed as the R3 eval arc; the door owes its refresh, then U-HE-37 opens, then U-HE-38.
+EOF
+eq "hook_roadmap_next unquoted then-tail: the FIRST then, not the last" "$(hook_roadmap_next "$DASHF")" "U-HE-37"
+cat > "$DASHF" <<'EOF'
+## Next action
+**Current next action.** Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 1, then U-HE-37.
+EOF
+eq "hook_roadmap_next plan pointer wins over a then-tail" "$(hook_roadmap_next "$DASHF")" "plan:loop-optimization-plan-2026-09-03"
+cat > "$DASHF" <<'EOF'
+## Next action
+**Current next action.** Land `U-HE-40` next.
+EOF
+eq "hook_roadmap_next quoted unit still works" "$(hook_roadmap_next "$DASHF")" "U-HE-40"
+# The explicit phrase outranks both bold and `then `: a bold LANDED unit precedes it,
+# and an unquoted then-tail follows it (the U-MEM-era shape plus a successor).
+cat > "$DASHF" <<'EOF'
+## Next action
+**Current next action.** **U-HE-36** landed as the R3 eval arc. The next implementable unit is U-HE-37.
+EOF
+eq "hook_roadmap_next explicit phrase outranks a bold landed unit" "$(hook_roadmap_next "$DASHF")" "U-HE-37"
+cat > "$DASHF" <<'EOF'
+## Next action
+**Current next action.** The next implementable unit is U-HE-37, then U-HE-38.
+EOF
+eq "hook_roadmap_next explicit phrase outranks the then-tail" "$(hook_roadmap_next "$DASHF")" "U-HE-37"
 
 # loop_mode_active — off by default; on via env; on via marker file.
 ( cd "$REPO"; unset HARNESS_LOOP; CLAUDE_PROJECT_DIR="$REPO" loop_mode_active ) \

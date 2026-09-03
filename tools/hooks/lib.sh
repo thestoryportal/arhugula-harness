@@ -262,27 +262,43 @@ hook_is_roadmap_status_only_set() {
 # already-RESOLVED R-id mentioned there instead of correctly finding no token
 # in the actual Next action prose (which may use non-`R-`/`U-` tokens like
 # `B-*`). Range tokens such as `R-410..R-440` are menus, not actionable units,
-# so they are ignored. Echoes the R-id, empty if absent (callers default).
+# so they are ignored. Echoes the unit id (`U-*`/`R-*`) or a `plan:<name>` pointer
+# to `.harness/plan/<name>.md`, empty if absent (callers default).
 # Usage: NEXT=$(hook_roadmap_next "$ROADMAP_STATUS")
 hook_roadmap_next() {
   local dash="$1"
   [ -f "$dash" ] || return 0
-  local section current token
+  local section current rule scope pattern strip token
   section=$(awk '/^## Next action/{f=1; next} f && (/^---$/ || /^## /){exit} f' "$dash" 2>/dev/null)
   current=$(printf '%s\n' "$section" | grep -m1 'Current next action' 2>/dev/null || true)
-  token=$(printf '%s\n' "$current" \
-    | sed -nE 's/.*next implementable unit is `?((U|R)-[A-Za-z0-9._-]+)`?.*/\1/p' \
-    | grep -v '\.\.' \
-    | head -1)
-  if [ -n "$token" ]; then
-    printf '%s' "$token"
-    return 0
-  fi
-  printf '%s\n' "$section" \
-    | grep -oE '`(U|R)-[A-Za-z0-9._-]+`' 2>/dev/null \
-    | tr -d '`' \
-    | grep -v '\.\.' \
-    | head -1
+  # [LAW:dataflow-not-control-flow] the precedence is a table, first non-range match
+  # wins: `scope|carrier regex|sed program that strips the carrier`. B-230 Task 2
+  # (2026-09-03): the pointer prose names its unit WITHOUT backticks — in bold, or
+  # after a `then ` — or points at a plan doc, so the two backticked rules of record
+  # (the phrase rule, now second; the section-wide rule, still last) came up empty
+  # on the live file. The explicit phrase outranks bold and `then `: a bold LANDED
+  # unit precedes it ("**U-HE-36** landed … the next implementable unit is U-HE-37"),
+  # and a `then ` tail follows it. The FIRST `then ` is the successor; the last would
+  # be the successor's successor ("…then U-HE-37 opens, then U-HE-38").
+  # `@ID@` is a unit id: dots inside, never at the end, so a sentence's full stop
+  # ("…unit is U-HE-37.") is not part of the token.
+  local id='[UR]-[A-Za-z0-9._-]*[A-Za-z0-9_-]'
+  local -a rules=(
+    'current|`\.harness/plan/[A-Za-z0-9._-]+\.md`|s#^`\.harness/plan/(.*)\.md`$#plan:\1#'
+    'current|next implementable unit is `?@ID@|s/^next implementable unit is `?//'
+    'current|\*\*@ID@\*\*|s/\*//g'
+    'current|then `?@ID@|s/^then `?//'
+    'section|`@ID@`|s/`//g'
+  )
+  for rule in "${rules[@]}"; do
+    scope=${rule%%|*}; rule=${rule#*|}; pattern=${rule%%|*}; strip=${rule#*|}
+    pattern=${pattern//@ID@/$id}
+    token=$(printf '%s\n' "${!scope}" | grep -oE "$pattern" | grep -v '\.\.' | head -1 | sed -E "$strip") || true
+    if [ -n "$token" ]; then
+      printf '%s' "$token"
+      return 0
+    fi
+  done
 }
 
 # Normalize a hook session id for use in a checkpoint filename.

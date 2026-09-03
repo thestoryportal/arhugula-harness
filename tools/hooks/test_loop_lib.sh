@@ -365,6 +365,35 @@ NS=$(loop_notify_summary)
 [ "$(printf '%s' "$NS" | grep -c 'with pipe')" = "1" ] && ok "notify summary is one line" || bad "notify summary shape: [$NS]"
 printf '%s' "$NS" | grep -q 'B-1 note' && bad "6th-oldest NOTIFY not dropped: [$NS]" || ok "notify summary keeps the newest 5"
 printf '%s' "$NS" | grep -q 'B-6 note | with pipe' && ok "notify summary unescapes pipes" || bad "notify escape: [$NS]"
+# 23d) B-230 Task 2 (2026-09-03): rows from successive landings repeat verbatim. Each
+#      renders ONCE, at its LAST occurrence, deduped BEFORE the newest-5 cap — never
+#      `sort -u`, which trades ledger order for lexicographic order and can hide a
+#      newer notice. The fixtures are deliberately non-lexicographic.
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+for i in 1 2 3; do loop_log_structured NOTIFY L1 'g:f:c' 'same notice'; done
+NS=$(loop_notify_summary)
+[ "$NS" = '[loop] ℹ notify: [L1] same notice' ] && ok "a NOTIFY repeated on three rows renders once" || bad "repeat not deduped: [$NS]"
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+for i in 1 2 3 4 5 6 7; do loop_log_structured NOTIFY L1 'g:f:c' "B-$i note"; done
+NS=$(loop_notify_summary)
+[ "$NS" = '[loop] ℹ notify: [L1] B-3 note; [L1] B-4 note; [L1] B-5 note; [L1] B-6 note; [L1] B-7 note' ] \
+  && ok "seven distinct NOTIFYs render the newest five in ledger order" || bad "order/cap: [$NS]"
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+# The repeat sits INSIDE the cap window (rows 3 and 6 of seven): the plan's rows-1-and-8
+# fixture passed on the un-deduped reducer because row 1 fell off the cap anyway. This
+# one also witnesses dedupe-before-cap — B-2, which a post-cap dedupe would hide, surfaces.
+for i in 1 2 3 4 5 6 7; do
+  d="B-$i note"; [ "$i" = 6 ] && d="B-3 note"
+  loop_log_structured NOTIFY L1 'g:f:c' "$d"
+done
+NS=$(loop_notify_summary)
+[ "$NS" = '[loop] ℹ notify: [L1] B-2 note; [L1] B-4 note; [L1] B-5 note; [L1] B-3 note; [L1] B-7 note' ] \
+  && ok "a NOTIFY repeated at rows 3 and 6 of seven renders once, at row 6's position, deduped before the cap" || bad "last-occurrence order: [$NS]"
+: > "$(loop_status_path)"; loop_status_ensure >/dev/null
+loop_log_structured NOTIFY L1 'g:f:c' 'shared notice'
+loop_log_structured NOTIFY L2 'g:f:c' 'shared notice'
+NS=$(loop_notify_summary)
+[ "$NS" = '[loop] ℹ notify: [L1] shared notice; [L2] shared notice' ] && ok "dedupe keys on lane + detail, not detail alone" || bad "cross-lane notices collapsed: [$NS]"
 unset -f loop_now; loop_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # 24) Write failure: the STRUCTURED writer propagates (an unrecorded DEFERRED-HIL/NOTIFY

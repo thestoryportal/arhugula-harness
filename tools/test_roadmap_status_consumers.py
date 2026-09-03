@@ -185,7 +185,10 @@ def test_hook_roadmap_next_on_real_truncated_file_returns_the_live_token():
     earlier `== \"\"` pin, which had normalized the regression). The token is
     asserted non-empty AND non-stale rather than pinned to one literal, so a
     future round rotating the pointer doesn't break this witness.
-    hook_roadmap_next's own code is byte-identical — lib.sh was not edited."""
+    B-230 Task 2 widened the parser's carriers (a backticked plan-doc pointer
+    -> `plan:<name>`, a bold unit, the unit after the first `then `), so the
+    accepted set below is every carrier on the CURRENT line, not a second copy
+    of the parser's precedence — membership is the stale-leak witness."""
     out = subprocess.run(
         ["bash", "-c", f"source {LIB_SH} && hook_roadmap_next .harness/roadmap_status.md"],
         cwd=ROOT,
@@ -202,19 +205,23 @@ def test_hook_roadmap_next_on_real_truncated_file_returns_the_live_token():
     )
     # Conditional demand (codex round-7): a B-only round LEGITIMATELY yields
     # empty — hook_roadmap_next is documented + pinned (tools/hooks/lib.sh,
-    # test_lib.sh) to surface only `U-`/`R-` tokens. So: when the CURRENT line
-    # carries a backticked U-/R- token, the hook MUST resolve one of the
-    # current line's own tokens (never empty, never archived history); when it
+    # test_lib.sh) to surface a `U-`/`R-` unit or a `plan:<name>` pointer. So:
+    # when the CURRENT line carries any such carrier, the hook MUST resolve one
+    # of the current line's own (never empty, never archived history); when it
     # carries none, empty is the documented correct answer.
     import re as _re
 
-    current_ur_tokens = {
-        t for t in _re.findall(r"`((?:U|R)-[A-Za-z0-9._-]+)`", current_line) if ".." not in t
+    current_tokens = {
+        f"plan:{n}" for n in _re.findall(r"`\.harness/plan/([A-Za-z0-9._-]+)\.md`", current_line)
+    } | {
+        t
+        for t in _re.findall(r"\b([UR]-[A-Za-z0-9._-]*[A-Za-z0-9_-])", current_line)
+        if ".." not in t
     }
-    if current_ur_tokens:
-        assert token in current_ur_tokens, (
+    if current_tokens:
+        assert token in current_tokens, (
             f"hook returned {token!r} but the live Current line's own tokens are "
-            f"{sorted(current_ur_tokens)} — a stale/archived pointer leaked "
+            f"{sorted(current_tokens)} — a stale/archived pointer leaked "
             "(empty would silently strip the loop's dashboard item)"
         )
     else:
