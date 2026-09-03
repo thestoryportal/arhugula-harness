@@ -460,6 +460,58 @@ def test_read_pairs_refuses_a_file_without_the_denominator(tmp_path: Path) -> No
         adc.read_pairs(f)
 
 
+def test_read_pairs_refuses_zero_denominator_and_malformed_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Both shapes used to escape as Python's exit 1 — a CONFLICT verdict to the shell
+    (codex r9 P3); they are ValueError → INCOMPLETE → exit 2."""
+    f = tmp_path / "pairs.txt"
+    f.write_text(f"# window-pairs: 0\n{'a' * 40} {'b' * 40}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="N > 0"):
+        adc.read_pairs(f)
+    f.write_text(f"# window-pairs: 5\n{'a' * 40}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not '<sha> <sha>"):
+        adc.read_pairs(f)
+    assert adc.main(["historical", "--pairs", str(f)]) == 2
+    assert "INCOMPLETE ValueError" in capsys.readouterr().err
+
+
+def test_pair_conflicts_operational_apply_failure_is_not_masked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only git apply's exit 1 (does not apply / applied with conflicts) means MASKED; any
+    other exit is an operational failure that must surface, never a measured pair."""
+    repo, s = _linear_history(tmp_path)
+    real = adc._git
+
+    def fake(repo_: Path, *args: str, **kw: object) -> subprocess.CompletedProcess[str]:
+        if args[:1] == ("apply",):
+            return subprocess.CompletedProcess(list(args), 128, "", "fatal: corrupt patch")
+        return real(repo_, *args, **kw)
+
+    monkeypatch.setattr(adc, "_git", fake)
+    with adc.scratch_objects(repo) as env, pytest.raises(adc.MergeTreeError, match="corrupt"):
+        adc.pair_conflicts(repo, s["A"], s["B"], env)
+
+
+def test_merged_prs_refuses_a_listing_that_does_not_reach_the_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capped newest-first listing that stops above the window's first PR would derive a
+    truncated file and silently overwrite the canonical one (codex r9 P2)."""
+    repo, s = _linear_history(tmp_path)
+    listing = [{"number": 1300, "mergedAt": "2026-08-10T00:00:00Z", "mergeCommit": {"oid": s["A"]}}]
+
+    def fake_run(*a: object, **kw: object) -> subprocess.CompletedProcess[str]:
+        import json
+
+        return subprocess.CompletedProcess([], 0, json.dumps(listing), "")
+
+    monkeypatch.setattr(adc.subprocess, "run", fake_run)
+    with pytest.raises(adc.MergeTreeError, match="does not reach PR #1239"):
+        adc.merged_prs(repo, 1239, 1391)
+
+
 def test_historical_reports_interval_and_unmeasured_semantic_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

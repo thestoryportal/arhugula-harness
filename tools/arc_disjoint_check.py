@@ -335,9 +335,14 @@ def pair_conflicts(repo: Path, a: str, b: str, env: dict[str, str]) -> PairVerdi
         if patch.returncode != 0:
             raise MergeTreeError(f"diff-tree {b}^ {b} -- {f} failed: {patch.stderr.strip()}")
         # the patch bytes verbatim: a stripped trailing newline is a corrupt patch
-        if _git(repo, "apply", "--cached", "--3way", env=env, stdin=patch.stdout).returncode != 0:
+        applied = _git(repo, "apply", "--cached", "--3way", env=env, stdin=patch.stdout)
+        if applied.returncode == 1:  # git apply's "does not apply / applied with conflicts"
             masked.append(f)
             _restore_entry(repo, a, f, env)
+        elif applied.returncode != 0:  # anything else is operational, never "masked" (codex r9)
+            raise MergeTreeError(
+                f"apply {b} -- {f} failed ({applied.returncode}): {applied.stderr.strip()}"
+            )
     tree = _plumbing(repo, "write-tree", env=env)
     certain = merge_conflicts(repo, a, synthetic_commit(repo, tree, base, env), env)
     return PairVerdict(sorted(set(certain) - GOVERNANCE_FILES), masked)
@@ -382,8 +387,17 @@ def merged_prs(repo: Path, first: int, last: int) -> list[MergedPr]:
     )
     if p.returncode != 0:
         raise MergeTreeError(f"gh pr list failed ({p.returncode}): {p.stderr.strip()}")
+    listed = json.loads(p.stdout)
+    # the listing is newest-first and capped: it must reach PAST the window's start, or the
+    # window is only partially covered and the derived file would be silently truncated
+    # (codex r9) — refuse rather than overwrite the canonical list with a short one
+    if not listed or min(r["number"] for r in listed) > first:
+        raise MergeTreeError(
+            f"gh pr list ({len(listed)} rows) does not reach PR #{first}: the P-R3 window is not"
+            " fully covered — raise the listing limit before deriving"
+        )
     rows = sorted(
-        (r for r in json.loads(p.stdout) if first <= r["number"] <= last),
+        (r for r in listed if first <= r["number"] <= last),
         key=lambda r: r["mergedAt"],
     )
     return [
@@ -433,9 +447,14 @@ def read_pairs(path: Path) -> PairList:
     denominators = [
         int(ln[len(_WINDOW_PAIRS_HEADER) :]) for ln in lines if ln.startswith(_WINDOW_PAIRS_HEADER)
     ]
-    if len(denominators) != 1:
-        raise ValueError(f"{path}: expected exactly one '{_WINDOW_PAIRS_HEADER}N' header line")
+    if len(denominators) != 1 or denominators[0] <= 0:
+        raise ValueError(
+            f"{path}: expected exactly one '{_WINDOW_PAIRS_HEADER}N' header line with N > 0"
+        )
     rows = [ln.split() for ln in lines if ln.strip() and not ln.startswith("#")]
+    bad = [r for r in rows if len(r) < 2 or not (_OID.fullmatch(r[0]) and _OID.fullmatch(r[1]))]
+    if bad:  # a malformed row is "cannot look" (exit 2), never an IndexError exit 1 (codex r9)
+        raise ValueError(f"{path}: {len(bad)} row(s) are not '<sha> <sha> …': {bad[0]!r}")
     return PairList(denominators[0], [(r[0], r[1]) for r in rows])
 
 
