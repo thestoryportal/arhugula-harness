@@ -11132,8 +11132,10 @@ items:
     unit ids. Plan with per-task witnesses at
     .harness/plan/loop-optimization-plan-2026-09-03.md.'
   close_out: 'OPEN — closes when Tasks 0-5 are merged with their witnesses recorded in
-    the plan §0, Task 6 and Task 7 have an operator answer, and Task 8 Step 1 (yield
-    row) is merged so its trigger is measurable.'
+    the plan §0, Task 6 and Task 7 have an operator answer, and Task 8 Steps 1-3 are
+    all landed: the yield row emitted, the trigger row registered, and the counter
+    wired into the baseline script — an umbrella closed after Step 1 alone would strand
+    the observations with no reachable trigger.'
   council: 'NO — workspace-ops tooling; the two spec legs (Tasks 7-8) are separately
     decision-gated inside the plan.'
   heading: '### B-230 · Loop optimization program *(surfaced by the Archify loop diagrams, 2026-09-03)*'

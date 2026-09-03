@@ -170,8 +170,11 @@ Two of the five CI runs per unit verify a diff that is only `.harness/roadmap_st
 
 ```python
 # tools/test_ci_bookkeeping_filter.py
-import subprocess, sys, pytest
-from ci_bookkeeping_diff import classify  # tools/ is the pytest rootdir; sibling modules import bare, as tools/test_arc_cost.py does
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/test_arc_metrics.py:22 shape — the suite runs --import-mode=importlib (pyproject.toml:383), so sibling modules need tools/ on sys.path explicitly
+import pytest
+from ci_bookkeeping_diff import classify
 
 def test_status_only_is_bookkeeping():
     assert classify([".harness/roadmap_status.md"]) is True
@@ -365,7 +368,7 @@ Expected: `ok`. Witness on the live file: `bash -c 'source tools/hooks/lib.sh; h
 
 - [ ] **Step 5: Deduplicate the banner line in the reducer**
 
-In `loop_notify_summary` (`tools/hooks/loop_lib.sh:661`) pass the rendered detail lines through `sort -u` before the cap, so a notice repeated by N landings prints once. Add a case to `tools/hooks/test_lib_roadmap_next.sh`'s sibling `tools/hooks/test_loop_lib_notify.sh` (same shape as `tools/hooks/test_permission_guard.sh`): a fixture ledger with the same `NOTIFY` detail on three rows renders one line; two different details render two. Witness: a new session with a `.codex-worktrees/` lane present shows the line once.
+In `loop_notify_summary` (`tools/hooks/loop_lib.sh:661`) the reducer promises the NEWEST five (`tail -5` at `:674`), so a `sort -u` before the cap would replace chronology with lexicographic order and could hide a newer notice (codex r4 on b-230-register). Dedupe preserving LAST-occurrence order instead, before the cap — an awk pass that walks the rows backwards keeping the first sighting of each detail and prints them forwards: `awk '{a[NR]=$0} END{for(i=NR;i>0;i--) if(!s[a[i]]++) o[++n]=a[i]; for(i=n;i>0;i--) print o[i]}'` (no `tac`; macOS lacks it). Add `tools/hooks/test_loop_lib_notify.sh` (same shape as `tools/hooks/test_permission_guard.sh`): the same `NOTIFY` detail on three rows renders once; seven distinct details render the newest five in ledger order; a detail repeated at rows 1 and 8 of nine renders once, at row 8's position. Witness: a new session with a `.codex-worktrees/` lane present shows the line once.
 
 - [ ] **Step 6: Commit**
 
@@ -468,14 +471,17 @@ The parser and the producer must agree on one row shape (codex r1 on b-230-regis
 **Interfaces:**
 - Produces: `python tools/branch_hygiene_batch.py --pending <loop_status.md>` prints one line per verified-merged branch as `<branch> <head_oid>` and, with `--emit-command`, prints the single guarded push:
   `git push --force-with-lease=refs/heads/A:<oidA> --force-with-lease=refs/heads/B:<oidB> origin :refs/heads/A :refs/heads/B`
-  With `--emit-command` the push is printed as the first line of ONE shell block whose remaining lines, chained with `&&`, append a `RESOLVED-HIL` row per deferral through `loop_resolve <item-id> …` (`tools/hooks/loop_lib.sh:286`): the pending reducer is last-write-wins on the item id, so a deletion that is not followed by its resolve row stays pending and is re-presented forever (codex r3 on b-230-register). `parse_pending` therefore keeps each row's item id (the reducer renders `[<lane>] <item-id> — branch hygiene close-out pending: …`). A pending row with no `<branch> (PR #N, merged` pair is printed to stderr as `unreadable pending row: <row>` and makes the exit non-zero; it is never skipped silently. A branch whose PR is not `MERGED` or whose head branch differs aborts the whole batch (exit 1, `verification mismatch: <branch> PR #N: <reason>` on stderr, no command printed): a partially stale queue must never become a partially executed destructive push (codex r2 on b-230-register). Input is the loop's pending-HIL reducer (`loop_pending_hil_list`, `tools/hooks/loop_lib.sh:392`, last-write-wins so a `RESOLVED-HIL` row clears its item), read from stdin — never the raw ledger, which would resurrect resolved rows — and the ledger path is the canonical `loop_status_path()` (`loop_lib.sh:31`), which honours alternate venues.
+  Two phases, each rerunnable on its own. Phase 1 (`--emit-command`) prints the guarded push. Phase 2 (`--resolve`, recipe `branch-hygiene-resolve`) is run AFTER the push: for each deferral it confirms every branch is absent on the remote (`git ls-remote --exit-code --heads origin refs/heads/<b>` exit 2 — the one "genuinely absent" signal ship-pr already uses; any other non-zero aborts) and only then appends the `RESOLVED-HIL` row through `loop_resolve <item-id> …` (`tools/hooks/loop_lib.sh:286`), because the pending reducer is last-write-wins on the item id and a deletion without its resolve row is re-presented forever (codex r3 on b-230-register). Keying the resolve on the remote's state rather than on the push having just run makes it retryable: if one append fails, rerunning `--resolve` skips nothing that is still present and resolves everything that is gone, without re-issuing a force-with-lease against OIDs that no longer exist (codex r4 on b-230-register). Item ids are validated against `[A-Za-z0-9._-]+` at parse time and every value that reaches a shell is `shlex.quote`d — a ledger token is shared, append-only data, not trusted program text (codex r4 on b-230-register, P1). A pending row with no `<branch> (PR #N, merged` pair is printed to stderr as `unreadable pending row: <row>` and makes the exit non-zero; it is never skipped silently. A branch whose PR is not `MERGED` or whose head branch differs aborts the whole batch (exit 1, `verification mismatch: <branch> PR #N: <reason>` on stderr, no command printed): a partially stale queue must never become a partially executed destructive push (codex r2 on b-230-register). Input is the loop's pending-HIL reducer (`loop_pending_hil_list`, `tools/hooks/loop_lib.sh:392`, last-write-wins so a `RESOLVED-HIL` row clears its item), read from stdin — never the raw ledger, which would resurrect resolved rows — and the ledger path is the canonical `loop_status_path()` (`loop_lib.sh:31`), which honours alternate venues.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tools/test_branch_hygiene_batch.py
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/test_arc_metrics.py:22 shape — the suite runs --import-mode=importlib (pyproject.toml:383), so sibling modules need tools/ on sys.path explicitly
 import pytest
-from branch_hygiene_batch import Deferral, build_close_block, build_push_command, parse_pending, UnreadableRow  # tools/ is the pytest rootdir; sibling modules import bare, as tools/test_arc_cost.py does
+from branch_hygiene_batch import Deferral, build_push_command, parse_pending, resolve_cleared, UnreadableRow
 
 def test_two_branches_one_command():
     cmd = build_push_command([("feat/a", "aaa111"), ("roadmap-refresh-post-1", "bbb222")])
@@ -493,12 +499,19 @@ def test_parse_pending_row_finds_both_branches():
            "(PR #1490, merged ff62189d2, main run green) — run the guarded force-with-lease delete block")
     assert parse_pending(row) == [Deferral("u-sr-08", [("feat/u-sr-08-context-noise-deletions", "1489"), ("roadmap-refresh-post-1489", "1490")])]
 
-def test_close_block_pushes_then_resolves_each_item():
-    block = build_close_block([Deferral("u-sr-08", [("feat/a", "1")])], {"feat/a": "aaa"})
-    lines = block.splitlines()
-    assert lines[0] == "git push --force-with-lease=refs/heads/feat/a:aaa origin :refs/heads/feat/a \\"
-    assert lines[1].startswith("  && bash -c 'source tools/hooks/loop_lib.sh; loop_resolve u-sr-08 ")
-    assert "feat/a" in lines[1]
+def test_crafted_item_id_is_refused():
+    with pytest.raises(UnreadableRow):
+        parse_pending("[lane-1] $(touch pwned) — branch hygiene close-out pending: feat/a (PR #1, merged 111, main run green)")
+
+def test_resolve_only_items_whose_branches_are_all_gone(monkeypatch):
+    import branch_hygiene_batch as m
+    gone = {"feat/a": True, "roadmap-refresh-post-1": True, "feat/b": False}
+    monkeypatch.setattr(m, "remote_absent", lambda branch: gone[branch])
+    resolved = []
+    monkeypatch.setattr(m, "loop_resolve", lambda item, note: resolved.append((item, note)))
+    left = resolve_cleared([Deferral("u-a", [("feat/a", "1"), ("roadmap-refresh-post-1", "2")]), Deferral("u-b", [("feat/b", "3")])])
+    assert [i for i, _ in resolved] == ["u-a"]
+    assert left == [Deferral("u-b", [("feat/b", "3")])]
 
 def test_bare_branch_row_is_refused_not_skipped():
     with pytest.raises(UnreadableRow):
@@ -531,14 +544,17 @@ the loop, by design. This tool only collapses N approvals into one.
 Row shape (the ONE shape: ship-pr's defer text produces it, the pending reducer renders it, this reads it):
   [<lane>] <item-id> — branch hygiene close-out pending: <branch> (PR #N, merged <sha>, main run green)[ and <branch> (PR #M, ...)]
 A pending row without a `<branch> (PR #N, merged` pair is unreadable and is refused, never skipped.
-The emitted block pushes, then appends one RESOLVED-HIL row per item (loop_resolve) — the pending
-reducer is last-write-wins on the item id, so a deletion without its resolve row stays pending forever.
+Phase 1 (--emit-command) prints the push. Phase 2 (--resolve) appends one RESOLVED-HIL row per item
+whose branches are ALL absent on the remote — the pending reducer is last-write-wins on the item id, so
+a deletion without its resolve row stays pending forever. Phase 2 is keyed on the remote's state, so it
+is safe to rerun after a partial failure. Ledger tokens are data: item ids are validated at parse time
+and every value handed to a shell is shlex-quoted.
 """
 from __future__ import annotations
-import argparse, json, re, subprocess, sys
+import argparse, json, re, shlex, subprocess, sys
 from dataclasses import dataclass
 
-PENDING = re.compile(r"\[[^\]]*\] (?P<item>\S+) — branch hygiene close-out pending: (?P<rest>.*)")
+PENDING = re.compile(r"\[[^\]]*\] (?P<item>[A-Za-z0-9._-]+) — branch hygiene close-out pending: (?P<rest>.*)")
 BRANCH = re.compile(r"(?P<branch>[\w./-]+) \(PR #(?P<pr>\d+), merged")
 
 class UnreadableRow(ValueError):
@@ -551,10 +567,15 @@ class Deferral:
 
 def parse_pending(text: str) -> list[Deferral]:
     out: list[Deferral] = []
-    for m in PENDING.finditer(text):
+    for line in text.splitlines():
+        if "branch hygiene close-out pending:" not in line:
+            continue
+        m = PENDING.search(line)
+        if m is None:
+            raise UnreadableRow(line)          # an item id outside [A-Za-z0-9._-]+ is unreadable, not shell input
         pairs = [(b.group("branch"), b.group("pr")) for b in BRANCH.finditer(m.group("rest"))]
         if not pairs:
-            raise UnreadableRow(m.group(0))
+            raise UnreadableRow(line)
         out.append(Deferral(m.group("item"), pairs))
     return out
 
@@ -584,35 +605,57 @@ def verify_all(deferrals: list[Deferral]) -> dict[str, str]:
             out[branch] = info["headRefOid"]
     return out
 
-def build_close_block(deferrals: list[Deferral], oids: dict[str, str]) -> str:
-    """One shell block: the guarded push, then (only on success) a RESOLVED-HIL row per item."""
-    push = build_push_command([(b, oids[b]) for d in deferrals for b, _ in d.branches])
-    resolves = [
-        f"  && bash -c 'source tools/hooks/loop_lib.sh; loop_resolve {d.item_id} \"branch hygiene done: "
-        f"{', '.join(b for b, _ in d.branches)} deleted via just branch-hygiene-pending\"'"
-        for d in deferrals
-    ]
-    return " \\\n".join([push, *resolves])
+def remote_absent(branch: str) -> bool:
+    """True only on ls-remote exit 2 (the ref is gone); any other non-zero is an error, never 'gone'."""
+    p = subprocess.run(["git", "ls-remote", "--exit-code", "--heads", "origin", f"refs/heads/{branch}"], capture_output=True, text=True)
+    if p.returncode == 0:
+        return False
+    if p.returncode == 2:
+        return True
+    raise RuntimeError(f"ls-remote {branch}: exit {p.returncode}: {p.stderr.strip()}")
+
+def loop_resolve(item_id: str, note: str) -> None:
+    """Append the RESOLVED-HIL row through the ledger's one writer; every value is shell-quoted."""
+    cmd = f"source tools/hooks/loop_lib.sh; loop_resolve {shlex.quote(item_id)} {shlex.quote(note)}"
+    subprocess.run(["bash", "-c", cmd], check=True)
+
+def resolve_cleared(deferrals: list[Deferral]) -> list[Deferral]:
+    """Resolve every deferral whose branches are ALL absent; return the ones still pending."""
+    left: list[Deferral] = []
+    for d in deferrals:
+        if all(remote_absent(b) for b, _ in d.branches):
+            loop_resolve(d.item_id, "branch hygiene done: " + ", ".join(b for b, _ in d.branches) + " absent on origin (just branch-hygiene-resolve)")
+        else:
+            left.append(d)
+    return left
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pending", required=True, help="pending-HIL reducer output; '-' reads stdin")
-    ap.add_argument("--emit-command", action="store_true")
+    ap.add_argument("--emit-command", action="store_true", help="phase 1: print the ONE guarded push")
+    ap.add_argument("--resolve", action="store_true", help="phase 2: resolve every item whose branches are gone on origin")
     a = ap.parse_args()
     text = sys.stdin.read() if a.pending == "-" else open(a.pending).read()
     try:
         deferrals = parse_pending(text)
-        oids = verify_all(deferrals)
     except UnreadableRow as e:
         print(f"unreadable pending row: {e}", file=sys.stderr)
         return 2
+    if a.resolve:
+        left = resolve_cleared(deferrals)
+        for d in left:
+            print(f"still present: {d.item_id} {' '.join(b for b, _ in d.branches)}")
+        return 0 if not left else 1
+    try:
+        oids = verify_all(deferrals)
     except VerificationMismatch as e:
         print(f"verification mismatch: {e}", file=sys.stderr)
         return 1
     for b, oid in oids.items():
         print(f"{b} {oid}")
     if a.emit_command:
-        print(build_close_block(deferrals, oids))
+        print(build_push_command(list(oids.items())))
+        print("# then, once the push has run:  just branch-hygiene-resolve", file=sys.stderr)
     return 0 if oids else 1
 
 if __name__ == "__main__":
@@ -622,7 +665,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the test**
 
 Run: `uv run pytest tools/test_branch_hygiene_batch.py -v`
-Expected: 6 passed.
+Expected: 7 passed.
 
 - [ ] **Step 5: Recipe and skill text**
 
@@ -632,13 +675,17 @@ Expected: 6 passed.
 # over the canonical loop_status_path() venue — never the raw ledger.
 branch-hygiene-pending:
     bash -c 'source tools/hooks/loop_lib.sh; loop_pending_hil_list' | uv run python tools/branch_hygiene_batch.py --pending - --emit-command
+
+# Phase 2, after the push: resolve every deferral whose branches are gone on origin. Rerunnable.
+branch-hygiene-resolve:
+    bash -c 'source tools/hooks/loop_lib.sh; loop_pending_hil_list' | uv run python tools/branch_hygiene_batch.py --pending - --resolve
 ```
 
-In `ship-pr/SKILL.md:471-480`, replace the canonical defer text with the one shape the parser reads — `bash tools/04-loop/defer.sh <arc-id> "branch hygiene close-out pending: <branch> (PR #<N>, merged <merge-sha>, main run green) and roadmap-refresh-post-<N> (PR #<refresh-N>, merged <refresh-merge-sha>, main run green)"` — and after it add: "In the next interactive session run `just branch-hygiene-pending` and paste the printed block — the guarded push followed by one `loop_resolve` per item, chained on the push's success; one approval clears every verified row, and the resolve rows are what make the reducer stop presenting them." The parser docstring and this skill sentence are the two carriers of the shape; `parse_pending` is the authority.
+In `ship-pr/SKILL.md:471-480`, replace the canonical defer text with the one shape the parser reads — `bash tools/04-loop/defer.sh <arc-id> "branch hygiene close-out pending: <branch> (PR #<N>, merged <merge-sha>, main run green) and roadmap-refresh-post-<N> (PR #<refresh-N>, merged <refresh-merge-sha>, main run green)"` — and after it add: "In the next interactive session run `just branch-hygiene-pending`, paste the printed push (one approval clears every verified row), then run `just branch-hygiene-resolve` — it appends the `RESOLVED-HIL` row for each item whose branches are gone on origin, which is what makes the reducer stop presenting them; it is safe to rerun." The parser docstring and this skill sentence are the two carriers of the shape; `parse_pending` is the authority.
 
 - [ ] **Step 6: Witness and commit**
 
-Run `just branch-hygiene-pending` against the current three deferrals; expected: six `branch oid` lines (each row names a content branch and its refresh branch) and one block — the push plus three `loop_resolve` lines. Do not run the block inside this task's PR; the operator runs it, and the witness that the deferrals stop re-surfacing is the next session's banner. Then:
+Run `just branch-hygiene-pending` against the current three deferrals; expected: six `branch oid` lines (each row names a content branch and its refresh branch) and one push command; `just branch-hygiene-resolve` run BEFORE the push must report all three items `still present` and resolve nothing. Do not run the push inside this task's PR; the operator runs it, then the resolve recipe, and the witness that the deferrals stop re-surfacing is the next session's banner. Then:
 
 ```bash
 git add tools/branch_hygiene_batch.py tools/test_branch_hygiene_batch.py justfile .claude/skills/ship-pr/SKILL.md tools/codex-parity-check.sh
@@ -651,12 +698,12 @@ git commit -m "feat(tools): branch_hygiene_batch — one guarded push for all de
 Today the gate publishes three bindings, then emits three verdicts, each as its own `just` call (`merge-gate/SKILL.md:74-87,171-195`). `merge-gate-emit` exits 1 for a *recorded* BLOCK and 2 for a verdict that was NOT recorded (`justfile:354-355`), so a multi-line just recipe would stop after a recorded BLOCK and leave the later lenses unrecorded — a breach of the all-three-verdicts audit contract (codex r1 on b-230-register). The loop therefore lives in Python, where a recorded BLOCK is a result, not an abort.
 
 **Files:**
-- Modify: `tools/merge_gate_log.py`: add an `emit-all` subcommand taking `--pr`, `--arc-id`, `--concurrency-json`, `--spec-json`, `--witness-json` (plus the `emit` flags it forwards), which runs the existing `emit` path for each lens in the fixed order and exits with the worst code (2 if any verdict was not recorded, else 1 if any recorded BLOCK, else 0). It is resumable: before emitting a lens it reads the JSONL for a verdict row already recorded for `(pr, head_sha, producer=merge-gate-<lens>)` and skips that lens with `already recorded`, so a re-run after one lens returned 2 emits only the lens that failed and never duplicates an earlier emission (codex r3 on b-230-register).
+- Modify: `tools/merge_gate_log.py`: add an `emit-all` subcommand taking `--pr`, `--arc-id`, `--concurrency-json`, `--spec-json`, `--witness-json` (plus the `emit` flags it forwards), which runs the existing `emit` path for each lens in the fixed order and exits with the worst code (2 if any verdict was not recorded, else 1 if any recorded BLOCK, else 0). It is resumable: before emitting a lens it reads the JSONL for a verdict row already recorded for `(arc_id, head_sha, producer=merge-gate-<lens>)` — the identity a gate row actually carries (`arc_id`, `head_sha`, `producer`; there is no `pr` field on the JSONL row, the Markdown sibling is the PR authority, codex r4 on b-230-register) — and skips that lens with `already recorded`, so a re-run after one lens returned 2 emits only the lens that failed and never duplicates an earlier emission (codex r3 on b-230-register).
 - Modify: `justfile`: add `merge-gate-emit-all *ARGS` forwarding to the subcommand, next to `merge-gate-emit` (line 359).
 - Modify: `.claude/skills/merge-gate/SKILL.md:171-195` to call it.
 - Test: `tools/test_merge_gate_emit_all.py`.
 
-- [ ] **Step 1: Write the failing test.** Monkeypatch the single-emit function to return 1 for `merge-gate-concurrency` and 0 for the other two, record the calls; assert all three lenses were emitted in the order `merge-gate-concurrency`, `merge-gate-spec-conformance`, `merge-gate-witness-adequacy` and the exit is 1. Second case: the middle lens returns 2; assert the third lens is still emitted and the exit is 2. Third case (resume): against a temp JSONL that already holds verdict rows for the first two lenses at this `(pr, head_sha)`, assert only `merge-gate-witness-adequacy` is emitted, the log gains exactly one row, and the exit is that lens's code. Fourth case: `just --show merge-gate-emit-all` names the subcommand.
+- [ ] **Step 1: Write the failing test.** Monkeypatch the single-emit function to return 1 for `merge-gate-concurrency` and 0 for the other two, record the calls; assert all three lenses were emitted in the order `merge-gate-concurrency`, `merge-gate-spec-conformance`, `merge-gate-witness-adequacy` and the exit is 1. Second case: the middle lens returns 2; assert the third lens is still emitted and the exit is 2. Third case (resume): against a temp JSONL that already holds verdict rows for the first two lenses at this `(arc_id, head_sha)` — rows in the real row shape, `arc_id`/`head_sha`/`producer`/`record_kind`, no `pr` — assert only `merge-gate-witness-adequacy` is emitted, the log gains exactly one row, and the exit is that lens's code. Fourth case: `just --show merge-gate-emit-all` names the subcommand.
 - [ ] **Step 2: Run it, expect FAIL.**
 - [ ] **Step 3: Add the subcommand and the recipe**
 
@@ -669,7 +716,7 @@ merge-gate-emit-all *ARGS:
 ```
 
 - [ ] **Step 4: Run the test, expect PASS.**
-- [ ] **Step 5: Update the skill text and commit** with `git commit -m "feat(just): merge-gate-emit-all"`.
+- [ ] **Step 5: Wire `tools/test_merge_gate_emit_all.py` into `tools/codex-parity-check.sh`** (the `tools/` coverage guard rejects any unexecuted `tools/test_*.py`; codex r4 on b-230-register), update the skill text, and commit with `git commit -m "feat(just): merge-gate-emit-all"`.
 
 The second disjointness check at ship time stays: HEAD changed since selection, so it is not a duplicate.
 ---
@@ -689,7 +736,11 @@ The detector reads the **diff**, not the surviving files: a deleted file, a remo
 
 ```python
 # tools/test_concurrency_surface.py
-from concurrency_surface import touches_concurrency  # tools/ is the pytest rootdir; sibling modules import bare, as tools/test_arc_cost.py does
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tools/test_arc_metrics.py:22 shape — the suite runs --import-mode=importlib (pyproject.toml:383), so sibling modules need tools/ on sys.path explicitly
+import pytest
+from concurrency_surface import EmptyDiff, touches_concurrency
 
 def test_added_lock_is_a_surface():
     assert touches_concurrency("+++ b/a.py\n+import asyncio\n+lock = asyncio.Lock()\n") is True
@@ -716,6 +767,11 @@ def test_plain_async_def_is_not_a_surface():
 
 def test_plain_diff_is_not():
     assert touches_concurrency("+++ b/b.py\n+def y(): return 1\n") is False
+
+def test_empty_or_contentless_input_fails_closed():
+    for bad in ("", "\n", "+++ b/x.bin\n--- a/x.bin\n", "Binary files a/x and b/x differ\n"):
+        with pytest.raises(EmptyDiff):
+            touches_concurrency(bad)
 ```
 
 - [ ] **Step 2: Run it, expect FAIL.**
@@ -727,6 +783,8 @@ def test_plain_diff_is_not():
 
 Input is unified-diff text (`git diff -U0 <base>..<head>`); added AND removed lines of every
 path are scanned, so a deleted file, a removed lock, and a shell/workflow change all count.
+Input with no content lines (an empty or failed diff, a binary-only change) is UNKNOWN and
+exits 2: the caller runs the lens on any non-zero exit (codex r4 on b-230-register).
 """
 from __future__ import annotations
 import re, sys
@@ -739,17 +797,26 @@ PATTERN = re.compile(r"\b(asyncio\.(gather|create_task|Lock|Semaphore|Queue|time
 # (`.claude/skills/merge-gate/SKILL.md:110-169`) plus the path-TOCTOU and module-global shapes; the
 # residual fail-open set is the risk Step 5 measures and the Step 6 spec leg must state as its bound.
 
+class EmptyDiff(ValueError):
+    """No added or removed content lines: a failed or binary-only diff is UNKNOWN, never 'no surface'."""
+
 def touches_concurrency(diff: str) -> bool:
-    changed = (l[1:] for l in diff.splitlines() if l[:1] in "+-" and not l.startswith(("+++", "---")))
+    changed = [l[1:] for l in diff.splitlines() if l[:1] in "+-" and not l.startswith(("+++", "---"))]
+    if not changed:
+        raise EmptyDiff("no +/- content lines")
     return any(PATTERN.search(l) for l in changed)
 
 if __name__ == "__main__":
-    print("concurrency=" + ("true" if touches_concurrency(sys.stdin.read()) else "false"))
+    try:
+        print("concurrency=" + ("true" if touches_concurrency(sys.stdin.read()) else "false"))
+    except EmptyDiff as e:
+        print(f"concurrency_surface: {e}: run the lens", file=sys.stderr)
+        raise SystemExit(2)
 ```
 
-- [ ] **Step 4: Run the test, expect PASS. Commit** `git commit -m "feat(tools): concurrency_surface detector (merge-gate lens gating, spec leg pending)"`.
+- [ ] **Step 4: Run the test, expect PASS. Wire `tools/test_concurrency_surface.py` into `tools/codex-parity-check.sh`** (same coverage-guard rule as Task 5), then commit `git commit -m "feat(tools): concurrency_surface detector (merge-gate lens gating, spec leg pending)"`.
 - [ ] **Step 5: Measure on history** — for the last 20 gate rounds, run the detector on each PR's `git diff -U0 base..head` and record how many rounds would have skipped the lens and whether any of the lens's 88 findings (the net-unique count is 0, so the question is whether any *accepted* finding would have been lost) fell in a skipped round. Any accepted concurrency finding in a round the detector would have skipped is a measured instance of the fail-open bound above; record it by finding id. Put the table in this plan under §0.
-- [ ] **Step 6: One AskUserQuestion** with the table and the fail-open bound stated: (a) open the C-HE-34 spec leg for a detector-gated concurrency lens, with a typed skip path so C-HE-29 accounting stays whole — `merge_gate_log.py emit --lens merge-gate-concurrency --skipped-reason "no concurrency surface"` writes a `no_finding` row with `finding_type: lens_skipped` and `cause_attribution: detector_no_surface` (the existing `emit` parses only a bound reviewer verdict and records APPROVE as `clean_approve`, so a skip cannot ride it without fabricating reviewer output; the typed path and its tests are part of the code PR — codex r3 on b-230-register); (b) keep three lenses always. On (a): spec + marker PR first (doc-only), then the code PR (typed skip path + tests) and the skill edit. On (b): Steps 1–5 stay as a measurement instrument and this task closes.
+- [ ] **Step 6: One AskUserQuestion** with the table and the fail-open bound stated: (a) open the C-HE-34 spec leg for a detector-gated concurrency lens — the skill step skips the lens ONLY on a literal `concurrency=false` from the detector; exit 2 (unknown input) and any other failure run the lens — with a typed skip path so C-HE-29 accounting stays whole — `merge_gate_log.py emit --lens merge-gate-concurrency --skipped-reason "no concurrency surface"` writes a `no_finding` row with `finding_type: lens_skipped` and `cause_attribution: detector_no_surface` (the existing `emit` parses only a bound reviewer verdict and records APPROVE as `clean_approve`, so a skip cannot ride it without fabricating reviewer output; the typed path and its tests are part of the code PR — codex r3 on b-230-register); (b) keep three lenses always. On (a): spec + marker PR first (doc-only), then the code PR (typed skip path + tests) and the skill edit. On (b): Steps 1–5 stay as a measurement instrument and this task closes.
 
 The Codex re-run after a lens BLOCK stays. A fix is new code and the out-of-family reviewer has never seen it; the log shows 2039 Codex rows for 343 lens rows, so the re-run is where the catches are.
 ---
@@ -803,8 +870,10 @@ Releasing the lease after the content merge and letting one refresh cover N merg
     unit ids. Plan with per-task witnesses at
     .harness/plan/loop-optimization-plan-2026-09-03.md.'
   close_out: 'OPEN — closes when Tasks 0-5 are merged with their witnesses recorded in
-    the plan §0, Task 6 and Task 7 have an operator answer, and Task 8 Step 1 (yield
-    row) is merged so its trigger is measurable.'
+    the plan §0, Task 6 and Task 7 have an operator answer, and Task 8 Steps 1-3 are
+    all landed: the yield row emitted, the trigger row registered, and the counter
+    wired into the baseline script — an umbrella closed after Step 1 alone would strand
+    the observations with no reachable trigger.'
   council: 'NO — workspace-ops tooling; the two spec legs (Tasks 7-8) are separately
     decision-gated inside the plan.'
   heading: '### B-230 · Loop optimization program *(surfaced by the Archify loop diagrams, 2026-09-03)*'
@@ -838,7 +907,8 @@ Each task is its own PR and its own arc through the loop it optimizes. Re-run `u
 - Registration: Task 9 first, so the loop derives the next task instead of parking the plan.
 - Coverage: CI runs → Task 1; serialization → Task 1 (duration) + Task 8 (trigger); duplicate reviews → Task 6 (gated) with the Codex re-run kept; hooks → Task 2 (the two real defects); close-out tail and cross-arc coupling → Task 3 (tail) with the coupling left in place for a stated reason; smaller items → Tasks 4 and 5, disjointness check kept.
 - No task edits the fixed merge string, releases the lease early, drops the CI-at-final-head rule, or runs fewer review lenses without a spec leg (C-HE-06, C-HE-07, C-HE-34); no task touches the permission guard's denial of the raw `gh pr merge` / `gh pr close --delete-branch` verbs.
+- Codex r4 (head `4ff4006ac`) found eight more — a ledger item id interpolated unquoted into `bash -c` (P1; now: id validated at parse, every shell value `shlex.quote`d, and the resolve phase runs in-process rather than as pasted text), a push-then-resolve block that could not be rerun after a partial failure (now: two rerunnable phases, resolve keyed on the remote's absence), `sort -u` reordering the newest-five notify cap (now: last-occurrence dedupe before the cap), a resume key naming a `pr` field the JSONL row does not carry (now: `arc_id`/`head_sha`/`producer`), a detector that read an empty or binary diff as "no surface" (now: `EmptyDiff`, exit 2, lens runs), bare sibling imports the importlib suite rejects (now: the `sys.path` shape every tools test uses), two new tools tests left out of the parity list (now: wired), and an umbrella close_out that could close before the trigger existed (now: Task 8 Steps 1-3) — all absorbed, each marked "codex r4 on b-230-register".
 - Codex r3 (head `034b392ee`) found seven more — a last-`then` rule that returned U-HE-38 on the live prose (now: bold token first, then the FIRST then-tail), a batch that deleted branches but never appended the `RESOLVED-HIL` rows the last-write-wins reducer needs (now: one block, push `&&` one `loop_resolve` per item, `Deferral` keeps the item id), an emit-all that duplicated earlier lenses on re-run (now: resumable per `(pr, head, lens)`), a fail-closed claim a token allowlist cannot make (now: stated fail-open, TOCTOU + global tokens added, the bound measured in Step 5 and carried into the spec leg), a `lens skipped` row with no emitter (now: a typed `--skipped-reason` path in the code PR), a contention test that let an every-retry emitter pass (now: exactly one row per event, cause/holder/backoff pinned), and the diagram's primary node still saying `yield` — all absorbed, each marked "codex r3 on b-230-register".
 - Codex r2 (head `2a3c66b8b`) found eight more — a movable `actions/checkout@v4` tag on the job that decides whether heavy checks run, dedupe placed at the emitter instead of the banner reducer, a Bash-only `${@:4}` in an `sh -cu` recipe with a dry-run test that could not exercise it, a hard-coded ledger path bypassing `loop_status_path()` and the pending reducer, a batch that dropped failed verifications instead of aborting, a detector missing the timeout/cancellation surfaces the lens prompt names, pre-assigned spec versions that collide, and a diagram label (and the same sentence in ship-pr) saying a held lease *yields* when `wait_for_door` sleeps and retries synchronously — all absorbed, each marked "codex r2 on b-230-register".
 - Codex r1 on the registration PR (b-230-register, head `02f656c72`) found eight design defects in the task bodies — clean rounds and rejected adjudications missing from the baseline, fixed positionals that could not express a valid close-out, a parser and producer disagreeing on the deferral row shape, a just recipe that stopped at a recorded BLOCK, a detector reading surviving files instead of the diff, lens gating and `--delete-branch` mis-classified as operator-only decisions, and a mid-door gate-log write that could never reach merged history — and every one is absorbed above, each marked "codex r1 on b-230-register" at the sentence it changed.
-- Names used across tasks: `classify`, `build_push_command`, `build_close_block`, `parse_pending`, `Deferral`, `UnreadableRow`, `verify_all`, `VerificationMismatch`, `touches_concurrency`, `summarize` are each defined in the task that introduces them.
+- Names used across tasks: `classify`, `build_push_command`, `parse_pending`, `Deferral`, `UnreadableRow`, `verify_all`, `VerificationMismatch`, `remote_absent`, `loop_resolve`, `resolve_cleared`, `touches_concurrency`, `EmptyDiff`, `summarize` are each defined in the task that introduces them.
