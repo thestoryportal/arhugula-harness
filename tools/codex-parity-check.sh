@@ -32,6 +32,7 @@ uv run pytest -q \
   tools/test_loop_cost_baseline.py \
   tools/test_arc_disjoint_check.py \
   tools/test_ci_yml_concurrency.py \
+  tools/test_ci_bookkeeping_filter.py \
   tools/test_finding_record.py \
   tools/test_lanes_verify.py \
   tools/test_main_protection.py \
