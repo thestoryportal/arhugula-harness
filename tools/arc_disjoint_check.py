@@ -57,8 +57,10 @@ GOVERNANCE_FILES = frozenset(
         ".harness/merge-gate-log.md",
     }
 )
-#: C-HE-03 §2 states that are a lane's live head (terminal = merged | abandoned).
+#: C-HE-03 §2 state domain: a lane's live head is a non-terminal record; anything outside
+#: the domain is a record the gate cannot classify (exit 2), never "not live".
 NON_TERMINAL = frozenset({"pending", "open"})
+TERMINAL = frozenset({"merged", "abandoned"})
 #: Per git call (the plan's fetch bound, U-HE-36 step 3); a hung git must land on exit 2,
 #: never hang a selection.
 GIT_TIMEOUT_S = 60
@@ -83,20 +85,21 @@ class LaneHead:
 
 
 def _git(
-    repo: Path, *args: str, env: dict[str, str] | None = None
+    repo: Path, *args: str, env: dict[str, str] | None = None, stdin: str = ""
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
         text=True,
+        input=stdin,
         env=None if env is None else {**os.environ, **env},
         check=False,
         timeout=GIT_TIMEOUT_S,
     )
 
 
-def _plumbing(repo: Path, *args: str, env: dict[str, str] | None = None) -> str:
-    p = _git(repo, *args, env=env)
+def _plumbing(repo: Path, *args: str, env: dict[str, str] | None = None, stdin: str = "") -> str:
+    p = _git(repo, *args, env=env, stdin=stdin)
     if p.returncode != 0:
         raise MergeTreeError(f"git {' '.join(args)} failed ({p.returncode}): {p.stderr.strip()}")
     return p.stdout.strip()
@@ -132,23 +135,31 @@ def conflicts(repo: Path, candidate_ref: str, other_refs: list[str]) -> list[str
     ]
 
 
-def resolve_ref(repo: Path, branch: str) -> str | None:
-    """The local branch ref, else its origin tracking ref, else None.
+def _is_commit(repo: Path, ref: str) -> bool:
+    return _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0
+
+
+def resolve_ref(repo: Path, branch: str, *, origin_fresh: bool) -> str | None:
+    """The local branch ref, else (only if the fetch just succeeded) its origin ref, else None.
 
     Lanes share one repository (worktrees under ``.codex-worktrees/`` / ``.claude/worktrees/``),
-    so a sibling's head is normally a local branch fresher than anything pushed.
+    so a sibling's head is normally a local branch fresher than anything pushed. A cached
+    ``refs/remotes/origin/*`` after a FAILED fetch may be stale — comparing against it could
+    report disjoint for a head that has moved — so it is not a candidate then (codex r1).
     """
-    for full in (f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"):
-        if _git(repo, "rev-parse", "--verify", "--quiet", f"{full}^{{commit}}").returncode == 0:
-            return full
-    return None
+    candidates = [f"refs/heads/{branch}"] + (
+        [f"refs/remotes/origin/{branch}"] if origin_fresh else []
+    )
+    return next((full for full in candidates if _is_commit(repo, full)), None)
 
 
-def other_lane_heads(repo: Path, me: str) -> list[LaneHead]:
+def other_lane_heads(repo: Path, me: str, *, origin_fresh: bool) -> list[LaneHead]:
     """Every non-terminal reservation held by another lane, with its branch resolved.
 
     A corrupt or symlinked sibling raises (``reservations.current`` is the authority) — for a
-    gate that is exit 2, not the best-effort skip ``sibling_open_count`` takes for a sensor.
+    gate that is exit 2, not the best-effort skip ``sibling_open_count`` takes for a sensor;
+    a state outside the C-HE-03 §2 domain raises the same way (codex r1: ``"pendng"`` is not
+    a terminal record, it is an unreadable one).
     """
     root = rs.reservations_root()
     dirs = (
@@ -162,6 +173,10 @@ def other_lane_heads(repo: Path, me: str) -> list[LaneHead]:
         if cur is None:  # headless dir: a reserve that died before its first generation landed
             continue
         rec = cur[1]
+        if rec["state"] not in NON_TERMINAL | TERMINAL:
+            raise CheckIncompleteError(
+                f"reservation {d.name}: state {rec['state']!r} is outside the C-HE-03 §2 domain"
+            )
         if rec["state"] in NON_TERMINAL and rec["lane_id"] != me:
             heads.append(
                 LaneHead(
@@ -169,7 +184,7 @@ def other_lane_heads(repo: Path, me: str) -> list[LaneHead]:
                     rec["lane_id"],
                     rec["state"],
                     rec["branch"],
-                    resolve_ref(repo, rec["branch"]),
+                    resolve_ref(repo, rec["branch"], origin_fresh=origin_fresh),
                 )
             )
     return heads
@@ -196,14 +211,16 @@ def lane_id() -> str:
 
 
 def check(repo: Path, candidate: str, me: str) -> int:
+    if not _is_commit(repo, candidate):  # codex r1: with zero heads nothing else would resolve it
+        raise CheckIncompleteError(f"candidate {candidate!r} is not a commit")
     fetch = _git(repo, "fetch", "-q", "origin")
     if fetch.returncode != 0:
         print(
             f"WARN fetch origin failed ({fetch.returncode}): {fetch.stderr.strip()}"
-            " -- checking local refs only",
+            " -- local branch refs only; an origin-only head is UNRESOLVED",
             file=sys.stderr,
         )
-    heads = other_lane_heads(repo, me)
+    heads = other_lane_heads(repo, me, origin_fresh=fetch.returncode == 0)
     unresolved = [h for h in heads if h.ref is None]
     for h in unresolved:
         print(
@@ -229,7 +246,9 @@ def scratch_objects(repo: Path) -> Iterator[dict[str, str]]:
     """Env that writes new objects to a temp dir while reading the repo's as an alternate.
 
     The replay mints synthetic commits and merged trees per pair; under this env none of
-    them lands in the repository's object store (verified empirically on git 2.39.5).
+    them lands in the repository's object store (verified empirically on git 2.39.5). The
+    commits carry their own identity — ``commit-tree`` refuses without one, and a clean CI
+    runner configures none (codex r1).
     """
     objects = Path(_plumbing(repo, "rev-parse", "--git-path", "objects"))
     objects = objects if objects.is_absolute() else repo / objects
@@ -237,6 +256,11 @@ def scratch_objects(repo: Path) -> Iterator[dict[str, str]]:
         yield {
             "GIT_OBJECT_DIRECTORY": tmp,
             "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(objects.resolve()),
+            "GIT_INDEX_FILE": str(Path(tmp) / "replay.index"),
+            "GIT_AUTHOR_NAME": "arc_disjoint_check",
+            "GIT_AUTHOR_EMAIL": "arc_disjoint_check@replay.invalid",
+            "GIT_COMMITTER_NAME": "arc_disjoint_check",
+            "GIT_COMMITTER_EMAIL": "arc_disjoint_check@replay.invalid",
         }
 
 
@@ -247,12 +271,12 @@ def footprint(repo: Path, sha: str) -> frozenset[str]:
     )
 
 
-def synthetic_commit(repo: Path, tree_of: str, parent: str, env: dict[str, str]) -> str:
-    """A commit carrying ``tree_of``'s tree parented at ``parent`` (written under ``env``)."""
+def synthetic_commit(repo: Path, tree: str, parent: str, env: dict[str, str]) -> str:
+    """A commit carrying ``tree`` (a tree-ish) parented at ``parent`` (written under ``env``)."""
     return _plumbing(
         repo,
         "commit-tree",
-        f"{tree_of}^{{tree}}",
+        f"{tree}^{{tree}}",
         "-p",
         parent,
         "-m",
@@ -261,21 +285,41 @@ def synthetic_commit(repo: Path, tree_of: str, parent: str, env: dict[str, str])
     )
 
 
-def pair_conflicts(repo: Path, a: str, b: str, env: dict[str, str]) -> list[str]:
-    """Textual-conflict paths had ``b`` (merged later) been developed concurrently with ``a``.
+@dataclass(frozen=True)
+class PairVerdict:
+    certain: list[str]  # paths where b's own change conflicts with a
+    masked: list[str]  # paths b changed whose patch no longer applies at a^ — not measurable
 
-    git 2.39 ``merge-tree`` has no ``--merge-base``, so the replay parents ``b``'s tree at
-    ``a^`` (the pre-``a`` base) and merges it with ``a``. ``b``'s tree also carries the
-    commits between ``a`` and ``b``; their overlap with ``a`` is measured separately (``b^``'s
-    tree at the same base) and subtracted, and the result is restricted to ``b``'s own
-    footprint minus the governance files. Conservative: a file where both an intermediate
-    and ``b`` overlap ``a`` is masked (attributed to the earlier pair). For an adjacent
-    pair ``b^ == a`` and the subtrahend is empty by construction.
+
+def pair_conflicts(repo: Path, a: str, b: str, env: dict[str, str]) -> PairVerdict:
+    """Textual conflicts had ``b`` (merged later) been developed concurrently with ``a``.
+
+    git 2.39 ``merge-tree`` has no ``--merge-base``, so the replay builds the "theirs" side
+    by hand: a temp index is read from ``a``'s tree, ``b``'s own patch (``b^..b``) is
+    applied to it one file at a time, and the resulting tree — parented at ``a^`` — is
+    merge-tree'd against ``a`` (base ``a^``, ours ``a``, theirs ``a`` + ``b``'s change). A
+    file ``b`` edited on the very lines ``a`` edited applies (its minus-lines are ``a``'s
+    version) and merge-tree then reports the 3-way conflict; a file whose patch no longer
+    applies at ``a`` (an intermediate commit moved its context) stays at ``a``'s version —
+    identical on both sides, so it cannot conflict — and is reported as MASKED rather
+    than dropped (codex r1): its status is genuinely unmeasurable from squash history, so
+    the O3 rate is an interval, never a silent undercount. Governance files are skipped
+    (P-R3's denominator excludes them). For an adjacent pair ``b^ == a``, every file
+    applies and ``masked`` is empty.
     """
     base = _plumbing(repo, "rev-parse", f"{a}^")
-    with_b = set(merge_conflicts(repo, a, synthetic_commit(repo, b, base, env), env))
-    with_pre = set(merge_conflicts(repo, a, synthetic_commit(repo, f"{b}^", base, env), env))
-    return sorted(((with_b - with_pre) & footprint(repo, b)) - GOVERNANCE_FILES)
+    _plumbing(repo, "read-tree", a, env=env)
+    masked = []
+    for f in sorted(footprint(repo, b) - GOVERNANCE_FILES):
+        patch = _git(repo, "diff-tree", "-p", "--binary", f"{b}^", b, "--", f)
+        if patch.returncode != 0:
+            raise MergeTreeError(f"diff-tree {b}^ {b} -- {f} failed: {patch.stderr.strip()}")
+        # the patch bytes verbatim: a stripped trailing newline is a corrupt patch
+        if _git(repo, "apply", "--cached", env=env, stdin=patch.stdout).returncode != 0:
+            masked.append(f)
+    tree = _plumbing(repo, "write-tree", env=env)
+    certain = merge_conflicts(repo, a, synthetic_commit(repo, tree, base, env), env)
+    return PairVerdict(sorted(set(certain) - GOVERNANCE_FILES), masked)
 
 
 @dataclass(frozen=True)
@@ -369,19 +413,26 @@ def read_pairs(path: Path) -> PairList:
 
 def historical(repo: Path, pairs_path: Path) -> int:
     pl = read_pairs(pairs_path)
-    hits = 0
+    certain = masked_only = 0
     with scratch_objects(repo) as env:
         for a, b in pl.pairs:
-            paths = pair_conflicts(repo, a, b, env)
-            hits += bool(paths)
-            if paths:
-                print(f"conflict {a[:12]} {b[:12]}: {', '.join(paths)}")
+            v = pair_conflicts(repo, a, b, env)
+            certain += bool(v.certain)
+            masked_only += bool(v.masked) and not v.certain
+            if v.certain or v.masked:
+                print(
+                    f"{'conflict' if v.certain else 'masked  '} {a[:12]} {b[:12]}:"
+                    f" {', '.join(v.certain)}"
+                    + (f" [masked: {', '.join(v.masked)}]" if v.masked else "")
+                )
     n_win, n_col = pl.window_pairs, len(pl.pairs)
+    upper = certain + masked_only
     print(
-        f"O3: textual-conflict rate {hits}/{n_win} = {hits / n_win:.3f} of window pairs "
-        f"(file-overlap upper bound {UPPER_BOUND} = {n_col}/{n_win}); "
-        f"conditional on file overlap {hits}/{n_col} = {hits / n_col if n_col else 0.0:.3f}; "
-        "governance files excluded; per-pair conservative"
+        f"O3: textual-conflict rate {certain}/{n_win} = {certain / n_win:.3f} of window pairs,"
+        f" at most {upper}/{n_win} = {upper / n_win:.3f} counting the {masked_only} pair(s)"
+        f" whose only changed paths are masked (file-overlap upper bound {UPPER_BOUND}"
+        f" = {n_col}/{n_win}); conditional on file overlap {certain}/{n_col}"
+        f" = {certain / n_col if n_col else 0.0:.3f}; governance files excluded"
     )
     print("semantic-conflict rate: unmeasured")
     return 0

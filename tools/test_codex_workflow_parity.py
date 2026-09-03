@@ -1200,6 +1200,21 @@ def test_roadmap_continue_carriers_document_span_emission_parity() -> None:
     assert ".claude/skills/ship-pr/SKILL.md" in codex_carrier
 
 
+def test_roadmap_continue_carriers_wire_the_selection_time_disjointness_gate() -> None:
+    # U-HE-36 (C-HE-13 §5), codex u-he-36 r1 P1: BOTH runner carriers must run the same
+    # guard-allowlisted gate between `selectable` and `reserve`, or a lane launched through
+    # the Codex bridge bypasses the selection fence entirely.
+    gate = "uv run python tools/arc_disjoint_check.py check --candidate HEAD"
+    for path in [
+        ".claude/skills/roadmap-continue/SKILL.md",
+        ".agents/skills/roadmap-continue/SKILL.md",
+    ]:
+        text = (ROOT / path).read_text(encoding="utf-8")
+        assert gate in text, path
+        assert text.index("reservations.py selectable") < text.index(gate), path
+        assert text.index(gate) < text.index("reservations.py reserve "), path
+
+
 def test_forward_profile_template_preserves_current_codex_home_and_review_boundary() -> None:
     profile = (ROOT / ".codex" / "notes" / "arhugula-forward.config.toml.example").read_text(
         encoding="utf-8"

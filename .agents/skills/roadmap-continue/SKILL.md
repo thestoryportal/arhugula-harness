@@ -28,6 +28,27 @@ check them rather than trusting remembered or checkpointed remaining work.
    and "one more targeted grep is cheaper" stops being true the moment the file is one
    you will open regardless.
 
+## Arc open — selection fence, then reservation (C-HE-03 §4; C-HE-13 §5)
+
+Selection IS arc open. The instant the unit is chosen, before any work, in the lane's
+worktree — definition home `.claude/skills/roadmap-continue/SKILL.md` step 2; every value
+a LITERAL, one command per invocation (the permission guard allowlists exactly these
+shapes):
+
+1. `source tools/hooks/lane-init.sh` — exports `HARNESS_LANE_ID` (persisted at the
+   worktree's `.harness/.lane-id`; lane-init is its one writer).
+2. `uv run python tools/reservations.py selectable --arc-id <arc-id>` — exit 1 means a
+   head exists: `show` it and resume only a `pending`/`open` head THIS lane holds; never
+   a terminal head, never another lane's.
+3. `uv run python tools/arc_disjoint_check.py check --candidate HEAD` — the selection-time
+   disjointness gate (U-HE-36): declared scope is a hint; the candidate is merge-tree'd
+   against every other lane's live head (`pending` + `open` reservations). Exit 0 →
+   reserve. Exit 1 (`CONFLICT <arc> [<lane>] <branch>: <path>` lines) → do not reserve;
+   re-derive and pick the next unit. Exit 2 (`UNRESOLVED …` / `INCOMPLETE …`) → the gate
+   could not run — never read it as clean; surface the printed cause and do not reserve.
+4. `uv run python tools/reservations.py reserve --arc-id <arc-id> --lane-id <lane-id> --branch <branch> --arc-type <inventing|applying>`,
+   then the queue-start span edge (the `phase` shape in step 7 below).
+
 ## Execute one arc
 
 1. Create or reuse a clean isolated worktree based on current `main`. Never edit the shared

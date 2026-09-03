@@ -94,6 +94,8 @@ def test_same_file_disjoint_hunks_is_not_a_conflict(repo: Path) -> None:
 
 
 def test_merge_tree_error_is_not_a_verdict(repo: Path) -> None:
+    """git 2.39.5 exits 1 for an unresolvable ref too — with no tree OID. That is an
+    error, never an empty conflict set."""
     with pytest.raises(adc.MergeTreeError):
         adc.merge_conflicts(repo, "lane-a", "no-such-ref")
 
@@ -112,7 +114,7 @@ def test_other_lane_heads_are_the_non_terminal_siblings(repo: Path, qdir: Path) 
     rs.transition("arc-merged", "merged", lane_id="other-3")
     rs.reserve("arc-mine", lane_id="me", branch="lane-a", arc_type="applying")
 
-    heads = adc.other_lane_heads(repo, "me")
+    heads = adc.other_lane_heads(repo, "me", origin_fresh=True)
 
     assert [(h.arc_id, h.state, h.ref) for h in heads] == [
         ("arc-open", "open", "refs/heads/lane-c"),
@@ -121,15 +123,28 @@ def test_other_lane_heads_are_the_non_terminal_siblings(repo: Path, qdir: Path) 
 
 
 def test_other_lane_heads_empty_store(repo: Path, qdir: Path) -> None:
-    assert adc.other_lane_heads(repo, "me") == []
+    assert adc.other_lane_heads(repo, "me", origin_fresh=True) == []
 
 
-def test_resolve_ref_local_then_origin_then_none(repo: Path) -> None:
+def test_other_lane_heads_refuses_a_state_outside_the_domain(repo: Path, qdir: Path) -> None:
+    """A ``"pendng"`` record is not terminal, it is unreadable (codex r1 P2)."""
+    rs.reserve("arc-x", lane_id="other", branch="lane-c", arc_type="applying")
+    gen = rs.reservations_root() / "arc-x" / "1.json"
+    gen.write_text(gen.read_text(encoding="utf-8").replace('"pending"', '"pendng"'), "utf-8")
+    with pytest.raises(adc.CheckIncompleteError, match="outside the C-HE-03"):
+        adc.other_lane_heads(repo, "me", origin_fresh=True)
+
+
+def test_resolve_ref_local_then_origin_only_when_fresh(repo: Path) -> None:
     sha = _git(repo, "rev-parse", "lane-c")
     _git(repo, "update-ref", "refs/remotes/origin/pushed-only", sha)
-    assert adc.resolve_ref(repo, "lane-c") == "refs/heads/lane-c"
-    assert adc.resolve_ref(repo, "pushed-only") == "refs/remotes/origin/pushed-only"
-    assert adc.resolve_ref(repo, "never-created") is None
+    assert adc.resolve_ref(repo, "lane-c", origin_fresh=True) == "refs/heads/lane-c"
+    assert adc.resolve_ref(repo, "lane-c", origin_fresh=False) == "refs/heads/lane-c"
+    assert adc.resolve_ref(repo, "pushed-only", origin_fresh=True) == (
+        "refs/remotes/origin/pushed-only"
+    )
+    assert adc.resolve_ref(repo, "pushed-only", origin_fresh=False) is None  # stale-cache guard
+    assert adc.resolve_ref(repo, "never-created", origin_fresh=True) is None
 
 
 def test_lane_id_env_then_file_then_incomplete(
@@ -155,6 +170,14 @@ def cli(repo: Path, qdir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(adc, "REPO", repo)
     monkeypatch.setenv("HARNESS_LANE_ID", "me")
     return repo
+
+
+def _add_origin(repo: Path, tmp_path: Path) -> Path:
+    """A real ``origin`` (bare clone) so ``git fetch origin`` succeeds."""
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(bare)], check=True)
+    _git(repo, "remote", "add", "origin", str(bare))
+    return bare
 
 
 def test_check_exit_0_disjoint(cli: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -204,13 +227,43 @@ def test_check_exit_2_on_a_malformed_sibling_record(
     assert "INCOMPLETE KeyError" in capsys.readouterr().err
 
 
-def test_check_fetch_failure_is_loud_not_fatal(
+def test_check_exit_2_on_an_invalid_candidate_even_with_no_heads(
     cli: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The scratch repo has no ``origin``: the fetch fails, the WARN lands on stderr, and
-    the local-ref check still completes."""
+    """With zero sibling heads no merge-tree ever resolves the candidate (codex r1 P2):
+    ``disjoint`` for a ref that does not exist would be a check that never ran."""
+    assert adc.main(["check", "--candidate", "no-such-ref"]) == 2
+    err = capsys.readouterr()
+    assert "INCOMPLETE CheckIncompleteError: candidate 'no-such-ref' is not a commit" in err.err
+    assert "disjoint" not in err.out
+
+
+def test_check_fetch_failure_is_loud_and_origin_only_heads_fail_closed(
+    cli: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """No ``origin`` remote: the fetch fails (WARN on stderr), local branches still check,
+    and a head known only through a cached origin ref is UNRESOLVED (codex r1 P2 — the
+    cache may be stale, so it is not compared)."""
+    rs.reserve("arc-c", lane_id="other", branch="lane-c", arc_type="applying")
     assert adc.main(["check", "--candidate", "lane-a"]) == 0
     assert "WARN fetch origin failed" in capsys.readouterr().err
+    _git(cli, "update-ref", "refs/remotes/origin/pushed-only", _git(cli, "rev-parse", "lane-b"))
+    rs.reserve("arc-p", lane_id="other-2", branch="pushed-only", arc_type="applying")
+    assert adc.main(["check", "--candidate", "lane-a"]) == 2
+    assert "UNRESOLVED arc-p [other-2] pending: branch pushed-only" in capsys.readouterr().out
+
+
+def test_check_uses_origin_heads_after_a_successful_fetch(
+    cli: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With a real origin the fetch succeeds and an origin-only head is compared."""
+    bare = _add_origin(cli, tmp_path)
+    subprocess.run(["git", "-C", str(bare), "branch", "pushed-only", "lane-b"], check=True)
+    rs.reserve("arc-p", lane_id="other", branch="pushed-only", arc_type="applying")
+    assert adc.main(["check", "--candidate", "lane-a"]) == 1
+    out = capsys.readouterr()
+    assert "CONFLICT arc-p [other] pushed-only: a.txt" in out.out
+    assert "WARN" not in out.err
 
 
 # --- O3 historical replay -----------------------------------------------------------
@@ -231,42 +284,64 @@ def _linear_history(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 def test_pair_conflicts_replays_later_pr_as_a_concurrent_lane(tmp_path: Path) -> None:
     repo, s = _linear_history(tmp_path)
     with adc.scratch_objects(repo) as env:
-        assert adc.pair_conflicts(repo, s["A"], s["B"], env) == ["a.txt"]  # same hunk
-        assert adc.pair_conflicts(repo, s["A"], s["I"], env) == []  # same file, other hunk
-        assert adc.pair_conflicts(repo, s["A"], s["C"], env) == []  # disjoint file
+        # B edited the line A edited: its patch applies onto A's tree, merge-tree conflicts
+        assert adc.pair_conflicts(repo, s["A"], s["B"], env) == adc.PairVerdict(["a.txt"], [])
+        # same file, other hunk — applies, no conflict
+        assert adc.pair_conflicts(repo, s["A"], s["I"], env) == adc.PairVerdict([], [])
+        # disjoint file
+        assert adc.pair_conflicts(repo, s["A"], s["C"], env) == adc.PairVerdict([], [])
 
 
-def test_pair_conflicts_subtracts_intermediate_overlap(tmp_path: Path) -> None:
-    """B's tree at A^ carries I's hunk too; I's own overlap with A must not be charged
-    to the (A, B) pair. Here I conflicts with A (l1 vs l1) while B only touches b.txt."""
+def test_pair_conflicts_names_a_masked_file_instead_of_dropping_it(tmp_path: Path) -> None:
+    """I moved B's context (l3), so B's patch no longer applies at A^: B's conflict status
+    against A is unmeasurable and is reported as masked, never as clean (codex r1 P2)."""
+    repo = _init_repo(tmp_path)
+    a = _commit(repo, "A", **{"a.txt": "A1\nl2\nl3\nl4\nl5\n"})
+    _commit(repo, "I", **{"a.txt": "A1\nl2\nI3\nl4\nl5\n"})
+    b = _commit(repo, "B", **{"a.txt": "A1\nl2\nI3\nl4\nB5\n", "b.txt": "y\n"})
+    with adc.scratch_objects(repo) as env:
+        assert adc.pair_conflicts(repo, a, b, env) == adc.PairVerdict([], ["a.txt"])
+
+
+def test_pair_conflicts_intermediate_overlap_is_not_charged_to_the_pair(tmp_path: Path) -> None:
+    """I conflicts with A on a.txt; B only touches b.txt — the (A, B) pair is clean."""
     repo = _init_repo(tmp_path)
     a = _commit(repo, "A", **{"a.txt": "A1\nl2\nl3\nl4\nl5\n"})
     i = _commit(repo, "I", **{"a.txt": "I1\nl2\nl3\nl4\nl5\n"})
     b = _commit(repo, "B", **{"b.txt": "y\n"})
     with adc.scratch_objects(repo) as env:
-        assert adc.pair_conflicts(repo, a, i, env) == ["a.txt"]
-        assert adc.pair_conflicts(repo, a, b, env) == []
+        assert adc.pair_conflicts(repo, a, i, env) == adc.PairVerdict(["a.txt"], [])
+        assert adc.pair_conflicts(repo, a, b, env) == adc.PairVerdict([], [])
 
 
 def test_pair_conflicts_excludes_governance_files(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     gov = ".harness/roadmap_status.md"
     (repo / ".harness").mkdir()
-    base = _commit(repo, "base2", **{gov: FIVE})
+    _commit(repo, "base2", **{gov: FIVE})
     a = _commit(repo, "A", **{gov: "A1\nl2\nl3\nl4\nl5\n"})
     b = _commit(repo, "B", **{gov: "B1\nl2\nl3\nl4\nl5\n"})
     with adc.scratch_objects(repo) as env:
-        assert adc.merge_conflicts(repo, a, adc.synthetic_commit(repo, b, base, env), env) == [gov]
-        assert adc.pair_conflicts(repo, a, b, env) == []
+        raw = adc.synthetic_commit(repo, b, f"{a}^", env)  # b's tree as a lane at a^
+        assert adc.merge_conflicts(repo, a, raw, env) == [gov]  # the raw merge does conflict
+        assert adc.pair_conflicts(repo, a, b, env) == adc.PairVerdict([], [])
 
 
-def test_scratch_objects_keep_the_repo_store_clean(tmp_path: Path) -> None:
+def test_scratch_objects_keep_the_repo_store_clean_and_need_no_git_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A clean CI runner has no git identity (codex r1 P1): the replay carries its own."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+    for var in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.delenv(var, raising=False)
     repo, s = _linear_history(tmp_path)
     objects = repo / ".git" / "objects"
     before = sorted(p for p in objects.rglob("*") if p.is_file())
     with adc.scratch_objects(repo) as env:
         syn = adc.synthetic_commit(repo, s["B"], f"{s['A']}^", env)
         adc.merge_conflicts(repo, s["A"], syn, env)
+        assert adc.pair_conflicts(repo, s["A"], s["B"], env) == adc.PairVerdict(["a.txt"], [])
     after = sorted(p for p in objects.rglob("*") if p.is_file())
     assert after == before
     assert (
@@ -312,7 +387,7 @@ def test_read_pairs_refuses_a_file_without_the_denominator(tmp_path: Path) -> No
         adc.read_pairs(f)
 
 
-def test_historical_reports_rate_and_unmeasured_semantic_line(
+def test_historical_reports_interval_and_unmeasured_semantic_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo, s = _linear_history(tmp_path)
@@ -322,8 +397,9 @@ def test_historical_reports_rate_and_unmeasured_semantic_line(
     out = capsys.readouterr().out
     assert f"conflict {s['A'][:12]} {s['B'][:12]}: a.txt" in out
     assert (
-        "O3: textual-conflict rate 1/5 = 0.200 of window pairs "
-        "(file-overlap upper bound 0.387 = 2/5); conditional on file overlap 1/2 = 0.500"
+        "O3: textual-conflict rate 1/5 = 0.200 of window pairs, at most 1/5 = 0.200 counting"
+        " the 0 pair(s) whose only changed paths are masked (file-overlap upper bound 0.387"
+        " = 2/5); conditional on file overlap 1/2 = 0.500"
     ) in out
     assert "semantic-conflict rate: unmeasured" in out
 
