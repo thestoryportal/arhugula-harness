@@ -481,6 +481,33 @@ def archive_current_next_action(text: str, archive_text: str) -> str | None:
     return archive_text[:at] + demoted.strip() + "\n\n" + archive_text[at:]
 
 
+_POINTER_LABEL_RE = re.compile(r"^\*\*Current next action \(post-#(\d+)\)\.\*\*\s*")
+
+
+def strip_pointer_label(pr_num: str, body: str) -> str:
+    """The ONE place a next-action body is relieved of a pasted
+    `**Current next action (post-#N).**` label before the tool applies its own.
+
+    The body is the tool's INPUT; the label is its OUTPUT. Authors compose the body
+    to read like the rendered pointer, so a pasted label recurred five times
+    (u-he-47, u-he-50, u-sr-04, u-sr-06, b-230-task-1) — each time a doubled label,
+    a red roadmap-status check on the refresh PR, and a blocked door (B-230 Task 3,
+    first slice). A label naming THIS landing is stripped: the intent is
+    unambiguous. A label naming another PR is refused: the body was authored for
+    a different landing, and stripping would silently install it here.
+    """
+    body = body.strip()
+    while (m := _POINTER_LABEL_RE.match(body)) is not None:
+        if m.group(1) != pr_num:
+            raise RoadmapStatusError(
+                f"next-action body carries a `**Current next action (post-#{m.group(1)}).**` "
+                f"label but this refresh is post-#{pr_num} — the body was authored for "
+                "another landing; drop the label (the tool prepends it) or fix the PR number"
+            )
+        body = body[m.end() :]
+    return body
+
+
 def install_next_action(text: str, pr_ref: str, body: str) -> str:
     """Replace the live pointer paragraph. STATUS FILE ONLY — safe inside the
     single-file terminating refresh.
@@ -503,6 +530,7 @@ def install_next_action(text: str, pr_ref: str, body: str) -> str:
         raise RoadmapStatusError(
             f"--pr {pr_ref!r} is not a PR number — expected `1234`, `#1234` or `PR #1234`"
         )
+    body = strip_pointer_label(digits.group(1), body)
     if "\n\n" in body.strip():
         raise RoadmapStatusError(
             "--next-action body must be a SINGLE paragraph (no blank lines) — the "
@@ -551,6 +579,7 @@ def rotate_next_action(
             f"--pr {pr_ref!r} is not a PR number — expected `1234`, `#1234` or `PR #1234`"
         )
     num = digits.group(1)
+    body = strip_pointer_label(num, body)
     # An empty/whitespace BODY (an unset shell variable, typically) would archive
     # the live pointer and install a marker with NO actionable text — and
     # validate() only COUNTS the marker, so the empty frontier would pass --check
@@ -961,7 +990,10 @@ def _discard_matching_draft(post_pr: int, represented_in: str | None) -> str:
         m = re.match(r"post-pr:\s*(\d+)\s*$", first.strip())
         if not (m and int(m.group(1)) == post_pr):
             return "other"  # another arc's authoring — always left alone
-        body = rest.strip()
+        try:
+            body = strip_pointer_label(str(post_pr), rest)
+        except RoadmapStatusError:
+            return "unrepresented"  # a label naming another PR is never this landing's
         # r7 P2 + r8 P2 + r11 P2: the proof is EQUALITY with the LIVE pointer body
         # AND the pointer's own post-# label naming THIS landing — a stale post-#54
         # pointer that happens to equal the draft body is not installation of the
@@ -1248,7 +1280,21 @@ def emit_refresh_pr(
             # READ ONLY — the draft is retired after `gh pr create` succeeds (codex
             # r3 P2): a crash between here and the push must leave the draft for the
             # retry, else the re-run silently lands a pointer-less refresh.
-            next_action = rest.strip()
+            # A pasted pointer label is stripped here, at the draft boundary, so the
+            # same body is what install_next_action writes AND what
+            # _discard_matching_draft later proves against; a label naming another
+            # PR, or a label with no prose under it, fails loud before any git work
+            # (the r18 unreadable-draft shape) — never the pointer-left-as-is branch.
+            try:
+                next_action = strip_pointer_label(str(post_pr), rest)
+            except RoadmapStatusError as exc:
+                raise SystemExit(f"emit-refresh-pr: {exc}") from exc
+            if not next_action:
+                raise SystemExit(
+                    "emit-refresh-pr: the next-action draft body is only a pointer label — "
+                    "write the paragraph PROSE below the post-pr line (the tool prepends "
+                    "the label)"
+                )
             draft_used = True
         else:
             # The door captures and discards this process's stderr on success (codex

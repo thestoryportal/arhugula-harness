@@ -403,10 +403,20 @@ for c in \
   "just mutation-probe-coverage-check" \
   "just reviewer-concurrency-probe" \
   "just reviewer-concurrency-probe gemini 5 main" \
-  "just overlay-check"; do
+  "just overlay-check" \
+  "just arc-close 1503 b897542dc .harness/.checkpoints/arc-exit-report-pr1503.md --arc-id b-230-task-1 --arc-type applying --decisions 0 --round-logs .harness/tmp/b-230-task-1-rounds/r1.log .harness/tmp/b-230-task-1-rounds/r2.log --levers B-211 B-212"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" = "allow" ] && ok "'$c' → allow controller lifecycle" || bad "'$c' not allowed: $OUT"
 done
+# B-230 Task 3: arc-close rides the generic just alternation; the token grammar and
+# _bash_args_safe keep the glob and out-of-worktree transcript forms at ask (B-217 owns
+# any widening) — pinned here so a charset change is a visible decision, not drift.
+OUT=$(run_on "$(pl Bash "just arc-close 1503 b897542dc cp.md --arc-id b-230-task-1 --arc-type applying --decisions 0 --round-logs '.harness/tmp/b-230-task-1-rounds/*.log'" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "arc-close with a glob --round-logs → ask (token grammar)" || bad "glob arc-close auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just arc-close 1503 b897542dc cp.md --arc-id b-230-task-1 --arc-type applying --decisions 0 --round-logs r1.log --transcript ~/.claude/projects/x/s.jsonl" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "arc-close with a ~ transcript → ask" || bad "tilde arc-close auto-allowed: $OUT"
+OUT=$(run_on "$(pl Bash "just arc-close 1503 b897542dc cp.md --arc-id b-230-task-1 --arc-type applying --decisions 0 --round-logs r1.log --transcript /Users/someone/.claude/projects/x/s.jsonl" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "arc-close with an out-of-worktree transcript → ask" || bad "out-of-worktree arc-close auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just merge-gate-emit --pr 1 --lens merge-gate-concurrency --verdict-json /tmp/outside.txt" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit reading a verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit auto-allowed: $OUT"
 # U-HE-47 codex r2 P1 + r4 P1: adjudication mutes findings — only the exact absorption

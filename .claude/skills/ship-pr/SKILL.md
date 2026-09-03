@@ -546,13 +546,24 @@ whole point: the merge SHA, the post-merge main-CI conclusion, the §12.2.1 refr
 the arc's *real* final checkpoint rather than a stale or fabricated one. **Skip this step
 entirely when the PR was itself the terminating roadmap-status refresh (§12.2.1)** — the
 same rule as the reflect block above: a refresh-only PR is not an arc, owes no report, and
-running it would mislabel its structurally-absent refresh as an open obligation. Run:
+running it would mislabel its structurally-absent refresh as an open obligation. Run the
+ONE close-out call (B-230 Task 3) — it runs the exit report, then the arc-metrics queue
+whose argument rules are in the next section; `just` stops at the first non-zero exit:
 
 ```
-just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-/context-save-lean-just-reported>
+just arc-close <NNN> <merge-sha> <the-path-/context-save-lean-just-reported> \
+  --arc-id <arc-id> --arc-type <inventing|applying> --decisions <N> \
+  --round-logs '<glob for THIS arc's round logs>' \
+  --transcript <this-session's-transcript.jsonl-or-omit> \
+  --levers <lever-id> <lever-id> <...-or-omit>
 ```
 
-Pass `--checkpoint` explicitly — the roadmap authorizes a **parallel frontier**, so another
+Loop-mode note: the permission guard auto-allows this call only with explicit round-log
+paths (no `*` — the `just` token grammar has none; `--round-logs` takes many paths) and no
+`--transcript` outside the worktree; a transcript-bearing call surfaces one approval, as
+`arc-metrics queue` always did. The transcript rule itself is unchanged (next section).
+
+The third positional is the checkpoint path — pass it explicitly, never a guess: the roadmap authorizes a **parallel frontier**, so another
 live session can `/context-save-lean` between your save and this collection; mtime cannot tell
 whose checkpoint is whose, so an unbound run reports the workspace-newest file as an
 unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path *your*
@@ -573,22 +584,17 @@ Capture is two steps that deliberately sit in **different arcs**: this arc *queu
 inputs, the next arc *folds* them into the ledger. Skip both on a terminating
 roadmap-status refresh (§12.2.1) — a refresh is not an arc.
 
-**Step 1 — queue, at closure (writes NOTHING to the repo).** After the exit report above,
-because `merged_at` and the merge SHA do not exist before merge. Do NOT record capture
+**Step 1 — queue, at closure (writes NOTHING to the repo).** Runs as the second step of
+the `just arc-close` call above — after the exit report, because `merged_at` and the merge
+SHA do not exist before merge; everything after the call's three positionals is forwarded
+verbatim to `arc-metrics queue`. Do NOT record capture
 phase edges here — the reservation is already `merged` and accretion refuses terminal
 states (C-HE-03 §3); see the phase-span bullet's "No `capture` pair" note. Pass
 `--arc-id <arc-id>` explicitly (the ARC id from the reservation, e.g. `u-he-34` — never
 the PR number: a `pr-<N>` default breaks the `arc_id` join between the ledger row, the
 reservation, and the gate log), and `--levers` as SEPARATE arguments, one per lever
 (`--levers B-211 B-212`, never one comma-joined token — cohort grouping is by exact
-set):
-
-```
-just arc-metrics queue --pr <NNN> --arc-id <arc-id> --arc-type <inventing|applying> \
-  --decisions <N> --round-logs '<glob for THIS arc's round logs>' \
-  --transcript <this-session's-transcript.jsonl-or-omit> \
-  --levers <lever-id> <lever-id> <...-or-omit>
-```
+set).
 
 Pass `--transcript` with EVERY session transcript that ran this arc so the row carries
 the C-HE-25 X6e cost fields (requestId-deduplicated IET, `tools/arc_cost.py`) — an arc

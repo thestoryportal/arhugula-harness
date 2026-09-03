@@ -193,10 +193,22 @@ launched. Disposing or moving on after the report — which an earlier reading o
 exactly the Codex-cohort gap the capture section exists to close.
 
 ```bash
-just arc-exit-report --pr <NNN> --merge-sha <merge-sha> --checkpoint <the-path-context-save-lean-just-reported>
+just arc-close <NNN> <merge-sha> <the-path-context-save-lean-just-reported> \
+  --arc-id <arc-id> --arc-type <inventing|applying> --decisions <N> \
+  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
 ```
 
-Pass `--checkpoint` explicitly. The roadmap authorizes a parallel frontier, so another live
+This ONE call (B-230 Task 3) runs the exit report, then `arc-metrics queue` with everything
+after the three positionals forwarded verbatim; `just` stops at the first non-zero exit,
+so a failed report never queues a metrics row. The queue's argument rules are in the
+arc-metrics section below.
+
+Loop-mode note (same as the Claude carrier): the permission guard auto-allows this call
+only with explicit round-log paths (no `*` — the `just` token grammar has none;
+`--round-logs` takes many paths); the quoted glob above surfaces one approval, as
+`arc-metrics queue` always did. Headless, pass the paths.
+
+The third positional is the checkpoint path — pass it explicitly, never a guess. The roadmap authorizes a parallel frontier, so another live
 session can write a checkpoint between this arc's save and this collection; mtime cannot
 discriminate ownership, so an unbound run reports the workspace-newest file as an
 unconfirmed heuristic and `checkpoint.confirmed` stays `false`. Only the path this arc's own
@@ -219,12 +231,10 @@ is not an arc. This is runner-parallel with the Claude carrier at
 `.claude/skills/ship-pr/SKILL.md`; an arc shipped from either runner must appear in the
 ledger, or every Codex-run arc is silently missing from the baseline.
 
-Step 1 -- queue, at closure, after the exit report above (writes NOTHING to the repo):
-
-```
-just arc-metrics queue --pr <NNN> --arc-type <inventing|applying> --decisions <N> \
-  --round-logs '<glob for THIS arc's round logs>' --levers <lever-ids-or-omit>
-```
+Step 1 -- queue, at closure, after the exit report (writes NOTHING to the repo): runs as
+the second step of the `just arc-close` call above. Pass `--arc-id <arc-id>` (the ARC id
+from the reservation, never the PR number: a `pr-<N>` default breaks the `arc_id` join
+between the ledger row, the reservation and the gate log).
 
 OMIT `--transcript` on this runner: Codex session transcripts are date-partitioned
 rollout JSONL under `~/.codex/sessions`, a shape `tools/arc_cost.py` does not parse

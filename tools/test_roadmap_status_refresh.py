@@ -1810,3 +1810,76 @@ def test_default_refresh_threads_status_and_archive_into_the_worktree(monkeypatc
     argv = argv_seen["argv"]
     assert argv[argv.index("--status") + 1] == f"{wt}/.harness/roadmap_status.md"
     assert argv[argv.index("--archive") + 1] == f"{wt}/.harness/roadmap_drift_log_archive.md"
+
+
+# ─── B-230 Task 3, first slice: a pasted pointer label in the body ──────────────
+# Five door blocks (u-he-47, u-he-50, u-sr-04, u-sr-06, b-230-task-1) came from a
+# draft whose prose began with the label the tool itself prepends.
+
+
+def test_install_next_action_strips_a_pasted_label_naming_this_pr():
+    out = rsr.install_next_action(
+        SAMPLE, "1338", "**Current next action (post-#1338).** The prose that follows."
+    )
+    assert "**Current next action (post-#1338).** The prose that follows." in out
+    # exactly one pointer — the doubled label is what reds the refresh PR's CI
+    assert out.count("**Current next action (") == SAMPLE.count("**Current next action (")
+
+
+def test_install_next_action_refuses_a_label_naming_another_pr():
+    with pytest.raises(rsr.RoadmapStatusError, match="authored for another landing"):
+        rsr.install_next_action(SAMPLE, "1338", "**Current next action (post-#1337).** prose")
+
+
+def test_install_next_action_refuses_a_label_with_no_prose_as_empty():
+    with pytest.raises(rsr.RoadmapStatusError, match="non-empty body"):
+        rsr.install_next_action(SAMPLE, "1338", "**Current next action (post-#1338).**")
+
+
+def test_rotate_next_action_strips_a_pasted_label():
+    new_text, _ = rsr.rotate_next_action(
+        SAMPLE, SAMPLE_ARCHIVE, "1339", "**Current next action (post-#1339).** Rotated prose."
+    )
+    assert "**Current next action (post-#1339).** Rotated prose." in new_text
+    assert new_text.count("**Current next action (") == SAMPLE.count("**Current next action (")
+
+
+def test_emit_refresh_pr_labelled_draft_installs_one_pointer_and_is_retired(monkeypatch, tmp_path):
+    """The label is stripped at the draft boundary, so the body install_next_action
+    writes is the body _discard_matching_draft proves against — the draft is
+    retired instead of tripping the 'corrected mid-landing' refusal."""
+    argv_seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(rsr, "main", lambda argv: (argv_seen.setdefault("argv", argv) and 0) or 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\n**Current next action (post-#55).** The prose only.\n")
+    calls: list[list[str]] = []
+    out = rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert out["pr"] == 90
+    argv = argv_seen["argv"]
+    assert argv[argv.index("--next-action") + 1] == "The prose only."
+    assert not draft.exists()
+
+
+def test_emit_refresh_pr_refuses_a_draft_label_naming_another_pr(monkeypatch, tmp_path):
+    """Loud, before any git work — never the pointer-left-as-is branch."""
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\n**Current next action (post-#54).** prose\n")
+    calls: list[list[str]] = []
+    with pytest.raises(SystemExit, match="authored for another landing"):
+        rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert draft.exists()
+    assert not any(c[:3] == ["git", "worktree", "add"] for c in calls)
+
+
+def test_emit_refresh_pr_refuses_a_label_only_draft(monkeypatch, tmp_path):
+    monkeypatch.setattr(rsr, "main", lambda argv: 0)
+    draft = tmp_path / "draft"
+    monkeypatch.setattr(rsr, "NEXT_ACTION_DRAFT", draft)
+    draft.write_text("post-pr: 55\n**Current next action (post-#55).**\n")
+    calls: list[list[str]] = []
+    with pytest.raises(SystemExit, match="only a pointer label"):
+        rsr.emit_refresh_pr(55, run=_scripted_run(_fresh_path_script(), calls))
+    assert draft.exists()

@@ -29,11 +29,11 @@ done
 lineno() { grep -nF -- "$2" "$1" | head -1 | cut -d: -f1; }
 
 # --- 1. Claude ship-pr: the step exists at all ---
-L_CMD=$(lineno "$SHIP" 'just arc-exit-report --pr')
+L_CMD=$(lineno "$SHIP" 'just arc-close <NNN>')
 if [ -n "$L_CMD" ]; then
   ok "claude ship-pr invokes the recipe (line $L_CMD)"
 else
-  bad "claude ship-pr does not invoke 'just arc-exit-report --pr'"
+  bad "claude ship-pr does not invoke 'just arc-close <NNN>'"
 fi
 
 # --- 2. Claude ship-pr: ordered AFTER the reflect/context-save anchor ---
@@ -74,11 +74,11 @@ else
 fi
 
 # --- 4. Codex-native mirror: the step exists (parity contract) ---
-L_ACMD=$(lineno "$ASHIP" 'just arc-exit-report --pr')
+L_ACMD=$(lineno "$ASHIP" 'just arc-close <NNN>')
 if [ -n "$L_ACMD" ]; then
   ok "codex-native ship-pr mirrors the recipe (line $L_ACMD)"
 else
-  bad "codex-native ship-pr does not invoke 'just arc-exit-report --pr'"
+  bad "codex-native ship-pr does not invoke 'just arc-close <NNN>'"
 fi
 
 # --- 5. Codex-native mirror: ordered after its own reflect/context-save section ---
@@ -122,15 +122,15 @@ printf '%s' "$ANORM" | grep -qF -- 'Skip entirely for a pure terminating-refresh
 # --- 6d. Both carriers BIND the checkpoint explicitly (codex round-3 P1): the roadmap
 #         authorizes a parallel frontier, so an unbound run can only report the
 #         workspace-newest file as an unconfirmed heuristic. The command shape must carry
-#         --checkpoint, and the rationale must name the parallel frontier — a bare flag
+#         the checkpoint (arc-close's third positional since B-230 Task 3), and the rationale must name the parallel frontier — a bare flag
 #         with no reason gets dropped by the next editor.
-printf '%s' "$NORM" | grep -qF -- '--checkpoint <the-path-/context-save-lean-just-reported>' \
+printf '%s' "$NORM" | grep -qF -- 'just arc-close <NNN> <merge-sha> <the-path-/context-save-lean-just-reported>' \
   && ok "claude carrier binds the checkpoint on the command line" \
   || bad "claude carrier command omits --checkpoint"
 printf '%s' "$NORM" | grep -qF -- 'parallel frontier' \
   && ok "claude carrier states WHY the checkpoint must be bound" \
   || bad "claude carrier missing the parallel-frontier rationale"
-printf '%s' "$ANORM" | grep -qF -- '--checkpoint <the-path-context-save-lean-just-reported>' \
+printf '%s' "$ANORM" | grep -qF -- 'just arc-close <NNN> <merge-sha> <the-path-context-save-lean-just-reported>' \
   && ok "codex carrier binds the checkpoint on the command line" \
   || bad "codex carrier command omits --checkpoint"
 printf '%s' "$ANORM" | grep -qF -- 'parallel frontier' \

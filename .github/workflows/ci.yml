@@ -126,6 +126,12 @@ jobs:
       - name: Sync workspace (all members)
         run: uv sync --all-packages
 
+      # B-230 Task 3: tools/test_arc_close_recipe.py (run by codex-parity-check.sh below)
+      # EXECUTES `just arc-close` against a PATH shim — a dry run cannot prove `$@`
+      # forwarding — so the runner needs the binary. SHA-pinned like every action here.
+      - name: Install just
+        uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+
       # Excludes the `e2e` marker — those tests exercise real external services
       # (Anthropic API etc.) and are gated on credentials not available in CI
       # per the marker definition in the root pyproject.toml. testpaths in
