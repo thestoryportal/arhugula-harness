@@ -35,7 +35,7 @@
 | Lease-acquire budget-exhausted events | 2 rows in `.harness/merge-gate-log.jsonl` across 65 arcs; in-budget yields are not logged (`tools/merge_door.py:1965`) | script in Task 0 |
 | Review rounds per arc | median 7, max 24; Codex wrapper wrote 2039 of 2455 log rows | script in Task 0 |
 | Gate rounds with findings | 48; in 33 of them exactly one lens raised findings | script in Task 0 |
-| Unique catches by lens | raw `unique_catch` flags: witness-adequacy 22, spec-conformance 10, concurrency 1 (of 88 concurrency findings). Net of `disposition: rejected` adjudications: 19 / 10 / 0 (codex r1 on b-230-register, head `02f656c72`). The contract-valid figure — a flag counts only when the finding's LAST disposition is `accepted` (C-HE-29; the envelope at `Spec_HE_Loop_Lanes_v1.md:632` allows `accepted / rejected / suppressed`, and an unadjudicated flag is not a catch) — is what Task 0 computes; it is unknown until then | script in Task 0 (reports raw, rejected, unadjudicated, accepted) |
+| Unique catches by lens | raw `unique_catch` flags: witness-adequacy 22, spec-conformance 10, concurrency 1 (of 88 concurrency findings). Net of `disposition: rejected` adjudications: 19 / 10 / 0 (codex r1 on b-230-register, head `02f656c72`). The contract-valid figure — a flag counts only when the finding's LAST disposition is `accepted` (C-HE-29; the envelope at `Spec_HE_Loop_Lanes_v1.md:632` allows `accepted / rejected / suppressed`, and an unadjudicated flag is not a catch) — — measured by Task 0 at the b-230-task-0 head over 2547 rows / 73 arcs: **witness-adequacy 19, spec-conformance 10, concurrency 0** (33 raw flags, 4 with a last disposition of rejected, 0 unadjudicated; rounds-per-arc median 6) | `uv run python tools/loop_cost_baseline.py` (reports raw, rejected/suppressed, unadjudicated, accepted) |
 | Per-call hook cost | `post-merge-refresh.sh:45`, `precmd-clear-cache.sh:28`, `rtk-shape-guard.sh:69` exit within one grep of an ordinary Bash call; `permission-guard.sh:67` exits unless loop mode | grounding |
 | Prompt hook signal | `[roadmap] next=?` on every prompt this session (`prompt-context.sh:57` prints `?` when `hook_roadmap_next` returns empty, `tools/hooks/lib.sh:267-286`) | observed |
 | Branch-hygiene deferrals waiting on the operator | 3 plus one TTL re-surface in the session banner | observed |
@@ -56,7 +56,7 @@ The hooks category collapses to two defects (the empty `next=` token and duplica
 - The `merge-door-lease-acquire` producer is counted from `record_kind: finding` rows with `finding_type: HITL-recoverable` — the shape the door actually writes (the u-he-36 row carried in this PR is one).
 - `--loop-status` counts `NOTIFY` rows whose cause is exactly `merge-door-lease-acquire:lease_held_yield` (Task 8).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tools/test_loop_cost_baseline.py
@@ -94,10 +94,10 @@ def test_baseline_reports_expected_keys(tmp_path):
     assert data["lease_acquire_events"] == 1
 ```
 
-- [ ] **Step 2: Run it to verify it fails** — `uv run pytest tools/test_loop_cost_baseline.py -v`; expected: FAIL, script not found.
-- [ ] **Step 3: Write the script** to the interface and constraints above.
-- [ ] **Step 4: Run the test, then the script on the real log** — `uv run pytest tools/test_loop_cost_baseline.py -v && uv run python tools/loop_cost_baseline.py`. Expected: PASS; on the real log `gate_rounds_with_findings` and `single_lens_rounds` re-derive the §0 rows (48 and 33 at the 2026-09-03 measurement head), `lease_acquire_events` is 2, and the accepted-only `unique_catch_by_producer` is recorded in §0 beside the raw and net-of-rejected figures. A difference from a recorded figure is a finding to record, not to explain away.
-- [ ] **Step 5: Wire the test into CI parity and commit** — add `tools/test_loop_cost_baseline.py` to `tools/codex-parity-check.sh`; `git commit -m "feat(tools): loop_cost_baseline — measured basis for the loop optimization plan"`.
+- [x] **Step 2: Run it to verify it fails** — `uv run pytest tools/test_loop_cost_baseline.py -v`; expected: FAIL, script not found.
+- [x] **Step 3: Write the script** to the interface and constraints above.
+- [x] **Step 4: Run the test, then the script on the real log** — `uv run pytest tools/test_loop_cost_baseline.py -v && uv run python tools/loop_cost_baseline.py`. Expected: PASS; on the real log `gate_rounds_with_findings` and `single_lens_rounds` re-derive the §0 rows (48 and 33 at the 2026-09-03 measurement head), `lease_acquire_events` is 2, and the accepted-only `unique_catch_by_producer` is recorded in §0 beside the raw and net-of-rejected figures. A difference from a recorded figure is a finding to record, not to explain away.
+- [x] **Step 5: Wire the test into CI parity and commit** — add `tools/test_loop_cost_baseline.py` to `tools/codex-parity-check.sh`; `git commit -m "feat(tools): loop_cost_baseline — measured basis for the loop optimization plan"`.
 
 ---
 
