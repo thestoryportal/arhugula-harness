@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `83a3b2119e09` |
+| `workspace_state_hash` | `6f9be5dfe619` |
 | `last_refreshed` | 2026-09-03T00:00:00Z |
-| `git_head` | `fcfdc273` —  |
+| `git_head` | `b897542d` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1501).** Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 1 (the CI bookkeeping fast path, the whole wall-clock saving) under the lean review protocol the operator set on 2026-09-03 — one codex round per task, a single witness-adequacy lens on Tasks 1 and 5 only, none on 2/3/4 — then Tasks 3, 4, 5, 2 in that order (B-230; Task 0 landed as #1501); then U-HE-37.
+**Current next action (post-#1503).** **Current next action (post-#1503).** Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 3 (the one-invocation arc close-out) under the lean review protocol the operator set on 2026-09-03 — one codex round per task, a single witness-adequacy lens on Tasks 1 and 5 only, none on 2/3/4 — and open that arc's PR with the Task 1 measurements appended to the plan §0 (the `changes` job's 13 s critical-path cost, the refresh PR's five heavy jobs `skipped`, and the refresh-merge `main` run's wall clock) plus `just main-protection-apply` surfaced once for the two `— blocking` contexts the live list lacks; then Tasks 4, 5, 2 in that order (B-230; Task 0 landed as #1501, Task 1 as #1503); then U-HE-37.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1503 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1501 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1499 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1497 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1495 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1493 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
