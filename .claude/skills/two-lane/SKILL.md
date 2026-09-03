@@ -14,9 +14,10 @@ automated, deliberately (see the CUTs at the end).
 ## Opt-in only
 
 **Opt-in only — never auto-invoked from `roadmap-continue` or `ship-pr`.** It fires on an
-explicit operator request. Pick the two arcs so their `scope.files` do not overlap; that
-selection is a judgment call at v1 — the analyzer for it (`tools/arc_disjoint_check.py`,
-U-WT-07) is deliberately unbuilt until this pilot proves lane selection is the bottleneck.
+explicit operator request. Declared `scope.files` is a scheduling HINT (the forward register
+carries no such keys); the gate is `tools/arc_disjoint_check.py` (U-WT-07, landed at
+U-HE-36) at selection — `roadmap-continue` merge-trees the candidate against every other
+lane's live head before `reserve` — plus `BASE_TOCTOU` at landing (C-HE-13 §5).
 
 ## Lane setup
 

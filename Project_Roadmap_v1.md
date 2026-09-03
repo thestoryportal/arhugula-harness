@@ -448,7 +448,10 @@ R-IF-116:
     (U-WT-02 under Feature 2, U-WT-07 under Feature 6) with their trigger conditions recorded
     there, and both are named on that plan's standing cut list —
     they are deliberately NOT open register rows, and neither is opened here. Per-unit as-built
-    notes live in that plan; no new arc is opened by this close.
+    notes live in that plan; no new arc is opened by this close. (UPDATE 2026-09-02: U-WT-07's
+    trigger was superseded by contract, not by the pilot — spec-he-loop-lanes C-HE-13 §4-5 made
+    the selection-time merge-tree check normative, and it landed as U-HE-36
+    (`tools/arc_disjoint_check.py`); U-WT-02 stays deferred on the cut list.)
 
 R-IF-roadmap-refresh:
   title: Refresh roadmap status dashboard after PR merge

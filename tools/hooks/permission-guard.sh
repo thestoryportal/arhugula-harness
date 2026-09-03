@@ -519,6 +519,27 @@ _phase_exact_shape() {
   printf '%s' "${13}" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
 }
 
+# U-HE-36: `uv run python tools/arc_disjoint_check.py check [--candidate <ref>]` — the
+# selection-time disjointness gate roadmap-continue runs before `reserve` (C-HE-13 §5).
+# Read-only (fetch + merge-tree + reservation reads), but the same arity-bounded
+# discipline as `phase`: _bash_args_safe rejects only UPPERCASE expansions, so a prefix
+# allow would let a lowercase `${victim:=x}` ride through (the guard suite's own probe).
+# 5 tokens bare, or 7 with a charset ref (HEAD, main, a sha, a branch, `HEAD^`); `~` is
+# a shell expansion char _bash_args_safe rejects, so `HEAD~1` stays at ask. The
+# other verbs (`derive-pairs` writes a tracked file via gh; `historical` is a
+# minutes-long replay) stay at ask.
+_disjoint_check_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  { [ "$#" -eq 5 ] || [ "$#" -eq 7 ]; } || return 1
+  [ "$1" = "uv" ] && [ "$2" = "run" ] && [ "$3" = "python" ] \
+    && [ "$4" = "tools/arc_disjoint_check.py" ] && [ "$5" = "check" ] || return 1
+  if [ "$#" -eq 7 ]; then
+    [ "$6" = "--candidate" ] || return 1
+    printf '%s' "$7" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/@^-]*$' || return 1
+  fi
+}
+
 # U-HE-34 r3 P2: `just review-with-failover-logged <log> [base]` — the guard rejects
 # `|` in Bash commands before this allowlist, so the round-log tee must live INSIDE
 # an allowlisted recipe. Same arity-bounded discipline: 3 or 4 tokens, charset path,
@@ -803,6 +824,16 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
        && _bash_args_safe "$CMD"; then
       # U-HE-34: the C-HE-27 span emitters (roadmap-continue / ship-pr) — positional
       # exact-shape only; see _phase_exact_shape for the duplicate-flag rationale.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/arc_disjoint_check\.py[[:space:]]+check([[:space:]]|$)' \
+       && _disjoint_check_shape "$TRIM" \
+       && printf '%s' "$CMD" | grep -Eq '^[[:space:]]*uv[[:space:]]' \
+       && _bash_args_safe "$CMD"; then
+      # U-HE-36: the selection-time disjointness gate — see _disjoint_check_shape. The
+      # bare form ONLY (codex r8 P2): TRIM strips a leading HARNESS_LANE_ID= prefix, and the
+      # tool falls back to that export when no marker is persisted, so an auto-allowed
+      # `HARNESS_LANE_ID=<peer> …` could make the gate skip that peer. Identity comes from
+      # the marker lane-init wrote, never from the command line.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+merge-gate-adjudicate([[:space:]]|$)' \
        && _adjudicate_exact_shape "$TRIM" \

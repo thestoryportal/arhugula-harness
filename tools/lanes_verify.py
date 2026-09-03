@@ -320,6 +320,8 @@ MANIFEST: list[Row] = [
     # C-HE-22 / C-HE-13 §2 (codex r10 P1): the "result row required before pilots" bound,
     # made fail-closed and mechanical — absent (probe never run) and RED both refuse.
     Row("C-HE-22", "just:pilot-gate-check", "phase1", "local", False),
+    # C-HE-13 §4-5 (U-HE-36): selection-time merge-tree refusal + the O3 base-rate replay
+    Row("C-HE-13", "pytest:tools/test_arc_disjoint_check.py", "phase1", "local + CI", False),
     # C-HE-19/20 (U-HE-08)
     Row(
         "C-HE-19/20",

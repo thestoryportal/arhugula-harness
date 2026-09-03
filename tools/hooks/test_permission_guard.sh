@@ -611,6 +611,31 @@ for c in 'uv run python tools/reservations.py transition --arc-id x --to merged'
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "reservations hardening: '$c' → not allow" || bad "reservations over-matched: $c"
 done
+# (a'') U-HE-36: the selection-time disjointness gate (C-HE-13 §5) — the read-only
+# `check` verb only; `derive-pairs` (writes a tracked file via gh) and `historical`
+# (a minutes-long replay) stay operator recipes, and expansions fall to _bash_args_safe.
+for c in 'uv run python tools/arc_disjoint_check.py check' \
+         'uv run python tools/arc_disjoint_check.py check --candidate HEAD' \
+         'uv run python tools/arc_disjoint_check.py check --candidate feat/u-he-36-arc-disjoint-check' \
+         'uv run python tools/arc_disjoint_check.py check --candidate HEAD^'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "arc_disjoint_check check → allow: '$c'" || bad "arc_disjoint_check check not allowed: $c → $OUT"
+done
+for c in 'uv run python tools/arc_disjoint_check.py derive-pairs' \
+         'uv run python tools/arc_disjoint_check.py historical' \
+         'uv run python tools/arc_disjoint_check.py' \
+         'uv run python tools/arc_disjoint_check.py check --candidate $(git rev-parse HEAD)' \
+         'uv run python tools/arc_disjoint_check.py check --candidate ${victim:=x}' \
+         'uv run python tools/arc_disjoint_check.py check --candidate HEAD --candidate x' \
+         'uv run python tools/arc_disjoint_check.py check --candidate=HEAD' \
+         'uv run python tools/arc_disjoint_check.py check --candidate -x' \
+         'uv run python tools/arc_disjoint_check.py check --candidate HEAD~1' \
+         'HARNESS_LANE_ID=peer uv run python tools/arc_disjoint_check.py check --candidate HEAD' \
+         'HARNESS_ARC_ID=x HARNESS_LANE_ID=peer uv run python tools/arc_disjoint_check.py check' \
+         'uv run python tools/arc_disjoint_check.py check --pairs x'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "arc_disjoint_check hardening: '$c' → not allow" || bad "arc_disjoint_check over-matched: $c"
+done
 # (a''') U-HE-31: the reaping recipe's mandatory pre-step. two-lane/SKILL.md now requires the
 # lane's stack to come down BEFORE safe-worktree-remove frees its index; if that command is
 # ask-then-deny in loop mode, the carrier stalls one step short of the allowlisted reaper.
