@@ -392,6 +392,15 @@ merge-gate-binding lens base='main':
 merge-gate-emit *ARGS:
     uv run python tools/merge_gate_log.py emit "$@"
 
+# All three lens verdicts in ONE call (B-230 Task 5): concurrency, spec-conformance,
+# witness-adequacy, always all three (a recorded BLOCK is a result, not an abort), exit
+# the worst of the three (2 NOT recorded > 1 BLOCK > 0). No resumption -- repair one
+# unrecorded lens with `merge-gate-emit` above, never by re-running this (that mints a
+# fresh round for the two lenses that were fine).
+#   just merge-gate-emit-all --pr <N> --arc-id <arc-id> --concurrency-json <f> --spec-json <f> --witness-json <f>
+merge-gate-emit-all *ARGS:
+    uv run python tools/merge_gate_log.py emit-all "$@"
+
 # Absorption-step disposition write (C-HE-24 §5, U-HE-47): append ONE finding_adjudication
 # row. Exit 0 recorded / 2 NOT recorded (unknown finding_id, actor == producer, same-second
 # ts, an already-adjudicated lineage violation, or — with HARNESS_ARC_ID set — an arc this

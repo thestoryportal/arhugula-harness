@@ -179,14 +179,22 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   silent/truncated/off-format response as approval — this is the same silent-failure trap
   documented for Codex's non-interactive streaming-capture limitation
   (`[[codex-out-of-family-reviewer]]`); it applies just as much to a raw subagent reply.
-- **Record each lens verdict through the structured sibling (C-HE-23 §2).** Write the lens's
-  full response to `.harness/tmp/merge-gate-lens-<id>.txt` (in-worktree, gitignored — the
-  permission guard auto-allows the wrapper only on in-worktree paths) and run
-  `just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+- **Record the three lens verdicts through the structured sibling (C-HE-23 §2) in ONE
+  call (B-230 Task 5).** Write each lens's full response to
+  `.harness/tmp/merge-gate-lens-<id>.txt` (in-worktree, gitignored — the permission guard
+  auto-allows the wrapper only on in-worktree paths) and, once all three files exist, run
+  `just merge-gate-emit-all --pr <PR#> --arc-id <arc-id> --concurrency-json .harness/tmp/merge-gate-lens-concurrency.txt --spec-json .harness/tmp/merge-gate-lens-spec-conformance.txt --witness-json .harness/tmp/merge-gate-lens-witness-adequacy.txt`
   (`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's
   `arc_id` to `pr-<N>`, which breaks the join N6 and the reservation phase rows key on;
-  U-HE-34 r6).
-  It parses the fenced JSON against the schema, holds it to the binding, requires the final
+  U-HE-34 r6). It records concurrency, spec-conformance and witness-adequacy in that
+  order, ALWAYS all three (a recorded BLOCK is a result, not an abort), and exits with the
+  worst of the three per-lens codes below. **Repair, never re-run:** if one lens exits 2,
+  re-run THAT lens and record it alone with the per-lens form
+  `just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+  — re-running `emit-all` would mint a fresh round for the two lenses that were fine (the
+  duplicate-gate-round noise Task 0 measured). There is no resumption: the JSONL is the only
+  record, and nothing is skipped on its say-so.
+  Each lens's record parses the fenced JSON against the schema, holds it to the binding, requires the final
   `VERDICT:` line to agree with it (exact-line match), and writes the
   `.harness/merge-gate-log.jsonl` rows FIRST and a structured `.harness/merge-gate-log.md`
   line second. Exit 0 = APPROVE recorded, 1 = BLOCK recorded, **2 = NOT recorded (no schema
@@ -217,8 +225,11 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   surface via **one batched `AskUserQuestion`** showing all three verdicts verbatim and which
   ones disagreed. Let the operator decide — this is a real fork per §12.4.1, not routine
   progress to auto-resolve.
-- **Always report the three verdicts**, even on a clean all-approve — the three `emit` calls
-  above are the machine record (JSONL first, structured md line second; `just
+- **Always report the three verdicts**, even on a clean all-approve — the `emit-all` call
+  above (plus any per-lens repair) is the machine record (JSONL first, structured md line
+  second). **After a per-lens repair the gate outcome is the worst of the three RECORDED
+  rows at the reviewed head, never the last exit code you saw** — a repaired APPROVE
+  beside an earlier recorded BLOCK is a split verdict, not all-approve; `just
   merge-gate-log-check` is the C-HE-23 §2 consistency reducer); additionally append the
   narrative row to `.harness/merge-gate-log.md` (`PR#`, date, branch, three verdicts, outcome, plus
   `blast-radius: <n consumers>` or `blast-radius: NOT RUN (<reason>)`) so "report where

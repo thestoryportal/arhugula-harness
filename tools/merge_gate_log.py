@@ -785,6 +785,120 @@ def _read_text(arg: str) -> str:
         return stream.read().decode("utf-8")
 
 
+#: The three merge-gate lenses in emission order (merge-gate/SKILL.md), keyed by the
+#: `emit-all` flag that carries each one's verdict file.
+LENS_FILES: tuple[tuple[str, str], ...] = (
+    ("merge-gate-concurrency", "concurrency_json"),
+    ("merge-gate-spec-conformance", "spec_json"),
+    ("merge-gate-witness-adequacy", "witness_json"),
+)
+
+
+def emit_verdict_file(
+    pr: int,
+    lens: str,
+    verdict_json: str,
+    *,
+    base: str = "main",
+    arc_id: str | None = None,
+    lane_id: str | None = None,
+    round_n: int | None = None,
+    prompt_version: str = PROMPT_VERSION,
+) -> int:
+    """Record ONE lens verdict from its output file and return the CLI exit: 0 APPROVE
+    recorded / 1 BLOCK recorded / 2 NOT recorded. The `emit` subcommand is one call of
+    this; `emit-all` is three (B-230 Task 5) — the same function so the two can never
+    drift on parse, binding, or the HEAD-moved rule."""
+    try:
+        expected = lens_binding(REPO, base, lens, prompt_version=prompt_version)
+        # "the next gate run" (C-HE-23 §2): re-emit the md line of any orphan JSONL
+        # verdict left by an earlier crash between the two writes (codex R2 P3).
+        # This invocation's own (arc, pr, head) triple is the recovery authority for
+        # the same arc's reservation-arc orphans (codex r8 P2, head-bound at r9 P2:
+        # recovery fires only for orphans AT THIS INVOCATION's reviewed head — the
+        # gate-rerun-after-crash scenario — so a later-head or mistyped-pr run can
+        # never relabel an older emission; those stay loudly standing).
+        n = reconcile_orphans(
+            arc_id=arc_id or f"pr-{pr}",
+            pr=pr,
+            head_sha=expected["head_sha"],
+        )
+        if n:
+            print(f"merge-gate-log: reconciled {n} orphan md row(s) from an earlier run")
+        text = _read_text(verdict_json)
+        outcome = rw.parse_verdict(CHANNEL, text, expected)
+        if outcome.terminal in ("APPROVE", "BLOCK"):
+            # the lens contract's trailing `VERDICT:` line must AGREE with the schema
+            # block -- JSON APPROVE + `VERDICT: BLOCK` (or no line) is not a verdict
+            # (codex R3 P2); the block alone never records an ambiguous response
+            tail = [ln.strip() for ln in text.splitlines() if ln.strip()]
+            m = _VERDICT_LINE.fullmatch(tail[-1]) if tail else None
+            line_verdict = (m.group(1) or m.group(2)) if m else None
+            if line_verdict != outcome.terminal:
+                outcome = rw.ReviewOutcome(
+                    "REVIEWER_UNAVAILABLE",
+                    CHANNEL,
+                    None,
+                    "final VERDICT line absent or disagrees with the schema block",
+                    [],
+                    None,
+                    outcome.source,
+                )
+        if outcome.terminal == "REVIEWER_UNAVAILABLE":
+            # held to the orchestrator's binding so the marker row is bound to its head
+            outcome.binding = dict(expected)
+            outcome.failure_class = "transient"  # the remedy is re-running the lens
+        rows = emit_gate_row(
+            pr=pr,
+            lens=lens,
+            outcome=outcome,
+            arc_id=arc_id,
+            lane_id=lane_id,
+            round_n=round_n,
+        )
+    except GateLogError as exc:
+        print(
+            f"merge-gate-log: NOT RECORDED ({exc}) -- the lens verdict does not count",
+            file=sys.stderr,
+        )
+        return 2
+    except Exception as exc:  # any other failure is "not recorded", never "BLOCK"
+        # A missing verdict file, a failed git call, a malformed log: exit 2, not the
+        # uncaught-exception exit 1 that the skills read as "BLOCK recorded" (codex R2 P2).
+        print(
+            f"merge-gate-log: NOT RECORDED ({type(exc).__name__}: {exc}) -- "
+            "the lens verdict does not count",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        f"merge-gate-log: {lens} {outcome.terminal} recorded "
+        f"(round {rows[0]['round_n']}, {len(rows)} row(s), head {rows[0]['head_sha']})"
+        + (f" -- {outcome.reason}" if outcome.reason else "")
+    )
+    # HEAD-moved guard (codex R2 P1): the rows are a true record of `expected["head_sha"]`,
+    # but if the checkout moved while we recorded, this is NOT a verdict for the current
+    # head -- the skill must not read exit 0/1 as one. Same rule as the codex wrapper.
+    try:
+        head_now = rw._git(REPO, "rev-parse", "HEAD")
+    except Exception as exc:  # the record stands; whether it is for THIS head is unknown
+        print(
+            f"merge-gate-log: recorded, but HEAD could not be re-read ({exc}) -- the verdict "
+            "does not count for the current checkout; re-run the lens",
+            file=sys.stderr,
+        )
+        return 2
+    if head_now != expected["head_sha"]:
+        print(
+            f"merge-gate-log: HEAD moved during emit ({expected['head_sha'][:12]} -> "
+            f"{head_now[:12]}); the recorded verdict is for the former head and does not "
+            "count for the current checkout -- re-run the lens",
+            file=sys.stderr,
+        )
+        return 2
+    return rw.exit_code(outcome)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="merge_gate_log", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -803,6 +917,20 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--lane-id", default=None)
     e.add_argument("--round-n", type=int, default=None)
     e.add_argument("--prompt-version", default=PROMPT_VERSION)
+
+    ea = sub.add_parser(
+        "emit-all",
+        help="record all three lens verdicts in one call; exit is the worst of the three",
+    )
+    ea.add_argument("--pr", type=int, required=True)
+    ea.add_argument("--concurrency-json", required=True, help="merge-gate-concurrency output")
+    ea.add_argument("--spec-json", required=True, help="merge-gate-spec-conformance output")
+    ea.add_argument("--witness-json", required=True, help="merge-gate-witness-adequacy output")
+    ea.add_argument("--base", default="main")
+    ea.add_argument("--arc-id", default=None)
+    ea.add_argument("--lane-id", default=None)
+    ea.add_argument("--round-n", type=int, default=None)
+    ea.add_argument("--prompt-version", default=PROMPT_VERSION)
 
     a = sub.add_parser(
         "adjudicate", help="append the C-HE-24 §5 finding_adjudication row (absorption step)"
@@ -869,94 +997,41 @@ def main(argv: list[str] | None = None) -> int:
         print(out)
         return 0
     if args.cmd == "emit":
-        try:
-            expected = lens_binding(REPO, args.base, args.lens, prompt_version=args.prompt_version)
-            # "the next gate run" (C-HE-23 §2): re-emit the md line of any orphan JSONL
-            # verdict left by an earlier crash between the two writes (codex R2 P3).
-            # This invocation's own (arc, pr, head) triple is the recovery authority for
-            # the same arc's reservation-arc orphans (codex r8 P2, head-bound at r9 P2:
-            # recovery fires only for orphans AT THIS INVOCATION's reviewed head — the
-            # gate-rerun-after-crash scenario — so a later-head or mistyped-pr run can
-            # never relabel an older emission; those stay loudly standing).
-            n = reconcile_orphans(
-                arc_id=args.arc_id or f"pr-{args.pr}",
-                pr=args.pr,
-                head_sha=expected["head_sha"],
-            )
-            if n:
-                print(f"merge-gate-log: reconciled {n} orphan md row(s) from an earlier run")
-            text = _read_text(args.verdict_json)
-            outcome = rw.parse_verdict(CHANNEL, text, expected)
-            if outcome.terminal in ("APPROVE", "BLOCK"):
-                # the lens contract's trailing `VERDICT:` line must AGREE with the schema
-                # block -- JSON APPROVE + `VERDICT: BLOCK` (or no line) is not a verdict
-                # (codex R3 P2); the block alone never records an ambiguous response
-                tail = [ln.strip() for ln in text.splitlines() if ln.strip()]
-                m = _VERDICT_LINE.fullmatch(tail[-1]) if tail else None
-                line_verdict = (m.group(1) or m.group(2)) if m else None
-                if line_verdict != outcome.terminal:
-                    outcome = rw.ReviewOutcome(
-                        "REVIEWER_UNAVAILABLE",
-                        CHANNEL,
-                        None,
-                        "final VERDICT line absent or disagrees with the schema block",
-                        [],
-                        None,
-                        outcome.source,
-                    )
-            if outcome.terminal == "REVIEWER_UNAVAILABLE":
-                # held to the orchestrator's binding so the marker row is bound to its head
-                outcome.binding = dict(expected)
-                outcome.failure_class = "transient"  # the remedy is re-running the lens
-            rows = emit_gate_row(
-                pr=args.pr,
-                lens=args.lens,
-                outcome=outcome,
+        return emit_verdict_file(
+            args.pr,
+            args.lens,
+            args.verdict_json,
+            base=args.base,
+            arc_id=args.arc_id,
+            lane_id=args.lane_id,
+            round_n=args.round_n,
+            prompt_version=args.prompt_version,
+        )
+    if args.cmd == "emit-all":
+        # A recorded BLOCK is a result, not an abort (plan Task 5 r1): every lens is always
+        # emitted, and the exit is the worst outcome — 2 not recorded > 1 BLOCK > 0. No
+        # resumption (design (b)): the JSONL is the only record, so nothing is skipped on
+        # its say-so; a single unrecorded lens is repaired with the per-lens `emit`.
+        # [LAW:dataflow-not-control-flow] same three operations every run; only values vary.
+        codes = [
+            emit_verdict_file(
+                args.pr,
+                lens,
+                getattr(args, flag),
+                base=args.base,
                 arc_id=args.arc_id,
                 lane_id=args.lane_id,
                 round_n=args.round_n,
+                prompt_version=args.prompt_version,
             )
-        except GateLogError as exc:
-            print(
-                f"merge-gate-log: NOT RECORDED ({exc}) -- the lens verdict does not count",
-                file=sys.stderr,
-            )
-            return 2
-        except Exception as exc:  # any other failure is "not recorded", never "BLOCK"
-            # A missing verdict file, a failed git call, a malformed log: exit 2, not the
-            # uncaught-exception exit 1 that the skills read as "BLOCK recorded" (codex R2 P2).
-            print(
-                f"merge-gate-log: NOT RECORDED ({type(exc).__name__}: {exc}) -- "
-                "the lens verdict does not count",
-                file=sys.stderr,
-            )
-            return 2
+            for lens, flag in LENS_FILES
+        ]
         print(
-            f"merge-gate-log: {args.lens} {outcome.terminal} recorded "
-            f"(round {rows[0]['round_n']}, {len(rows)} row(s), head {rows[0]['head_sha']})"
-            + (f" -- {outcome.reason}" if outcome.reason else "")
+            "merge-gate-log: emit-all "
+            + " ".join(f"{lens}={code}" for (lens, _), code in zip(LENS_FILES, codes, strict=True))
+            + f" -> exit {max(codes)}"
         )
-        # HEAD-moved guard (codex R2 P1): the rows are a true record of `expected["head_sha"]`,
-        # but if the checkout moved while we recorded, this is NOT a verdict for the current
-        # head -- the skill must not read exit 0/1 as one. Same rule as the codex wrapper.
-        try:
-            head_now = rw._git(REPO, "rev-parse", "HEAD")
-        except Exception as exc:  # the record stands; whether it is for THIS head is unknown
-            print(
-                f"merge-gate-log: recorded, but HEAD could not be re-read ({exc}) -- the verdict "
-                "does not count for the current checkout; re-run the lens",
-                file=sys.stderr,
-            )
-            return 2
-        if head_now != expected["head_sha"]:
-            print(
-                f"merge-gate-log: HEAD moved during emit ({expected['head_sha'][:12]} -> "
-                f"{head_now[:12]}); the recorded verdict is for the former head and does not "
-                "count for the current checkout -- re-run the lens",
-                file=sys.stderr,
-            )
-            return 2
-        return rw.exit_code(outcome)
+        return max(codes)
     if args.cmd == "adjudicate":
         # the guard-required headless form: HARNESS_ARC_ID names an arc, and that claim is
         # bound to reservation HOLDER state inside adjudicate(), immediately before the

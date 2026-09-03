@@ -40,6 +40,7 @@ tools/test_arc_close_recipe.py \
   tools/test_main_protection.py \
   tools/test_merge_door.py \
   tools/test_merge_gate_log.py \
+  tools/test_merge_gate_emit_all.py \
   tools/test_review_wrapper.py \
   tools/test_reviewer_concurrency_probe.py \
   tools/test_reservations.py \

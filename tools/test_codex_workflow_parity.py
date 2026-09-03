@@ -1407,6 +1407,15 @@ def test_merge_gate_carriers_wire_arc_id_and_adjudication() -> None:
     assert "just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id>" in codex
     assert "--arc-id <arc-id>" in claude
 
+    # B-230 Task 5: BOTH carriers record the three verdicts in one call and name the
+    # per-lens form only as the repair path — reverting either carrier to three calls
+    # must red this suite.
+    emit_all = "just merge-gate-emit-all --pr <"
+    for text, carrier in ((codex, "codex"), (claude, "claude")):
+        assert emit_all in text, carrier
+        assert "--concurrency-json" in text and "--witness-json" in text, carrier
+        assert "never" in text and "re-running `emit-all`" in text, carrier
+
     # the documented command MUST carry the HARNESS_ARC_ID= prefix (r5 P2): the guard
     # auto-allows only the prefixed form, so a bare instruction strands headless at ask
     adjudicate_cmd = (
