@@ -1322,14 +1322,20 @@ def test_arc_metrics_capture_is_mirrored_across_both_ship_carriers() -> None:
         marker = "arc-metrics"
         start = body.lower().index(marker)
         section = body[start:]
-        assert "just arc-metrics queue" in section, path
-        # C-HE-25 X6e activation (codex u-he-48 r1/r2): inspect the fenced queue
+        # B-230 Task 3: the queue command rides the ONE close-out call, `just arc-close`
+        # (exit report, then `arc-metrics queue` with the tail forwarded verbatim), so
+        # the fenced command to inspect is that call — exactly one per carrier.
+        assert "just arc-close" in section, path
+        # C-HE-25 X6e activation (codex u-he-48 r1/r2): inspect the fenced
         # COMMAND, not the surrounding prose -- explanatory paragraphs also say
         # "--transcript", so a prose-level search stays green with the flag
         # deleted from the command. The Claude carrier must pass the flag; the
         # Codex carrier must instead NAME its exclusion (rollout transcripts
         # under ~/.codex/sessions are a shape arc_cost.py does not parse).
-        blocks = [b for b in section.split("```") if "just arc-metrics queue" in b]
+        # Fences are balanced, so the odd-indexed split segments are the fenced code;
+        # the prose around them names the call too and must not count.
+        fenced = body.split("```")[1::2]
+        blocks = [b for b in fenced if "just arc-close" in b]
         assert len(blocks) == 1, path
         if ".claude" in str(path):
             assert "--transcript" in blocks[0], path

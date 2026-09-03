@@ -39,6 +39,10 @@
 | Per-call hook cost | `post-merge-refresh.sh:45`, `precmd-clear-cache.sh:28`, `rtk-shape-guard.sh:69` exit within one grep of an ordinary Bash call; `permission-guard.sh:67` exits unless loop mode | grounding |
 | Prompt hook signal | `[roadmap] next=?` on every prompt this session (`prompt-context.sh:57` prints `?` when `hook_roadmap_next` returns empty, `tools/hooks/lib.sh:267-286`) | observed |
 | Branch-hygiene deferrals waiting on the operator | 3 plus one TTL re-surface in the session banner | observed |
+| CI wall clock after Task 1 — content-merge `main` run 33778938360 (the #1503 squash touched `ci.yml`, so the self-guard forced a full run) | 464 s; `changes` 11 s; nothing skipped | `gh run view 33778938360 --json jobs` |
+| CI wall clock after Task 1 — refresh-merge `main` run 33780380581 (#1504) | 55 s against the 455 s baseline row above; `changes` 13 s; pytest / coverage / axis-isolation / pyright / tools-coverage `skipped` | `gh run view 33780380581 --json jobs` |
+| Required checks on `main` after Task 1 | the live list still has 12 `— blocking` contexts; `main_protection.py verify` derives 14 — missing `merge-gate log consistency (C-HE-23 §2 reducer) — blocking` (new in Task 1) and `split-brain ledger backstop — blocking` (absent before Task 1 too). `just main-protection-apply` closes the gap; it is an outward-facing branch-protection write, surfaced once here and not run from an unattended lane | `uv run python tools/main_protection.py verify` at `8c014d67f` (b-230-task-3) |
+| Loop cost baseline at `8c014d67f` (b-230-task-3, before this arc's review rounds) | 2593 rows / 77 arcs (75 reviewed); median 7, max 24; gate rounds with findings 50, single-lens 36; accepted-only unique catches witness-adequacy 20 / spec-conformance 10 / concurrency 0 (raw 34; rejected-or-suppressed 4; unadjudicated 0); lease-acquire events 2 | `uv run python tools/loop_cost_baseline.py` |
 
 The hooks category collapses to two defects (the empty `next=` token and duplicated banner lines); the per-call hooks are already cheap. The serialization category collapses to lease *duration* until Task 8 Step 1 makes in-budget contention measurable; only two hour-long stalls are on record across the 76 arcs at the Task 0 head.
 
@@ -116,7 +120,7 @@ Two of the five CI runs per unit verify a diff that is only `.harness/roadmap_st
 - The fast path skips pytest (which runs `tools/test_merge_gate_log.py`) on exactly the commits that append gate rows, and no unconditional job today runs the JSONL↔Markdown consistency reducer (`rg merge-gate-log .github/workflows/ci.yml` is empty). Add an unconditional `gate-log-consistency` job so a sibling mismatch cannot receive green final-head CI. `merge_gate_log.py` is NOT stdlib-only — its siblings `finding_record` and `review_wrapper_common` import the declared `jsonschema` dependency — so the job installs the project (the same `uv sync` step the light `lint` job uses) and runs `uv run python tools/merge_gate_log.py check`; a no-setup `python3` invocation would fail at import on a clean runner and red every CI run. (r5, r6)
 - Base/head for the classifier: `pull_request` → `github.event.pull_request.base.sha..head.sha`; `push` → `github.event.before..github.sha`. The output line is appended to `$GITHUB_OUTPUT` verbatim.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tools/test_ci_bookkeeping_filter.py
@@ -140,12 +144,14 @@ def test_empty_diff_raises():
         classify([])
 ```
 
-- [ ] **Step 2: Run to verify it fails** — `uv run pytest tools/test_ci_bookkeeping_filter.py -v`; expected: import error.
-- [ ] **Step 3: Write the classifier** to the interface.
-- [ ] **Step 4: Run the test** — expected: 4 passed.
-- [ ] **Step 5: Add the `changes` and `gate-log-consistency` jobs and gate the heavy jobs** per the constraints.
-- [ ] **Step 6: Three witnesses before and after merging the workflow change.** Positive: the Task 1 PR touches `.github/` and `tools/`, so every job must run (`gh pr checks <n>` shows `changes` logging `bookkeeping=false` and pytest running). Negative: on a throwaway branch, make `tools/ci_bookkeeping_diff.py` exit 2 unconditionally and push; pytest must still run (proves the `always()` guard). After merge, the door's next refresh PR is the third witness: `gh pr checks <refresh-pr>` must show pytest, coverage, axis-isolation, typecheck, tools-coverage as `skipped`, `gate-log-consistency` as passed, and the PR mergeable. If any required check shows "Expected" instead of `skipped`, `git revert` and record the finding here; do not widen the filter.
-- [ ] **Step 7: Commit** — `git commit -m "ci: bookkeeping fast path — skip heavy jobs when only roadmap_status or gate-log files change"`.
+- [x] **Step 2: Run to verify it fails** — `uv run pytest tools/test_ci_bookkeeping_filter.py -v`; expected: import error.
+- [x] **Step 3: Write the classifier** to the interface.
+- [x] **Step 4: Run the test** — expected: 4 passed.
+- [x] **Step 5: Add the `changes` and `gate-log-consistency` jobs and gate the heavy jobs** per the constraints.
+- [x] **Step 6: Three witnesses before and after merging the workflow change.** Positive: the Task 1 PR touches `.github/` and `tools/`, so every job must run (`gh pr checks <n>` shows `changes` logging `bookkeeping=false` and pytest running). Negative: on a throwaway branch, make `tools/ci_bookkeeping_diff.py` exit 2 unconditionally and push; pytest must still run (proves the `always()` guard). After merge, the door's next refresh PR is the third witness: `gh pr checks <refresh-pr>` must show pytest, coverage, axis-isolation, typecheck, tools-coverage as `skipped`, `gate-log-consistency` as passed, and the PR mergeable. If any required check shows "Expected" instead of `skipped`, `git revert` and record the finding here; do not widen the filter.
+- [x] **Step 7: Commit** — `git commit -m "ci: bookkeeping fast path — skip heavy jobs when only roadmap_status or gate-log files change"`.
+
+**Landed** as PR #1503 → `b897542dc`, refresh #1504 → `9fb7ea033` (2026-09-03). Step 6 witnesses: positive, run 33774577684 (`changes` 13 s, `bookkeeping=false`, pytest ran); negative, run 33775581502 — the classifier STEP was forced to exit 2, not the classifier itself, because the self-guard makes a classifier edit unreachable on the same PR (`bookkeeping=false` before the classifier runs), and pytest still ran; third, refresh PR #1504's five heavy jobs `skipped` (run 33780380581, 55 s, measured in §0). Two deviations from the constraints as written: the classifier diffs `BASE...HEAD` (three-dot, the merge-base form a `pull_request` event needs) with `--no-renames`, so a renamed bookkeeping file is classified by both of its names. Step 8 stays decision-gated with Task 6 Step 6.
 
 **Expected saving:** two runs per unit drop from ~455 s to ~60 s: the refresh PR run and the refresh-merge `main` push run (`github.event.before..github.sha` is the refresh commit alone). That is about 13 minutes of wall clock per landed unit, all of it inside the lease, so the door's hold shrinks from about 23 minutes to about 10. The "final head after gate rows" PR run stays full, because a `pull_request` diff is `base..head` and covers the whole PR.
 
@@ -208,7 +214,7 @@ echo "ok"
 
 The close-out after the door releases is eight serial steps (`.claude/skills/ship-pr/SKILL.md:387-644`). Reflect and `/context-save-lean` need the session; the exit report, metrics queue, and deferral rows do not. Fold those into one recipe.
 
-**Files:** modify `justfile` (add `arc-close` next to `arc-exit-report` at line 265); modify `tools/hooks/permission-guard.sh` and `tools/hooks/test_permission_guard.sh` (the loop-mode allowlist entry); modify both ship-pr carriers (`.claude/skills/ship-pr/SKILL.md:541-624` and the matching sections of `.agents/skills/ship-pr/SKILL.md`) to invoke `just arc-close`; test `tools/test_arc_close_recipe.py` (wired into `tools/codex-parity-check.sh`) plus a carrier-parity case in the shape of `tools/test_codex_workflow_parity.py`.
+**Files:** modify `justfile` (add `arc-close` next to `arc-exit-report` at line 265); modify `tools/hooks/permission-guard.sh` and `tools/hooks/test_permission_guard.sh` (the loop-mode allowlist entry); modify both ship-pr carriers (the §Arc exit report and §Arc-metrics capture sections of `.claude/skills/ship-pr/SKILL.md`, and the matching sections of `.agents/skills/ship-pr/SKILL.md`) to invoke `just arc-close`; test `tools/test_arc_close_recipe.py` (wired into `tools/codex-parity-check.sh`) plus a carrier-parity case in the shape of `tools/test_codex_workflow_parity.py`. Modify `.github/workflows/ci.yml` too: the recipe test EXECUTES `just`, and the runner has no `just` — install it (SHA-pinned `extractions/setup-just`) in the `test` job that runs the parity check.
 
 **Interface.** `just arc-close <pr> <merge_sha> <checkpoint> [<arc-metrics queue arguments…>]` runs `just arc-exit-report --pr <pr> --merge-sha <merge_sha> --checkpoint <checkpoint>` then `just arc-metrics queue --pr <pr> <arguments…>`; each line in its own shell; `just` stops at the first non-zero exit.
 
@@ -218,9 +224,9 @@ The close-out after the door releases is eight serial steps (`.claude/skills/shi
 - The test EXECUTES the recipe: a shim `just` ahead of the real binary on `PATH` records the inner calls' argv (the real binary is resolved with `shutil.which` before the shim is prepended), so positional handling and glob preservation are exercised, not printed — `just -n` does not expand `$@`. (r2)
 - Both ship-pr carriers change together with a parity witness; the cross-arc metrics drain stays as it is (its reason is durability, `ship-pr/SKILL.md:604-611`, `justfile:232-234`). (r5)
 - The shim records each argv element separately (one NUL- or newline-delimited element per line, or JSON), never `"$*"`: a recipe that forwarded the whole tail as ONE argument via `"$*"` would produce the same flattened log as correct `"$@"` forwarding and the test would stay green while `arc_metrics` argparse failed. The assertions compare argument ARRAYS. (r6)
-- `just arc-close` is added to the permission guard's loop-mode allowlist (arity-bounded exact shape, in the style of the existing `just arc-exit-report` / `just arc-metrics` entries) with `test_permission_guard.sh` cases; without it the new carrier command falls through to an approval prompt and is denied unattended. Task 3's file list includes `tools/hooks/permission-guard.sh` and its tests. (r6)
+- `just arc-close` is added to the permission guard's loop-mode allowlist with `test_permission_guard.sh` cases; without it the new carrier command falls through to an approval prompt and is denied unattended. Task 3's file list includes `tools/hooks/permission-guard.sh` and its tests. (r6) **Grounded at the Task 3 arc:** the cited `just arc-exit-report` / `just arc-metrics` entries do not exist (`rg 'arc-exit-report|arc-metrics' tools/hooks/permission-guard.sh` is empty), so there was no exact-shape style to follow; `arc-close` rides the generic `just` verb alternation like every other allowlisted recipe — its variadic `*QUEUE_ARGS` swallows every trailing token, so no token can chain a second recipe, and the `_JUST_PLAIN_LINE` token grammar plus `_bash_args_safe` bound the arguments. Two forms stay at ask by those pre-existing walls and are pinned as ask cases: a glob `--round-logs '…/*.log'` (`*` is outside the token charset; widening is B-217's, not this task's — pass the round-log paths explicitly, `--round-logs` is `nargs="+"`) and a `--transcript` under `~` or anywhere outside the worktree (omit it in a loop-mode lane).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tools/test_arc_close_recipe.py
@@ -254,10 +260,10 @@ def test_omitting_transcript_and_levers_is_representable(tmp_path):
     assert calls[1] == ["arc-metrics", "queue", "--pr", "12", "--arc-id", "u-x", "--arc-type", "applying", "--decisions", "0", "--round-logs", "logs/*.log"]
 ```
 
-- [ ] **Step 2: Run to verify it fails** — unknown recipe.
-- [ ] **Step 3: Add the recipe** per the interface and constraints.
-- [ ] **Step 4: Run the test** — expected: 2 passed.
-- [ ] **Step 5: Update both ship-pr carriers** — replace the two command blocks in §"Arc exit report" and §"Arc-metrics capture" with the single `just arc-close …` invocation; keep the surrounding rules (skip when the PR was itself the refresh; queue writes outside the repo; the transcript and lever rules verbatim). Add the parity case. Run `just codex-check`.
+- [x] **Step 2: Run to verify it fails** — unknown recipe.
+- [x] **Step 3: Add the recipe** per the interface and constraints.
+- [x] **Step 4: Run the test** — expected: 2 passed.
+- [x] **Step 5: Update both ship-pr carriers** — replace the two command blocks in §"Arc exit report" and §"Arc-metrics capture" with the single `just arc-close …` invocation; keep the surrounding rules (skip when the PR was itself the refresh; queue writes outside the repo; the transcript and lever rules verbatim). Add the parity case. Run `just codex-check`.
 - [ ] **Step 6: Commit** — `git commit -m "feat(just): arc-close folds exit-report + metrics queue into one close-out call"`.
 
 ---
