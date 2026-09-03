@@ -1,0 +1,305 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Phase D — Merge door, fixed-point refresh, arc close",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "session",
+      "label": "Claude session + ship-pr"
+    },
+    {
+      "id": "door",
+      "label": "merge door (safe-merge.sh → merge_door.py)"
+    },
+    {
+      "id": "github",
+      "label": "GitHub + CI"
+    },
+    {
+      "id": "records",
+      "label": "Records"
+    },
+    {
+      "id": "blocked",
+      "label": "Blocked / HITL",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "ph-prep",
+      "label": "Prepare",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "ph-land",
+      "label": "Land under one lease",
+      "fromCol": 2,
+      "toCol": 4,
+      "variant": "emphasis"
+    },
+    {
+      "id": "ph-close",
+      "label": "Close",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "backfill",
+    "safemerge",
+    "lease",
+    "merge",
+    "refresh",
+    "refreshmerge",
+    "release",
+    "closeout"
+  ],
+  "nodes": [
+    {
+      "id": "backfill",
+      "lane": "session",
+      "col": 0,
+      "type": "backend",
+      "label": "final-gate back-fill",
+      "sublabel": "reservations update · open",
+      "width": 150
+    },
+    {
+      "id": "draft",
+      "lane": "records",
+      "col": 0,
+      "type": "database",
+      "label": ".next-action-draft",
+      "sublabel": "post-pr: <N> + pointer",
+      "width": 140
+    },
+    {
+      "id": "safemerge",
+      "lane": "session",
+      "col": 1,
+      "type": "security",
+      "label": "safe-merge.sh <pr>",
+      "sublabel": "needs ARC_ID + LANE_ID",
+      "tag": "only merge path",
+      "width": 150
+    },
+    {
+      "id": "flagguard",
+      "lane": "blocked",
+      "col": 1,
+      "type": "security",
+      "label": "exit 69 pre-lease",
+      "sublabel": "refresh flag absent",
+      "width": 130
+    },
+    {
+      "id": "lease",
+      "lane": "door",
+      "col": 2,
+      "type": "security",
+      "label": "acquire lease",
+      "sublabel": "fail-fast · tuple check",
+      "width": 150
+    },
+    {
+      "id": "held",
+      "lane": "blocked",
+      "col": 2,
+      "type": "security",
+      "label": "lease held → yield",
+      "sublabel": "held → yield · retry",
+      "width": 140
+    },
+    {
+      "id": "merge",
+      "lane": "door",
+      "col": 3,
+      "type": "cloud",
+      "label": "squash merge",
+      "sublabel": "--squash --match-head-commit",
+      "width": 160
+    },
+    {
+      "id": "mainci",
+      "lane": "github",
+      "col": 3,
+      "type": "cloud",
+      "label": "main CI on merge SHA",
+      "sublabel": "gh run list --commit",
+      "width": 140
+    },
+    {
+      "id": "regate",
+      "lane": "blocked",
+      "col": 3,
+      "type": "security",
+      "label": "exit 4 / 5",
+      "sublabel": "stale tuple / budget out",
+      "width": 150
+    },
+    {
+      "id": "refresh",
+      "lane": "door",
+      "col": 4,
+      "type": "backend",
+      "label": "refresh continuation",
+      "sublabel": "--emit-refresh-pr-json",
+      "width": 130
+    },
+    {
+      "id": "refreshmerge",
+      "lane": "github",
+      "col": 4,
+      "type": "cloud",
+      "label": "refresh PR",
+      "sublabel": "ops: roadmap status refresh",
+      "tag": "terminating",
+      "width": 160
+    },
+    {
+      "id": "doorblocked",
+      "lane": "blocked",
+      "col": 4,
+      "type": "security",
+      "label": "door blocked (exit 3)",
+      "sublabel": "CI not green → unblock",
+      "width": 150
+    },
+    {
+      "id": "release",
+      "lane": "door",
+      "col": 5,
+      "type": "security",
+      "label": "release lease",
+      "sublabel": "exit 0",
+      "width": 92
+    },
+    {
+      "id": "closeout",
+      "lane": "session",
+      "col": 5,
+      "type": "backend",
+      "label": "arc close-out",
+      "sublabel": "hygiene · reflect · save · report",
+      "width": 180
+    }
+  ],
+  "edges": [
+    {
+      "from": "backfill",
+      "to": "draft",
+      "role": "branch",
+      "variant": "dashed"
+    },
+    {
+      "from": "backfill",
+      "to": "safemerge",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "safemerge",
+      "to": "flagguard",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "safemerge",
+      "to": "lease",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "lease",
+      "to": "held",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "lease",
+      "to": "merge",
+      "role": "main",
+      "label": "tuple verified",
+      "variant": "emphasis"
+    },
+    {
+      "from": "merge",
+      "to": "mainci",
+      "role": "branch",
+      "variant": "dashed"
+    },
+    {
+      "from": "lease",
+      "to": "regate",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "merge",
+      "to": "refresh",
+      "role": "main",
+      "label": "main CI green",
+      "variant": "emphasis"
+    },
+    {
+      "from": "refresh",
+      "to": "refreshmerge",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "refreshmerge",
+      "to": "doorblocked",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "refreshmerge",
+      "to": "release",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "release",
+      "to": "closeout",
+      "role": "main",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "One lease, one merge string",
+      "items": [
+        "The wrapper aborts pre-lease (exit 69) if the refresh producer lacks --emit-refresh-pr-json",
+        "Lease acquire is fail-fast; on held the caller yields, does the next gate pass, and retries with backoff to HITL-recoverable",
+        "Exit 0 landed + refreshed · 3 blocked (DEFERRED-HIL row) · 4 re-gate · 5 budget exhausted"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Fixed point (§12.2.1)",
+      "items": [
+        "Refresh branch roadmap-refresh-post-<N>, title ops: roadmap status refresh post-#N, only roadmap_status.md changes",
+        "The refresh installs the pointer from .next-action-draft when its post-pr number matches this landing",
+        "Its merge leaves the stored hash one commit behind; the next SessionStart audit reads lag-expected"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Close-out after release",
+      "items": [
+        "PostToolUse Bash hook post-merge-refresh.sh fires after every Bash call here, including the door's merge commands (advisory reminder of §12.2)",
+        "Wait for the refresh merge SHA's own main CI before branch hygiene; force-with-lease deletes are deferred in loop mode",
+        "Reflect, save memory when a pattern recurs, then /context-save-lean (skipped only when this PR was itself the refresh)",
+        "arc-exit-report and arc-metrics queue write the exit row; the next arc drains metrics before its own PR"
+      ]
+    }
+  ]
+}

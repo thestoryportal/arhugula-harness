@@ -1,0 +1,385 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Code Implementation Loop — continue to refresh merge",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "audit",
+        "label": "Audit and derive",
+        "focus": [
+          "continue",
+          "audit",
+          "drift",
+          "derive"
+        ],
+        "note": "SessionStart audit compares the workspace hash; drift halts, match derives the next action."
+      },
+      {
+        "id": "build",
+        "label": "Build and Codex round",
+        "focus": [
+          "derive",
+          "build",
+          "codex",
+          "codexfix",
+          "prcreate"
+        ],
+        "note": "Ground, red-first tests, preflight, just codex-check, then the out-of-family round before the PR opens."
+      },
+      {
+        "id": "review",
+        "label": "PR, CI, merge-gate",
+        "focus": [
+          "prcreate",
+          "ci",
+          "gate",
+          "gatefix"
+        ],
+        "note": "CI green is a precondition; the 3-lens gate merges only on all APPROVE, capped at ten rounds."
+      },
+      {
+        "id": "land",
+        "label": "Merge door and refresh",
+        "focus": [
+          "gate",
+          "door",
+          "doorblocked",
+          "close"
+        ],
+        "note": "safe-merge.sh holds one lease across squash-merge, main CI, and the terminating refresh PR."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "operator",
+      "label": "Operator"
+    },
+    {
+      "id": "session",
+      "label": "Claude session + skills"
+    },
+    {
+      "id": "gates",
+      "label": "Review gates"
+    },
+    {
+      "id": "github",
+      "label": "GitHub + CI"
+    },
+    {
+      "id": "blocked",
+      "label": "Blocked / halted",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "ph-audit",
+      "label": "Audit",
+      "fromCol": 0,
+      "toCol": 0
+    },
+    {
+      "id": "ph-derive",
+      "label": "Derive",
+      "fromCol": 1,
+      "toCol": 1
+    },
+    {
+      "id": "ph-build",
+      "label": "Build + Codex round",
+      "fromCol": 2,
+      "toCol": 2,
+      "variant": "emphasis"
+    },
+    {
+      "id": "ph-review",
+      "label": "PR + CI + merge-gate",
+      "fromCol": 3,
+      "toCol": 4,
+      "variant": "security"
+    },
+    {
+      "id": "ph-land",
+      "label": "Door + refresh",
+      "fromCol": 5,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "continue",
+    "audit",
+    "derive",
+    "build",
+    "codex",
+    "prcreate",
+    "ci",
+    "gate",
+    "door"
+  ],
+  "nodes": [
+    {
+      "id": "continue",
+      "lane": "operator",
+      "col": 0,
+      "type": "frontend",
+      "label": "continue",
+      "sublabel": "/roadmap-continue"
+    },
+    {
+      "id": "audit",
+      "lane": "session",
+      "col": 0,
+      "type": "messagebus",
+      "label": "SessionStart audit",
+      "sublabel": "session-start.sh",
+      "width": 120
+    },
+    {
+      "id": "drift",
+      "lane": "blocked",
+      "col": 0,
+      "type": "security",
+      "label": "DRIFT DETECTED",
+      "sublabel": "§12.3 halt · ask",
+      "width": 115
+    },
+    {
+      "id": "derive",
+      "lane": "session",
+      "col": 1,
+      "type": "backend",
+      "label": "derive + reserve",
+      "sublabel": "§4 queue · reservations.py",
+      "width": 120
+    },
+    {
+      "id": "build",
+      "lane": "session",
+      "col": 2,
+      "type": "backend",
+      "label": "build unit",
+      "sublabel": "red-first · preflight · codex-check",
+      "width": 150
+    },
+    {
+      "id": "codex",
+      "lane": "gates",
+      "col": 2,
+      "type": "external",
+      "label": "codex-review",
+      "sublabel": "exit 0 APPROVE · exit 1 BLOCK",
+      "width": 140
+    },
+    {
+      "id": "codexfix",
+      "lane": "blocked",
+      "col": 1,
+      "type": "security",
+      "label": "BLOCK → absorb",
+      "sublabel": "attest · next round",
+      "width": 120
+    },
+    {
+      "id": "prcreate",
+      "lane": "github",
+      "col": 2,
+      "type": "cloud",
+      "label": "gh pr create",
+      "sublabel": "feature branch off main",
+      "width": 110
+    },
+    {
+      "id": "ci",
+      "lane": "github",
+      "col": 3,
+      "type": "cloud",
+      "label": "PR CI",
+      "sublabel": "gh pr checks · red → fix",
+      "width": 120
+    },
+    {
+      "id": "gate",
+      "lane": "gates",
+      "col": 4,
+      "type": "security",
+      "label": "merge-gate",
+      "sublabel": "3 lenses · Agent ×3",
+      "tag": "all APPROVE"
+    },
+    {
+      "id": "gatefix",
+      "lane": "blocked",
+      "col": 4,
+      "type": "security",
+      "label": "any BLOCK / split",
+      "sublabel": "adjudicate · re-gate ≤10",
+      "width": 140
+    },
+    {
+      "id": "door",
+      "lane": "session",
+      "col": 5,
+      "type": "security",
+      "label": "merge door",
+      "sublabel": "safe-merge.sh · squash · main CI · refresh PR",
+      "tag": "one lease",
+      "width": 190
+    },
+    {
+      "id": "doorblocked",
+      "lane": "blocked",
+      "col": 5,
+      "type": "security",
+      "label": "door blocked",
+      "sublabel": "exit 3 · merge-door-unblock",
+      "width": 150
+    },
+    {
+      "id": "close",
+      "lane": "operator",
+      "col": 5,
+      "type": "frontend",
+      "label": "arc close",
+      "sublabel": "exit 0 · reflect · context-save-lean",
+      "width": 160
+    }
+  ],
+  "edges": [
+    {
+      "from": "continue",
+      "to": "audit",
+      "role": "main"
+    },
+    {
+      "from": "audit",
+      "to": "derive",
+      "role": "main",
+      "label": "hash ok",
+      "variant": "emphasis"
+    },
+    {
+      "from": "audit",
+      "to": "drift",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "derive",
+      "to": "build",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "build",
+      "to": "codex",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "codex",
+      "to": "codexfix",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "codexfix",
+      "to": "codex",
+      "role": "return",
+      "variant": "dashed"
+    },
+    {
+      "from": "codex",
+      "to": "prcreate",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "prcreate",
+      "to": "ci",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "ci",
+      "to": "gate",
+      "role": "main",
+      "label": "green",
+      "variant": "emphasis"
+    },
+    {
+      "from": "gate",
+      "to": "gatefix",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "gatefix",
+      "to": "codex",
+      "role": "return",
+      "variant": "dashed"
+    },
+    {
+      "from": "gate",
+      "to": "door",
+      "role": "main",
+      "label": "all 3 APPROVE",
+      "variant": "emphasis"
+    },
+    {
+      "from": "door",
+      "to": "doorblocked",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "door",
+      "to": "close",
+      "role": "branch",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Every gate has two exits",
+      "items": [
+        "SessionStart audit: hash match → derive; mismatch → DRIFT halt",
+        "Codex round (pre-PR): exit 0 APPROVE → gh pr create; exit 1 BLOCK → absorb, next round",
+        "PR CI: green → merge-gate; red → fix and re-poll (drawn in the Phase C drill-down)",
+        "merge-gate: all 3 APPROVE → door; any BLOCK or split → fix, re-run the Codex round, re-gate, capped at 10"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "The door is the only merge",
+      "items": [
+        "safe-merge.sh wraps merge_door.py; the only merge string is gh pr merge --squash --match-head-commit",
+        "One held lease spans squash-merge, the merge SHA's main CI, and the terminating refresh PR",
+        "Exit 3 = blocked (DEFERRED-HIL row names just merge-door-unblock), 4 = re-gate, 5 = budget exhausted"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Lifecycle hooks off the main path",
+      "items": [
+        "PreCompact precompact-checkpoint.sh · PostCompact postcompact-reinject.sh",
+        "PostToolUseFailure + StopFailure capture-failure.sh · SessionEnd session-end-cleanup.sh",
+        "PermissionRequest permission-guard.sh (same guard as PreToolUse *) · PostToolUse Bash post-merge-refresh.sh advisory after every Bash call"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Fixed point",
+      "items": [
+        "Refresh PR title begins ops: roadmap status refresh and touches only .harness/roadmap_status.md",
+        "Its merge leaves the stored hash one commit behind; the next audit reads that as lag-expected, not drift",
+        "Drill-downs: 01 audit, 02 build, 03 review, 04 merge + refresh"
+      ]
+    }
+  ]
+}

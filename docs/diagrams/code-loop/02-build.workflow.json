@@ -1,0 +1,273 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Phase B — Ground, build, preflight, commit",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "reviewers",
+      "label": "Subagents"
+    },
+    {
+      "id": "session",
+      "label": "Claude session + skills"
+    },
+    {
+      "id": "tools",
+      "label": "just recipes + tools"
+    },
+    {
+      "id": "hooks",
+      "label": "Hooks (settings.json)"
+    },
+    {
+      "id": "blocked",
+      "label": "Red / fix",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "ph-ground",
+      "label": "Ground",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "ph-impl",
+      "label": "Implement",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "ph-gate",
+      "label": "Local gate + commit",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "ground",
+    "redfirst",
+    "implement",
+    "preflight",
+    "codexcheck",
+    "commit"
+  ],
+  "nodes": [
+    {
+      "id": "ground",
+      "lane": "session",
+      "col": 0,
+      "type": "backend",
+      "label": "ground unit",
+      "sublabel": "re-read cites at HEAD",
+      "width": 110
+    },
+    {
+      "id": "overlay",
+      "lane": "tools",
+      "col": 0,
+      "type": "database",
+      "label": "just overlay-query",
+      "sublabel": "C-*/U-* cites · --seam",
+      "width": 130
+    },
+    {
+      "id": "brief",
+      "lane": "reviewers",
+      "col": 1,
+      "type": "external",
+      "label": "transcript-brief review",
+      "sublabel": "§13.1 fresh-context Agent",
+      "width": 175
+    },
+    {
+      "id": "redfirst",
+      "lane": "session",
+      "col": 1,
+      "type": "backend",
+      "label": "red-first tests",
+      "sublabel": "failing witness per unit",
+      "width": 120
+    },
+    {
+      "id": "implement",
+      "lane": "session",
+      "col": 2,
+      "type": "backend",
+      "label": "implement",
+      "sublabel": "Edit / Write / Bash"
+    },
+    {
+      "id": "pretool",
+      "lane": "hooks",
+      "col": 2,
+      "type": "messagebus",
+      "label": "PreToolUse + PostToolUse",
+      "sublabel": "clear-cache · rtk-shape-guard · permission-guard · postedit-lint",
+      "width": 290
+    },
+    {
+      "id": "preflight",
+      "lane": "session",
+      "col": 3,
+      "type": "security",
+      "label": "defect-class-preflight",
+      "sublabel": "preflight-grep.sh · ranked classes",
+      "width": 150
+    },
+    {
+      "id": "callers",
+      "lane": "tools",
+      "col": 3,
+      "type": "database",
+      "label": "graft callers",
+      "sublabel": "--depth 2 blast radius",
+      "width": 110
+    },
+    {
+      "id": "codexcheck",
+      "lane": "tools",
+      "col": 4,
+      "type": "security",
+      "label": "just codex-check",
+      "sublabel": "lint · typecheck · parity · pytest",
+      "tag": "local gate",
+      "width": 150
+    },
+    {
+      "id": "red",
+      "lane": "blocked",
+      "col": 4,
+      "type": "security",
+      "label": "red → fix",
+      "sublabel": "loop until green",
+      "width": 100
+    },
+    {
+      "id": "commit",
+      "lane": "session",
+      "col": 5,
+      "type": "backend",
+      "label": "commit",
+      "sublabel": "conventional title + trailers",
+      "width": 120
+    },
+    {
+      "id": "stop",
+      "lane": "hooks",
+      "col": 5,
+      "type": "messagebus",
+      "label": "Stop hooks",
+      "sublabel": "stop-gate (ruff) · git-arc-guard · stop-loop",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "from": "ground",
+      "to": "overlay",
+      "role": "branch",
+      "label": "resolve cites",
+      "variant": "dashed"
+    },
+    {
+      "from": "ground",
+      "to": "redfirst",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "redfirst",
+      "to": "brief",
+      "role": "branch",
+      "label": "decision fork",
+      "variant": "dashed"
+    },
+    {
+      "from": "redfirst",
+      "to": "implement",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "pretool",
+      "to": "implement",
+      "role": "async",
+      "label": "every tool call + every edit",
+      "variant": "dashed"
+    },
+    {
+      "from": "implement",
+      "to": "preflight",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "preflight",
+      "to": "callers",
+      "role": "branch",
+      "label": "shared surface",
+      "variant": "dashed"
+    },
+    {
+      "from": "preflight",
+      "to": "codexcheck",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "codexcheck",
+      "to": "red",
+      "role": "error",
+      "label": "any red",
+      "variant": "security"
+    },
+    {
+      "from": "red",
+      "to": "implement",
+      "role": "return",
+      "label": "fix",
+      "variant": "dashed"
+    },
+    {
+      "from": "codexcheck",
+      "to": "commit",
+      "role": "main",
+      "label": "green",
+      "variant": "emphasis"
+    },
+    {
+      "from": "commit",
+      "to": "stop",
+      "role": "async",
+      "label": "turn end",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Hooks that ride every build",
+      "items": [
+        "PreToolUse on Bash: precmd-clear-cache and rtk-shape-guard; on every tool: permission-guard (also on PermissionRequest)",
+        "PostToolUse on Edit/Write: postedit-lint (ruff, yaml parse) and graft-mark-dirty; on Bash: post-merge-refresh advisory",
+        "Stop: stop-gate blocks on ruff failure; git-arc-guard and stop-loop are advisory"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Preflight before commit",
+      "items": [
+        "defect-class-preflight runs preflight-grep.sh then walks the ranked defect classes",
+        "graft callers --depth 2 enumerates blast radius on any shared surface touch",
+        "just codex-check is the superset local gate: sync, lint, fmt, typecheck, doc checks, parity, pytest"
+      ]
+    }
+  ]
+}

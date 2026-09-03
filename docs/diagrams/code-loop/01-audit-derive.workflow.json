@@ -1,0 +1,269 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Phase A — Session start, audit, derive, reserve",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "operator",
+      "label": "Operator"
+    },
+    {
+      "id": "hooks",
+      "label": "Hooks (settings.json)"
+    },
+    {
+      "id": "session",
+      "label": "Claude session + roadmap-continue"
+    },
+    {
+      "id": "records",
+      "label": "Records"
+    },
+    {
+      "id": "blocked",
+      "label": "Halted / re-derive",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "ph-start",
+      "label": "Session start",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "ph-prompt",
+      "label": "Prompt",
+      "fromCol": 2,
+      "toCol": 2
+    },
+    {
+      "id": "ph-derive",
+      "label": "Derive + reserve",
+      "fromCol": 3,
+      "toCol": 5,
+      "variant": "emphasis"
+    }
+  ],
+  "mainPath": [
+    "sessionstart",
+    "hashcmp",
+    "continue",
+    "ups",
+    "derive",
+    "arcopen",
+    "disjoint",
+    "reserve"
+  ],
+  "nodes": [
+    {
+      "id": "sessionstart",
+      "lane": "hooks",
+      "col": 0,
+      "type": "messagebus",
+      "label": "SessionStart",
+      "sublabel": "session-start.sh · loop-gc.sh",
+      "width": 140
+    },
+    {
+      "id": "status",
+      "lane": "records",
+      "col": 0,
+      "type": "database",
+      "label": "roadmap_status.md",
+      "sublabel": "stored hash",
+      "width": 130
+    },
+    {
+      "id": "hashcmp",
+      "lane": "hooks",
+      "col": 1,
+      "type": "security",
+      "label": "hash compare",
+      "sublabel": "computed vs stored",
+      "tag": "§12.1",
+      "width": 120
+    },
+    {
+      "id": "drift",
+      "lane": "blocked",
+      "col": 1,
+      "type": "security",
+      "label": "DRIFT DETECTED",
+      "sublabel": "§12.3 halt · AskUserQuestion",
+      "width": 150
+    },
+    {
+      "id": "continue",
+      "lane": "operator",
+      "col": 2,
+      "type": "frontend",
+      "label": "continue",
+      "sublabel": "/roadmap-continue"
+    },
+    {
+      "id": "ups",
+      "lane": "hooks",
+      "col": 2,
+      "type": "messagebus",
+      "label": "UserPromptSubmit",
+      "sublabel": "prompt-context · skill-check · lint",
+      "width": 150
+    },
+    {
+      "id": "derive",
+      "lane": "session",
+      "col": 3,
+      "type": "backend",
+      "label": "derive next action",
+      "sublabel": "§4 queue · no-parking",
+      "width": 130
+    },
+    {
+      "id": "arcopen",
+      "lane": "session",
+      "col": 4,
+      "type": "backend",
+      "label": "arc open",
+      "sublabel": "reservations.py selectable",
+      "width": 150
+    },
+    {
+      "id": "disjoint",
+      "lane": "session",
+      "col": 5,
+      "type": "security",
+      "label": "arc_disjoint_check",
+      "sublabel": "--candidate HEAD",
+      "width": 140
+    },
+    {
+      "id": "conflict",
+      "lane": "blocked",
+      "col": 5,
+      "type": "security",
+      "label": "CONFLICT / UNRESOLVED",
+      "sublabel": "exit 1 / 2 · no reserve",
+      "width": 150
+    },
+    {
+      "id": "held",
+      "lane": "blocked",
+      "col": 4,
+      "type": "security",
+      "label": "head held elsewhere",
+      "sublabel": "selectable exit 1 · re-derive",
+      "width": 150
+    },
+    {
+      "id": "reserve",
+      "lane": "records",
+      "col": 5,
+      "type": "database",
+      "label": "reserve + phase edges",
+      "sublabel": "reserve · phase edges",
+      "width": 140
+    }
+  ],
+  "edges": [
+    {
+      "from": "sessionstart",
+      "to": "hashcmp",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "status",
+      "to": "hashcmp",
+      "role": "branch",
+      "variant": "dashed"
+    },
+    {
+      "from": "hashcmp",
+      "to": "drift",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "hashcmp",
+      "to": "continue",
+      "role": "main",
+      "label": "hash=ok or lag-expected",
+      "variant": "emphasis"
+    },
+    {
+      "from": "continue",
+      "to": "ups",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "ups",
+      "to": "derive",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "derive",
+      "to": "arcopen",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "arcopen",
+      "to": "held",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "held",
+      "to": "derive",
+      "role": "return",
+      "variant": "dashed"
+    },
+    {
+      "from": "arcopen",
+      "to": "disjoint",
+      "role": "main",
+      "label": "exit 0 free",
+      "variant": "emphasis"
+    },
+    {
+      "from": "disjoint",
+      "to": "conflict",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "disjoint",
+      "to": "reserve",
+      "role": "main",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Audit is the load-bearing discipline",
+      "items": [
+        "session-start.sh recomputes HEAD + open PRs + fork docs + retirement batch into workspace_state_hash",
+        "Match or a terminating-refresh fixed point proceeds; any other mismatch halts before edits",
+        "The prompt hooks re-inject the next action on every message",
+        "UserPromptSubmit scripts by name: prompt-context.sh, skill-activation-check.sh, prompt-lint.sh (plus graft-hooks.cjs prompt)"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Reservation before build",
+      "items": [
+        "selectable exit 0 = head free; exit 1 = show state, resume own pending/open arc or re-derive",
+        "arc_disjoint_check must print disjoint: before reserve; CONFLICT never reserves",
+        "phase edges queue start/end and execute start are recorded only for a reserved arc"
+      ]
+    }
+  ]
+}

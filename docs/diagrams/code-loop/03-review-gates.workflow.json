@@ -1,0 +1,296 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Phase C — PR, Codex round, merge-gate lenses",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "hooks",
+      "label": "Hooks"
+    },
+    {
+      "id": "session",
+      "label": "Claude session + ship-pr"
+    },
+    {
+      "id": "reviewers",
+      "label": "Out-of-family + lens subagents"
+    },
+    {
+      "id": "records",
+      "label": "Records"
+    },
+    {
+      "id": "github",
+      "label": "GitHub + CI"
+    },
+    {
+      "id": "blocked",
+      "label": "Blocked",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "ph-attest",
+      "label": "Attest + Codex round",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "ph-pr",
+      "label": "PR + CI",
+      "fromCol": 2,
+      "toCol": 2
+    },
+    {
+      "id": "ph-gate",
+      "label": "merge-gate",
+      "fromCol": 3,
+      "toCol": 5,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "attest",
+    "codex",
+    "prcreate",
+    "ci",
+    "scope",
+    "lenses",
+    "outcome"
+  ],
+  "nodes": [
+    {
+      "id": "attest",
+      "lane": "session",
+      "col": 0,
+      "type": "security",
+      "label": "admission attestation",
+      "sublabel": "leg-selfcheck · template-preflight · attest-preflight",
+      "width": 220
+    },
+    {
+      "id": "codex",
+      "lane": "reviewers",
+      "col": 1,
+      "type": "external",
+      "label": "review-with-failover-logged",
+      "sublabel": "gpt-5.6 → gemini failover · exit 0 → PR",
+      "tag": "round rN",
+      "width": 200
+    },
+    {
+      "id": "codexblock",
+      "lane": "blocked",
+      "col": 1,
+      "type": "security",
+      "label": "BLOCK (exit 1)",
+      "sublabel": "absorb · sweep + attest · next round",
+      "width": 160
+    },
+    {
+      "id": "unavail",
+      "lane": "blocked",
+      "col": 0,
+      "type": "security",
+      "label": "exit 2 / 3",
+      "sublabel": "refused · UNAVAILABLE · GATE_REFUSED",
+      "width": 170
+    },
+    {
+      "id": "prcreate",
+      "lane": "github",
+      "col": 2,
+      "type": "cloud",
+      "label": "gh pr create",
+      "sublabel": "reservations.py update pr= head_sha=",
+      "width": 150
+    },
+    {
+      "id": "ci",
+      "lane": "github",
+      "col": 3,
+      "type": "cloud",
+      "label": "PR CI",
+      "sublabel": "gh pr checks green · rerun flakes",
+      "width": 140
+    },
+    {
+      "id": "cired",
+      "lane": "blocked",
+      "col": 3,
+      "type": "security",
+      "label": "CI red",
+      "sublabel": "fix, push, re-poll",
+      "width": 100
+    },
+    {
+      "id": "scope",
+      "lane": "session",
+      "col": 3,
+      "type": "backend",
+      "label": "scope + blast radius",
+      "sublabel": "pr diff --name-only · doc-only → skip",
+      "width": 170
+    },
+    {
+      "id": "lenses",
+      "lane": "reviewers",
+      "col": 4,
+      "type": "external",
+      "label": "3 lenses (Agent ×3)",
+      "sublabel": "concurrency · spec-conformance · witness-adequacy",
+      "width": 210
+    },
+    {
+      "id": "agenthooks",
+      "lane": "hooks",
+      "col": 3,
+      "type": "messagebus",
+      "label": "Agent hooks",
+      "sublabel": "fire at lens launch · advisory · validate",
+      "width": 190
+    },
+    {
+      "id": "gatelog",
+      "lane": "records",
+      "col": 4,
+      "type": "database",
+      "label": "gate rows",
+      "sublabel": "emit per lens · log-check · landing-delta",
+      "width": 190
+    },
+    {
+      "id": "outcome",
+      "lane": "session",
+      "col": 5,
+      "type": "security",
+      "label": "gate outcome",
+      "sublabel": "all 3 APPROVE → door",
+      "tag": "no HIL",
+      "width": 120
+    },
+    {
+      "id": "gateblock",
+      "lane": "blocked",
+      "col": 5,
+      "type": "security",
+      "label": "any BLOCK / split",
+      "sublabel": "adjudicate · fix · re-review · re-gate",
+      "tag": "cap 10 → AskUserQuestion",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "from": "attest",
+      "to": "codex",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "attest",
+      "to": "unavail",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "codex",
+      "to": "codexblock",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "codexblock",
+      "to": "attest",
+      "role": "return",
+      "variant": "dashed"
+    },
+    {
+      "from": "codex",
+      "to": "prcreate",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "prcreate",
+      "to": "ci",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "ci",
+      "to": "cired",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "ci",
+      "to": "scope",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "scope",
+      "to": "lenses",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "agenthooks",
+      "to": "lenses",
+      "role": "async",
+      "variant": "dashed"
+    },
+    {
+      "from": "lenses",
+      "to": "outcome",
+      "role": "main",
+      "variant": "emphasis"
+    },
+    {
+      "from": "outcome",
+      "to": "gateblock",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "from": "outcome",
+      "to": "gatelog",
+      "role": "branch",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Codex round exit codes",
+      "items": [
+        "0 APPROVE · 1 BLOCK · 2 REVIEWER_UNAVAILABLE (both channels) · 3 GATE_REFUSED (admission not granted)",
+        "A BLOCK is absorbed, swept with review-template-sweep and review-attest-sweep, committed, then the next logged round runs",
+        "Round budget lives in tools/review_loop_gate.py; only the operator extends it via review-attest-budget"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "merge-gate verdict rule",
+      "items": [
+        "Fires only when the diff touches harness-*/src or tests; doc-only and refresh PRs skip it",
+        "Each lens returns a JSON block plus a VERDICT line; missing or malformed parses as BLOCK",
+        "All three APPROVE merges without HIL; any BLOCK or split re-gates, capped at ten rounds, then one batched AskUserQuestion"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Hooks on the lens launch",
+      "items": [
+        "PreToolUse Agent: agent-prompt-advisory injects the laws:prompt reminder",
+        "SubagentStart / SubagentStop: subagent-validate injects the output contract and blocks malformed output for one retry",
+        "Gate rows are committed and pushed; landing-delta must be only the two gate-log files or the gate re-runs"
+      ]
+    }
+  ]
+}
