@@ -121,18 +121,26 @@ verdict bound to the wrong tree. Require,
 immediately before the
 `VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
 (`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
-the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored) and record it:
-`just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored); once all three exist,
+record them in ONE call (B-230 Task 5):
+`just merge-gate-emit-all --pr <N> --arc-id <arc-id> --concurrency-json .harness/tmp/merge-gate-lens-concurrency.txt --spec-json .harness/tmp/merge-gate-lens-spec-conformance.txt --witness-json .harness/tmp/merge-gate-lens-witness-adequacy.txt`
 (`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's `arc_id`
 to `pr-<N>`, which breaks the N6/phase joins AND the U-HE-47 unique-catch join against the
-preceding codex rounds, whose rows carry the reservation arc id)
-(JSONL row first, structured markdown line second, C-HE-23 §2; the final `VERDICT:` line must
-agree with the block, exact-line match). Exit 0 = APPROVE recorded, 1 = BLOCK recorded,
-2 = NOT recorded — that lens verdict does not count; treat as `BLOCK` and re-run the lens.
+preceding codex rounds, whose rows carry the reservation arc id).
+It records the three lenses in that order, ALWAYS all three (a recorded BLOCK is a result,
+not an abort), and exits with the worst per-lens code: 0 = APPROVE recorded, 1 = BLOCK
+recorded, 2 = NOT recorded (JSONL row first, structured markdown line second, C-HE-23 §2;
+the final `VERDICT:` line must agree with the block, exact-line match). A lens that exited 2
+does not count — treat it as `BLOCK`, re-run THAT lens, and record it alone with
+`just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+(never by re-running `emit-all`, which mints a fresh round for the two lenses that were fine;
+there is no resumption — the JSONL is the only record).
 
 ## Outcome
 
-- All three approve: the three `emit` calls are the machine record; additionally append the
+- All three approve: the `emit-all` call (plus any per-lens repair) is the machine record —
+  after a repair the outcome is the worst of the three RECORDED rows at the reviewed head,
+  never the last exit code seen; additionally append the
   PR/date/branch/head/verdicts/outcome row to `.harness/merge-gate-log.md`
   (`just merge-gate-log-check` is the consistency reducer).
 - Any block: reconcile it against current HEAD. If real and mechanical, fix it, add the

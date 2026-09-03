@@ -396,6 +396,7 @@ for c in \
   "just merge-gate-binding merge-gate-concurrency" \
   "just merge-gate-binding merge-gate-spec-conformance main" \
   "just merge-gate-emit --pr 1397 --lens merge-gate-concurrency --verdict-json .harness/tmp/merge-gate-lens-concurrency.txt --base main" \
+  "just merge-gate-emit-all --pr 1397 --arc-id b-230-task-5 --concurrency-json .harness/tmp/merge-gate-lens-concurrency.txt --spec-json .harness/tmp/merge-gate-lens-spec-conformance.txt --witness-json .harness/tmp/merge-gate-lens-witness-adequacy.txt" \
   "just merge-gate-log-check" \
   "just merge-gate-landing-delta 0123456789abcdef0123456789abcdef01234567" \
   "just lanes-verify" \
@@ -419,6 +420,10 @@ OUT=$(run_on "$(pl Bash "just arc-close 1503 b897542dc cp.md --arc-id b-230-task
 [ "$(dec "$OUT")" != "allow" ] && ok "arc-close with an out-of-worktree transcript → ask" || bad "out-of-worktree arc-close auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just merge-gate-emit --pr 1 --lens merge-gate-concurrency --verdict-json /tmp/outside.txt" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit reading a verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit auto-allowed: $OUT"
+# B-230 Task 5: emit-all rides the same alternation; one out-of-worktree verdict path
+# among the three drops the whole call to ask, exactly as the single-lens form does.
+OUT=$(run_on "$(pl Bash "just merge-gate-emit-all --pr 1 --arc-id b-230-task-5 --concurrency-json .harness/tmp/c.txt --spec-json /tmp/outside.txt --witness-json .harness/tmp/w.txt" '')")
+[ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit-all with one verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit-all auto-allowed: $OUT"
 # U-HE-47 codex r2 P1 + r4 P1: adjudication mutes findings — only the exact absorption
 # shape (accepted|rejected, an absorber-identity actor, a review-producer 4-part
 # finding-id, bounded arity) AND the HARNESS_ARC_ID= prefix (the CLI's arc-binding
