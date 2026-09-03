@@ -3,6 +3,7 @@ copy, the stdlib-only witness, and the ci.yml shape the saving depends on."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -215,13 +216,117 @@ def test_changes_step_refuses_fast_path_when_classifier_or_workflow_changed():
     # codex r1 P1: a classifier executed from the PR head may not judge a change to itself
     # or to the workflow that gates on it — the step decides `bookkeeping=false` for those
     # diffs before the classifier runs. Pinned by SHAPE: the self-file list is the guard's
-    # own allowlist, and the false-line is what the guard writes.
+    # own allowlist, and the false-line is what the guard writes. The behavioral witnesses
+    # below execute the step; this pin keeps the self-file LIST from drifting.
     run = _jobs()["changes"]["steps"]
     step = next(s for s in run if s.get("id") == "classify")["run"]
     self_guard, _, classify_call = step.partition('ci_bookkeeping_diff.py "$BASE"')
     assert "-- tools/ci_bookkeeping_diff.py .github/workflows/ci.yml" in self_guard
     assert 'echo "bookkeeping=false"' in self_guard
     assert classify_call, "the classifier call must follow the self-guard"
+
+
+# --- the `changes` step executed for real (witness lens r1 P2 on b-230-task-1) ----------
+
+
+def _changes_step_script() -> str:
+    # The step's own `run:` block, verbatim except for the interpreter: the runner's
+    # /usr/bin/python3 becomes this process's interpreter so the script resolves on any host.
+    step = next(s for s in _steps(_jobs()["changes"]) if s.get("id") == "classify")
+    run = str(step["run"])
+    assert "/usr/bin/python3 tools/ci_bookkeeping_diff.py" in run
+    return run.replace("/usr/bin/python3", sys.executable)
+
+
+def _repo_with_step_files(tmp_path: Path) -> tuple[Path, str]:
+    # Base commit carries what the step reads: the real classifier at its relative path,
+    # a workflow file, a status pointer, and one code file. Returns (repo, base_sha).
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "ci_bookkeeping_diff.py").write_text(_SCRIPT.read_text())
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: CI\n")
+    (tmp_path / ".harness").mkdir()
+    (tmp_path / ".harness" / "roadmap_status.md").write_text("v1\n")
+    (tmp_path / "code.py").write_text("x = 1\n")
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    return tmp_path, _git(tmp_path, "rev-parse", "HEAD")
+
+
+def _run_changes_step(
+    repo: Path, base: str, head: str
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    # GitHub runs `shell: bash` steps as `bash -eo pipefail`; GITHUB_OUTPUT is a file the
+    # step appends to. Returns (process, GITHUB_OUTPUT contents).
+    gh_output = repo / "github_output"
+    gh_output.write_text("")
+    env = {**os.environ, "BASE": base, "HEAD": head, "GITHUB_OUTPUT": str(gh_output)}
+    p = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", _changes_step_script()],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    return p, gh_output.read_text()
+
+
+def test_changes_step_ignores_a_lying_classifier_that_changed_on_the_range(tmp_path: Path):
+    # The P1 shape: the head's classifier lies (always `bookkeeping=true`) and is itself in
+    # the diff. Premise asserted: run directly, the planted classifier does lie. The step
+    # must answer false WITHOUT consulting it — an inverted guard condition would run it.
+    repo, base = _repo_with_step_files(tmp_path)
+    liar = repo / "tools" / "ci_bookkeeping_diff.py"
+    liar.write_text('print("bookkeeping=true")\n')
+    (repo / "harness-cp.py").write_text("payload\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "lying classifier + code")
+    head = _git(repo, "rev-parse", "HEAD")
+    direct = subprocess.run(
+        [sys.executable, str(liar), base, head], cwd=repo, capture_output=True, text=True
+    )
+    assert direct.stdout == "bookkeeping=true\n"
+    p, out = _run_changes_step(repo, base, head)
+    assert p.returncode == 0, p.stderr
+    assert out == "bookkeeping=false\n"
+    assert "self-guard" in p.stderr
+
+
+def test_changes_step_refuses_fast_path_on_a_workflow_change(tmp_path: Path):
+    repo, base = _repo_with_step_files(tmp_path)
+    (repo / ".github" / "workflows" / "ci.yml").write_text("name: CI\n# edited\n")
+    _git(repo, "commit", "-q", "-am", "workflow edit")
+    head = _git(repo, "rev-parse", "HEAD")
+    p, out = _run_changes_step(repo, base, head)
+    assert p.returncode == 0, p.stderr
+    assert out == "bookkeeping=false\n"
+    assert "self-guard" in p.stderr
+
+
+def test_changes_step_lets_the_unchanged_classifier_answer_true_on_a_status_only_diff(
+    tmp_path: Path,
+):
+    # The complement: neither self-file changed, so the step runs the (base-identical)
+    # classifier and a status-only diff takes the fast path. An inverted guard would print
+    # false here instead.
+    repo, base = _repo_with_step_files(tmp_path)
+    (repo / ".harness" / "roadmap_status.md").write_text("v2\n")
+    _git(repo, "commit", "-q", "-am", "refresh")
+    head = _git(repo, "rev-parse", "HEAD")
+    p, out = _run_changes_step(repo, base, head)
+    assert p.returncode == 0, p.stderr
+    assert out == "bookkeeping=true\n"
+    assert "self-guard" not in p.stderr
+
+
+def test_changes_step_fails_loud_on_an_empty_range(tmp_path: Path):
+    # The classifier's exit 2 must fail the STEP (pipefail through the tee) and leave
+    # GITHUB_OUTPUT empty — this is the arm `always()` on the gated jobs exists for.
+    repo, base = _repo_with_step_files(tmp_path)
+    p, out = _run_changes_step(repo, base, base)
+    assert p.returncode == 2
+    assert out == ""
 
 
 def test_gate_log_consistency_is_unconditional_and_blocking():
