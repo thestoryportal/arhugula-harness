@@ -8,11 +8,15 @@ Rules the numbers follow (each one a reviewer finding on the registration PR or 
   * a round is a distinct (channel, head_sha, pass) per arc, named by ANY record kind, over
     the REVIEW producers only: `codex_review_wrapper` and `gemini_review_wrapper` (each its
     own paid round, scoped per producer — `just gemini-review` runs standalone) and the merge
-    gate (three `merge-gate-*` lenses). The ONE exception: the C-HE-17 D-C failover child is
-    a gemini run forced to the primary's round number (review_wrapper_common.round_n_for),
-    and it fires only after the primary reported `reviewer_unavailable`; so a gemini round
-    merges into the codex round iff a codex `reviewer_unavailable` row exists at the same
-    (arc, head_sha, round_n) — the log carries no other failover marker. Head-bound, because round_n is reused across an
+    gate (three `merge-gate-*` lenses). A gemini row is ALWAYS its own producer round here:
+    the C-HE-17 D-C failover child is forced to the primary's round number
+    (review_wrapper_common.round_n_for) but the log carries no failover marker, so a
+    reducer cannot tell a failover child from a standalone `just gemini-review` that
+    happened to share the key. Inferring lineage from key coincidence was tried and
+    reversed (b-230-task-0 r6/r7); instead `failover_ambiguous_rounds` reports how many
+    (arc, head, round_n) keys carry both a codex `reviewer_unavailable` row and a gemini
+    row — the exact upper bound on the overcount — and the marker is forward work
+    on the wrapper (register B-231). Head-bound, because round_n is reused across an
     arc's review heads (branch-he-lanes-s1 has codex round 0 on six heads). A gate lens
     mints its round_n INDEPENDENTLY (PR 1414 recorded one three-lens pass as concurrency r3
     beside spec/witness r2), so a gate pass at a head is the per-lens RANK of the lens's
@@ -22,10 +26,13 @@ Rules the numbers follow (each one a reviewer finding on the registration PR or 
     (`reviewer_concurrency_probe`, whose round_n is an iteration index) and door producers
     (round_n null) are not rounds;
   * `gate_rounds_with_findings` / `single_lens_rounds` group lens VERDICT finding rows by that
-    pass identity; single = exactly one lens producer raised findings in the pass. A row the
-    gate emitter writes about ITSELF under the lens's producer (the markdown-sibling write
-    failure, `finding_type: transient-retry`, `lineage_claim: wrapper`,
-    merge_gate_log.py:300-316) is not a lens verdict and counts nowhere here;
+    pass identity; single = exactly one lens producer raised findings in the pass. Two row
+    shapes under a lens producer are NOT lens work and count nowhere here: the row the gate
+    emitter writes about ITSELF (the markdown-sibling write failure, `finding_type:
+    transient-retry`, `lineage_claim: wrapper`, merge_gate_log.py:300-316) and the typed
+    detector-skip row the plan's Task 6 defines (`no_finding` with `finding_type:
+    lens_skipped`) — a skipped reviewer is the cost reduction this baseline measures, never
+    work performed;
   * a `unique_catch` flag counts only when the finding's LAST `finding_adjudication` row is
     `accepted` — last in APPEND order, the reducer authority C-HE-24 §5 names ("readers
     reduce by finding_id → last row"), never by ts; rejected / suppressed and
@@ -68,6 +75,7 @@ CODEX_PRODUCER = "codex_review_wrapper"
 GEMINI_PRODUCER = "gemini_review_wrapper"
 OUT_OF_FAMILY = frozenset({CODEX_PRODUCER, GEMINI_PRODUCER})
 WRAPPER_WRITTEN_KINDS = frozenset({"finding", "no_finding", "reviewer_unavailable"})
+LENS_SKIPPED = "lens_skipped"  # plan Task 6's typed detector-skip row; not lens work
 
 
 def _is_lens(producer: object) -> bool:
@@ -76,12 +84,15 @@ def _is_lens(producer: object) -> bool:
 
 def _is_lens_verdict_row(r: dict) -> bool:
     """A row a lens's verdict produced. The lens's `no_finding` / `reviewer_unavailable` marker
-    rows carry `lineage_claim: wrapper` and ARE its verdict; the one row to exclude is a
-    `finding` the emitter wrote about itself under the lens's producer (the markdown-sibling
-    write failure, merge_gate_log.py:300-316) — a finding row with `lineage_claim: wrapper`."""
+    rows carry `lineage_claim: wrapper` and ARE its verdict. Excluded: a `finding` the emitter
+    wrote about itself under the lens's producer (the markdown-sibling write failure,
+    merge_gate_log.py:300-316 — a finding row with `lineage_claim: wrapper`), and the typed
+    detector-skip row (`no_finding` with `finding_type: lens_skipped`, plan Task 6)."""
     if not (_is_lens(r.get("producer")) and r.get("record_kind") in WRAPPER_WRITTEN_KINDS):
         return False
-    return not (r.get("record_kind") == "finding" and r.get("lineage_claim") == "wrapper")
+    if r.get("record_kind") == "finding" and r.get("lineage_claim") == "wrapper":
+        return False
+    return r.get("finding_type") != LENS_SKIPPED
 
 
 def _channel(producer: object) -> str | None:
@@ -93,14 +104,21 @@ def _channel(producer: object) -> str | None:
     return None
 
 
-def _failover_rounds(rows: list[dict]) -> set[tuple]:
-    """(arc_id, head_sha, round_n) where the primary reported unavailable — the only rounds
-    in which a gemini row is the D-C failover child of the codex round, not its own round."""
-    return {
+def _failover_ambiguous_rounds(rows: list[dict]) -> int:
+    """Keys (arc_id, head_sha, round_n) carrying both a codex `reviewer_unavailable` row and a
+    gemini row: each MAY be a D-C failover child counted as an extra round. The log has no
+    marker to settle it, so the count is reported as the overcount's upper bound."""
+    unavailable = {
         (r.get("arc_id"), r.get("head_sha"), r.get("round_n"))
         for r in rows
         if r.get("producer") == CODEX_PRODUCER and r.get("record_kind") == "reviewer_unavailable"
     }
+    gemini = {
+        (r.get("arc_id"), r.get("head_sha"), r.get("round_n"))
+        for r in rows
+        if r.get("producer") == GEMINI_PRODUCER and r.get("round_n") is not None
+    }
+    return len(unavailable & gemini)
 
 
 def _last_dispositions(rows: list[dict]) -> dict[str, str]:
@@ -129,16 +147,15 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
     per_arc: dict[str, set] = collections.defaultdict(set)
     by_round: dict[tuple, collections.Counter] = collections.defaultdict(collections.Counter)
     ranks = _gate_pass_ranks(rows)
-    failover = _failover_rounds(rows)
     for r in rows:
         channel = _channel(r.get("producer"))
         if r.get("round_n") is None or channel is None:
             continue
+        if channel == "gate" and not _is_lens_verdict_row(r):
+            continue  # a typed skip row is not a gate pass
         arc, head, n = r.get("arc_id"), r.get("head_sha"), r.get("round_n")
         if channel == "gate":
             n = ranks[(arc, head, r.get("producer"), n)]
-        elif channel == GEMINI_PRODUCER and (arc, head, n) in failover:
-            channel = CODEX_PRODUCER  # the failover child of that codex round, not a new round
         per_arc[str(arc)].add((channel, head, n))
         if r.get("record_kind") == "finding" and channel == "gate" and _is_lens_verdict_row(r):
             by_round[(arc, head, n)][r.get("producer")] += 1
@@ -190,6 +207,7 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         if per_arc
         else 0,
         "rounds_per_arc_max": max((len(v) for v in per_arc.values()), default=0),
+        "failover_ambiguous_rounds": _failover_ambiguous_rounds(rows),
         "codex_rows": codex_rows,
         "lens_rows": lens_rows,
         "gate_rounds_with_findings": len(gate_rounds),

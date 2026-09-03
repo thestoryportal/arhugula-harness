@@ -446,7 +446,7 @@ def test_retry_that_lowers_the_flag_is_not_a_catch() -> None:
     assert data["unique_catch_by_producer"] == {}
 
 
-def test_gemini_is_its_own_round_unless_it_is_the_failover_child() -> None:
+def test_gemini_is_always_its_own_round_and_ambiguity_is_counted() -> None:
     base = {"arc_id": "i", "head_sha": "h7"}
     standalone = [
         # a standalone `just gemini-review` at the same producer-local round number as codex r1
@@ -466,8 +466,10 @@ def test_gemini_is_its_own_round_unless_it_is_the_failover_child() -> None:
         },
     ]
     assert summarize(standalone)["rounds_per_arc_median"] == 2
+    assert summarize(standalone)["failover_ambiguous_rounds"] == 0
     failover = [
-        # the D-C chain: codex unavailable at r1, the gemini child forced to r1 — ONE round
+        # the D-C chain shape: codex unavailable at r1, a gemini row forced to r1. The log carries
+        # no marker, so it counts as two rounds and ONE ambiguous key (the overcount's bound).
         {
             **base,
             "record_kind": "reviewer_unavailable",
@@ -482,7 +484,33 @@ def test_gemini_is_its_own_round_unless_it_is_the_failover_child() -> None:
             "finding_id": "g21",
         },
     ]
-    assert summarize(failover)["rounds_per_arc_median"] == 1
+    assert summarize(failover)["rounds_per_arc_median"] == 2
+    assert summarize(failover)["failover_ambiguous_rounds"] == 1
+
+
+def test_typed_skip_row_is_not_lens_work() -> None:
+    rows = [
+        {
+            "record_kind": "no_finding",
+            "arc_id": "j",
+            "round_n": 1,
+            "head_sha": "h8",
+            "producer": "merge-gate-witness-adequacy",
+            "lineage_claim": "wrapper",
+        },
+        {
+            "record_kind": "no_finding",
+            "arc_id": "j",
+            "round_n": 1,
+            "head_sha": "h8",
+            "producer": "merge-gate-concurrency",
+            "finding_type": "lens_skipped",
+            "cause_attribution": "detector_no_surface",
+        },
+    ]
+    data = summarize(rows)
+    assert data["lens_rows"] == 1
+    assert data["rounds_per_arc_median"] == 1
 
 
 def test_single_lens_round_and_clean_only_arc() -> None:
