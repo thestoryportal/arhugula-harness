@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `ff8fb33e27b1` |
+| `workspace_state_hash` | `360dbe7bf01e` |
 | `last_refreshed` | 2026-09-03T00:00:00Z |
-| `git_head` | `818b4eb2` —  |
+| `git_head` | `4b7ca167` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1497).** U-HE-36 landed as the R3 eval arc: `tools/arc_disjoint_check.py` (selection-time merge-tree refusal against every non-terminal sibling head, the O3 replay over the P-R3 172-pair set with a MASKED interval, `derive-pairs` reproducing 150/444/172), the gate wired before `reserve` in both roadmap-continue carriers and again at ship-pr pre-flight, spec v1.7 (X7 lane set = non-terminal reservations; X7b O3 rate is an interval) with its markers, and register rows B-228 (selection-time reads committed heads — closure is a v1.8 spec decision) and B-229 (O3 population omits path-disjoint dir/file conflicts — closure is a 444-pair replay). U-HE-51's trial rode it: codex ran 9 reviewer rounds plus an operator-approved tenth (27 findings on the gate log, 19 absorbed, 8 rejected on contract, no APPROVE at the final head — the budget ended on the B-228 restatement, not on code); the mid-budget concurrency + witness-adequacy pass after codex r4 found two test-adequacy gaps codex had not (both absorbed) and the concurrency lens found nothing; the ship pass ran all three lenses at the final head (concurrency and witness-adequacy APPROVE first time; spec-conformance took four passes, each BLOCK a PR-body count or a stale spec cite, none code). Against the [B] baseline's 13 rounds (10 codex + 3 gate) this arc spent 10 codex slots + 12 lens runs (2 mid-budget, 2 at the superseded r6 head, 3 + 5 at the two ship heads), so the trial's rounds-to-all-approve claim is correlational and unfavourable in count but different in kind: five of the ten codex rounds (r6–r10) re-raised one registered contract objection. The next implementable unit is **U-HE-37** (S6 pilot gate — `just lanes-pilot`, `lanes-pilot-report`, the O1 recipe, the pilot-runner unit; its dependencies U-HE-05/30/33/35/36 are all landed), then U-HE-38 (cohort report joint on `(concurrent_lanes_at_open, arc_type)`).
+**Current next action (post-#1499).** Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 0 then Task 1 (B-230, registered by #1499 with the Archify loop diagrams at `docs/diagrams/code-loop/`; the plan carries interfaces, tests and per-task design constraints from six codex rounds, and each task lands as its own arc); then U-HE-37.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1499 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1497 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1495 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1493 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1491 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1489 | 2026-09-02 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
