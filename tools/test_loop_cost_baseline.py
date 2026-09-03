@@ -397,6 +397,55 @@ def test_door_only_arc_counts_in_arcs_but_not_reviewed_arcs() -> None:
     assert data["lease_acquire_events"] == 2
 
 
+def test_wrapper_md_failure_row_is_not_a_lens_finding() -> None:
+    # merge_gate_log emits its markdown-sibling write failure as a finding under the LENS's
+    # producer (lineage_claim=wrapper); a clean no_finding pass must stay clean
+    rows = [
+        {
+            "record_kind": "no_finding",
+            "arc_id": "g",
+            "round_n": 1,
+            "head_sha": "h5",
+            "producer": "merge-gate-witness-adequacy",
+            "lineage_claim": "wrapper",
+        },
+        {
+            "record_kind": "reviewer_unavailable",
+            "arc_id": "g",
+            "round_n": 1,
+            "head_sha": "h5",
+            "producer": "merge-gate-concurrency",
+            "lineage_claim": "wrapper",
+        },
+        {
+            "record_kind": "finding",
+            "arc_id": "g",
+            "round_n": 1,
+            "head_sha": "h5",
+            "producer": "merge-gate-witness-adequacy",
+            "finding_id": "md1",
+            "finding_type": "transient-retry",
+            "lineage_claim": "wrapper",
+        },
+    ]
+    data = summarize(rows)
+    assert data["gate_rounds_with_findings"] == 0
+    assert data["single_lens_rounds"] == 0
+    assert data["lens_rows"] == 2  # the marker rows are the lenses' verdicts; the md row is not
+    assert data["rounds_per_arc_median"] == 1
+
+
+def test_retry_that_lowers_the_flag_is_not_a_catch() -> None:
+    rows = _rows()
+    # w1 re-emitted (same id, same core) with unique_catch False after its accepted adjudication
+    retry = dict(rows[1])
+    retry["unique_catch"] = False
+    rows.append(retry)
+    data = summarize(rows)
+    assert data["unique_catch_raw"] == 2
+    assert data["unique_catch_by_producer"] == {}
+
+
 def test_single_lens_round_and_clean_only_arc() -> None:
     rows = [
         {

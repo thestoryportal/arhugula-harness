@@ -17,14 +17,19 @@ Rules the numbers follow (each one a reviewer finding on the registration PR or 
     10 + 3 = 13). A clean `no_finding` round and a clean-only arc count; probe producers
     (`reviewer_concurrency_probe`, whose round_n is an iteration index) and door producers
     (round_n null) are not rounds;
-  * `gate_rounds_with_findings` / `single_lens_rounds` group lens finding rows by that pass
-    identity; single = exactly one lens producer raised findings in the pass;
+  * `gate_rounds_with_findings` / `single_lens_rounds` group lens VERDICT finding rows by that
+    pass identity; single = exactly one lens producer raised findings in the pass. A row the
+    gate emitter writes about ITSELF under the lens's producer (the markdown-sibling write
+    failure, `finding_type: transient-retry`, `lineage_claim: wrapper`,
+    merge_gate_log.py:300-316) is not a lens verdict and counts nowhere here;
   * a `unique_catch` flag counts only when the finding's LAST `finding_adjudication` row is
     `accepted` — last in APPEND order, the reducer authority C-HE-24 §5 names ("readers
     reduce by finding_id → last row"), never by ts; rejected / suppressed and
     never-adjudicated flags are reported in their own counters and never folded in;
   * catches are counted per DISTINCT finding_id (C-HE-24 §5 N6 shape): a same-core retry
-    re-emits a finding row under the same id before adjudication and is one finding;
+    re-emits a finding row under the same id before adjudication and is one finding, and the
+    LAST finding row of the lineage (append order) carries the flag that counts —
+    `unique_catch` is outside finding_record._CORE_IMMUTABLE, so a retry may lower it;
   * `arcs` counts every distinct arc_id in the log (door-only arcs included — the two lease
     events live on `u-he-32-refresh2`, which never had a review round); `reviewed_arcs` is
     the rounds-per-arc denominator (arcs with at least one review round);
@@ -62,6 +67,16 @@ WRAPPER_WRITTEN_KINDS = frozenset({"finding", "no_finding", "reviewer_unavailabl
 
 def _is_lens(producer: object) -> bool:
     return isinstance(producer, str) and producer.startswith("merge-gate")
+
+
+def _is_lens_verdict_row(r: dict) -> bool:
+    """A row a lens's verdict produced. The lens's `no_finding` / `reviewer_unavailable` marker
+    rows carry `lineage_claim: wrapper` and ARE its verdict; the one row to exclude is a
+    `finding` the emitter wrote about itself under the lens's producer (the markdown-sibling
+    write failure, merge_gate_log.py:300-316) — a finding row with `lineage_claim: wrapper`."""
+    if not (_is_lens(r.get("producer")) and r.get("record_kind") in WRAPPER_WRITTEN_KINDS):
+        return False
+    return not (r.get("record_kind") == "finding" and r.get("lineage_claim") == "wrapper")
 
 
 def _channel(producer: object) -> str | None:
@@ -107,18 +122,22 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         if channel == "gate":
             n = ranks[(arc, head, r.get("producer"), n)]
         per_arc[str(arc)].add((channel, head, n))
-        if r.get("record_kind") == "finding" and channel == "gate":
+        if r.get("record_kind") == "finding" and channel == "gate" and _is_lens_verdict_row(r):
             by_round[(arc, head, n)][r.get("producer")] += 1
 
     gate_rounds = [k for k, c in by_round.items() if any(_is_lens(p) for p in c)]
     single = [k for k in gate_rounds if sum(1 for p in by_round[k] if _is_lens(p)) == 1]
 
     last = _last_dispositions(rows)
-    # one entry per DISTINCT flagged finding_id (a same-core retry repeats the id)
-    flagged: dict[str, object] = {}
+    # one entry per DISTINCT finding_id; the LAST finding row of the lineage (append order)
+    # decides the flag, since a same-core retry may re-emit the id with a different value
+    lineage_last: dict[str, dict] = {}
     for r in rows:
-        if r.get("record_kind") == "finding" and r.get("unique_catch") is True:
-            flagged.setdefault(str(r.get("finding_id")), r.get("producer"))
+        if r.get("record_kind") == "finding":
+            lineage_last[str(r.get("finding_id"))] = r
+    flagged = {
+        fid: r.get("producer") for fid, r in lineage_last.items() if r.get("unique_catch") is True
+    }
     accepted = collections.Counter(
         producer for fid, producer in flagged.items() if last.get(fid) == "accepted"
     )
@@ -138,11 +157,7 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         for r in rows
         if r.get("producer") == CODEX_PRODUCER and r.get("record_kind") in WRAPPER_WRITTEN_KINDS
     )
-    lens_rows = sum(
-        1
-        for r in rows
-        if _is_lens(r.get("producer")) and r.get("record_kind") in WRAPPER_WRITTEN_KINDS
-    )
+    lens_rows = sum(1 for r in rows if _is_lens_verdict_row(r))
     all_arcs = {str(r.get("arc_id")) for r in rows}
 
     yields: int | None = None
