@@ -7,6 +7,7 @@ prove nothing about either parse.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -224,6 +225,37 @@ def test_check_exit_2_unresolvable_head_fails_closed(
     out = capsys.readouterr().out
     assert "UNRESOLVED arc-ghost [other] pending: branch not-yet-created" in out
     assert "CONFLICT" not in out and "disjoint" not in out
+
+
+def test_check_unresolved_sibling_wins_over_a_conflicting_one(
+    cli: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exit-code priority (witness lens r2 P2): with an unresolvable sibling AND a genuinely
+    conflicting resolved sibling present at once, the check refuses (2) and prints no
+    CONFLICT verdict — a reorder that computed the conflict first would return 1 here."""
+    rs.reserve("arc-ghost", lane_id="other", branch="not-yet-created", arc_type="applying")
+    rs.reserve("arc-b", lane_id="other-2", branch="lane-b", arc_type="applying")
+    assert adc.main(["check", "--candidate", "lane-a"]) == 2
+    out = capsys.readouterr().out
+    assert "UNRESOLVED arc-ghost [other] pending" in out
+    assert "CONFLICT" not in out and "disjoint" not in out
+
+
+def test_entry_point_runs_as_the_carriers_invoke_it(tmp_path: Path) -> None:
+    """The literal production shape — the script as a subprocess, `check --candidate` — with
+    the reservation store pointed at an empty scratch queue (witness lens r2 P3: the
+    in-process tests never exercise the __main__ / argparse wiring)."""
+    env = {**os.environ, "ARC_METRICS_QUEUE_DIR": str(tmp_path / "queue"), "HARNESS_LANE_ID": "me"}
+    p = subprocess.run(
+        [sys.executable, str(Path(adc.__file__)), "check", "--candidate", "HEAD"],
+        cwd=adc.REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "disjoint: HEAD vs 0 other lane head(s)"
 
 
 def test_check_exit_2_without_lane_id(

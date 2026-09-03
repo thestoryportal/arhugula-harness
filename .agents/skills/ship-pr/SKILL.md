@@ -23,6 +23,11 @@ before executing; those authorities win if this summary drifts.
    costs nothing" bills the next call.
 4. Run `just codex-closeout`. If the diff changes afterward, re-run every affected gate.
 5. Review the actual diff, stage only explicit paths, and inspect the staged diff.
+6. Disjointness re-check at ship (U-HE-36; B-228): with the arc's commits on the candidate,
+   run `uv run python tools/arc_disjoint_check.py check --candidate HEAD` (the same
+   guard-allowlisted shape as at arc open). Exit 1 names the live sibling whose head
+   textually conflicts — rebase or resolve before opening the PR (the door's `BASE_TOCTOU`
+   refuses the landing otherwise; C-HE-13 §5); exit 2 → surface the printed cause.
 
 Use the real worktree as `cwd` rather than `git -C` so durable command-prefix approvals
 match. The normal command shapes are:

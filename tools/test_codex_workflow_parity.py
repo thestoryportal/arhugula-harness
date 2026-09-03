@@ -1219,6 +1219,10 @@ def test_roadmap_continue_carriers_wire_the_selection_time_disjointness_gate() -
     assert codex.index("reservations.py reserve ") < codex.index(
         "just codex-autonomous-arc <arc-id>` in that worktree"
     )
+    # B-228 (codex r2/r6/r7): the SAME gate runs again at ship pre-flight in both carriers,
+    # when the candidate carries the arc's commits.
+    for path in [".claude/skills/ship-pr/SKILL.md", ".agents/skills/ship-pr/SKILL.md"]:
+        assert gate in (ROOT / path).read_text(encoding="utf-8"), path
 
 
 def test_forward_profile_template_preserves_current_codex_home_and_review_boundary() -> None:

@@ -22,6 +22,13 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   prefer closing out to a handoff over idling through the expiry: one cold re-warm
   re-reads the whole context at ≈0.7M IET ([B] F4); "the wait costs nothing, I'm just
   sleeping" is the trap — the expiry bills the NEXT call.
+- **Disjointness re-check at ship (U-HE-36; B-228).** Run the selection-time gate again now
+  that the candidate carries the arc's commits — `uv run python tools/arc_disjoint_check.py check --candidate HEAD`
+  (guard-allowlisted in exactly this shape). Exit 1 names the live sibling whose head
+  textually conflicts: rebase or resolve before opening the PR (the door's `BASE_TOCTOU`
+  would refuse the landing later; C-HE-13 §5). Exit 2 → the gate could not run; surface the
+  printed cause. At selection the candidate was `main`, so this is the first invocation
+  with real content on the candidate side.
 - **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
   the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
   claim from the actual source rather than restating it; (c) confirm every `#NNN` reference
