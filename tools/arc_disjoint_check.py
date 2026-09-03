@@ -143,21 +143,32 @@ def _is_commit(repo: Path, ref: str) -> bool:
     return _git(repo, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode == 0
 
 
-def resolve_ref(repo: Path, branch: str, *, origin_fresh: bool) -> str | None:
-    """The local branch ref, else (only if the fetch just succeeded) its origin ref, else None.
+def resolve_ref(repo: Path, branch: str) -> str | None:
+    """The local branch ref, else the origin ref a targeted fetch just refreshed, else None.
 
     Lanes share one repository (worktrees under ``.codex-worktrees/`` / ``.claude/worktrees/``),
-    so a sibling's head is normally a local branch fresher than anything pushed. A cached
-    ``refs/remotes/origin/*`` after a FAILED fetch may be stale — comparing against it could
-    report disjoint for a head that has moved — so it is not a candidate then (codex r1).
+    so a sibling's head is normally a local branch fresher than anything pushed. A CACHED
+    ``refs/remotes/origin/*`` is never consulted: it can be stale after a failed fetch, after
+    a fetch without ``--prune`` (the remote branch deleted), or under a restricted refspec
+    (codex r1/r3). The origin ref is admissible only when
+    ``git fetch origin +refs/heads/<b>:refs/remotes/origin/<b>`` succeeded just now, which
+    overwrites the tracking ref from the remote by construction; a failed fetch (no such
+    remote branch, no network) leaves the head unresolved.
     """
-    candidates = [f"refs/heads/{branch}"] + (
-        [f"refs/remotes/origin/{branch}"] if origin_fresh else []
-    )
-    return next((full for full in candidates if _is_commit(repo, full)), None)
+    local = f"refs/heads/{branch}"
+    if _is_commit(repo, local):
+        return local
+    remote = f"refs/remotes/origin/{branch}"
+    fetched = _git(repo, "fetch", "-q", "origin", f"+refs/heads/{branch}:{remote}")
+    if fetched.returncode != 0:
+        print(
+            f"WARN fetch origin {branch} failed ({fetched.returncode}): {fetched.stderr.strip()}",
+            file=sys.stderr,
+        )
+    return remote if fetched.returncode == 0 and _is_commit(repo, remote) else None
 
 
-def other_lane_heads(repo: Path, me: str, *, origin_fresh: bool) -> list[LaneHead]:
+def other_lane_heads(repo: Path, me: str) -> list[LaneHead]:
     """Every non-terminal reservation held by another lane, with its branch resolved.
 
     A corrupt or symlinked sibling raises (``reservations.current`` is the authority) — for a
@@ -188,7 +199,7 @@ def other_lane_heads(repo: Path, me: str, *, origin_fresh: bool) -> list[LaneHea
                     rec["lane_id"],
                     rec["state"],
                     rec["branch"],
-                    resolve_ref(repo, rec["branch"], origin_fresh=origin_fresh),
+                    resolve_ref(repo, rec["branch"]),
                 )
             )
     return heads
@@ -218,19 +229,12 @@ def lane_id() -> str:
 def check(repo: Path, candidate: str, me: str) -> int:
     if not _is_commit(repo, candidate):  # codex r1: with zero heads nothing else would resolve it
         raise CheckIncompleteError(f"candidate {candidate!r} is not a commit")
-    fetch = _git(repo, "fetch", "-q", "origin")
-    if fetch.returncode != 0:
-        print(
-            f"WARN fetch origin failed ({fetch.returncode}): {fetch.stderr.strip()}"
-            " -- local branch refs only; an origin-only head is UNRESOLVED",
-            file=sys.stderr,
-        )
-    heads = other_lane_heads(repo, me, origin_fresh=fetch.returncode == 0)
+    heads = other_lane_heads(repo, me)
     unresolved = [h for h in heads if h.ref is None]
     for h in unresolved:
         print(
             f"UNRESOLVED {h.arc_id} [{h.lane_id}] {h.state}: branch {h.branch}"
-            " has no local or origin ref"
+            " has no local ref and no fetchable origin ref"
             " -- cannot merge-tree it; if that lane is dead, abandon its reservation (C-HE-03 §5)"
         )
     if unresolved:
@@ -296,6 +300,16 @@ class PairVerdict:
     masked: list[str]  # paths b changed whose patch no longer applies at a^ — not measurable
 
 
+def _restore_entry(repo: Path, tree_ish: str, f: str, env: dict[str, str]) -> None:
+    """Put ``f`` back to ``tree_ish``'s entry in the temp index after a conflicted 3-way apply
+    left stages 1–3 there (``write-tree`` refuses an unmerged index)."""
+    _plumbing(repo, "update-index", "--force-remove", "--", f, env=env)
+    entry = _plumbing(repo, "ls-tree", tree_ish, "--", f)
+    if entry:  # absent in tree_ish (b added it): removal is the restore
+        mode, _kind, oid = entry.split("\t")[0].split()
+        _plumbing(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{f}", env=env)
+
+
 def pair_conflicts(repo: Path, a: str, b: str, env: dict[str, str]) -> PairVerdict:
     """Textual conflicts had ``b`` (merged later) been developed concurrently with ``a``.
 
@@ -304,13 +318,15 @@ def pair_conflicts(repo: Path, a: str, b: str, env: dict[str, str]) -> PairVerdi
     applied to it one file at a time, and the resulting tree — parented at ``a^`` — is
     merge-tree'd against ``a`` (base ``a^``, ours ``a``, theirs ``a`` + ``b``'s change). A
     file ``b`` edited on the very lines ``a`` edited applies (its minus-lines are ``a``'s
-    version) and merge-tree then reports the 3-way conflict; a file whose patch no longer
-    applies at ``a`` (an intermediate commit moved its context) stays at ``a``'s version —
-    identical on both sides, so it cannot conflict — and is reported as MASKED rather
-    than dropped (codex r1): its status is genuinely unmeasurable from squash history, so
-    the O3 rate is an interval, never a silent undercount. Governance files are skipped
-    (P-R3's denominator excludes them). For an adjacent pair ``b^ == a``, every file
-    applies and ``masked`` is empty.
+    version) and merge-tree then reports the 3-way conflict. When an intermediate commit
+    moved ``b``'s context, ``apply --3way`` re-derives the change from the patch's own
+    pre/post-image blobs (codex r3: the plain apply masked every such file); only a file
+    whose change overlaps an intermediate's own hunk still cannot be placed — it is
+    restored to ``a``'s entry (identical on both sides, so it cannot conflict) and reported
+    as MASKED rather than dropped: its status is genuinely unmeasurable from squash
+    history, so the O3 rate is an interval, never a silent undercount (C-HE-13 §4, v1.7
+    X7b). Governance files are skipped (P-R3's denominator excludes them). For an adjacent
+    pair ``b^ == a``, every file applies and ``masked`` is empty.
     """
     base = _plumbing(repo, "rev-parse", f"{a}^")
     _plumbing(repo, "read-tree", a, env=env)
@@ -320,8 +336,9 @@ def pair_conflicts(repo: Path, a: str, b: str, env: dict[str, str]) -> PairVerdi
         if patch.returncode != 0:
             raise MergeTreeError(f"diff-tree {b}^ {b} -- {f} failed: {patch.stderr.strip()}")
         # the patch bytes verbatim: a stripped trailing newline is a corrupt patch
-        if _git(repo, "apply", "--cached", env=env, stdin=patch.stdout).returncode != 0:
+        if _git(repo, "apply", "--cached", "--3way", env=env, stdin=patch.stdout).returncode != 0:
             masked.append(f)
+            _restore_entry(repo, a, f, env)
     tree = _plumbing(repo, "write-tree", env=env)
     certain = merge_conflicts(repo, a, synthetic_commit(repo, tree, base, env), env)
     return PairVerdict(sorted(set(certain) - GOVERNANCE_FILES), masked)

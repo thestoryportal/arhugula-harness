@@ -114,7 +114,7 @@ def test_other_lane_heads_are_the_non_terminal_siblings(repo: Path, qdir: Path) 
     rs.transition("arc-merged", "merged", lane_id="other-3")
     rs.reserve("arc-mine", lane_id="me", branch="lane-a", arc_type="applying")
 
-    heads = adc.other_lane_heads(repo, "me", origin_fresh=True)
+    heads = adc.other_lane_heads(repo, "me")
 
     assert [(h.arc_id, h.state, h.ref) for h in heads] == [
         ("arc-open", "open", "refs/heads/lane-c"),
@@ -123,7 +123,7 @@ def test_other_lane_heads_are_the_non_terminal_siblings(repo: Path, qdir: Path) 
 
 
 def test_other_lane_heads_empty_store(repo: Path, qdir: Path) -> None:
-    assert adc.other_lane_heads(repo, "me", origin_fresh=True) == []
+    assert adc.other_lane_heads(repo, "me") == []
 
 
 def test_other_lane_heads_refuses_a_state_outside_the_domain(repo: Path, qdir: Path) -> None:
@@ -132,19 +132,25 @@ def test_other_lane_heads_refuses_a_state_outside_the_domain(repo: Path, qdir: P
     gen = rs.reservations_root() / "arc-x" / "1.json"
     gen.write_text(gen.read_text(encoding="utf-8").replace('"pending"', '"pendng"'), "utf-8")
     with pytest.raises(adc.CheckIncompleteError, match="outside the C-HE-03"):
-        adc.other_lane_heads(repo, "me", origin_fresh=True)
+        adc.other_lane_heads(repo, "me")
 
 
-def test_resolve_ref_local_then_origin_only_when_fresh(repo: Path) -> None:
-    sha = _git(repo, "rev-parse", "lane-c")
-    _git(repo, "update-ref", "refs/remotes/origin/pushed-only", sha)
-    assert adc.resolve_ref(repo, "lane-c", origin_fresh=True) == "refs/heads/lane-c"
-    assert adc.resolve_ref(repo, "lane-c", origin_fresh=False) == "refs/heads/lane-c"
-    assert adc.resolve_ref(repo, "pushed-only", origin_fresh=True) == (
-        "refs/remotes/origin/pushed-only"
-    )
-    assert adc.resolve_ref(repo, "pushed-only", origin_fresh=False) is None  # stale-cache guard
-    assert adc.resolve_ref(repo, "never-created", origin_fresh=True) is None
+def test_resolve_ref_local_else_targeted_fetch_never_the_cache(repo: Path, tmp_path: Path) -> None:
+    """A cached origin ref is never trusted (codex r1/r3: stale after a failed fetch, an
+    unpruned deletion, or a restricted refspec); only a targeted fetch that just succeeded
+    makes the origin ref admissible."""
+    stale = _git(repo, "rev-parse", "lane-b")
+    _git(repo, "update-ref", "refs/remotes/origin/pushed-only", stale)
+    assert adc.resolve_ref(repo, "lane-c") == "refs/heads/lane-c"  # local wins, no fetch
+    assert adc.resolve_ref(repo, "pushed-only") is None  # no origin at all: cache ignored
+    bare = _add_origin(repo, tmp_path)
+    assert adc.resolve_ref(repo, "pushed-only") is None  # origin has no such branch
+    subprocess.run(["git", "-C", str(bare), "branch", "pushed-only", "lane-c"], check=True)
+    assert adc.resolve_ref(repo, "pushed-only") == "refs/remotes/origin/pushed-only"
+    assert _git(repo, "rev-parse", "refs/remotes/origin/pushed-only") == _git(
+        repo, "rev-parse", "lane-c"
+    )  # the stale cached value was overwritten by the fetch
+    assert adc.resolve_ref(repo, "never-created") is None
 
 
 def test_lane_id_marker_wins_then_env_then_incomplete(
@@ -252,29 +258,33 @@ def test_check_exit_2_on_an_invalid_candidate_even_with_no_heads(
     assert "disjoint" not in err.out
 
 
-def test_check_fetch_failure_is_loud_and_origin_only_heads_fail_closed(
+def test_check_cached_origin_ref_without_a_fetchable_branch_is_unresolved(
     cli: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """No ``origin`` remote: the fetch fails (WARN on stderr), local branches still check,
-    and a head known only through a cached origin ref is UNRESOLVED (codex r1 P2 — the
-    cache may be stale, so it is not compared)."""
+    """Local branches check with no fetch at all; a head known only through a cached origin
+    ref is UNRESOLVED when the targeted fetch fails (no remote here; codex r1/r3 — the
+    cache may be stale, so it is never compared)."""
     rs.reserve("arc-c", lane_id="other", branch="lane-c", arc_type="applying")
     assert adc.main(["check", "--candidate", "lane-a"]) == 0
-    assert "WARN fetch origin failed" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
     _git(cli, "update-ref", "refs/remotes/origin/pushed-only", _git(cli, "rev-parse", "lane-b"))
     rs.reserve("arc-p", lane_id="other-2", branch="pushed-only", arc_type="applying")
     assert adc.main(["check", "--candidate", "lane-a"]) == 2
-    assert "UNRESOLVED arc-p [other-2] pending: branch pushed-only" in capsys.readouterr().out
+    out = capsys.readouterr()
+    assert "UNRESOLVED arc-p [other-2] pending: branch pushed-only" in out.out
+    assert "WARN fetch origin pushed-only failed" in out.err
 
 
 def test_check_uses_origin_heads_after_a_successful_fetch(
     cli: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With a real origin the fetch succeeds and an origin-only head is compared."""
+    """With a real origin the targeted fetch succeeds and an origin-only head is compared —
+    at the REMOTE's current tip, not a stale cached one."""
     bare = _add_origin(cli, tmp_path)
     subprocess.run(["git", "-C", str(bare), "branch", "pushed-only", "lane-b"], check=True)
+    _git(cli, "update-ref", "refs/remotes/origin/pushed-only", _git(cli, "rev-parse", "lane-c"))
     rs.reserve("arc-p", lane_id="other", branch="pushed-only", arc_type="applying")
-    assert adc.main(["check", "--candidate", "lane-a"]) == 1
+    assert adc.main(["check", "--candidate", "lane-a"]) == 1  # stale cache said disjoint
     out = capsys.readouterr()
     assert "CONFLICT arc-p [other] pushed-only: a.txt" in out.out
     assert "WARN" not in out.err
@@ -306,14 +316,31 @@ def test_pair_conflicts_replays_later_pr_as_a_concurrent_lane(tmp_path: Path) ->
         assert adc.pair_conflicts(repo, s["A"], s["C"], env) == adc.PairVerdict([], [])
 
 
-def test_pair_conflicts_names_a_masked_file_instead_of_dropping_it(tmp_path: Path) -> None:
-    """I moved B's context (l3), so B's patch no longer applies at A^: B's conflict status
-    against A is unmeasurable and is reported as masked, never as clean (codex r1 P2)."""
+def test_pair_conflicts_three_way_places_a_change_whose_context_moved(tmp_path: Path) -> None:
+    """I moved B's context (l3): the plain apply fails but the 3-way re-derives B's change
+    from the patch's own blobs, so the pair is measured, not masked (codex r3 P2)."""
     repo = _init_repo(tmp_path)
     a = _commit(repo, "A", **{"a.txt": "A1\nl2\nl3\nl4\nl5\n"})
     _commit(repo, "I", **{"a.txt": "A1\nl2\nI3\nl4\nl5\n"})
     b = _commit(repo, "B", **{"a.txt": "A1\nl2\nI3\nl4\nB5\n", "b.txt": "y\n"})
     with adc.scratch_objects(repo) as env:
+        assert adc.pair_conflicts(repo, a, b, env) == adc.PairVerdict([], [])
+    b2 = _commit(repo, "B2", **{"a.txt": "B1\nl2\nI3\nl4\nB5\n"})  # also edits A's line
+    with adc.scratch_objects(repo) as env:
+        assert adc.pair_conflicts(repo, a, b2, env) == adc.PairVerdict(["a.txt"], [])
+
+
+def test_pair_conflicts_names_a_masked_file_instead_of_dropping_it(tmp_path: Path) -> None:
+    """B rewrote the very line I introduced: B's change overlaps an intermediate's hunk, so
+    even the 3-way cannot place it against A. The file is restored to A's entry (the
+    index stays writable) and reported as masked, never as clean (codex r1 P2)."""
+    repo = _init_repo(tmp_path)
+    a = _commit(repo, "A", **{"a.txt": "A1\nl2\nl3\nl4\nl5\n"})
+    _commit(repo, "I", **{"a.txt": "A1\nl2\nI3\nl4\nl5\n"})
+    b = _commit(repo, "B", **{"a.txt": "A1\nl2\nB3\nl4\nB5\n", "b.txt": "y\n"})
+    with adc.scratch_objects(repo) as env:
+        assert adc.pair_conflicts(repo, a, b, env) == adc.PairVerdict([], ["a.txt"])
+        # the temp index is clean again: a second pair on the same env still works
         assert adc.pair_conflicts(repo, a, b, env) == adc.PairVerdict([], ["a.txt"])
 
 
