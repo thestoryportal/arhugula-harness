@@ -22,6 +22,7 @@ uv run pytest -q \
   tools/test_codex_worktree_gc.py \
   tools/test_arc_exit_report.py \
 tools/test_arc_close_recipe.py \
+  tools/test_branch_hygiene_batch.py \
   tools/test_mutation_probe.py \
   tools/test_pin_scope.py \
   tools/test_rtk_shape_guard.py \

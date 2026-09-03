@@ -121,6 +121,14 @@ and the requested PR/head SHA. Do not interpolate an empty PR number, SHA, branc
    conclusion to equal `success`.
 2. Perform branch hygiene only against the exact merged PR/head OID. Recheck remote state;
    do not infer squash-merge ancestry. Preserve any branch with new or unmerged work.
+   Force pushes are denied to an unattended lane by design: record the deferral with
+   `bash tools/04-loop/defer.sh <arc-id> "branch hygiene close-out pending: <branch> (PR #<N>, merged <merge-sha>, main run green) and roadmap-refresh-post-<N> (PR #<refresh-N>, merged <refresh-merge-sha>, main run green)"`
+   — both branches in the ONE row, in exactly this shape (`tools/branch_hygiene_batch.py`'s
+   `parse_pending` is the authority on it; B-230 Task 4). In the next interactive session run
+   `just branch-hygiene-pending`, paste the printed push (one approval clears every verified
+   row), then run `just branch-hygiene-resolve` — it appends the `RESOLVED-HIL` row for each
+   item whose branches are gone on origin, which is what makes the reducer stop presenting
+   them; it is safe to rerun.
 3. **Never put a `roadmap_status.md` edit in a substantive content PR.** A commit on
    `main` that touches it without being a *verified* terminating refresh satisfies
    neither guard exception (`_lag_expected` wants the refresh shape; `_owed_lag` requires

@@ -476,8 +476,13 @@ allowlist carve-out — that reintroduces exactly the auto-approved-destructive-
 operator has twice rejected. Instead, when running inside loop mode, defer this step through
 the permission guard's allowlisted wrapper — a bare `loop_defer` call is undefined in a fresh
 child shell and would silently no-op:
-`bash tools/04-loop/defer.sh <arc-id> "branch hygiene close-out pending: <branch>"` — and let the next
-interactive session run it.
+`bash tools/04-loop/defer.sh <arc-id> "branch hygiene close-out pending: <branch> (PR #<N>, merged <merge-sha>, main run green) and roadmap-refresh-post-<N> (PR #<refresh-N>, merged <refresh-merge-sha>, main run green)"`
+— BOTH branches in the ONE row, in exactly this shape: `tools/branch_hygiene_batch.py`'s
+`parse_pending` is the authority on it and refuses a row without a `<branch> (PR #N, merged`
+pair (B-230 Task 4). In the next interactive session run `just branch-hygiene-pending`, paste
+the printed push (one approval clears every verified row), then run
+`just branch-hygiene-resolve` — it appends the `RESOLVED-HIL` row for each item whose branches
+are gone on origin, which is what makes the reducer stop presenting them; it is safe to rerun.
 
 ## R-NNN closure cascade — §12.5.3
 
