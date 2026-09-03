@@ -53,9 +53,63 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    # B-230 Task 1 — the CI bookkeeping fast path. Two of the five CI runs per landed
+    # unit verify a diff that is only `.harness/roadmap_status.md` (the terminating
+    # refresh PR and its merge push onto main); this job classifies the diff so the five
+    # heavy jobs below (`needs: changes`) skip on exactly those. A skipped job still
+    # reports Success to branch protection (GitHub docs, "Using conditions to control
+    # job execution"), so every required context keeps reporting — a workflow-level
+    # `paths:` filter would leave them "Expected" and block the merge, which is why the
+    # gate is a job-level `if:`. Every gated job's `if:` carries `always()`: a failing
+    # classifier leaves this output EMPTY and every heavy job runs; without it a broken
+    # classifier would mark them `skipped` = Success and pytest would vanish from a
+    # mergeable PR. Stdlib-only under the runner's python3 with no uv setup — this job
+    # sits on every full run's critical path. The checkout SHA is the pin every other
+    # job uses: this job decides whether five checks run, so a movable tag is a bypass.
+    name: classify diff (bookkeeping fast path)
+    runs-on: ubuntu-latest
+    outputs:
+      bookkeeping: ${{ steps.classify.outputs.bookkeeping }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Both SHAs must be present: base...head is the PR's own changes (merge-base
+          # to head), so a base that moved since branching never widens the diff.
+          fetch-depth: 0
+
+      - name: Classify base...head
+        id: classify
+        # `shell: bash` gives pipefail, so the classifier's exit 2 (empty or unresolvable
+        # diff) fails the step through the tee; on that path the script writes nothing
+        # to stdout, so no partial line reaches $GITHUB_OUTPUT. Same base/head
+        # expression as the codex-context-guard job.
+        #
+        # Self-guard first (codex r1 P1 on b-230-task-1): the classifier executes from
+        # the PR head, so a diff that changes the classifier or this workflow may not be
+        # judged by it — a regression that prints `bookkeeping=true` would skip the very
+        # pytest job that tests it. Those diffs are `bookkeeping=false` by fiat, decided
+        # here in the step; for every other diff the head classifier is byte-identical
+        # to the base classifier, so running from head IS running from base.
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          self_changed="$(git diff --name-only --no-renames "$BASE...$HEAD" -- tools/ci_bookkeeping_diff.py .github/workflows/ci.yml)"
+          if [ -n "$self_changed" ]; then
+            echo "self-guard: classifier/workflow changed on $BASE...$HEAD — full run" >&2
+            echo "bookkeeping=false" | tee -a "$GITHUB_OUTPUT"
+          else
+            /usr/bin/python3 tools/ci_bookkeeping_diff.py "$BASE" "$HEAD" | tee -a "$GITHUB_OUTPUT"
+          fi
+
   test:
     runs-on: ubuntu-latest
     name: pytest (all axis packages) — blocking
+    needs: changes
+    if: always() && needs.changes.outputs.bookkeeping != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -112,6 +166,8 @@ jobs:
   typecheck:
     runs-on: ubuntu-latest
     name: pyright (strict) — blocking
+    needs: changes
+    if: always() && needs.changes.outputs.bookkeeping != 'true'
     # Blocking as of R-200-ci-lint-typecheck-blocking (pyright half) — the tree
     # is pyright-clean (0 errors) tree-wide. New findings fail the PR. See header
     # note for the drive-clean approach (test-dir executionEnvironments + src
@@ -161,6 +217,8 @@ jobs:
     # .harness/class_3_drift_od_cp_undeclared_dependency.md for the direction analysis.
     name: axis isolation — harness-${{ matrix.axis }}
     runs-on: ubuntu-latest
+    needs: changes
+    if: always() && needs.changes.outputs.bookkeeping != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -198,6 +256,8 @@ jobs:
     name: coverage (informational) — advisory at v1
     runs-on: ubuntu-latest
     continue-on-error: true
+    needs: changes
+    if: always() && needs.changes.outputs.bookkeeping != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -429,6 +489,8 @@ jobs:
     #     local pre-push gate's is. B-184 close-out (a).
     runs-on: ubuntu-latest
     name: tools/ test coverage guard + codex-loop tests — blocking
+    needs: changes
+    if: always() && needs.changes.outputs.bookkeeping != 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -508,6 +570,36 @@ jobs:
 
       - name: Validate the closure gate (failing automatable predicate = CI failure)
         run: uv run python tools/closure_gate.py --check
+
+  gate-log-consistency:
+    # B-230 Task 1 — the fast path above skips pytest (which runs
+    # tools/test_merge_gate_log.py through codex-parity-check.sh) on exactly the commits
+    # that append gate rows, and no other job ran the C-HE-23 §2 JSONL↔Markdown
+    # consistency reducer. `check` exits 1 on a Markdown verdict row with no JSONL
+    # authority row (its hard condition); an orphan JSONL row is the contract's WARN
+    # class and reconciles on the next gate run, which is why the classifier refuses the
+    # fast path for a JSONL change without its Markdown sibling (codex r1 P2).
+    # Unconditional (no `needs`, no `if`). merge_gate_log.py is NOT stdlib-only —
+    # its siblings finding_record + review_wrapper_common import the declared jsonschema
+    # dependency — so this job installs the project like the light `lint` job does; a
+    # bare python3 invocation would fail at import on a clean runner.
+    runs-on: ubuntu-latest
+    name: merge-gate log consistency (C-HE-23 §2 reducer) — blocking
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv + Python 3.12
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync workspace (all members)
+        run: uv sync --all-packages
+
+      - name: JSONL ↔ Markdown gate-log consistency (mismatch = CI failure)
+        run: uv run python tools/merge_gate_log.py check
 
   codex-context-guard:
     # R-600-codex-context-guard — Codex-side context-rot gate. The guard is stdlib-only
