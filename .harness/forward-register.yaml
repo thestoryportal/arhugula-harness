@@ -11399,8 +11399,19 @@ items:
     does NOT claim §2, so no green check stands over a measurement that cannot happen (the shape C-HE-22''s
     "result row required before pilots" P1 had). WHAT CLOSES THIS ROW, for whoever takes it: give the guard
     a durable append at its detection site, decide the carrier field explicitly (and record it, since the
-    consumer currently accepts EITHER to avoid guessing wrong), then flip the manifest row to cover §2 and
-    delete the either-carrier tolerance in `arc_metrics.is_drift_row`. ALSO OWED AT THAT MOMENT, and
+    consumer binds to `producer`, per the log''s own convention, and the either-carrier hedge was removed
+    at r6 because an unconstrained `finding_type` made it a misclassification risk), then flip the manifest
+    row to cover §2. TWO FURTHER EMITTER OBLIGATIONS, both surfaced at u-he-38 r6 and both load-bearing
+    for the consumer that is already built. (1) NAME THE DETECTION IN `producer`. `finding_type` carries
+    the closed lifecycle vocabulary and is an unconstrained string, so a detection name there could be
+    forged or collided into by an unrelated producer. (2) EMIT A `no_finding` MARKER PER CHECKED ARC, not
+    only on detection. The incidence denominator is distinct OBSERVED arcs, so a detection-only emitter
+    would place every affected arc in both numerator and denominator and every clean arc in neither, and
+    each non-empty cohort would read 100%. The device is C-HE-29 §2''s own -- a marker row per scored
+    round is exactly how that contract makes its denominator countable from the log alone -- so this
+    follows a precedent in the same spec rather than inventing an obligation. If the emitter cannot emit
+    markers, the denominator must instead become eligible post-activation arcs, which is what makes the
+    activation boundary below load-bearing rather than merely tidy. ALSO OWED AT THAT MOMENT, and
     surfaced by the same reviewer at u-he-38 r3: an EMITTER-ACTIVATION BOUNDARY. Every ledger arc that
     ran before the emitter exists would otherwise stay in the denominator as collision-free exposure and
     permanently dilute each cohort''s incidence. The boundary is not invented here because C-HE-28 does

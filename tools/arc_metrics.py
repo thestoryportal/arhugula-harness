@@ -68,35 +68,51 @@ GATE_LOG = Path(os.environ.get("ARC_METRICS_GATE_LOG", REPO / ".harness" / "merg
 #: transient-retry, HITL-recoverable, permanent-fail-exit, probe-result. On that
 #: evidence ``producer`` is the likelier carrier -- but "likelier" is not a contract.
 #:
-#: So the predicate accepts the name in EITHER field. No row carries this string in
-#: either one (verified across the live log), so a false positive is impossible,
-#: while a single-field guess could silently miss the real emitter and report a
-#: confident zero forever -- the empty-versus-unlooked confusion this ledger exists
-#: to refuse. The report's provenance line states the emitter gap outright, so the
-#: zero this currently produces can never be read as a measured collision rate.
+#: The predicate binds to ``producer`` alone. An earlier draft accepted the name in
+#: EITHER field, hedging against an emitter that might choose the other; that hedge
+#: costs more than it buys. ``finding_type`` is an unconstrained string, so an
+#: unrelated producer emitting a row whose classification happened to carry this name
+#: would be silently counted as a refresh collision -- a real misclassification traded
+#: against a speculative miss, and a miss would at least render `--` rather than a
+#: wrong number. B-237 records that the emitter MUST name itself in ``producer``, so
+#: the binding is a stated contract for the unbuilt producer rather than a guess about
+#: it. The report's provenance line states the emitter gap outright, so what this
+#: currently produces can never be read as a measured collision rate.
 DRIFT_DETECTION = "ROADMAP_STATUS_DRIFT"
 
 
 def is_drift_row(row: dict) -> bool:
-    """A refresh-collision row under either carrier (see ``DRIFT_DETECTION``)."""
-    return DRIFT_DETECTION in (row.get("finding_type"), row.get("producer"))
+    """A refresh-collision row, identified by ``producer`` (see ``DRIFT_DETECTION``)."""
+    return row.get("producer") == DRIFT_DETECTION
 
 
-#: C-HE-25's baseline rule: a row lacking the lane-count KEY predates the field and IS
-#: the implicit N=1 baseline. Only an explicitly stored ``null`` means the field existed
-#: and the best-effort C-HE-03 §7 sensor recorded nothing -- an unknown, not a baseline.
-#: ``dict.get()`` renders both as ``None`` and merges a known cohort into an unknown one.
+#: TWO SCALES, and the field name names the wrong one. `concurrent_lanes_at_open`
+#: stores a SIBLING count, not a lane count: `open_with_sensor` sets it from
+#: `sibling_open_count(arc_id)` (`reservations.py:786`), which skips the arc's own
+#: reservation, and C-HE-03 §7 defines it as the "count of sibling `open` reservations".
+#: A solo arc therefore stores 0, and a stored 1 means TWO lanes were live.
 #:
-#: The spec settles this by worked example, not just by assertion: C-HE-28 §3's honest
-#: first-months claim reads "the only populated joint cells are `(N=1, inventing)` n=6
-#: and `(N=1, null)` n=12" -- 18 rows placed at **N=1** at a HEAD where no row yet
-#: carried the field at all. Historical rows are therefore counted as N=1 by the very
-#: contract this report serves (AC#10), and grouping them anywhere else would put 19 of
-#: 35 arcs in a cohort the spec says they do not occupy.
+#: AC#10 talks in lanes, not siblings. C-HE-28 §3 reads "the only populated joint cells
+#: are `(N=1, inventing)` n=6 and `(N=1, null)` n=12" -- 18 rows at **N=1** at a HEAD
+#: where no row carried the field at all -- and "every N ≥ 2 cell ... starts at 0". Both
+#: sentences are only true of LANES: a lone arc is 1 lane, and the question AC#10 asks
+#: is whether running two or more lanes helps, which is `N >= 2` in lanes and `>= 1` in
+#: siblings. Reporting the raw field would label a solo arc `N=0` -- no arc runs in zero
+#: lanes -- and would make `N >= 2` mean three lanes.
+#:
+#: So the cohort key is LANES = siblings + 1, and a row lacking the KEY is C-HE-25's
+#: implicit N=1 baseline, landing in the same cohort as a stored 0: both are one lane.
+#: Only an explicitly stored ``null`` is an unknown -- the field existed and the
+#: best-effort sensor recorded nothing -- and it stays its own cohort rather than being
+#: imputed. (`dict.get()` would render absent and null alike and merge a known cohort
+#: into an unknown one.)
 def lanes_at_open(row: dict) -> int | None:
-    """The lane-count cohort key: the integer, ``1`` for a row predating the field
+    """The cohort key in LANES: stored siblings + 1, ``1`` for a row predating the field
     (C-HE-25's implicit baseline), or ``None`` for an explicitly recorded unknown."""
-    return row["concurrent_lanes_at_open"] if "concurrent_lanes_at_open" in row else 1
+    if "concurrent_lanes_at_open" not in row:
+        return 1
+    siblings = row["concurrent_lanes_at_open"]
+    return None if siblings is None else siblings + 1
 
 
 def cohort_sort_key(value: object) -> tuple:
@@ -2509,7 +2525,10 @@ def summary(_args: argparse.Namespace) -> int:
         print()
 
     # C-HE-28 §1: lane-count as a lever is judged BY COHORT on the integer
-    # `concurrent_lanes_at_open`. A row lacking one is a key, not an error (C-HE-25:
+    # `concurrent_lanes_at_open`, converted to LANES by `lanes_at_open` -- the stored
+    # field is a SIBLING count, so the label says `lanes_at_open` rather than naming a
+    # field whose raw value it no longer shows.
+    # A row lacking one is a key, not an error (C-HE-25:
     # additive-safe reads), and the label renders via json.dumps so None is the
     # literal `null`, never "None".
     #
@@ -2520,7 +2539,7 @@ def summary(_args: argparse.Namespace) -> int:
     # The divergence would be introduced by that change, so it is repaired with it.
     by_lanes: dict[str, list[dict]] = {}
     for r in rows:
-        key = f"concurrent_lanes_at_open={json.dumps(lanes_at_open(r))}"
+        key = f"lanes_at_open={json.dumps(lanes_at_open(r))}"
         by_lanes.setdefault(key, []).append(r)
     for label in sorted(by_lanes):
         cohort = by_lanes[label]
@@ -2671,6 +2690,18 @@ def summary(_args: argparse.Namespace) -> int:
     # report's own empty-versus-unlooked confusion a third time, now hiding in the
     # denominator after being driven out of the flag and the numerator.
     #
+    # THIS DENOMINATOR PRESUMES A MARKER PER CHECKED ARC, and that presumption is a
+    # requirement on the unbuilt emitter, recorded at B-237 -- not an assumption made
+    # quietly here. A detection-only emitter (rows appended solely when drift is FOUND)
+    # would put every affected arc in both sets and every clean arc in neither, and each
+    # non-empty cohort would read 100%. Between the two failure modes this one is the
+    # right way to fail: a cohort of 1/1 and 2/2 is visibly wrong and provokes the
+    # question, whereas a cohort-size denominator yields a plausible-looking diluted
+    # rate that nobody re-examines. The device is C-HE-29 §2's own -- a `no_finding`
+    # marker per scored round is exactly how that contract makes its denominator
+    # countable from the log alone -- so requiring it of this emitter follows a
+    # precedent in the same spec rather than inventing an obligation.
+    #
     # The numerator is the distinct arcs AFFECTED, not the findings counted. One arc
     # can collect several refresh collisions, each a separate finding with its own
     # finding_id, so a finding count could exceed the arc denominator and print `3/1`
@@ -2696,7 +2727,7 @@ def summary(_args: argparse.Namespace) -> int:
     # -- a parser, a truncated paste, or a reader skimming the numbers takes `0/6` as a
     # measured rate no matter what the next line says.
     print(
-        "drift incidence by concurrent_lanes_at_open (affected arcs / OBSERVED arcs): "
+        "drift incidence by lanes_at_open (affected arcs / OBSERVED arcs): "
         + ", ".join(
             f"N={json.dumps(n)}: "
             + (

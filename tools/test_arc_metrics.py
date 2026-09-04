@@ -867,7 +867,8 @@ def test_lane_cohort_medians_exclude_lower_bound_rows(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(am, "LEDGER", ledger)
     am.summary(am.argparse.Namespace())
     out = capsys.readouterr().out
-    lanes = out[out.index("-- LANES [concurrent_lanes_at_open=1]") :]
+    # stored value 1 is ONE SIBLING, i.e. 2 lanes (`lanes_at_open` = siblings + 1).
+    lanes = out[out.index("-- LANES [lanes_at_open=2]") :]
     assert "review rounds    4.5 (n=2" in lanes, (
         "median of [4,5]; both the unknown AND the partial-suffix row are out"
     )
@@ -1644,10 +1645,11 @@ def test_cohort_split_null_safe(monkeypatch, tmp_path: Path, capsys):
     out = capsys.readouterr().out
     # C-HE-25: a row lacking the KEY predates the field and IS the N=1 baseline
     # (C-HE-28 §3 places 18 such rows at N=1). Only an explicit null is an unknown.
-    assert "LANES [concurrent_lanes_at_open=1] (n=1)" in out, "absent key -> N=1 baseline"
-    assert "LANES [concurrent_lanes_at_open=null] (n=1)" in out, "explicit null stays unknown"
-    assert "LANES [concurrent_lanes_at_open=2] (n=1)" in out
-    assert "concurrent_lanes_at_open=None" not in out
+    assert "LANES [lanes_at_open=1] (n=1)" in out, "absent key -> the 1-lane baseline"
+    assert "LANES [lanes_at_open=null] (n=1)" in out, "explicit null stays unknown"
+    # row "b" stores 2 SIBLINGS, which is 3 lanes.
+    assert "LANES [lanes_at_open=3] (n=1)" in out
+    assert "lanes_at_open=None" not in out
 
 
 # ---- U-HE-12 (C-HE-26 §2): arc_type_open / arc_type_close on the single arc row ---------
@@ -3429,8 +3431,15 @@ def test_phase_spans_negative_span_fails_loud():
 # ---------------------------------------------------------------------------
 
 
+#: lanes -> the SIBLING count the producer actually stores (`open_with_sensor` sets it
+#: from `sibling_open_count`, which excludes the arc itself, so a solo arc stores 0).
+#: Fixtures use the producer's real scale, including 0, rather than writing lane counts
+#: into a sibling field.
+_SIBLINGS_FOR_LANES = {1: 0, 2: 1, 4: 3}
+
+
 def _joint_rows() -> list[dict]:
-    """C-HE-28 Verification fixture: N=1/2/4 x arc_type, three arcs per cell."""
+    """C-HE-28 Verification fixture: N=1/2/4 LANES x arc_type, three arcs per cell."""
     return [
         {
             "arc_id": f"{n}-{t}-{i}",
@@ -3438,7 +3447,7 @@ def _joint_rows() -> list[dict]:
             "arc_span_s": 60.0 * n,
             "review_rounds": 1,
             "round_completeness": "complete",
-            "concurrent_lanes_at_open": n,
+            "concurrent_lanes_at_open": _SIBLINGS_FOR_LANES[n],
             "arc_type_open": t,
             "lane_id": f"lane-{n}",
         }
@@ -3448,26 +3457,22 @@ def _joint_rows() -> list[dict]:
     ]
 
 
-def _drift_row(arc_id: str, lane_id: str, *, carrier: str = "producer", **over) -> dict:
+def _drift_row(arc_id: str, lane_id: str, **over) -> dict:
     """A refresh-collision row, lane-attributed per C-HE-24 §6.
 
-    No emitter appends one today, so the durable shape is unwitnessed and the
-    detection name is matched under EITHER carrier. `carrier` picks which field
-    holds it, so both branches of that predicate are exercised by real rows: the
-    log's own convention puts detection identity in `producer` and a closed
-    severity vocabulary in `finding_type`, but neither is contractual yet.
+    The detection names itself in `producer`, which is where every durable detection
+    in the live log names its site, and `finding_type` carries the closed lifecycle
+    vocabulary. B-237 records that contract for the unbuilt emitter.
     """
-    row = {
+    return {
         "finding_id": f"codex_context_guard:head:{arc_id}:1",
-        "producer": "codex_context_guard",
+        "producer": "ROADMAP_STATUS_DRIFT",
         "finding_type": "terminal-block",
         "record_kind": "finding",
         "disposition": None,
         "lane_id": lane_id,
         "arc_id": arc_id,
-    }
-    row[carrier] = "ROADMAP_STATUS_DRIFT"
-    return row | over
+    } | over
 
 
 def _run_summary(tmp_path: Path, monkeypatch, capsys, rows: list[dict], gate: list[dict] | None):
@@ -3547,7 +3552,7 @@ def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, mon
             "arc_span_s": 60.0,
             "review_rounds": 1,
             "round_completeness": "complete",
-            "concurrent_lanes_at_open": 1,
+            "concurrent_lanes_at_open": 0,  # 0 siblings == 1 lane
             "arc_type_open": "applying",
             "lane_id": None,  # predates the lane field
         }
@@ -3731,14 +3736,32 @@ def test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null(
             "arc_type_open": None,
         },
     ]
+    # A THIRD row, storing 0 siblings: a solo arc recorded by the live sensor. It is
+    # ONE LANE, so it belongs in the same cohort as the pre-field row — which is what
+    # makes C-HE-28 §3's "(N=1, ...) n=18" true of a HEAD where no row carried the
+    # field. Reporting the raw field would split them and label this one `N=0`.
+    rows.append(
+        {
+            "arc_id": "solo-0",
+            "levers_active": [],
+            "arc_span_s": 60.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": 0,
+            "arc_type_open": None,
+        }
+    )
     out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
-    assert "-- JOINT (N=1, null) (n=1) arc span 1.0m" in out, "absent key -> N=1 baseline"
+    assert "-- JOINT (N=1, null) (n=2) arc span" in out, (
+        "absent key and 0 siblings are the same 1-lane cohort"
+    )
     assert "-- JOINT (N=null, null) (n=1) arc span 10.0m" in out, "explicit null is unknown"
-    assert "N=1: --/0 of 1, N=null: --/0 of 1" in out
+    assert "N=0" not in out, "no arc runs in zero lanes; the stored 0 is a SIBLING count"
+    assert "N=1: --/0 of 2, N=null: --/0 of 1" in out
     joint_lines = [ln for ln in out.splitlines() if ln.startswith("-- JOINT")]
-    assert len(joint_lines) == 2, "one cell each, never one pooled cell of two"
-    assert not any("(n=2)" in ln for ln in joint_lines), (
-        "the two populations must never share a cohort"
+    assert len(joint_lines) == 2, (
+        "two cells: the 1-lane cohort (pre-field + solo) and the unknown one — the "
+        "explicit null must never be absorbed into a measured cohort"
     )
 
 
