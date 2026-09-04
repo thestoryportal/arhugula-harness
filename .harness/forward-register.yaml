@@ -55,17 +55,26 @@
 # `identity_digest` = sha256 of the sorted "id:status" pairs; catches two items
 # swapping statuses while the aggregate counts stay put (a plain count pin can't).
 # `tools/forward_register.py --check` is the CI gate.
+#
+# TWO CARRIERS, ONE CLAIM -- until B-235 lands. THIS file is canonical, but
+# `forward_register.py --detail` renders the PROSE twin at
+# `.harness/post-phase-8-forward-register.md`, and the --check prose-drift test
+# compares HEADINGS ONLY, never bodies. So a `close_out` edited here does NOT reach
+# the surface operators actually read, and neither check will say so. Until B-235
+# replaces this pair with derivation, every close_out edit MUST be applied to the
+# prose twin's body in the SAME commit. That is a CONVENTION, not a mechanism --
+# nothing enforces it, which is precisely why B-235 exists.
 
 
 snapshot:
-  total: 234
+  total: 235
   open: 1
   design_substrate_gated: 3
-  registered_finding: 76
+  registered_finding: 77
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 2434bfc932f9db35
+  identity_digest: 35e60b035c55a42a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11230,8 +11239,9 @@ items:
     cannot be attributed to a pilot
   pr: 'PR pending (u-he-37)'
   status: registered_finding
-  summary: 'SURFACED by codex r3 on u-he-37 (2026-09-04), two bounds the C-HE-13 §3 report
-    cannot close from the consumer side. FIRST, membership is inferred from the reservations
+  summary: 'FOUR bounds the C-HE-13 §3 report cannot close from the consumer side, of which
+    (a), (c) and (d) BLOCK a trustworthy PASS; codex r3 on u-he-37 (2026-09-04) surfaced the
+    first two and r4 added the two door-completion bounds recorded below. FIRST, membership is inferred from the reservations
     carrying pilot_run_id because nothing persists an expected roster, so a lane that created
     its reservation and died before recording the id is invisible and a 4-lane pilot that lost
     one lane can still present three lanes and satisfy the 3-4 check. SECOND, the friction
@@ -11240,7 +11250,19 @@ items:
     so the door''s own release attestation falls outside every defensible close. Three review
     rounds landed on that one heuristic, which is the register-and-hold point: the root cause
     is producer-side, not another consumer bound.'
-  close_out: 'OPEN — closure = (a) the pilot runner persists an expected participant roster at
+  close_out: 'OPEN — and BLOCKING the Scope-level completeness of U-HE-37: until (a), (c) AND (d)
+    land, lanes-pilot-report does NOT compute the C-HE-13 §3 iff-clause completely, because THREE
+    paths can still produce a false PASS — a lane that died before recording pilot_run_id is
+    invisible and a short run presents as a valid clean one (a); an already externally-MERGED PR
+    receives a merge_sha from merge_door.land() and satisfies the landing clause (c); and a
+    malformed live LEASE reads as absent so the report can PASS before the door post-merge checks
+    finish (d). A PASS must not be relied on for any decision that assumes every intended lane
+    landed through the door and finished. Bound (b), arcless friction rows, is reporting-only and
+    does not gate a PASS, so it is NOT part of the blocking set (codex r4 and r6 on
+    u-he-37-plan-record; the unit records the same caveat above its step ticks and the prose
+    Current state mirrors it, because forward_register.py --detail renders the prose, not this
+    field). closure = (a) the pilot runner
+    persists an expected participant roster at
     start and the report compares it against the reservations that recorded the run id, and
     (b) every merge_door._notify detail leads with its arc id so ledger rows are attributable
     without a time window at all. (b) alone retires the friction bound and is the smaller
@@ -11257,6 +11279,53 @@ items:
     reservation payload, and (d) read_lease() distinguishes absent from unreadable as every
     other store reader in this family already does. Interim floor already landed: the report
     prints `arcs`, `lanes` and a `membership: inferred …` field, so a PASS cannot be read as
-    "every intended lane landed", and every bound is stated in the module docstring.'
+    "every intended lane landed". The runtime-facing hazard set is INCOMPLETE, and that is a FOURTH surface this claim spans: the module docstring of tools/lanes_pilot.py states bounds (a) and (b) only -- the two surfaced at codex r3 -- and says nothing of (c) or (d), which r4 surfaced later, so a reader of the code alone sees two of the four ways a PASS can be false. It cannot be corrected from this record: this plan is a DESIGN surface under codex_context_guard.DESIGN_RE while tools/ is IMPL, so editing that docstring here would be a HARD DESIGN_IMPL_MIX. OWED: the next lanes_pilot.py touch adds (c) and (d) to the docstring.'
   council: 'NO — one producer field and one roster surface; no cross-axis tension.'
   heading: '### B-234 · pilot membership is inferred, and arcless loop-ledger rows cannot be attributed to a pilot *(surfaced by codex r3 on u-he-37, 2026-09-04; REGISTERED)*'
+- id: B-235
+  title: >-
+    forward_register --detail renders the prose carrier while close_out is canonical, and
+    check_prose_drift compares headings only, so the two bodies can silently disagree
+  pr: 'PR pending (u-he-37-plan-record)'
+  status: registered_finding
+  summary: 'One claim, two hand-maintained bodies, and no check that compares them. The YAML
+    close_out is the canonical field, but forward_register.py --detail renders the PROSE
+    carrier, and check_prose_drift() compares HEADINGS only -- never bodies. A safety-critical
+    disposition therefore has to be typed twice, and reverting either copy leaves --check GREEN
+    while the canonical field and the surface routing actually reads disagree. This is not
+    hypothetical: it is the root cause of four consecutive review rounds on u-he-37-plan-record
+    -- r5 found the blocker recorded only in YAML and so invisible to --detail, r6 found the
+    canonical YAML still saying two paths after the other two surfaces said three, r7 found a
+    fourth surface (the lanes_pilot.py module docstring) asserted to agree when it carries two
+    of four bounds, and r8 found the plan paragraph still saying two inside a paragraph whose
+    next sentence said three. Every one of those was a human re-typing a claim that had one
+    authority.'
+  close_out: 'OPEN. Two shapes, and the choice between them is the decision: EITHER derive the
+    rendered detail body from the canonical YAML so the prose carrier stops being a second
+    authority (strongest -- it deletes the class rather than detecting it, but it changes what
+    --detail prints and needs the prose bodies that carry MORE than close_out reconciled first),
+    OR extend check_prose_drift() to semantic parity on the bodies it already pairs by heading
+    (weaker -- a second clock that at least alarms, and it cannot express that the docstring is a
+    third carrier). NOT fixable from the arc that found it: forward_register.py is tools/ and
+    matches codex_context_guard.IMPL_RE, while the plan is DESIGN, so the fix cannot ride a
+    doc-only PR. Interim, and the reason this is registered rather than held: the enumeration is
+    currently identical in the same order on all three register-side surfaces, verified by
+    reading each at head 27f3066ca -- so the live risk today is LATENT (future divergence),
+    not an actual disagreement. SHARPENED at codex r10, which re-raised this a third time and
+    was right to: neither closure shape as first written is as cheap as this row claimed.
+    DERIVING the rendered body from close_out would LOSE information, because the prose bodies
+    carry What-it-is, Closure-shape and Current-state text that close_out does not hold; and
+    full BODY PARITY cannot mean textual equality, because the two bodies are deliberately
+    different registers of prose. The specifiable fix is NARROWER than either: check that the
+    BLOCKING-BOUND ENUMERATION agrees across carriers -- extract the bound letters asserted by
+    close_out and by the prose Current state, compare the SETS, and fail on a mismatch. That is
+    the claim whose divergence is dangerous; the prose around it is not. RECOMMENDED NEXT,
+    ahead of U-HE-38: it lands as its own tools-only PR with no DESIGN surface in the change
+    set and no clearance marker needed. Re-raised as a standalone finding at codex r9
+    on the same arc, correctly: registering a defect does not repair it, and the reason this
+    row exists rather than a fix is a CI-enforced scope boundary, not a judgement that the
+    gap is acceptable. Interim mitigation landed with this row and named as insufficient: the
+    header of each carrier now states which file is canonical and that both bodies must be
+    edited in one commit -- a convention with nothing enforcing it.'
+  council: 'NO -- a tooling authority question inside one register, no cross-axis tension.'
+  heading: '### B-235 · the register keeps one claim on two hand-maintained surfaces and the drift check compares only headings *(surfaced by codex r8 on u-he-37-plan-record, 2026-09-04; REGISTERED)*'
