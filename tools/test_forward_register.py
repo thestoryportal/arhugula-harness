@@ -173,6 +173,26 @@ def test_detail_states_an_absent_close_out_rather_than_omitting_it(capsys) -> No
     assert "(none" in out
 
 
+def test_detail_emits_the_delimiter_as_one_bare_unindented_line(capsys) -> None:
+    """Pins the PRODUCER half of the contract `tools/leg_selfcheck.py` relies on.
+
+    That consumer tolerates a missing delimiter (`cut = 0`) because injected `detail_fn`
+    fakes predate the header. The tolerance is for the TEST SEAM only -- on the real path
+    the delimiter is always emitted, and if it ever stopped being, the consumer would
+    silently revert to counting the canonical header as prose body: the exact silent
+    retirement of the YAML-only-row gate that B-235's consumer fix exists to prevent.
+    Nothing else asserts the real CLI's shape, so this test is what closes that loop.
+    """
+    forward_register.main(["--detail", "B-1"])
+    lines = capsys.readouterr().out.splitlines()
+    # Exactly one, and BARE -- an indented occurrence is row content, not the frame.
+    assert lines.count(forward_register.PROSE_DELIMITER) == 1, lines[:20]
+    idx = lines.index(forward_register.PROSE_DELIMITER)
+    # The canonical header precedes it; the prose heading follows it.
+    assert any(ln.startswith("close_out (CANONICAL") for ln in lines[:idx])
+    assert any(ln.startswith("### B-1") for ln in lines[idx + 1 :])
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 
