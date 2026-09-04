@@ -411,7 +411,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--summary", action="store_true", help="human-readable counts")
     ap.add_argument("--json", action="store_true", help="machine-readable derivation")
     ap.add_argument("--open", action="store_true", help="id + title + status for open work only")
-    ap.add_argument("--detail", metavar="ID", help="print the full prose block for one item id")
+    ap.add_argument(
+        "--detail",
+        metavar="ID",
+        help="print one item's canonical close_out, then its prose block",
+    )
     args = ap.parse_args(argv)
 
     data = load(args.ledger)

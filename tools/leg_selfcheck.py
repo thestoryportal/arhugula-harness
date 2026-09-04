@@ -1081,13 +1081,18 @@ def check_register_rows(
     base_ids: set[str] | None = None,
     uncommitted: bool = False,
 ) -> None:
-    """`--detail <ID>` renders the PROSE carrier, not the YAML `summary`.
+    """`--detail <ID>` renders the canonical YAML `close_out`, then the PROSE carrier.
 
-    A row written only into `forward-register.yaml` prints just its heading —
-    so the next session reading `--detail` sees a title and nothing else and
-    concludes the row is empty. The "leads with current state, not a superseded
-    instruction" half is genuinely non-mechanical, so the leading bullet is
-    PRINTED for a human rather than pattern-matched into a fake verdict.
+    Since B-235 it prints the canonical header FIRST, then `PROSE_DELIMITER` on its own
+    unindented line, then the prose block; what this function judges is only the PROSE
+    half, which is why it splits on that delimiter rather than reading the whole output.
+
+    A row written only into `forward-register.yaml` therefore contributes NO prose body,
+    and the next session reading `--detail` sees the canonical text followed by a heading
+    and nothing else. That empty prose half is what `HEADING ONLY` reports. The "leads
+    with current state, not a superseded instruction" half is genuinely non-mechanical, so
+    the leading bullet is PRINTED for a human rather than pattern-matched into a fake
+    verdict.
     """
     if not any(
         p.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")) for p in paths

@@ -483,6 +483,33 @@ def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_status()
     )
 
 
+def test_the_header_line_can_never_equal_the_prose_delimiter() -> None:
+    """merge-gate witness lens [P3]. `_one_line`'s completeness argument -- that flattening
+    is a COMPLETE fix and not a mitigation -- rests on a fact about PROSE_DELIMITER that was
+    stated in prose and checked nowhere.
+
+    The two spoof tests below pin the newline vector (an embedded newline putting a bare
+    delimiter on its own line). They do NOT pin the other half: that the header line itself
+    can never BE the delimiter. That half holds because the header is always
+    `{id} — {status}`, so it always contains the separator ` — `, and PROSE_DELIMITER does
+    not. Editing PROSE_DELIMITER to contain an em dash would silently retire the guarantee
+    with every other test still green -- an argument no machine re-checks is a map already
+    drifting from its territory.
+    """
+    assert " \u2014 " not in forward_register.PROSE_DELIMITER
+
+    # The consequence, exercised through the real emitter rather than argued: the closest
+    # available forgery -- the delimiter split across both fields so the separator lands
+    # exactly where the delimiter's own text would continue -- still does not equal it.
+    forged_id = "---"
+    forged_status = "prose block (hand-maintained copy) ---"
+    header = (
+        f"{forward_register._one_line(forged_id)} \u2014 "
+        f"{forward_register._one_line(forged_status)}"
+    )
+    assert header != forward_register.PROSE_DELIMITER
+
+
 def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_id() -> None:
     """The sibling `id`, swept rather than reported. It shares the unindented line with
     `status` and was defended only at `validate()`, which this path never calls -- so the

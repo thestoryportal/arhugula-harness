@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 235
+  total: 236
   open: 1
   design_substrate_gated: 3
-  registered_finding: 77
+  registered_finding: 78
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 35e60b035c55a42a
+  identity_digest: 9e830e725384296e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11340,3 +11340,38 @@ items:
     silently. Both directions are witnessed by mutation probe.'
   council: 'NO -- a tooling authority question inside one register, no cross-axis tension.'
   heading: '### B-235 · the register keeps one claim on two hand-maintained surfaces and the drift check compares only headings *(surfaced by codex r8 on u-he-37-plan-record, 2026-09-04; REGISTERED)*'
+- id: B-236
+  title: leg_selfcheck's dirty-carrier guard snapshots git status once and then renders the working tree
+    once per row, so a concurrent write between them is invisible
+  pr: '#1521 (surfaced by the merge-gate concurrency lens on the b-235 arc)'
+  status: registered_finding
+  summary: 'TOCTOU in the committed-mode guard at tools/leg_selfcheck.py. check_register_rows reads `git
+    status --porcelain` ONCE, and if the register carriers are clean it falls through to a loop that spawns
+    one `forward_register.py --detail <rid>` subprocess per row. forward_register reads the LIVE working
+    tree directly -- load() opens the ledger path and the prose is read with read_text(); it never reads
+    a git blob. So the guard certifies the tree at one instant and the reads it protects happen at N later
+    instants, with no lock and no re-check. A concurrent uncommitted edit to forward-register.yaml or
+    post-phase-8-forward-register.md landing inside that window is invisible: --detail renders prose that
+    the push will not carry, a heading-only committed row is downgraded from HARD to ADVISORY, and `leg-selfcheck
+    OK` ships. That is the round-11 [P2] fail-open reopened from the TIMING side rather than the already-dirty
+    side the guard closes.'
+  close_out: 'REGISTERED, not driven, and deliberately NOT absorbed into the b-235 arc that found it.
+    GROUNDS: the guard is PRE-EXISTING ON MAIN -- `git show main:tools/leg_selfcheck.py` carries it at
+    line 1122 using `_run` -- so this window predates b-235 and was not introduced there. b-235 touched
+    exactly one line of it, swapping `_run` for `_run_checked`, which moves the guard STRICTLY in the
+    safe direction: a failed `git status` used to return empty stdout, indistinguishable from a clean
+    tree, and now raises. Closing the remaining window is a design question, not a one-line fix, and the
+    two remedies the lens proposed do not hold: reading `git show HEAD:<path>` instead of the live tree
+    would break `--uncommitted` mode, whose whole purpose is rendering the working tree; and re-checking
+    immediately before each --detail call narrows the window without closing it, since the write can still
+    land between that re-check and the subprocess''s own read. WHAT WOULD ACTUALLY CLOSE IT, for whoever
+    takes this row: make the mutation DETECTABLE rather than preventable -- re-run the same dirty check
+    after the row loop and fail HARD if the carriers changed during the run -- or give the run a lock.
+    The detect-after shape is preferred: it needs no new locking primitive and turns a silently wrong
+    answer into a loud one. TRIGGER: this is only reachable with a genuine concurrent writer in the same
+    checkout, which this workspace does have (background lanes, editor autosave), so it is real rather
+    than theoretical -- but it is narrow, and b-235''s review budget was exhausted at 15/15 rounds when
+    it surfaced, so absorbing an unreviewed new bound there would have been the worse trade.'
+  council: NO -- a single-tool timing question inside one checker, no cross-axis tension.
+  heading: '### B-236 · the dirty-carrier guard checks the tree once, then renders it N times *(surfaced
+    by the merge-gate concurrency lens on b-235, 2026-09-04; REGISTERED)*'
