@@ -32,6 +32,7 @@ tools/test_arc_close_recipe.py \
   tools/test_arc_lever_report.py \
   tools/test_arc_cost.py \
   tools/test_loop_cost_baseline.py \
+  tools/test_lease_yield_trigger.py \
 tools/test_concurrency_surface.py \
   tools/test_arc_disjoint_check.py \
   tools/test_ci_yml_concurrency.py \

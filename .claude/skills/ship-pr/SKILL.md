@@ -264,7 +264,9 @@ already exported — the wrapper aborts pre-lease otherwise.)
 
 This acquires the lease (fail-fast on `held`, but the wrapper does NOT hand control back:
 its own `wait_for_door` sleeps and retries in place — base 30 s ×2, cap 10 min, 12 attempts,
-≈ 1 h — then routes `HITL-recoverable`; there is no gate-pass to do meanwhile), verifies head/base + `local-base-cas-check` against the
+≈ 1 h — then routes `HITL-recoverable`; there is no gate-pass to do meanwhile; the first
+`held` observation appends ONE `NOTIFY` row, cause `merge-door-lease-acquire:lease_held_yield`,
+to the shared loop ledger — the B-232 trigger's carrier, never a gate-log row), verifies head/base + `local-base-cas-check` against the
 attested tuple, merges with the fixed string, confirms MERGED, flips the reservation,
 **holds the lease through the merge SHA's own `main` run and the terminating refresh PR
 as a continuation** (`.harness/roadmap_status.md`-only, §12.2.1 shape unchanged — the

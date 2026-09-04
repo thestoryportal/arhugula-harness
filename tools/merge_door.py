@@ -983,6 +983,21 @@ def default_ground() -> Ground:
     )
 
 
+#: [LAW:one-source-of-truth] the contention row's cause — the ONE producer-side literal;
+#: tools/loop_cost_baseline.py (stdlib-only, never imports this module) keeps a
+#: consumer-side copy pinned equal by tools/test_loop_cost_baseline.py.
+LEASE_HELD_YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
+
+
+def _lease_holder() -> str:
+    """The arc holding the door as observed NOW, or `-` (the ledger's own null cell) when
+    the lease is already gone — the holder released between the exclusive-create refusal
+    and this read, and the next attempt will simply succeed. A containment failure on the
+    LEASE path raises out of read_lease() as LeaseError; it is never read as absence."""
+    lease = read_lease()
+    return "-" if lease is None else str(lease["reservation_id"])
+
+
 def _notify(kind: str, lane_id: str, cause: str, detail: str) -> None:
     """Loop-ledger row, tolerant of a WRITE FAILURE but no longer of a missing writer.
 
@@ -1708,11 +1723,32 @@ def _tiering_active() -> bool:
 
 
 def wait_for_door(
-    try_acquire: Callable[[], dict], *, clock=time.monotonic, sleep=time.sleep, rng=None
+    try_acquire: Callable[[], dict],
+    *,
+    lane_id: str,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    rng=None,
 ) -> dict:
     """§8 caller policy: bounded exponential backoff + full jitter (base 30 s, ×2, cap
     10 min, 12 attempts ≈ 1 h), then HITL-recoverable. Rate-limit refusals wait but never
-    count against the 12."""
+    count against the 12.
+
+    Contention is made visible OUT of the repo (plan Task 8 Step 1): the first `held`
+    observation of a call — backoff index 0 — appends exactly ONE `NOTIFY` row with cause
+    LEASE_HELD_YIELD_CAUSE to the shared loop ledger, through the same `_notify` the
+    door's DEFERRED-HIL rows use. Never a gate-log row: a row appended to the tracked
+    merge-gate-log while the wait runs lands after the PR's final committed head and is
+    left as dirty worktree state when the door then merges that head. Later retries of
+    the same wait emit nothing — one row per contention EVENT, so the B-232 trigger
+    (>5 rows in any 30-day window) counts events, not backoff iterations. A ledger write
+    failure is LOUD (`_notify`'s ROW LOST stderr line) and never aborts the wait: the row
+    is telemetry, a lost one undercounts the trigger (the conservative direction), and a
+    raise here would let telemetry gate a landing — B-199 carries the persistent-failure
+    residual (codex r1 on b-230-task-8, rejected on these grounds). `lane_id` is
+    required — a wait without a lane is not a state the door has
+    ([LAW:types-are-the-program]).
+    """
     import random
 
     rng = rng or random.random
@@ -1734,6 +1770,11 @@ def wait_for_door(
             continue
         except LeaseHeld:
             attempts += 1
+            if attempts == 1:
+                # [LAW:dataflow-not-control-flow] the branch is the contention event's own
+                # boundary (backoff index 0), the plan's discriminator — not a mode.
+                detail = f"holder={_lease_holder()} backoff=0"
+                _notify("NOTIFY", lane_id, LEASE_HELD_YIELD_CAUSE, detail)
             if attempts >= BACKOFF["max_attempts"]:
                 raise BudgetExhausted("HITL-recoverable: lease_acquire_budget_exhausted") from None
             sleep(min(BACKOFF["cap_s"], delay) * rng())
@@ -1845,7 +1886,8 @@ def main(argv: list[str] | None = None) -> int:
                             pr=args.pr,
                             head_sha=cur[1]["head_sha"],
                             base_sha=cur[1]["base_sha"],
-                        )
+                        ),
+                        lane_id=args.lane_id,
                     )
             if args.no_refresh:
                 # skipping the mandatory §4(viii) continuation is an EXPLICIT posture

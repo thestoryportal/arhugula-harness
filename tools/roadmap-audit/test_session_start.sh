@@ -172,11 +172,39 @@ EOF
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "B-3 standalone notice" && ok "NOTIFY surfaces with no pending HIL rows" || bad "NOTIFY suppressed without HIL rows: $OUT"
 printf '%s' "$OUT" | grep -q "await your input" && bad "a NOTIFY was counted as awaiting input: $OUT" || ok "NOTIFY never reports as awaiting input"
+# 5d) B-232 trigger segment (plan Task 8 Step 3): the rolling 30-day lease_held_yield count is
+#     evaluated by THIS hook every session — a ledger with no yield rows reads 0/5, six rows
+#     inside one window fire the trigger, five do not.
+printf '%s' "$OUT" | grep -q "\[b-232\] lease_held_yields_30d_max=0/5" \
+  && ok "B-232 segment evaluates to 0/5 on a ledger with no yield rows" || bad "no B-232 segment: $OUT"
+printf '%s' "$OUT" | grep -q "TRIGGER FIRED" && bad "B-232 fired on zero rows: $OUT" || ok "B-232 does not fire on zero rows"
+_Y="merge-door-lease-acquire:lease_held_yield"
+{
+  printf '| ts | kind | lane;cause | detail |\n|---|---|---|---|\n'
+  for d in 01 02 03 04 05 06; do printf '| 2020-01-%sT00:00:00Z | NOTIFY | lane=L7;cause=%s | holder=u-x backoff=0 |\n' "$d" "$_Y"; done
+} > "$HARNESS_LOOP_STATUS_PATH"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "\[b-232\] lease_held_yields_30d_max=6/5 TRIGGER FIRED" \
+  && ok "B-232 fires at six yield rows in one 30-day window" || bad "B-232 did not fire: $OUT"
+{
+  printf '| ts | kind | lane;cause | detail |\n|---|---|---|---|\n'
+  for d in 01 02 03 04 05; do printf '| 2020-01-%sT00:00:00Z | NOTIFY | lane=L7;cause=%s | holder=u-x backoff=0 |\n' "$d" "$_Y"; done
+} > "$HARNESS_LOOP_STATUS_PATH"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "\[b-232\] lease_held_yields_30d_max=5/5" && ! printf '%s' "$OUT" | grep -q "TRIGGER FIRED" \
+  && ok "B-232 reads 5/5 without firing at the threshold" || bad "B-232 threshold wrong: $OUT"
+# 5e) An evaluation FAILURE is printed in the segment's place, never dropped as a silent zero.
+printf '| ts | kind | lane;cause | detail |\n|---|---|---|---|\n| yesterday | NOTIFY | lane=L7;cause=%s | h |\n' "$_Y" > "$HARNESS_LOOP_STATUS_PATH"
+OUT=$(run)
+printf '%s' "$OUT" | grep -q "\[b-232\] trigger evaluation FAILED: lease_yield_trigger: cannot evaluate" \
+  && ok "B-232 evaluation failure surfaces in the banner" || bad "B-232 failure swallowed: $OUT"
+printf '%s' "$OUT" | grep -q "lease_held_yields_30d_max=0/5" && bad "B-232 failure read as zero: $OUT" || ok "B-232 failure is never a zero"
 
 rm -f "$HARNESS_LOOP_STATUS_PATH"
 OUT=$(run)
 printf '%s' "$OUT" | grep -q "await your input" && bad "pending-HIL suffix present with no ledger: $OUT" || ok "no pending-HIL suffix when no ledger"
 printf '%s' "$OUT" | grep -q "notify:" && bad "NOTIFY segment present with no ledger: $OUT" || ok "no NOTIFY segment when no ledger"
+printf '%s' "$OUT" | grep -q "\[b-232\]" && bad "B-232 segment present with no ledger: $OUT" || ok "no B-232 segment when no ledger"
 
 rm -f "$REPO/.harness/loop_status.md"
 rm -f "$HARNESS_LOOP_STATUS_PATH"

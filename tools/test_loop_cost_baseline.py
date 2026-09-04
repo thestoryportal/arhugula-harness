@@ -15,7 +15,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from loop_cost_baseline import summarize
+from datetime import datetime, timedelta
+
+from loop_cost_baseline import YIELD_CAUSE, rolling_window_max, summarize
 
 SCRIPT = Path(__file__).resolve().parent / "loop_cost_baseline.py"
 YIELD = "merge-door-lease-acquire:lease_held_yield"
@@ -130,6 +132,7 @@ def test_baseline_reports_expected_keys(tmp_path: Path) -> None:
     assert (
         data["lease_held_yields"] is None
     )  # no --loop-status given: an honest could-not-look, never a zero
+    assert data["lease_held_yields_30d_max"] is None
 
 
 def test_last_appended_row_wins_not_the_latest_ts() -> None:
@@ -567,6 +570,56 @@ def test_loop_status_counts_only_the_yield_cause(tmp_path: Path) -> None:
     )
     data = _run(log, "--loop-status", str(status))
     assert data["lease_held_yields"] == 2
+    assert data["lease_held_yields_30d_max"] == 2  # both rows on one day
+
+
+def test_yield_cause_literal_matches_the_door_producer() -> None:
+    """One producer-side literal (merge_door.LEASE_HELD_YIELD_CAUSE) and this stdlib-only
+    consumer's copy: the two are pinned equal here so neither can drift alone."""
+    import merge_door
+
+    assert merge_door.LEASE_HELD_YIELD_CAUSE == YIELD_CAUSE == YIELD
+
+
+def _days(*offsets: float) -> list[datetime]:
+    t0 = datetime.fromisoformat("2026-09-04T00:00:00+00:00")
+    return [t0 + timedelta(days=d) for d in offsets]
+
+
+def test_rolling_window_boundaries() -> None:
+    """Plan Task 8 Step 3 (r6): six rows spanning 29 days end-to-end → 6; six rows spanning
+    31 days → 5; the window is half-open, so two rows exactly 30 days apart never share
+    one; a lifetime count of six spread over years is NOT a trigger."""
+    w = timedelta(days=30)
+    assert rolling_window_max(_days(0, 5, 10, 15, 20, 29), w) == 6
+    assert rolling_window_max(_days(0, 5, 10, 15, 20, 31), w) == 5
+    assert rolling_window_max(_days(0, 30), w) == 1
+    assert rolling_window_max(_days(0, 29.999), w) == 2
+    assert rolling_window_max(_days(0, 100, 200, 300, 400, 500), w) == 1
+    assert rolling_window_max(_days(500, 0, 3, 250, 1), w) == 3  # unsorted input
+    assert rolling_window_max([], w) == 0
+
+
+def test_rolling_window_reads_the_ledger_ts_column(tmp_path: Path) -> None:
+    """The trigger over real row shapes: six yield rows, five inside one 30-day span and
+    a sixth 40 days out, beside a non-yield NOTIFY row that never counts."""
+    log = tmp_path / "log.jsonl"
+    log.write_text(json.dumps(_rows()[0]) + "\n")
+    status = tmp_path / "loop_status.md"
+    days = [1, 2, 3, 4, 5, 45]
+    body = "".join(
+        f"| 2026-08-{d:02d}T01:00:00Z | NOTIFY | lane=L;cause={YIELD} | holder=u backoff=0 |\n"
+        for d in days[:5]
+    )
+    status.write_text(
+        "| ts | kind | lane;cause | detail |\n|---|---|---|---|\n"
+        "| 2026-08-03T00:00:00Z | NOTIFY | lane=L;cause=- | not a yield |\n"
+        + body
+        + f"| 2026-09-14T01:00:00Z | NOTIFY | lane=L;cause={YIELD} | holder=u backoff=0 |\n"
+    )
+    data = _run(log, "--loop-status", str(status))
+    assert data["lease_held_yields"] == 6
+    assert data["lease_held_yields_30d_max"] == 5
 
 
 def test_empty_log_is_an_error(tmp_path: Path) -> None:

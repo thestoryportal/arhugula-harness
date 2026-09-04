@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 231
-  open: 2
+  total: 232
+  open: 1
   design_substrate_gated: 3
   registered_finding: 74
   operator_gated: 0
-  held: 2
-  closed: 150
-  identity_digest: d54a53e467e06def
+  held: 3
+  closed: 151
+  identity_digest: 2648cd445e4ff05a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11123,8 +11123,8 @@ items:
     Loop optimization program: CI bookkeeping fast path, prompt-hook signal, one-call
     arc close-out, batched branch hygiene, merge-gate emit-all, lens gating decision,
     two trigger-gated spec legs
-  pr: 'PR pending (b-230-register)'
-  status: open
+  pr: '#1499 (b-230-register); closed at the b-230-task-8 arc'
+  status: closed
   summary: 'SURFACED by the Archify loop diagrams (docs/diagrams/code-loop/, 2026-09-03)
     and grounded the same day: five CI runs per landed unit with pytest at 450 s each,
     a merge-door lease held across two of them, 35 of 49 gate passes raised by a single
@@ -11132,14 +11132,17 @@ items:
     prompt hook printing next=? because the pointer prose stopped quoting
     unit ids. Plan with per-task witnesses at
     .harness/plan/loop-optimization-plan-2026-09-03.md.'
-  close_out: 'OPEN — closes when Tasks 0-5 are merged with their witnesses recorded in
-    the plan §0, Task 6 and Task 7 have an operator answer, and Task 8 Steps 1-3 are
-    all landed: the yield row emitted, the trigger row registered, and the counter
-    wired into the baseline script — an umbrella closed after Step 1 alone would strand
-    the observations with no reachable trigger.'
+  close_out: 'CLOSED at the b-230-task-8 arc (2026-09-04). Tasks 9/0/1/3/4/5/2 and
+    Task 6 Steps 1-5 merged at PRs #1499, #1501, #1503, #1505, #1507, #1509, #1511,
+    #1513 with their §0 witnesses in the plan; the operator answered Task 6 Step 6
+    (keep three lenses always — no C-HE-34 spec leg), Task 7 (no --delete-branch in the
+    fixed merge string) and Task 1 Step 8 (held) on 2026-09-03; Task 8 Steps 1-3 landed
+    in the b-230-task-8 arc: the lease_held_yield NOTIFY row from wait_for_door, the
+    B-232 trigger row, and lease_held_yields_30d_max in the baseline script. The
+    trigger lives on at B-232; the concurrency detector stays a measurement instrument.'
   council: 'NO — workspace-ops tooling; the two spec legs (Tasks 7-8) are separately
     decision-gated inside the plan.'
-  heading: '### B-230 · Loop optimization program *(surfaced by the Archify loop diagrams, 2026-09-03)*'
+  heading: '### B-230 · Loop optimization program *(surfaced by the Archify loop diagrams, 2026-09-03; CLOSED at the b-230-task-8 arc, 2026-09-04)*'
 - id: B-231
   title: >-
     Gate-log rows carry no failover-child marker; a gemini row forced to the codex round
@@ -11160,3 +11163,37 @@ items:
     A wrapper-side change with its own codex round; not part of B-230.'
   council: 'NO — one producer field on one wrapper; no cross-axis tension.'
   heading: '### B-231 · gate-log rows carry no failover-child marker — a gemini round cannot be told from a standalone review *(surfaced by codex r6/r7 on b-230-task-0, 2026-09-03; REGISTERED)*'
+- id: B-232
+  title: >-
+    Merge-door lease released after content merge; refresh covers N merges
+  pr: 'PR pending (b-230-task-8)'
+  status: held
+  summary: 'SURFACED by the loop optimization plan Task 8 (.harness/plan/loop-optimization-plan-2026-09-03.md,
+    registered at the b-230-task-8 arc, 2026-09-04): releasing the merge-door lease after
+    the content merge and letting one terminating refresh cover N merges would end the
+    per-unit serialization, but it needs three coupled changes — the C-HE-06 invariants
+    (.harness/spec/Spec_HE_Loop_Lanes_v1.md:317-321: the lease is never released while
+    the merge SHA''s own main run or the terminating refresh is unconfirmed), the §12.2.1
+    one-commit fixed point in root CLAUDE.md, and _owed_lag in
+    tools/codex_context_guard.py:443. Contention is measurable since this arc:
+    merge_door.wait_for_door appends ONE NOTIFY row per contention event (cause
+    merge-door-lease-acquire:lease_held_yield, detail holder=<arc id> backoff=0) to the
+    shared loop_status.md; tools/loop_cost_baseline.py --loop-status reports
+    lease_held_yields (lifetime) and lease_held_yields_30d_max (rolling); and
+    tools/roadmap-audit/session-start.sh evaluates the trigger EVERY session through
+    tools/lease_yield_trigger.py, printing `[b-232] lease_held_yields_30d_max=<n>/5`
+    and `TRIGGER FIRED` past 5 (codex r1 on b-230-task-8: a promise re-evaluated by
+    whoever remembers is no carrier).'
+  close_out: 'HELD (trigger-gated; codex r1 on b-230-task-8: design_substrate_gated is a
+    schedulable status, so the loop could have selected this row before its trigger) —
+    TRIGGER: more than 5 lease_held_yield NOTIFY rows in any half-open 30-day window
+    [t, t + 30 d), i.e. lease_held_yields_30d_max > 5, printed by the SessionStart banner
+    every session (0 at registration). When it fires, flip this row to
+    design_substrate_gated and open the spec leg as a Class 2 decision
+    with a proposed text at the next unallocated Spec_HE_Loop_Lanes version, carrying the
+    three cites above; until then nothing in acquire, release, the C-HE-06 invariants or
+    the §12.2.1 fixed point changes.'
+  council: 'NO until the trigger fires; then a three-carrier change (spec invariant,
+    root CLAUDE.md fixed point, context-guard lag rule) with a nameable serialization ⊥
+    fixed-point tension — council-eligible at that point.'
+  heading: '### B-232 · merge-door lease released after content merge; refresh covers N merges *(trigger-gated by B-230 Task 8, 2026-09-04; HELD until the trigger fires)*'
