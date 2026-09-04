@@ -370,6 +370,37 @@ def test_a_real_detail_failure_is_reported_as_itself_not_as_changed_framing(monk
     assert not any("framing changed" in m for m in msgs), msgs
 
 
+def test_a_failing_git_status_fails_the_run_instead_of_reporting_clean_carriers(monkeypatch):
+    """Class sibling of codex r14 [P3], found by the sweep that finding required.
+
+    The dirty-carrier guard read `git status --porcelain` through `_run`, which discards
+    the return code, so a failed git returned empty stdout -- indistinguishable from a
+    clean tree. The guard would then report the carriers committed and judge HEAD anyway,
+    reopening from the other side the very fail-open it was added to close (round 11
+    [P2]). Same shape as the r14 finding: a real failure rendered as a benign other
+    state. `_run_checked` makes it terminal instead.
+    """
+    import subprocess
+
+    import pytest
+
+    real_run = subprocess.run
+
+    def failing_git_status(args, **kwargs):
+        if args == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: bad index")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(ls.subprocess, "run", failing_git_status)
+
+    report = ls.Report()
+    # `detail_fn=None` and `uncommitted=False` are jointly what reach the guard at all.
+    with pytest.raises(ls.BaseRefError, match="git status"):
+        ls.check_register_rows(
+            ["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None, uncommitted=False
+        )
+
+
 def test_a_close_out_containing_the_delimiter_cannot_spoof_the_prose_frame():
     """codex r1 [P2]. A SUBSTRING split lets row CONTENT choose the framing: a close_out
     carrying the delimiter text would split inside the canonical header, drag its own

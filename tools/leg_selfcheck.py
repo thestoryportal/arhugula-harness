@@ -84,7 +84,11 @@ class Report:
 
 
 class BaseRefError(ValueError):
-    """The requested base ref does not resolve (fails the run; never silent)."""
+    """A git command this run depends on did not succeed (fails the run; never silent).
+
+    Originally raised only for an unresolvable base ref, hence the name. It now also
+    carries a failed `git status` from the dirty-carrier guard: the shared property is
+    that the command's empty output would otherwise be read as a real answer."""
 
 
 def _run(args: list[str]) -> str:
@@ -1124,7 +1128,13 @@ def check_register_rows(
     if ids and detail_fn is None and not uncommitted:
         dirty = [
             line[3:].strip()
-            for line in _run(["git", "status", "--porcelain"]).splitlines()
+            # `_run_checked`, never `_run`: a failed `git status` returns empty stdout,
+            # which is indistinguishable from a clean tree, so the guard would report the
+            # carriers committed and judge HEAD anyway -- reopening from the other side the
+            # exact fail-open this branch was added to close (codex r11 [P2]). Same class as
+            # the r14 [P3] under sweep (a real failure rendered as a benign other diagnosis)
+            # and as round 3's swallowed diff. [LAW:no-silent-failure]
+            for line in _run_checked(["git", "status", "--porcelain"]).splitlines()
             if line[3:]
             .strip()
             .endswith(("forward-register.yaml", "post-phase-8-forward-register.md"))
