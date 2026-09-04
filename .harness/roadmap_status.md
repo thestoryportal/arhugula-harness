@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `945031bf6c97` |
+| `workspace_state_hash` | `0ab15abf1244` |
 | `last_refreshed` | 2026-09-04T00:00:00Z |
-| `git_head` | `569b8fbf` —  |
+| `git_head` | `00b27780` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1517).** U-HE-37 Steps 1–4 landed at #1517 — `tools/lanes_pilot.py` implements the C-HE-13 §1 mechanical pilot gate (reducing through `lanes_verify.phase0_verdict` for §1 and `probe_result_verdict` for §2's probe-before-pilots order, so the runner and the recipes cannot disagree) and the §3 success iff-clause as a pure `evaluate(run_id, Stores)` over the three stores, with `just lanes-pilot` / `lanes-pilot-report` behind an end-anchored arity-bounded guard matcher and two C-HE-13 phase1 manifest rows; `parse_loop_row` is extracted into `loop_cost_baseline` as the one reader of the shared ledger's row grammar. **Phase 0 is RED today** — `lanes_pilot.py gate` refuses, naming `C-HE-08 just:main-protection-verify` (live branch protection is missing the `merge-gate log consistency` and `split-brain ledger backstop` blocking contexts), so **Step 5 (≥ 3 manual pilots at 3–4 lanes) cannot start until an operator runs `just main-protection-apply`**, an outward-facing branch-protection write. Four codex rounds (24 findings) and six merge-gate passes (22 findings) landed against this arc; the two production defects were a permission-guard hole that auto-approved a chained second recipe and a C-HE-04 check that would have failed every pilot in the current drain steady state. `B-233` (the guard's generic `just` alternation is not end-anchored for every parameterless recipe) and `B-234` (inferred pilot membership, arcless ledger rows, and two door-completion bounds) carry the registered residue. The next implementable unit is **U-HE-38** (cohort report joint on `(concurrent_lanes_at_open, arc_type)`, drift join, correlational header; `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:6770`), carrying the U-HE-37 plan step ticks owed as a doc-only PR (the Codex context guard's DESIGN_RE classifies `Implementation_Plan_*_v<n>` as a design surface, so they cannot ride a `tools/` PR), plus `just arc-metrics drain` and `just roadmap-status --archive-superseded`.
+**Current next action (post-#1519).** U-HE-37's plan record landed at #1519: Steps 1–4 ticked with what shipped, Step 5 left open and attributed to its real blocker — phase 0 is RED on `C-HE-08 just:main-protection-verify` because live branch protection lacks the `merge-gate log consistency` and `split-brain ledger backstop` blocking contexts, so `just main-protection-apply` (an outward-facing write, operator-gated) is what unblocks the ≥ 3 manual pilots. The record carries the three-bound blocking set (a)/(c)/(d) of `B-234`, the Step 1 skeleton labelled as pre-implementation input rather than a claim about shipped code, and the carrier constraint every later unit inherits: `codex_context_guard.DESIGN_RE` matches `Implementation_Plan_*_v<n>` while `tools/` is IMPL, so step ticks ride their own doc-only PR. **The next arc is `B-235`, ahead of unit `U-HE-38`** — ten codex rounds on the plan record produced seventeen findings, and five of them were one defect wearing different clothes: `close_out` is canonical but `forward_register.py --detail` renders the prose twin and `check_prose_drift()` compares headings only, so one claim lives on two hand-maintained bodies with no check comparing them. `B-235` now specifies the repair precisely — extract the blocking-bound letters asserted by `close_out` and by the prose `Current state`, compare the SETS, fail on a mismatch — which is narrower than deriving the body (that loses the prose sections `close_out` does not hold) and narrower than textual body parity (the two registers of prose differ by design). It is tools-only, so it carries no DESIGN surface and needs no clearance marker. `U-HE-38` follows (cohort report joint on `(concurrent_lanes_at_open, arc_type)`, the `ROADMAP_STATUS_DRIFT` join by `lane_id`/`arc_id`, and the correlational header; cited by unit id, NOT by line, because the previous pointer's `:6770` drifted the moment the U-HE-37 record was inserted above it) — and its plan skeleton has already been grounded: `GATE_LOG` already exists at `tools/arc_metrics.py:54` with an env override, the skeleton's `except Exception: drift = []` would swallow the `RecordError` that `finding_record.read_rows` raises deliberately on a corrupt log and print `0/6` for "could not look", and its `json.dumps(t)` renders `(N=2, "applying")` while its own test asserts `(N=2, applying)`. Also carried: `just arc-metrics drain` and `just roadmap-status --archive-superseded`.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1519 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1517 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1515 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1513 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1511 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1509 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
