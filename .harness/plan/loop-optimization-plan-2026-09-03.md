@@ -54,6 +54,39 @@
 | CI wall clock after Task 5 — refresh-merge `main` run 33811463410 (#1510) | 53 s (`createdAt` 22:06:53Z → `updatedAt` 22:07:46Z); 17 jobs, 5 `skipped` | `gh run view 33811463410 --json createdAt,updatedAt,jobs`
 | Loop cost baseline at `aea7e5b48` (main after #1510; the b-230-task-2 branch point, before this arc's review round) | 2608 rows / 80 arcs (78 reviewed); median 6, max 24; gate rounds with findings 50, single-lens 36; accepted-only unique catches witness-adequacy 20 / spec-conformance 10 / concurrency 0 (raw 34; rejected-or-suppressed 4; unadjudicated 0); lease-acquire events 2 | `uv run python tools/loop_cost_baseline.py`
 | Prompt hook signal after Task 2 (live `roadmap_status.md` at the b-230-task-2 branch point, pointer prose "Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 2 …") | `plan:loop-optimization-plan-2026-09-03` (was empty, `?` on every prompt) | `bash -c 'source tools/hooks/lib.sh; hook_roadmap_next .harness/roadmap_status.md'`
+| CI wall clock after Task 2 — content-merge `main` run 33816639381 (the #1511 squash `f8da46fa8` touched `tools/`, so nothing was skipped) | 515 s (`createdAt` 23:13:22Z → `updatedAt` 23:21:57Z); 22 jobs, 0 `skipped` | `gh run view 33816639381 --json createdAt,updatedAt,jobs`
+| CI wall clock after Task 2 — refresh-merge `main` run 33817402757 (#1512, `a3c7613b3`) | 54 s (`createdAt` 23:23:36Z → `updatedAt` 23:24:30Z); 17 jobs, 5 `skipped` (pytest / coverage / pyright / tools-coverage / axis-isolation) | `gh run view 33817402757 --json createdAt,updatedAt,jobs`
+| Loop cost baseline at `a3c7613b3` (main after #1512; the b-230-task-6 branch point, before this arc's review round) | 2610 rows / 81 arcs (79 reviewed); median 6, max 24; gate rounds with findings 50, single-lens 36; accepted-only unique catches witness-adequacy 20 / spec-conformance 10 / concurrency 0 (raw 34; rejected-or-suppressed 4; unadjudicated 0); lease-acquire events 2; `arc-metrics drain` held 27 (the pre-existing 26 plus b-230-task-2, same cause) | `uv run python tools/loop_cost_baseline.py`
+| Task 6 Step 5 — the detector on every concurrency-lens round in the log (79 of the log's 109 gate rounds carry a `merge-gate-concurrency` verdict row; the bound cannot be observed where the lens never ran) | all paths: 74 fire / **5 would skip** (73 / 6 before codex r1 on this arc added the `concurrency:` / `cancel-in-progress:` workflow tokens, which flipped u-sr-07 `ec486d066` through a `.harness/` file); every one of the 13 rounds carrying a concurrency `finding` row fired, so **0 finding rows and 0 accepted findings fell in a would-skip round**. The log holds **21** concurrency `finding` rows (21 distinct ids; 1 adjudicated, `rejected`; 20 unadjudicated; last one 2026-08-27 on u-he-49) — the "88 findings" above and at Task 6's basis is the count of ALL 88 rows the producer wrote (62 `no_finding`, 21 `finding`, 4 `reviewer_unavailable`, 1 adjudication). Secondary column, the same detector over the diff with `.harness/**` file sections removed (many fires come from carried gate-log JSON rows quoting code, not from code): 70 fire / 9 would skip, and ONE would-skip round carried a finding — pr-1416 head `c2b309c86`, `merge-gate-concurrency:c2b309c869a005db0592dc2c1f4d48e37ea19b18:993463045e62:1` (P1, `tools/hooks/safe-merge.sh:12-13`, never adjudicated, so not a C-HE-29 catch) — the one measured fail-open instance, for that variant only. Recomputed `sha256(git diff --binary base head)` equalled the row's `diff_digest` on all 79 rounds; every base/head object was present locally. The last-20 table is at §0.1 | driver under the job tmp dir importing `_gate_pass_ranks` / `_is_lens_verdict_row` / `_last_dispositions` from `tools/loop_cost_baseline.py` and `bound_diff` from `tools/review_wrapper_common.py`; per round `uv run python tools/concurrency_surface.py < <(git diff --binary <base> <head>)`
+
+### §0.1 Task 6 Step 5 — the last 20 concurrency-lens rounds (append order; measured at `a3c7613b3`, re-run after the codex r1 absorption)
+
+`verdict` is the detector over the bound diff (`git diff --binary base head`, digest-verified); `code paths` is the secondary column with `.harness/**` sections removed; `findings` / `accepted` are the concurrency lens's `finding` rows in that round and those whose last disposition is `accepted`.
+
+| Arc | Head, pass | Base | verdict | code paths | findings | accepted |
+|---|---|---|---|---|---|---|
+| u-sr-01 | `8372ed068` p1 | `db7f5d3b7` | true | true | 0 | 0 |
+| u-sr-01 | `79395c870` p1 | `db7f5d3b7` | true | true | 0 | 0 |
+| u-sr-02 | `8b3c4b6d8` p1 | `ec945d18b` | true | true | 0 | 0 |
+| u-sr-02 | `9d1eeafa0` p1 | `ec945d18b` | true | true | 0 | 0 |
+| u-sr-03 | `cd16adb94` p1 | `8100ae9db` | true | true | 0 | 0 |
+| u-sr-03 | `d8f024f27` p1 | `8100ae9db` | true | true | 0 | 0 |
+| u-sr-04 | `80eac66c1` p1 | `7295ebf7c` | true | true | 0 | 0 |
+| u-sr-05 | `fd5d7ae5f` p1 | `51dd825e3` | false | false | 0 | 0 |
+| u-sr-05 | `3794d019a` p1 | `51dd825e3` | false | false | 0 | 0 |
+| u-sr-06 | `470a2b300` p1 | `759620d7e` | false | false | 0 | 0 |
+| u-sr-07 | `184bbecd7` p1 | `61d47aac0` | false | false | 0 | 0 |
+| u-sr-07 | `ec486d066` p1 | `61d47aac0` | true | false | 0 | 0 |
+| u-sr-08 | `6279ba59b` p1 | `bb0253337` | false | false | 0 | 0 |
+| u-sr-09 | `f085f4e45` p1 | `cd3c86172` | true | true | 0 | 0 |
+| u-sr-09 | `49d2dc46d` p1 | `cd3c86172` | true | true | 0 | 0 |
+| u-sr-09 | `6e6605477` p1 | `cd3c86172` | true | true | 0 | 0 |
+| u-he-36 | `bba19b5bd` p1 | `c95a804fa` | true | true | 0 | 0 |
+| u-he-36 | `763943fbc` p1 | `c95a804fa` | true | true | 0 | 0 |
+| u-he-36 | `763943fbc` p2 | `c95a804fa` | true | true | 0 | 0 |
+| u-he-36 | `b20454691` p1 | `c95a804fa` | true | true | 0 | 0 |
+
+Window: 5 of 20 would skip; 0 findings in the window at all (the lens's last finding row predates it). The saving Task 6 Step 6 buys is therefore one subagent in 5 of 79 gate rounds (9 of 79 with the `.harness/**` exclusion, at the cost of one measured miss).
 
 The hooks category collapses to two defects (the empty `next=` token and duplicated banner lines); the per-call hooks are already cheap. The serialization category collapses to lease *duration* until Task 8 Step 1 makes in-budget contention measurable; only two hour-long stalls are on record across the 76 arcs at the Task 0 head.
 
@@ -402,7 +435,7 @@ The second disjointness check at ship time stays: HEAD changed since selection, 
 
 ### Task 6: Concurrency lens on demand (duplicate reviews, spec-gated)
 
-Basis: the concurrency lens has 1 raw / 0 net-of-rejected unique catches in 88 findings; witness-adequacy has 22 raw / 19 and spec-conformance 10 (§0; the accepted-only figure comes from Task 0). Running the concurrency lens only when the diff touches a shared-state, process-isolation or timeout/cancellation surface removes one subagent from the gate rounds the detector clears; Step 5 measures how many that is. Running fewer lenses is what C-HE-34 forecloses — "No collapsing of review layers to cut the 68%" (`Spec_HE_Loop_Lanes_v1.md:823`) — so an operator answer cannot enable it directly: Steps 1–5 build the detector and the measurement (mode-agnostic), Step 6 asks once, and a *yes* opens a spec leg (change note qualifying C-HE-34 for a detector-gated lens, clearance marker, HE plan update, landed as a doc-only PR) before the code and skill edits land.
+Basis: the concurrency lens has 1 raw / 0 net-of-rejected unique catches in 88 rows it wrote (21 of them `finding` rows — Step 5 measured the split; the earlier "88 findings" wording counted every row); witness-adequacy has 22 raw / 19 and spec-conformance 10 (§0; the accepted-only figure comes from Task 0). Running the concurrency lens only when the diff touches a shared-state, process-isolation or timeout/cancellation surface removes one subagent from the gate rounds the detector clears; Step 5 measures how many that is. Running fewer lenses is what C-HE-34 forecloses — "No collapsing of review layers to cut the 68%" (`Spec_HE_Loop_Lanes_v1.md:823`) — so an operator answer cannot enable it directly: Steps 1–5 build the detector and the measurement (mode-agnostic), Step 6 asks once, and a *yes* opens a spec leg (change note qualifying C-HE-34 for a detector-gated lens, clearance marker, HE plan update, landed as a doc-only PR) before the code and skill edits land.
 
 **Files:** create `tools/concurrency_surface.py`; test `tools/test_concurrency_surface.py` (wired into `tools/codex-parity-check.sh`). Only after the spec leg is cleared: `tools/merge_gate_log.py` (the typed skip path), `tools/hooks/permission-guard.sh` + tests, `.claude/skills/merge-gate/SKILL.md:110-169` and `:197-219`.
 
@@ -415,7 +448,7 @@ Basis: the concurrency lens has 1 raw / 0 net-of-rejected unique catches in 88 f
 - Empty, header-only or binary-only input is UNKNOWN, never "no surface": `EmptyDiff` → exit 2 → the lens runs. The skill step skips the lens ONLY on a literal `concurrency=false`. (r4)
 - The typed skip row (`no_finding`, `finding_type: lens_skipped`, `cause_attribution: detector_no_surface`) is written ONLY by an emit command that itself runs the detector on the bound diff (`diff_digest` from `lens_binding`) and records the detector's verdict in the row — never from caller-supplied reason text, which a headless agent could use to claim a skip and bypass the reviewer. That command gets its own exact-shape guard allowlist entry and `test_permission_guard.sh` cases; the existing `emit` parses only a bound reviewer verdict (`clean_approve` at `merge_gate_log.py:196`) and cannot carry a skip. (r3, r5 P1)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test** — landed as `tools/test_concurrency_surface.py`: the nine cases below verbatim plus a removed-line-that-looks-like-a-header case and the CLI contract (`concurrency=true|false` exit 0; `run the lens` exit 2).
 
 ```python
 # tools/test_concurrency_surface.py
@@ -457,10 +490,10 @@ def test_empty_or_contentless_input_fails_closed():
             touches_concurrency(bad)
 ```
 
-- [ ] **Step 2: Run it, expect FAIL.**
-- [ ] **Step 3: Write the detector** to the interface and constraints.
-- [ ] **Step 4: Run the test, expect PASS. Wire the test into `tools/codex-parity-check.sh`; commit** `git commit -m "feat(tools): concurrency_surface detector (merge-gate lens gating, spec leg pending)"`.
-- [ ] **Step 5: Measure on history** — for the last 20 gate rounds, run the detector on each PR's `git diff -U0 base..head` and record how many rounds would have skipped the lens and whether any of the lens's 88 findings fell in a skipped round; any ACCEPTED concurrency finding in a would-skip round is a measured instance of the fail-open bound, recorded by finding id. Put the table in this plan under §0.
+- [x] **Step 2: Run it, expect FAIL.** — import error, nothing collected.
+- [x] **Step 3: Write the detector** to the interface and constraints — `tools/concurrency_surface.py`: the allowlist is one tuple of patterns; `content_lines` → `surface_hits` → `touches_concurrency`; a header is only the git shape (`+++`/`---` followed by `a/`, `b/` or `/dev/null`) so a removed `-- …` line stays content; the docstring states the fail-open bound.
+- [x] **Step 4: Run the test, expect PASS. Wire the test into `tools/codex-parity-check.sh`; commit** `git commit -m "feat(tools): concurrency_surface detector (merge-gate lens gating, spec leg pending)"`.
+- [x] **Step 5: Measure on history** (measured over ALL 79 concurrency-lens rounds, not only the last 20, since the last 20 carry no finding row; the diff is the lens's own bound bytes `git diff --binary base head` — digest-verified — rather than `-U0`, which reads the same `+`/`-` lines; results at §0 + §0.1) — for the last 20 gate rounds, run the detector on each PR's `git diff -U0 base..head` and record how many rounds would have skipped the lens and whether any of the lens's 88 rows (21 `finding` rows) fell in a skipped round; any ACCEPTED concurrency finding in a would-skip round is a measured instance of the fail-open bound, recorded by finding id. Put the table in this plan under §0.
 - [ ] **Step 6: One AskUserQuestion** with the table and the fail-open bound stated: (a) open the C-HE-34 spec leg for a detector-gated concurrency lens with the typed skip path above, so C-HE-29 accounting stays whole; (b) keep three lenses always. On (a): spec + marker PR first (doc-only), then the code PR (typed skip path + guard entry + tests) and the skill edit. On (b): Steps 1–5 stay as a measurement instrument and this task closes.
 
 The Codex re-run after a lens BLOCK stays. A fix is new code and the out-of-family reviewer has never seen it; the log shows 1765 wrapper-written Codex rows against 310 lens-written rows at the Task 0 head (`codex_rows` / `lens_rows`), so the re-run is where the catches are.
