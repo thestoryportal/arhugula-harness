@@ -11311,9 +11311,17 @@ items:
     doc-only PR. Interim, and the reason this is registered rather than held: the enumeration is
     currently identical in the same order on all three register-side surfaces, verified by
     reading each at head 27f3066ca -- so the live risk today is LATENT (future divergence),
-    not an actual disagreement. RECOMMENDED NEXT, ahead of U-HE-38: the repair is small,
-    self-contained and tools-only, so it lands as its own PR with no DESIGN surface in the
-    change set and no clearance marker needed. Re-raised as a standalone finding at codex r9
+    not an actual disagreement. SHARPENED at codex r10, which re-raised this a third time and
+    was right to: neither closure shape as first written is as cheap as this row claimed.
+    DERIVING the rendered body from close_out would LOSE information, because the prose bodies
+    carry What-it-is, Closure-shape and Current-state text that close_out does not hold; and
+    full BODY PARITY cannot mean textual equality, because the two bodies are deliberately
+    different registers of prose. The specifiable fix is NARROWER than either: check that the
+    BLOCKING-BOUND ENUMERATION agrees across carriers -- extract the bound letters asserted by
+    close_out and by the prose Current state, compare the SETS, and fail on a mismatch. That is
+    the claim whose divergence is dangerous; the prose around it is not. RECOMMENDED NEXT,
+    ahead of U-HE-38: it lands as its own tools-only PR with no DESIGN surface in the change
+    set and no clearance marker needed. Re-raised as a standalone finding at codex r9
     on the same arc, correctly: registering a defect does not repair it, and the reason this
     row exists rather than a fix is a CI-enforced scope boundary, not a judgement that the
     gap is acceptable. Interim mitigation landed with this row and named as insufficient: the
