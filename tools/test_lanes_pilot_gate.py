@@ -222,10 +222,16 @@ def test_a_duplicate_non_pilot_arc_id_also_violates_c_he_03() -> None:
     assert any("old-arc has 2 union-ledger rows" in v for v in rep["ledger_invariant_violations"])
 
 
-def test_queued_and_committed_at_once_fails_c_he_04() -> None:
+def test_queued_and_committed_is_the_sweep_window_not_a_violation() -> None:
+    """`arc_metrics._drain_one` unlinks a queue entry only once the row is ALREADY in
+    committed history, on a LATER drain pass — so "queued and committed" is the normal
+    self-healing window, not a C-HE-04 breach. C-HE-04's exclusive-or is stated *after a
+    drain invocation*, not as a globally-true property, and with the workspace drain held
+    this window is the steady state. Failing on it would cry wolf on every pilot."""
     rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), queued_arc_ids={"u-1"}))
-    assert rep["pass"] is False
-    assert any("C-HE-04" in v and "BOTH" in v for v in rep["ledger_invariant_violations"])
+    assert rep["ledger_invariant_violations"] == []
+    assert rep["rows_awaiting_queue_sweep"] == ["u-1"]
+    assert rep["pass"] is True
 
 
 def test_neither_queued_nor_committed_fails_c_he_04() -> None:

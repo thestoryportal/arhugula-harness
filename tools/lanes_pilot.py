@@ -252,11 +252,17 @@ def ledger_invariants(stores: Stores) -> list[str]:
         queued = arc_id in stores.queued_arc_ids
         committed = arc_id in stores.merged_ledger_arc_ids
         if queued and committed:
-            violations.append(
-                f"C-HE-04: {arc_id} is BOTH queued and in committed history; the "
-                "post-drain invariant admits exactly one"
-            )
-        elif not queued and not committed:
+            # NOT a violation. C-HE-04's exclusive-or is stated "after any drain
+            # invocation", not as a globally-true property, and `arc_metrics._drain_one`
+            # releases a queue entry only once `arc_id in committed` is ALREADY true — the
+            # unlink lands on a LATER, independently-triggered drain pass. A row that has
+            # reached MERGED_REF whose queue file has not yet been swept is therefore the
+            # normal self-healing window, reachable in ordinary multi-lane operation and,
+            # with the workspace drain currently held, the steady state. Calling it a breach
+            # would fail pilots for exactly the condition the drain exists to reap
+            # (merge-gate concurrency lens). Surfaced as an observation instead.
+            continue
+        if not queued and not committed:
             violations.append(
                 f"C-HE-04: {arc_id} has neither a queue entry nor a committed row; its "
                 "capture is unaccounted for"
@@ -330,6 +336,11 @@ def evaluate(run_id: str, stores: Stores) -> dict:
         for a in arcs
         if a["arc_id"] in stores.queued_arc_ids and a["arc_id"] not in stores.merged_ledger_arc_ids
     )
+    awaiting_sweep = sorted(
+        a["arc_id"]
+        for a in arcs
+        if a["arc_id"] in stores.queued_arc_ids and a["arc_id"] in stores.merged_ledger_arc_ids
+    )
     return {
         "run_id": run_id,
         "arcs": sorted(a["arc_id"] for a in arcs),
@@ -341,6 +352,7 @@ def evaluate(run_id: str, stores: Stores) -> dict:
         "coordination_hil": [f"{r['cause']}: {r['detail'][:80]}" for r in hil],
         "coordination_hil_still_outstanding": len(still_open),
         "rows_not_yet_folded": unfolded,
+        "rows_awaiting_queue_sweep": awaiting_sweep,
         "membership": (
             "inferred from reservations carrying this pilot_run_id; a lane that died before "
             "recording it is invisible (B-234) — compare `lanes` against what was spawned"
