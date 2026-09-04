@@ -2681,26 +2681,23 @@ def summary(_args: argparse.Namespace) -> int:
         else:
             attributable.append((g, arc))
 
-    # BOTH SIDES OF THE RATIO ARE ARCS, and only arcs actually looked at.
+    # EXPOSURE IS THE COHORT, and the detector is what makes that true.
     #
-    # The denominator is the distinct arcs in the cohort that a drift-class row was
-    # attributed to -- never every ledger arc at that N. An arc nobody observed
-    # contributes no exposure: counting it would let one observed N=4 arc print `0/6`
-    # and silently assert five unobserved arcs were collision-free, which is this
-    # report's own empty-versus-unlooked confusion a third time, now hiding in the
-    # denominator after being driven out of the flag and the numerator.
+    # The denominator is every ledger arc at that lane count. An earlier revision used
+    # only arcs carrying a drift-class row, on the reasoning that an arc nobody looked
+    # at contributes no exposure. That reasoning smuggled in a producer contract no
+    # contract states: it is sound only if the emitter writes a `no_finding` marker per
+    # CHECKED arc, and neither C-HE-28 nor the plan requires one. Against the actual
+    # detector it inverts -- `codex_context_guard` runs in CI on every merge, so a
+    # findings-only emitter would place affected arcs in both sets and clean arcs in
+    # neither, and every non-empty cohort would report 100%.
     #
-    # THIS DENOMINATOR PRESUMES A MARKER PER CHECKED ARC, and that presumption is a
-    # requirement on the unbuilt emitter, recorded at B-237 -- not an assumption made
-    # quietly here. A detection-only emitter (rows appended solely when drift is FOUND)
-    # would put every affected arc in both sets and every clean arc in neither, and each
-    # non-empty cohort would read 100%. Between the two failure modes this one is the
-    # right way to fail: a cohort of 1/1 and 2/2 is visibly wrong and provokes the
-    # question, whereas a cohort-size denominator yields a plausible-looking diluted
-    # rate that nobody re-examines. The device is C-HE-29 §2's own -- a `no_finding`
-    # marker per scored round is exactly how that contract makes its denominator
-    # countable from the log alone -- so requiring it of this emitter follows a
-    # precedent in the same spec rather than inventing an obligation.
+    # A universal detector examines every arc, so every arc in the cohort IS observed
+    # and the exposure is the cohort. This is also the shape the implementation plan's
+    # own fixture expects (`N=4: 1/6`). What remains true from the earlier objection is
+    # narrower and is B-237's activation boundary: arcs that ran BEFORE the emitter
+    # existed were genuinely never examined, and once it lands they must leave the
+    # denominator rather than dilute it.
     #
     # The numerator is the distinct arcs AFFECTED, not the findings counted. One arc
     # can collect several refresh collisions, each a separate finding with its own
@@ -2708,9 +2705,11 @@ def summary(_args: argparse.Namespace) -> int:
     # -- a proportion greater than one, which is not a thing incidence can be.
     # Reducing by finding_id removes duplicate ROWS for one finding; only counting
     # arcs removes duplicate FINDINGS for one arc.
-    observed_arcs: dict[object, set] = {}
-    for _g, arc in attributable:
-        observed_arcs.setdefault(lanes_at_open(arc), set()).add(arc["arc_id"])
+    #
+    # Measurability is a GLOBAL fact and belongs at that scale: the question a `--`
+    # answers is "is the emitter wired at all", which no per-cohort silence can tell
+    # you once the denominator is the cohort -- a cohort with no collisions is then
+    # legitimately 0/6, indistinguishable from an unexamined one by inspection alone.
     drift = [
         r
         for r in fr.reduce_last_by_finding_id(
@@ -2721,20 +2720,17 @@ def summary(_args: argparse.Namespace) -> int:
     affected_arcs: dict[object, set] = {}
     for r in drift:
         affected_arcs.setdefault(lanes_at_open(by_arc[r["arc_id"]]), set()).add(r["arc_id"])
-    # A cohort with no observed arc renders `--`, never a digit: the ratio has no
-    # denominator to stand on. `--` is the same unavailable token fmt_span and the N6
-    # line already use, and it is carried by the value rather than by the caveat below
-    # -- a parser, a truncated paste, or a reader skimming the numbers takes `0/6` as a
-    # measured rate no matter what the next line says.
+    # While NOTHING has been observed the whole line renders `--`, never a digit: with
+    # no emitter there is no measurement to report, and `--` is the same unavailable
+    # token fmt_span and the N6 line already use. It is carried by the VALUE rather
+    # than by the caveat below, because a parser, a truncated paste, or a reader
+    # skimming the numbers takes `0/6` as a measured rate whatever the next line says.
+    measurable = bool(observed)
     print(
-        "drift incidence by lanes_at_open (affected arcs / OBSERVED arcs): "
+        "drift incidence by lanes_at_open (affected arcs / arcs in cohort): "
         + ", ".join(
             f"N={json.dumps(n)}: "
-            + (
-                f"{len(affected_arcs.get(n, ()))}/{len(observed_arcs[n])}"
-                if n in observed_arcs
-                else f"--/0 of {len(by_n[n])}"
-            )
+            f"{len(affected_arcs.get(n, ())) if measurable else '--'}/{len(by_n[n])}"
             for n in sorted(by_n, key=cohort_sort_key)
         )
     )
@@ -2744,13 +2740,11 @@ def summary(_args: argparse.Namespace) -> int:
         f"       row(s): {len(observed)} drift-class row(s) of any kind observed, "
         f"{unjoinable} unjoinable, {lane_mismatch} EXCLUDED for a lane_id\n"
         f"       disagreeing with the ledger's (contradictory attribution, not a "
-        f"measurement); {len(observed_arcs)} of {len(by_n)} cohort(s) had an arc\n"
-        f"       observed. BOTH sides of each ratio are distinct ARCS -- affected over "
-        f"OBSERVED, never over cohort size, because an arc nobody\n"
-        f"       looked at contributes no exposure; `--/0 of K` names the K arcs that "
-        f"ran at an N where nothing was observed. A `--` means\n"
-        f"       that cohort was never looked at, a numeric 0 means an emitter looked "
-        f"and recorded no collision. Those are different facts\n"
+        f"measurement). The numerator is distinct AFFECTED arcs and the\n"
+        f"       denominator every arc in the cohort: the detector is a CI guard that "
+        f"runs on every merge, so each arc is examined. A `--`\n"
+        f"       means no emitter has written to this log at all, a numeric 0 means it "
+        f"ran and recorded no collision. Those are different facts\n"
         f"       and the report will not merge them (gate log: {GATE_LOG})."
     )
     print()

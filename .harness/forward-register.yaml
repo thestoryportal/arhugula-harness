@@ -11406,14 +11406,16 @@ items:
     row to cover §2. TWO FURTHER EMITTER OBLIGATIONS, both surfaced at u-he-38 r6 and both load-bearing
     for the consumer that is already built. (1) NAME THE DETECTION IN `producer`. `finding_type` carries
     the closed lifecycle vocabulary and is an unconstrained string, so a detection name there could be
-    forged or collided into by an unrelated producer. (2) EMIT A `no_finding` MARKER PER CHECKED ARC, not
-    only on detection. The incidence denominator is distinct OBSERVED arcs, so a detection-only emitter
-    would place every affected arc in both numerator and denominator and every clean arc in neither, and
-    each non-empty cohort would read 100%. The device is C-HE-29 §2''s own -- a marker row per scored
-    round is exactly how that contract makes its denominator countable from the log alone -- so this
-    follows a precedent in the same spec rather than inventing an obligation. If the emitter cannot emit
-    markers, the denominator must instead become eligible post-activation arcs, which is what makes the
-    activation boundary below load-bearing rather than merely tidy. ALSO OWED AT THAT MOMENT, and
+    forged or collided into by an unrelated producer. (2) THE ACTIVATION BOUNDARY IS THE DENOMINATOR''S ONLY
+    OPEN QUESTION, and it is now the whole of it. An interim revision of this row required a `no_finding`
+    marker per CHECKED arc so the denominator could be distinct OBSERVED arcs; that requirement is
+    WITHDRAWN (u-he-38 r8). It invented a producer contract no spec states, it contradicted the plan''s
+    own fixture (which expects 1/6, not 1/1), and against the real detector it inverts: `codex_context_guard`
+    runs in CI on every merge, so every arc IS examined and the exposure is simply the cohort. The consumer
+    now uses the cohort as the denominator. What survives is narrower and real: arcs that ran BEFORE the
+    emitter existed were genuinely never examined, so once it lands they must LEAVE the denominator rather
+    than dilute it. C-HE-28 defines no such boundary, and guessing a date or commit here would bake an
+    unreviewed constant into the metric, so it is producer-side work owed with the emitter. ALSO OWED AT THAT MOMENT, and
     surfaced by the same reviewer at u-he-38 r3: an EMITTER-ACTIVATION BOUNDARY. Every ledger arc that
     ran before the emitter exists would otherwise stay in the denominator as collision-free exposure and
     permanently dilute each cohort''s incidence. The boundary is not invented here because C-HE-28 does
