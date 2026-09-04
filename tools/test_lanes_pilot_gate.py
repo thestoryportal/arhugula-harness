@@ -20,6 +20,13 @@ import pytest
 SCRIPT = Path(__file__).resolve().parent / "lanes_pilot.py"
 
 
+class _Proc:
+    """A `subprocess.run` result standing in for the ledger-path resolution."""
+
+    def __init__(self, stdout: str, returncode: int = 0, stderr: str = "") -> None:
+        self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
+
+
 def _row(contract: str = "C-HE-06", artifact: str = "pytest:x") -> lv.Row:
     return lv.Row(contract, artifact, "phase0", "local", True)
 
@@ -471,6 +478,83 @@ def test_cli_maps_an_unreadable_store_to_exit_2_not_the_fail_code(monkeypatch) -
 def test_cli_report_exits_2_on_an_unanswerable_run(monkeypatch) -> None:
     monkeypatch.setattr(lp, "_pilot_arcs", lambda run_id: [])
     assert lp.main(["report", "ghost"]) == 2
+
+
+def test_cli_gate_dispatch_runs_the_real_phase0_seam(monkeypatch, capsys) -> None:
+    """`just lanes-pilot` invokes `lanes_pilot.py gate` FIRST, and that CLI branch is the
+    wiring that makes the recipe refuse. Every other gate test calls `gate()` directly with
+    a hand-built result list, so hardcoding this branch to `return 0` — or dropping the
+    `phase0_results()` call — would leave them all green (merge-gate witness lens)."""
+    called = {"n": 0}
+
+    def fake_phase0():
+        called["n"] += 1
+        return [lv.Result(_row("C-HE-06", "pytest:x"), "fail", "boom")]
+
+    monkeypatch.setattr(lp, "phase0_results", fake_phase0)
+    monkeypatch.setattr(lv, "probe_result_verdict", lambda: GREEN)
+    rc = lp.main(["gate"])
+    assert rc != 0, "a RED phase0 row must make the CLI exit non-zero"
+    assert called["n"] == 1, "the CLI must consult the real phase0 seam"
+    assert "phase0 RED" in capsys.readouterr().out
+
+
+def test_cli_gate_dispatch_returns_zero_when_both_halves_are_green(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(lp, "phase0_results", lambda: [lv.Result(_row(), "pass")])
+    monkeypatch.setattr(lv, "probe_result_verdict", lambda: GREEN)
+    assert lp.main(["gate"]) == 0
+    assert "GREEN" in capsys.readouterr().out
+
+
+def test_loop_rows_raises_on_a_malformed_data_row(monkeypatch, tmp_path) -> None:
+    """`_loop_rows`'s malformed-pipe-row branch is the [LAW:no-silent-failure] arm: a
+    truncated DEFERRED-HIL still carries its coordination cause, so dropping it would report
+    "no escalation occurred". Exercised directly, not through a monkeypatched stand-in."""
+    ledger = tmp_path / "loop_status.md"
+    ledger.write_text(
+        "| ts | kind | lane;cause | detail |\n|---|---|---|---|\n"
+        "| 2026-09-04T01:00:00Z | DEFERRED-HIL | lane=L1;cause=merge-door-x |\n"
+    )
+    monkeypatch.setattr(lp.subprocess, "run", lambda *a, **k: _Proc(str(ledger)))
+    with pytest.raises(lp.PilotError, match="unreadable ledger row"):
+        lp._loop_rows()
+
+
+def test_loop_rows_reads_well_formed_rows(monkeypatch, tmp_path) -> None:
+    ledger = tmp_path / "loop_status.md"
+    ledger.write_text(
+        "| ts | kind | lane;cause | detail |\n|---|---|---|---|\n"
+        "| 2026-09-04T01:00:00Z | NOTIFY | lane=L1;cause=c | u-1 — detail |\n"
+    )
+    monkeypatch.setattr(lp.subprocess, "run", lambda *a, **k: _Proc(str(ledger)))
+    rows = lp._loop_rows()
+    assert len(rows) == 1 and rows[0]["cause"] == "c" and rows[0]["lane"] == "L1"
+
+
+def test_loop_rows_refuses_when_the_ledger_path_cannot_be_resolved(monkeypatch) -> None:
+    monkeypatch.setattr(
+        lp.subprocess, "run", lambda *a, **k: _Proc("", returncode=1, stderr="no venue")
+    )
+    with pytest.raises(lp.PilotError, match="could not resolve"):
+        lp._loop_rows()
+
+
+def test_pilot_arcs_refuses_a_store_path_that_is_not_a_directory(monkeypatch, tmp_path) -> None:
+    """A containment breach must never read as an empty store."""
+    import reservations as rs
+
+    planted = tmp_path / "reservations"
+    planted.write_text("not a directory")
+    monkeypatch.setattr(rs, "reservations_root", lambda: planted)
+    with pytest.raises(lp.PilotError, match="not a directory"):
+        lp._pilot_arcs("pilot-1")
+
+
+def test_pilot_arcs_returns_empty_for_an_absent_store(monkeypatch, tmp_path) -> None:
+    import reservations as rs
+
+    monkeypatch.setattr(rs, "reservations_root", lambda: tmp_path / "absent")
+    assert lp._pilot_arcs("pilot-1") == []
 
 
 def test_cli_needs_a_run_id() -> None:

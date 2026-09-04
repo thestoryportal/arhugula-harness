@@ -188,7 +188,9 @@ for c in 'just lanes-pilot pilot-1 main-protection-rollback' \
          'just lanes-pilot-report' \
          'just lanes-pilot $RUN' \
          'just lanes-pilot pilot-1; rm x' \
-         'just lanes-pilot pilot-1 && just main-protection-rollback'; do
+         'just lanes-pilot pilot-1 && just main-protection-rollback' \
+         'just lanes-pilot my-secret-run' \
+         'just lanes-pilot-report ..parent'; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "pilot arity: '$c' → not allow" || bad "pilot verb over-matched: $c"
 done

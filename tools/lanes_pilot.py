@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -443,8 +444,6 @@ def _loop_rows() -> list[dict]:
     """Every parsed row of the shared ledger. An unreadable or absent ledger RAISES: a
     pilot whose escalations cannot be read has an unanswerable clause (c), and an empty
     list would render that as "no escalations" ([LAW:no-silent-failure])."""
-    import subprocess
-
     proc = subprocess.run(
         [
             "bash",
