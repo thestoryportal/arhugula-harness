@@ -2592,9 +2592,20 @@ def summary(_args: argparse.Namespace) -> int:
     # finding_id (last write wins -- the append-order authority finding_record
     # defines), then drop findings whose final disposition is `rejected`: a refuted
     # collision is not a collision, the same rule C-HE-29 §2 states for unique_catch.
+    #
+    # OBSERVATION vs INCIDENCE, kept apart. `observed` is every drift-class row of any
+    # kind; `drift` is the subset that asserts a collision happened. A `no_finding`
+    # marker is observation without incidence -- the emitter looked and saw nothing --
+    # which is exactly C-HE-29 §2's device for making a denominator countable from the
+    # log alone, reused here. Without at least one observed row the numerator was never
+    # looked at, and `measurable` below turns every cell into `--` rather than a zero.
+    observed = [g for g in gate_rows if is_drift_row(g)]
+    measurable = bool(observed)
     drift = [
         r
-        for r in fr.reduce_last_by_finding_id([g for g in gate_rows if is_drift_row(g)]).values()
+        for r in fr.reduce_last_by_finding_id(
+            [g for g in observed if g.get("record_kind") != "no_finding"]
+        ).values()
         if r.get("disposition") != "rejected"
     ]
     by_arc = {r["arc_id"]: r for r in rows}
@@ -2628,10 +2639,17 @@ def summary(_args: argparse.Namespace) -> int:
     hits: dict[object, int] = dict.fromkeys(by_n, 0)
     for arc in agreed:
         hits[arc.get("concurrent_lanes_at_open")] += 1
+    # An unobserved numerator renders `--`, never a digit. The denominator is real and
+    # stays visible, so the cell says what is known and what is not: "6 arcs ran at
+    # this N; whether any collided was never looked at". The prose caveat below is not
+    # enough on its own -- a parser, a truncated paste, or a reader skimming the
+    # numbers takes `0/6` as a measured rate no matter what the next line says, and
+    # this is the one report whose purpose is keeping empty apart from unlooked. `--`
+    # is the same unavailable token fmt_span and the N6 line already use.
     print(
         "drift incidence by concurrent_lanes_at_open: "
         + ", ".join(
-            f"N={json.dumps(n)}: {hits[n]}/{len(by_n[n])}"
+            f"N={json.dumps(n)}: {hits[n] if measurable else '--'}/{len(by_n[n])}"
             for n in sorted(by_n, key=lambda k: (k is None, k))
         )
     )
@@ -2640,12 +2658,13 @@ def summary(_args: argparse.Namespace) -> int:
         f"(reduced by finding_id, `rejected` dropped) among {len(gate_rows)} gate\n"
         f"       row(s); {len(agreed)} counted, {unjoinable} unjoinable, "
         f"{lane_mismatch} EXCLUDED for a lane_id disagreeing with the ledger's\n"
-        f"       (contradictory attribution, not a measurement). A 0 numerator "
-        f"means the source is UNWIRED, not that "
-        f"collisions were measured and found absent: {DRIFT_DETECTION} is\n"
-        f"       raised as an in-memory CI guard finding and no emitter appends it "
-        f"here, so read a 0 cell as unavailable, never as a\n"
-        f"       rate (gate log: {GATE_LOG})."
+        f"       (contradictory attribution, not a measurement). {len(observed)} "
+        f"drift-class row(s) of any kind were observed, so the cells above read\n"
+        f"       {'as counts' if measurable else 'as `--`'}: a `--` numerator means "
+        f"the source was never looked at (no finding and no `no_finding` marker),\n"
+        f"       a numeric 0 means an emitter looked and recorded no collision. Those "
+        f"are different facts and the report will not merge them\n"
+        f"       (gate log: {GATE_LOG})."
     )
     print()
 

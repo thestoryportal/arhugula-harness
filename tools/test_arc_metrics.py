@@ -3509,7 +3509,7 @@ def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
     N6's explicit "gate log absent" -- neither reads as a collision-free cohort."""
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), None)
     assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "among 0 gate" in out
-    assert "means the source is UNWIRED" in out, "the caveat naming the ambiguity must print"
+    assert "never looked at" in out, "the caveat naming the ambiguity must print"
     assert "N6 problems-prevented/hour  -- (gate log absent" in out
 
 
@@ -3564,7 +3564,7 @@ def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
     assert "-- JOINT (N=null, null) (n=1) arc span --" in out
     assert "None" not in out.split("-- JOINT")[1]
     assert out.index('(N=1, "inventing")') < out.index("(N=null, null)")
-    assert "N=1: 0/3, N=null: 0/1" in out
+    assert "N=1: --/3, N=null: --/1" in out
 
 
 # mutation-probe: count `gate_rows` directly instead of reducing by finding_id ->
@@ -3626,4 +3626,32 @@ def test_drift_detection_is_matched_under_either_carrier(tmp_path: Path, monkeyp
             }
         ],
     )
-    assert "N=2: 0/6" in out and "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    # Sharper than 0/6: the row is not even OBSERVED, so the cell is unavailable.
+    assert "N=2: --/6" in out and "0 drift-class row(s) of any kind were observed" in out
+
+
+# mutation-probe: drop the `if measurable` guard and always render hits[n] -> the
+# unwired case prints 0/6 and this test goes red.
+def test_an_unobserved_numerator_renders_unavailable_not_zero(tmp_path: Path, monkeypatch, capsys):
+    """No drift-class row of any kind means the numerator was never looked at. The
+    denominator is real and stays visible; the numerator is `--`. A prose caveat
+    cannot stop a parser or a truncated paste from reading `0/6` as a rate."""
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [])
+    assert "N=1: --/6, N=2: --/6, N=4: --/6" in out
+    assert "0/6" not in out, "an unwired source must never render a digit numerator"
+    assert "never looked at" in out
+
+
+def test_a_no_finding_marker_makes_a_zero_legitimate(tmp_path: Path, monkeypatch, capsys):
+    """C-HE-29 §2's device: a `no_finding` marker records that the emitter looked and
+    saw nothing, which is observation without incidence. It makes the cohort countable
+    -- so 0 becomes a measurement -- while contributing nothing to the numerator."""
+    marker = _drift_row("4-inventing-0", "lane-4") | {
+        "record_kind": "no_finding",
+        "finding_id": "codex_context_guard:head:marker:1",
+    }
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [marker])
+    assert "N=1: 0/6, N=2: 0/6, N=4: 0/6" in out, "observed -> counts, and the count is 0"
+    assert "--/6" not in out
+    assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out, "a marker is not an incidence"
+    assert "1 drift-class row(s) of any kind were observed" in out

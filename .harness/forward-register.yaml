@@ -11400,7 +11400,13 @@ items:
     "result row required before pilots" P1 had). WHAT CLOSES THIS ROW, for whoever takes it: give the guard
     a durable append at its detection site, decide the carrier field explicitly (and record it, since the
     consumer currently accepts EITHER to avoid guessing wrong), then flip the manifest row to cover §2 and
-    delete the either-carrier tolerance in `arc_metrics.is_drift_row`. Until then the consumer side is
+    delete the either-carrier tolerance in `arc_metrics.is_drift_row`. ALSO OWED AT THAT MOMENT, and
+    surfaced by the same reviewer at u-he-38 r3: an EMITTER-ACTIVATION BOUNDARY. Every ledger arc that
+    ran before the emitter exists would otherwise stay in the denominator as collision-free exposure and
+    permanently dilute each cohort''s incidence. The boundary is not invented here because C-HE-28 does
+    not define one and guessing it would bake an unreviewed constant into the metric; it is producer-side
+    work that belongs with the emitter that makes it meaningful. Until then nothing can be diluted: with
+    no observed drift-class row the report renders every cell `--/<denominator>` rather than a digit. Until then the consumer side is
     complete and inert: reduce-by-finding_id, `rejected` dropped, lane-mismatch rows excluded.'
   council: 'NO -- a single producer-side wiring decision (which field carries the detection name), no cross-axis
     tension.'
