@@ -499,11 +499,31 @@ def test_cli_gate_dispatch_runs_the_real_phase0_seam(monkeypatch, capsys) -> Non
     assert "phase0 RED" in capsys.readouterr().out
 
 
-def test_cli_gate_dispatch_returns_zero_when_both_halves_are_green(monkeypatch, capsys) -> None:
+def test_cli_gate_dispatch_consults_the_real_probe_seam(monkeypatch, capsys) -> None:
+    """The §2 half of the same wiring: `gate()`'s `probe is not None else
+    lv.probe_result_verdict()` else-branch is the ONLY path the CLI takes, and every direct
+    `gate()` test passes `probe=` explicitly. Without a counter here, hardcoding that branch
+    to a literal `("GREEN", "stub")` — the same bug shape witnessed for `phase0_results` —
+    would leave the whole suite green (merge-gate witness lens, second pass)."""
+    seen = {"n": 0}
+
+    def fake_probe():
+        seen["n"] += 1
+        return GREEN
+
     monkeypatch.setattr(lp, "phase0_results", lambda: [lv.Result(_row(), "pass")])
-    monkeypatch.setattr(lv, "probe_result_verdict", lambda: GREEN)
+    monkeypatch.setattr(lv, "probe_result_verdict", fake_probe)
     assert lp.main(["gate"]) == 0
+    assert seen["n"] == 1, "the CLI must consult the real probe-result seam"
     assert "GREEN" in capsys.readouterr().out
+
+
+def test_cli_gate_dispatch_refuses_on_a_red_probe(monkeypatch, capsys) -> None:
+    """Phase 0 green and the C-HE-22 probe RED must still refuse, through the CLI path."""
+    monkeypatch.setattr(lp, "phase0_results", lambda: [lv.Result(_row(), "pass")])
+    monkeypatch.setattr(lv, "probe_result_verdict", lambda: ("RED", "no result row"))
+    assert lp.main(["gate"]) != 0
+    assert "C-HE-22" in capsys.readouterr().out
 
 
 def test_loop_rows_raises_on_a_malformed_data_row(monkeypatch, tmp_path) -> None:

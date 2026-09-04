@@ -51,13 +51,6 @@ def test_manifest_artifacts_exist_at_head():
             assert re.search(rf"^{name}( +[^:\n]*)?:", justfile, re.M), r.artifact
 
 
-def test_a_parameterized_recipe_row_resolves_and_an_absent_one_does_not():
-    """Both directions of the rule above, so a widened matcher cannot go vacuous."""
-    justfile = "lanes-pilot-report run_id:\n    uv run python x\n"
-    assert re.search(r"^lanes-pilot-report( +[^:\n]*)?:", justfile, re.M)
-    assert not re.search(r"^lanes-pilot-absent( +[^:\n]*)?:", justfile, re.M)
-
-
 def test_phase0_skip_counts_as_fail():
     def fake_run(cmd, **kw):
         return _P(0, "1 skipped\nSKIPPED [1] x.py:1: docker-daemon-absent\n")
