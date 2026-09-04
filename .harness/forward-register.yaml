@@ -11240,7 +11240,12 @@ items:
     so the door''s own release attestation falls outside every defensible close. Three review
     rounds landed on that one heuristic, which is the register-and-hold point: the root cause
     is producer-side, not another consumer bound.'
-  close_out: 'OPEN — closure = (a) the pilot runner persists an expected participant roster at
+  close_out: 'OPEN — and BLOCKING the Scope-level completeness of U-HE-37: until (c) and (d)
+    land, lanes-pilot-report does NOT compute the C-HE-13 §3 iff-clause completely, because two
+    paths can still produce a false PASS, so a PASS must not be relied on for any decision that
+    assumes every lane landed through the door and finished (codex r4 on u-he-37-plan-record;
+    the unit records the same caveat above its step ticks). closure = (a) the pilot runner
+    persists an expected participant roster at
     start and the report compares it against the reservations that recorded the run id, and
     (b) every merge_door._notify detail leads with its arc id so ledger rows are attributable
     without a time window at all. (b) alone retires the friction bound and is the smaller

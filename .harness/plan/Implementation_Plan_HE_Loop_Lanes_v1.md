@@ -6765,6 +6765,20 @@ lanes-pilot-report run_id:
 - [x] **Step 4:** Register `Row("C-HE-13", "pytest:tools/test_lanes_pilot_gate.py", "phase1", "local + CI", False)`, `Row("C-HE-13", "just:lanes-pilot-report <run-id>", "phase1", "local", False)` (the runner marks a `just:` row carrying `<run-id>` as `live`). Commit `feat(he-lanes): U-HE-37 mechanical pilot gate + pilot report (C-HE-13 §1-3)`.
 - [ ] **Step 5 (execution, after S1–S5 GREEN):** run ≥ 3 pilots at 3–4 lanes; each report line into the evidence log; run O1 and O3 recipes and record.
 
+**Unit status, stated before the ticks so no one reads them alone: Steps 1–4 are IMPLEMENTED AS
+WRITTEN, and the unit's Scope-level guarantee is NOT fully met.** The Scope says
+`lanes-pilot-report` "computes the §3 iff-clause". It does not, completely: two paths can still
+produce a false PASS — an already-externally-MERGED PR receives a `merge_sha` from
+`merge_door.land()` and satisfies clause (a), and a malformed live `LEASE` reads as absent so the
+report can PASS while the door's post-merge checks are unfinished (`B-234` (iii) and (iv)).
+Registering those does not make the implementation complete, and a checkbox cannot express
+"implemented, with two named false-PASS paths open" — hence this line. **U-HE-37 must not be
+treated as closed for any decision that relies on a PASS being trustworthy.** The closing
+condition is fail-closed terminal merge-door evidence: a door-published completion marker the
+report can read, so "landed through the door and finished" stops being inferred from reservation
+payload, plus an absent-vs-unreadable lease read. The ticks below record that the STEPS ran, not
+that the guarantee holds.
+
 **Landed (Steps 1–4)** at PR #1517 → `569b8fbfa`, refresh #1518 → `15ece142a` (both `main` runs
 green, 2026-09-04). `tools/lanes_pilot.py`: `gate(results, probe)` takes its verdict
 from `lanes_verify.phase0_verdict` (§1) AND `lanes_verify.probe_result_verdict` (§2), the same
