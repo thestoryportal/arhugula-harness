@@ -91,11 +91,29 @@ class RegisterError(ValueError):
 
 
 def _nonblank(value: Any) -> bool:
-    """A whitespace-only scalar is not a value. Plain truthiness accepted `"   "` for
-    every required field, so `--check` stayed green while `--detail` rendered a required
-    canonical disposition as SILENCE -- the explicit-absence contract broken by the one
-    predicate meant to uphold it (codex r2 [P2])."""
-    return bool(str(value).strip()) if value is not None else False
+    """Is this field carrying a present, meaningful scalar?
+
+    Two failures this replaces, in order. Plain truthiness accepted `"   "`, so `--check`
+    stayed green while `--detail` rendered a required canonical disposition as SILENCE --
+    the explicit-absence contract broken by the one predicate meant to uphold it (codex r2
+    [P2]). The first repair then STRINGIFIED before testing, which widened the gate it was
+    narrowing: `str(False)` is `"False"`, so `close_out: false`, `pr: 0` and `[]` began
+    passing a check that plain truthiness had correctly rejected, and `--detail` could
+    present `False` as the canonical disposition (codex r3 [P2]).
+
+    So the type is tested, never coerced. `bool` is checked FIRST because `isinstance(True,
+    int)` is True in Python -- a bool would otherwise slip through the int arm. `int` is
+    admitted only for `pr`, which carries a bare PR number on 4 live rows; 0 is not one.
+    The result strictly narrows the original truthiness test: everything it rejected is
+    still rejected, plus blank strings.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, int):
+        return value != 0
+    return False
 
 
 def _id_from_heading(heading: str) -> str | None:

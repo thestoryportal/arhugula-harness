@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import forward_register
+import pytest
 
 
 def _data() -> dict:
@@ -238,6 +239,29 @@ def test_a_whitespace_only_close_out_never_renders_as_silence(capsys) -> None:
     # An explicit statement, never an empty gap between the label and the delimiter.
     assert stated, header
     assert any("(none" in ln or "(MISSING" in ln for ln in stated), header
+
+
+@pytest.mark.parametrize("bad", [False, True, 0, [], {}, 1.5, "", "   ", None])
+def test_falsy_and_non_scalar_close_out_values_are_all_rejected(bad: object) -> None:
+    """codex r3 [P2]. The r2 repair stringified before testing, so `str(False)` was
+    `"False"` and `close_out: false` / `pr: 0` / `[]` began PASSING a check that plain
+    truthiness had correctly rejected -- the gate widened by the fix meant to narrow it,
+    and `--detail` could then present `False` as the canonical disposition. Every value
+    the original truthiness test rejected must still be rejected."""
+    data = copy.deepcopy(_data())
+    row = _first_open_class(data)
+    row["close_out"] = bad
+    violations = forward_register.validate(data)
+    assert any("needs a 'close_out' field" in v for v in violations), (bad, violations)
+
+
+def test_an_integer_pr_citation_is_still_accepted() -> None:
+    """The narrowing must not red the 4 live rows whose `pr` is a bare number -- the
+    reason the predicate tests type rather than demanding `str`."""
+    data = copy.deepcopy(_data())
+    row = _first_closed(data)
+    row["pr"] = 1519
+    assert not [v for v in forward_register.validate(data) if "deliverable citation" in v]
 
 
 # --- negative tests: each gate failure-class is caught ----------------------
