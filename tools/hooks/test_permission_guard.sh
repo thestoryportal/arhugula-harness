@@ -401,6 +401,8 @@ for c in \
   "just merge-gate-landing-delta 0123456789abcdef0123456789abcdef01234567" \
   "just lanes-verify" \
   "just lanes-phase0-check" \
+  "just lanes-pilot pilot-1" \
+  "just lanes-pilot-report pilot-1" \
   "just mutation-probe-coverage-check" \
   "just reviewer-concurrency-probe" \
   "just reviewer-concurrency-probe gemini 5 main" \

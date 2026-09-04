@@ -6627,11 +6627,11 @@ if __name__ == "__main__":
 
 **Spec linkage.** C-HE-13 §1 (mechanical gate), §2 (order; O1 after X6 fix), §3 (≥ 3 pilots at 3–4 lanes gate follow-on orchestration only; success iff-clause; recurring definition); C-HE-06 §10 (attestation tiering during pilots — U-HE-23); §8 AC#1.
 
-**Files.** Create `tools/lanes_pilot.py` (`gate()`, `report(run_id)`), `tools/test_lanes_pilot_gate.py`. Modify `justfile` (`lanes-pilot`, `lanes-pilot-report`), `.claude/skills/two-lane/SKILL.md:140-142` (pilot bar wording: gates follow-on orchestration only), `tools/lanes_verify.py`, `tools/codex-parity-check.sh`.
+**Files.** Create `tools/lanes_pilot.py` (`gate()`, `report(run_id)`), `tools/test_lanes_pilot_gate.py`. Modify `justfile` (`lanes-pilot`, `lanes-pilot-report`), `.claude/skills/two-lane/SKILL.md:158-166` (pilot bar wording: gates follow-on orchestration only), `tools/lanes_verify.py`, `tools/codex-parity-check.sh`.
 
 **Depends on.** U-HE-05, U-HE-33, U-HE-35, U-HE-36, U-HE-30.
 
-- [ ] **Step 1: Tests**
+- [x] **Step 1: Tests**
 ```python
 def test_pilot_runner_refuses_on_any_phase0_red(monkeypatch):
     monkeypatch.setattr(lp, "phase0_results", lambda: [lv.Result(lv.Row("C-HE-06", "pytest:x", "phase0", "l", True), "fail", "boom")])
@@ -6654,7 +6654,7 @@ def test_recurring_definition():
     assert lp.recurring({"pilot-1": {"a:x:y"}, "pilot-2": {"a:x:y"}, "pilot-3": set()}, severe=set()) == {"a:x:y"}
     assert lp.recurring({"pilot-1": {"b:x:y"}, "pilot-2": set(), "pilot-3": set()}, severe={"b:x:y"}) == {"b:x:y"}
 ```
-- [ ] **Step 2–3:** RED; implement (`gate()` runs `lanes_verify.phase0_rows()` via `run_row`, returns `(1, "phase0 RED: <contract> <artifact> — <reason>")` on the first non-pass incl. skips; `report()` reads reservations with `pilot_run_id`, `merge-gate-log.jsonl` `BASE_TOCTOU` rows for those arcs, and the shared `loop_status.md` DEFERRED-HIL rows whose cause starts with `merge-door-`/`reservation-`). Recipes:
+- [x] **Step 2–3:** RED; implement (`gate()` runs `lanes_verify.phase0_rows()` via `run_row`, returns `(1, "phase0 RED: <contract> <artifact> — <reason>")` on the first non-pass incl. skips; `report()` reads reservations with `pilot_run_id`, `merge-gate-log.jsonl` `BASE_TOCTOU` rows for those arcs, and the shared `loop_status.md` DEFERRED-HIL rows whose cause starts with `merge-door-`/`reservation-`). Recipes:
 
 ```python
 #!/usr/bin/env python3
@@ -6761,9 +6761,41 @@ lanes-pilot run_id:
 lanes-pilot-report run_id:
     uv run python tools/lanes_pilot.py report {{run_id}}
 ```
-`two-lane/SKILL.md:140-142` → *"Phase 0 (`just lanes-phase0-check` GREEN) gates running N ≥ 2 lanes at all; the ≥ 3 pilots at 3–4 lanes gate only follow-on lane orchestration (automated spawning) — never the right to keep running N lanes manually (C-HE-13 §3)."*
-- [ ] **Step 4:** Register `Row("C-HE-13", "pytest:tools/test_lanes_pilot_gate.py", "phase1", "local + CI", False)`, `Row("C-HE-13", "just:lanes-pilot-report <run-id>", "phase1", "local", False)` (the runner marks a `just:` row carrying `<run-id>` as `live`). Commit `feat(he-lanes): U-HE-37 mechanical pilot gate + pilot report (C-HE-13 §1-3)`.
+`.claude/skills/two-lane/SKILL.md:158-166` → *"Phase 0 (`just lanes-phase0-check` GREEN) gates running N ≥ 2 lanes at all; the ≥ 3 pilots at 3–4 lanes gate only follow-on lane orchestration (automated spawning) — never the right to keep running N lanes manually (C-HE-13 §3)."*
+- [x] **Step 4:** Register `Row("C-HE-13", "pytest:tools/test_lanes_pilot_gate.py", "phase1", "local + CI", False)`, `Row("C-HE-13", "just:lanes-pilot-report <run-id>", "phase1", "local", False)` (the runner marks a `just:` row carrying `<run-id>` as `live`). Commit `feat(he-lanes): U-HE-37 mechanical pilot gate + pilot report (C-HE-13 §1-3)`.
 - [ ] **Step 5 (execution, after S1–S5 GREEN):** run ≥ 3 pilots at 3–4 lanes; each report line into the evidence log; run O1 and O3 recipes and record.
+
+**Landed (Steps 1–4)** at the u-he-37 arc, 2026-09-04. `tools/lanes_pilot.py`: `gate(results)` is
+pure and takes its verdict from `lanes_verify.phase0_verdict`, so the runner and
+`just lanes-phase0-check` cannot disagree on what "phase0 green" means (a skip and a `live` row
+both count RED without this module restating the rule); `evaluate(run_id, Stores)` computes the §3
+iff-clause pure over the three stores' contents, so every clause is witnessed without mocking a
+filesystem; `report()` gathers and calls it. Recipes `lanes-pilot` / `lanes-pilot-report` added and
+allowlisted in `tools/hooks/permission-guard.sh` with two `test_permission_guard.sh` cases (399
+pass), and the two manifest rows registered — the `just:lanes-pilot-report <run-id>` row carries a
+placeholder, so `_command` marks it LIVE and no auto-run invents a run id.
+
+**Three defects in this unit's plan skeleton, each now witnessed** (B-230 recorded five instances
+of this class, so these are the sixth through eighth — plan TESTS, CONSTRAINTS, BASIS FIGURES and
+CITES are all unreviewed input): (1) the skeleton filtered BASE_TOCTOU rows by `arc_id in {f"merge-{sha12}"}` only, which
+matches `codex_context_guard.check_base_toctou` but NOT `merge_door._emit_gate(gate="BASE_TOCTOU",
+arc_id=arc_id)` — the door's own in-flight detection carries the arc's real id, so the pilot's pass
+could never have been flipped by it; `toctou_keys()` accepts both shapes and both directions are
+pinned. (2) The skeleton's `ok = all_merged and not toctou and not hil` implements two of §3's three
+clauses — "the union ledger satisfies the C-HE-03/04 invariants" was absent; `ledger_invariants()`
+evaluates the two that are observable read-only (at most one union-ledger row per arc; the
+post-drain queued-xor-committed rule) and the module docstring names the write-path invariants it
+deliberately does not restate. A held drain is the invariant's own first branch, not a violation —
+reported as `rows_not_yet_folded`, which matters because the workspace drain has held since
+u-he-34. (3) The skeleton scoped HIL rows to `[min reserved_at, max transitioned_at]`, a window that
+excludes every escalation the door raises after the `merged` flip while it still holds the lease —
+exactly the post-merge-CI and BASE_TOCTOU rows §3 exists to catch; attribution is by arc id from the
+detail's leading token instead, with no window. A fourth, minor: this unit's Files line cited a
+span 18 lines above the pilot-bar paragraph at HEAD; it is corrected in place to the
+paragraph's current location.
+
+Step 5 is operator execution and is not closed by this arc: it needs ≥ 3 real pilot runs at 3–4
+lanes, each landing through the merge door, with the report line recorded in the evidence log.
 
 ---
 

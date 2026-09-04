@@ -320,6 +320,15 @@ lanes-verify:
 lanes-phase0-check:
     uv run python tools/lanes_verify.py phase0
 
+# C-HE-13 §1: refuse to start a pilot unless every phase0 row PASSES at HEAD (a skip is
+# NOT a pass), then print the manual N-lane recipe. Read-only; starts nothing itself.
+lanes-pilot run_id:
+    uv run python tools/lanes_pilot.py gate && uv run python tools/lanes_pilot.py start {{run_id}}
+
+# C-HE-13 §3: the success iff-clause across the three stores. Exit 1 = FAIL, 2 = unanswerable.
+lanes-pilot-report run_id:
+    uv run python tools/lanes_pilot.py report {{run_id}}
+
 # Every manifest row marked mutation-probe must have a PINNED result in
 # .harness/mutation-probe-log.jsonl (spec §0.3; the probe tool appends it).
 mutation-probe-coverage-check:

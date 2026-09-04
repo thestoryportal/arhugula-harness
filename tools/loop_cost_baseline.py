@@ -251,12 +251,36 @@ def rolling_window_max(stamps: list[datetime], window: timedelta) -> int:
     return best
 
 
+def parse_loop_row(line: str) -> dict[str, str] | None:
+    """One shared-ledger row as `{ts, kind, lane, cause, detail}`, or None for a line that
+    is not a data row (the header, the `|---|` rule, prose).
+
+    THE parser for the ledger's row grammar ([LAW:one-source-of-truth]): `_is_yield_row`
+    below and `tools/lanes_pilot.py`'s C-HE-13 §3 report both reduce through it, so the
+    grammar has one reader rather than a regex per consumer.
+
+    Two row shapes are live and are told apart by cell count, not by guessing: the
+    structured 4-column row `loop_log_structured` writes (`ts | kind | lane=…;cause=… |
+    detail`) and the older 3-column `ts | kind | detail`, whose lane and cause are empty
+    strings — absent, never invented."""
+    cells = [c.strip() for c in line.split("|")]
+    if len(cells) < 5 or not cells[1] or cells[1] == "ts" or set(cells[2]) <= {"-"}:
+        return None
+    structured = len(cells) >= 6
+    fields = dict(p.split("=", 1) for p in (cells[3] if structured else "").split(";") if "=" in p)
+    return {
+        "ts": cells[1],
+        "kind": cells[2],
+        "lane": fields.get("lane", ""),
+        "cause": fields.get("cause", ""),
+        "detail": cells[4] if structured else cells[3],
+    }
+
+
 def _is_yield_row(line: str) -> bool:
     """A loop_status.md table row `| ts | NOTIFY | lane=…;cause=<YIELD_CAUSE> | detail |`."""
-    cells = [c.strip() for c in line.split("|")]
-    if len(cells) < 5 or cells[2] != "NOTIFY":
-        return False
-    return any(part == f"cause={YIELD_CAUSE}" for part in cells[3].split(";"))
+    row = parse_loop_row(line)
+    return bool(row) and row["kind"] == "NOTIFY" and row["cause"] == YIELD_CAUSE
 
 
 def yield_stamps(lines: list[str]) -> list[datetime]:

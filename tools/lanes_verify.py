@@ -322,6 +322,12 @@ MANIFEST: list[Row] = [
     Row("C-HE-22", "just:pilot-gate-check", "phase1", "local", False),
     # C-HE-13 §4-5 (U-HE-36): selection-time merge-tree refusal + the O3 base-rate replay
     Row("C-HE-13", "pytest:tools/test_arc_disjoint_check.py", "phase1", "local + CI", False),
+    # C-HE-13 §1-3 (U-HE-37): the mechanical pilot gate + the pilot report. The report row
+    # carries a `<run-id>` placeholder, so `_command` returns None and the runner marks it
+    # LIVE — it is answered by a real pilot's report line in the plan evidence log, never
+    # by an auto-run with an invented run id.
+    Row("C-HE-13", "pytest:tools/test_lanes_pilot_gate.py", "phase1", "local + CI", False),
+    Row("C-HE-13", "just:lanes-pilot-report <run-id>", "phase1", "local", False),
     # C-HE-19/20 (U-HE-08)
     Row(
         "C-HE-19/20",

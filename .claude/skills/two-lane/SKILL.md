@@ -155,6 +155,12 @@ not for lack of time:
 - **No conflict automation.** The abandon-and-rebase rule above is total; automating it would
   encode merge-order heuristics, which is precisely what the rule forbids.
 
-**Follow-on orchestration is registered only after ≥3 manual pilot runs surface a named
-recurring pain** — a specific, repeated, described friction, not a hypothetical one. Until then
-this file is the whole feature.
+**Two distinct gates, and conflating them is the AC#1 ambiguity C-HE-13 §3 exists to
+resolve.** Phase 0 green (`just lanes-phase0-check`, which `just lanes-pilot` refuses to
+start without) gates running N ≥ 2 lanes **at all** — the pilots are simply the first N-lane
+runs and therefore sit behind it too. The ≥ 3 pilot runs at 3–4 lanes gate **only follow-on
+lane orchestration** (automated spawning), never the right to keep running N lanes manually.
+Follow-on orchestration is registered only once those pilots surface a named recurring pain —
+a `cause_signature` in ≥ 2 of the ≥ 3 pilots, or one occurrence the operator rates
+independently severe (C-HE-13 §3); `just lanes-pilot-report <run-id>` prints the PASS/FAIL and
+the friction rows it is judged on. Until then this file is the whole feature.
