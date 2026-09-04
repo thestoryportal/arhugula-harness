@@ -60,12 +60,12 @@
 snapshot:
   total: 232
   open: 1
-  design_substrate_gated: 4
+  design_substrate_gated: 3
   registered_finding: 74
   operator_gated: 0
-  held: 2
+  held: 3
   closed: 151
-  identity_digest: d33372178c412df1
+  identity_digest: 2648cd445e4ff05a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11167,7 +11167,7 @@ items:
   title: >-
     Merge-door lease released after content merge; refresh covers N merges
   pr: 'PR pending (b-230-task-8)'
-  status: design_substrate_gated
+  status: held
   summary: 'SURFACED by the loop optimization plan Task 8 (.harness/plan/loop-optimization-plan-2026-09-03.md,
     registered at the b-230-task-8 arc, 2026-09-04): releasing the merge-door lease after
     the content merge and letting one terminating refresh cover N merges would end the
@@ -11178,16 +11178,22 @@ items:
     tools/codex_context_guard.py:443. Contention is measurable since this arc:
     merge_door.wait_for_door appends ONE NOTIFY row per contention event (cause
     merge-door-lease-acquire:lease_held_yield, detail holder=<arc id> backoff=0) to the
-    shared loop_status.md, and tools/loop_cost_baseline.py --loop-status reports
-    lease_held_yields (lifetime) and lease_held_yields_30d_max (rolling).'
-  close_out: 'OPEN — TRIGGER: more than 5 lease_held_yield NOTIFY rows in any half-open
-    30-day window [t, t + 30 d), i.e. lease_held_yields_30d_max > 5 from `uv run python
-    tools/loop_cost_baseline.py --loop-status <loop_status.md>`, re-run at each roadmap
-    refresh (0 at registration). When it fires, open the spec leg as a Class 2 decision
+    shared loop_status.md; tools/loop_cost_baseline.py --loop-status reports
+    lease_held_yields (lifetime) and lease_held_yields_30d_max (rolling); and
+    tools/roadmap-audit/session-start.sh evaluates the trigger EVERY session through
+    tools/lease_yield_trigger.py, printing `[b-232] lease_held_yields_30d_max=<n>/5`
+    and `TRIGGER FIRED` past 5 (codex r1 on b-230-task-8: a promise re-evaluated by
+    whoever remembers is no carrier).'
+  close_out: 'HELD (trigger-gated; codex r1 on b-230-task-8: design_substrate_gated is a
+    schedulable status, so the loop could have selected this row before its trigger) —
+    TRIGGER: more than 5 lease_held_yield NOTIFY rows in any half-open 30-day window
+    [t, t + 30 d), i.e. lease_held_yields_30d_max > 5, printed by the SessionStart banner
+    every session (0 at registration). When it fires, flip this row to
+    design_substrate_gated and open the spec leg as a Class 2 decision
     with a proposed text at the next unallocated Spec_HE_Loop_Lanes version, carrying the
     three cites above; until then nothing in acquire, release, the C-HE-06 invariants or
     the §12.2.1 fixed point changes.'
   council: 'NO until the trigger fires; then a three-carrier change (spec invariant,
     root CLAUDE.md fixed point, context-guard lag rule) with a nameable serialization ⊥
     fixed-point tension — council-eligible at that point.'
-  heading: '### B-232 · merge-door lease released after content merge; refresh covers N merges *(trigger-gated by B-230 Task 8, 2026-09-04; REGISTERED)*'
+  heading: '### B-232 · merge-door lease released after content merge; refresh covers N merges *(trigger-gated by B-230 Task 8, 2026-09-04; HELD until the trigger fires)*'

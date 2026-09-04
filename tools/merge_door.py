@@ -1741,7 +1741,11 @@ def wait_for_door(
     merge-gate-log while the wait runs lands after the PR's final committed head and is
     left as dirty worktree state when the door then merges that head. Later retries of
     the same wait emit nothing — one row per contention EVENT, so the B-232 trigger
-    (>5 rows in any 30-day window) counts events, not backoff iterations. `lane_id` is
+    (>5 rows in any 30-day window) counts events, not backoff iterations. A ledger write
+    failure is LOUD (`_notify`'s ROW LOST stderr line) and never aborts the wait: the row
+    is telemetry, a lost one undercounts the trigger (the conservative direction), and a
+    raise here would let telemetry gate a landing — B-199 carries the persistent-failure
+    residual (codex r1 on b-230-task-8, rejected on these grounds). `lane_id` is
     required — a wait without a lane is not a state the door has
     ([LAW:types-are-the-program]).
     """

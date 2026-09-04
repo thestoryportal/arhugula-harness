@@ -22,6 +22,9 @@ hook_review_isolated && exit 0
 _LOOPLIB="$(dirname "${BASH_SOURCE[0]}")/../hooks/loop_lib.sh"
 # shellcheck source=../hooks/loop_lib.sh
 [ -f "$_LOOPLIB" ] && . "$_LOOPLIB"
+# Resolved BEFORE the cd below: the B-232 segment runs a script from this checkout's
+# tools/, whichever project dir the audit is pointed at (its test harness uses a temp one).
+_TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PROJECT_DIR=$(hook_project_dir)
 [ -z "$PROJECT_DIR" ] && exit 0
@@ -69,6 +72,23 @@ if command -v loop_pending_hil_summary >/dev/null 2>&1; then
   if command -v loop_notify_summary >/dev/null 2>&1; then
     _n=$(loop_notify_summary 2>/dev/null)
     [ -n "$_n" ] && _HIL="${_HIL} $_n"
+  fi
+fi
+
+# B-232 trigger (plan Task 8 Step 3; codex r1 on b-230-task-8): the rolling 30-day
+# lease_held_yield count is evaluated HERE, by a mechanism that fires every session, not
+# by whoever remembers to re-run the baseline. ≈0.1 s; stdlib-only, so plain python3 by
+# the script's own path. Its own segment beside the HIL/NOTIFY ones; an evaluation
+# failure is printed in its place, never dropped (a silent zero would read as "no
+# contention"). No ledger → no segment: nothing to evaluate is not a measured zero.
+if command -v loop_status_path >/dev/null 2>&1; then
+  _lp=$(loop_status_path)
+  if [ -n "$_lp" ] && [ -f "$_lp" ]; then
+    if _y=$(python3 "$_TOOLS_DIR/lease_yield_trigger.py" "$_lp" 2>&1 | paste -sd' ' -); then
+      _HIL="${_HIL} ${_y}"
+    else
+      _HIL="${_HIL} [b-232] trigger evaluation FAILED: ${_y}"
+    fi
   fi
 fi
 

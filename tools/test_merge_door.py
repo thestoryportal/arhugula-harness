@@ -1537,6 +1537,29 @@ def test_wait_for_door_yield_row_names_a_vanished_holder_as_null(door, monkeypat
     assert rows == ["holder=- backoff=0"]
 
 
+def test_wait_for_door_survives_a_lost_yield_row(door, monkeypatch, capsys):
+    """codex r1 on b-230-task-8 (rejected; grounds in wait_for_door's docstring): a failed
+    ledger write is LOUD and never aborts the wait — the row is telemetry for B-232's
+    trigger, and a raise here would let telemetry gate a landing."""
+
+    def boom(*_a, **_k):
+        raise md.rs.LoopStatusWriteError("venue unwritable")
+
+    monkeypatch.setattr(rs, "emit_loop_row", boom)
+    calls = iter([md.LeaseHeld("held"), {"lease_token": "won"}])
+
+    def try_acquire():
+        r = next(calls)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    lease = md.wait_for_door(try_acquire, lane_id="A", sleep=lambda s: None, rng=lambda: 1.0)
+    assert lease == {"lease_token": "won"}
+    err = capsys.readouterr().err
+    assert "ROW LOST" in err and md.LEASE_HELD_YIELD_CAUSE in err
+
+
 def _fake_gh(bindir: Path, state: Path, log: Path, tree: str, state2: Path | None = None) -> None:
     """A `gh` + `git` shim on PATH: pr view answers from state.json; pr merge appends to
     merge-calls.log and flips state.json to MERGED; run list reports success; git

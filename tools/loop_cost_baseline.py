@@ -75,7 +75,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
-TRIGGER_WINDOW = timedelta(days=30)  # B-232: >5 yield rows in any 30-day window
+TRIGGER_WINDOW = timedelta(days=30)  # B-232: > TRIGGER_THRESHOLD yield rows in any window
+TRIGGER_THRESHOLD = 5  # B-232 trigger: lease_held_yields_30d_max > 5 opens the spec leg
 LEASE_PRODUCER = "merge-door-lease-acquire"
 CODEX_PRODUCER = "codex_review_wrapper"
 GEMINI_PRODUCER = "gemini_review_wrapper"
@@ -204,7 +205,7 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
     yields: int | None = None
     yields_30d_max: int | None = None
     if loop_status_rows is not None:
-        stamps = [_row_ts(line) for line in loop_status_rows if _is_yield_row(line)]
+        stamps = yield_stamps(loop_status_rows)
         yields = len(stamps)
         yields_30d_max = rolling_window_max(stamps, TRIGGER_WINDOW)
 
@@ -256,6 +257,12 @@ def _is_yield_row(line: str) -> bool:
     if len(cells) < 5 or cells[2] != "NOTIFY":
         return False
     return any(part == f"cause={YIELD_CAUSE}" for part in cells[3].split(";"))
+
+
+def yield_stamps(lines: list[str]) -> list[datetime]:
+    """The `ts` of every lease_held_yield NOTIFY row — the one seam both the baseline
+    and tools/lease_yield_trigger.py (the session-start carrier) read through."""
+    return [_row_ts(line) for line in lines if _is_yield_row(line)]
 
 
 def main() -> int:
