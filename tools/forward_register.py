@@ -429,6 +429,13 @@ def main(argv: list[str] | None = None) -> int:
                     "the prose block below, which records what actually landed."
                 )
                 _emit_indented(close_out, indent="    ")
+            else:
+                # The never-silence invariant is UNIVERSAL, not scoped to open-class rows.
+                # The closed branch previously emitted nothing here, so a reader saw the
+                # citation and then a gap -- indistinguishable from a close_out that failed
+                # to load, which is the empty-versus-unlooked confusion the invariant exists
+                # to prevent (codex r8 [P3]). 25 of 151 closed rows take this path.
+                _emit_indented("close_out: (none — not required once a row is closed)")
         else:
             print(f"close_out (CANONICAL — {args.ledger}):")
             if _nonblank_text(close_out):

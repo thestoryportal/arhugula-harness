@@ -11313,8 +11313,12 @@ items:
     the YAML row, ABOVE the prose block, separated by PROSE_DELIMITER. The surface that
     operator routing actually reads therefore carries the authority itself, so a drifted
     prose body is now seen BESIDE the canonical text instead of standing in for it. An
-    absent close_out is stated in three distinguishable ways -- present, MISSING while
-    required at this status, and not required at this status -- never as silence.
+    close_out is ALWAYS stated and never rendered as silence -- as its text when present,
+    as MISSING when required at this status and absent, and as an explicit not-required
+    line otherwise, whose wording differs for a held row and a closed one. The count of
+    renderings is deliberately not stated here: it changed once already (codex r8 found
+    the closed branch emitting nothing at all), and a number in prose drifts while the
+    invariant does not.
     WHY NOT THE SHAPE THIS ROW ORIGINALLY PRESCRIBED: extracting bound letters from both
     prose bodies and comparing the sets would NOT have caught the r6 defect it was written
     for. At r6 the YAML asserted (c) and (d) as the blocking set while MENTIONING (a) and

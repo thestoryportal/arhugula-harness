@@ -419,8 +419,12 @@ def test_a_closed_row_without_a_close_out_renders_no_historical_note(capsys) -> 
     forward_register.main(["--detail", "B-1"])
     header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
     assert "CLOSED — citation:" in header, header
-    # The close_out preamble belongs only to rows that HAVE one.
+    # The close_out preamble belongs only to rows that HAVE one...
     assert "NOT reconciled when a row closes" not in header, header
+    # ...but absence is still STATED, never a silent gap. The never-silence invariant is
+    # universal; this branch used to emit nothing, which read the same as a field that
+    # failed to load (codex r8 [P3]).
+    assert "close_out: (none — not required once a row is closed)" in header, header
 
 
 def test_a_closed_row_missing_its_pr_says_so_in_the_render_not_only_in_check(capsys) -> None:
