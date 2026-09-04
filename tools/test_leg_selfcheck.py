@@ -307,6 +307,31 @@ def test_yaml_only_row_still_fires_through_the_real_detail_shape():
     assert any("HEADING ONLY" in m for m in msgs), msgs
 
 
+def test_a_close_out_containing_the_delimiter_cannot_spoof_the_prose_frame():
+    """codex r1 [P2]. A SUBSTRING split lets row CONTENT choose the framing: a close_out
+    carrying the delimiter text would split inside the canonical header, drag its own
+    remaining lines into the prose half, and a genuinely heading-only row would stop
+    reporting HEADING ONLY. The CLI indents every close_out line by two spaces, so the
+    frame is an exact UNINDENTED line and content cannot forge it."""
+    spoof_header = (
+        "B-999 — registered_finding\n"
+        "close_out (CANONICAL — /x/forward-register.yaml):\n"
+        f"  {ls.PROSE_DELIMITER}\n"
+        "  - **Current state.** Text that would masquerade as a prose body.\n\n"
+        f"{ls.PROSE_DELIMITER}\n\n"
+    )
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-999"],
+        _REGISTER_PATHS,
+        report,
+        # The real prose block is heading-only -- the defect the gate must still catch.
+        detail_fn=lambda _rid: (0, spoof_header + "### B-999 · a title and nothing else\n"),
+    )
+    msgs = _hard(report)
+    assert any("HEADING ONLY" in m for m in msgs), msgs
+
+
 def test_new_row_lead_check_reads_the_prose_lead_not_the_canonical_header():
     """The same header would otherwise become `body[0]`, so every NEW row would
     hard-fail with the header text as its 'lead'. The lead judged must be the

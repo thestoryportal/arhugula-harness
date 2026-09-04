@@ -1140,13 +1140,25 @@ def check_register_rows(
             return
     for rid in ids:
         rc, stdout = detail(rid)
-        # `--detail` prints a CANONICAL close_out header, then PROSE_DELIMITER, then the
-        # prose block. Only the prose half is what these two checks judge: counting the
-        # header as body would make `not body` unreachable and silently retire the
-        # YAML-only-row detection below. An injected `detail_fn` (tests) may emit no
-        # delimiter, in which case the whole output IS the prose half.
-        prose_half = stdout.split(PROSE_DELIMITER, 1)[-1]
-        body = [ln for ln in prose_half.splitlines() if ln.strip() and not ln.startswith("###")]
+        # `--detail` prints a CANONICAL close_out header, then PROSE_DELIMITER on its own
+        # line, then the prose block. Only the prose half is what these two checks judge:
+        # counting the header as body would make `not body` unreachable and silently
+        # retire the YAML-only-row detection below.
+        #
+        # The frame is parsed as an EXACT UNINDENTED LINE, never a substring. A substring
+        # split lets row CONTENT choose the framing: a close_out containing the delimiter
+        # text would split inside the header, carry its own remaining lines into the prose
+        # half, and a heading-only row would stop reporting HEADING ONLY (codex r1 [P2]).
+        # The CLI renders every close_out line with a two-space indent, so an unindented
+        # delimiter line cannot be produced by row content at all.
+        # An injected `detail_fn` (tests) may emit no delimiter, in which case the whole
+        # output IS the prose half.
+        lines = stdout.splitlines()
+        try:
+            cut = lines.index(PROSE_DELIMITER) + 1
+        except ValueError:
+            cut = 0
+        body = [ln for ln in lines[cut:] if ln.strip() and not ln.startswith("###")]
         if rc != 0:
             report.add("register", HARD, f"{rid}: --detail exited {rc}")
         elif not body:
