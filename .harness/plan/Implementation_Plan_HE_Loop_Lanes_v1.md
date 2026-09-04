@@ -6766,10 +6766,18 @@ lanes-pilot-report run_id:
 - [ ] **Step 5 (execution, after S1–S5 GREEN):** run ≥ 3 pilots at 3–4 lanes; each report line into the evidence log; run O1 and O3 recipes and record.
 
 **Landed (Steps 1–4)** at PR #1517 → `569b8fbfa`, refresh #1518 → `15ece142a` (both `main` runs
-green, 2026-09-04). `tools/lanes_pilot.py`: `gate(results, probe)` is pure and takes its verdict
+green, 2026-09-04). `tools/lanes_pilot.py`: `gate(results, probe)` takes its verdict
 from `lanes_verify.phase0_verdict` (§1) AND `lanes_verify.probe_result_verdict` (§2), the same
 reductions `just lanes-phase0-check` and `just pilot-gate-check` exit on, so the runner and the
-recipes cannot disagree about what "green" means — a `skip` and a `live` row both count RED without
+recipes cannot disagree about what "green" means. It is pure over BOTH arguments when both are
+supplied — which is how every test drives it — but NOT on the production path: `main()` calls
+`gate(phase0_results())` and lets `probe` default to `None`, so `gate` then performs the
+`probe_result_verdict()` read itself, and that read touches the gate log. The §1 half is already
+lifted to the edge (`phase0_results()` is evaluated by the caller); the §2 half is not.
+**Named follow-up, owed on the next `lanes_pilot.py` touch:** make `probe` required and have
+`main()` supply `lv.probe_result_verdict()`, so the effect sits at the boundary and `gate` is
+pure by construction rather than by convention ([LAW:effects-at-boundaries]). It is deliberately
+NOT done here — this file is a DESIGN surface, so a code change cannot ride this PR — a `skip` and a `live` row both count RED without
 this module restating the rule. `evaluate(run_id, Stores)` computes the §3 iff-clause pure over the
 three stores' contents, so every clause is witnessed with plain data and no filesystem mocking.
 Two qualifications the prose must carry, because `B-234` holds them open: clause (a) is checked as
