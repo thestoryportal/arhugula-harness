@@ -387,29 +387,46 @@ def main(argv: list[str] | None = None) -> int:
         close_out = row.get("close_out")
         print(f"{row['id']} — {status}")
 
-        # `close_out` is status-dependent in MEANING, so the header renders whichever
-        # field the row's own status makes authoritative. On an open-class row it is the
-        # live disposition. On a CLOSED row it is residue: `validate()` never required it
-        # there and nothing reconciles it at closure, so 126 of the 151 closed rows still
-        # carry the work INSTRUCTION written while they were open ("Validate signature
-        # byte-length ... once a real backend exists" on B-34, closed at #1032). Leading
-        # with that would promote a historical plan above the closure record and can route
-        # an operator back into finished work -- a worse defect, on the majority of rows,
-        # than the one this header was added to fix (codex r4 [P2]).
+        # `close_out` is status-dependent in MEANING, so the header renders whichever field
+        # the row's own status makes authoritative. On an open-class row it is the live
+        # disposition. On a CLOSED row it is UNRECONCILED: `validate()` never required it
+        # there and nothing updates it at closure, so 126 of the 151 closed rows still
+        # carry whatever was last written -- and the content varies. B-34, closed at
+        # #1032, carries a finished plan ("Validate signature byte-length ... once a real
+        # backend exists"); B-125 carries a live disposition, a promotion trigger that
+        # REOPENS the row, and a gloss correction owed on the next OD/CP spec delta.
+        # Leading with either as though it were the closure record can route an operator
+        # back into finished work (codex r4 [P2]); calling either one historical can
+        # suppress an active obligation (codex r7 [P2]). The header therefore states the
+        # closure and reports the field, and classifies neither.
         if status == "closed":
             pr = row.get("pr")
             print(f"closure (CANONICAL — {args.ledger}):")
+            # The field is REPORTED, never interpreted. `pr` is a deliverable citation of
+            # arbitrary shape, not a verified delivery: 19 closed rows cite something that is
+            # not a PR at all (`R-410`, `batch-53..57`, `CP spec v1.97`,
+            # `ratified-2026-07-21 (...)`), and B-25 is closed carrying the placeholder
+            # `#PENDING`. "delivered at #PENDING" asserted a delivery that never happened
+            # (codex r7 [P2]).
             if _valid_pr(pr):
-                _emit_indented(f"CLOSED — delivered at {pr}")
+                _emit_indented(f"CLOSED — citation: {pr}")
             else:
                 _emit_indented(
                     "(MISSING — a closed row needs a 'pr' citation; `--check` reports it)"
                 )
             if _nonblank_text(close_out):
+                # Neutral, and deliberately NOT a classification. The r4 repair called every
+                # closed row's close_out historical, which over-corrected: nothing reconciles
+                # this field at closure, so its content varies -- B-34's is a finished plan,
+                # but B-125's states a live disposition, a promotion trigger that REOPENS the
+                # row, and a gloss correction owed as a named rider on the next OD/CP spec
+                # delta. Calling that "not a current instruction" told readers to disregard an
+                # active obligation (codex r7 [P2]). The tool cannot tell the two apart, so it
+                # states only what it knows.
                 _emit_indented(
-                    "close_out below is the plan recorded while this row was OPEN —\n"
-                    "HISTORICAL, not a current instruction. The prose block records\n"
-                    "what actually landed."
+                    "close_out is NOT reconciled when a row closes — it may record a plan\n"
+                    "that was completed, or an obligation that is still owed. Read it with\n"
+                    "the prose block below, which records what actually landed."
                 )
                 _emit_indented(close_out, indent="    ")
         else:

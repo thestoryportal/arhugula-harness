@@ -24,6 +24,10 @@ import forward_register
 import pytest
 
 
+def _has_text(v: object) -> bool:
+    return isinstance(v, str) and bool(v.strip())
+
+
 def _data() -> dict:
     return forward_register.load()
 
@@ -294,9 +298,10 @@ def test_a_positive_integer_is_not_text_for_any_narrative_field(field: str) -> N
 def test_a_closed_row_leads_with_its_closure_not_a_stale_work_instruction(capsys) -> None:
     """codex r4 [P2]. `close_out` is status-dependent in MEANING: on an open-class row it is
     the live disposition, but `validate()` never requires it on a closed row and nothing
-    reconciles it at closure, so 126 of 151 closed rows still carry the INSTRUCTION written
-    while they were open. Leading with that promotes a historical plan above the closure
-    record and can route an operator back into finished work."""
+    reconciles it at closure, so 126 of 151 closed rows still carry whatever was
+    last written there -- a finished plan on some rows, a live obligation on others.
+    Leading with either as though it were the closure record can route an operator back
+    into finished work."""
     row = next(r for r in _data()["items"] if r["id"] == "B-34")
     assert row["status"] == "closed" and row.get("close_out"), (
         "fixture: B-34 is closed with a stale close_out"
@@ -306,10 +311,11 @@ def test_a_closed_row_leads_with_its_closure_not_a_stale_work_instruction(capsys
     header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
 
     # The closure is the authority a reader meets first...
-    assert "CLOSED — delivered at" in header, header
-    # ...and the stale plan is never presented as the current canonical disposition.
-    assert "HISTORICAL, not a current instruction" in header, header
-    assert header.index("CLOSED — delivered at") < header.index("HISTORICAL"), header
+    assert "CLOSED — citation:" in header, header
+    # ...and the close_out is reported below it, never as the row's current disposition
+    # and never classified (codex r7: some closed rows' close_out is a LIVE obligation).
+    assert "NOT reconciled when a row closes" in header, header
+    assert header.index("CLOSED — citation:") < header.index("NOT reconciled"), header
 
 
 def test_a_newline_in_pr_cannot_forge_the_prose_frame_on_a_closed_row(capsys) -> None:
@@ -412,9 +418,9 @@ def test_a_closed_row_without_a_close_out_renders_no_historical_note(capsys) -> 
 
     forward_register.main(["--detail", "B-1"])
     header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
-    assert "CLOSED — delivered at" in header, header
-    # The historical-plan preamble belongs only to rows that HAVE a stale close_out.
-    assert "HISTORICAL, not a current instruction" not in header, header
+    assert "CLOSED — citation:" in header, header
+    # The close_out preamble belongs only to rows that HAVE one.
+    assert "NOT reconciled when a row closes" not in header, header
 
 
 def test_a_closed_row_missing_its_pr_says_so_in_the_render_not_only_in_check(capsys) -> None:
@@ -448,6 +454,44 @@ def test_a_closed_row_missing_its_pr_says_so_in_the_render_not_only_in_check(cap
 
     assert "(MISSING — a closed row needs a 'pr' citation" in header, header
     assert "CLOSED — delivered at" not in header, header
+
+
+def test_a_closed_rows_pr_is_reported_as_a_citation_not_asserted_as_delivery(capsys) -> None:
+    """codex r7 [P2]. `pr` is a deliverable citation of arbitrary shape, not proof of
+    delivery: 19 closed rows cite something that is not a PR (`R-410`, `batch-53..57`,
+    `CP spec v1.97`), and B-25 is closed carrying the placeholder `#PENDING` -- for which
+    the old wording rendered the false assertion "CLOSED — delivered at #PENDING"."""
+    row = next(r for r in _data()["items"] if r["id"] == "B-25")
+    assert row["status"] == "closed" and row.get("pr") == "#PENDING", (
+        "fixture: B-25 is closed with the placeholder citation #PENDING"
+    )
+
+    forward_register.main(["--detail", "B-25"])
+    header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+    assert "CLOSED — citation: #PENDING" in header, header
+    assert "delivered at" not in header, header
+
+
+def test_a_closed_rows_close_out_is_not_declared_historical(capsys) -> None:
+    """codex r7 [P2]. The r4 repair called EVERY closed row's close_out historical, which
+    over-corrected. Nothing reconciles the field at closure, so its content varies: B-34's
+    is a finished plan, but B-125's states a live disposition, a promotion trigger that
+    REOPENS the row, and a gloss correction owed as a named rider on the next OD/CP spec
+    delta. Telling a reader that is "not a current instruction" suppresses an active
+    obligation. The tool cannot discriminate, so it must not classify."""
+    row = next(r for r in _data()["items"] if r["id"] == "B-125")
+    assert row["status"] == "closed" and _has_text(row.get("close_out")), (
+        "fixture: B-125 is closed and carries a non-blank close_out"
+    )
+    assert "OWED" in row["close_out"], (
+        "fixture: B-125's close_out states an owed obligation — the whole point of this test"
+    )
+
+    forward_register.main(["--detail", "B-125"])
+    header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+    assert "NOT reconciled when a row closes" in header, header
+    assert "not a current instruction" not in header, header
+    assert "HISTORICAL" not in header, header
 
 
 # --- negative tests: each gate failure-class is caught ----------------------
