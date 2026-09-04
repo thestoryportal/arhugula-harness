@@ -2518,12 +2518,18 @@ def summary(_args: argparse.Namespace) -> int:
         print()
 
     # C-HE-28 §1: lane-count as a lever is judged BY COHORT on the integer
-    # `concurrent_lanes_at_open`. Historical rows carry no such field and group
-    # under `null` -- a key, not an error (C-HE-25: additive-safe reads). The
-    # label renders via json.dumps so None is the literal `null`, never "None".
+    # `concurrent_lanes_at_open`. A row lacking one is a key, not an error (C-HE-25:
+    # additive-safe reads), and the label renders via json.dumps so None is the
+    # literal `null`, never "None".
+    #
+    # Keyed through `lanes_at_open` for the same reason the joint block below is, and
+    # in the same commit: once that block separates a row that PREDATES the field from
+    # one carrying an explicit null, this block pooling them would make one report
+    # give two different partitions of one population -- 26 here against 19 + 7 there.
+    # The divergence would be introduced by that change, so it is repaired with it.
     by_lanes: dict[str, list[dict]] = {}
     for r in rows:
-        key = f"concurrent_lanes_at_open={json.dumps(r.get('concurrent_lanes_at_open'))}"
+        key = f"concurrent_lanes_at_open={json.dumps(lanes_at_open(r))}"
         by_lanes.setdefault(key, []).append(r)
     for label in sorted(by_lanes):
         cohort = by_lanes[label]

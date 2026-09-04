@@ -1624,12 +1624,26 @@ def test_cohort_split_null_safe(monkeypatch, tmp_path: Path, capsys):
             "round_completeness": "complete",
             "concurrent_lanes_at_open": 2,
         },
+        # Row "a" above has the key ABSENT; this one CARRIES an explicit null. The
+        # spec's Verification bullet asks that the split group "without error on
+        # `null`", so the null case needs a row that actually holds one — before
+        # U-HE-38 this test asserted the null label against an absent-key row, which
+        # is the conflation itself.
+        {
+            "arc_id": "c",
+            "levers_active": [],
+            "arc_span_s": 180.0,
+            "review_rounds": 3,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": None,
+        },
     ]
     ledger.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     monkeypatch.setattr(am, "LEDGER", ledger)
     assert am.summary(argparse.Namespace()) == 0
     out = capsys.readouterr().out
-    assert "LANES [concurrent_lanes_at_open=null] (n=1)" in out
+    assert 'LANES [concurrent_lanes_at_open="absent"] (n=1)' in out, "key absent"
+    assert "LANES [concurrent_lanes_at_open=null] (n=1)" in out, "explicit null"
     assert "LANES [concurrent_lanes_at_open=2] (n=1)" in out
     assert "concurrent_lanes_at_open=None" not in out
 
