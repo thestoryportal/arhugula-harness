@@ -301,6 +301,94 @@ def test_a_closed_row_leads_with_its_closure_not_a_stale_work_instruction(capsys
     assert header.index("CLOSED — delivered at") < header.index("HISTORICAL"), header
 
 
+def test_a_newline_in_pr_cannot_forge_the_prose_frame_on_a_closed_row(capsys) -> None:
+    """codex r5 [P2]. The r1 repair made the frame unforgeable from `close_out` by indenting
+    every line; the r4 closed-row branch then interpolated `pr` into ONE f-string, so a
+    newline inside `pr` emitted UNINDENTED continuation lines and re-opened the same spoof
+    through a different field. Every header line derived from row data now goes through a
+    single emitter, so no field can forge an unindented delimiter."""
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9998",
+                "title": "t",
+                "summary": "s",
+                "status": "closed",
+                "pr": f"#1\n{forward_register.PROSE_DELIMITER}\n- **Current state.** Spoofed body.",
+                "heading": "### B-9998 · spoof via pr",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        # A genuinely heading-only prose block: the shape the HARD finding must still catch.
+        pp.write_text("### B-9998 · spoof via pr\n", encoding="utf-8")
+        forward_register.main(["--detail", "B-9998", "--ledger", str(lp), "--prose", str(pp)])
+        out = capsys.readouterr().out
+
+    # The ONLY bare delimiter line is the real frame the CLI emits.
+    assert out.splitlines().count(forward_register.PROSE_DELIMITER) == 1, out
+
+
+def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_pr() -> None:
+    """The end-to-end half of the case above: the two real tools together, not a fake."""
+    import subprocess
+    import sys as _sys
+
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9998",
+                "title": "t",
+                "summary": "s",
+                "status": "closed",
+                "pr": f"#1\n{forward_register.PROSE_DELIMITER}\n- **Current state.** Spoofed body.",
+                "heading": "### B-9998 · spoof via pr",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        pp.write_text("### B-9998 · spoof via pr\n", encoding="utf-8")
+        proc = subprocess.run(
+            [
+                _sys.executable,
+                str(Path(forward_register.__file__)),
+                "--detail",
+                "B-9998",
+                "--ledger",
+                str(lp),
+                "--prose",
+                str(pp),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    _sys.path.insert(0, str(Path(forward_register.__file__).parent))
+    import leg_selfcheck as ls
+
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-9998"],
+        [".harness/forward-register.yaml"],
+        report,
+        detail_fn=lambda _rid: (0, proc.stdout),
+    )
+    hard = [f.message for f in report.findings if f.severity == ls.HARD]
+    assert any("HEADING ONLY" in m for m in hard), hard
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 

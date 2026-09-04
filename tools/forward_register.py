@@ -118,6 +118,21 @@ def _valid_pr(value: Any) -> bool:
     return _nonblank_text(value)
 
 
+def _emit_indented(text: Any, indent: str = "  ") -> None:
+    """Print row-derived content into the canonical header, one indented line at a time.
+
+    `tools/leg_selfcheck.py` anchors the prose frame on an EXACT UNINDENTED delimiter line,
+    which content cannot forge only while EVERY line derived from row data is indented. The
+    r1 fix established that for `close_out`; the r4 closed-row branch then interpolated `pr`
+    into a single f-string, so a newline inside `pr` emitted unindented continuation lines
+    and re-opened the same spoof through a different field (codex r5 [P2]). The repair is
+    not another per-field guard -- it is a single emitter every site must go through, so no
+    future field can reintroduce the hole by forgetting.
+    """
+    for line in str(text).strip().splitlines():
+        print(f"{indent}{line}")
+
+
 def _id_from_heading(heading: str) -> str | None:
     """Extract the item id a heading string names, or None if neither shape matches."""
     m = _HEADING_ID_RE.match(heading) or _SECTION_HEADING_ID_RE.match(heading)
@@ -385,26 +400,28 @@ def main(argv: list[str] | None = None) -> int:
             pr = row.get("pr")
             print(f"closure (CANONICAL — {args.ledger}):")
             if _valid_pr(pr):
-                print(f"  CLOSED — delivered at {pr}")
+                _emit_indented(f"CLOSED — delivered at {pr}")
             else:
-                print("  (MISSING — a closed row needs a 'pr' citation; `--check` reports it)")
+                _emit_indented(
+                    "(MISSING — a closed row needs a 'pr' citation; `--check` reports it)"
+                )
             if _nonblank_text(close_out):
-                print("  close_out below is the plan recorded while this row was OPEN —")
-                print("  HISTORICAL, not a current instruction. The prose block records")
-                print("  what actually landed.")
-                for line in str(close_out).strip().splitlines():
-                    print(f"    {line}")
+                _emit_indented(
+                    "close_out below is the plan recorded while this row was OPEN —\n"
+                    "HISTORICAL, not a current instruction. The prose block records\n"
+                    "what actually landed."
+                )
+                _emit_indented(close_out, indent="    ")
         else:
             print(f"close_out (CANONICAL — {args.ledger}):")
             if _nonblank_text(close_out):
-                for line in str(close_out).strip().splitlines():
-                    print(f"  {line}")
+                _emit_indented(close_out)
             elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
                 # Not the same fact as "not required here", and never rendered as silence:
                 # an absent-but-required close_out is a `--check` violation, not a shrug.
-                print("  (MISSING — required at this status; `--check` reports it)")
+                _emit_indented("(MISSING — required at this status; `--check` reports it)")
             else:
-                print(f"  (none — not required at status {status!r})")
+                _emit_indented(f"(none — not required at status {status!r})")
         print()
         print(PROSE_DELIMITER)
         print()
