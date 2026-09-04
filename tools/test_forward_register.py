@@ -193,6 +193,53 @@ def test_detail_emits_the_delimiter_as_one_bare_unindented_line(capsys) -> None:
     assert any(ln.startswith("### B-1") for ln in lines[idx + 1 :])
 
 
+def test_a_whitespace_only_close_out_is_rejected_not_accepted_as_present() -> None:
+    """codex r2 [P2]. Plain truthiness accepted `"   "`, so `--check` stayed GREEN while
+    `--detail` rendered a required canonical disposition as SILENCE -- the explicit-absence
+    contract broken by the very predicate meant to uphold it. Blank is absent."""
+    data = copy.deepcopy(_data())
+    row = _first_open_class(data)
+    row["close_out"] = "   \n\t  "
+    violations = forward_register.validate(data)
+    assert any("needs a 'close_out' field" in v for v in violations), violations
+
+
+def test_a_whitespace_only_close_out_never_renders_as_silence(capsys) -> None:
+    """The RENDER branch must use the same predicate the validator does. A first version of
+    this test pointed at B-1, whose close_out is ABSENT rather than blank, so it exercised
+    the `else` arm and passed even with truthiness restored -- a vacuous witness caught by
+    the mutation probe. The input has to actually be whitespace."""
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9999",
+                "title": "t",
+                "summary": "s",
+                "status": "registered_finding",
+                "close_out": "   \n\t  ",
+                "council": "NO",
+                "heading": "### B-9999 · blank close_out",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "ledger.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "prose.md"
+        pp.write_text("### B-9999 · blank close_out\n\n- **What it is.** Body.\n", encoding="utf-8")
+        forward_register.main(["--detail", "B-9999", "--ledger", str(lp), "--prose", str(pp)])
+        out = capsys.readouterr().out
+
+    header = out.split(forward_register.PROSE_DELIMITER, 1)[0]
+    stated = [ln for ln in header.splitlines() if ln.startswith("  ")]
+    # An explicit statement, never an empty gap between the label and the delimiter.
+    assert stated, header
+    assert any("(none" in ln or "(MISSING" in ln for ln in stated), header
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 

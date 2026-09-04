@@ -90,6 +90,14 @@ class RegisterError(ValueError):
     """A structural violation in the forward register (fails ``--check`` / CI)."""
 
 
+def _nonblank(value: Any) -> bool:
+    """A whitespace-only scalar is not a value. Plain truthiness accepted `"   "` for
+    every required field, so `--check` stayed green while `--detail` rendered a required
+    canonical disposition as SILENCE -- the explicit-absence contract broken by the one
+    predicate meant to uphold it (codex r2 [P2])."""
+    return bool(str(value).strip()) if value is not None else False
+
+
 def _id_from_heading(heading: str) -> str | None:
     """Extract the item id a heading string names, or None if neither shape matches."""
     m = _HEADING_ID_RE.match(heading) or _SECTION_HEADING_ID_RE.match(heading)
@@ -176,10 +184,10 @@ def validate(data: dict[str, Any]) -> list[str]:
             violations.append(f"{rid}: invalid status {status!r}")
             continue
 
-        if not r.get("title"):
+        if not _nonblank(r.get("title")):
             violations.append(f"{rid}: missing non-empty 'title'")
 
-        if not r.get("summary"):
+        if not _nonblank(r.get("summary")):
             violations.append(f"{rid}: missing non-empty 'summary'")
 
         heading = r.get("heading")
@@ -202,12 +210,12 @@ def validate(data: dict[str, Any]) -> list[str]:
                 violations.append(f"{rid}: heading names id {heading_id!r}, not the row's own id")
 
         if status == "closed":
-            if not r.get("pr"):
+            if not _nonblank(r.get("pr")):
                 violations.append(f"{rid}: closed item needs a 'pr' deliverable citation")
         elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
-            if not r.get("close_out"):
+            if not _nonblank(r.get("close_out")):
                 violations.append(f"{rid}: {status} item needs a 'close_out' field")
-            if not r.get("council"):
+            if not _nonblank(r.get("council")):
                 violations.append(f"{rid}: {status} item needs a 'council' disposition")
 
     d = derive(data)
@@ -344,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{row['id']} — {status}")
         print(f"close_out (CANONICAL — {args.ledger}):")
         close_out = row.get("close_out")
-        if close_out:
+        if _nonblank(close_out):
             for line in str(close_out).strip().splitlines():
                 print(f"  {line}")
         elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
