@@ -208,8 +208,20 @@ def validate(data: dict[str, Any]) -> list[str]:
     seen_headings: dict[str, str] = {}
     for r in items:
         rid = r.get("id", "<no-id>")
-        if not r.get("id"):
+        if not _nonblank_text(r.get("id")):
             violations.append("row missing non-empty 'id'")
+        elif rid != rid.strip() or "\n" in rid:
+            # An id is an IDENTIFIER, and the `--detail` header prints it on an
+            # UNINDENTED first line. So a multi-line id is the one remaining way row
+            # CONTENT can forge the prose frame: an id carrying PROSE_DELIMITER on an
+            # interior line emits it as an exact bare line, and `leg_selfcheck` then cuts
+            # there -- the r5 spoof, in the one field the emitter discipline could not
+            # cover because that line is unindented by design. Found by the r10
+            # class-sibling sweep and confirmed by execution, not by reading.
+            violations.append(
+                f"{rid!r}: id must be a single-line identifier with no surrounding "
+                f"whitespace (a multi-line id can forge the --detail prose frame)"
+            )
         if rid in seen_ids:
             violations.append(f"duplicate id {rid}")
         seen_ids.add(rid)

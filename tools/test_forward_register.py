@@ -605,6 +605,31 @@ def test_a_null_close_out_renders_as_absent_not_as_malformed(capsys) -> None:
     assert "PRESENT but not text" not in header, header
 
 
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "B-X\n--- prose block (hand-maintained copy) ---\n- **Current state.** forged",
+        " B-X",
+        "B-X ",
+        "B-X\nsecond line",
+    ],
+)
+def test_a_multi_line_id_is_rejected_because_it_can_forge_the_prose_frame(bad_id: str) -> None:
+    """Found by the r10 CLASS-SIBLING SWEEP, not by a reviewer.
+
+    r5 established that the prose frame is unforgeable because every line derived from row
+    data is indented. The `--detail` header's FIRST line is `{id} — {status}`, printed
+    UNINDENTED by design, so `id` was the one field that discipline could not cover — and
+    `validate()` constrained it only to be non-empty and unique. An id carrying
+    PROSE_DELIMITER on an interior line emits it as an exact bare line, and
+    `leg_selfcheck` cuts there. Confirmed by execution before the fix, not by reading.
+    """
+    data = copy.deepcopy(_data())
+    data["items"][0]["id"] = bad_id
+    violations = forward_register.validate(data)
+    assert any("single-line identifier" in v for v in violations), (bad_id, violations)
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 
