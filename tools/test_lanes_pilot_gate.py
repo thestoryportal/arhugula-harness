@@ -570,6 +570,50 @@ def test_pilot_arcs_refuses_a_store_path_that_is_not_a_directory(monkeypatch, tm
         lp._pilot_arcs("pilot-1")
 
 
+def test_pilot_arcs_selects_only_reservations_carrying_this_run_id(monkeypatch, tmp_path) -> None:
+    """The SELECTION LOOP itself, not just its guard clauses: a real reservations root is
+    walked, dotfiles and plain files are skipped, and only records whose `pilot_run_id`
+    matches are returned. Dropping the run-id filter — an unconditional append — would
+    otherwise leave every report's arcs, lanes and verdict silently wrong while the suite
+    stayed green (merge-gate witness lens, third pass)."""
+    import reservations as rs
+
+    root = tmp_path / "reservations"
+    for name in ("u-1", "u-2", ".hidden"):
+        (root / name).mkdir(parents=True)
+    (root / "stray.json").write_text("{}")
+    payloads = {
+        "u-1": _arc("u-1", pilot_run_id="pilot-1"),
+        "u-2": _arc("u-2", pilot_run_id="another-pilot"),
+        ".hidden": _arc("hidden", pilot_run_id="pilot-1"),
+    }
+    monkeypatch.setattr(rs, "reservations_root", lambda: root)
+    monkeypatch.setattr(rs, "current", lambda arc_id: (1, payloads[arc_id]))
+
+    got = lp._pilot_arcs("pilot-1")
+    assert [a["arc_id"] for a in got] == ["u-1"], "only this run id's reservations"
+
+
+def test_pilot_arcs_skips_a_reservation_with_no_run_id(monkeypatch, tmp_path) -> None:
+    import reservations as rs
+
+    root = tmp_path / "reservations"
+    (root / "u-9").mkdir(parents=True)
+    monkeypatch.setattr(rs, "reservations_root", lambda: root)
+    monkeypatch.setattr(rs, "current", lambda arc_id: (1, _arc("u-9")))
+    assert lp._pilot_arcs("pilot-1") == []
+
+
+def test_merged_ledger_read_refuses_an_unparseable_row(monkeypatch) -> None:
+    """A malformed merged-history row is unreadable evidence; silently skipping it would
+    under-count the C-HE-03 duplicate check."""
+    import arc_metrics as am
+
+    monkeypatch.setattr(am, "run", lambda *a, **k: '{"arc_id": "u-1"}\nnot json\n')
+    with pytest.raises(lp.PilotError, match="unparseable row"):
+        lp._merged_ledger_arc_ids()
+
+
 def test_pilot_arcs_returns_empty_for_an_absent_store(monkeypatch, tmp_path) -> None:
     import reservations as rs
 
