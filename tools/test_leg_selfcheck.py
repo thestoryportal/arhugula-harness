@@ -307,7 +307,7 @@ def test_yaml_only_row_still_fires_through_the_real_detail_shape():
     assert any("HEADING ONLY" in m for m in msgs), msgs
 
 
-def test_a_missing_delimiter_on_the_real_cli_path_fails_loud_not_silently():
+def test_a_missing_delimiter_on_the_real_cli_path_fails_loud_not_silently(monkeypatch):
     """codex r12 [P2]. The missing-delimiter fallback is for injected doubles only.
 
     `just leg-selfcheck --uncommitted` runs the producer from the WORKING TREE, so an
@@ -321,17 +321,19 @@ def test_a_missing_delimiter_on_the_real_cli_path_fails_loud_not_silently():
     monkeypatching the subprocess helper rather than injecting a double.
     """
     report = ls.Report()
-    original = ls._detail_via_cli
-    try:
+    # `monkeypatch` owns both modes, so there is no hand-rolled save/restore pair here --
+    # the two-armed shape whose restore arm is the recurring dead/leaky branch.
+    monkeypatch.setattr(
+        ls,
+        "_detail_via_cli",
         # Real-path shape MINUS the delimiter: header present, prose heading-only.
-        ls._detail_via_cli = lambda _rid: (  # type: ignore[assignment]
+        lambda _rid: (
             0,
             "B-999 — closed\nclosure (CANONICAL — /x):\n  CLOSED — citation: #1\n\n"
             "### B-999 · a title and nothing else\n",
-        )
-        ls.check_register_rows(["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None)
-    finally:
-        ls._detail_via_cli = original  # type: ignore[assignment]
+        ),
+    )
+    ls.check_register_rows(["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None)
 
     msgs = _hard(report)
     assert any("emitted no" in m and "line" in m for m in msgs), msgs
