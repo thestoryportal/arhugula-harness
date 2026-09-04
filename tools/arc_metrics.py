@@ -53,18 +53,34 @@ LEDGER = Path(os.environ.get("ARC_METRICS_LEDGER", REPO / ".harness" / "arc-metr
 #: pattern as LEDGER so a test or a second lane can point at its own log.
 GATE_LOG = Path(os.environ.get("ARC_METRICS_GATE_LOG", REPO / ".harness" / "merge-gate-log.jsonl"))
 
-#: C-HE-28 §2 numerator class: the refresh-collision finding.
+#: C-HE-28 §2 numerator: the refresh-collision detection.
 #:
-#: It is a finding CODE, carried in ``finding_type`` -- ``codex_context_guard``
-#: raises it as ``Finding(severity, code, message)`` (`codex_context_guard.py:1515`)
-#: and `finding_record.to_guard_finding` projects rows back through
-#: ``row["finding_type"]``. It is NOT a ``producer``: that field names the emitting
-#: TOOL (`codex_review_wrapper`, `merge-gate-*`), and no producer is or will be
-#: named for a finding class. Matching on ``producer`` would therefore be vacuous
-#: against every row this log can ever hold -- a predicate that matches nothing
-#: reports a confident zero, which is the empty-versus-unlooked confusion this
-#: ledger exists to refuse, wearing a new costume.
-DRIFT_FINDING_TYPE = "ROADMAP_STATUS_DRIFT"
+#: NO emitter appends such a row to the gate log today. ``codex_context_guard``
+#: raises this name as an in-memory CI guard ``Finding`` (`codex_context_guard.py:1515`)
+#: and never appends it, so the durable row's shape is UNWITNESSED -- there is no
+#: live example to match against, and any single-field predicate is a guess about a
+#: producer contract that does not exist yet.
+#:
+#: What the log DOES demonstrate constrains the guess. Detection identity lives in
+#: ``producer`` (`merge-door-post-merge-ci`, `merge-door-lease-acquire` -- the
+#: detection site, not merely the tool), while ``finding_type`` carries a closed,
+#: severity-shaped lifecycle vocabulary: terminal-block, clean-approve, probe-sample,
+#: transient-retry, HITL-recoverable, permanent-fail-exit, probe-result. On that
+#: evidence ``producer`` is the likelier carrier -- but "likelier" is not a contract.
+#:
+#: So the predicate accepts the name in EITHER field. No row carries this string in
+#: either one (verified across the live log), so a false positive is impossible,
+#: while a single-field guess could silently miss the real emitter and report a
+#: confident zero forever -- the empty-versus-unlooked confusion this ledger exists
+#: to refuse. The report's provenance line states the emitter gap outright, so the
+#: zero this currently produces can never be read as a measured collision rate.
+DRIFT_DETECTION = "ROADMAP_STATUS_DRIFT"
+
+
+def is_drift_row(row: dict) -> bool:
+    """A refresh-collision row under either carrier (see ``DRIFT_DETECTION``)."""
+    return DRIFT_DETECTION in (row.get("finding_type"), row.get("producer"))
+
 
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
 #: disposed at loop completion, so anything queued inside one is lost with it --
@@ -2536,16 +2552,18 @@ def summary(_args: argparse.Namespace) -> int:
     # one -- which is what both consumers want: an unreadable log stops the report
     # rather than being reported as a zero.
     #
-    # Read BEFORE the existence check, because the log is append-only and never
-    # unlinked, so the only transition a concurrent lane can make under us is
-    # absent -> present. In this order that race yields "present, 0 rows", which
-    # both lines below report consistently; the other order yields "absent" from
-    # N6 while the drift join reports rows it has already read.
-    gate_rows = fr.read_rows(GATE_LOG)
+    # Presence is checked ONCE and the read is CONDITIONED on it, so the two can
+    # never describe different observations: the pair is "present with its rows" or
+    # "absent with none", and no interleaving produces a third. (Checking and
+    # reading independently leaves a window in which N6 reports "gate log absent"
+    # while the drift join reports rows it has already read.)
     gate_present = GATE_LOG.exists()
+    gate_rows = fr.read_rows(GATE_LOG) if gate_present else []
 
-    # C-HE-28 §2 (R-15): refresh-collision incidence correlated against the SAME
-    # cohort key as the lane split.
+    # C-HE-28 §2 (R-15): refresh-collision incidence correlated against
+    # `concurrent_lanes_at_open`. That single axis is the key §2 names, and so it is
+    # the key these denominators use -- §1's joint key governs the cohort SPLIT
+    # above, and the two differ deliberately, not by oversight.
     #
     # The join is on `arc_id`, the unique per-arc key both stores carry (C-HE-24 §6
     # gives every finding-class row `lane_id` AND `arc_id`). It cannot be on
@@ -2553,7 +2571,22 @@ def summary(_args: argparse.Namespace) -> int:
     # `lane_id` does not identify an N. `lane_id` is instead the CROSS-CHECK -- a
     # joined row whose lane disagrees with its ledger row's is a corrupt
     # attribution, and it is counted and stated rather than silently accepted.
-    drift = [g for g in gate_rows if g.get("finding_type") == DRIFT_FINDING_TYPE]
+    #
+    # The incidence UNIT is a distinct FINDING, never a log row. An adjudication row
+    # copies `finding_type`/`arc_id` verbatim from the finding it dispositions, and
+    # the log already carries such pairs in bulk (measured at U-HE-38 r1: 527 of
+    # 2260 finding_ids -- a figure that grows with every append, hence bound to a
+    # round rather than stated as live), so
+    # counting rows would count every adjudicated collision at least twice and could
+    # push a cell's numerator past its own denominator. Reduce to one row per
+    # finding_id (last write wins -- the append-order authority finding_record
+    # defines), then drop findings whose final disposition is `rejected`: a refuted
+    # collision is not a collision, the same rule C-HE-29 §2 states for unique_catch.
+    drift = [
+        r
+        for r in fr.reduce_last_by_finding_id([g for g in gate_rows if is_drift_row(g)]).values()
+        if r.get("disposition") != "rejected"
+    ]
     by_arc = {r["arc_id"]: r for r in rows}
     # Partition first, then count from the partition: an unjoinable row is reported
     # as its own number, never skipped past.
@@ -2582,13 +2615,15 @@ def summary(_args: argparse.Namespace) -> int:
         )
     )
     print(
-        f"     ^ numerator: {len(drift)} {DRIFT_FINDING_TYPE} row(s) among "
-        f"{len(gate_rows)} gate row(s); {len(matched)} joined to a ledger arc by "
-        f"arc_id, {unjoinable} unjoinable, {lane_mismatch} whose lane_id disagrees\n"
-        f"       with the ledger's. A cell counts only rows appended to the gate log "
-        f"carrying finding_type={DRIFT_FINDING_TYPE}; an absent emitter and a\n"
-        f"       collision-free cohort both render 0, so a 0 is not on its own a "
-        f"measured collision rate (gate log: {GATE_LOG})."
+        f"     ^ numerator: {len(drift)} distinct {DRIFT_DETECTION} finding(s) "
+        f"(reduced by finding_id, `rejected` dropped) among {len(gate_rows)} gate\n"
+        f"       row(s); {len(matched)} joined to a ledger arc by arc_id, "
+        f"{unjoinable} unjoinable, {lane_mismatch} whose lane_id disagrees with the\n"
+        f"       ledger's. A 0 numerator means the source is UNWIRED, not that "
+        f"collisions were measured and found absent: {DRIFT_DETECTION} is\n"
+        f"       raised as an in-memory CI guard finding and no emitter appends it "
+        f"here, so read a 0 cell as unavailable, never as a\n"
+        f"       rate (gate log: {GATE_LOG})."
     )
     print()
 

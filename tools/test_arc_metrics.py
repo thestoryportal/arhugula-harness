@@ -3432,17 +3432,26 @@ def _joint_rows() -> list[dict]:
     ]
 
 
-def _drift_row(arc_id: str, lane_id: str) -> dict:
-    """A refresh-collision row as C-HE-24 §6 shapes it: the class lives in
-    `finding_type`, and `producer` names the emitting TOOL."""
-    return {
+def _drift_row(arc_id: str, lane_id: str, *, carrier: str = "producer", **over) -> dict:
+    """A refresh-collision row, lane-attributed per C-HE-24 §6.
+
+    No emitter appends one today, so the durable shape is unwitnessed and the
+    detection name is matched under EITHER carrier. `carrier` picks which field
+    holds it, so both branches of that predicate are exercised by real rows: the
+    log's own convention puts detection identity in `producer` and a closed
+    severity vocabulary in `finding_type`, but neither is contractual yet.
+    """
+    row = {
         "finding_id": f"codex_context_guard:head:{arc_id}:1",
         "producer": "codex_context_guard",
-        "finding_type": "ROADMAP_STATUS_DRIFT",
+        "finding_type": "terminal-block",
         "record_kind": "finding",
+        "disposition": None,
         "lane_id": lane_id,
         "arc_id": arc_id,
     }
+    row[carrier] = "ROADMAP_STATUS_DRIFT"
+    return row | over
 
 
 def _run_summary(tmp_path: Path, monkeypatch, capsys, rows: list[dict], gate: list[dict] | None):
@@ -3490,7 +3499,7 @@ def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path: Path, monkeyp
     assert '-- JOINT (N=1, "inventing") (n=3) arc span 1.0m (n=3, 1.0-1.0)' in out
     assert '-- JOINT (N=4, "applying") (n=3) arc span 4.0m (n=3, 4.0-4.0)' in out
     assert "drift incidence by concurrent_lanes_at_open: N=1: 0/6, N=2: 0/6, N=4: 1/6" in out
-    assert "1 ROADMAP_STATUS_DRIFT row(s) among 2 gate row(s); 1 joined" in out
+    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "1 joined" in out
 
 
 def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
@@ -3499,8 +3508,8 @@ def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
     """Absent gate log: the numerator is stated as 0 rows out of 0, alongside
     N6's explicit "gate log absent" -- neither reads as a collision-free cohort."""
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), None)
-    assert "0 ROADMAP_STATUS_DRIFT row(s) among 0 gate row(s)" in out
-    assert "an absent emitter and a" in out, "the caveat naming the ambiguity must print"
+    assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "among 0 gate" in out
+    assert "means the source is UNWIRED" in out, "the caveat naming the ambiguity must print"
     assert "N6 problems-prevented/hour  -- (gate log absent" in out
 
 
@@ -3535,10 +3544,8 @@ def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, mon
             _drift_row("legacy-0", "lane-anything"),  # ledger lane_id is absent
         ],
     )
-    assert (
-        "4 ROADMAP_STATUS_DRIFT row(s) among 4 gate row(s); 3 joined to a ledger arc by "
-        "arc_id, 1 unjoinable, 1 whose lane_id disagrees" in out
-    )
+    assert "4 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    assert "3 joined to a ledger arc by arc_id, 1 unjoinable, 1 whose lane_id disagrees" in out
     assert "N=1: 1/7, N=2: 1/6, N=4: 1/6" in out
 
 
@@ -3555,3 +3562,65 @@ def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
     assert "None" not in out.split("-- JOINT")[1]
     assert out.index('(N=1, "inventing")') < out.index("(N=null, null)")
     assert "N=1: 0/3, N=null: 0/1" in out
+
+
+# mutation-probe: count `gate_rows` directly instead of reducing by finding_id ->
+# the adjudicated finding is counted twice and N=4 reads 2/6.
+def test_drift_incidence_counts_findings_not_log_rows(tmp_path: Path, monkeypatch, capsys):
+    """An adjudication row copies finding_type/arc_id verbatim from its finding
+    (measured at U-HE-38 r1: 527 of 2260 finding_ids), so counting rows would count
+    every adjudicated collision at least twice -- and could push a cell's numerator
+    past its own denominator. One finding is one incidence."""
+    finding = _drift_row("4-inventing-0", "lane-4")
+    adjudication = finding | {"record_kind": "finding_adjudication", "disposition": "accepted"}
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, adjudication])
+    assert "N=4: 1/6" in out, "one finding, two rows -> incidence 1"
+    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    assert "among 2 gate" in out, "the row count stays visible beside the finding count"
+
+
+# mutation-probe: drop the `disposition != "rejected"` filter -> N=4 reads 1/6.
+def test_a_refuted_drift_finding_is_not_a_collision(tmp_path: Path, monkeypatch, capsys):
+    """Last-write-wins over finding_id, then `rejected` drops out: the same rule
+    C-HE-29 §2 states for unique_catch. A refuted collision is not a collision."""
+    finding = _drift_row("4-inventing-0", "lane-4")
+    refutation = finding | {"record_kind": "finding_adjudication", "disposition": "rejected"}
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, refutation])
+    assert "N=4: 0/6" in out
+    assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+
+
+def test_drift_detection_is_matched_under_either_carrier(tmp_path: Path, monkeypatch, capsys):
+    """The durable row's shape is unwitnessed (no emitter), so a single-field
+    predicate could silently miss the real one and report a confident zero forever.
+    Both carriers count; a row carrying the name in NEITHER field does not."""
+    for carrier in ("producer", "finding_type"):
+        out = _run_summary(
+            tmp_path,
+            monkeypatch,
+            capsys,
+            _joint_rows(),
+            [_drift_row("2-applying-0", "lane-2", carrier=carrier)],
+        )
+        assert "N=2: 1/6" in out, f"the {carrier} carrier must count"
+    # Negative control: the name only in free text is not a detection.
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            {
+                "finding_id": "codex_review_wrapper:head:x:1",
+                "producer": "codex_review_wrapper",
+                "finding_type": "terminal-block",
+                "record_kind": "finding",
+                "disposition": None,
+                "lane_id": "lane-2",
+                "arc_id": "2-applying-0",
+                "observed_evidence": "a review finding that merely mentions "
+                "ROADMAP_STATUS_DRIFT in its prose",
+            }
+        ],
+    )
+    assert "N=2: 0/6" in out and "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
