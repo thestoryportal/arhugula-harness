@@ -82,6 +82,38 @@ def is_drift_row(row: dict) -> bool:
     return DRIFT_DETECTION in (row.get("finding_type"), row.get("producer"))
 
 
+#: Cohort-key sentinel for the two DIFFERENT ways a row can lack a lane count.
+#:
+#: A row whose KEY IS ABSENT predates the field -- C-HE-25's "implicit N=1 baseline"
+#: population (19 of 35 rows at U-HE-38 r4). A row CARRYING an explicit ``null`` has the
+#: field and recorded no value, because the C-HE-03 §7 sensor is a best-effort snapshot
+#: (7 rows). ``dict.get()`` renders both as ``None`` and pools them into one median --
+#: the same two-populations-one-number error this file already refuses between arc spans
+#: and PR-open windows.
+#:
+#: The sentinel is a string, so it can never collide with the integer values, and it
+#: renders through the same ``json.dumps`` as every other key component -- visibly a
+#: quoted label, never mistakable for a count.
+#:
+#: NOT normalized to 1. C-HE-25's baseline sentence is AC#10 analytic framing, its own
+#: Verification bullet requires this split to group on the field "without error on
+#: `null`" (so nulls must reach the grouping), and C-HE-28 §3 forbids effect estimates
+#: at this sample size. Rewriting 19 rows' cohort membership on the strength of that
+#: sentence would impute a value no contract asks this report to impute.
+LANES_ABSENT = "absent"
+
+
+def lanes_at_open(row: dict) -> object:
+    """The lane-count cohort key: the integer, an explicit ``None``, or ``LANES_ABSENT``."""
+    return row["concurrent_lanes_at_open"] if "concurrent_lanes_at_open" in row else LANES_ABSENT
+
+
+def cohort_sort_key(value: object) -> tuple:
+    """Integers numerically first, then ``LANES_ABSENT``, then ``None`` -- one ordering
+    for a key whose components are deliberately of three different types."""
+    return (value is None, isinstance(value, str), value if isinstance(value, int) else 0)
+
+
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
 #: disposed at loop completion, so anything queued inside one is lost with it --
 #: and a dirty tracked file there blocks that disposal outright. See
@@ -2527,16 +2559,16 @@ def summary(_args: argparse.Namespace) -> int:
     # "(N=1, null)"). A third axis would also shatter a 35-row ledger into near
     # singletons, making every cell's median a single arc.
     #
-    # The key is the raw (int|None, str|None) tuple -- both components hashable, as
-    # C-HE-28 §1 requires of a cohort key -- and BOTH render through json.dumps at
-    # print time, exactly as the single-axis block above. That is the one renderer
-    # under which an absent label is the literal `null` and can never be read as a
-    # string named "None". Sorting keys on `is None` first puts the unlabelled
-    # cells last and keeps the integers in numeric, not lexicographic, order.
+    # Both components are hashable, as C-HE-28 §1 requires of a cohort key, and BOTH
+    # render through json.dumps at print time, exactly as the single-axis block above.
+    # That is the one renderer under which an absent label is the literal `null` and
+    # can never be read as a string named "None". The lane component comes from
+    # `lanes_at_open`, which keeps a row that PREDATES the field apart from one that
+    # carries an explicit null (see LANES_ABSENT) rather than pooling both medians.
     joint: dict[tuple, list[dict]] = {}
     for r in rows:
-        joint.setdefault((r.get("concurrent_lanes_at_open"), r.get("arc_type_open")), []).append(r)
-    for n, t in sorted(joint, key=lambda k: (k[0] is None, k[0], k[1] is None, k[1])):
+        joint.setdefault((lanes_at_open(r), r.get("arc_type_open")), []).append(r)
+    for n, t in sorted(joint, key=lambda k: (cohort_sort_key(k[0]), k[1] is None, k[1] or "")):
         cohort = joint[(n, t)]
         # The same two exclusions every span aggregate above applies: a lower-bound
         # row (partial-suffix / unknown) is not a measurement of a whole arc, and a
@@ -2600,45 +2632,57 @@ def summary(_args: argparse.Namespace) -> int:
     # log alone, reused here. Without at least one observed row the numerator was never
     # looked at, and `measurable` below turns every cell into `--` rather than a zero.
     observed = [g for g in gate_rows if is_drift_row(g)]
-    measurable = bool(observed)
-    drift = [
-        r
-        for r in fr.reduce_last_by_finding_id(
-            [g for g in observed if g.get("record_kind") != "no_finding"]
-        ).values()
-        if r.get("disposition") != "rejected"
-    ]
     by_arc = {r["arc_id"]: r for r in rows}
-    # Partition first, then count from the partition: an unjoinable row is reported
-    # as its own number, never skipped past.
-    matched = [(g, by_arc[g["arc_id"]]) for g in drift if g.get("arc_id") in by_arc]
-    unjoinable = len(drift) - len(matched)
     # Denominators come from this one grouping. Rescanning `rows` per cell to
     # recount would be a second map of a fact this dict already holds.
     by_n: dict[object, list[dict]] = {}
     for r in rows:
-        by_n.setdefault(r.get("concurrent_lanes_at_open"), []).append(r)
+        by_n.setdefault(lanes_at_open(r), []).append(r)
+
+    # The join and the lane check run ONCE, over every drift-class row, and the
+    # incidence subset is taken after. Running them over the findings alone would let
+    # a `no_finding` marker mark a cohort observed without ever being checked for
+    # attribution -- two passes free to disagree about which rows are attributable.
+    #
     # A ledger row predating the lane field carries `lane_id: None` -- absent, which
     # is not a disagreement, so it is not a mismatch. A real disagreement is: the
     # finding says the arc ran on one lane, the ledger says another, and one of the
     # two attributions is wrong with no way here to say which.
     #
-    # Mismatches are EXCLUDED from the numerator, not merely reported beside it. The
-    # arc_id join alone would still yield an N for such a row, which is exactly the
+    # Mismatches are EXCLUDED, not merely reported beside the numerator. The arc_id
+    # join alone would still yield an N for such a row, which is exactly the
     # temptation: it looks like recoverable data. But a cell built partly from rows
     # whose two recorded attributions contradict each other is not a measurement of
     # anything, and folding them in silently launders the contradiction into a rate.
     # They are counted and named on their own line instead, so excluding them cannot
     # hide them either.
-    agreed, lane_mismatch = [], 0
-    for g, arc in matched:
+    joined = [(g, by_arc[g["arc_id"]]) for g in observed if g.get("arc_id") in by_arc]
+    unjoinable = len(observed) - len(joined)
+    attributable, lane_mismatch = [], 0
+    for g, arc in joined:
         if arc.get("lane_id") is not None and g.get("lane_id") != arc.get("lane_id"):
             lane_mismatch += 1
         else:
-            agreed.append(arc)
+            attributable.append((g, arc))
+
+    # Measurability is PER COHORT, keyed by the same lane count as the denominators.
+    # Global measurability was this report's own empty-versus-unlooked confusion one
+    # level up: a single marker for one arc would have turned every OTHER cohort's
+    # silence into a printed 0, and an unjoinable or lane-mismatched row -- already
+    # excluded from the numerator as unattributable -- would have flipped the flag for
+    # all of them. A cohort counts as looked-at only when a drift-class row was
+    # actually attributed to one of ITS arcs.
+    observed_ns = {lanes_at_open(arc) for _g, arc in attributable}
+    drift = [
+        r
+        for r in fr.reduce_last_by_finding_id(
+            [g for g, _arc in attributable if g.get("record_kind") != "no_finding"]
+        ).values()
+        if r.get("disposition") != "rejected"
+    ]
     hits: dict[object, int] = dict.fromkeys(by_n, 0)
-    for arc in agreed:
-        hits[arc.get("concurrent_lanes_at_open")] += 1
+    for r in drift:
+        hits[lanes_at_open(by_arc[r["arc_id"]])] += 1
     # An unobserved numerator renders `--`, never a digit. The denominator is real and
     # stays visible, so the cell says what is known and what is not: "6 arcs ran at
     # this N; whether any collided was never looked at". The prose caveat below is not
@@ -2649,22 +2693,22 @@ def summary(_args: argparse.Namespace) -> int:
     print(
         "drift incidence by concurrent_lanes_at_open: "
         + ", ".join(
-            f"N={json.dumps(n)}: {hits[n] if measurable else '--'}/{len(by_n[n])}"
-            for n in sorted(by_n, key=lambda k: (k is None, k))
+            f"N={json.dumps(n)}: {hits[n] if n in observed_ns else '--'}/{len(by_n[n])}"
+            for n in sorted(by_n, key=cohort_sort_key)
         )
     )
     print(
         f"     ^ numerator: {len(drift)} distinct {DRIFT_DETECTION} finding(s) "
         f"(reduced by finding_id, `rejected` dropped) among {len(gate_rows)} gate\n"
-        f"       row(s); {len(agreed)} counted, {unjoinable} unjoinable, "
-        f"{lane_mismatch} EXCLUDED for a lane_id disagreeing with the ledger's\n"
-        f"       (contradictory attribution, not a measurement). {len(observed)} "
-        f"drift-class row(s) of any kind were observed, so the cells above read\n"
-        f"       {'as counts' if measurable else 'as `--`'}: a `--` numerator means "
-        f"the source was never looked at (no finding and no `no_finding` marker),\n"
-        f"       a numeric 0 means an emitter looked and recorded no collision. Those "
-        f"are different facts and the report will not merge them\n"
-        f"       (gate log: {GATE_LOG})."
+        f"       row(s); {len(observed)} drift-class row(s) of any kind observed, "
+        f"{unjoinable} unjoinable, {lane_mismatch} EXCLUDED for a lane_id\n"
+        f"       disagreeing with the ledger's (contradictory attribution, not a "
+        f"measurement); {len(observed_ns)} of {len(by_n)} cohort(s) had one\n"
+        f"       attributed to them and so read as counts. A `--` numerator means "
+        f"THAT cohort was never looked at (no finding and no `no_finding`\n"
+        f"       marker among its own arcs), a numeric 0 means an emitter looked at "
+        f"it and recorded no collision. Those are different facts\n"
+        f"       and the report will not merge them (gate log: {GATE_LOG})."
     )
     print()
 

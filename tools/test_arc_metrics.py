@@ -3498,8 +3498,11 @@ def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path: Path, monkeyp
     assert '-- JOINT (N=2, "applying") (n=3) arc span 2.0m (n=3, 2.0-2.0)' in out
     assert '-- JOINT (N=1, "inventing") (n=3) arc span 1.0m (n=3, 1.0-1.0)' in out
     assert '-- JOINT (N=4, "applying") (n=3) arc span 4.0m (n=3, 4.0-4.0)' in out
-    assert "drift incidence by concurrent_lanes_at_open: N=1: 0/6, N=2: 0/6, N=4: 1/6" in out
-    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "1 counted" in out
+    assert "drift incidence by concurrent_lanes_at_open: N=1: --/6, N=2: --/6, N=4: 1/6" in out, (
+        "measurability is per cohort: only N=4 had a drift-class row attributed to it"
+    )
+    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    assert "1 of 3 cohort(s) had one" in out, "per-cohort measurability is reported"
 
 
 def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
@@ -3544,12 +3547,18 @@ def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, mon
             _drift_row("legacy-0", "lane-anything"),  # ledger lane_id is absent
         ],
     )
-    assert "4 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
-    assert "2 counted, 1 unjoinable, 1 EXCLUDED for a lane_id disagreeing" in out
+    # `drift` is the ATTRIBUTABLE subset: the unjoinable and the lane-mismatched rows
+    # are observed but never become incidences, so 4 rows yield 2 distinct findings.
+    assert "2 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    assert (
+        "4 drift-class row(s) of any kind observed, 1 unjoinable, 1 EXCLUDED for a lane_id" in out
+    )
     # The lane-disagreeing row joined arc "2-applying-1" by arc_id, so an arc_id-only
     # numerator would read N=2: 1/6. It is excluded, so N=2 stays 0: a cell built from
     # rows whose two attributions contradict each other measures nothing.
-    assert "N=1: 1/7, N=2: 0/6, N=4: 1/6" in out
+    # N=2's only row was lane-mismatched, so it is unattributable: that cohort was
+    # never validly looked at and reads `--`, not a measured 0.
+    assert "N=1: 1/7, N=2: --/6, N=4: 1/6" in out
 
 
 def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
@@ -3561,10 +3570,10 @@ def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
     rows = _joint_rows()[:3]
     rows.append({"arc_id": "old-0", "levers_active": [], "review_rounds": 2})
     out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
-    assert "-- JOINT (N=null, null) (n=1) arc span --" in out
+    assert '-- JOINT (N="absent", null) (n=1) arc span --' in out
     assert "None" not in out.split("-- JOINT")[1]
-    assert out.index('(N=1, "inventing")') < out.index("(N=null, null)")
-    assert "N=1: --/3, N=null: --/1" in out
+    assert out.index('(N=1, "inventing")') < out.index('(N="absent", null)')
+    assert 'N=1: --/3, N="absent": --/1' in out
 
 
 # mutation-probe: count `gate_rows` directly instead of reducing by finding_id ->
@@ -3627,7 +3636,7 @@ def test_drift_detection_is_matched_under_either_carrier(tmp_path: Path, monkeyp
         ],
     )
     # Sharper than 0/6: the row is not even OBSERVED, so the cell is unavailable.
-    assert "N=2: --/6" in out and "0 drift-class row(s) of any kind were observed" in out
+    assert "N=2: --/6" in out and "0 drift-class row(s) of any kind observed" in out
 
 
 # mutation-probe: drop the `if measurable` guard and always render hits[n] -> the
@@ -3651,7 +3660,51 @@ def test_a_no_finding_marker_makes_a_zero_legitimate(tmp_path: Path, monkeypatch
         "finding_id": "codex_context_guard:head:marker:1",
     }
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [marker])
-    assert "N=1: 0/6, N=2: 0/6, N=4: 0/6" in out, "observed -> counts, and the count is 0"
-    assert "--/6" not in out
+    # Per cohort: the marker names an N=4 arc, so ONLY N=4 becomes countable. The
+    # other cohorts were not looked at and must not inherit its zero.
+    assert "N=1: --/6, N=2: --/6, N=4: 0/6" in out
     assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out, "a marker is not an incidence"
-    assert "1 drift-class row(s) of any kind were observed" in out
+    assert "1 drift-class row(s) of any kind observed" in out
+
+
+# mutation-probe: replace lanes_at_open() with r.get("concurrent_lanes_at_open") ->
+# the two populations pool into one N=null cohort and this test goes red.
+def test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Two different facts that `dict.get()` renders identically. A row whose KEY IS
+    ABSENT predates the field (C-HE-25's implicit-N=1-baseline population); a row
+    CARRYING an explicit null has the field and its best-effort C-HE-03 §7 sensor
+    recorded nothing. Pooling them puts two populations under one median — the error
+    this file already refuses between arc spans and PR-open windows. Neither is
+    imputed to 1: the split reports them, it does not guess at them."""
+    rows = [
+        # predates the field entirely
+        {
+            "arc_id": "old-0",
+            "levers_active": [],
+            "arc_span_s": 60.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "arc_type_open": None,
+        },
+        # has the field; the sensor recorded nothing
+        {
+            "arc_id": "new-0",
+            "levers_active": [],
+            "arc_span_s": 600.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": None,
+            "arc_type_open": None,
+        },
+    ]
+    out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
+    assert '-- JOINT (N="absent", null) (n=1) arc span 1.0m' in out
+    assert "-- JOINT (N=null, null) (n=1) arc span 10.0m" in out
+    assert 'N="absent": --/1, N=null: --/1' in out
+    joint_lines = [ln for ln in out.splitlines() if ln.startswith("-- JOINT")]
+    assert len(joint_lines) == 2, "one cell each, never one pooled cell of two"
+    assert not any("(n=2)" in ln for ln in joint_lines), (
+        "the two populations must never share a cohort"
+    )
