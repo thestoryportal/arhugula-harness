@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `01d224ec1d42` |
+| `workspace_state_hash` | `945031bf6c97` |
 | `last_refreshed` | 2026-09-04T00:00:00Z |
-| `git_head` | `20f3a3e6` —  |
+| `git_head` | `569b8fbf` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1515).** B-230 CLOSED at #1515 — Task 8 Steps 1–3 landed: `wait_for_door` appends one `lease_held_yield` NOTIFY row per contention event to the shared loop ledger, `B-232` (held, trigger-gated: `lease_held_yields_30d_max > 5`) carries the lease-scope spec leg, `tools/loop_cost_baseline.py --loop-status` reports the rolling 30-day maximum, and `tools/roadmap-audit/session-start.sh` evaluates the trigger every session through `tools/lease_yield_trigger.py` (`[b-232] lease_held_yields_30d_max=<n>/5` in the banner; codex r1 3 P2 — 2 absorbed, 1 rejected with grounds); the operator's 2026-09-03 answers are recorded in the plan (Task 6 Step 6 keep three lenses; Task 7 no `--delete-branch`; Task 1 Step 8 held) and the plan §0 carries the #1513/#1514 run rows and the `462615452` baseline. The next implementable unit is **U-HE-37** (S6 pilot gate — `just lanes-pilot`, `lanes-pilot-report`, the O1 recipe and the pilot-runner unit, `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:6624`), carrying the §0 rows owed to the plan (the #1515 content-merge and refresh-merge `main` run wall clocks with skipped-job counts, a `tools/loop_cost_baseline.py --loop-status` re-run), `just arc-metrics drain`, and `just roadmap-status --archive-superseded`; then U-HE-38.
+**Current next action (post-#1517).** U-HE-37 Steps 1–4 landed at #1517 — `tools/lanes_pilot.py` implements the C-HE-13 §1 mechanical pilot gate (reducing through `lanes_verify.phase0_verdict` for §1 and `probe_result_verdict` for §2's probe-before-pilots order, so the runner and the recipes cannot disagree) and the §3 success iff-clause as a pure `evaluate(run_id, Stores)` over the three stores, with `just lanes-pilot` / `lanes-pilot-report` behind an end-anchored arity-bounded guard matcher and two C-HE-13 phase1 manifest rows; `parse_loop_row` is extracted into `loop_cost_baseline` as the one reader of the shared ledger's row grammar. **Phase 0 is RED today** — `lanes_pilot.py gate` refuses, naming `C-HE-08 just:main-protection-verify` (live branch protection is missing the `merge-gate log consistency` and `split-brain ledger backstop` blocking contexts), so **Step 5 (≥ 3 manual pilots at 3–4 lanes) cannot start until an operator runs `just main-protection-apply`**, an outward-facing branch-protection write. Four codex rounds (24 findings) and six merge-gate passes (22 findings) landed against this arc; the two production defects were a permission-guard hole that auto-approved a chained second recipe and a C-HE-04 check that would have failed every pilot in the current drain steady state. `B-233` (the guard's generic `just` alternation is not end-anchored for every parameterless recipe) and `B-234` (inferred pilot membership, arcless ledger rows, and two door-completion bounds) carry the registered residue. The next implementable unit is **U-HE-38** (cohort report joint on `(concurrent_lanes_at_open, arc_type)`, drift join, correlational header; `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:6770`), carrying the U-HE-37 plan step ticks owed as a doc-only PR (the Codex context guard's DESIGN_RE classifies `Implementation_Plan_*_v<n>` as a design surface, so they cannot ride a `tools/` PR), plus `just arc-metrics drain` and `just roadmap-status --archive-superseded`.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1517 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1515 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1513 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1511 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1509 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1507 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
