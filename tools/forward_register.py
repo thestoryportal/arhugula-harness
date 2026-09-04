@@ -118,6 +118,32 @@ def _valid_pr(value: Any) -> bool:
     return _nonblank_text(value)
 
 
+def _one_line(value: Any) -> str:
+    """Flatten row-derived text for the ONE unindented line `--detail` prints.
+
+    Every other row-derived line goes through `_emit_indented`, which is what makes an
+    unindented delimiter unforgeable by content. `{id} — {status}` is the single line
+    that cannot be indented without changing the operator-facing header, so the same
+    guarantee is kept here instead. A newline in either field puts row CONTENT on its own
+    unindented line, and a `status` carrying PROSE_DELIMITER hands `leg_selfcheck` an
+    EARLIER bare delimiter to split on -- so a genuinely heading-only row stops reporting
+    HEADING ONLY (codex r15 [P2]; the same spoof as r1 through `close_out` and r5 through
+    `pr`, reopened through the one field the r5 emitter could not cover).
+
+    `validate()` rejects both shapes -- a multi-line id explicitly, a multi-line status by
+    STATUSES membership -- but `--detail` never calls it, and neither does `leg_selfcheck`,
+    which drives `--detail`. A validator-only defence therefore never reaches this path.
+
+    It FLATTENS rather than refuses, deliberately. Exiting on a malformed field here would
+    suppress the canonical `close_out`, which is precisely the r14 [P2] defect this header
+    exists to prevent; the authority must reach the reader even when the row is malformed.
+    `--check` stays the enforcer that REPORTS the malformation. Flattening is sufficient,
+    not merely mitigating: the line is always `{id} — {status}`, and PROSE_DELIMITER
+    contains no em dash, so no pair of field values can make it equal the delimiter.
+    """
+    return " ".join(str(value).split())
+
+
 def _emit_indented(text: Any, indent: str = "  ") -> None:
     """Print row-derived content into the canonical header, one indented line at a time.
 
@@ -402,7 +428,9 @@ def main(argv: list[str] | None = None) -> int:
         # second, after the reader has already formed a view from the copy.
         status = row.get("status", "<no status>")
         close_out = row.get("close_out")
-        print(f"{row['id']} — {status}")
+        # [LAW:single-enforcer] `_one_line` is the sole guard for this, the only
+        # unindented row-derived line; `_emit_indented` owns every other one.
+        print(f"{_one_line(row['id'])} — {_one_line(status)}")
 
         # `close_out` is status-dependent in MEANING, so the header renders whichever field
         # the row's own status makes authoritative. On an open-class row it is the live

@@ -408,6 +408,89 @@ def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_pr() -> 
     assert any("HEADING ONLY" in m for m in hard), hard
 
 
+def _spoofed_row_still_reports_heading_only(rid: str, status: str, detail_arg: str) -> None:
+    """Render one crafted row through the REAL `--detail`, then feed that stdout to the
+    REAL `check_register_rows`. The two tools together are the contract; a fake either
+    side would prove nothing about whether the frame can be forged."""
+    import subprocess
+    import sys as _sys
+
+    import yaml as _yaml
+
+    heading = "### B-9997 \u00b7 spoof via the unindented header line"
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": rid,
+                "title": "t",
+                "summary": "s",
+                "status": status,
+                "pr": "#1",
+                "heading": heading,
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        pp.write_text(heading + "\n", encoding="utf-8")
+        proc = subprocess.run(
+            [
+                _sys.executable,
+                str(Path(forward_register.__file__)),
+                "--detail",
+                detail_arg,
+                "--ledger",
+                str(lp),
+                "--prose",
+                str(pp),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    # The delimiter must appear EXACTLY once: a second bare one is the forgery itself.
+    assert proc.stdout.splitlines().count(forward_register.PROSE_DELIMITER) == 1, proc.stdout
+
+    _sys.path.insert(0, str(Path(forward_register.__file__).parent))
+    import leg_selfcheck as ls
+
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-9997"],
+        [".harness/forward-register.yaml"],
+        report,
+        detail_fn=lambda _rid: (0, proc.stdout),
+    )
+    hard = [f.message for f in report.findings if f.severity == ls.HARD]
+    assert any("HEADING ONLY" in m for m in hard), hard
+
+
+def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_status() -> None:
+    """codex r15 [P2]. `status` reaches the ONE unindented line `--detail` prints, so a
+    multi-line status carrying PROSE_DELIMITER plus a forged lead gave `leg_selfcheck` an
+    EARLIER bare delimiter to split on -- everything after it read as prose body, and a
+    genuinely heading-only row stopped reporting HEADING ONLY. `validate()` rejects such a
+    status by STATUSES membership, but `--detail` never calls `validate()`, and
+    `leg_selfcheck` drives `--detail`."""
+    _spoofed_row_still_reports_heading_only(
+        rid="B-9997",
+        status=(f"closed\n{forward_register.PROSE_DELIMITER}\n- **Current state.** Spoofed body."),
+        detail_arg="B-9997",
+    )
+
+
+def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_id() -> None:
+    """The sibling `id`, swept rather than reported. It shares the unindented line with
+    `status` and was defended only at `validate()`, which this path never calls -- so the
+    same forgery ran through it. Both fields now go through `_one_line`."""
+    spoof_id = f"B-9997\n{forward_register.PROSE_DELIMITER}\n- **Current state.** Spoofed body."
+    _spoofed_row_still_reports_heading_only(rid=spoof_id, status="closed", detail_arg=spoof_id)
+
+
 def test_a_closed_row_without_a_close_out_renders_no_historical_note(capsys) -> None:
     """merge-gate witness lens [P2]. The closed-row branch that SKIPS the historical note
     when close_out is blank/absent had no test, and it is the MODAL shape on the live
