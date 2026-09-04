@@ -6797,6 +6797,30 @@ paragraph's current location.
 Step 5 is operator execution and is not closed by this arc: it needs ≥ 3 real pilot runs at 3–4
 lanes, each landing through the merge door, with the report line recorded in the evidence log.
 
+**Codex r1 (u-he-37): BLOCK, 1 P1 + 5 P2 + 1 P3, all seven accepted.** The P1 was a real
+permission-guard hole, verified empirically before absorbing: the loop-mode allowlist branch is
+not end-anchored and `just` runs every trailing token as a further recipe, so
+`just lanes-pilot p1 main-protection-rollback` would have been auto-approved. Both pilot verbs now
+carry their own end-anchored arity-bounded matcher with seven negative cases (guard suite 406
+pass); the same non-anchoring holds for every parameterless recipe already in that alternation and
+is registered as `B-233` rather than fixed here, since closing it needs a per-recipe arity audit.
+The five P2s each closed a clause that was weaker than C-HE-13 §3's own words: (i) a `merged`
+reservation is not proof of a DOOR landing — `reservations.reconcile()` flips an externally-merged
+PR from `gh` ground truth without ever setting `merge_sha` (C-HE-03 §5), so clause (a) now requires
+the door-recorded sha, whose absence also strips `toctou_keys` of the `merge-<sha12>` key; (ii) §3
+defines a pilot as a run *at 3–4 lanes*, so a one- or two-lane run is not a pilot and cannot count
+toward the ≥ 3 that gate follow-on orchestration; (iii) §3 says no escalation *carries* a
+coordination signature, not that none remains outstanding, so a resolved one still fails the pilot
+and the outstanding count became reported detail; (iv) the C-HE-03 duplicate check now reads MERGED
+history through `arc_metrics._committed_ledger_lines()`, whose tri-state `None` refuses, because
+`committed_arc_ids()` collapses "unreadable" into an empty set that would have read as the legal
+queued-and-not-yet-folded branch and printed PASS; (v) the friction window lost its upper bound,
+which sat at `transitioned_at` and therefore dropped the post-merge rows the door emits while it
+still holds the lease. The P3 mapped every non-`PilotError` store failure to exit 2, since exit 1
+is the documented measured-FAIL code. The class-sibling sweep on (iv) found one more instance in
+the same diff: `finding_record.read_rows()` also returns `[]` for an absent gate log, which would
+have made the BASE_TOCTOU half of clause (a) read clean — closed and witnessed in the same commit.
+
 ---
 
 ### U-HE-38: Cohort report joint on `(concurrent_lanes_at_open, arc_type)`, drift join, correlational header

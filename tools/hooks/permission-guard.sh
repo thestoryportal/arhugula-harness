@@ -867,6 +867,20 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # surplus token can be parsed by `just` as a chained second recipe (the B-215
       # budget-chain class).
       emit_allow
+    # U-HE-37: `just lanes-pilot <run-id>` / `just lanes-pilot-report <run-id>` take exactly
+    # ONE bareword argument, and they ride THIS exact-shape matcher rather than the generic
+    # verb alternation below, which is not end-anchored. Under that alternation
+    # `just lanes-pilot p1 main-protection-rollback` is auto-allowed and `just` parses the
+    # surplus token as a chained SECOND recipe (verified: a bogus trailing token errors with
+    # "justfile does not contain recipe") — the B-215 budget-chain class, which `arc-close`
+    # escapes only because its variadic `*QUEUE_ARGS` swallows every trailing token. Anchoring
+    # to end-of-string bounds the arity to the recipe's own single parameter, so no chain is
+    # expressible. Neither verb is authority-bearing (the gate only REFUSES; the report is a
+    # read-only reducer), so the bound is arity, not identity. The same non-anchoring holds for
+    # every parameterless recipe already in that alternation — registered, not fixed here.
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+lanes-pilot(-report)?[[:space:]]+[A-Za-z0-9._-]+[[:space:]]*$' \
+       && _bash_args_safe "$CMD"; then
+      emit_allow
     # B-230 Task 3: `just arc-close <pr> <sha> <checkpoint> [queue args…]` is the close-out
     # tail ship-pr runs unattended (exit report + arc-metrics queue). It rides the generic
     # `just` verb alternation below like every other allowlisted recipe: the recipe's
@@ -877,7 +891,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     # is outside the token charset — pass the round-log paths explicitly; `--round-logs`
     # is nargs="+" and a literal path is a glob matching itself) and a `--transcript`
     # under `~` or any absolute path outside the worktree (omit it in a loop-mode lane).
-    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit(-all)?|log-check|landing-delta)|lanes-(verify|phase0-check|pilot|pilot-report)|mutation-probe-coverage-check|arc-close)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit(-all)?|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check|arc-close)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi

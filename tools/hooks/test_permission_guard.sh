@@ -179,6 +179,20 @@ for c in 'bash tools/hooks/safe-merge.sh 268 --squash' 'bash tools/hooks/safe-me
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "wrapper hardening: '$c' → not allow" || bad "wrapper over-matched: $c"
 done
+# U-HE-37 pilot verbs: arity-bounded to ONE bareword run id. A surplus token is parsed by
+# `just` as a chained SECOND recipe, so the not-end-anchored generic verb alternation would
+# auto-approve `just lanes-pilot p1 <any-ask-gated-recipe>` (codex r1 P1 on u-he-37).
+for c in 'just lanes-pilot pilot-1 main-protection-rollback' \
+         'just lanes-pilot-report pilot-1 main-protection-apply' \
+         'just lanes-pilot' \
+         'just lanes-pilot-report' \
+         'just lanes-pilot $RUN' \
+         'just lanes-pilot pilot-1; rm x' \
+         'just lanes-pilot pilot-1 && just main-protection-rollback'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "pilot arity: '$c' → not allow" || bad "pilot verb over-matched: $c"
+done
+
 # direct-exec form: the C-HE-07 §1 verbatim matcher makes the `bash` token optional
 # (mirrors _safe_worktree_remove_wrapper) — pinned so the shape is deliberate, not drift.
 OUT=$(run_on "$(pl Bash 'tools/hooks/safe-merge.sh 268' '')")

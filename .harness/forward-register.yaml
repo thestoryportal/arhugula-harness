@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 232
+  total: 233
   open: 1
   design_substrate_gated: 3
-  registered_finding: 74
+  registered_finding: 75
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 2648cd445e4ff05a
+  identity_digest: b1f9af01964b0fef
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11197,3 +11197,30 @@ items:
     root CLAUDE.md fixed point, context-guard lag rule) with a nameable serialization ⊥
     fixed-point tension — council-eligible at that point.'
   heading: '### B-232 · merge-door lease released after content merge; refresh covers N merges *(trigger-gated by B-230 Task 8, 2026-09-04; HELD until the trigger fires)*'
+- id: B-233
+  title: >-
+    permission-guard's generic `just` verb alternation is not end-anchored; a trailing
+    token is parsed by `just` as a chained second recipe
+  pr: 'PR pending (u-he-37)'
+  status: registered_finding
+  summary: 'SURFACED by codex r1 on u-he-37 (2026-09-04) against that arc''s two new
+    recipes, and confirmed EMPIRICALLY to be pre-existing and general: the loop-mode
+    allowlist branch in tools/hooks/permission-guard.sh matches
+    `just[[:space:]]+(check|lint|...)([[:space:]]|$)` with no end anchor, and `just` runs
+    every trailing token as a further recipe (verified — `just lanes-pilot-report aaa
+    zzz-nonexistent` errors with "justfile does not contain recipe", proving the token is
+    parsed as a recipe and not as an argument). So `just lint main-protection-rollback`
+    auto-approves an otherwise ask-gated outward-facing mutation after the allowed recipe
+    runs. `arc-close` escapes the class only because its variadic `*QUEUE_ARGS` swallows
+    every trailing token, and u-he-37''s two pilot verbs now carry their own end-anchored
+    arity-bounded matcher with seven negative guard cases — neither fix generalizes to the
+    other recipes in the alternation.'
+  close_out: 'OPEN — closure = every recipe in the generic alternation is either
+    end-anchored with its own arity bound, variadic like arc-close, or moved to an
+    exact-shape branch, with negative chain cases per recipe in
+    tools/hooks/test_permission_guard.sh. Needs a per-recipe arity audit of the justfile
+    (roughly forty verbs) plus a decision on whether a single end-anchored form can cover
+    the parameterless majority; a blanket anchor would break the parameterized entries
+    already relying on the loose match, so this is an audit, not a one-line fix.'
+  council: 'NO — one guard predicate and its test matrix; no cross-axis tension.'
+  heading: '### B-233 · the generic `just` verb alternation in the permission guard is not end-anchored — a trailing token is parsed by `just` as a chained second recipe *(surfaced by codex r1 on u-he-37, 2026-09-04; REGISTERED)*'

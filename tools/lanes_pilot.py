@@ -54,6 +54,10 @@ COORDINATION_CAUSES = ("merge-door-", "reservation-")
 #: Both raise sites write this producer, with DIFFERENT arc ids — see `toctou_keys`.
 TOCTOU_PRODUCER = "BASE_TOCTOU"
 
+#: C-HE-13 §3 defines a pilot as a run "at 3–4 lanes". A one- or two-lane run is not a
+#: pilot at all, so it cannot count toward the ≥ 3 pilots that gate follow-on orchestration.
+PILOT_LANES = range(3, 5)
+
 
 class PilotError(RuntimeError):
     """A pilot question that could not be answered. Never a FAIL verdict: FAIL is a
@@ -93,16 +97,40 @@ class Stores:
     """The three stores' contents as plain data, so `evaluate` is pure over them and the
     §3 iff-clause is witnessed without mocking a filesystem ([LAW:effects-at-boundaries]).
 
-    `ledger_arc_ids` is a LIST, not a set: the C-HE-03 "at most one row" invariant is a
-    statement about duplicates, and a set cannot express the violation it forbids.
     """
 
     arcs: list[dict]
     gate_rows: list[dict]
     loop_rows: list[dict]
-    ledger_arc_ids: list[str]
-    committed_arc_ids: set[str]
+    #: arc_ids of every row on MERGED history — a LIST, because the C-HE-03 invariant is
+    #: "at most one row for that arc_id ever reaches merged history" and a set cannot
+    #: express the duplicate it forbids. The worktree ledger is NOT this: a topic-branch
+    #: row is not merged history (codex r1 P2).
+    merged_ledger_arc_ids: list[str]
     queued_arc_ids: set[str]
+
+
+def door_landing_violations(arcs: list[dict]) -> list[str]:
+    """Clause (a) in full: `merged` AND landed THROUGH THE MERGE DOOR.
+
+    Reservation state alone is not that proof. `reservations.reconcile()` flips an
+    externally-merged PR to `merged` from `gh` ground truth without ever setting
+    `merge_sha` (C-HE-03 §5), so a lane that bypassed the door — a hand `gh pr merge`,
+    say — would otherwise satisfy the clause the door exists to enforce. The door records
+    `merge_sha` on its own landing path, so its presence is the discriminator; its absence
+    also strips `toctou_keys` of the `merge-<sha12>` key, which is the second reason a
+    door-less landing must not read as clean (codex r1 P2 on this arc).
+    """
+    out = []
+    for a in arcs:
+        if a["state"] != "merged":
+            out.append(f"{a['arc_id']} is {a['state']}, not merged")
+        elif not a.get("merge_sha"):
+            out.append(
+                f"{a['arc_id']} is merged with no door-recorded merge_sha — not proof of "
+                "a merge-door landing (reconcile() flips on gh ground truth alone)"
+            )
+    return out
 
 
 def toctou_keys(arcs: list[dict]) -> set[str]:
@@ -119,8 +147,14 @@ def toctou_keys(arcs: list[dict]) -> set[str]:
     return keys
 
 
-def outstanding_hil(loop_rows: list[dict], arc_ids: set[str]) -> list[dict]:
-    """Clause (c): coordination-caused escalations for these arcs that nothing resolved.
+def coordination_hil(loop_rows: list[dict], arc_ids: set[str]) -> tuple[list[dict], list[dict]]:
+    """Clause (c) as `(every occurrence, the subset still outstanding)`.
+
+    C-HE-13 §3 is written as "no HITL escalation carries a `cause_signature` prefixed
+    `merge-door-` or `reservation-`" — it is about whether one OCCURRED, not about whether
+    one remains open. A pilot that needed operator recovery to clear a coordination
+    escalation still hit coordination pain, which is the whole signal §3 collects, so the
+    verdict keys on the first element; the second is reported detail (codex r1 P2).
 
     Attribution is by ARC ID, taken from the detail's leading token — every merge-door
     escalation and every `defer.sh` row writes `<arc-id> — …`. A timestamp window would
@@ -134,6 +168,7 @@ def outstanding_hil(loop_rows: list[dict], arc_ids: set[str]) -> list[dict]:
     escalations for ONE arc reduce to the later, which is the existing reducer's
     semantics rather than a new rule this module invents.
     """
+    occurred: list[dict] = []
     pending: dict[str, dict] = {}
     for row in loop_rows:
         token = (row["detail"].split() or [""])[0]
@@ -141,9 +176,24 @@ def outstanding_hil(loop_rows: list[dict], arc_ids: set[str]) -> list[dict]:
             continue
         if row["kind"] == "DEFERRED-HIL":
             pending[token] = row
+            if row["cause"].startswith(COORDINATION_CAUSES):
+                occurred.append(row)
         elif row["kind"] == "RESOLVED-HIL":
             pending.pop(token, None)
-    return [r for r in pending.values() if r["cause"].startswith(COORDINATION_CAUSES)]
+    still_open = [r for r in pending.values() if r["cause"].startswith(COORDINATION_CAUSES)]
+    return occurred, still_open
+
+
+def lane_violations(arcs: list[dict]) -> list[str]:
+    """C-HE-13 §3 defines a pilot as a run at 3–4 lanes; a run outside that is not a pilot
+    and must not count toward the ≥ 3 that gate follow-on orchestration (codex r1 P2)."""
+    lanes = {a["lane_id"] for a in arcs}
+    if len(lanes) in PILOT_LANES:
+        return []
+    return [
+        f"{len(lanes)} distinct lane(s) ({', '.join(sorted(lanes))}) — C-HE-13 §3 pilots "
+        f"run at {PILOT_LANES.start}-{PILOT_LANES.stop - 1} lanes"
+    ]
 
 
 def ledger_invariants(stores: Stores) -> list[str]:
@@ -155,14 +205,14 @@ def ledger_invariants(stores: Stores) -> list[str]:
     violations: list[str] = []
     for arc in stores.arcs:
         arc_id = arc["arc_id"]
-        rows = stores.ledger_arc_ids.count(arc_id)
+        rows = stores.merged_ledger_arc_ids.count(arc_id)
         if rows > 1:
             violations.append(
                 f"C-HE-03: {arc_id} has {rows} union-ledger rows; at most one may reach "
                 "merged history"
             )
         queued = arc_id in stores.queued_arc_ids
-        committed = arc_id in stores.committed_arc_ids
+        committed = arc_id in stores.merged_ledger_arc_ids
         if queued and committed:
             violations.append(
                 f"C-HE-04: {arc_id} is BOTH queued and in committed history; the "
@@ -182,18 +232,24 @@ def friction(loop_rows: list[dict], arcs: list[dict]) -> list[str]:
     A REPORTING field only — `pass` is computed from arc-attributed evidence alone, so
     nothing here can flip a verdict. Deliberately wider than the pass/fail set: rows like
     the merge door's lease-yield NOTIFY carry no arc id in their detail, so arc attribution
-    alone would silently drop real friction. The lane-and-window half recovers those, at
-    the cost of possibly including a row from another arc the same lane ran inside the
-    window — an over-count in a reporting field, never in a verdict.
+    alone would silently drop real friction.
+
+    The lane half is bounded BELOW (the earliest `reserved_at`) and deliberately not
+    above. An upper bound at the latest `transitioned_at` is stamped at the merged flip,
+    while the door then holds its lease through post-merge CI and the terminating refresh
+    — so exactly the arcless post-merge NOTIFY rows would be dropped, undercounting the
+    recurring pain that gates follow-on orchestration (codex r1 P2). The residual is the
+    opposite error: a later arc on the same lane can contribute a cause. Over-counting a
+    REPORTING field is recoverable by reading it; under-counting the organic-pain bar is
+    not.
     """
     arc_ids = {a["arc_id"] for a in arcs}
     lanes = {a["lane_id"] for a in arcs}
     t0 = min((a["reserved_at"] for a in arcs), default="")
-    t1 = max((a["transitioned_at"] for a in arcs), default="")
     causes: set[str] = set()
     for row in loop_rows:
         token = (row["detail"].split() or [""])[0]
-        windowed = row["lane"] in lanes and t0 <= row["ts"] <= t1
+        windowed = row["lane"] in lanes and row["ts"] >= t0
         if (token in arc_ids or windowed) and row["cause"] not in ("", "-"):
             causes.add(row["cause"])
     return sorted(causes)
@@ -212,24 +268,28 @@ def evaluate(run_id: str, stores: Stores) -> dict:
         for r in stores.gate_rows
         if r.get("producer") == TOCTOU_PRODUCER and r.get("arc_id") in keys
     ]
-    hil = outstanding_hil(stores.loop_rows, {a["arc_id"] for a in arcs})
+    hil, still_open = coordination_hil(stores.loop_rows, {a["arc_id"] for a in arcs})
+    landing = door_landing_violations(arcs)
+    lanes = lane_violations(arcs)
     violations = ledger_invariants(stores)
-    all_merged = all(a["state"] == "merged" for a in arcs)
     unfolded = sorted(
         a["arc_id"]
         for a in arcs
-        if a["arc_id"] in stores.queued_arc_ids and a["arc_id"] not in stores.committed_arc_ids
+        if a["arc_id"] in stores.queued_arc_ids and a["arc_id"] not in stores.merged_ledger_arc_ids
     )
     return {
         "run_id": run_id,
         "arcs": sorted(a["arc_id"] for a in arcs),
-        "all_merged": all_merged,
+        "lanes": sorted({a["lane_id"] for a in arcs}),
+        "door_landing_violations": landing,
+        "lane_violations": lanes,
         "base_toctou": len(toctou),
         "ledger_invariant_violations": violations,
         "coordination_hil": [f"{r['cause']}: {r['detail'][:80]}" for r in hil],
+        "coordination_hil_still_outstanding": len(still_open),
         "rows_not_yet_folded": unfolded,
         "friction": friction(stores.loop_rows, arcs),
-        "pass": all_merged and not toctou and not violations and not hil,
+        "pass": not (landing or lanes or toctou or violations or hil),
     }
 
 
@@ -312,14 +372,40 @@ def report(run_id: str) -> dict:
         )
     queue_dir = am.QUEUE_DIR
     queued = {p.stem for p in queue_dir.glob("*.json")} if queue_dir.is_dir() else set()
+    # TRI-STATE, deliberately not `am.committed_arc_ids()`: that helper collapses "merged
+    # history is unreadable" into an empty set because holding a capture is the safe
+    # default for the DRAIN. For this report the same empty set would make every arc look
+    # like the legal queued-and-not-yet-folded branch and print PASS, so the unreadable
+    # case must refuse instead (codex r1 P2). `_committed_ledger_lines()` is the
+    # workspace's own discriminated reader — None means unreadable — and reusing it keeps
+    # one authority on where merged history lives.
+    # Class-sibling of the tri-state read below (defect-class-preflight, class 3):
+    # `fr.read_rows()` returns [] for an ABSENT gate log, which would make the BASE_TOCTOU
+    # half of clause (a) read clean when the detections simply could not be looked at.
+    if not fr.GATE_LOG_JSONL.exists():
+        raise PilotError(
+            f"the gate log ({fr.GATE_LOG_JSONL}) does not exist — the BASE_TOCTOU "
+            "first-parent clause cannot be evaluated"
+        )
+    lines = am._committed_ledger_lines()
+    if lines is None:
+        raise PilotError(
+            f"merged history ({am.MERGED_REF}:{am.LEDGER.name}) is unreadable — the "
+            "C-HE-03/04 union-ledger clause cannot be evaluated"
+        )
+    merged_ids = []
+    for line in lines:
+        try:
+            merged_ids.append(json.loads(line).get("arc_id", ""))
+        except json.JSONDecodeError:
+            raise PilotError(f"merged ledger carries an unparseable row: {line[:80]}") from None
     return evaluate(
         run_id,
         Stores(
             arcs=arcs,
             gate_rows=fr.read_rows(),
             loop_rows=_loop_rows(),
-            ledger_arc_ids=[r.get("arc_id", "") for r in am.read_ledger()],
-            committed_arc_ids=am.committed_arc_ids(),
+            merged_ledger_arc_ids=merged_ids,
             queued_arc_ids=queued,
         ),
     )
@@ -362,6 +448,16 @@ def main(argv: list[str] | None = None) -> int:
         rep = report(a.run_id)
     except PilotError as exc:
         print(f"lanes_pilot: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        # Exit 1 is the DOCUMENTED measured-FAIL code, so evidence this tool could not
+        # read must never arrive as one. The store layers raise their own types
+        # (finding_record / arc_metrics / reservations errors, JSON and OS errors), and a
+        # traceback would exit 1 and read as a failed pilot (codex r1 P3). Loud and
+        # typed-as-unanswerable, never swallowed.
+        print(
+            f"lanes_pilot: unreadable pilot evidence: {type(exc).__name__}: {exc}", file=sys.stderr
+        )
         return 2
     print(json.dumps(rep, indent=2))
     print("PILOT", "PASS" if rep["pass"] else "FAIL")
