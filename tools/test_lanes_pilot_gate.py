@@ -315,6 +315,14 @@ def test_friction_keeps_an_arcless_post_merge_row_inside_the_pilots_own_span() -
     assert "merge-door-post-merge:HITL-recoverable:ci" in rep["friction"]
 
 
+def test_friction_ignores_bookkeeping_row_kinds() -> None:
+    """A RESOLVED-HIL carries the cause_signature of the item it SETTLES, so counting it
+    would let the delivery of a pre-pilot deferral read as new pilot friction."""
+    row = _loop_row("RESOLVED-HIL", "merge-door-lease-acquire:x", "u-1 — cleared")
+    rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), loop_rows=[row]))
+    assert rep["friction"] == []
+
+
 def test_friction_excludes_a_later_arcs_causes_on_the_same_lane() -> None:
     """Unbounded above, a persistent lane's LATER arcs would add their causes to this
     pilot's deduplicated set, which can falsely satisfy the recurring bar that authorises
@@ -340,6 +348,33 @@ def test_recurring_definition() -> None:
     assert lp.recurring({"p1": {"a:x:y"}, "p2": {"a:x:y"}, "p3": set()}, severe=set()) == {"a:x:y"}
     assert lp.recurring({"p1": {"b:x:y"}, "p2": set(), "p3": set()}, severe={"b:x:y"}) == {"b:x:y"}
     assert lp.recurring({"p1": {"c"}, "p2": set(), "p3": set()}, severe=set()) == set()
+
+
+def test_the_recurring_bar_needs_at_least_three_pilots() -> None:
+    """§3 defines the bar over >= 3 pilots; two is not a smaller sample of it, and
+    returning a signature from two would authorise follow-on orchestration on evidence
+    the contract does not accept."""
+    with pytest.raises(ValueError, match=">= 3 pilots"):
+        lp.recurring({"p1": {"a"}, "p2": {"a"}}, severe=set())
+
+
+def test_a_severe_signature_must_actually_have_occurred() -> None:
+    """`severe` rates an OCCURRENCE severe, so a signature that appeared in no pilot
+    cannot be one; passing it through would invent friction evidence."""
+    with pytest.raises(ValueError, match="never occurred"):
+        lp.recurring({"p1": set(), "p2": set(), "p3": set()}, severe={"never-seen"})
+
+
+def test_the_pilot_recipe_runs_the_gate_before_start() -> None:
+    """The recipe body is the production wiring: `gate()` unit tests stay green even if
+    `just lanes-pilot` is reduced to `lanes_pilot.py start`, which would admit a pilot
+    with no gate at all (codex r4 P2). Pin the chain itself."""
+    body = (Path(__file__).resolve().parent.parent / "justfile").read_text()
+    recipe = body.split("\nlanes-pilot run_id:", 1)[1].split("\n\n", 1)[0]
+    assert "lanes_pilot.py gate" in recipe
+    assert "lanes_pilot.py start {{run_id}}" in recipe
+    assert recipe.index("gate") < recipe.index("start"), "the gate must precede start"
+    assert "&&" in recipe, "start must be conditional on the gate's exit code"
 
 
 # ── CLI contract: 0 PASS, 1 measured FAIL, 2 unanswerable ─────────────────────

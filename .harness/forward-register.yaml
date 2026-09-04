@@ -11245,8 +11245,18 @@ items:
     (b) every merge_door._notify detail leads with its arc id so ledger rows are attributable
     without a time window at all. (b) alone retires the friction bound and is the smaller
     change; (a) needs a roster surface C-HE-13 does not currently define, so it may route to a
-    spec leg. Interim floor already landed: the report prints `arcs`, `lanes` and a
-    `membership: inferred …` field, so a PASS cannot be read as "every intended lane landed",
-    and both bounds are stated in the module docstring.'
+    spec leg. ALSO carries two door-completion bounds from codex r4 on the same arc, the same
+    shape as the first two — the report sits OUTSIDE the door and cannot verify door completion
+    from the stores alone, which is why four review rounds converged on this family rather than
+    on the code: a non-empty merge_sha does not by itself prove a DOOR landing (merge_door.land
+    accepts a PR already externally MERGED, reconciles the cycle and still writes that sha), and
+    read_lease() maps a present-but-MALFORMED lease file to None, so a corrupted live lease lets
+    the report proceed while post-merge checks are unfinished. Their closure: (c) the door
+    publishes an explicit completion marker the report can read — a released-lease record or a
+    terminal door row — so "landed through the door and finished" stops being inferred from
+    reservation payload, and (d) read_lease() distinguishes absent from unreadable as every
+    other store reader in this family already does. Interim floor already landed: the report
+    prints `arcs`, `lanes` and a `membership: inferred …` field, so a PASS cannot be read as
+    "every intended lane landed", and every bound is stated in the module docstring.'
   council: 'NO — one producer field and one roster surface; no cross-axis tension.'
   heading: '### B-234 · pilot membership is inferred, and arcless loop-ledger rows cannot be attributed to a pilot *(surfaced by codex r3 on u-he-37, 2026-09-04; REGISTERED)*'

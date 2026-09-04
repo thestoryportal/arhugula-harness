@@ -71,6 +71,15 @@ TOCTOU_PRODUCER = "BASE_TOCTOU"
 #: pilot at all, so it cannot count toward the ≥ 3 pilots that gate follow-on orchestration.
 PILOT_LANES = range(3, 5)
 
+#: C-HE-13 §3: the recurring-friction bar is defined over >= 3 pilot runs.
+MIN_PILOTS = 3
+
+#: Only rows that REPORT friction count toward the organic-pain bar. A `RESOLVED-HIL` or a
+#: delivery/bookkeeping row carries the cause_signature of the item it settles, so counting
+#: it would let the DELIVERY of a pre-pilot deferral read as new pilot friction and help
+#: satisfy the recurring bar (codex r4 P2).
+FRICTION_KINDS = ("DEFERRED-HIL", "NOTIFY")
+
 
 class PilotError(RuntimeError):
     """A pilot question that could not be answered. Never a FAIL verdict: FAIL is a
@@ -290,6 +299,8 @@ def friction(loop_rows: list[dict], arcs: list[dict]) -> list[str]:
     causes: set[str] = set()
     for row in loop_rows:
         token = (row["detail"].split() or [""])[0]
+        if row["kind"] not in FRICTION_KINDS:
+            continue
         windowed = row["lane"] in lanes and t0 <= row["ts"] <= t1
         if (token in arc_ids or windowed) and row["cause"] not in ("", "-"):
             causes.add(row["cause"])
@@ -341,12 +352,27 @@ def evaluate(run_id: str, stores: Stores) -> dict:
 def recurring(per_pilot: dict[str, set[str]], *, severe: set[str]) -> set[str]:
     """C-HE-13 §3: a `cause_signature` in >= 2 of the >= 3 pilots, OR one the operator
     rates independently severe. The single-severe clause is load-bearing — at n=3 a
-    40%-incidence source registers twice with P ~ 0.35."""
+    40%-incidence source registers twice with P ~ 0.35.
+
+    Both halves of the sentence are enforced, not just the counting half (codex r4 P3).
+    The bar is defined over >= 3 pilots, so fewer is not a smaller sample of it — it is
+    not the bar, and returning a signature from two pilots would authorise follow-on
+    orchestration on evidence §3 does not accept. And `severe` rates an OCCURRENCE
+    severe: a signature that never appeared in any pilot cannot be one, so an unseen
+    value is refused rather than passed through."""
     counts: dict[str, int] = {}
     for sigs in per_pilot.values():
-        for s in sigs:
-            counts[s] = counts.get(s, 0) + 1
-    return {s for s, n in counts.items() if n >= 2} | set(severe)
+        for sig in sigs:
+            counts[sig] = counts.get(sig, 0) + 1
+    if len(per_pilot) < MIN_PILOTS:
+        raise ValueError(
+            f"C-HE-13 §3 defines the recurring bar over >= {MIN_PILOTS} pilots; got "
+            f"{len(per_pilot)}"
+        )
+    unseen = set(severe) - set(counts)
+    if unseen:
+        raise ValueError(f"severe signatures that never occurred in these pilots: {sorted(unseen)}")
+    return {sig for sig, n in counts.items() if n >= 2} | set(severe)
 
 
 # ── store gathering (the edges) ───────────────────────────────────────────────

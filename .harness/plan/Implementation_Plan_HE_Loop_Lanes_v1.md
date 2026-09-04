@@ -6865,6 +6865,32 @@ rounds landed on that one window heuristic, which is the register-and-hold point
 is producer-side. The report now prints `arcs`, `lanes` and a `membership: inferred …` field so a
 PASS cannot be read as "every intended lane landed".
 
+**Codex r4: BLOCK, 5 P2 + 1 P3 — four closed, two registered, and the loop STOPS here.** One was
+a REGRESSION r3 introduced and had to be fixed: the structured-vs-legacy discriminator matched any
+`key=value` run, so a legacy free-text detail that is one token (`status=done`) parsed as a
+truncated structured row — and since the report refuses on those, a single historical row would
+have made every future pilot report permanently unanswerable. The discriminator is now the
+producer's exact shape, `lane=<x>;cause=<y>`, read from `_loop_structured_col`
+(`tools/hooks/loop_lib.sh:151-166`) rather than guessed. Three more were closed: `recurring()`
+enforced only the counting half of §3, so it returned a signature from two pilots and passed an
+unseen `severe` value straight through — it now refuses both; friction counted every row kind, so
+a `RESOLVED-HIL` contributed the cause_signature of the item it SETTLES and the delivery of a
+pre-pilot deferral could read as new pilot friction; and no test executed the recipe body, so
+reducing `just lanes-pilot` to `lanes_pilot.py start` would have left every unit test green while
+removing the gate entirely — the chain is now pinned. The last two are the register-and-hold exit:
+a non-empty `merge_sha` still does not prove a DOOR landing (`merge_door.land` accepts a PR
+already externally MERGED, reconciles it and writes the sha), and `read_lease()` maps a
+present-but-malformed lease to None. Both are the same family as r3's two — the report sits
+OUTSIDE the door and cannot verify door completion from the stores alone — and four consecutive
+rounds converging on that family is the signal to stop hardening a consumer heuristic and name the
+producer change instead. They join `B-234`, whose closure now also names an explicit door
+completion marker and an absent-vs-unreadable lease read.
+
+**Residual class recorded (review trail closed at r4).** Rounds 1-4 produced 24 findings, 22
+accepted and closed in-arc and 2 registered; the yield did not front-load, which is the documented
+shape for an INVENTING arc. Further findings against this report's door-completion inferences are
+expected and belong to `B-234`, not to another round of consumer-side bounds.
+
 ---
 
 ### U-HE-38: Cohort report joint on `(concurrent_lanes_at_open, arc_type)`, drift join, correlational header

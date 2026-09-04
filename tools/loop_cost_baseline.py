@@ -78,8 +78,14 @@ from pathlib import Path
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
 TRIGGER_WINDOW = timedelta(days=30)  # B-232: > TRIGGER_THRESHOLD yield rows in any window
 TRIGGER_THRESHOLD = 5  # B-232 trigger: lease_held_yields_30d_max > 5 opens the spec leg
-#: A structured lane;cause column: only `key=value` pairs joined by `;`, no whitespace.
-_STRUCTURED_COL = re.compile(r"\w+=[^;\s]*(?:;\w+=[^;\s]*)*")
+#: The structured column EXACTLY as `loop_log_structured` writes it: `lane=<x>;cause=<y>`,
+#: both keys, in that order, with `;` and whitespace stripped from the values
+#: (`_loop_structured_col`, tools/hooks/loop_lib.sh:151-166). Matching any `key=value`
+#: run instead misreads a LEGACY free-text detail that happens to be one token — a
+#: three-column row ending `status=done` — as a truncated structured row, and since the
+#: pilot report refuses on those, ONE such historical row would make every future report
+#: permanently unanswerable (codex r4 P2, on the r3 fix).
+_STRUCTURED_COL = re.compile(r"lane=[^;\s]*;cause=[^;\s]*")
 LEASE_PRODUCER = "merge-door-lease-acquire"
 CODEX_PRODUCER = "codex_review_wrapper"
 GEMINI_PRODUCER = "gemini_review_wrapper"
