@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `6d38b573431c` |
+| `workspace_state_hash` | `01d224ec1d42` |
 | `last_refreshed` | 2026-09-04T00:00:00Z |
-| `git_head` | `f5b8f6c6` —  |
+| `git_head` | `20f3a3e6` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1513).** B-230 Task 6 Steps 1–5 landed at #1513 — `tools/concurrency_surface.py` (`touches_concurrency` over the diff's added and removed lines; one pattern tuple naming every construct the merge-gate Reviewer 1 prompt lists plus path-TOCTOU, module-global and GitHub Actions `concurrency:` / `cancel-in-progress:` shapes; `EmptyDiff` → exit 2 `run the lens`; fail-open on unnamed surfaces by construction) with its parity-wired test, and the Step 5 measurement in plan §0 / §0.1: over all 79 concurrency-lens rounds (digest-verified against each row's `diff_digest`) 74 fire / 5 would skip, every round carrying a concurrency finding fired, the `.harness/**`-excluded variant reads 70 / 9 with one measured miss (pr-1416, unadjudicated P1), and the lens's "88 findings" is 88 rows (21 `finding` rows, last 2026-08-27). Raise the ONE batched AskUserQuestion the plan schedules: `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 6 Step 6 (open the C-HE-34 spec leg for a detector-gated concurrency lens with the typed skip row, saving one subagent in 5 of 79 gate rounds against the stated fail-open bound — or keep three lenses), Task 7 (`--delete-branch` in the fixed merge string, recommend no), and Task 1 Step 8 — carrying the §0 rows owed to the plan (the #1513 content-merge and refresh-merge `main` run wall clocks with skipped-job counts, a `tools/loop_cost_baseline.py` re-run), `just arc-metrics drain`, and `just roadmap-status --archive-superseded`; then Task 8 Steps 1–3, then U-HE-37.
+**Current next action (post-#1515).** B-230 CLOSED at #1515 — Task 8 Steps 1–3 landed: `wait_for_door` appends one `lease_held_yield` NOTIFY row per contention event to the shared loop ledger, `B-232` (held, trigger-gated: `lease_held_yields_30d_max > 5`) carries the lease-scope spec leg, `tools/loop_cost_baseline.py --loop-status` reports the rolling 30-day maximum, and `tools/roadmap-audit/session-start.sh` evaluates the trigger every session through `tools/lease_yield_trigger.py` (`[b-232] lease_held_yields_30d_max=<n>/5` in the banner; codex r1 3 P2 — 2 absorbed, 1 rejected with grounds); the operator's 2026-09-03 answers are recorded in the plan (Task 6 Step 6 keep three lenses; Task 7 no `--delete-branch`; Task 1 Step 8 held) and the plan §0 carries the #1513/#1514 run rows and the `462615452` baseline. The next implementable unit is **U-HE-37** (S6 pilot gate — `just lanes-pilot`, `lanes-pilot-report`, the O1 recipe and the pilot-runner unit, `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:6624`), carrying the §0 rows owed to the plan (the #1515 content-merge and refresh-merge `main` run wall clocks with skipped-job counts, a `tools/loop_cost_baseline.py --loop-status` re-run), `just arc-metrics drain`, and `just roadmap-status --archive-superseded`; then U-HE-38.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1515 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1513 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1511 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1509 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1507 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1505 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
