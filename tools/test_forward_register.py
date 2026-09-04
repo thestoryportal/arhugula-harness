@@ -499,6 +499,16 @@ def test_a_closed_rows_close_out_is_not_declared_historical(capsys) -> None:
     assert "not a current instruction" not in header, header
     assert "HISTORICAL" not in header, header
 
+    # The PREAMBLE is not the payload. Asserting only the wrapper left this test green
+    # when `_emit_indented(close_out, ...)` was deleted -- `--detail B-125` silently
+    # dropped the live OWED obligation while all 160 tests passed (codex r11 [P2],
+    # confirmed by mutation before fixing). The BODY must be witnessed too, both by a
+    # fragment derived from the row (so it cannot drift) and by the semantic phrase that
+    # is the whole reason this row is the fixture.
+    assert "RIDER OWNER" in header, "B-125's live obligation must reach the header"
+    first_line = row["close_out"].splitlines()[0]
+    assert first_line[:80] in header, header[:400]
+
 
 @pytest.mark.parametrize("status", ["closed", "held"])
 @pytest.mark.parametrize("bad", [False, 0, [], {}, 1, "   "])
