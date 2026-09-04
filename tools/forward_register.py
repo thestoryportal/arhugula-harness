@@ -244,6 +244,22 @@ def validate(data: dict[str, Any]) -> list[str]:
             elif heading_id != rid:
                 violations.append(f"{rid}: heading names id {heading_id!r}, not the row's own id")
 
+        # A field that is PRESENT must be well-formed whatever the status. `close_out` and
+        # `council` are only REQUIRED on open-class rows, so nothing type-checked them on a
+        # closed or held row: `close_out: false` passed `--check` and then rendered as
+        # "(none — not required...)", collapsing INVALID into ABSENT (codex r9 [P2]).
+        # A field that is PRESENT must be well-formed whatever the status. `close_out` and
+        # `council` are only REQUIRED on open-class rows, so nothing type-checked them on a
+        # closed or held row: `close_out: false` passed `--check` and then rendered as
+        # "(none — not required...)", collapsing INVALID into ABSENT (codex r9 [P2]).
+        for optional in ("close_out", "council"):
+            value = r.get(optional)
+            if value is not None and not _nonblank_text(value):
+                violations.append(
+                    f"{rid}: '{optional}' is present but is not non-blank text "
+                    f"({type(value).__name__}) — absent is legal here, malformed is not"
+                )
+
         if status == "closed":
             if not _valid_pr(r.get("pr")):
                 violations.append(f"{rid}: closed item needs a 'pr' deliverable citation")
@@ -429,6 +445,10 @@ def main(argv: list[str] | None = None) -> int:
                     "the prose block below, which records what actually landed."
                 )
                 _emit_indented(close_out, indent="    ")
+            elif close_out is not None:
+                _emit_indented(
+                    "close_out: (PRESENT but not text — malformed; `--check` reports it)"
+                )
             else:
                 # The never-silence invariant is UNIVERSAL, not scoped to open-class rows.
                 # The closed branch previously emitted nothing here, so a reader saw the
@@ -440,6 +460,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"close_out (CANONICAL — {args.ledger}):")
             if _nonblank_text(close_out):
                 _emit_indented(close_out)
+            elif close_out is not None:
+                # Distinct from both "absent" and "absent but required": the value EXISTS
+                # and is malformed, and saying "(none)" for it would be a lie (codex r9).
+                _emit_indented("(PRESENT but not text — malformed; `--check` reports it)")
             elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
                 # Not the same fact as "not required here", and never rendered as silence:
                 # an absent-but-required close_out is a `--check` violation, not a shrug.

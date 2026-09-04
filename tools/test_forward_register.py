@@ -257,7 +257,9 @@ def test_a_whitespace_only_close_out_never_renders_as_silence(capsys) -> None:
     stated = [ln for ln in header.splitlines() if ln.startswith("  ")]
     # An explicit statement, never an empty gap between the label and the delimiter.
     assert stated, header
-    assert any("(none" in ln or "(MISSING" in ln for ln in stated), header
+    # Since codex r9 the message is sharper than "(MISSING": a blank string is PRESENT and
+    # malformed, which is a different fact from absent, and the renderer now says so.
+    assert any("PRESENT but not text" in ln for ln in stated), header
 
 
 @pytest.mark.parametrize("bad", [False, True, 0, 1, 1519, [], {}, 1.5, "", "   ", None])
@@ -496,6 +498,59 @@ def test_a_closed_rows_close_out_is_not_declared_historical(capsys) -> None:
     assert "NOT reconciled when a row closes" in header, header
     assert "not a current instruction" not in header, header
     assert "HISTORICAL" not in header, header
+
+
+@pytest.mark.parametrize("status", ["closed", "held"])
+@pytest.mark.parametrize("bad", [False, 0, [], {}, 1, "   "])
+def test_a_present_but_malformed_close_out_is_rejected_at_any_status(
+    status: str, bad: object
+) -> None:
+    """codex r9 [P2]. `close_out` is only REQUIRED on open-class rows, so nothing
+    type-checked it on a closed or held row — `close_out: false` passed `--check`.
+    Absent is legal where the field is not required; PRESENT-but-malformed never is."""
+    data = copy.deepcopy(_data())
+    row = next(r for r in data["items"] if r["status"] == status)
+    row["close_out"] = bad
+    violations = forward_register.validate(data)
+    assert any("is present but is not non-blank text" in v for v in violations), (
+        status,
+        bad,
+        violations,
+    )
+
+
+def test_a_malformed_close_out_renders_as_malformed_not_as_absent(capsys) -> None:
+    """The renderer half of the same defect: `--detail` can be pointed at a file `--check`
+    would reject, and reporting a malformed value as "(none)" is a lie in either
+    direction. Malformed, absent, and absent-but-required are three different facts."""
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9996",
+                "title": "t",
+                "summary": "s",
+                "status": "closed",
+                "pr": "#1",
+                "close_out": False,
+                "heading": "### B-9996 · malformed close_out",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        pp.write_text(
+            "### B-9996 · malformed close_out\n\n- **What it is.** Body.\n", encoding="utf-8"
+        )
+        forward_register.main(["--detail", "B-9996", "--ledger", str(lp), "--prose", str(pp)])
+        header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+
+    assert "PRESENT but not text" in header, header
+    assert "(none —" not in header, header
 
 
 # --- negative tests: each gate failure-class is caught ----------------------
