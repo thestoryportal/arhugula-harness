@@ -3638,19 +3638,36 @@ def test_a_refuted_drift_finding_is_not_a_collision(tmp_path: Path, monkeypatch,
     assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
 
 
-def test_drift_detection_is_matched_under_either_carrier(tmp_path: Path, monkeypatch, capsys):
-    """The durable row's shape is unwitnessed (no emitter), so a single-field
-    predicate could silently miss the real one and report a confident zero forever.
-    Both carriers count; a row carrying the name in NEITHER field does not."""
-    for carrier in ("producer", "finding_type"):
-        out = _run_summary(
-            tmp_path,
-            monkeypatch,
-            capsys,
-            _joint_rows(),
-            [_drift_row("2-applying-0", "lane-2", carrier=carrier)],
-        )
-        assert "N=2: 1/1" in out, f"the {carrier} carrier must count"
+# mutation-probe: widen the predicate back to `DRIFT_DETECTION in (finding_type,
+# producer)` -> the finding_type-only row below is counted and this test goes red.
+def test_drift_detection_binds_to_producer_only(tmp_path: Path, monkeypatch, capsys):
+    """`producer` names the detection site; `finding_type` carries the closed lifecycle
+    vocabulary and is an unconstrained string. Binding to producer alone is what stops
+    an unrelated producer's row, whose classification happens to carry this name, being
+    counted as a refresh collision. B-237 records that obligation for the emitter."""
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [_drift_row("2-applying-0", "lane-2")],
+    )
+    assert "N=2: 1/1" in out, "the producer carrier counts"
+
+    # The name in `finding_type` instead: NOT a detection, however suggestive.
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            _drift_row("2-applying-0", "lane-2")
+            | {"producer": "some-other-checker", "finding_type": "ROADMAP_STATUS_DRIFT"}
+        ],
+    )
+    assert "N=2: --/0 of 6" in out, "finding_type is not the carrier"
+    assert "0 drift-class row(s) of any kind observed" in out
+
     # Negative control: the name only in free text is not a detection.
     out = _run_summary(
         tmp_path,

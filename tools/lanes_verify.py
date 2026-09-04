@@ -418,12 +418,21 @@ MANIFEST: list[Row] = [
     # line DELETION expresses them — every line in the drift block is load-bearing
     # for the next, so the probe tool's comment-out range would raise NameError and
     # be refused as indeterminate rather than run. Both were performed manually and
-    # are recorded on the U-HE-38 commits: (a) narrowing the drift predicate to a
-    # single carrier field turns this row and the unjoinable-row sibling red;
-    # (b) counting raw gate rows instead of reducing by finding_id and dropping
-    # `rejected` turns test_drift_incidence_counts_findings_not_log_rows and
-    # test_a_refuted_drift_finding_is_not_a_collision red. All go green again on
-    # restore. Same disposition, and the same reason, as the WR-14 row below
+    # are recorded on the U-HE-38 commits, each naming the test it actually kills:
+    # (a) counting raw gate rows instead of reducing by finding_id and dropping
+    # `rejected` -> test_drift_incidence_counts_findings_not_log_rows and
+    # test_a_refuted_drift_finding_is_not_a_collision; (b) widening the drift
+    # predicate back to either carrier -> test_drift_detection_binds_to_producer_only;
+    # (c) dropping the siblings+1 conversion -> test_cohort_split_null_safe,
+    # test_lane_cohort_medians_exclude_lower_bound_rows and
+    # test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null; (d) a
+    # finding-count numerator -> test_two_collisions_on_one_arc_are_one_affected_arc;
+    # (e) a cohort-size denominator -> test_an_unobserved_arc_contributes_no_exposure.
+    # All go green again on restore. (An earlier revision of this note claimed a probe
+    # against a test that could not have failed it — the either-carrier fixture set the
+    # name in `producer` under both branches — which is why each probe now names the
+    # tests it was actually observed to turn red.)
+    # Same disposition, and the same reason, as the WR-14 row below
     # (probe outside the tool's expressible set; manual probe recorded on the
     # landing commit).
     # The claim is SPLIT at §1+§3 on purpose, and §2 is deliberately not claimed.
