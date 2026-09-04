@@ -627,7 +627,7 @@ def test_pilot_arcs_returns_empty_for_an_absent_store(monkeypatch, tmp_path) -> 
     assert lp._pilot_arcs("pilot-1") == []
 
 
-def _wire_report(monkeypatch, tmp_path, arcs, *, merged, queued_names):
+def _wire_report(monkeypatch, tmp_path, arcs, *, merged, queued_names, gate_rows=(), loop_rows=()):
     """Wire report()'s four store seams to real on-disk content, leaving the queued-arc
     loop, the Stores assembly and evaluate() to run for real."""
     import arc_metrics as am
@@ -641,11 +641,15 @@ def _wire_report(monkeypatch, tmp_path, arcs, *, merged, queued_names):
     gate_log = tmp_path / "gate-log.jsonl"
     gate_log.write_text("")
     monkeypatch.setattr(lp, "_pilot_arcs", lambda run_id: arcs)
-    monkeypatch.setattr(lp, "_loop_rows", lambda: [])
+    # NON-EMPTY on purpose: stubbing these to `[]` returns exactly what a mutation
+    # hardcoding `Stores(gate_rows=[], loop_rows=[])` produces, so the seams would be
+    # indistinguishable and clause (a)'s BASE_TOCTOU check and clause (c)'s
+    # coordination-HIL check could go permanently vacuous with the suite green.
+    monkeypatch.setattr(lp, "_loop_rows", lambda: list(loop_rows))
     monkeypatch.setattr(lp, "_merged_ledger_arc_ids", lambda: list(merged))
     monkeypatch.setattr(md, "read_lease", lambda: None)
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", gate_log)
-    monkeypatch.setattr(fr, "read_rows", lambda: [])
+    monkeypatch.setattr(fr, "read_rows", lambda: list(gate_rows))
     monkeypatch.setattr(am, "QUEUE_DIR", queue)
 
 
@@ -656,13 +660,49 @@ def test_report_success_path_returns_a_real_pass(monkeypatch, tmp_path) -> None:
     `<arc>.json` (free) and `<arc>.taken` (claimed mid-drain)."""
     arcs = _pilot_arcs()
     _wire_report(
-        monkeypatch, tmp_path, arcs, merged=["u-3"], queued_names=["u-1.json", "u-2.taken"]
+        monkeypatch,
+        tmp_path,
+        arcs,
+        merged=["u-3"],
+        queued_names=["u-1.json", "u-2.taken"],
+        gate_rows=[{"producer": "BASE_TOCTOU", "arc_id": "someone-else"}],
+        loop_rows=[_loop_row("NOTIFY", "env-cause", "unattributed", lane="L-u-1")],
     )
     rep = lp.report("pilot-1")
+    assert rep["friction"] == ["env-cause"], "the loop ledger must reach the report"
     assert rep["pass"] is True
     assert rep["arcs"] == ["u-1", "u-2", "u-3"]
     assert rep["rows_not_yet_folded"] == ["u-1", "u-2"], "both queue shapes recognised"
     assert rep["ledger_invariant_violations"] == []
+
+
+def test_report_reads_the_gate_log_for_base_toctou(monkeypatch, tmp_path) -> None:
+    """A BASE_TOCTOU row naming a PILOT arc must fail through the real `report()` path —
+    the witness that `gate_rows=fr.read_rows()` is genuinely consulted, not hardcoded."""
+    _wire_report(
+        monkeypatch,
+        tmp_path,
+        _pilot_arcs(),
+        merged=["u-1", "u-2", "u-3"],
+        queued_names=[],
+        gate_rows=[{"producer": "BASE_TOCTOU", "arc_id": "u-2"}],
+    )
+    rep = lp.report("pilot-1")
+    assert rep["base_toctou"] == 1 and rep["pass"] is False
+
+
+def test_report_reads_the_loop_ledger_for_coordination_hil(monkeypatch, tmp_path) -> None:
+    """Clause (c) through the real `report()` path, for the same reason."""
+    _wire_report(
+        monkeypatch,
+        tmp_path,
+        _pilot_arcs(),
+        merged=["u-1", "u-2", "u-3"],
+        queued_names=[],
+        loop_rows=[_loop_row("DEFERRED-HIL", "merge-door-lease-acquire:x", "u-1 — blocked")],
+    )
+    rep = lp.report("pilot-1")
+    assert len(rep["coordination_hil"]) == 1 and rep["pass"] is False
 
 
 def test_cli_report_exits_0_on_pass_and_1_on_fail(monkeypatch, tmp_path, capsys) -> None:
@@ -683,10 +723,21 @@ def test_phase0_results_runs_the_real_manifest_rows(monkeypatch) -> None:
     """Its body is otherwise never executed: collapsing it to `return []` would make the
     real CLI gate vacuously GREEN, since phase0_verdict([]) is 0."""
     row = _row("C-HE-06", "pytest:x")
+    seen = []
+
+    def fake_run_row(r):
+        seen.append(r.artifact)
+        return lv.Result(r, "fail", "ran for real")
+
     monkeypatch.setattr(lv, "phase0_rows", lambda: [row])
-    monkeypatch.setattr(lv, "run_row", lambda r: lv.Result(r, "pass"))
+    monkeypatch.setattr(lv, "run_row", fake_run_row)
     got = lp.phase0_results()
-    assert [r.row.contract for r in got] == ["C-HE-06"]
+    # The stub records the call and returns a status a bypass would not invent, so a
+    # mutation skipping run_row and hardcoding a passing Result is distinguishable.
+    assert seen == ["pytest:x"], "each manifest row must be run for real"
+    assert [(r.row.contract, r.status, r.reason) for r in got] == [
+        ("C-HE-06", "fail", "ran for real")
+    ]
 
 
 def test_loop_rows_refuses_an_empty_ledger_path(monkeypatch) -> None:
@@ -712,9 +763,10 @@ def test_merged_ledger_read_is_empty_for_a_ledger_outside_the_repo(monkeypatch, 
 
 
 def test_friction_ignores_a_row_with_no_cause() -> None:
-    row = _loop_row("NOTIFY", "-", "u-1 — placeholder cause")
-    rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), loop_rows=[row]))
-    assert rep["friction"] == []
+    for empty in ("-", ""):
+        row = _loop_row("NOTIFY", empty, "u-1 — placeholder cause")
+        rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), loop_rows=[row]))
+        assert rep["friction"] == [], f"cause={empty!r} must not register as friction"
 
 
 def test_cli_needs_a_run_id() -> None:
