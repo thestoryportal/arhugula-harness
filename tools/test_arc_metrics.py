@@ -1642,8 +1642,10 @@ def test_cohort_split_null_safe(monkeypatch, tmp_path: Path, capsys):
     monkeypatch.setattr(am, "LEDGER", ledger)
     assert am.summary(argparse.Namespace()) == 0
     out = capsys.readouterr().out
-    assert 'LANES [concurrent_lanes_at_open="absent"] (n=1)' in out, "key absent"
-    assert "LANES [concurrent_lanes_at_open=null] (n=1)" in out, "explicit null"
+    # C-HE-25: a row lacking the KEY predates the field and IS the N=1 baseline
+    # (C-HE-28 §3 places 18 such rows at N=1). Only an explicit null is an unknown.
+    assert "LANES [concurrent_lanes_at_open=1] (n=1)" in out, "absent key -> N=1 baseline"
+    assert "LANES [concurrent_lanes_at_open=null] (n=1)" in out, "explicit null stays unknown"
     assert "LANES [concurrent_lanes_at_open=2] (n=1)" in out
     assert "concurrent_lanes_at_open=None" not in out
 
@@ -3512,11 +3514,12 @@ def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path: Path, monkeyp
     assert '-- JOINT (N=2, "applying") (n=3) arc span 2.0m (n=3, 2.0-2.0)' in out
     assert '-- JOINT (N=1, "inventing") (n=3) arc span 1.0m (n=3, 1.0-1.0)' in out
     assert '-- JOINT (N=4, "applying") (n=3) arc span 4.0m (n=3, 4.0-4.0)' in out
-    assert "drift incidence by concurrent_lanes_at_open: N=1: --/6, N=2: --/6, N=4: 1/6" in out, (
-        "measurability is per cohort: only N=4 had a drift-class row attributed to it"
+    assert "N=1: --/0 of 6, N=2: --/0 of 6, N=4: 1/1" in out, (
+        "per cohort, and both sides are ARCS: 1 affected of 1 observed at N=4; the other "
+        "cohorts had no arc observed at all, so they carry no denominator to divide"
     )
     assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
-    assert "1 of 3 cohort(s) had one" in out, "per-cohort measurability is reported"
+    assert "1 of 3 cohort(s) had an arc" in out, "per-cohort measurability is reported"
 
 
 def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
@@ -3571,23 +3574,37 @@ def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, mon
     # numerator would read N=2: 1/6. It is excluded, so N=2 stays 0: a cell built from
     # rows whose two attributions contradict each other measures nothing.
     # N=2's only row was lane-mismatched, so it is unattributable: that cohort was
-    # never validly looked at and reads `--`, not a measured 0.
-    assert "N=1: 1/7, N=2: --/6, N=4: 1/6" in out
+    # never validly looked at and reads `--`, not a measured 0. The legacy row sits at
+    # N=1 (absent key = C-HE-25 baseline) and was observed, so N=1 has a denominator.
+    assert "N=1: 1/1, N=2: --/0 of 6, N=4: 1/1" in out
 
 
 def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
     tmp_path: Path, monkeypatch, capsys
 ):
-    """Historical rows carry neither field. They group under `null` -- a key, not
-    an error -- rendered as the JSON literal so it can never read as a cohort
-    named "None", and sorted after every labelled cell."""
+    """An unlabelled component groups under `null` -- a key, not an error -- rendered
+    as the JSON literal so it can never read as a cohort named "None", and sorted
+    after every labelled cell. Both axes are exercised: an unlabelled `arc_type_open`,
+    and an explicitly-null lane count (a row lacking the lane KEY is the N=1 baseline
+    instead, per C-HE-25, which the predating-row test pins)."""
     rows = _joint_rows()[:3]
     rows.append({"arc_id": "old-0", "levers_active": [], "review_rounds": 2})
+    rows.append(
+        {
+            "arc_id": "unknown-0",
+            "levers_active": [],
+            "review_rounds": 2,
+            "concurrent_lanes_at_open": None,
+            "arc_type_open": None,
+        }
+    )
     out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
-    assert '-- JOINT (N="absent", null) (n=1) arc span --' in out
-    assert "None" not in out.split("-- JOINT")[1]
-    assert out.index('(N=1, "inventing")') < out.index('(N="absent", null)')
-    assert 'N=1: --/3, N="absent": --/1' in out
+    joint = out.split("-- JOINT", 1)[1]
+    assert "-- JOINT (N=1, null) (n=1) arc span --" in out, "unlabelled arc_type renders null"
+    assert "-- JOINT (N=null, null) (n=1) arc span --" in out, "explicit null lane count"
+    assert "None" not in joint, "never a cohort named None"
+    assert out.index('(N=1, "inventing")') < out.index("(N=null, null)"), "labelled cells first"
+    assert "N=1: --/0 of 4, N=null: --/0 of 1" in out
 
 
 # mutation-probe: count `gate_rows` directly instead of reducing by finding_id ->
@@ -3600,7 +3617,7 @@ def test_drift_incidence_counts_findings_not_log_rows(tmp_path: Path, monkeypatc
     finding = _drift_row("4-inventing-0", "lane-4")
     adjudication = finding | {"record_kind": "finding_adjudication", "disposition": "accepted"}
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, adjudication])
-    assert "N=4: 1/6" in out, "one finding, two rows -> incidence 1"
+    assert "N=4: 1/1" in out, "one finding, two rows -> one affected arc of one observed"
     assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
     assert "among 2 gate" in out, "the row count stays visible beside the finding count"
 
@@ -3612,7 +3629,7 @@ def test_a_refuted_drift_finding_is_not_a_collision(tmp_path: Path, monkeypatch,
     finding = _drift_row("4-inventing-0", "lane-4")
     refutation = finding | {"record_kind": "finding_adjudication", "disposition": "rejected"}
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, refutation])
-    assert "N=4: 0/6" in out
+    assert "N=4: 0/1" in out, "the arc was observed, so 0 is a measurement here"
     assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
 
 
@@ -3628,7 +3645,7 @@ def test_drift_detection_is_matched_under_either_carrier(tmp_path: Path, monkeyp
             _joint_rows(),
             [_drift_row("2-applying-0", "lane-2", carrier=carrier)],
         )
-        assert "N=2: 1/6" in out, f"the {carrier} carrier must count"
+        assert "N=2: 1/1" in out, f"the {carrier} carrier must count"
     # Negative control: the name only in free text is not a detection.
     out = _run_summary(
         tmp_path,
@@ -3650,7 +3667,7 @@ def test_drift_detection_is_matched_under_either_carrier(tmp_path: Path, monkeyp
         ],
     )
     # Sharper than 0/6: the row is not even OBSERVED, so the cell is unavailable.
-    assert "N=2: --/6" in out and "0 drift-class row(s) of any kind observed" in out
+    assert "N=2: --/0 of 6" in out and "0 drift-class row(s) of any kind observed" in out
 
 
 # mutation-probe: drop the `if measurable` guard and always render hits[n] -> the
@@ -3660,7 +3677,7 @@ def test_an_unobserved_numerator_renders_unavailable_not_zero(tmp_path: Path, mo
     denominator is real and stays visible; the numerator is `--`. A prose caveat
     cannot stop a parser or a truncated paste from reading `0/6` as a rate."""
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [])
-    assert "N=1: --/6, N=2: --/6, N=4: --/6" in out
+    assert "N=1: --/0 of 6, N=2: --/0 of 6, N=4: --/0 of 6" in out
     assert "0/6" not in out, "an unwired source must never render a digit numerator"
     assert "never looked at" in out
 
@@ -3676,9 +3693,10 @@ def test_a_no_finding_marker_makes_a_zero_legitimate(tmp_path: Path, monkeypatch
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [marker])
     # Per cohort: the marker names an N=4 arc, so ONLY N=4 becomes countable. The
     # other cohorts were not looked at and must not inherit its zero.
-    assert "N=1: --/6, N=2: --/6, N=4: 0/6" in out
+    assert "N=1: --/0 of 6, N=2: --/0 of 6, N=4: 0/1" in out
     assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out, "a marker is not an incidence"
     assert "1 drift-class row(s) of any kind observed" in out
+    assert "1 of 3 cohort(s) had an arc" in out
 
 
 # mutation-probe: replace lanes_at_open() with r.get("concurrent_lanes_at_open") ->
@@ -3687,11 +3705,11 @@ def test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null(
     tmp_path: Path, monkeypatch, capsys
 ):
     """Two different facts that `dict.get()` renders identically. A row whose KEY IS
-    ABSENT predates the field (C-HE-25's implicit-N=1-baseline population); a row
+    ABSENT predates the field and IS C-HE-25's implicit N=1 baseline — C-HE-28 §3
+    places 18 such rows at `(N=1, ...)` at a HEAD where no row carried the field. A row
     CARRYING an explicit null has the field and its best-effort C-HE-03 §7 sensor
-    recorded nothing. Pooling them puts two populations under one median — the error
-    this file already refuses between arc spans and PR-open windows. Neither is
-    imputed to 1: the split reports them, it does not guess at them."""
+    recorded nothing: an unknown, not a baseline. Pooling them puts a known cohort into
+    an unknown one."""
     rows = [
         # predates the field entirely
         {
@@ -3714,11 +3732,44 @@ def test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null(
         },
     ]
     out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
-    assert '-- JOINT (N="absent", null) (n=1) arc span 1.0m' in out
-    assert "-- JOINT (N=null, null) (n=1) arc span 10.0m" in out
-    assert 'N="absent": --/1, N=null: --/1' in out
+    assert "-- JOINT (N=1, null) (n=1) arc span 1.0m" in out, "absent key -> N=1 baseline"
+    assert "-- JOINT (N=null, null) (n=1) arc span 10.0m" in out, "explicit null is unknown"
+    assert "N=1: --/0 of 1, N=null: --/0 of 1" in out
     joint_lines = [ln for ln in out.splitlines() if ln.startswith("-- JOINT")]
     assert len(joint_lines) == 2, "one cell each, never one pooled cell of two"
     assert not any("(n=2)" in ln for ln in joint_lines), (
         "the two populations must never share a cohort"
     )
+
+
+# mutation-probe: count findings instead of distinct affected arcs -> N=4 reads 2/1,
+# a proportion greater than one, and this test goes red.
+def test_two_collisions_on_one_arc_are_one_affected_arc(tmp_path: Path, monkeypatch, capsys):
+    """Reducing by finding_id removes duplicate ROWS for one finding; it does nothing
+    about two DIFFERENT findings on the same arc, which carry distinct finding_ids and
+    would each increment a finding-based numerator. The arc appears once in the
+    denominator, so a finding count can exceed it — `2/1` is not a thing incidence can
+    be. Both sides of the ratio are distinct arcs."""
+    first = _drift_row("4-inventing-0", "lane-4")
+    second = _drift_row("4-inventing-0", "lane-4") | {
+        "finding_id": "codex_context_guard:head:4-inventing-0:2"
+    }
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [first, second])
+    assert "N=4: 1/1" in out, "one arc affected, however many times it collided"
+    assert "2/1" not in out, "a proportion above one is unrepresentable, not merely unlikely"
+    assert "2 distinct ROADMAP_STATUS_DRIFT finding(s)" in out, "both findings are still seen"
+
+
+def test_an_unobserved_arc_contributes_no_exposure(tmp_path: Path, monkeypatch, capsys):
+    """The denominator is arcs actually LOOKED AT, never cohort size. Six arcs ran at
+    N=4 and one was observed: reporting `0/6` would assert five unobserved arcs were
+    collision-free, which is the empty-versus-unlooked confusion hiding in the
+    denominator after being driven out of the flag and the numerator."""
+    marker = _drift_row("4-inventing-0", "lane-4") | {
+        "record_kind": "no_finding",
+        "finding_id": "codex_context_guard:head:marker:1",
+    }
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [marker])
+    assert "N=4: 0/1" in out, "one observed arc, no collision on it"
+    assert "0/6" not in out, "cohort size is not exposure"
+    assert "N=1: --/0 of 6" in out, "an entirely unobserved cohort still names its size"

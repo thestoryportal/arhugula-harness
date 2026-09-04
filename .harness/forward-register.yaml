@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 237
+  total: 238
   open: 1
   design_substrate_gated: 3
-  registered_finding: 79
+  registered_finding: 80
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 1eb19501479ebaea
+  identity_digest: 738f80a08a6ecaa9
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11412,3 +11412,36 @@ items:
     tension.'
   heading: '### B-237 · C-HE-28 §2''s drift numerator has no emitter, so the correlation is built but unmeasurable
     *(surfaced by the out-of-family reviewer on u-he-38, 2026-09-04; REGISTERED)*'
+- id: B-238
+  title: revisit lever stratification of the C-HE-28 joint cohort key once the ledger carries enough
+    treated arcs to support a third axis
+  pr: '#TBD (raised twice by the out-of-family reviewer on u-he-38, r2 and r5; REJECTED both times
+    on the same grounds, registered so the concern is tracked rather than merely refused)'
+  status: registered_finding
+  summary: 'The reviewer argued twice that the joint cohort key must stratify by `levers_active`
+    as well, so that a lever effect cannot be attributed to lane count. The concern is live rather
+    than theoretical: 6 of 35 ledger rows carry levers, across 3 distinct exact lever sets (`B-211
+    + B-212` x3, `defect-class-preflight + register-pr-prose` x1, the same pair plus `review-loop-gate`
+    x2), and those arcs currently pool with the 29 baseline arcs inside each (N, arc_type) cell.'
+  close_out: 'REJECTED as a change to THIS unit, on grounds that did not move between the two raisings.
+    C-HE-28 §1 names the split explicitly -- "the split MUST be joint on (concurrent_lanes_at_open,
+    arc_type)" -- a 2-tuple; and §3''s honest-first-months claim enumerates the populated cells in
+    that same 2-tuple form, "(N=1, inventing) n=6 and (N=1, null) n=12", which is the spec''s own
+    worked example of what a joint cell IS. The "exact-lever-set discipline" §1 invokes is scoped
+    by its own parenthetical -- "do not collapse every non-empty levers_active into one TREATED cohort"
+    -- to the lever cohorts, which `by_levers` honours intact by keying on the exact sorted set.
+    Note the evidentiary symmetry: the SAME §3 enumeration was decisive in ACCEPTING the r5 finding
+    that historical rows belong at N=1, so it is being weighed consistently, not selectively.
+    WHY IT IS REGISTERED ANYWAY: the confound is real and will matter once treated arcs are numerous
+    enough for a cell to be more than a singleton. At 35 rows a third axis shatters the ledger --
+    4 lever sets x 6 lane values x 3 arc types -- and every median becomes one arc, so stratifying
+    now would destroy the descriptive counts it aims to protect. NOT HELD BARE: the standing floor
+    is C-HE-28 §3 itself, which this report prints in its header as the CORRELATIONAL note and which
+    forbids an effect estimate at this sample size -- the confound cannot be laundered into a causal
+    claim while that holds. WHAT REOPENS THIS ROW: enough treated arcs that a (lever set, N, arc_type)
+    cell is non-singleton, or any move to state an effect rather than a count -- at which point the
+    stratification is owed before the claim, and a spec amendment naming the 3-tuple is owed with it.'
+  council: 'NO -- a cohort-key scoping question inside one report, resolved by reading two spec clauses;
+    no cross-axis tension.'
+  heading: '### B-238 · lever stratification of the joint cohort key, deferred until the ledger can
+    carry a third axis *(raised twice and rejected on u-he-38, 2026-09-04; REGISTERED)*'

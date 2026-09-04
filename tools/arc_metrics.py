@@ -82,36 +82,27 @@ def is_drift_row(row: dict) -> bool:
     return DRIFT_DETECTION in (row.get("finding_type"), row.get("producer"))
 
 
-#: Cohort-key sentinel for the two DIFFERENT ways a row can lack a lane count.
+#: C-HE-25's baseline rule: a row lacking the lane-count KEY predates the field and IS
+#: the implicit N=1 baseline. Only an explicitly stored ``null`` means the field existed
+#: and the best-effort C-HE-03 §7 sensor recorded nothing -- an unknown, not a baseline.
+#: ``dict.get()`` renders both as ``None`` and merges a known cohort into an unknown one.
 #:
-#: A row whose KEY IS ABSENT predates the field -- C-HE-25's "implicit N=1 baseline"
-#: population (19 of 35 rows at U-HE-38 r4). A row CARRYING an explicit ``null`` has the
-#: field and recorded no value, because the C-HE-03 §7 sensor is a best-effort snapshot
-#: (7 rows). ``dict.get()`` renders both as ``None`` and pools them into one median --
-#: the same two-populations-one-number error this file already refuses between arc spans
-#: and PR-open windows.
-#:
-#: The sentinel is a string, so it can never collide with the integer values, and it
-#: renders through the same ``json.dumps`` as every other key component -- visibly a
-#: quoted label, never mistakable for a count.
-#:
-#: NOT normalized to 1. C-HE-25's baseline sentence is AC#10 analytic framing, its own
-#: Verification bullet requires this split to group on the field "without error on
-#: `null`" (so nulls must reach the grouping), and C-HE-28 §3 forbids effect estimates
-#: at this sample size. Rewriting 19 rows' cohort membership on the strength of that
-#: sentence would impute a value no contract asks this report to impute.
-LANES_ABSENT = "absent"
-
-
-def lanes_at_open(row: dict) -> object:
-    """The lane-count cohort key: the integer, an explicit ``None``, or ``LANES_ABSENT``."""
-    return row["concurrent_lanes_at_open"] if "concurrent_lanes_at_open" in row else LANES_ABSENT
+#: The spec settles this by worked example, not just by assertion: C-HE-28 §3's honest
+#: first-months claim reads "the only populated joint cells are `(N=1, inventing)` n=6
+#: and `(N=1, null)` n=12" -- 18 rows placed at **N=1** at a HEAD where no row yet
+#: carried the field at all. Historical rows are therefore counted as N=1 by the very
+#: contract this report serves (AC#10), and grouping them anywhere else would put 19 of
+#: 35 arcs in a cohort the spec says they do not occupy.
+def lanes_at_open(row: dict) -> int | None:
+    """The lane-count cohort key: the integer, ``1`` for a row predating the field
+    (C-HE-25's implicit baseline), or ``None`` for an explicitly recorded unknown."""
+    return row["concurrent_lanes_at_open"] if "concurrent_lanes_at_open" in row else 1
 
 
 def cohort_sort_key(value: object) -> tuple:
-    """Integers numerically first, then ``LANES_ABSENT``, then ``None`` -- one ordering
-    for a key whose components are deliberately of three different types."""
-    return (value is None, isinstance(value, str), value if isinstance(value, int) else 0)
+    """Integers numerically first, then ``None`` -- one ordering for a key whose
+    components are deliberately of two different types."""
+    return (value is None, value if isinstance(value, int) else 0)
 
 
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
@@ -2671,14 +2662,24 @@ def summary(_args: argparse.Namespace) -> int:
         else:
             attributable.append((g, arc))
 
-    # Measurability is PER COHORT, keyed by the same lane count as the denominators.
-    # Global measurability was this report's own empty-versus-unlooked confusion one
-    # level up: a single marker for one arc would have turned every OTHER cohort's
-    # silence into a printed 0, and an unjoinable or lane-mismatched row -- already
-    # excluded from the numerator as unattributable -- would have flipped the flag for
-    # all of them. A cohort counts as looked-at only when a drift-class row was
-    # actually attributed to one of ITS arcs.
-    observed_ns = {lanes_at_open(arc) for _g, arc in attributable}
+    # BOTH SIDES OF THE RATIO ARE ARCS, and only arcs actually looked at.
+    #
+    # The denominator is the distinct arcs in the cohort that a drift-class row was
+    # attributed to -- never every ledger arc at that N. An arc nobody observed
+    # contributes no exposure: counting it would let one observed N=4 arc print `0/6`
+    # and silently assert five unobserved arcs were collision-free, which is this
+    # report's own empty-versus-unlooked confusion a third time, now hiding in the
+    # denominator after being driven out of the flag and the numerator.
+    #
+    # The numerator is the distinct arcs AFFECTED, not the findings counted. One arc
+    # can collect several refresh collisions, each a separate finding with its own
+    # finding_id, so a finding count could exceed the arc denominator and print `3/1`
+    # -- a proportion greater than one, which is not a thing incidence can be.
+    # Reducing by finding_id removes duplicate ROWS for one finding; only counting
+    # arcs removes duplicate FINDINGS for one arc.
+    observed_arcs: dict[object, set] = {}
+    for _g, arc in attributable:
+        observed_arcs.setdefault(lanes_at_open(arc), set()).add(arc["arc_id"])
     drift = [
         r
         for r in fr.reduce_last_by_finding_id(
@@ -2686,34 +2687,39 @@ def summary(_args: argparse.Namespace) -> int:
         ).values()
         if r.get("disposition") != "rejected"
     ]
-    hits: dict[object, int] = dict.fromkeys(by_n, 0)
+    affected_arcs: dict[object, set] = {}
     for r in drift:
-        hits[lanes_at_open(by_arc[r["arc_id"]])] += 1
-    # An unobserved numerator renders `--`, never a digit. The denominator is real and
-    # stays visible, so the cell says what is known and what is not: "6 arcs ran at
-    # this N; whether any collided was never looked at". The prose caveat below is not
-    # enough on its own -- a parser, a truncated paste, or a reader skimming the
-    # numbers takes `0/6` as a measured rate no matter what the next line says, and
-    # this is the one report whose purpose is keeping empty apart from unlooked. `--`
-    # is the same unavailable token fmt_span and the N6 line already use.
+        affected_arcs.setdefault(lanes_at_open(by_arc[r["arc_id"]]), set()).add(r["arc_id"])
+    # A cohort with no observed arc renders `--`, never a digit: the ratio has no
+    # denominator to stand on. `--` is the same unavailable token fmt_span and the N6
+    # line already use, and it is carried by the value rather than by the caveat below
+    # -- a parser, a truncated paste, or a reader skimming the numbers takes `0/6` as a
+    # measured rate no matter what the next line says.
     print(
-        "drift incidence by concurrent_lanes_at_open: "
+        "drift incidence by concurrent_lanes_at_open (affected arcs / OBSERVED arcs): "
         + ", ".join(
-            f"N={json.dumps(n)}: {hits[n] if n in observed_ns else '--'}/{len(by_n[n])}"
+            f"N={json.dumps(n)}: "
+            + (
+                f"{len(affected_arcs.get(n, ()))}/{len(observed_arcs[n])}"
+                if n in observed_arcs
+                else f"--/0 of {len(by_n[n])}"
+            )
             for n in sorted(by_n, key=cohort_sort_key)
         )
     )
     print(
-        f"     ^ numerator: {len(drift)} distinct {DRIFT_DETECTION} finding(s) "
+        f"     ^ from {len(drift)} distinct {DRIFT_DETECTION} finding(s) "
         f"(reduced by finding_id, `rejected` dropped) among {len(gate_rows)} gate\n"
-        f"       row(s); {len(observed)} drift-class row(s) of any kind observed, "
+        f"       row(s): {len(observed)} drift-class row(s) of any kind observed, "
         f"{unjoinable} unjoinable, {lane_mismatch} EXCLUDED for a lane_id\n"
         f"       disagreeing with the ledger's (contradictory attribution, not a "
-        f"measurement); {len(observed_ns)} of {len(by_n)} cohort(s) had one\n"
-        f"       attributed to them and so read as counts. A `--` numerator means "
-        f"THAT cohort was never looked at (no finding and no `no_finding`\n"
-        f"       marker among its own arcs), a numeric 0 means an emitter looked at "
-        f"it and recorded no collision. Those are different facts\n"
+        f"measurement); {len(observed_arcs)} of {len(by_n)} cohort(s) had an arc\n"
+        f"       observed. BOTH sides of each ratio are distinct ARCS -- affected over "
+        f"OBSERVED, never over cohort size, because an arc nobody\n"
+        f"       looked at contributes no exposure; `--/0 of K` names the K arcs that "
+        f"ran at an N where nothing was observed. A `--` means\n"
+        f"       that cohort was never looked at, a numeric 0 means an emitter looked "
+        f"and recorded no collision. Those are different facts\n"
         f"       and the report will not merge them (gate log: {GATE_LOG})."
     )
     print()
