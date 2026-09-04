@@ -129,6 +129,11 @@ def test_detail_renders_the_canonical_close_out_even_when_the_prose_disagrees(ca
     the reader."""
     row = next(r for r in _data()["items"] if r["id"] == "B-234")
     canonical = row["close_out"]
+    # Without this, a future edit blanking B-234's close_out would make the canonical-text
+    # assertion vacuously true rather than failing (merge-gate witness lens, P3).
+    assert row["status"] != "closed" and canonical and canonical.strip(), (
+        "fixture: B-234 must be open-class with a non-blank close_out"
+    )
 
     def gut_the_prose(text: str) -> str:
         # Replace the prose body's own disposition with a contradicting one.
@@ -188,6 +193,12 @@ def test_detail_emits_the_delimiter_as_one_bare_unindented_line(capsys) -> None:
     retirement of the YAML-only-row gate that B-235's consumer fix exists to prevent.
     Nothing else asserts the real CLI's shape, so this test is what closes that loop.
     """
+    row = next(r for r in _data()["items"] if r["id"] == "B-235")
+    # Fixture shape asserted, not assumed: this test pins the OPEN-CLASS header, so if a
+    # future PR closes B-235 the label changes and the assertions below would silently
+    # stop witnessing what they name (merge-gate witness lens, P3).
+    assert row["status"] != "closed", "fixture: B-235 must be open-class for this test"
+
     forward_register.main(["--detail", "B-235"])
     lines = capsys.readouterr().out.splitlines()
     # Exactly one, and BARE -- an indented occurrence is row content, not the frame.
@@ -387,6 +398,56 @@ def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_pr() -> 
     )
     hard = [f.message for f in report.findings if f.severity == ls.HARD]
     assert any("HEADING ONLY" in m for m in hard), hard
+
+
+def test_a_closed_row_without_a_close_out_renders_no_historical_note(capsys) -> None:
+    """merge-gate witness lens [P2]. The closed-row branch that SKIPS the historical note
+    when close_out is blank/absent had no test, and it is the MODAL shape on the live
+    register -- 25 of 151 closed rows take it on every `--detail`. Inverting that guard
+    would print the historical preamble with nothing under it, and nothing would fail."""
+    row = next(r for r in _data()["items"] if r["id"] == "B-1")
+    assert row["status"] == "closed" and not row.get("close_out"), (
+        "fixture: B-1 is closed and carries no close_out"
+    )
+
+    forward_register.main(["--detail", "B-1"])
+    header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+    assert "CLOSED — delivered at" in header, header
+    # The historical-plan preamble belongs only to rows that HAVE a stale close_out.
+    assert "HISTORICAL, not a current instruction" not in header, header
+
+
+def test_a_closed_row_missing_its_pr_says_so_in_the_render_not_only_in_check(capsys) -> None:
+    """merge-gate witness lens [P2]. `test_negative_closed_without_pr_fails` covers
+    `validate()`, a DIFFERENT function; the render path's own message was unexercised, so
+    a closed row with no citation could have rendered a blank or misleading authority line
+    while the validator test stayed green."""
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9997",
+                "title": "t",
+                "summary": "s",
+                "status": "closed",
+                "heading": "### B-9997 · closed with no pr",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        pp.write_text(
+            "### B-9997 · closed with no pr\n\n- **What it is.** Body.\n", encoding="utf-8"
+        )
+        forward_register.main(["--detail", "B-9997", "--ledger", str(lp), "--prose", str(pp)])
+        header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+
+    assert "(MISSING — a closed row needs a 'pr' citation" in header, header
+    assert "CLOSED — delivered at" not in header, header
 
 
 # --- negative tests: each gate failure-class is caught ----------------------
