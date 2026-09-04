@@ -6821,6 +6821,29 @@ is the documented measured-FAIL code. The class-sibling sweep on (iv) found one 
 the same diff: `finding_record.read_rows()` also returns `[]` for an absent gate log, which would
 have made the BASE_TOCTOU half of clause (a) read clean — closed and witnessed in the same commit.
 
+**Codex r2: BLOCK, 1 P1 + 5 P2, all six accepted.** The P1 was a second spec-conformance gap
+rather than a defect in r1's fixes: `just lanes-pilot` ran only the §1 phase-0 half and never the
+§2 ordering gate, so a pilot could be admitted behind an absent or RED reviewer-concurrency probe
+result — `gate()` now also reduces through `lanes_verify.probe_result_verdict()`, the same verdict
+`just pilot-gate-check` exits on. Three P2s landed on r1's own absorption, which is the expected
+shape: the tri-state adapter consumed `arc_metrics._committed_ledger_lines()`, whose `set[str]`
+collapses byte-identical rows and so made the very C-HE-03 duplicate it checks for undetectable
+(the r1 test had bypassed the adapter by building a list directly — a vacuous witness, now replaced
+by `_merged_ledger_arc_ids()` with its own duplicate-preserving read and a test through the real
+path); the queue snapshot globbed `*.json` only, reading a claimed `<arc>.taken` capture as absent
+and flipping the C-HE-04 exclusive-or to a false violation mid-drain; and the friction window, which
+r1 had unbounded above, let a persistent lane's LATER arcs contribute causes that could falsely
+satisfy the recurring bar authorising follow-on orchestration. That last one is r1 and r2 pointing
+opposite ways, so it was resolved by synthesis rather than by flipping back: the window now closes
+at the pilot's own last ARC-ATTRIBUTED activity, which the door's post-merge escalations extend
+(they carry the arc id) while an unrelated later arc does not, with the residual — an arcless row
+after the last arc-attributed one — named in the docstring and pinned by two tests. The remaining
+two: a report taken while the door still holds a lease for one of the arcs is now unanswerable,
+because the reservation flips to `merged` with its `merge_sha` at step (vi) and the door only THEN
+runs first-parent detection, post-merge CI and the refresh; and a truncated ledger row carrying a
+timestamp now raises instead of parsing to `None` and being dropped, which would have reported "no
+coordination escalation" instead of the documented exit 2.
+
 ---
 
 ### U-HE-38: Cohort report joint on `(concurrent_lanes_at_open, arc_type)`, drift join, correlational header

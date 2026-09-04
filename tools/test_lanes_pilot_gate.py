@@ -64,33 +64,54 @@ def _loop_row(
 # ── C-HE-13 §1: the gate ──────────────────────────────────────────────────────
 
 
+GREEN = ("GREEN", "probe result recorded")
+
+
 def test_pilot_runner_refuses_on_any_phase0_red() -> None:
-    rc, msg = lp.gate([lv.Result(_row("C-HE-06", "pytest:x"), "fail", "boom")])
+    rc, msg = lp.gate([lv.Result(_row("C-HE-06", "pytest:x"), "fail", "boom")], probe=GREEN)
     assert rc != 0 and "C-HE-06" in msg and "pytest:x" in msg and "boom" in msg
 
 
 def test_a_skip_is_not_a_pass() -> None:
     """C-HE-13 §1 names this explicitly: skip-marked rows count as NOT passed."""
     rc, msg = lp.gate(
-        [lv.Result(_row(), "pass"), lv.Result(_row("C-HE-09", "shell:y"), "skip", "no docker")]
+        [lv.Result(_row(), "pass"), lv.Result(_row("C-HE-09", "shell:y"), "skip", "no docker")],
+        probe=GREEN,
     )
     assert rc != 0 and "C-HE-09" in msg and "skip" in msg
 
 
 def test_a_live_row_is_not_a_pass_either() -> None:
-    rc, _ = lp.gate([lv.Result(_row("C-HE-13", "just:lanes-pilot-report <run-id>"), "live", "")])
+    rc, _ = lp.gate(
+        [lv.Result(_row("C-HE-13", "just:lanes-pilot-report <run-id>"), "live", "")], probe=GREEN
+    )
     assert rc != 0
 
 
 def test_all_pass_is_green() -> None:
-    rc, msg = lp.gate([lv.Result(_row(), "pass"), lv.Result(_row("C-HE-09", "shell:y"), "pass")])
+    rc, msg = lp.gate(
+        [lv.Result(_row(), "pass"), lv.Result(_row("C-HE-09", "shell:y"), "pass")], probe=GREEN
+    )
     assert rc == 0 and "GREEN" in msg and "2 rows" in msg
+
+
+def test_a_red_reviewer_concurrency_probe_refuses_the_pilot() -> None:
+    """C-HE-13 §2 orders the reviewer-concurrency probe BEFORE pilots, and
+    `just pilot-gate-check` is its mechanical form. Running only the phase0 half would
+    admit a pilot behind an absent or RED probe result."""
+    rc, msg = lp.gate([lv.Result(_row(), "pass")], probe=("RED", "no result row"))
+    assert rc != 0 and "C-HE-22" in msg and "RED" in msg
+
+
+def test_a_green_gate_names_both_halves() -> None:
+    rc, msg = lp.gate([lv.Result(_row(), "pass")], probe=GREEN)
+    assert rc == 0 and "phase0 GREEN" in msg and "probe-result GREEN" in msg
 
 
 def test_gate_reduces_through_phase0_verdict(monkeypatch) -> None:
     """The gate owns no pass/fail rule of its own: it is `lanes_verify.phase0_verdict`."""
     monkeypatch.setattr(lv, "phase0_verdict", lambda results: 0)
-    rc, _ = lp.gate([lv.Result(_row(), "fail", "boom")])
+    rc, _ = lp.gate([lv.Result(_row(), "fail", "boom")], probe=GREEN)
     assert rc == 0
 
 
@@ -261,19 +282,38 @@ def test_another_arcs_hil_never_counts() -> None:
     assert rep["pass"] is True and rep["coordination_hil"] == []
 
 
-def test_friction_keeps_an_arcless_post_merge_row_from_a_pilot_lane() -> None:
-    """The lease-yield NOTIFY carries no arc id, and it can land after the merged flip.
-    An upper window bound at `transitioned_at` would drop it, undercounting the organic-
-    pain bar; friction is a reporting field, so the wider scope never moves the verdict."""
-    row = _loop_row(
+def test_friction_keeps_an_arcless_post_merge_row_inside_the_pilots_own_span() -> None:
+    """The door's post-merge escalations ARE arc-attributed, so they extend the window's
+    close; an arcless row alongside them (the lease-yield NOTIFY carries no arc id) is
+    therefore captured. Bounding at `transitioned_at` would drop both, undercounting the
+    organic-pain bar."""
+    attributed = _loop_row(
+        "DEFERRED-HIL",
+        "merge-door-post-merge:HITL-recoverable:ci",
+        "u-1 — post-merge run red",
+        ts="2026-09-04T23:30:00Z",
+    )
+    arcless = _loop_row(
         "NOTIFY",
         "merge-door-lease-acquire:lease_held_yield",
         "holder=u-9 backoff=0",
         ts="2026-09-04T23:00:00Z",
     )
-    rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), loop_rows=[row]))
-    assert rep["friction"] == ["merge-door-lease-acquire:lease_held_yield"]
-    assert rep["pass"] is True  # a NOTIFY is not an escalation
+    rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), loop_rows=[arcless, attributed]))
+    assert "merge-door-lease-acquire:lease_held_yield" in rep["friction"]
+    assert "merge-door-post-merge:HITL-recoverable:ci" in rep["friction"]
+
+
+def test_friction_excludes_a_later_arcs_causes_on_the_same_lane() -> None:
+    """Unbounded above, a persistent lane's LATER arcs would add their causes to this
+    pilot's deduplicated set, which can falsely satisfy the recurring bar that authorises
+    follow-on orchestration. The window closes at the pilot's own last arc-attributed
+    activity, so a later unrelated arc does not extend it."""
+    later = _loop_row(
+        "NOTIFY", "some-later-arc-cause", "holder=x backoff=0", ts="2027-01-01T00:00:00Z"
+    )
+    rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), loop_rows=[later]))
+    assert rep["friction"] == []
 
 
 def test_friction_ignores_a_row_predating_the_pilot() -> None:
@@ -302,17 +342,57 @@ def test_report_refuses_when_no_arc_carries_the_run_id(monkeypatch) -> None:
         lp.report("ghost")
 
 
+def test_the_merged_ledger_read_preserves_byte_identical_duplicates(monkeypatch) -> None:
+    """The C-HE-03 invariant forbids a second row for one arc_id, so the reader must not
+    deduplicate: `arc_metrics._committed_ledger_lines()` returns a SET and would collapse a
+    byte-identical duplicate, making the violation undetectable through the real path."""
+    import arc_metrics as am
+
+    row = '{"arc_id": "u-1"}'
+    monkeypatch.setattr(am, "run", lambda *a, **k: f"{row}\n{row}\n")
+    assert lp._merged_ledger_arc_ids() == ["u-1", "u-1"]
+
+
+def test_the_merged_ledger_read_refuses_when_unreadable(monkeypatch) -> None:
+    import arc_metrics as am
+
+    def boom(*a, **k):
+        raise am.AbortError("no such ref")
+
+    monkeypatch.setattr(am, "run", boom)
+    with pytest.raises(lp.PilotError, match="unreadable"):
+        lp._merged_ledger_arc_ids()
+
+
 def test_report_refuses_when_merged_history_is_unreadable(monkeypatch) -> None:
     """`arc_metrics.committed_arc_ids()` collapses "unreadable" into an empty set because
     holding a capture is the safe default for the DRAIN. Here the same empty set would
     make every arc look like the legal queued-and-not-folded branch and print PASS, so the
     tri-state reader's None must refuse."""
-    import arc_metrics as am
+    import merge_door as md
 
     monkeypatch.setattr(lp, "_pilot_arcs", lambda run_id: _pilot_arcs())
     monkeypatch.setattr(lp, "_loop_rows", lambda: [])
-    monkeypatch.setattr(am, "_committed_ledger_lines", lambda: None)
+    monkeypatch.setattr(md, "read_lease", lambda: None)
+    monkeypatch.setattr(lp, "_merged_ledger_arc_ids", _raise_unreadable)
     with pytest.raises(lp.PilotError, match="unreadable"):
+        lp.report("pilot-1")
+
+
+def _raise_unreadable() -> list[str]:
+    raise lp.PilotError("merged history is unreadable")
+
+
+def test_report_refuses_while_the_door_still_holds_a_lease(monkeypatch) -> None:
+    """The reservation flips to `merged` with its `merge_sha` at door step (vi); the door
+    THEN runs first-parent detection, post-merge CI and the refresh while holding the
+    lease. A report inside that window could print PASS moments before a BASE_TOCTOU or CI
+    escalation is written, so it is unanswerable rather than a verdict."""
+    import merge_door as md
+
+    monkeypatch.setattr(lp, "_pilot_arcs", lambda run_id: _pilot_arcs())
+    monkeypatch.setattr(md, "read_lease", lambda: {"reservation_id": "u-2"})
+    with pytest.raises(lp.PilotError, match="still holds a lease"):
         lp.report("pilot-1")
 
 
@@ -321,9 +401,11 @@ def test_report_refuses_when_the_gate_log_is_absent(monkeypatch, tmp_path) -> No
     absent gate log, which would make the BASE_TOCTOU half of clause (a) read clean when
     the detections could not be looked at at all."""
     import finding_record as fr
+    import merge_door as md
 
     monkeypatch.setattr(lp, "_pilot_arcs", lambda run_id: _pilot_arcs())
     monkeypatch.setattr(lp, "_loop_rows", lambda: [])
+    monkeypatch.setattr(md, "read_lease", lambda: None)
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "absent.jsonl")
     with pytest.raises(lp.PilotError, match="gate log"):
         lp.report("pilot-1")

@@ -73,8 +73,8 @@ def phase0_results() -> list[lv.Result]:
     return [lv.run_row(r) for r in lv.phase0_rows()]
 
 
-def gate(results: list[lv.Result]) -> tuple[int, str]:
-    """C-HE-13 §1 as `(exit code, message)`, pure over the results.
+def gate(results: list[lv.Result], probe: tuple[str, str] | None = None) -> tuple[int, str]:
+    """C-HE-13 §1 AND §2 as `(exit code, message)`, pure over its inputs.
 
     The VERDICT is `lanes_verify.phase0_verdict` — the same reduction `just
     lanes-phase0-check` exits on, so the runner and the recipe can never disagree about
@@ -83,10 +83,18 @@ def gate(results: list[lv.Result]) -> tuple[int, str]:
     counts as RED here without this file restating that rule.
     """
     rc = lv.phase0_verdict(results)
-    if rc == 0:
-        return 0, f"phase0 GREEN ({len(results)} rows)"
-    bad = next(r for r in results if r.status != "pass")
-    return rc, f"phase0 RED: {bad.row.contract} {bad.row.artifact} — {bad.status}: {bad.reason}"
+    if rc != 0:
+        bad = next(r for r in results if r.status != "pass")
+        return rc, f"phase0 RED: {bad.row.contract} {bad.row.artifact} — {bad.status}: {bad.reason}"
+    # §2 order (R-10, R-11, C-HE-22): the reviewer-concurrency probe comes BEFORE pilots,
+    # and `just pilot-gate-check` is its mechanical form. Running only the phase0 half
+    # would admit a pilot behind an absent or RED probe result — the ordering gate exists
+    # exactly so that cannot happen (codex r2 P1). The verdict is
+    # `lanes_verify.probe_result_verdict`, not a rule restated here.
+    verdict, why = probe if probe is not None else lv.probe_result_verdict()
+    if verdict != "GREEN":
+        return 1, f"pilot-gate RED: C-HE-22 probe-result {verdict} — {why}"
+    return 0, f"phase0 GREEN ({len(results)} rows); C-HE-22 probe-result GREEN"
 
 
 # ── C-HE-13 §3: the report ────────────────────────────────────────────────────
@@ -245,11 +253,24 @@ def friction(loop_rows: list[dict], arcs: list[dict]) -> list[str]:
     """
     arc_ids = {a["arc_id"] for a in arcs}
     lanes = {a["lane_id"] for a in arcs}
+    attributed = [r for r in loop_rows if (r["detail"].split() or [""])[0] in arc_ids]
     t0 = min((a["reserved_at"] for a in arcs), default="")
+    # The window CLOSES at the pilot's own last arc-attributed activity, not at the merged
+    # flip and not never. `transitioned_at` alone drops the door's post-merge rows (codex
+    # r1); no upper bound at all lets a later arc on the same persistent lane contribute
+    # causes to this pilot's set, which can falsely satisfy the recurring bar that
+    # authorises follow-on orchestration (codex r2). The door's own post-merge escalations
+    # ARE arc-attributed, so they extend t1 and are captured, while an unrelated later arc
+    # does not extend it. Named residual: an ARCLESS row after the last arc-attributed one
+    # is outside the window.
+    t1 = max(
+        [a["transitioned_at"] for a in arcs] + [r["ts"] for r in attributed],
+        default="",
+    )
     causes: set[str] = set()
     for row in loop_rows:
         token = (row["detail"].split() or [""])[0]
-        windowed = row["lane"] in lanes and row["ts"] >= t0
+        windowed = row["lane"] in lanes and t0 <= row["ts"] <= t1
         if (token in arc_ids or windowed) and row["cause"] not in ("", "-"):
             causes.add(row["cause"])
     return sorted(causes)
@@ -333,6 +354,41 @@ def _pilot_arcs(run_id: str) -> list[dict]:
     return arcs
 
 
+def _merged_ledger_arc_ids() -> list[str]:
+    """Every merged-history row's `arc_id`, DUPLICATES PRESERVED.
+
+    Not `arc_metrics._committed_ledger_lines()`, whose `set[str]` collapses byte-identical
+    rows — the very shape the C-HE-03 "at most one row for that arc_id ever reaches merged
+    history" invariant forbids, so consuming that set makes an exact duplicate undetectable
+    (codex r2 P2). The read below mirrors that helper's tri-state exactly (a ledger outside
+    the repo is KNOWN-empty; an unreadable one refuses) and reuses its `MERGED_REF`,
+    `LEDGER` and `run`, so this file adds no second authority on WHERE merged history
+    lives — only on how its rows are collected.
+    """
+    import arc_metrics as am
+
+    try:
+        rel = am.LEDGER.relative_to(am.REPO)
+    except ValueError:
+        return []
+    try:
+        raw = am.run(["git", "show", f"{am.MERGED_REF}:{rel}"], what="git show merged ledger")
+    except am.AbortError:
+        raise PilotError(
+            f"merged history ({am.MERGED_REF}:{rel}) is unreadable — the C-HE-03/04 "
+            "union-ledger clause cannot be evaluated"
+        ) from None
+    ids: list[str] = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            ids.append(json.loads(line).get("arc_id", ""))
+        except json.JSONDecodeError:
+            raise PilotError(f"merged ledger carries an unparseable row: {line[:80]}") from None
+    return ids
+
+
 def _loop_rows() -> list[dict]:
     """Every parsed row of the shared ledger. An unreadable or absent ledger RAISES: a
     pilot whose escalations cannot be read has an unanswerable clause (c), and an empty
@@ -355,14 +411,26 @@ def _loop_rows() -> list[dict]:
         raise PilotError(f"could not resolve the shared loop ledger: {proc.stderr.strip()}")
     if not Path(path).exists():
         raise PilotError(f"shared loop ledger {path} does not exist")
-    rows = [parse_loop_row(line) for line in Path(path).read_text().splitlines()]
-    return [r for r in rows if r is not None]
+    out: list[dict] = []
+    for line in Path(path).read_text().splitlines():
+        row = parse_loop_row(line)
+        if row is not None:
+            out.append(row)
+        elif line.lstrip().startswith("|") and "T" in line and ":" in line:
+            # A pipe row carrying a timestamp is a DATA row this parser could not read —
+            # a truncated DEFERRED-HIL still carries its coordination cause, and silently
+            # dropping it would report "no escalation occurred" instead of the documented
+            # unanswerable exit 2 (codex r2 P2). The header and the `|---|` rule parse to
+            # None too, which is why the discriminator is the timestamp, not the pipe.
+            raise PilotError(f"unreadable ledger row: {line[:100]}")
+    return out
 
 
 def report(run_id: str) -> dict:
     """Gather the three stores and evaluate the §3 iff-clause."""
     import arc_metrics as am
     import finding_record as fr
+    import merge_door as md
 
     arcs = _pilot_arcs(run_id)
     if not arcs:
@@ -370,8 +438,31 @@ def report(run_id: str) -> dict:
             f"no reservation carries pilot_run_id={run_id!r} — nothing to report. "
             "Each lane records it after arc open (see `lanes-pilot` step 1)."
         )
+    # A door still working on one of these arcs means the landing is NOT complete: the
+    # reservation flips to `merged` with its `merge_sha` at step (vi), and the door THEN
+    # runs first-parent detection, post-merge CI and the terminating refresh while holding
+    # the lease. Reporting inside that window could print PASS moments before a
+    # BASE_TOCTOU or CI escalation is written, so it is unanswerable, not a verdict
+    # (codex r2 P2).
+    live = md.read_lease()
+    if live and live.get("reservation_id") in {a["arc_id"] for a in arcs}:
+        raise PilotError(
+            f"the merge door still holds a lease for {live['reservation_id']} — its "
+            "post-merge checks have not completed; re-run the report once it releases"
+        )
     queue_dir = am.QUEUE_DIR
-    queued = {p.stem for p in queue_dir.glob("*.json")} if queue_dir.is_dir() else set()
+    # C-HE-04 durable captures are `<arc>.json` when free AND `<arc>.taken`
+    # (plus `.taken.recover.<host>.<pid>`) while a drain or recovery holds them. Counting
+    # only `*.json` reads a claimed entry as ABSENT, which flips the post-drain
+    # exclusive-or to a false "neither" violation mid-drain (codex r2 P2).
+    queued: set[str] = set()
+    if queue_dir.is_dir():
+        for entry in queue_dir.iterdir():
+            name = entry.name
+            if name.endswith(".json"):
+                queued.add(name[: -len(".json")])
+            elif ".taken" in name:
+                queued.add(name.split(".taken", 1)[0])
     # TRI-STATE, deliberately not `am.committed_arc_ids()`: that helper collapses "merged
     # history is unreadable" into an empty set because holding a capture is the safe
     # default for the DRAIN. For this report the same empty set would make every arc look
@@ -387,18 +478,7 @@ def report(run_id: str) -> dict:
             f"the gate log ({fr.GATE_LOG_JSONL}) does not exist — the BASE_TOCTOU "
             "first-parent clause cannot be evaluated"
         )
-    lines = am._committed_ledger_lines()
-    if lines is None:
-        raise PilotError(
-            f"merged history ({am.MERGED_REF}:{am.LEDGER.name}) is unreadable — the "
-            "C-HE-03/04 union-ledger clause cannot be evaluated"
-        )
-    merged_ids = []
-    for line in lines:
-        try:
-            merged_ids.append(json.loads(line).get("arc_id", ""))
-        except json.JSONDecodeError:
-            raise PilotError(f"merged ledger carries an unparseable row: {line[:80]}") from None
+    merged_ids = _merged_ledger_arc_ids()
     return evaluate(
         run_id,
         Stores(
@@ -436,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("run_id", nargs="?")
     a = p.parse_args(argv)
     if a.cmd == "gate":
-        rc, msg = gate(phase0_results())
+        rc, msg = gate(phase0_results())  # probe verdict read inside gate()
         print(msg)
         return rc
     if not a.run_id:
