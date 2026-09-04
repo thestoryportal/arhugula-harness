@@ -333,13 +333,41 @@ def test_a_missing_delimiter_on_the_real_cli_path_fails_loud_not_silently(monkey
             "### B-999 · a title and nothing else\n",
         ),
     )
-    ls.check_register_rows(["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None)
+    # `uncommitted=True` for the same reason the sibling rc test needs it: with
+    # `detail_fn=None` the dirty-carrier guard returns EARLY, so on a working tree with
+    # modified register files this test never reached the branch it names. It passed when
+    # written only because the carriers happened to be committed — a tree-state dependency,
+    # not a witness. `--uncommitted` is also the venue this branch exists for.
+    ls.check_register_rows(
+        ["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None, uncommitted=True
+    )
 
     msgs = _hard(report)
     assert any("emitted no" in m and "line" in m for m in msgs), msgs
     # It must NOT silently fall through to the heading-only verdict, which would read as a
     # normal register defect rather than a broken producer contract.
     assert not any("HEADING ONLY" in m for m in msgs), msgs
+
+
+def test_a_real_detail_failure_is_reported_as_itself_not_as_changed_framing(monkeypatch):
+    """codex r14 [P3]. The delimiter check ran BEFORE the return-code check, so a genuine
+    `--detail` failure (a row whose prose heading is missing exits 1 with empty stdout)
+    was reported as "the producer's framing changed" — diagnosing the wrong thing and
+    hiding the real error. The pre-existing nonzero test stays green either way because
+    its injected `detail_fn` takes the compatibility fallback rather than this production
+    branch, so it never witnessed the ordering."""
+    report = ls.Report()
+    monkeypatch.setattr(ls, "_detail_via_cli", lambda _rid: (1, ""))
+    # `uncommitted=True` is required to reach this branch at all, and is the truer venue:
+    # the dirty-carrier guard returns early otherwise, and `--uncommitted` is the mode in
+    # which a working-tree producer failure actually shows up.
+    ls.check_register_rows(
+        ["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None, uncommitted=True
+    )
+
+    msgs = _hard(report)
+    assert any("--detail exited 1" in m for m in msgs), msgs
+    assert not any("framing changed" in m for m in msgs), msgs
 
 
 def test_a_close_out_containing_the_delimiter_cannot_spoof_the_prose_frame():

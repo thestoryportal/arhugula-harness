@@ -11312,7 +11312,7 @@ items:
     WHAT LANDED: forward_register --detail now prints the CANONICAL close_out, read from
     the YAML row, ABOVE the prose block, separated by PROSE_DELIMITER. The surface that
     operator routing actually reads therefore carries the authority itself, so a drifted
-    prose body is now seen BESIDE the canonical text instead of standing in for it. An
+    prose body is now seen BESIDE the canonical text instead of standing in for it.
     close_out is ALWAYS stated and never rendered as silence -- as its text when present,
     as MISSING when required at this status and absent, and as an explicit not-required
     line otherwise, whose wording differs for a held row and a closed one. The count of

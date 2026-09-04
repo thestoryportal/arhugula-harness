@@ -693,6 +693,47 @@ def test_a_malformed_council_is_caught_by_the_type_loop_independently(status: st
     )
 
 
+def test_a_missing_prose_heading_does_not_suppress_the_canonical_block(capsys) -> None:
+    """codex r14 [P2]. The prose lookup used to run FIRST and `return 1` on a missing
+    heading, so the hand-maintained carrier — the UNRELIABLE one, the entire reason this
+    header exists — could suppress the canonical `close_out` completely, falsifying the
+    guarantee that the authority always reaches the reader. The canonical block is now
+    emitted before the lookup, and a missing heading is reported on its own."""
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9993",
+                "title": "t",
+                "summary": "s",
+                "status": "registered_finding",
+                "close_out": "THE CANONICAL DISPOSITION THAT MUST STILL REACH THE READER.",
+                "council": "NO",
+                "heading": "### B-9993 · heading that the prose no longer carries",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        # The prose carrier has LOST this row's heading — the failure being simulated.
+        pp.write_text("### B-0001 · some other row\n\n- **What it is.** Body.\n", encoding="utf-8")
+        rc = forward_register.main(["--detail", "B-9993", "--ledger", str(lp), "--prose", str(pp)])
+        captured = capsys.readouterr()
+
+    # The canonical authority reached the reader despite the prose carrier failing...
+    assert "THE CANONICAL DISPOSITION THAT MUST STILL REACH THE READER." in captured.out, (
+        captured.out
+    )
+    assert "close_out (CANONICAL" in captured.out, captured.out
+    # ...and the prose failure is reported separately, on stderr, with a non-zero exit.
+    assert rc == 1
+    assert "heading not found" in captured.err, captured.err
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 

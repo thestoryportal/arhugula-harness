@@ -1160,6 +1160,14 @@ def check_register_rows(
         # unindented_line` pins the COMMITTED producer and cannot see that tree, which is
         # why five sweep answers calling this arm "safe, the producer is pinned" were
         # incomplete (codex r12 [P2]).
+        # The PRODUCER'S OWN failure is reported first. A real `--detail` failure (a row
+        # whose prose heading is missing exits 1 with empty stdout) would otherwise hit the
+        # delimiter branch below and be reported as "framing changed", hiding the actual
+        # error behind a diagnosis of the wrong thing (codex r14 [P3]).
+        if rc != 0:
+            report.add("register", HARD, f"{rid}: --detail exited {rc}")
+            continue
+
         lines = stdout.splitlines()
         try:
             cut = lines.index(PROSE_DELIMITER) + 1
@@ -1174,9 +1182,7 @@ def check_register_rows(
                 continue
             cut = 0
         body = [ln for ln in lines[cut:] if ln.strip() and not ln.startswith("###")]
-        if rc != 0:
-            report.add("register", HARD, f"{rid}: --detail exited {rc}")
-        elif not body:
+        if not body:
             report.add(
                 "register",
                 HARD,

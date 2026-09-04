@@ -395,23 +395,6 @@ def main(argv: list[str] | None = None) -> int:
         if row is None:
             print(f"no such id: {args.detail}", file=sys.stderr)
             return 1
-        text = args.prose.read_text(encoding="utf-8")
-        heading = row["heading"]
-        lines = text.splitlines(keepends=True)
-        offset = 0
-        start: int | None = None
-        for line in lines:
-            if line.rstrip("\n") == heading:
-                start = offset
-                break
-            offset += len(line)
-        if start is None:
-            print(f"heading not found as a complete line in prose: {heading!r}", file=sys.stderr)
-            return 1
-        rest = text[start:]
-        next_heading = re.search(r"\n(#{2,3})\s", rest[len(heading) :])
-        end = len(rest) if next_heading is None else len(heading) + next_heading.start() + 1
-
         # B-235. The prose below is a HAND-MAINTAINED copy, and `check_prose_drift`
         # compares headings only -- so a body edited out of step with `close_out` used
         # to leave this surface, the one operator-facing routing reads, showing the copy
@@ -491,6 +474,29 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(PROSE_DELIMITER)
         print()
+
+        # The prose lookup runs AFTER the canonical block, and deliberately so. It used to
+        # run first and `return 1` on a missing heading, which meant the hand-maintained
+        # carrier -- the UNRELIABLE one, the whole reason this header exists -- could
+        # suppress the canonical close_out entirely, falsifying the guarantee that the
+        # authority always reaches the reader (codex r14 [P2]). A missing prose heading is
+        # now reported on its own, after the authority has already been printed.
+        text = args.prose.read_text(encoding="utf-8")
+        heading = row["heading"]
+        lines = text.splitlines(keepends=True)
+        offset = 0
+        start: int | None = None
+        for line in lines:
+            if line.rstrip("\n") == heading:
+                start = offset
+                break
+            offset += len(line)
+        if start is None:
+            print(f"heading not found as a complete line in prose: {heading!r}", file=sys.stderr)
+            return 1
+        rest = text[start:]
+        next_heading = re.search(r"\n(#{2,3})\s", rest[len(heading) :])
+        end = len(rest) if next_heading is None else len(heading) + next_heading.start() + 1
         print(rest[:end].rstrip())
         return 0
 
