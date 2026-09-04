@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 238
+  total: 239
   open: 1
   design_substrate_gated: 3
-  registered_finding: 80
+  registered_finding: 81
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 738f80a08a6ecaa9
+  identity_digest: 46693d9de4eb9f21
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11456,3 +11456,37 @@ items:
     no cross-axis tension.'
   heading: '### B-238 · lever stratification of the joint cohort key, deferred until the ledger can
     carry a third axis *(raised twice and rejected on u-he-38, 2026-09-04; REGISTERED)*'
+- id: B-239
+  title: C-HE-28 names `concurrent_lanes_at_open` as the cohort key while §3 counts in LANES, and the
+    two scales differ by one
+  pr: '#TBD (surfaced by the out-of-family reviewer on u-he-38 r6; the consumer resolved it, the spec
+    text still carries the ambiguity)'
+  status: registered_finding
+  summary: 'Two scales share one name across the cleared spec. The SENSOR stores siblings: `open_with_sensor`
+    sets `concurrent_lanes_at_open` from `sibling_open_count(arc_id)` (`tools/reservations.py:786`),
+    which excludes the arc''s own reservation, and C-HE-03 §7 defines the field as the "count of sibling
+    `open` reservations". A solo arc therefore stores 0 and a stored 1 means two live lanes. But C-HE-28
+    §1 names that field as the cohort key, while §3 counts in LANES: "the only populated joint cells are
+    (N=1, inventing) n=6 and (N=1, null) n=12" -- 18 rows at N=1 at a HEAD where NO row carried the field
+    -- and "every N >= 2 cell ... starts at 0". Both §3 sentences are true only of lanes: a lone arc is
+    one lane, and AC#10 asks whether two or more lanes help, which is N>=2 in lanes but >=1 in siblings.
+    Read literally as the raw field, §1 would label a solo arc N=0 (no arc runs in zero lanes) and would
+    make "N >= 2" mean three lanes.'
+  close_out: 'RESOLVED IN THE CONSUMER, REGISTERED FOR THE SPEC. `tools/arc_metrics.py` `lanes_at_open`
+    converts siblings to lanes (+1), reports absent-key rows as the 1-lane baseline alongside stored-0
+    solo arcs, and renames the report labels to `lanes_at_open` rather than continuing to name a field
+    whose raw value they no longer show -- so no live surface is ambiguous today. What is NOT fixed is
+    the spec text, and it is registered rather than edited because editing `design-substrate`-class
+    wording from an implementation arc is the silent-absorption failure mode (root CLAUDE.md §4.3/§4.4);
+    a cleared contract''s prose is amended through back-flow, not from the consumer that noticed. NOTE
+    the cost of leaving it: this ambiguity survived SIX review rounds on this arc. Rounds 4 and 5 both
+    reasoned about the cohort key at length, and one of them (r5) shipped a fix that mapped historical
+    rows onto a stored 1 -- i.e. onto "two lanes" -- precisely because the field name asserts lanes while
+    the sensor counts siblings. WHAT CLOSES THIS ROW: a spec amendment that either renames the field to
+    say siblings, or states the conversion at C-HE-28 §1 where the cohort key is defined, so the next
+    consumer does not re-derive it from `reservations.py`. Either is a wording change to a cleared
+    artifact and routes through design-phase back-flow.'
+  council: 'NO -- a naming/scale ambiguity with one correct reading, established by reading the producer
+    and three spec clauses; no cross-domain tension to convene over.'
+  heading: '### B-239 · the cohort field is named for lanes and stores siblings, and the spec counts both
+    ways *(surfaced on u-he-38 r6, 2026-09-04; consumer resolved, spec text REGISTERED)*'
