@@ -67,6 +67,21 @@ def test_token_inside_a_removed_line_that_looks_like_a_header_still_counts():
     assert touches_concurrency("+++ b/n.sql\n--- flock the table\n") is True
 
 
+def test_workflow_concurrency_group_is_a_surface():
+    assert (
+        touches_concurrency(
+            "+++ b/ci.yml\n-  cancel-in-progress: true\n+  cancel-in-progress: false\n"
+        )
+        is True
+    )
+    assert (
+        touches_concurrency(
+            "+++ b/.github/workflows/ci.yml\n+concurrency:\n+  group: ci-${{ github.ref }}\n"
+        )
+        is True
+    )
+
+
 def _cli(stdin: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT)], input=stdin, capture_output=True, text=True, check=False

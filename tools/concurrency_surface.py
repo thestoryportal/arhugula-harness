@@ -49,6 +49,9 @@ SURFACE_PATTERNS: tuple[str, ...] = (
     r"os\.replace",
     r"global ",
     r"nonlocal ",
+    # GitHub Actions concurrency groups and in-progress cancellation (codex r1 P2 on this arc)
+    r"concurrency:",
+    r"cancel-in-progress:",
 )
 _SURFACE = re.compile("|".join(f"(?:{p})" for p in SURFACE_PATTERNS))
 
