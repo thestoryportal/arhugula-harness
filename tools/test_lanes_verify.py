@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -34,14 +35,20 @@ def test_manifest_rows_well_formed():
 
 
 def test_manifest_artifacts_exist_at_head():
-    """A pytest/shell row names a file that exists; a `just:` row names a real recipe."""
+    """A pytest/shell row names a file that exists; a `just:` row names a real recipe.
+
+    A recipe declaration is `name:` OR `name <param…>:` — a substring search for `name:`
+    alone reports every PARAMETERIZED recipe as missing (`lanes-pilot-report <run-id>`,
+    U-HE-37), which is a false RED on a row whose artifact does exist.
+    """
     justfile = (lv.REPO / "justfile").read_text()
     for r in lv.MANIFEST:
         kind, _, target = r.artifact.partition(":")
         if kind in ("pytest", "shell"):
             assert (lv.REPO / target.split("::")[0].split()[0]).exists(), r.artifact
         elif kind == "just":
-            assert f"\n{target.split()[0]}:" in justfile, r.artifact
+            name = re.escape(target.split()[0])
+            assert re.search(rf"^{name}( +[^:\n]*)?:", justfile, re.M), r.artifact
 
 
 def test_phase0_skip_counts_as_fail():

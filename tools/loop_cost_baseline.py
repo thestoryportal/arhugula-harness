@@ -69,6 +69,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import re
 import statistics
 import sys
 from datetime import datetime, timedelta
@@ -77,6 +78,14 @@ from pathlib import Path
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
 TRIGGER_WINDOW = timedelta(days=30)  # B-232: > TRIGGER_THRESHOLD yield rows in any window
 TRIGGER_THRESHOLD = 5  # B-232 trigger: lease_held_yields_30d_max > 5 opens the spec leg
+#: The structured column EXACTLY as `loop_log_structured` writes it: `lane=<x>;cause=<y>`,
+#: both keys, in that order, with `;` and whitespace stripped from the values
+#: (`_loop_structured_col`, tools/hooks/loop_lib.sh:151-166). Matching any `key=value`
+#: run instead misreads a LEGACY free-text detail that happens to be one token — a
+#: three-column row ending `status=done` — as a truncated structured row, and since the
+#: pilot report refuses on those, ONE such historical row would make every future report
+#: permanently unanswerable (codex r4 P2, on the r3 fix).
+_STRUCTURED_COL = re.compile(r"lane=[^;\s]*;cause=[^;\s]*")
 LEASE_PRODUCER = "merge-door-lease-acquire"
 CODEX_PRODUCER = "codex_review_wrapper"
 GEMINI_PRODUCER = "gemini_review_wrapper"
@@ -251,12 +260,46 @@ def rolling_window_max(stamps: list[datetime], window: timedelta) -> int:
     return best
 
 
+def parse_loop_row(line: str) -> dict[str, str] | None:
+    """One shared-ledger row as `{ts, kind, lane, cause, detail}`, or None for a line that
+    is not a data row (the header, the `|---|` rule, prose).
+
+    THE parser for the ledger's row grammar ([LAW:one-source-of-truth]): `_is_yield_row`
+    below and `tools/lanes_pilot.py`'s C-HE-13 §3 report both reduce through it, so the
+    grammar has one reader rather than a regex per consumer.
+
+    Two row shapes are live and are told apart by cell count, not by guessing: the
+    structured 4-column row `loop_log_structured` writes (`ts | kind | lane=…;cause=… |
+    detail`) and the older 3-column `ts | kind | detail`, whose lane and cause are empty
+    strings — absent, never invented."""
+    cells = [c.strip() for c in line.split("|")]
+    if len(cells) < 5 or not cells[1] or cells[1] == "ts" or set(cells[2]) <= {"-"}:
+        return None
+    # Structured vs legacy is decided by the third cell's SHAPE, not by cell count. Counting
+    # alone reads a TRUNCATED structured row (`| ts | DEFERRED-HIL | lane=L;cause=x |`, five
+    # cells) as a legacy three-column row, silently yielding an empty cause and the metadata
+    # as the detail — so a truncated coordination escalation would parse "successfully" and
+    # slip past a consumer's malformed-row refusal (codex r3 P2). The structured cell is
+    # entirely `key=value` pairs joined by `;` with no spaces; a legacy detail that merely
+    # contains an `=` (`holder=u-9 backoff=0`) has a space and is not mistaken for one.
+    structured_col = bool(_STRUCTURED_COL.fullmatch(cells[3]))
+    if structured_col and len(cells) < 6:
+        return None  # truncated structured row: unreadable, never silently legacy
+    structured = structured_col and len(cells) >= 6
+    fields = dict(p.split("=", 1) for p in (cells[3] if structured else "").split(";") if "=" in p)
+    return {
+        "ts": cells[1],
+        "kind": cells[2],
+        "lane": fields.get("lane", ""),
+        "cause": fields.get("cause", ""),
+        "detail": cells[4] if structured else cells[3],
+    }
+
+
 def _is_yield_row(line: str) -> bool:
     """A loop_status.md table row `| ts | NOTIFY | lane=…;cause=<YIELD_CAUSE> | detail |`."""
-    cells = [c.strip() for c in line.split("|")]
-    if len(cells) < 5 or cells[2] != "NOTIFY":
-        return False
-    return any(part == f"cause={YIELD_CAUSE}" for part in cells[3].split(";"))
+    row = parse_loop_row(line)
+    return bool(row) and row["kind"] == "NOTIFY" and row["cause"] == YIELD_CAUSE
 
 
 def yield_stamps(lines: list[str]) -> list[datetime]:

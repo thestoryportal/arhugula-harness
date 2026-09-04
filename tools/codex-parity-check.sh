@@ -39,6 +39,7 @@ tools/test_concurrency_surface.py \
   tools/test_ci_bookkeeping_filter.py \
   tools/test_finding_record.py \
   tools/test_lanes_verify.py \
+  tools/test_lanes_pilot_gate.py \
   tools/test_main_protection.py \
   tools/test_merge_door.py \
   tools/test_merge_gate_log.py \

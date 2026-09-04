@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 232
+  total: 234
   open: 1
   design_substrate_gated: 3
-  registered_finding: 74
+  registered_finding: 76
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 2648cd445e4ff05a
+  identity_digest: 2434bfc932f9db35
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11197,3 +11197,66 @@ items:
     root CLAUDE.md fixed point, context-guard lag rule) with a nameable serialization ⊥
     fixed-point tension — council-eligible at that point.'
   heading: '### B-232 · merge-door lease released after content merge; refresh covers N merges *(trigger-gated by B-230 Task 8, 2026-09-04; HELD until the trigger fires)*'
+- id: B-233
+  title: >-
+    permission-guard's generic `just` verb alternation is not end-anchored; a trailing
+    token is parsed by `just` as a chained second recipe
+  pr: 'PR pending (u-he-37)'
+  status: registered_finding
+  summary: 'SURFACED by codex r1 on u-he-37 (2026-09-04) against that arc''s two new
+    recipes, and confirmed EMPIRICALLY to be pre-existing and general: the loop-mode
+    allowlist branch in tools/hooks/permission-guard.sh matches
+    `just[[:space:]]+(check|lint|...)([[:space:]]|$)` with no end anchor, and `just` runs
+    every trailing token as a further recipe (verified — `just lanes-pilot-report aaa
+    zzz-nonexistent` errors with "justfile does not contain recipe", proving the token is
+    parsed as a recipe and not as an argument). So `just lint main-protection-rollback`
+    auto-approves an otherwise ask-gated outward-facing mutation after the allowed recipe
+    runs. `arc-close` escapes the class only because its variadic `*QUEUE_ARGS` swallows
+    every trailing token, and u-he-37''s two pilot verbs now carry their own end-anchored
+    arity-bounded matcher with seven negative guard cases — neither fix generalizes to the
+    other recipes in the alternation.'
+  close_out: 'OPEN — closure = every recipe in the generic alternation is either
+    end-anchored with its own arity bound, variadic like arc-close, or moved to an
+    exact-shape branch, with negative chain cases per recipe in
+    tools/hooks/test_permission_guard.sh. Needs a per-recipe arity audit of the justfile
+    (roughly forty verbs) plus a decision on whether a single end-anchored form can cover
+    the parameterless majority; a blanket anchor would break the parameterized entries
+    already relying on the loose match, so this is an audit, not a one-line fix.'
+  council: 'NO — one guard predicate and its test matrix; no cross-axis tension.'
+  heading: '### B-233 · the generic `just` verb alternation in the permission guard is not end-anchored — a trailing token is parsed by `just` as a chained second recipe *(surfaced by codex r1 on u-he-37, 2026-09-04; REGISTERED)*'
+- id: B-234
+  title: >-
+    Pilot membership is inferred from recorded run ids, and arcless loop-ledger rows
+    cannot be attributed to a pilot
+  pr: 'PR pending (u-he-37)'
+  status: registered_finding
+  summary: 'SURFACED by codex r3 on u-he-37 (2026-09-04), two bounds the C-HE-13 §3 report
+    cannot close from the consumer side. FIRST, membership is inferred from the reservations
+    carrying pilot_run_id because nothing persists an expected roster, so a lane that created
+    its reservation and died before recording the id is invisible and a 4-lane pilot that lost
+    one lane can still present three lanes and satisfy the 3-4 check. SECOND, the friction
+    window closes at the pilot''s last ARC-ATTRIBUTED row, and three merge_door._notify details
+    carry no leading arc id (the lease-acquired, lease-released and main-CI-queue-depth rows),
+    so the door''s own release attestation falls outside every defensible close. Three review
+    rounds landed on that one heuristic, which is the register-and-hold point: the root cause
+    is producer-side, not another consumer bound.'
+  close_out: 'OPEN — closure = (a) the pilot runner persists an expected participant roster at
+    start and the report compares it against the reservations that recorded the run id, and
+    (b) every merge_door._notify detail leads with its arc id so ledger rows are attributable
+    without a time window at all. (b) alone retires the friction bound and is the smaller
+    change; (a) needs a roster surface C-HE-13 does not currently define, so it may route to a
+    spec leg. ALSO carries two door-completion bounds from codex r4 on the same arc, the same
+    shape as the first two — the report sits OUTSIDE the door and cannot verify door completion
+    from the stores alone, which is why four review rounds converged on this family rather than
+    on the code: a non-empty merge_sha does not by itself prove a DOOR landing (merge_door.land
+    accepts a PR already externally MERGED, reconciles the cycle and still writes that sha), and
+    read_lease() maps a present-but-MALFORMED lease file to None, so a corrupted live lease lets
+    the report proceed while post-merge checks are unfinished. Their closure: (c) the door
+    publishes an explicit completion marker the report can read — a released-lease record or a
+    terminal door row — so "landed through the door and finished" stops being inferred from
+    reservation payload, and (d) read_lease() distinguishes absent from unreadable as every
+    other store reader in this family already does. Interim floor already landed: the report
+    prints `arcs`, `lanes` and a `membership: inferred …` field, so a PASS cannot be read as
+    "every intended lane landed", and every bound is stated in the module docstring.'
+  council: 'NO — one producer field and one roster surface; no cross-axis tension.'
+  heading: '### B-234 · pilot membership is inferred, and arcless loop-ledger rows cannot be attributed to a pilot *(surfaced by codex r3 on u-he-37, 2026-09-04; REGISTERED)*'

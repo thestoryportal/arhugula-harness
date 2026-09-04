@@ -61,6 +61,9 @@
 | CI wall clock after Task 6 Steps 1–5 — content-merge `main` run 33825006882 (the #1513 squash `f5b8f6c6a` touched `tools/`, so nothing was skipped) | 517 s (`createdAt` 01:14:40Z → `updatedAt` 01:23:17Z, 2026-09-04); 22 jobs, 0 `skipped` | `gh run view 33825006882 --json createdAt,updatedAt,jobs`
 | CI wall clock after Task 6 Steps 1–5 — refresh-merge `main` run 33825706732 (#1514, `462615452`) | 61 s (`createdAt` 01:25:25Z → `updatedAt` 01:26:26Z); 17 jobs, 5 `skipped` (pytest / coverage / pyright / tools-coverage / axis-isolation) | `gh run view 33825706732 --json createdAt,updatedAt,jobs`
 | Loop cost baseline at `462615452` (main after #1514; the b-230-task-8 branch point, before this arc's review round) | 2616 rows / 82 arcs (80 reviewed); median 5.5, max 24; gate rounds with findings 50, single-lens 36; accepted-only unique catches witness-adequacy 20 / spec-conformance 10 / concurrency 0 (raw 34; rejected-or-suppressed 4; unadjudicated 0); lease-acquire events 2; over the live `loop_status.md`: `lease_held_yields` 0, `lease_held_yields_30d_max` 0 (the producer lands with this arc); `arc-metrics drain` held 28 (the pre-existing 27 plus b-230-task-6, same cause) | `uv run python tools/loop_cost_baseline.py --loop-status <loop_status.md>`; `just arc-metrics drain`
+| CI wall clock after Task 8 — content-merge `main` run 33832235255 (the #1515 squash `20f3a3e6f` touched `tools/`, so nothing was skipped) | 536 s (`createdAt` 03:10:32Z → `updatedAt` 03:19:28Z, 2026-09-04); 22 jobs, 0 `skipped` | `gh run view 33832235255 --json createdAt,updatedAt,jobs`
+| CI wall clock after Task 8 — refresh-merge `main` run 33832866357 (#1516, `46e15c742`) | 61 s (`createdAt` 03:20:46Z → `updatedAt` 03:21:47Z); 17 jobs, 5 `skipped` | `gh run view 33832866357 --json createdAt,updatedAt,jobs`
+| Loop cost baseline at the u-he-37 branch point (`46e15c742` plus this arc's own rows) | 2623 rows / 83 arcs (81 reviewed); median 5, max 24; gate rounds with findings 50, single-lens 36; accepted-only unique catches witness-adequacy 20 / spec-conformance 10 / concurrency 0 (raw 34; rejected-or-suppressed 4; unadjudicated 0); lease-acquire events 2; `lease_held_yields` 0 and `lease_held_yields_30d_max` 0 over the live ledger (the B-232 producer landed with #1515, so the counter starts here); `arc-metrics drain` held 29 (the pre-existing 28 plus b-230-task-8, same cause) | `uv run python tools/loop_cost_baseline.py --loop-status <loop_status.md>`; `just arc-metrics drain`
 
 ### §0.1 Task 6 Step 5 — the last 20 concurrency-lens rounds (append order; measured at `a3c7613b3`, re-run after the codex r1 absorption)
 
@@ -512,7 +515,7 @@ The permission guard is not on the path: the door runs `gh pr merge` from a Pyth
 **Files (only after the decision):** `.harness/spec/Spec_HE_Loop_Lanes_v1.md:294` (C-HE-06 §4 iv) and `:334-338` (C-HE-07 §1), bumped to the next unallocated version at the time the leg opens, with a change note; `.harness/clearance/spec-he-loop-lanes-v<that version>-cleared-<date>.md`; `tools/merge_door.py:896` (the fixed string), `tools/hooks/safe-merge.sh:2-4` (its comment quoting the string), `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`, `tools/test_merge_door.py` (the fixed-string witness). No permission-guard or guard-test change.
 
 - [x] **Step 1:** Present the decision in the same AskUserQuestion as Task 6 Step 6, recommending **no** for now: Task 4 already collapses the cost to one approval per session, and the rule exists because deletion is irreversible. **Answered NO — operator, 2026-09-03:** `--delete-branch` never enters the fixed merge string; deletion stays the once-per-session hand-approved batch (Task 4). Task 7 CLOSED; Step 2 does not run.
-- [ ] **Step 2 (only on yes):** file the spec change note, land the spec + marker PR first (doc-only, no code, so the context guard's DESIGN_IMPL_MIX rule stays clean), then land the code PR with the file edits above.
+- [x] **Step 2 (only on yes): VOID — the operator answered NO on 2026-09-03, so this step never runs.** It would have been: file the spec change note, land the spec + marker PR first (doc-only, no code, so the context guard's DESIGN_IMPL_MIX rule stays clean), then land the code PR with the file edits above.
 
 ---
 
@@ -569,9 +572,9 @@ B-230 closes only after Steps 1–3 are all landed: an umbrella closed after Ste
 
 The field set above mirrors `B-229`. `status` must be one of the register enum values in `tools/forward_register.py` (`open`, not `active`), and `tools/forward_register.py --check` also requires a matching `### B-230 · …` block in `.harness/post-phase-8-forward-register.md` whose heading equals the `heading:` field byte-for-byte. `just check` runs its tally gate.
 
-- [ ] **Step 2: Point the next action at the plan.** Write `.harness/.next-action-draft` with first line `post-pr: <N>` for the PR that lands this registration, then one paragraph: "Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 0 then Task 1 (B-230); then U-HE-37." The door's refresh installs it, and after Task 2 the prompt hook shows `next=plan:loop-optimization-plan-2026-09-03`.
+- [x] **Step 2: Point the next action at the plan.** *(Landed with #1499; the prompt hook read `next=plan:loop-optimization-plan-2026-09-03` from Task 2 onward.)* Write `.harness/.next-action-draft` with first line `post-pr: <N>` for the PR that lands this registration, then one paragraph: "Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 0 then Task 1 (B-230); then U-HE-37." The door's refresh installs it, and after Task 2 the prompt hook shows `next=plan:loop-optimization-plan-2026-09-03`.
 
-- [ ] **Step 3: Land it** as a doc-only PR (`register`, `snapshot`, this plan file, the diagrams it cites); `just check` green; no merge-gate (no code surface); commit `ops: register B-230 loop optimization program`.
+- [x] **Step 3: Land it** *(landed as PR #1499 → `4b7ca1677`, refresh #1500)* as a doc-only PR (`register`, `snapshot`, this plan file, the diagrams it cites); `just check` green; no merge-gate (no code surface); commit `ops: register B-230 loop optimization program`.
 
 ## Order and expected effect
 
