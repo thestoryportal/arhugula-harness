@@ -6771,9 +6771,16 @@ from `lanes_verify.phase0_verdict` (§1) AND `lanes_verify.probe_result_verdict`
 reductions `just lanes-phase0-check` and `just pilot-gate-check` exit on, so the runner and the
 recipes cannot disagree about what "green" means — a `skip` and a `live` row both count RED without
 this module restating the rule. `evaluate(run_id, Stores)` computes the §3 iff-clause pure over the
-three stores' contents, so every clause is witnessed with plain data and no filesystem mocking;
-`report()` gathers and calls it and REFUSES (exit 2) rather than returning a verdict whenever the
-evidence cannot be read — exit 1 is reserved for a measured FAIL. Recipes `lanes-pilot` /
+three stores' contents, so every clause is witnessed with plain data and no filesystem mocking.
+Two qualifications the prose must carry, because `B-234` holds them open: clause (a) is checked as
+`merged` AND a door-recorded `merge_sha`, which is NOT full proof of a door landing — `merge_door.land()`
+also records a `merge_sha` when it encounters an already externally-MERGED PR, so a hand-merged
+lane can still satisfy it; and `report()` refuses (exit 2) on the store failures it can DETECT — an
+unreadable merged ledger, an absent gate log or loop ledger, a malformed ledger row, a live door
+lease naming a pilot arc — but not on a lease it cannot tell from absence, since
+`merge_door.read_lease()` maps a present-but-MALFORMED `LEASE` to `None`, which `report()` reads as
+"no lease held" and may therefore PASS while post-merge checks are still running. Exit 1 stays
+reserved for a measured FAIL. Recipes `lanes-pilot` /
 `lanes-pilot-report` ride their own END-ANCHORED arity-bounded guard matcher rather than the generic
 `just` verb alternation, which is not end-anchored (`just` executes a trailing token as a second
 recipe). Two C-HE-13 phase1 manifest rows registered; the `just:lanes-pilot-report <run-id>` row
@@ -6829,11 +6836,17 @@ with the suite green. **The rule this arc paid for: a stub whose return value eq
 return value witnesses nothing** — a stub must return a call counter or content that must appear in
 the output. Each fix was mutation-probed with the tree restored byte-identical.
 
-**Two bounds this report cannot close, registered at `B-234` rather than patched around:** pilot
-membership is inferred from the reservations carrying `pilot_run_id` because nothing persists an
-expected roster, so a lane that died before recording it is invisible; and the door's own arcless
-release attestation falls outside any defensible friction window because three `merge_door._notify`
-details omit the leading arc id every other escalation carries. Four consecutive rounds converged on
+**Four bounds this report cannot close, all registered at `B-234` rather than patched around.**
+(i) Pilot membership is INFERRED from the reservations carrying `pilot_run_id`, because nothing
+persists an expected roster — a lane that died before recording it is invisible, so a four-lane
+pilot that lost one lane can still show three and satisfy the 3–4 check. (ii) The door's own arcless
+release attestation falls outside any defensible friction window, because three `merge_door._notify`
+details omit the leading arc id every other escalation carries. (iii) A non-empty `merge_sha` does
+not prove a DOOR landing: `merge_door.land()` accepts a PR already externally MERGED, reconciles the
+cycle and still writes that SHA. (iv) `merge_door.read_lease()` maps a present-but-malformed `LEASE`
+to `None`, indistinguishable from no lease, so a corrupted live lease lets the report proceed while
+the door's post-merge checks are unfinished. (iii) and (iv) are the same shape as (i) and (ii): the
+report sits OUTSIDE the door and cannot verify door completion from the stores alone. Four consecutive rounds converged on
 that family, which is the register-and-hold point: the root cause is producer-side. The interim
 floor is landed — the report prints `arcs`, `lanes` and a `membership: inferred …` field, so a PASS
 cannot be read as "every intended lane landed".
