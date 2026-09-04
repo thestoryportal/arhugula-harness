@@ -46,6 +46,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The `--detail` boundary is IMPORTED, never re-typed: this module parses the prose
+# half of that output, and a second copy of the delimiter would be exactly the
+# two-carriers drift B-235 exists to remove.
+from forward_register import PROSE_DELIMITER  # noqa: E402
+
 # --- finding model -----------------------------------------------------------
 
 HARD = "HARD"
@@ -79,7 +84,11 @@ class Report:
 
 
 class BaseRefError(ValueError):
-    """The requested base ref does not resolve (fails the run; never silent)."""
+    """A git command this run depends on did not succeed (fails the run; never silent).
+
+    Originally raised only for an unresolvable base ref, hence the name. It now also
+    carries a failed `git status` from the dirty-carrier guard: the shared property is
+    that the command's empty output would otherwise be read as a real answer."""
 
 
 def _run(args: list[str]) -> str:
@@ -1072,13 +1081,18 @@ def check_register_rows(
     base_ids: set[str] | None = None,
     uncommitted: bool = False,
 ) -> None:
-    """`--detail <ID>` renders the PROSE carrier, not the YAML `summary`.
+    """`--detail <ID>` renders the canonical YAML `close_out`, then the PROSE carrier.
 
-    A row written only into `forward-register.yaml` prints just its heading —
-    so the next session reading `--detail` sees a title and nothing else and
-    concludes the row is empty. The "leads with current state, not a superseded
-    instruction" half is genuinely non-mechanical, so the leading bullet is
-    PRINTED for a human rather than pattern-matched into a fake verdict.
+    Since B-235 it prints the canonical header FIRST, then `PROSE_DELIMITER` on its own
+    unindented line, then the prose block; what this function judges is only the PROSE
+    half, which is why it splits on that delimiter rather than reading the whole output.
+
+    A row written only into `forward-register.yaml` therefore contributes NO prose body,
+    and the next session reading `--detail` sees the canonical text followed by a heading
+    and nothing else. That empty prose half is what `HEADING ONLY` reports. The "leads
+    with current state, not a superseded instruction" half is genuinely non-mechanical, so
+    the leading bullet is PRINTED for a human rather than pattern-matched into a fake
+    verdict.
     """
     if not any(
         p.endswith(("forward-register.yaml", "post-phase-8-forward-register.md")) for p in paths
@@ -1119,7 +1133,13 @@ def check_register_rows(
     if ids and detail_fn is None and not uncommitted:
         dirty = [
             line[3:].strip()
-            for line in _run(["git", "status", "--porcelain"]).splitlines()
+            # `_run_checked`, never `_run`: a failed `git status` returns empty stdout,
+            # which is indistinguishable from a clean tree, so the guard would report the
+            # carriers committed and judge HEAD anyway -- reopening from the other side the
+            # exact fail-open this branch was added to close (codex r11 [P2]). Same class as
+            # the r14 [P3] under sweep (a real failure rendered as a benign other diagnosis)
+            # and as round 3's swallowed diff. [LAW:no-silent-failure]
+            for line in _run_checked(["git", "status", "--porcelain"]).splitlines()
             if line[3:]
             .strip()
             .endswith(("forward-register.yaml", "post-phase-8-forward-register.md"))
@@ -1135,10 +1155,49 @@ def check_register_rows(
             return
     for rid in ids:
         rc, stdout = detail(rid)
-        body = [ln for ln in stdout.splitlines() if ln.strip() and not ln.startswith("###")]
+        # `--detail` prints a CANONICAL close_out header, then PROSE_DELIMITER on its own
+        # line, then the prose block. Only the prose half is what these two checks judge:
+        # counting the header as body would make `not body` unreachable and silently
+        # retire the YAML-only-row detection below.
+        #
+        # The frame is parsed as an EXACT UNINDENTED LINE, never a substring. A substring
+        # split lets row CONTENT choose the framing: a close_out containing the delimiter
+        # text would split inside the header, carry its own remaining lines into the prose
+        # half, and a heading-only row would stop reporting HEADING ONLY (codex r1 [P2]).
+        # The CLI renders every close_out line with a two-space indent, so an unindented
+        # delimiter line cannot be produced by row content at all.
+        # The missing-delimiter fallback is for INJECTED test doubles ONLY. On the real
+        # `_detail_via_cli` path it must fail loud: `just leg-selfcheck --uncommitted` runs
+        # the producer from the WORKING TREE, so an uncommitted change that alters or drops
+        # the delimiter would set `cut = 0`, count the canonical header as prose body, and
+        # let a heading-only / YAML-only row evade the HARD finding below -- in exactly the
+        # venue this check exists for. `test_detail_emits_the_delimiter_as_one_bare_
+        # unindented_line` pins the COMMITTED producer and cannot see that tree, which is
+        # why five sweep answers calling this arm "safe, the producer is pinned" were
+        # incomplete (codex r12 [P2]).
+        # The PRODUCER'S OWN failure is reported first. A real `--detail` failure (a row
+        # whose prose heading is missing exits 1 with empty stdout) would otherwise hit the
+        # delimiter branch below and be reported as "framing changed", hiding the actual
+        # error behind a diagnosis of the wrong thing (codex r14 [P3]).
         if rc != 0:
             report.add("register", HARD, f"{rid}: --detail exited {rc}")
-        elif not body:
+            continue
+
+        lines = stdout.splitlines()
+        try:
+            cut = lines.index(PROSE_DELIMITER) + 1
+        except ValueError:
+            if detail_fn is None:
+                report.add(
+                    "register",
+                    HARD,
+                    f"{rid}: --detail emitted no `{PROSE_DELIMITER}` line — the producer's "
+                    "framing changed; refusing to guess where the prose body starts",
+                )
+                continue
+            cut = 0
+        body = [ln for ln in lines[cut:] if ln.strip() and not ln.startswith("###")]
+        if not body:
             report.add(
                 "register",
                 HARD,

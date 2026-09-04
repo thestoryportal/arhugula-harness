@@ -56,25 +56,29 @@
 # swapping statuses while the aggregate counts stay put (a plain count pin can't).
 # `tools/forward_register.py --check` is the CI gate.
 #
-# TWO CARRIERS, ONE CLAIM -- until B-235 lands. THIS file is canonical, but
-# `forward_register.py --detail` renders the PROSE twin at
-# `.harness/post-phase-8-forward-register.md`, and the --check prose-drift test
-# compares HEADINGS ONLY, never bodies. So a `close_out` edited here does NOT reach
-# the surface operators actually read, and neither check will say so. Until B-235
-# replaces this pair with derivation, every close_out edit MUST be applied to the
-# prose twin's body in the SAME commit. That is a CONVENTION, not a mechanism --
-# nothing enforces it, which is precisely why B-235 exists.
+# TWO CARRIERS, ONE CLAIM. THIS file is canonical, and since B-235
+# `forward_register.py --detail` PRINTS this row's close_out verbatim, above the prose
+# twin at `.harness/post-phase-8-forward-register.md` and separated from it by
+# PROSE_DELIMITER. So a close_out edited here DOES reach the surface operator routing
+# reads -- that half of B-235 is repaired, and the earlier warning here that it did not
+# is SUPERSEDED.
+# What REMAINS: the prose twin is still a hand-maintained body, and the --check
+# prose-drift test still compares HEADINGS ONLY, never bodies. The two can therefore
+# still disagree with both checks green -- the reader now simply sees the canonical text
+# BESIDE the divergent copy instead of the copy alone. So: apply a close_out edit to the
+# prose twin's body in the SAME commit. That remains a CONVENTION, not a mechanism, and
+# it is the residual B-235 stays open to track.
 
 
 snapshot:
-  total: 235
+  total: 236
   open: 1
   design_substrate_gated: 3
-  registered_finding: 77
+  registered_finding: 78
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 35e60b035c55a42a
+  identity_digest: 9e830e725384296e
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11260,8 +11264,9 @@ items:
     landed through the door and finished. Bound (b), arcless friction rows, is reporting-only and
     does not gate a PASS, so it is NOT part of the blocking set (codex r4 and r6 on
     u-he-37-plan-record; the unit records the same caveat above its step ticks and the prose
-    Current state mirrors it, because forward_register.py --detail renders the prose, not this
-    field). closure = (a) the pilot runner
+    Current state mirrors it -- since B-235, --detail prints this canonical field ABOVE that
+    prose, so the two are read together and the mirror is belt-and-braces rather than the only
+    way this claim reaches a reader). closure = (a) the pilot runner
     persists an expected participant roster at
     start and the report compares it against the reservations that recorded the run id, and
     (b) every merge_door._notify detail leads with its arc id so ledger rows are attributable
@@ -11284,13 +11289,14 @@ items:
   heading: '### B-234 · pilot membership is inferred, and arcless loop-ledger rows cannot be attributed to a pilot *(surfaced by codex r3 on u-he-37, 2026-09-04; REGISTERED)*'
 - id: B-235
   title: >-
-    forward_register --detail renders the prose carrier while close_out is canonical, and
-    check_prose_drift compares headings only, so the two bodies can silently disagree
+    close_out reaches --detail since the fix, but the prose twin is still a hand-maintained
+    second body and check_prose_drift compares headings only, so the two can still disagree
   pr: 'PR pending (u-he-37-plan-record)'
   status: registered_finding
-  summary: 'One claim, two hand-maintained bodies, and no check that compares them. The YAML
-    close_out is the canonical field, but forward_register.py --detail renders the PROSE
-    carrier, and check_prose_drift() compares HEADINGS only -- never bodies. A safety-critical
+  summary: 'One claim, two hand-maintained bodies, and no check that compares them. AS FIRST
+    REGISTERED: close_out was canonical but forward_register.py --detail rendered the PROSE
+    carrier ALONE, and check_prose_drift() compares HEADINGS only -- never bodies. The rendering
+    half is now FIXED (--detail prints close_out first); the unchecked-second-body half is not. A safety-critical
     disposition therefore has to be typed twice, and reverting either copy leaves --check GREEN
     while the canonical field and the surface routing actually reads disagree. This is not
     hypothetical: it is the root cause of four consecutive review rounds on u-he-37-plan-record
@@ -11300,32 +11306,72 @@ items:
     of four bounds, and r8 found the plan paragraph still saying two inside a paragraph whose
     next sentence said three. Every one of those was a human re-typing a claim that had one
     authority.'
-  close_out: 'OPEN. Two shapes, and the choice between them is the decision: EITHER derive the
-    rendered detail body from the canonical YAML so the prose carrier stops being a second
-    authority (strongest -- it deletes the class rather than detecting it, but it changes what
-    --detail prints and needs the prose bodies that carry MORE than close_out reconciled first),
-    OR extend check_prose_drift() to semantic parity on the bodies it already pairs by heading
-    (weaker -- a second clock that at least alarms, and it cannot express that the docstring is a
-    third carrier). NOT fixable from the arc that found it: forward_register.py is tools/ and
-    matches codex_context_guard.IMPL_RE, while the plan is DESIGN, so the fix cannot ride a
-    doc-only PR. Interim, and the reason this is registered rather than held: the enumeration is
-    currently identical in the same order on all three register-side surfaces, verified by
-    reading each at head 27f3066ca -- so the live risk today is LATENT (future divergence),
-    not an actual disagreement. SHARPENED at codex r10, which re-raised this a third time and
-    was right to: neither closure shape as first written is as cheap as this row claimed.
-    DERIVING the rendered body from close_out would LOSE information, because the prose bodies
-    carry What-it-is, Closure-shape and Current-state text that close_out does not hold; and
-    full BODY PARITY cannot mean textual equality, because the two bodies are deliberately
-    different registers of prose. The specifiable fix is NARROWER than either: check that the
-    BLOCKING-BOUND ENUMERATION agrees across carriers -- extract the bound letters asserted by
-    close_out and by the prose Current state, compare the SETS, and fail on a mismatch. That is
-    the claim whose divergence is dangerous; the prose around it is not. RECOMMENDED NEXT,
-    ahead of U-HE-38: it lands as its own tools-only PR with no DESIGN surface in the change
-    set and no clearance marker needed. Re-raised as a standalone finding at codex r9
-    on the same arc, correctly: registering a defect does not repair it, and the reason this
-    row exists rather than a fix is a CI-enforced scope boundary, not a judgement that the
-    gap is acceptable. Interim mitigation landed with this row and named as insufficient: the
-    header of each carrier now states which file is canonical and that both bodies must be
-    edited in one commit -- a convention with nothing enforcing it.'
+  close_out: 'PARTIALLY CLOSED at the arc that follows u-he-37-plan-record -- the
+    OPERATOR-FACING half is repaired; the detection half is deliberately not built, and
+    the row stays open so that residual is tracked rather than named on a closed row.
+    WHAT LANDED: forward_register --detail now prints the CANONICAL close_out, read from
+    the YAML row, ABOVE the prose block, separated by PROSE_DELIMITER. The surface that
+    operator routing actually reads therefore carries the authority itself, so a drifted
+    prose body is now seen BESIDE the canonical text instead of standing in for it.
+    close_out is ALWAYS stated and never rendered as silence -- as its text when present,
+    as MISSING when required at this status and absent, and as an explicit not-required
+    line otherwise, whose wording differs for a held row and a closed one. The count of
+    renderings is deliberately not stated here: it changed once already (codex r8 found
+    the closed branch emitting nothing at all), and a number in prose drifts while the
+    invariant does not.
+    WHY NOT THE SHAPE THIS ROW ORIGINALLY PRESCRIBED: extracting bound letters from both
+    prose bodies and comparing the sets would NOT have caught the r6 defect it was written
+    for. At r6 the YAML asserted (c) and (d) as the blocking set while MENTIONING (a) and
+    (b) elsewhere, so letter extraction yields the same four letters on both sides and
+    reports agreement; phrase-anchored extraction is fragile the other way, and a pattern
+    matching nothing on both sides passes VACUOUSLY -- a gate that cannot tell empty from
+    unlooked, which is the defect class this register exists to record. Rendering the
+    canonical field removes the need to parse prose for a fact at all.
+    RESIDUAL, tracked here: the two bodies can still diverge and nothing detects it. The
+    severity is materially lower now that the canonical text reaches the reader, so this
+    is registered rather than driven; a future pass may add parity on the specific claim,
+    not on the prose. NOT built as part of this arc: a structured blocking_bounds field.
+    Exactly one row carries bounds today, and minting a schema field for a generality that
+    does not exist is speculative carrying cost.
+    CONSUMER NOTE: tools/leg_selfcheck.py parses the prose half of --detail and now splits
+    on the imported PROSE_DELIMITER. Without that, the canonical header would have become
+    body[0] -- hard-failing every new row on the lead check, and, worse, making its
+    empty-body test unreachable so the YAML-only-row gate would have stopped firing
+    silently. Both directions are witnessed by mutation probe.'
   council: 'NO -- a tooling authority question inside one register, no cross-axis tension.'
   heading: '### B-235 · the register keeps one claim on two hand-maintained surfaces and the drift check compares only headings *(surfaced by codex r8 on u-he-37-plan-record, 2026-09-04; REGISTERED)*'
+- id: B-236
+  title: leg_selfcheck's dirty-carrier guard snapshots git status once and then renders the working tree
+    once per row, so a concurrent write between them is invisible
+  pr: '#1521 (surfaced by the merge-gate concurrency lens on the b-235 arc)'
+  status: registered_finding
+  summary: 'TOCTOU in the committed-mode guard at tools/leg_selfcheck.py. check_register_rows reads `git
+    status --porcelain` ONCE, and if the register carriers are clean it falls through to a loop that spawns
+    one `forward_register.py --detail <rid>` subprocess per row. forward_register reads the LIVE working
+    tree directly -- load() opens the ledger path and the prose is read with read_text(); it never reads
+    a git blob. So the guard certifies the tree at one instant and the reads it protects happen at N later
+    instants, with no lock and no re-check. A concurrent uncommitted edit to forward-register.yaml or
+    post-phase-8-forward-register.md landing inside that window is invisible: --detail renders prose that
+    the push will not carry, a heading-only committed row is downgraded from HARD to ADVISORY, and `leg-selfcheck
+    OK` ships. That is the round-11 [P2] fail-open reopened from the TIMING side rather than the already-dirty
+    side the guard closes.'
+  close_out: 'REGISTERED, not driven, and deliberately NOT absorbed into the b-235 arc that found it.
+    GROUNDS: the guard is PRE-EXISTING ON MAIN -- `git show main:tools/leg_selfcheck.py` carries it at
+    line 1122 using `_run` -- so this window predates b-235 and was not introduced there. b-235 touched
+    exactly one line of it, swapping `_run` for `_run_checked`, which moves the guard STRICTLY in the
+    safe direction: a failed `git status` used to return empty stdout, indistinguishable from a clean
+    tree, and now raises. Closing the remaining window is a design question, not a one-line fix, and the
+    two remedies the lens proposed do not hold: reading `git show HEAD:<path>` instead of the live tree
+    would break `--uncommitted` mode, whose whole purpose is rendering the working tree; and re-checking
+    immediately before each --detail call narrows the window without closing it, since the write can still
+    land between that re-check and the subprocess''s own read. WHAT WOULD ACTUALLY CLOSE IT, for whoever
+    takes this row: make the mutation DETECTABLE rather than preventable -- re-run the same dirty check
+    after the row loop and fail HARD if the carriers changed during the run -- or give the run a lock.
+    The detect-after shape is preferred: it needs no new locking primitive and turns a silently wrong
+    answer into a loud one. TRIGGER: this is only reachable with a genuine concurrent writer in the same
+    checkout, which this workspace does have (background lanes, editor autosave), so it is real rather
+    than theoretical -- but it is narrow, and b-235''s review budget was exhausted at 15/15 rounds when
+    it surfaced, so absorbing an unreviewed new bound there would have been the worse trade.'
+  council: NO -- a single-tool timing question inside one checker, no cross-axis tension.
+  heading: '### B-236 · the dirty-carrier guard checks the tree once, then renders it N times *(surfaced
+    by the merge-gate concurrency lens on b-235, 2026-09-04; REGISTERED)*'

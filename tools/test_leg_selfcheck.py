@@ -276,6 +276,181 @@ def test_register_check_fires_on_a_row_that_renders_a_heading_only():
     assert any("HEADING ONLY" in m for m in msgs), msgs
 
 
+def _real_shaped_detail(prose: str, *, rid: str = "B-999", status: str = "registered_finding"):
+    """Reproduce the SHAPE `forward_register --detail` actually emits: a canonical
+    close_out header, the delimiter, then the prose block. Every other fake in this
+    file predates that header and omits the delimiter, so they exercise the
+    compatibility fallback rather than the runtime path -- these two tests are the
+    ones that witness the real shape (B-235)."""
+    header = (
+        f"{rid} — {status}\n"
+        f"close_out (CANONICAL — /x/forward-register.yaml):\n"
+        f"  OPEN — the canonical disposition.\n\n"
+        f"{ls.PROSE_DELIMITER}\n\n"
+    )
+    return lambda _rid: (0, header + prose)
+
+
+def test_yaml_only_row_still_fires_through_the_real_detail_shape():
+    """B-235 regression. The canonical header made `--detail` output non-empty for a
+    row with NO prose body, so a naive `body` computation would make `not body`
+    unreachable and RETIRE this gate silently -- a gate that stops firing without
+    saying so. Feed the real shape and prove it still fires."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-999"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=_real_shaped_detail("### B-999 · a title and nothing else\n"),
+    )
+    msgs = _hard(report)
+    assert any("HEADING ONLY" in m for m in msgs), msgs
+
+
+def test_a_missing_delimiter_on_the_real_cli_path_fails_loud_not_silently(monkeypatch):
+    """codex r12 [P2]. The missing-delimiter fallback is for injected doubles only.
+
+    `just leg-selfcheck --uncommitted` runs the producer from the WORKING TREE, so an
+    uncommitted change that alters or drops the delimiter would set `cut = 0`, count the
+    canonical header as prose body, and let a heading-only row evade the HARD finding — in
+    exactly the venue this check exists for. The producer-shape test pins the COMMITTED
+    producer and cannot see that tree, which is why calling this arm "safe, the producer is
+    pinned" was incomplete for five sweeps running.
+
+    `detail_fn=None` selects the real `_detail_via_cli`, so this drives that branch by
+    monkeypatching the subprocess helper rather than injecting a double.
+    """
+    report = ls.Report()
+    # `monkeypatch` owns both modes, so there is no hand-rolled save/restore pair here --
+    # the two-armed shape whose restore arm is the recurring dead/leaky branch.
+    monkeypatch.setattr(
+        ls,
+        "_detail_via_cli",
+        # Real-path shape MINUS the delimiter: header present, prose heading-only.
+        lambda _rid: (
+            0,
+            "B-999 — closed\nclosure (CANONICAL — /x):\n  CLOSED — citation: #1\n\n"
+            "### B-999 · a title and nothing else\n",
+        ),
+    )
+    # `uncommitted=True` for the same reason the sibling rc test needs it: with
+    # `detail_fn=None` the dirty-carrier guard returns EARLY, so on a working tree with
+    # modified register files this test never reached the branch it names. It passed when
+    # written only because the carriers happened to be committed — a tree-state dependency,
+    # not a witness. `--uncommitted` is also the venue this branch exists for.
+    ls.check_register_rows(
+        ["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None, uncommitted=True
+    )
+
+    msgs = _hard(report)
+    assert any("emitted no" in m and "line" in m for m in msgs), msgs
+    # It must NOT silently fall through to the heading-only verdict, which would read as a
+    # normal register defect rather than a broken producer contract.
+    assert not any("HEADING ONLY" in m for m in msgs), msgs
+
+
+def test_a_real_detail_failure_is_reported_as_itself_not_as_changed_framing(monkeypatch):
+    """codex r14 [P3]. The delimiter check ran BEFORE the return-code check, so a genuine
+    `--detail` failure (a row whose prose heading is missing exits 1 with empty stdout)
+    was reported as "the producer's framing changed" — diagnosing the wrong thing and
+    hiding the real error. The pre-existing nonzero test stays green either way because
+    its injected `detail_fn` takes the compatibility fallback rather than this production
+    branch, so it never witnessed the ordering."""
+    report = ls.Report()
+    monkeypatch.setattr(ls, "_detail_via_cli", lambda _rid: (1, ""))
+    # `uncommitted=True` is required to reach this branch at all, and is the truer venue:
+    # the dirty-carrier guard returns early otherwise, and `--uncommitted` is the mode in
+    # which a working-tree producer failure actually shows up.
+    ls.check_register_rows(
+        ["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None, uncommitted=True
+    )
+
+    msgs = _hard(report)
+    assert any("--detail exited 1" in m for m in msgs), msgs
+    assert not any("framing changed" in m for m in msgs), msgs
+
+
+def test_a_failing_git_status_fails_the_run_instead_of_reporting_clean_carriers(monkeypatch):
+    """Class sibling of codex r14 [P3], found by the sweep that finding required.
+
+    The dirty-carrier guard read `git status --porcelain` through `_run`, which discards
+    the return code, so a failed git returned empty stdout -- indistinguishable from a
+    clean tree. The guard would then report the carriers committed and judge HEAD anyway,
+    reopening from the other side the very fail-open it was added to close (round 11
+    [P2]). Same shape as the r14 finding: a real failure rendered as a benign other
+    state. `_run_checked` makes it terminal instead.
+    """
+    import subprocess
+
+    import pytest
+
+    real_run = subprocess.run
+
+    def failing_git_status(args, **kwargs):
+        if args == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(args, 128, stdout="", stderr="fatal: bad index")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(ls.subprocess, "run", failing_git_status)
+
+    report = ls.Report()
+    # `detail_fn=None` and `uncommitted=False` are jointly what reach the guard at all.
+    with pytest.raises(ls.BaseRefError, match="git status"):
+        ls.check_register_rows(
+            ["- id: B-999"], _REGISTER_PATHS, report, detail_fn=None, uncommitted=False
+        )
+
+
+def test_a_close_out_containing_the_delimiter_cannot_spoof_the_prose_frame():
+    """codex r1 [P2]. A SUBSTRING split lets row CONTENT choose the framing: a close_out
+    carrying the delimiter text would split inside the canonical header, drag its own
+    remaining lines into the prose half, and a genuinely heading-only row would stop
+    reporting HEADING ONLY. The CLI indents every close_out line by two spaces, so the
+    frame is an exact UNINDENTED line and content cannot forge it."""
+    spoof_header = (
+        "B-999 — registered_finding\n"
+        "close_out (CANONICAL — /x/forward-register.yaml):\n"
+        f"  {ls.PROSE_DELIMITER}\n"
+        "  - **Current state.** Text that would masquerade as a prose body.\n\n"
+        f"{ls.PROSE_DELIMITER}\n\n"
+    )
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-999"],
+        _REGISTER_PATHS,
+        report,
+        # The real prose block is heading-only -- the defect the gate must still catch.
+        detail_fn=lambda _rid: (0, spoof_header + "### B-999 · a title and nothing else\n"),
+    )
+    msgs = _hard(report)
+    assert any("HEADING ONLY" in m for m in msgs), msgs
+
+
+def test_new_row_lead_check_reads_the_prose_lead_not_the_canonical_header():
+    """The same header would otherwise become `body[0]`, so every NEW row would
+    hard-fail with the header text as its 'lead'. The lead judged must be the
+    PROSE's first bullet."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-999"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=_real_shaped_detail("### B-999 · t\n\n- **Close-out steps** run the thing.\n"),
+        register_added={
+            ".harness/post-phase-8-forward-register.md": ["### B-999 · t"],
+            ".harness/forward-register.yaml": ["- id: B-999"],
+        },
+        base_ids=set(),
+    )
+    msgs = _hard(report)
+    # Discriminating assertion: the REPORTED lead must quote the prose bullet. Asserting
+    # only that "LEADS with" appears was vacuous -- the canonical header also fails the
+    # accepted-lead pattern, so the check fired either way and the mutation did not kill
+    # it (mutation-probe non-kill is a finding, not a pass).
+    assert any("Close-out steps" in m for m in msgs), msgs
+    assert not any("registered_finding" in m for m in msgs), msgs
+
+
 def test_register_check_is_silent_and_prints_the_lead_when_a_prose_body_exists():
     """The current-state-first half is genuinely non-mechanical, so the leading
     bullet is surfaced for a human instead of pattern-matched into a fake pass."""

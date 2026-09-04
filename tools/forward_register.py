@@ -80,8 +80,83 @@ _SECTION_HEADING_ID_RE = re.compile(r"^##\s+.*\(([A-Z]+-\d+)\)\s*$", re.MULTILIN
 #: their "## A-N · ..." heading shape, so they never surface as false drift.
 
 
+#: Boundary between the CANONICAL header `--detail` prints and the hand-maintained
+#: prose block that follows it. Consumers that parse the prose (tools/leg_selfcheck.py)
+#: split here; it is imported, never re-typed, so the two cannot drift (B-235).
+PROSE_DELIMITER = "--- prose block (hand-maintained copy) ---"
+
+
 class RegisterError(ValueError):
     """A structural violation in the forward register (fails ``--check`` / CI)."""
+
+
+def _nonblank_text(value: Any) -> bool:
+    """Is this NARRATIVE field carrying real text?
+
+    Three failures this replaces, in order. Plain truthiness accepted `"   "`, so `--check`
+    stayed green while `--detail` rendered a required canonical disposition as SILENCE
+    (codex r2). The first repair STRINGIFIED before testing, so `str(False)` was `"False"`
+    and `close_out: false` / `pr: 0` / `[]` began passing a check truthiness had correctly
+    rejected (codex r3). The second repair kept ONE predicate for two different contracts,
+    so its non-zero-integer arm -- there only for `pr` -- also admitted `close_out: 1`,
+    `council: 1`, `title: 1` and `summary: 1`, and `--detail` could present `1` as the
+    canonical disposition (codex r4).
+
+    A narrative field is text or it is absent. No coercion, no numbers.
+    """
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _valid_pr(value: Any) -> bool:
+    """A deliverable citation: non-blank text (`"#1032"`, or prose naming several) or a bare
+    positive PR number, which 4 live rows carry. `bool` is excluded explicitly because
+    `isinstance(True, int)` is True in Python, and 0 is not a PR."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value > 0
+    return _nonblank_text(value)
+
+
+def _one_line(value: Any) -> str:
+    """Flatten row-derived text for the ONE unindented line `--detail` prints.
+
+    Every other row-derived line goes through `_emit_indented`, which is what makes an
+    unindented delimiter unforgeable by content. `{id} — {status}` is the single line
+    that cannot be indented without changing the operator-facing header, so the same
+    guarantee is kept here instead. A newline in either field puts row CONTENT on its own
+    unindented line, and a `status` carrying PROSE_DELIMITER hands `leg_selfcheck` an
+    EARLIER bare delimiter to split on -- so a genuinely heading-only row stops reporting
+    HEADING ONLY (codex r15 [P2]; the same spoof as r1 through `close_out` and r5 through
+    `pr`, reopened through the one field the r5 emitter could not cover).
+
+    `validate()` rejects both shapes -- a multi-line id explicitly, a multi-line status by
+    STATUSES membership -- but `--detail` never calls it, and neither does `leg_selfcheck`,
+    which drives `--detail`. A validator-only defence therefore never reaches this path.
+
+    It FLATTENS rather than refuses, deliberately. Exiting on a malformed field here would
+    suppress the canonical `close_out`, which is precisely the r14 [P2] defect this header
+    exists to prevent; the authority must reach the reader even when the row is malformed.
+    `--check` stays the enforcer that REPORTS the malformation. Flattening is sufficient,
+    not merely mitigating: the line is always `{id} — {status}`, and PROSE_DELIMITER
+    contains no em dash, so no pair of field values can make it equal the delimiter.
+    """
+    return " ".join(str(value).split())
+
+
+def _emit_indented(text: Any, indent: str = "  ") -> None:
+    """Print row-derived content into the canonical header, one indented line at a time.
+
+    `tools/leg_selfcheck.py` anchors the prose frame on an EXACT UNINDENTED delimiter line,
+    which content cannot forge only while EVERY line derived from row data is indented. The
+    r1 fix established that for `close_out`; the r4 closed-row branch then interpolated `pr`
+    into a single f-string, so a newline inside `pr` emitted unindented continuation lines
+    and re-opened the same spoof through a different field (codex r5 [P2]). The repair is
+    not another per-field guard -- it is a single emitter every site must go through, so no
+    future field can reintroduce the hole by forgetting.
+    """
+    for line in str(text).strip().splitlines():
+        print(f"{indent}{line}")
 
 
 def _id_from_heading(heading: str) -> str | None:
@@ -159,8 +234,20 @@ def validate(data: dict[str, Any]) -> list[str]:
     seen_headings: dict[str, str] = {}
     for r in items:
         rid = r.get("id", "<no-id>")
-        if not r.get("id"):
+        if not _nonblank_text(r.get("id")):
             violations.append("row missing non-empty 'id'")
+        elif rid != rid.strip() or "\n" in rid:
+            # An id is an IDENTIFIER, and the `--detail` header prints it on an
+            # UNINDENTED first line. So a multi-line id is the one remaining way row
+            # CONTENT can forge the prose frame: an id carrying PROSE_DELIMITER on an
+            # interior line emits it as an exact bare line, and `leg_selfcheck` then cuts
+            # there -- the r5 spoof, in the one field the emitter discipline could not
+            # cover because that line is unindented by design. Found by the r10
+            # class-sibling sweep and confirmed by execution, not by reading.
+            violations.append(
+                f"{rid!r}: id must be a single-line identifier with no surrounding "
+                f"whitespace (a multi-line id can forge the --detail prose frame)"
+            )
         if rid in seen_ids:
             violations.append(f"duplicate id {rid}")
         seen_ids.add(rid)
@@ -170,10 +257,10 @@ def validate(data: dict[str, Any]) -> list[str]:
             violations.append(f"{rid}: invalid status {status!r}")
             continue
 
-        if not r.get("title"):
+        if not _nonblank_text(r.get("title")):
             violations.append(f"{rid}: missing non-empty 'title'")
 
-        if not r.get("summary"):
+        if not _nonblank_text(r.get("summary")):
             violations.append(f"{rid}: missing non-empty 'summary'")
 
         heading = r.get("heading")
@@ -195,13 +282,35 @@ def validate(data: dict[str, Any]) -> list[str]:
             elif heading_id != rid:
                 violations.append(f"{rid}: heading names id {heading_id!r}, not the row's own id")
 
+        # A field carrying a VALUE must be well-formed whatever the status. `close_out` and
+        # `council` are only REQUIRED on open-class rows, so nothing type-checked them on a
+        # closed or held row: `close_out: false` passed `--check` and then rendered as
+        # "(none — not required...)", collapsing INVALID into ABSENT (codex r9 [P2]).
+        #
+        # `null` counts as NO VALUE here, deliberately. codex r10 read the earlier wording
+        # ("a field that is PRESENT") as promising otherwise -- the rule and the code
+        # disagreed, and the RULE was the wrong half. In YAML `null` IS a spelling of
+        # absence: a bare `close_out:` parses to None, and round-tripping an omitted key
+        # through safe_dump/safe_load can produce either form. This register spells absence
+        # by OMITTING the key on all 27 rows that lack a close_out and writes an explicit
+        # null nowhere, so rejecting null would red a legitimate authoring style to draw a
+        # distinction the data model does not make. `false`, `0`, `[]` and `"   "` are
+        # different: each is a VALUE, and none of them is prose.
+        for optional in ("close_out", "council"):
+            value = r.get(optional)
+            if value is not None and not _nonblank_text(value):
+                violations.append(
+                    f"{rid}: '{optional}' is present but is not non-blank text "
+                    f"({type(value).__name__}) — absent is legal here, malformed is not"
+                )
+
         if status == "closed":
-            if not r.get("pr"):
+            if not _valid_pr(r.get("pr")):
                 violations.append(f"{rid}: closed item needs a 'pr' deliverable citation")
         elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
-            if not r.get("close_out"):
+            if not _nonblank_text(r.get("close_out")):
                 violations.append(f"{rid}: {status} item needs a 'close_out' field")
-            if not r.get("council"):
+            if not _nonblank_text(r.get("council")):
                 violations.append(f"{rid}: {status} item needs a 'council' disposition")
 
     d = derive(data)
@@ -302,7 +411,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--summary", action="store_true", help="human-readable counts")
     ap.add_argument("--json", action="store_true", help="machine-readable derivation")
     ap.add_argument("--open", action="store_true", help="id + title + status for open work only")
-    ap.add_argument("--detail", metavar="ID", help="print the full prose block for one item id")
+    ap.add_argument(
+        "--detail",
+        metavar="ID",
+        help="print one item's canonical close_out, then its prose block",
+    )
     args = ap.parse_args(argv)
 
     data = load(args.ledger)
@@ -312,6 +425,94 @@ def main(argv: list[str] | None = None) -> int:
         if row is None:
             print(f"no such id: {args.detail}", file=sys.stderr)
             return 1
+        # B-235. The prose below is a HAND-MAINTAINED copy, and `check_prose_drift`
+        # compares headings only -- so a body edited out of step with `close_out` used
+        # to leave this surface, the one operator-facing routing reads, showing the copy
+        # alone. The canonical field is printed FIRST: the authority must not be met
+        # second, after the reader has already formed a view from the copy.
+        status = row.get("status", "<no status>")
+        close_out = row.get("close_out")
+        # [LAW:single-enforcer] `_one_line` is the sole guard for this, the only
+        # unindented row-derived line; `_emit_indented` owns every other one.
+        print(f"{_one_line(row['id'])} — {_one_line(status)}")
+
+        # `close_out` is status-dependent in MEANING, so the header renders whichever field
+        # the row's own status makes authoritative. On an open-class row it is the live
+        # disposition. On a CLOSED row it is UNRECONCILED: `validate()` never required it
+        # there and nothing updates it at closure, so 126 of the 151 closed rows still
+        # carry whatever was last written -- and the content varies. B-34, closed at
+        # #1032, carries a finished plan ("Validate signature byte-length ... once a real
+        # backend exists"); B-125 carries a live disposition, a promotion trigger that
+        # REOPENS the row, and a gloss correction owed on the next OD/CP spec delta.
+        # Leading with either as though it were the closure record can route an operator
+        # back into finished work (codex r4 [P2]); calling either one historical can
+        # suppress an active obligation (codex r7 [P2]). The header therefore states the
+        # closure and reports the field, and classifies neither.
+        if status == "closed":
+            pr = row.get("pr")
+            print(f"closure (CANONICAL — {args.ledger}):")
+            # The field is REPORTED, never interpreted. `pr` is a deliverable citation of
+            # arbitrary shape, not a verified delivery: 19 closed rows cite something that is
+            # not a PR at all (`R-410`, `batch-53..57`, `CP spec v1.97`,
+            # `ratified-2026-07-21 (...)`), and B-25 is closed carrying the placeholder
+            # `#PENDING`. "delivered at #PENDING" asserted a delivery that never happened
+            # (codex r7 [P2]).
+            if _valid_pr(pr):
+                _emit_indented(f"CLOSED — citation: {pr}")
+            else:
+                _emit_indented(
+                    "(MISSING — a closed row needs a 'pr' citation; `--check` reports it)"
+                )
+            if _nonblank_text(close_out):
+                # Neutral, and deliberately NOT a classification. The r4 repair called every
+                # closed row's close_out historical, which over-corrected: nothing reconciles
+                # this field at closure, so its content varies -- B-34's is a finished plan,
+                # but B-125's states a live disposition, a promotion trigger that REOPENS the
+                # row, and a gloss correction owed as a named rider on the next OD/CP spec
+                # delta. Calling that "not a current instruction" told readers to disregard an
+                # active obligation (codex r7 [P2]). The tool cannot tell the two apart, so it
+                # states only what it knows.
+                _emit_indented(
+                    "close_out is NOT reconciled when a row closes — it may record a plan\n"
+                    "that was completed, or an obligation that is still owed. Read it with\n"
+                    "the prose block below, which records what actually landed."
+                )
+                _emit_indented(close_out, indent="    ")
+            elif close_out is not None:
+                _emit_indented(
+                    "close_out: (PRESENT but not text — malformed; `--check` reports it)"
+                )
+            else:
+                # The never-silence invariant is UNIVERSAL, not scoped to open-class rows.
+                # The closed branch previously emitted nothing here, so a reader saw the
+                # citation and then a gap -- indistinguishable from a close_out that failed
+                # to load, which is the empty-versus-unlooked confusion the invariant exists
+                # to prevent (codex r8 [P3]). 25 of 151 closed rows take this path.
+                _emit_indented("close_out: (none — not required once a row is closed)")
+        else:
+            print(f"close_out (CANONICAL — {args.ledger}):")
+            if _nonblank_text(close_out):
+                _emit_indented(close_out)
+            elif close_out is not None:
+                # Distinct from both "absent" and "absent but required": the value EXISTS
+                # and is malformed, and saying "(none)" for it would be a lie (codex r9).
+                _emit_indented("(PRESENT but not text — malformed; `--check` reports it)")
+            elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
+                # Not the same fact as "not required here", and never rendered as silence:
+                # an absent-but-required close_out is a `--check` violation, not a shrug.
+                _emit_indented("(MISSING — required at this status; `--check` reports it)")
+            else:
+                _emit_indented(f"(none — not required at status {status!r})")
+        print()
+        print(PROSE_DELIMITER)
+        print()
+
+        # The prose lookup runs AFTER the canonical block, and deliberately so. It used to
+        # run first and `return 1` on a missing heading, which meant the hand-maintained
+        # carrier -- the UNRELIABLE one, the whole reason this header exists -- could
+        # suppress the canonical close_out entirely, falsifying the guarantee that the
+        # authority always reaches the reader (codex r14 [P2]). A missing prose heading is
+        # now reported on its own, after the authority has already been printed.
         text = args.prose.read_text(encoding="utf-8")
         heading = row["heading"]
         lines = text.splitlines(keepends=True)
