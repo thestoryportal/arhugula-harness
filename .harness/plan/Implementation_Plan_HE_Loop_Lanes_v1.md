@@ -6859,6 +6859,18 @@ that family, which is the register-and-hold point: the root cause is producer-si
 floor is landed — the report prints `arcs`, `lanes` and a `membership: inferred …` field, so a PASS
 cannot be read as "every intended lane landed".
 
+**Cite units by ID, never by line, in anything outside this file.** Inserting this record above
+U-HE-38 moved its heading from `:6770` to `:6872`, which stranded the roadmap pointer's line cite
+inside this retrospective — and the first correction was itself stale by the time the sibling
+finding was absorbed, because that shifted the file again. Two review rounds went to chasing the
+coordinate. A line number into a living document is a derived value with no single owner, so it
+drifts on every insertion above it; a unit id does not. The refreshed pointer therefore names
+`U-HE-38` and this file, with no line number at all. (`roadmap_status.md` itself may not be edited
+here — §12.2.1: a commit on `main` touching it without being a verified terminating refresh
+hard-fails CI — so the corrected pointer rides `.harness/.next-action-draft`, which the merge
+door's §4(viii) refresh installs, and that draft's `post-pr:` MUST carry this PR's real number or
+the draft is ignored with a warning and the stale cite survives.)
+
 **A carrier constraint worth recording for every future unit in this plan.**
 `codex_context_guard.DESIGN_RE` matches `.*Implementation_Plan_[A-Za-z_]+_v\d`, so THIS file is a
 DESIGN surface while `tools/` and `justfile` are IMPL; the two together are a HARD `DESIGN_IMPL_MIX`
