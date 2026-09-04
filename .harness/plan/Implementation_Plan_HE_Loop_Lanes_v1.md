@@ -6631,6 +6631,32 @@ if __name__ == "__main__":
 
 **Depends on.** U-HE-05, U-HE-33, U-HE-35, U-HE-36, U-HE-30.
 
+**Unit status — read this before the ticks below.** Steps 1–4 ran and their code is merged, but
+the unit's Scope-level guarantee is **NOT** fully met, and Step 1's shipped test **diverges from
+the skeleton this plan records** (the note at that step gives the divergence). "Implemented" here
+means the steps were carried out — never that the plan's sketch is what shipped.
+
+The Scope says `lanes-pilot-report` "computes the §3 iff-clause". It does not, completely:
+**three** paths can still produce a false PASS, and all three must close before a PASS is
+trustworthy — bounds **(a)**, **(c)** and **(d)** of `B-234`. **(a)** A lane that dies before
+recording `pilot_run_id` is invisible, so a four-lane run that lost a lane presents as a valid
+clean three-lane one; closing it needs an expected-participant roster, for which terminal door
+evidence cannot substitute. **(c)** An already-externally-MERGED PR receives a `merge_sha` from
+`merge_door.land()` and satisfies the landing clause; closing it needs a door-published completion
+marker the report can read, so "landed through the door and finished" stops being inferred from
+reservation payload. **(d)** A malformed live `LEASE` reads as absent, so the report can PASS while
+the door's post-merge checks are unfinished; closing it needs an absent-vs-unreadable lease read.
+Bound **(b)**, arcless friction rows, is reporting-only and does **not** gate a PASS, so it is not
+in the blocking set.
+
+**U-HE-37 must not be treated as closed for any decision that relies on a PASS being trustworthy.**
+A checkbox cannot express "implemented, with three named false-PASS paths open" — hence this
+paragraph. That same three-bound set, in the same order, is stated in
+`.harness/forward-register.yaml`'s `close_out` and in the prose carrier's `Current state`, while
+the module docstring of `tools/lanes_pilot.py` carries only (a) and (b) — a gap recorded at
+`B-234` as owed, because `tools/` is IMPL and cannot be edited from this DESIGN-surface PR. The
+ticks below record that the STEPS ran, not that the guarantee holds.
+
 - [x] **Step 1: Tests**
 
 *The block below is the PRE-IMPLEMENTATION SKELETON, kept as written for the record. It is not
@@ -6776,26 +6802,6 @@ lanes-pilot-report run_id:
 `two-lane/SKILL.md:140-142` → *"Phase 0 (`just lanes-phase0-check` GREEN) gates running N ≥ 2 lanes at all; the ≥ 3 pilots at 3–4 lanes gate only follow-on lane orchestration (automated spawning) — never the right to keep running N lanes manually (C-HE-13 §3)."*
 - [x] **Step 4:** Register `Row("C-HE-13", "pytest:tools/test_lanes_pilot_gate.py", "phase1", "local + CI", False)`, `Row("C-HE-13", "just:lanes-pilot-report <run-id>", "phase1", "local", False)` (the runner marks a `just:` row carrying `<run-id>` as `live`). Commit `feat(he-lanes): U-HE-37 mechanical pilot gate + pilot report (C-HE-13 §1-3)`.
 - [ ] **Step 5 (execution, after S1–S5 GREEN):** run ≥ 3 pilots at 3–4 lanes; each report line into the evidence log; run O1 and O3 recipes and record.
-
-**Unit status, stated before the ticks so no one reads them alone: Steps 1–4 are IMPLEMENTED AS
-WRITTEN, and the unit's Scope-level guarantee is NOT fully met.** The Scope says
-`lanes-pilot-report` "computes the §3 iff-clause". It does not, completely: two paths can still
-produce a false PASS — an already-externally-MERGED PR receives a `merge_sha` from
-`merge_door.land()` and satisfies clause (a), and a malformed live `LEASE` reads as absent so the
-report can PASS while the door's post-merge checks are unfinished (`B-234` (iii) and (iv)).
-Registering those does not make the implementation complete, and a checkbox cannot express
-"implemented, with two named false-PASS paths open" — hence this line. **U-HE-37 must not be
-treated as closed for any decision that relies on a PASS being trustworthy.** The closing
-condition is bounds **(a), (c) and (d)** of `B-234` — all three of its false-PASS paths, not the
-two door ones alone. (a): an expected-participant roster, because a four-lane run that loses a lane
-before `pilot_run_id` is recorded is invisible and presents as a valid clean three-lane run, so
-terminal door evidence cannot restore the iff-clause on its own. (c): a door-published completion
-marker the report can read, so "landed through the door and finished" stops being inferred from
-reservation payload. (d): an absent-vs-unreadable lease read. Bound (b), arcless friction rows, is
-reporting-only and does NOT gate a PASS, so it is not in the blocking set. The same set, in the same
-order, is stated in `.harness/forward-register.yaml`'s `close_out` and in the prose carrier's
-`Current state` — three surfaces, one claim. The ticks below record that the STEPS ran, not
-that the guarantee holds.
 
 **Landed (Steps 1–4)** at PR #1517 → `569b8fbfa`, refresh #1518 → `15ece142a` (both `main` runs
 green, 2026-09-04). `tools/lanes_pilot.py`: `gate(results, probe)` takes its verdict

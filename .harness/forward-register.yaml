@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 234
+  total: 235
   open: 1
   design_substrate_gated: 3
-  registered_finding: 76
+  registered_finding: 77
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 2434bfc932f9db35
+  identity_digest: 35e60b035c55a42a
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11273,3 +11273,34 @@ items:
     "every intended lane landed". The runtime-facing hazard set is INCOMPLETE, and that is a FOURTH surface this claim spans: the module docstring of tools/lanes_pilot.py states bounds (a) and (b) only -- the two surfaced at codex r3 -- and says nothing of (c) or (d), which r4 surfaced later, so a reader of the code alone sees two of the four ways a PASS can be false. It cannot be corrected from this record: this plan is a DESIGN surface under codex_context_guard.DESIGN_RE while tools/ is IMPL, so editing that docstring here would be a HARD DESIGN_IMPL_MIX. OWED: the next lanes_pilot.py touch adds (c) and (d) to the docstring.'
   council: 'NO — one producer field and one roster surface; no cross-axis tension.'
   heading: '### B-234 · pilot membership is inferred, and arcless loop-ledger rows cannot be attributed to a pilot *(surfaced by codex r3 on u-he-37, 2026-09-04; REGISTERED)*'
+- id: B-235
+  title: >-
+    forward_register --detail renders the prose carrier while close_out is canonical, and
+    check_prose_drift compares headings only, so the two bodies can silently disagree
+  pr: 'PR pending (u-he-37-plan-record)'
+  status: registered_finding
+  summary: 'One claim, two hand-maintained bodies, and no check that compares them. The YAML
+    close_out is the canonical field, but forward_register.py --detail renders the PROSE
+    carrier, and check_prose_drift() compares HEADINGS only -- never bodies. A safety-critical
+    disposition therefore has to be typed twice, and reverting either copy leaves --check GREEN
+    while the canonical field and the surface routing actually reads disagree. This is not
+    hypothetical: it is the root cause of four consecutive review rounds on u-he-37-plan-record
+    -- r5 found the blocker recorded only in YAML and so invisible to --detail, r6 found the
+    canonical YAML still saying two paths after the other two surfaces said three, r7 found a
+    fourth surface (the lanes_pilot.py module docstring) asserted to agree when it carries two
+    of four bounds, and r8 found the plan paragraph still saying two inside a paragraph whose
+    next sentence said three. Every one of those was a human re-typing a claim that had one
+    authority.'
+  close_out: 'OPEN. Two shapes, and the choice between them is the decision: EITHER derive the
+    rendered detail body from the canonical YAML so the prose carrier stops being a second
+    authority (strongest -- it deletes the class rather than detecting it, but it changes what
+    --detail prints and needs the prose bodies that carry MORE than close_out reconciled first),
+    OR extend check_prose_drift() to semantic parity on the bodies it already pairs by heading
+    (weaker -- a second clock that at least alarms, and it cannot express that the docstring is a
+    third carrier). NOT fixable from the arc that found it: forward_register.py is tools/ and
+    matches codex_context_guard.IMPL_RE, while the plan is DESIGN, so the fix cannot ride a
+    doc-only PR. Interim, and the reason this is registered rather than held: the enumeration is
+    currently identical in the same order on all three register-side surfaces, verified by
+    reading each at head 27f3066ca.'
+  council: 'NO -- a tooling authority question inside one register, no cross-axis tension.'
+  heading: '### B-235 · the register keeps one claim on two hand-maintained surfaces and the drift check compares only headings *(surfaced by codex r8 on u-he-37-plan-record, 2026-09-04; REGISTERED)*'
