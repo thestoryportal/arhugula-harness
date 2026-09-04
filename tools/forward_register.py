@@ -90,30 +90,32 @@ class RegisterError(ValueError):
     """A structural violation in the forward register (fails ``--check`` / CI)."""
 
 
-def _nonblank(value: Any) -> bool:
-    """Is this field carrying a present, meaningful scalar?
+def _nonblank_text(value: Any) -> bool:
+    """Is this NARRATIVE field carrying real text?
 
-    Two failures this replaces, in order. Plain truthiness accepted `"   "`, so `--check`
-    stayed green while `--detail` rendered a required canonical disposition as SILENCE --
-    the explicit-absence contract broken by the one predicate meant to uphold it (codex r2
-    [P2]). The first repair then STRINGIFIED before testing, which widened the gate it was
-    narrowing: `str(False)` is `"False"`, so `close_out: false`, `pr: 0` and `[]` began
-    passing a check that plain truthiness had correctly rejected, and `--detail` could
-    present `False` as the canonical disposition (codex r3 [P2]).
+    Three failures this replaces, in order. Plain truthiness accepted `"   "`, so `--check`
+    stayed green while `--detail` rendered a required canonical disposition as SILENCE
+    (codex r2). The first repair STRINGIFIED before testing, so `str(False)` was `"False"`
+    and `close_out: false` / `pr: 0` / `[]` began passing a check truthiness had correctly
+    rejected (codex r3). The second repair kept ONE predicate for two different contracts,
+    so its non-zero-integer arm -- there only for `pr` -- also admitted `close_out: 1`,
+    `council: 1`, `title: 1` and `summary: 1`, and `--detail` could present `1` as the
+    canonical disposition (codex r4).
 
-    So the type is tested, never coerced. `bool` is checked FIRST because `isinstance(True,
-    int)` is True in Python -- a bool would otherwise slip through the int arm. `int` is
-    admitted only for `pr`, which carries a bare PR number on 4 live rows; 0 is not one.
-    The result strictly narrows the original truthiness test: everything it rejected is
-    still rejected, plus blank strings.
+    A narrative field is text or it is absent. No coercion, no numbers.
     """
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _valid_pr(value: Any) -> bool:
+    """A deliverable citation: non-blank text (`"#1032"`, or prose naming several) or a bare
+    positive PR number, which 4 live rows carry. `bool` is excluded explicitly because
+    `isinstance(True, int)` is True in Python, and 0 is not a PR."""
     if isinstance(value, bool):
         return False
-    if isinstance(value, str):
-        return bool(value.strip())
     if isinstance(value, int):
-        return value != 0
-    return False
+        return value > 0
+    return _nonblank_text(value)
 
 
 def _id_from_heading(heading: str) -> str | None:
@@ -202,10 +204,10 @@ def validate(data: dict[str, Any]) -> list[str]:
             violations.append(f"{rid}: invalid status {status!r}")
             continue
 
-        if not _nonblank(r.get("title")):
+        if not _nonblank_text(r.get("title")):
             violations.append(f"{rid}: missing non-empty 'title'")
 
-        if not _nonblank(r.get("summary")):
+        if not _nonblank_text(r.get("summary")):
             violations.append(f"{rid}: missing non-empty 'summary'")
 
         heading = r.get("heading")
@@ -228,12 +230,12 @@ def validate(data: dict[str, Any]) -> list[str]:
                 violations.append(f"{rid}: heading names id {heading_id!r}, not the row's own id")
 
         if status == "closed":
-            if not _nonblank(r.get("pr")):
+            if not _valid_pr(r.get("pr")):
                 violations.append(f"{rid}: closed item needs a 'pr' deliverable citation")
         elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
-            if not _nonblank(r.get("close_out")):
+            if not _nonblank_text(r.get("close_out")):
                 violations.append(f"{rid}: {status} item needs a 'close_out' field")
-            if not _nonblank(r.get("council")):
+            if not _nonblank_text(r.get("council")):
                 violations.append(f"{rid}: {status} item needs a 'council' disposition")
 
     d = derive(data)
@@ -367,18 +369,42 @@ def main(argv: list[str] | None = None) -> int:
         # alone. The canonical field is printed FIRST: the authority must not be met
         # second, after the reader has already formed a view from the copy.
         status = row.get("status", "<no status>")
-        print(f"{row['id']} — {status}")
-        print(f"close_out (CANONICAL — {args.ledger}):")
         close_out = row.get("close_out")
-        if _nonblank(close_out):
-            for line in str(close_out).strip().splitlines():
-                print(f"  {line}")
-        elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
-            # Not the same fact as "not required here", and never rendered as silence:
-            # an absent-but-required close_out is a `--check` violation, not a shrug.
-            print("  (MISSING — required at this status; `--check` reports it)")
+        print(f"{row['id']} — {status}")
+
+        # `close_out` is status-dependent in MEANING, so the header renders whichever
+        # field the row's own status makes authoritative. On an open-class row it is the
+        # live disposition. On a CLOSED row it is residue: `validate()` never required it
+        # there and nothing reconciles it at closure, so 126 of the 151 closed rows still
+        # carry the work INSTRUCTION written while they were open ("Validate signature
+        # byte-length ... once a real backend exists" on B-34, closed at #1032). Leading
+        # with that would promote a historical plan above the closure record and can route
+        # an operator back into finished work -- a worse defect, on the majority of rows,
+        # than the one this header was added to fix (codex r4 [P2]).
+        if status == "closed":
+            pr = row.get("pr")
+            print(f"closure (CANONICAL — {args.ledger}):")
+            if _valid_pr(pr):
+                print(f"  CLOSED — delivered at {pr}")
+            else:
+                print("  (MISSING — a closed row needs a 'pr' citation; `--check` reports it)")
+            if _nonblank_text(close_out):
+                print("  close_out below is the plan recorded while this row was OPEN —")
+                print("  HISTORICAL, not a current instruction. The prose block records")
+                print("  what actually landed.")
+                for line in str(close_out).strip().splitlines():
+                    print(f"    {line}")
         else:
-            print(f"  (none — not required at status {status!r})")
+            print(f"close_out (CANONICAL — {args.ledger}):")
+            if _nonblank_text(close_out):
+                for line in str(close_out).strip().splitlines():
+                    print(f"  {line}")
+            elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
+                # Not the same fact as "not required here", and never rendered as silence:
+                # an absent-but-required close_out is a `--check` violation, not a shrug.
+                print("  (MISSING — required at this status; `--check` reports it)")
+            else:
+                print(f"  (none — not required at status {status!r})")
         print()
         print(PROSE_DELIMITER)
         print()

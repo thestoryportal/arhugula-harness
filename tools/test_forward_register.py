@@ -162,16 +162,20 @@ def test_detail_renders_the_canonical_close_out_even_when_the_prose_disagrees(ca
 
 
 def test_detail_states_an_absent_close_out_rather_than_omitting_it(capsys) -> None:
-    """A closed row carries no `close_out` by design. Printing nothing would be
-    indistinguishable from a row whose close_out failed to load, so absence is
-    STATED (the gate-cannot-tell-empty-from-unlooked rule applied to a renderer)."""
-    row = next(r for r in _data()["items"] if r["id"] == "B-1")
-    assert not row.get("close_out"), "fixture assumption: B-1 is closed with no close_out"
+    """A `held` row carries no `close_out` by design, and `held` is the ONE non-closed,
+    non-open-class status -- so it is the only fixture that reaches the "not required"
+    arm. (Closed rows render their closure instead; open-class rows must carry one.)
+    Printing nothing would be indistinguishable from a close_out that failed to load, so
+    absence is STATED -- gate-cannot-tell-empty-from-unlooked, applied to a renderer."""
+    row = next(r for r in _data()["items"] if r["id"] == "B-149")
+    assert row["status"] == "held" and not row.get("close_out"), (
+        "fixture: B-149 is held, no close_out"
+    )
 
-    forward_register.main(["--detail", "B-1"])
-    out = capsys.readouterr().out
-    assert "CANONICAL" in out
-    assert "(none" in out
+    forward_register.main(["--detail", "B-149"])
+    header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+    assert "close_out (CANONICAL" in header, header
+    assert "(none — not required at status 'held')" in header, header
 
 
 def test_detail_emits_the_delimiter_as_one_bare_unindented_line(capsys) -> None:
@@ -184,14 +188,14 @@ def test_detail_emits_the_delimiter_as_one_bare_unindented_line(capsys) -> None:
     retirement of the YAML-only-row gate that B-235's consumer fix exists to prevent.
     Nothing else asserts the real CLI's shape, so this test is what closes that loop.
     """
-    forward_register.main(["--detail", "B-1"])
+    forward_register.main(["--detail", "B-235"])
     lines = capsys.readouterr().out.splitlines()
     # Exactly one, and BARE -- an indented occurrence is row content, not the frame.
     assert lines.count(forward_register.PROSE_DELIMITER) == 1, lines[:20]
     idx = lines.index(forward_register.PROSE_DELIMITER)
     # The canonical header precedes it; the prose heading follows it.
     assert any(ln.startswith("close_out (CANONICAL") for ln in lines[:idx])
-    assert any(ln.startswith("### B-1") for ln in lines[idx + 1 :])
+    assert any(ln.startswith("### B-235") for ln in lines[idx + 1 :])
 
 
 def test_a_whitespace_only_close_out_is_rejected_not_accepted_as_present() -> None:
@@ -241,7 +245,7 @@ def test_a_whitespace_only_close_out_never_renders_as_silence(capsys) -> None:
     assert any("(none" in ln or "(MISSING" in ln for ln in stated), header
 
 
-@pytest.mark.parametrize("bad", [False, True, 0, [], {}, 1.5, "", "   ", None])
+@pytest.mark.parametrize("bad", [False, True, 0, 1, 1519, [], {}, 1.5, "", "   ", None])
 def test_falsy_and_non_scalar_close_out_values_are_all_rejected(bad: object) -> None:
     """codex r3 [P2]. The r2 repair stringified before testing, so `str(False)` was
     `"False"` and `close_out: false` / `pr: 0` / `[]` began PASSING a check that plain
@@ -262,6 +266,39 @@ def test_an_integer_pr_citation_is_still_accepted() -> None:
     row = _first_closed(data)
     row["pr"] = 1519
     assert not [v for v in forward_register.validate(data) if "deliverable citation" in v]
+
+
+@pytest.mark.parametrize("field", ["council", "title", "summary"])
+def test_a_positive_integer_is_not_text_for_any_narrative_field(field: str) -> None:
+    """codex r4 [P2]. One predicate served two contracts, so the non-zero-integer arm
+    present only for `pr` also admitted `council: 1`, `title: 1` and `summary: 1`. The r3
+    negative test omitted POSITIVE integers, so the fail-open stayed green -- the gap was
+    in the test, not only the code."""
+    data = copy.deepcopy(_data())
+    row = _first_open_class(data)
+    row[field] = 1
+    assert forward_register.validate(data) != []
+
+
+def test_a_closed_row_leads_with_its_closure_not_a_stale_work_instruction(capsys) -> None:
+    """codex r4 [P2]. `close_out` is status-dependent in MEANING: on an open-class row it is
+    the live disposition, but `validate()` never requires it on a closed row and nothing
+    reconciles it at closure, so 126 of 151 closed rows still carry the INSTRUCTION written
+    while they were open. Leading with that promotes a historical plan above the closure
+    record and can route an operator back into finished work."""
+    row = next(r for r in _data()["items"] if r["id"] == "B-34")
+    assert row["status"] == "closed" and row.get("close_out"), (
+        "fixture: B-34 is closed with a stale close_out"
+    )
+
+    forward_register.main(["--detail", "B-34"])
+    header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+
+    # The closure is the authority a reader meets first...
+    assert "CLOSED — delivered at" in header, header
+    # ...and the stale plan is never presented as the current canonical disposition.
+    assert "HISTORICAL, not a current instruction" in header, header
+    assert header.index("CLOSED — delivered at") < header.index("HISTORICAL"), header
 
 
 # --- negative tests: each gate failure-class is caught ----------------------
