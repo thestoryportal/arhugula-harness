@@ -6632,6 +6632,18 @@ if __name__ == "__main__":
 **Depends on.** U-HE-05, U-HE-33, U-HE-35, U-HE-36, U-HE-30.
 
 - [x] **Step 1: Tests**
+
+*The block below is the PRE-IMPLEMENTATION SKELETON, kept as written for the record. It is not
+what shipped, and the tick does not claim it is.* It calls `lp.gate()` with no arguments and
+monkeypatches `lp.phase0_results`; HEAD defines `gate(results: list[lv.Result], probe:
+tuple[str, str] | None = None) -> tuple[int, str]` and `tools/test_lanes_pilot_gate.py` passes
+both explicitly, so the sketch as displayed would raise `TypeError`. The divergence is deliberate and is the better design the
+review rounds drove toward: taking the results as a parameter makes `gate` pure over its inputs
+instead of pinning a module seam the production path does not use, which is what let the §1 and
+§2 reductions come straight from `lanes_verify` rather than be restated here. **Read every
+skeleton in this plan as unreviewed input, never as a contract** — where it and the shipped code
+disagree, the shipped code and the spec win, and this note is the record of one such divergence.
+
 ```python
 def test_pilot_runner_refuses_on_any_phase0_red(monkeypatch):
     monkeypatch.setattr(lp, "phase0_results", lambda: [lv.Result(lv.Row("C-HE-06", "pytest:x", "phase0", "l", True), "fail", "boom")])

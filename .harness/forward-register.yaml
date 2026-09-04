@@ -11230,8 +11230,9 @@ items:
     cannot be attributed to a pilot
   pr: 'PR pending (u-he-37)'
   status: registered_finding
-  summary: 'SURFACED by codex r3 on u-he-37 (2026-09-04), two bounds the C-HE-13 §3 report
-    cannot close from the consumer side. FIRST, membership is inferred from the reservations
+  summary: 'FOUR bounds the C-HE-13 §3 report cannot close from the consumer side, of which
+    (a), (c) and (d) BLOCK a trustworthy PASS; codex r3 on u-he-37 (2026-09-04) surfaced the
+    first two and r4 added the two door-completion bounds recorded below. FIRST, membership is inferred from the reservations
     carrying pilot_run_id because nothing persists an expected roster, so a lane that created
     its reservation and died before recording the id is invisible and a 4-lane pilot that lost
     one lane can still present three lanes and satisfy the 3-4 check. SECOND, the friction
@@ -11269,6 +11270,6 @@ items:
     reservation payload, and (d) read_lease() distinguishes absent from unreadable as every
     other store reader in this family already does. Interim floor already landed: the report
     prints `arcs`, `lanes` and a `membership: inferred …` field, so a PASS cannot be read as
-    "every intended lane landed", and every bound is stated in the module docstring.'
+    "every intended lane landed". The runtime-facing hazard set is INCOMPLETE, and that is a FOURTH surface this claim spans: the module docstring of tools/lanes_pilot.py states bounds (a) and (b) only -- the two surfaced at codex r3 -- and says nothing of (c) or (d), which r4 surfaced later, so a reader of the code alone sees two of the four ways a PASS can be false. It cannot be corrected from this record: this plan is a DESIGN surface under codex_context_guard.DESIGN_RE while tools/ is IMPL, so editing that docstring here would be a HARD DESIGN_IMPL_MIX. OWED: the next lanes_pilot.py touch adds (c) and (d) to the docstring.'
   council: 'NO — one producer field and one roster surface; no cross-axis tension.'
   heading: '### B-234 · pilot membership is inferred, and arcless loop-ledger rows cannot be attributed to a pilot *(surfaced by codex r3 on u-he-37, 2026-09-04; REGISTERED)*'
