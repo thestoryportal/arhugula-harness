@@ -640,6 +640,59 @@ def test_a_multi_line_id_is_rejected_because_it_can_forge_the_prose_frame(bad_id
     assert any("single-line identifier" in v for v in violations), (bad_id, violations)
 
 
+def test_an_open_class_row_missing_its_close_out_renders_missing_not_none(capsys) -> None:
+    """merge-gate witness lens [P2]. This arm had ZERO coverage, and its mutation is the
+    failure this whole change exists to prevent: deleting it renders a REQUIRED-but-absent
+    close_out as "(none — not required...)", collapsing invalid into absent on the exact
+    surface operator routing reads. `validate()` requires close_out on open-class rows, so
+    no live row reaches this arm -- it needs a temp ledger, which is why it was missed."""
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9994",
+                "title": "t",
+                "summary": "s",
+                "status": "registered_finding",
+                "council": "NO",
+                "heading": "### B-9994 · open-class, no close_out",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        pp.write_text(
+            "### B-9994 · open-class, no close_out\n\n- **What it is.** Body.\n", encoding="utf-8"
+        )
+        forward_register.main(["--detail", "B-9994", "--ledger", str(lp), "--prose", str(pp)])
+        header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+
+    assert "(MISSING — required at this status" in header, header
+    # The whole point: absent-but-REQUIRED must never read as absent-and-fine.
+    assert "not required" not in header, header
+
+
+@pytest.mark.parametrize("status", ["closed", "held"])
+def test_a_malformed_council_is_caught_by_the_type_loop_independently(status: str) -> None:
+    """merge-gate witness lens [P3]. The type-check loop covers `close_out` AND `council`,
+    but the only test touching `council` used an OPEN-class row, where the pre-existing
+    required-check catches it anyway -- so narrowing the loop to ("close_out",) left every
+    test green. On a closed or held row `council` is NOT required, so the type loop is the
+    only thing that can catch a malformed one: this witnesses that entry alone."""
+    data = copy.deepcopy(_data())
+    row = next(r for r in data["items"] if r["status"] == status)
+    row["council"] = False
+    violations = forward_register.validate(data)
+    assert any("'council' is present but is not non-blank text" in v for v in violations), (
+        status,
+        violations,
+    )
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 
