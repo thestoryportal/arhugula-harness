@@ -621,6 +621,96 @@ def test_pilot_arcs_returns_empty_for_an_absent_store(monkeypatch, tmp_path) -> 
     assert lp._pilot_arcs("pilot-1") == []
 
 
+def _wire_report(monkeypatch, tmp_path, arcs, *, merged, queued_names):
+    """Wire report()'s four store seams to real on-disk content, leaving the queued-arc
+    loop, the Stores assembly and evaluate() to run for real."""
+    import arc_metrics as am
+    import finding_record as fr
+    import merge_door as md
+
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    for name in queued_names:
+        (queue / name).write_text("{}")
+    gate_log = tmp_path / "gate-log.jsonl"
+    gate_log.write_text("")
+    monkeypatch.setattr(lp, "_pilot_arcs", lambda run_id: arcs)
+    monkeypatch.setattr(lp, "_loop_rows", lambda: [])
+    monkeypatch.setattr(lp, "_merged_ledger_arc_ids", lambda: list(merged))
+    monkeypatch.setattr(md, "read_lease", lambda: None)
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", gate_log)
+    monkeypatch.setattr(fr, "read_rows", lambda: [])
+    monkeypatch.setattr(am, "QUEUE_DIR", queue)
+
+
+def test_report_success_path_returns_a_real_pass(monkeypatch, tmp_path) -> None:
+    """report()'s SUCCESS path — every other report test raises before reaching
+    `Stores(...)`/`evaluate(...)`, so the queued-arc-id loop, the Stores assembly and the
+    verdict were all unwitnessed. Both queue-entry filename shapes are exercised here:
+    `<arc>.json` (free) and `<arc>.taken` (claimed mid-drain)."""
+    arcs = _pilot_arcs()
+    _wire_report(
+        monkeypatch, tmp_path, arcs, merged=["u-3"], queued_names=["u-1.json", "u-2.taken"]
+    )
+    rep = lp.report("pilot-1")
+    assert rep["pass"] is True
+    assert rep["arcs"] == ["u-1", "u-2", "u-3"]
+    assert rep["rows_not_yet_folded"] == ["u-1", "u-2"], "both queue shapes recognised"
+    assert rep["ledger_invariant_violations"] == []
+
+
+def test_cli_report_exits_0_on_pass_and_1_on_fail(monkeypatch, tmp_path, capsys) -> None:
+    """main()'s PASS/FAIL exit mapping: inverting the ternary must not stay green."""
+    arcs = _pilot_arcs()
+    _wire_report(
+        monkeypatch, tmp_path, arcs, merged=["u-3"], queued_names=["u-1.json", "u-2.taken"]
+    )
+    assert lp.main(["report", "pilot-1"]) == 0
+    assert "PILOT PASS" in capsys.readouterr().out
+
+    arcs[0]["state"] = "open"  # a lane that never landed
+    assert lp.main(["report", "pilot-1"]) == 1
+    assert "PILOT FAIL" in capsys.readouterr().out
+
+
+def test_phase0_results_runs_the_real_manifest_rows(monkeypatch) -> None:
+    """Its body is otherwise never executed: collapsing it to `return []` would make the
+    real CLI gate vacuously GREEN, since phase0_verdict([]) is 0."""
+    row = _row("C-HE-06", "pytest:x")
+    monkeypatch.setattr(lv, "phase0_rows", lambda: [row])
+    monkeypatch.setattr(lv, "run_row", lambda r: lv.Result(r, "pass"))
+    got = lp.phase0_results()
+    assert [r.row.contract for r in got] == ["C-HE-06"]
+
+
+def test_loop_rows_refuses_an_empty_ledger_path(monkeypatch) -> None:
+    """The `or not path` disjunct: a zero exit with empty stdout is still unresolvable."""
+    monkeypatch.setattr(lp.subprocess, "run", lambda *a, **k: _Proc("", returncode=0))
+    with pytest.raises(lp.PilotError, match="could not resolve"):
+        lp._loop_rows()
+
+
+def test_loop_rows_refuses_a_ledger_path_that_does_not_exist(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(lp.subprocess, "run", lambda *a, **k: _Proc(str(tmp_path / "gone.md")))
+    with pytest.raises(lp.PilotError, match="does not exist"):
+        lp._loop_rows()
+
+
+def test_merged_ledger_read_is_empty_for_a_ledger_outside_the_repo(monkeypatch, tmp_path) -> None:
+    """A ledger outside the repo has no committed history at all — a KNOWN empty, which is
+    why it returns [] rather than refusing like the unreadable case."""
+    import arc_metrics as am
+
+    monkeypatch.setattr(am, "LEDGER", tmp_path / "elsewhere.jsonl")
+    assert lp._merged_ledger_arc_ids() == []
+
+
+def test_friction_ignores_a_row_with_no_cause() -> None:
+    row = _loop_row("NOTIFY", "-", "u-1 — placeholder cause")
+    rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), loop_rows=[row]))
+    assert rep["friction"] == []
+
+
 def test_cli_needs_a_run_id() -> None:
     assert lp.main(["report"]) == 2
     assert lp.main(["start"]) == 2
