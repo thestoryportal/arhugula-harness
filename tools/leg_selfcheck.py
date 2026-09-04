@@ -1151,12 +1151,27 @@ def check_register_rows(
         # half, and a heading-only row would stop reporting HEADING ONLY (codex r1 [P2]).
         # The CLI renders every close_out line with a two-space indent, so an unindented
         # delimiter line cannot be produced by row content at all.
-        # An injected `detail_fn` (tests) may emit no delimiter, in which case the whole
-        # output IS the prose half.
+        # The missing-delimiter fallback is for INJECTED test doubles ONLY. On the real
+        # `_detail_via_cli` path it must fail loud: `just leg-selfcheck --uncommitted` runs
+        # the producer from the WORKING TREE, so an uncommitted change that alters or drops
+        # the delimiter would set `cut = 0`, count the canonical header as prose body, and
+        # let a heading-only / YAML-only row evade the HARD finding below -- in exactly the
+        # venue this check exists for. `test_detail_emits_the_delimiter_as_one_bare_
+        # unindented_line` pins the COMMITTED producer and cannot see that tree, which is
+        # why five sweep answers calling this arm "safe, the producer is pinned" were
+        # incomplete (codex r12 [P2]).
         lines = stdout.splitlines()
         try:
             cut = lines.index(PROSE_DELIMITER) + 1
         except ValueError:
+            if detail_fn is None:
+                report.add(
+                    "register",
+                    HARD,
+                    f"{rid}: --detail emitted no `{PROSE_DELIMITER}` line — the producer's "
+                    "framing changed; refusing to guess where the prose body starts",
+                )
+                continue
             cut = 0
         body = [ln for ln in lines[cut:] if ln.strip() and not ln.startswith("###")]
         if rc != 0:
