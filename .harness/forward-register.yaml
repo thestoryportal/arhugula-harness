@@ -58,14 +58,14 @@
 
 
 snapshot:
-  total: 233
+  total: 234
   open: 1
   design_substrate_gated: 3
-  registered_finding: 75
+  registered_finding: 76
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: b1f9af01964b0fef
+  identity_digest: 2434bfc932f9db35
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11224,3 +11224,29 @@ items:
     already relying on the loose match, so this is an audit, not a one-line fix.'
   council: 'NO — one guard predicate and its test matrix; no cross-axis tension.'
   heading: '### B-233 · the generic `just` verb alternation in the permission guard is not end-anchored — a trailing token is parsed by `just` as a chained second recipe *(surfaced by codex r1 on u-he-37, 2026-09-04; REGISTERED)*'
+- id: B-234
+  title: >-
+    Pilot membership is inferred from recorded run ids, and arcless loop-ledger rows
+    cannot be attributed to a pilot
+  pr: 'PR pending (u-he-37)'
+  status: registered_finding
+  summary: 'SURFACED by codex r3 on u-he-37 (2026-09-04), two bounds the C-HE-13 §3 report
+    cannot close from the consumer side. FIRST, membership is inferred from the reservations
+    carrying pilot_run_id because nothing persists an expected roster, so a lane that created
+    its reservation and died before recording the id is invisible and a 4-lane pilot that lost
+    one lane can still present three lanes and satisfy the 3-4 check. SECOND, the friction
+    window closes at the pilot''s last ARC-ATTRIBUTED row, and three merge_door._notify details
+    carry no leading arc id (the lease-acquired, lease-released and main-CI-queue-depth rows),
+    so the door''s own release attestation falls outside every defensible close. Three review
+    rounds landed on that one heuristic, which is the register-and-hold point: the root cause
+    is producer-side, not another consumer bound.'
+  close_out: 'OPEN — closure = (a) the pilot runner persists an expected participant roster at
+    start and the report compares it against the reservations that recorded the run id, and
+    (b) every merge_door._notify detail leads with its arc id so ledger rows are attributable
+    without a time window at all. (b) alone retires the friction bound and is the smaller
+    change; (a) needs a roster surface C-HE-13 does not currently define, so it may route to a
+    spec leg. Interim floor already landed: the report prints `arcs`, `lanes` and a
+    `membership: inferred …` field, so a PASS cannot be read as "every intended lane landed",
+    and both bounds are stated in the module docstring.'
+  council: 'NO — one producer field and one roster surface; no cross-axis tension.'
+  heading: '### B-234 · pilot membership is inferred, and arcless loop-ledger rows cannot be attributed to a pilot *(surfaced by codex r3 on u-he-37, 2026-09-04; REGISTERED)*'

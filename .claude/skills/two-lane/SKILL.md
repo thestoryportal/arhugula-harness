@@ -160,7 +160,9 @@ resolve.** Phase 0 green (`just lanes-phase0-check`, which `just lanes-pilot` re
 start without) gates running N ≥ 2 lanes **at all** — the pilots are simply the first N-lane
 runs and therefore sit behind it too. The ≥ 3 pilot runs at 3–4 lanes gate **only follow-on
 lane orchestration** (automated spawning), never the right to keep running N lanes manually.
-Follow-on orchestration is registered only once those pilots surface a named recurring pain —
-a `cause_signature` in ≥ 2 of the ≥ 3 pilots, or one occurrence the operator rates
-independently severe (C-HE-13 §3); `just lanes-pilot-report <run-id>` prints the PASS/FAIL and
-the friction rows it is judged on. Until then this file is the whole feature.
+Follow-on orchestration is
+registered only after ≥3 manual pilot runs surface a named recurring pain — a specific,
+repeated, described friction, not a hypothetical one; in C-HE-13 §3's terms a `cause_signature`
+appearing in ≥ 2 of the ≥ 3 pilots, or one occurrence the operator rates independently severe.
+`just lanes-pilot-report <run-id>` prints the PASS/FAIL and the friction rows it is judged on.
+Until then this file is the whole feature.

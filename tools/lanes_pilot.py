@@ -26,6 +26,19 @@ replace", "no TTL reclaim", "no `FileNotFoundError` escapes `drain()`"), which n
 post-hoc read of the stores can witness; they are covered by the phase0 manifest rows that
 `gate()` requires green before a pilot may start, and this report does not restate them.
 
+**Two bounds this report cannot close, stated so a PASS is never over-read** (codex r3;
+forward work at `B-234`). (1) MEMBERSHIP IS INFERRED from the reservations that carry the
+run id, because nothing persists an expected roster: a lane that created its reservation and
+died before recording `pilot_run_id` is invisible here, so a 4-lane pilot that lost one lane
+can still present three lanes and pass the 3–4 check. The report therefore prints `arcs` and
+`lanes` explicitly and carries `membership: inferred …`, so the operator can compare them
+against what was actually spawned. (2) FRICTION MISSES ARCLESS ROWS PAST THE WINDOW: the
+door's own release attestation (`lease released after pr #…`) carries no arc id and is
+written after the last arc-attributed row, so it falls outside the close. The root cause is
+producer-side — three `merge_door._notify` details omit the leading arc id — and is
+registered rather than patched around again here, after three review rounds on this one
+heuristic.
+
 A held drain is NOT a violation: an arc whose entry is still queued and whose row is not
 yet committed is the invariant's own first branch. `report()` distinguishes that from a
 real breach so an operator can tell "not folded yet" from "both states at once".
@@ -211,14 +224,21 @@ def ledger_invariants(stores: Stores) -> list[str]:
     the operator never has to re-derive which invariant broke.
     """
     violations: list[str] = []
-    for arc in stores.arcs:
-        arc_id = arc["arc_id"]
-        rows = stores.merged_ledger_arc_ids.count(arc_id)
+    # C-HE-03's duplicate rule is a property of the UNION LEDGER, not of the pilot's own
+    # rows: a duplicated non-pilot arc_id is already a violation of the invariant clause (b)
+    # asserts, so scoping the scan to pilot arcs would let the report claim the union ledger
+    # is sound while holding proof that it is not (codex r3 P2).
+    seen: dict[str, int] = {}
+    for arc_id in stores.merged_ledger_arc_ids:
+        seen[arc_id] = seen.get(arc_id, 0) + 1
+    for arc_id, rows in sorted(seen.items()):
         if rows > 1:
             violations.append(
                 f"C-HE-03: {arc_id} has {rows} union-ledger rows; at most one may reach "
                 "merged history"
             )
+    for arc in stores.arcs:
+        arc_id = arc["arc_id"]
         queued = arc_id in stores.queued_arc_ids
         committed = arc_id in stores.merged_ledger_arc_ids
         if queued and committed:
@@ -309,6 +329,10 @@ def evaluate(run_id: str, stores: Stores) -> dict:
         "coordination_hil": [f"{r['cause']}: {r['detail'][:80]}" for r in hil],
         "coordination_hil_still_outstanding": len(still_open),
         "rows_not_yet_folded": unfolded,
+        "membership": (
+            "inferred from reservations carrying this pilot_run_id; a lane that died before "
+            "recording it is invisible (B-234) — compare `lanes` against what was spawned"
+        ),
         "friction": friction(stores.loop_rows, arcs),
         "pass": not (landing or lanes or toctou or violations or hil),
     }

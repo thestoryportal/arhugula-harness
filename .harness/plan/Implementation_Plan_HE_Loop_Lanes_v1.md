@@ -6844,6 +6844,27 @@ runs first-parent detection, post-merge CI and the refresh; and a truncated ledg
 timestamp now raises instead of parsing to `None` and being dropped, which would have reported "no
 coordination escalation" instead of the documented exit 2.
 
+**Codex r3: BLOCK, 1 P1 + 4 P2 — three closed, two registered.** The P1 was a real CI breakage
+and a known class this arc failed to apply: rewriting the `two-lane` pilot-bar paragraph dropped
+two literals `tools/hooks/test_skill_two_lane.sh:136-139` pins, leaving that suite red (confirmed
+by running it: 69 pass / 2 fail, now 71 / 0 with both phrases restored inside the new text). It
+escaped the two earlier `just codex-check` runs because an earlier recipe in the chain failed
+first — `fmt-check` — so the shell suites never ran; the whole `tools/hooks`, `tools/statusline`
+and `tools/roadmap-audit` loop was then run by hand and is green. Two P2s were genuine
+correctness: the C-HE-03 duplicate scan was scoped to the pilot's own arcs although the clause is
+about the UNION ledger, so a duplicated non-pilot id was proof of a violation the report ignored;
+and `parse_loop_row` chose structured-vs-legacy by CELL COUNT, so a truncated structured row
+(`| ts | DEFERRED-HIL | lane=L;cause=x |`, five cells) parsed "successfully" as legacy with an
+empty cause and slipped past the malformed-row refusal — the discriminator is now the third
+cell's SHAPE, and a legacy detail that merely contains an `=` still parses. The remaining two are
+bounds the consumer cannot close and are registered at `B-234` with an interim floor rather than
+patched around: pilot membership is inferred from recorded run ids because nothing persists an
+expected roster, and the door's arcless release attestation falls outside any defensible friction
+window because three `merge_door._notify` details omit the leading arc id. Three consecutive
+rounds landed on that one window heuristic, which is the register-and-hold point — the root cause
+is producer-side. The report now prints `arcs`, `lanes` and a `membership: inferred …` field so a
+PASS cannot be read as "every intended lane landed".
+
 ---
 
 ### U-HE-38: Cohort report joint on `(concurrent_lanes_at_open, arc_type)`, drift join, correlational header

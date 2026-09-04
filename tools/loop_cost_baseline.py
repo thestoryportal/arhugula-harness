@@ -69,6 +69,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import re
 import statistics
 import sys
 from datetime import datetime, timedelta
@@ -77,6 +78,8 @@ from pathlib import Path
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
 TRIGGER_WINDOW = timedelta(days=30)  # B-232: > TRIGGER_THRESHOLD yield rows in any window
 TRIGGER_THRESHOLD = 5  # B-232 trigger: lease_held_yields_30d_max > 5 opens the spec leg
+#: A structured lane;cause column: only `key=value` pairs joined by `;`, no whitespace.
+_STRUCTURED_COL = re.compile(r"\w+=[^;\s]*(?:;\w+=[^;\s]*)*")
 LEASE_PRODUCER = "merge-door-lease-acquire"
 CODEX_PRODUCER = "codex_review_wrapper"
 GEMINI_PRODUCER = "gemini_review_wrapper"
@@ -266,7 +269,17 @@ def parse_loop_row(line: str) -> dict[str, str] | None:
     cells = [c.strip() for c in line.split("|")]
     if len(cells) < 5 or not cells[1] or cells[1] == "ts" or set(cells[2]) <= {"-"}:
         return None
-    structured = len(cells) >= 6
+    # Structured vs legacy is decided by the third cell's SHAPE, not by cell count. Counting
+    # alone reads a TRUNCATED structured row (`| ts | DEFERRED-HIL | lane=L;cause=x |`, five
+    # cells) as a legacy three-column row, silently yielding an empty cause and the metadata
+    # as the detail — so a truncated coordination escalation would parse "successfully" and
+    # slip past a consumer's malformed-row refusal (codex r3 P2). The structured cell is
+    # entirely `key=value` pairs joined by `;` with no spaces; a legacy detail that merely
+    # contains an `=` (`holder=u-9 backoff=0`) has a space and is not mistaken for one.
+    structured_col = bool(_STRUCTURED_COL.fullmatch(cells[3]))
+    if structured_col and len(cells) < 6:
+        return None  # truncated structured row: unreadable, never silently legacy
+    structured = structured_col and len(cells) >= 6
     fields = dict(p.split("=", 1) for p in (cells[3] if structured else "").split(";") if "=" in p)
     return {
         "ts": cells[1],

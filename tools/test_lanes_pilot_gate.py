@@ -204,6 +204,17 @@ def test_duplicate_merged_ledger_rows_fail_c_he_03() -> None:
     )
 
 
+def test_a_duplicate_non_pilot_arc_id_also_violates_c_he_03() -> None:
+    """The duplicate rule is a property of the UNION LEDGER, not of the pilot's own rows.
+    Scoping the scan to pilot arcs would let the report claim the union ledger is sound
+    while holding proof that it is not."""
+    arcs = _pilot_arcs()
+    ids = [a["arc_id"] for a in arcs] + ["old-arc", "old-arc"]
+    rep = lp.evaluate("pilot-1", _stores(arcs, merged_ledger_arc_ids=ids))
+    assert rep["pass"] is False
+    assert any("old-arc has 2 union-ledger rows" in v for v in rep["ledger_invariant_violations"])
+
+
 def test_queued_and_committed_at_once_fails_c_he_04() -> None:
     rep = lp.evaluate("pilot-1", _stores(_pilot_arcs(), queued_arc_ids={"u-1"}))
     assert rep["pass"] is False

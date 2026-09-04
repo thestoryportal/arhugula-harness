@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from datetime import datetime, timedelta
 
-from loop_cost_baseline import YIELD_CAUSE, rolling_window_max, summarize
+from loop_cost_baseline import YIELD_CAUSE, parse_loop_row, rolling_window_max, summarize
 
 SCRIPT = Path(__file__).resolve().parent / "loop_cost_baseline.py"
 YIELD = "merge-door-lease-acquire:lease_held_yield"
@@ -584,6 +584,22 @@ def test_yield_cause_literal_matches_the_door_producer() -> None:
 def _days(*offsets: float) -> list[datetime]:
     t0 = datetime.fromisoformat("2026-09-04T00:00:00+00:00")
     return [t0 + timedelta(days=d) for d in offsets]
+
+
+def test_a_truncated_structured_row_is_unreadable_not_legacy() -> None:
+    """Cell count alone reads `| ts | DEFERRED-HIL | lane=L;cause=x |` (five cells) as a
+    legacy three-column row, giving an empty cause and the metadata as the detail — so a
+    truncated coordination escalation would parse "successfully" and slip past a consumer's
+    malformed-row refusal. A legacy detail that merely contains an `=` has a space in it and
+    must still parse."""
+    assert (
+        parse_loop_row("| 2026-09-04T01:00:00Z | DEFERRED-HIL | lane=L1;cause=merge-door-x |")
+        is None
+    )
+    legacy = parse_loop_row("| 2026-09-04T01:00:00Z | NOTIFY | holder=u-9 backoff=0 |")
+    assert legacy is not None and legacy["detail"] == "holder=u-9 backoff=0"
+    full = parse_loop_row("| 2026-09-04T01:00:00Z | NOTIFY | lane=L1;cause=c | d |")
+    assert full is not None and full["cause"] == "c" and full["detail"] == "d"
 
 
 def test_rolling_window_boundaries() -> None:
