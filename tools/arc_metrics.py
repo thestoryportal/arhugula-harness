@@ -53,6 +53,19 @@ LEDGER = Path(os.environ.get("ARC_METRICS_LEDGER", REPO / ".harness" / "arc-metr
 #: pattern as LEDGER so a test or a second lane can point at its own log.
 GATE_LOG = Path(os.environ.get("ARC_METRICS_GATE_LOG", REPO / ".harness" / "merge-gate-log.jsonl"))
 
+#: C-HE-28 §2 numerator class: the refresh-collision finding.
+#:
+#: It is a finding CODE, carried in ``finding_type`` -- ``codex_context_guard``
+#: raises it as ``Finding(severity, code, message)`` (`codex_context_guard.py:1515`)
+#: and `finding_record.to_guard_finding` projects rows back through
+#: ``row["finding_type"]``. It is NOT a ``producer``: that field names the emitting
+#: TOOL (`codex_review_wrapper`, `merge-gate-*`), and no producer is or will be
+#: named for a finding class. Matching on ``producer`` would therefore be vacuous
+#: against every row this log can ever hold -- a predicate that matches nothing
+#: reports a confident zero, which is the empty-versus-unlooked confusion this
+#: ledger exists to refuse, wearing a new costume.
+DRIFT_FINDING_TYPE = "ROADMAP_STATUS_DRIFT"
+
 #: Pending captures, deliberately OUTSIDE the repo. A topic worktree is
 #: disposed at loop completion, so anything queued inside one is lost with it --
 #: and a dirty tracked file there blocks that disposal outright. See
@@ -2358,6 +2371,14 @@ def summary(_args: argparse.Namespace) -> int:
     print(f"  baseline (no levers): {len(baseline)}   treated: {treated_n}")
     if by_levers:
         print(f"  lever cohorts: {len(by_levers)} ({', '.join(sorted(by_levers))})")
+    # C-HE-28 §3 requires this statement in the report HEADER, and header is the
+    # load-bearing word: every cohort block below -- levers, lanes, and the joint
+    # split -- reports a delta the caveat governs, so a reader who meets it after
+    # them has already read the numbers uncaveated.
+    print(
+        "NOTE: cohort deltas are CORRELATIONAL — assignment to N is operator-chosen "
+        "(C-HE-28 §3); descriptive counts only until N>=2 and 'applying' cells populate."
+    )
     print()
 
     cohorts = [("BASELINE", baseline)]
@@ -2474,13 +2495,108 @@ def summary(_args: argparse.Namespace) -> int:
             print(f"  {bounded} lower-bound row(s) excluded from the exact line above")
         print()
 
+    # C-HE-28 §1: once `arc_type` labels are uncontaminated (C-HE-26) the lane
+    # split MUST be JOINT on (concurrent_lanes_at_open, arc_type_open). Assignment
+    # to N is operator-chosen and simpler `applying` arcs are plausibly batched, so
+    # the single-axis block above cannot separate a lane-count effect from that
+    # confound; only the joint cell can.
+    #
+    # The key is the raw (int|None, str|None) tuple -- both components hashable, as
+    # C-HE-28 §1 requires of a cohort key -- and BOTH render through json.dumps at
+    # print time, exactly as the single-axis block above. That is the one renderer
+    # under which an absent label is the literal `null` and can never be read as a
+    # string named "None". Sorting keys on `is None` first puts the unlabelled
+    # cells last and keeps the integers in numeric, not lexicographic, order.
+    joint: dict[tuple, list[dict]] = {}
+    for r in rows:
+        joint.setdefault((r.get("concurrent_lanes_at_open"), r.get("arc_type_open")), []).append(r)
+    for n, t in sorted(joint, key=lambda k: (k[0] is None, k[0], k[1] is None, k[1])):
+        cohort = joint[(n, t)]
+        # The same two exclusions every span aggregate above applies: a lower-bound
+        # row (partial-suffix / unknown) is not a measurement of a whole arc, and a
+        # null span is absent rather than zero.
+        spans = [
+            r["arc_span_s"]
+            for r in cohort
+            if r.get("round_completeness", "complete") == "complete"
+            and r.get("arc_span_s") is not None
+        ]
+        print(
+            f"-- JOINT (N={json.dumps(n)}, {json.dumps(t)}) (n={len(cohort)}) "
+            f"arc span {fmt_span(spans)}"
+        )
+    print()
+
+    import finding_record as fr
+
+    # ONE read of the gate log and ONE existence check, shared by both consumers
+    # below (N6's dispositions and the C-HE-28 §2 drift join). Two independent
+    # exists()+read pairs would be two maps of one territory, free to disagree.
+    # `read_rows` returns [] for an absent path and RAISES RecordError on a corrupt
+    # one -- which is what both consumers want: an unreadable log stops the report
+    # rather than being reported as a zero.
+    #
+    # Read BEFORE the existence check, because the log is append-only and never
+    # unlinked, so the only transition a concurrent lane can make under us is
+    # absent -> present. In this order that race yields "present, 0 rows", which
+    # both lines below report consistently; the other order yields "absent" from
+    # N6 while the drift join reports rows it has already read.
+    gate_rows = fr.read_rows(GATE_LOG)
+    gate_present = GATE_LOG.exists()
+
+    # C-HE-28 §2 (R-15): refresh-collision incidence correlated against the SAME
+    # cohort key as the lane split.
+    #
+    # The join is on `arc_id`, the unique per-arc key both stores carry (C-HE-24 §6
+    # gives every finding-class row `lane_id` AND `arc_id`). It cannot be on
+    # `lane_id` alone: one lane runs many arcs, at different lane counts, so
+    # `lane_id` does not identify an N. `lane_id` is instead the CROSS-CHECK -- a
+    # joined row whose lane disagrees with its ledger row's is a corrupt
+    # attribution, and it is counted and stated rather than silently accepted.
+    drift = [g for g in gate_rows if g.get("finding_type") == DRIFT_FINDING_TYPE]
+    by_arc = {r["arc_id"]: r for r in rows}
+    # Partition first, then count from the partition: an unjoinable row is reported
+    # as its own number, never skipped past.
+    matched = [(g, by_arc[g["arc_id"]]) for g in drift if g.get("arc_id") in by_arc]
+    unjoinable = len(drift) - len(matched)
+    # Denominators come from this one grouping. Rescanning `rows` per cell to
+    # recount would be a second map of a fact this dict already holds.
+    by_n: dict[object, list[dict]] = {}
+    for r in rows:
+        by_n.setdefault(r.get("concurrent_lanes_at_open"), []).append(r)
+    hits: dict[object, int] = dict.fromkeys(by_n, 0)
+    for _g, arc in matched:
+        hits[arc.get("concurrent_lanes_at_open")] += 1
+    # A ledger row predating the lane field carries `lane_id: None` -- absent, which
+    # is not a disagreement, so it is not counted as a mismatch.
+    lane_mismatch = sum(
+        1
+        for g, arc in matched
+        if arc.get("lane_id") is not None and g.get("lane_id") != arc.get("lane_id")
+    )
+    print(
+        "drift incidence by concurrent_lanes_at_open: "
+        + ", ".join(
+            f"N={json.dumps(n)}: {hits[n]}/{len(by_n[n])}"
+            for n in sorted(by_n, key=lambda k: (k is None, k))
+        )
+    )
+    print(
+        f"     ^ numerator: {len(drift)} {DRIFT_FINDING_TYPE} row(s) among "
+        f"{len(gate_rows)} gate row(s); {len(matched)} joined to a ledger arc by "
+        f"arc_id, {unjoinable} unjoinable, {lane_mismatch} whose lane_id disagrees\n"
+        f"       with the ledger's. A cell counts only rows appended to the gate log "
+        f"carrying finding_type={DRIFT_FINDING_TYPE}; an absent emitter and a\n"
+        f"       collision-free cohort both render 0, so a 0 is not on its own a "
+        f"measured collision rate (gate log: {GATE_LOG})."
+    )
+    print()
+
     # C-HE-27 §4: N6 from the durable phases map + the gate log's dispositions.
     # An absent gate log or an unmeasured denominator prints as "--", never as a
     # zero -- "could not look" must stay distinguishable from "looked, found none".
-    if GATE_LOG.exists():
-        import finding_record as fr
-
-        n6_val, n6_hours, n6_excluded_s = n6(rows, fr.read_rows(GATE_LOG))
+    if gate_present:
+        n6_val, n6_hours, n6_excluded_s = n6(rows, gate_rows)
         n6_txt = "-- (no verify/edit spans measured)" if n6_val is None else f"{n6_val:.2f}"
         print(
             f"N6 problems-prevented/hour  {n6_txt}  "

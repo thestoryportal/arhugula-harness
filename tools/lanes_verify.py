@@ -409,6 +409,28 @@ MANIFEST: list[Row] = [
         "local + CI",
         False,
     ),
+    # C-HE-28 (U-HE-38) — §-granular for the same reason the C-HE-27 rows above
+    # are: this witness exercises the joint cohort split (§1), the drift-finding
+    # join (§2) and the correlational header (§3), and no C-HE-27 phase span, so
+    # the plan's draft "C-HE-27/28" label is narrowed here exactly as codex r4
+    # narrowed it there.
+    # mutation-probe `—`: the discriminating mutation is a SWAP of the drift
+    # predicate's field (`finding_type` -> the plan skeleton's `producer`), and no
+    # line DELETION expresses it — every line in that block is load-bearing for the
+    # next, so the probe tool's comment-out range would raise NameError and be
+    # refused as indeterminate rather than run. The swap was performed manually and
+    # is recorded on the U-HE-38 commit: it turns this row and
+    # test_drift_rows_that_do_not_join_are_counted_not_dropped red, and both go
+    # green again on restore. Same disposition, and the same reason, as the WR-14
+    # row below (probe outside the tool's expressible set; manual probe recorded on
+    # the landing commit).
+    Row(
+        "C-HE-28 §1–§3",
+        "pytest:tools/test_arc_metrics.py::test_cohort_by_concurrent_lanes_at_open_and_arc_type",
+        "measurement",
+        "local + CI",
+        False,
+    ),
     # C-HE-30 (U-HE-14)
     # spec §8.1: mutation-probe `—` (static doc witness; no deletion-expressible target)
     Row("C-HE-30", "pytest:tools/test_store_audit.py", "phase0", "local + CI", False),

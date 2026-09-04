@@ -3405,3 +3405,153 @@ def test_phase_spans_negative_span_fails_loud():
     }
     with pytest.raises(am.AbortError, match="end precedes start"):
         am.phase_spans(row)
+
+
+# ---------------------------------------------------------------------------
+# U-HE-38 / C-HE-28: joint (concurrent_lanes_at_open, arc_type) cohorts, the
+# ROADMAP_STATUS_DRIFT join, and the correlational header.
+# ---------------------------------------------------------------------------
+
+
+def _joint_rows() -> list[dict]:
+    """C-HE-28 Verification fixture: N=1/2/4 x arc_type, three arcs per cell."""
+    return [
+        {
+            "arc_id": f"{n}-{t}-{i}",
+            "levers_active": [],
+            "arc_span_s": 60.0 * n,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": n,
+            "arc_type_open": t,
+            "lane_id": f"lane-{n}",
+        }
+        for n in (1, 2, 4)
+        for t in ("inventing", "applying")
+        for i in range(3)
+    ]
+
+
+def _drift_row(arc_id: str, lane_id: str) -> dict:
+    """A refresh-collision row as C-HE-24 §6 shapes it: the class lives in
+    `finding_type`, and `producer` names the emitting TOOL."""
+    return {
+        "finding_id": f"codex_context_guard:head:{arc_id}:1",
+        "producer": "codex_context_guard",
+        "finding_type": "ROADMAP_STATUS_DRIFT",
+        "record_kind": "finding",
+        "lane_id": lane_id,
+        "arc_id": arc_id,
+    }
+
+
+def _run_summary(tmp_path: Path, monkeypatch, capsys, rows: list[dict], gate: list[dict] | None):
+    ledger = tmp_path / "l.jsonl"
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    if gate is None:
+        monkeypatch.setattr(am, "GATE_LOG", tmp_path / "absent.jsonl")
+    else:
+        path = tmp_path / "g.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in gate))
+        monkeypatch.setattr(am, "GATE_LOG", path)
+    am.summary(argparse.Namespace())
+    return capsys.readouterr().out
+
+
+# mutation-probe: match the drift class on `producer` (the plan skeleton's
+# predicate) instead of `finding_type` -> the numerator empties and both the
+# `N=4: 1/6` cell and the "1 ROADMAP_STATUS_DRIFT row(s)" line go red.
+def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path: Path, monkeypatch, capsys):
+    """The joint split, its medians, the correlational header, and a drift row
+    joined to its arc's lane count."""
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            _drift_row("4-inventing-0", "lane-4"),
+            # Negative control: a real reviewer finding shares the log and the
+            # arc space, and must NOT enter the refresh-collision numerator.
+            {
+                "finding_id": "codex_review_wrapper:head:abc:1",
+                "producer": "codex_review_wrapper",
+                "finding_type": "terminal-block",
+                "lane_id": "lane-4",
+                "arc_id": "4-applying-0",
+            },
+        ],
+    )
+    assert "CORRELATIONAL" in out and "operator-chosen" in out
+    # Both key components render through json.dumps, so an absent label could
+    # never be mistaken for a string (see test_joint_cohort_labels_null below).
+    assert '-- JOINT (N=2, "applying") (n=3) arc span 2.0m (n=3, 2.0-2.0)' in out
+    assert '-- JOINT (N=1, "inventing") (n=3) arc span 1.0m (n=3, 1.0-1.0)' in out
+    assert '-- JOINT (N=4, "applying") (n=3) arc span 4.0m (n=3, 4.0-4.0)' in out
+    assert "drift incidence by concurrent_lanes_at_open: N=1: 0/6, N=2: 0/6, N=4: 1/6" in out
+    assert "1 ROADMAP_STATUS_DRIFT row(s) among 2 gate row(s); 1 joined" in out
+
+
+def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Absent gate log: the numerator is stated as 0 rows out of 0, alongside
+    N6's explicit "gate log absent" -- neither reads as a collision-free cohort."""
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), None)
+    assert "0 ROADMAP_STATUS_DRIFT row(s) among 0 gate row(s)" in out
+    assert "an absent emitter and a" in out, "the caveat naming the ambiguity must print"
+    assert "N6 problems-prevented/hour  -- (gate log absent" in out
+
+
+# mutation-probe: drop the unjoinable/mismatch counters and print only the hits
+# -> the two rows the join could not honour vanish silently.
+def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, monkeypatch, capsys):
+    """A drift row whose arc is absent from the ledger, and one whose lane_id
+    contradicts the ledger's, are each reported rather than skipped past. A
+    ledger row with no lane_id is ABSENT, not disagreeing, so it is no mismatch."""
+    rows = _joint_rows()
+    rows.append(
+        {
+            "arc_id": "legacy-0",
+            "levers_active": [],
+            "arc_span_s": 60.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": 1,
+            "arc_type_open": "applying",
+            "lane_id": None,  # predates the lane field
+        }
+    )
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        rows,
+        [
+            _drift_row("4-inventing-0", "lane-4"),  # joins, lane agrees
+            _drift_row("no-such-arc", "lane-9"),  # unjoinable
+            _drift_row("2-applying-1", "lane-WRONG"),  # joins, lane disagrees
+            _drift_row("legacy-0", "lane-anything"),  # ledger lane_id is absent
+        ],
+    )
+    assert (
+        "4 ROADMAP_STATUS_DRIFT row(s) among 4 gate row(s); 3 joined to a ledger arc by "
+        "arc_id, 1 unjoinable, 1 whose lane_id disagrees" in out
+    )
+    assert "N=1: 1/7, N=2: 1/6, N=4: 1/6" in out
+
+
+def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Historical rows carry neither field. They group under `null` -- a key, not
+    an error -- rendered as the JSON literal so it can never read as a cohort
+    named "None", and sorted after every labelled cell."""
+    rows = _joint_rows()[:3]
+    rows.append({"arc_id": "old-0", "levers_active": [], "review_rounds": 2})
+    out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
+    assert "-- JOINT (N=null, null) (n=1) arc span --" in out
+    assert "None" not in out.split("-- JOINT")[1]
+    assert out.index('(N=1, "inventing")') < out.index("(N=null, null)")
+    assert "N=1: 0/3, N=null: 0/1" in out
