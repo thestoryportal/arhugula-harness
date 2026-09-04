@@ -6631,7 +6631,7 @@ if __name__ == "__main__":
 
 **Depends on.** U-HE-05, U-HE-33, U-HE-35, U-HE-36, U-HE-30.
 
-- [ ] **Step 1: Tests**
+- [x] **Step 1: Tests**
 ```python
 def test_pilot_runner_refuses_on_any_phase0_red(monkeypatch):
     monkeypatch.setattr(lp, "phase0_results", lambda: [lv.Result(lv.Row("C-HE-06", "pytest:x", "phase0", "l", True), "fail", "boom")])
@@ -6654,7 +6654,7 @@ def test_recurring_definition():
     assert lp.recurring({"pilot-1": {"a:x:y"}, "pilot-2": {"a:x:y"}, "pilot-3": set()}, severe=set()) == {"a:x:y"}
     assert lp.recurring({"pilot-1": {"b:x:y"}, "pilot-2": set(), "pilot-3": set()}, severe={"b:x:y"}) == {"b:x:y"}
 ```
-- [ ] **Step 2–3:** RED; implement (`gate()` runs `lanes_verify.phase0_rows()` via `run_row`, returns `(1, "phase0 RED: <contract> <artifact> — <reason>")` on the first non-pass incl. skips; `report()` reads reservations with `pilot_run_id`, `merge-gate-log.jsonl` `BASE_TOCTOU` rows for those arcs, and the shared `loop_status.md` DEFERRED-HIL rows whose cause starts with `merge-door-`/`reservation-`). Recipes:
+- [x] **Step 2–3:** RED; implement (`gate()` runs `lanes_verify.phase0_rows()` via `run_row`, returns `(1, "phase0 RED: <contract> <artifact> — <reason>")` on the first non-pass incl. skips; `report()` reads reservations with `pilot_run_id`, `merge-gate-log.jsonl` `BASE_TOCTOU` rows for those arcs, and the shared `loop_status.md` DEFERRED-HIL rows whose cause starts with `merge-door-`/`reservation-`). Recipes:
 
 ```python
 #!/usr/bin/env python3
@@ -6762,8 +6762,89 @@ lanes-pilot-report run_id:
     uv run python tools/lanes_pilot.py report {{run_id}}
 ```
 `two-lane/SKILL.md:140-142` → *"Phase 0 (`just lanes-phase0-check` GREEN) gates running N ≥ 2 lanes at all; the ≥ 3 pilots at 3–4 lanes gate only follow-on lane orchestration (automated spawning) — never the right to keep running N lanes manually (C-HE-13 §3)."*
-- [ ] **Step 4:** Register `Row("C-HE-13", "pytest:tools/test_lanes_pilot_gate.py", "phase1", "local + CI", False)`, `Row("C-HE-13", "just:lanes-pilot-report <run-id>", "phase1", "local", False)` (the runner marks a `just:` row carrying `<run-id>` as `live`). Commit `feat(he-lanes): U-HE-37 mechanical pilot gate + pilot report (C-HE-13 §1-3)`.
+- [x] **Step 4:** Register `Row("C-HE-13", "pytest:tools/test_lanes_pilot_gate.py", "phase1", "local + CI", False)`, `Row("C-HE-13", "just:lanes-pilot-report <run-id>", "phase1", "local", False)` (the runner marks a `just:` row carrying `<run-id>` as `live`). Commit `feat(he-lanes): U-HE-37 mechanical pilot gate + pilot report (C-HE-13 §1-3)`.
 - [ ] **Step 5 (execution, after S1–S5 GREEN):** run ≥ 3 pilots at 3–4 lanes; each report line into the evidence log; run O1 and O3 recipes and record.
+
+**Landed (Steps 1–4)** at PR #1517 → `569b8fbfa`, refresh #1518 → `15ece142a` (both `main` runs
+green, 2026-09-04). `tools/lanes_pilot.py`: `gate(results, probe)` is pure and takes its verdict
+from `lanes_verify.phase0_verdict` (§1) AND `lanes_verify.probe_result_verdict` (§2), the same
+reductions `just lanes-phase0-check` and `just pilot-gate-check` exit on, so the runner and the
+recipes cannot disagree about what "green" means — a `skip` and a `live` row both count RED without
+this module restating the rule. `evaluate(run_id, Stores)` computes the §3 iff-clause pure over the
+three stores' contents, so every clause is witnessed with plain data and no filesystem mocking;
+`report()` gathers and calls it and REFUSES (exit 2) rather than returning a verdict whenever the
+evidence cannot be read — exit 1 is reserved for a measured FAIL. Recipes `lanes-pilot` /
+`lanes-pilot-report` ride their own END-ANCHORED arity-bounded guard matcher rather than the generic
+`just` verb alternation, which is not end-anchored (`just` executes a trailing token as a second
+recipe). Two C-HE-13 phase1 manifest rows registered; the `just:lanes-pilot-report <run-id>` row
+carries a placeholder so `_command` marks it LIVE and nothing auto-runs with an invented run id.
+`parse_loop_row` was extracted into `loop_cost_baseline` as the one reader of the shared ledger's
+row grammar.
+
+**Step 5 is NOT closed and is blocked on an operator action, not on Claude.** Run end to end
+against all 57 phase0 rows in a quiet tree, the gate exits 1 naming
+`C-HE-08 just:main-protection-verify — fail: MISMATCH contexts differ: missing=['merge-gate log
+consistency (C-HE-23 §2 reducer) — blocking', 'split-brain ledger backstop — blocking']`. Live
+branch protection lacks those two blocking contexts; `just main-protection-apply` closes the gap and
+is an outward-facing write. Until it runs, no pilot may start — which is precisely what C-HE-13 §1
+exists to enforce, since a pilot against unfixed state produces contaminated friction signal.
+
+**Review trail: four out-of-family codex rounds — 7 + 6 + 5 + 6 = 24 findings, every one adjudicated
+`accepted` on `.harness/merge-gate-log.jsonl` — plus six merge-gate passes.** A recording gap worth
+naming: the gate log carries ZERO merge-gate finding rows for this arc. Only the final all-APPROVE
+pass was emitted, because a lens verdict binds to the head it reviewed (C-HE-15 §3) and each
+absorption moved the head before its BLOCK was recorded. The five intermediate BLOCK passes survive
+only in this PR's commit trail and body. The lesson for the next unit: emit each gate pass at the
+head it reviewed, BEFORE absorbing it, or its findings never reach the durable record.
+
+Two of the findings across both channels were production defects rather than test gaps. (i) The loop-mode
+permission-guard allowlist is not end-anchored and `just` runs a trailing token as a further recipe,
+so `just lanes-pilot p1 main-protection-rollback` was auto-approved — verified empirically before
+absorbing (a bogus trailing token errors with "justfile does not contain recipe", which is only
+reachable if it was parsed as one). The two pilot verbs now carry their own anchored matcher —
+2 allow cases and 9 negatives in `tools/hooks/test_permission_guard.sh`, and removing the
+`_bash_args_safe` conjunct turns exactly two of them red; the same non-anchoring holds for every parameterless recipe already in that
+alternation and is registered at `B-233`, since closing it needs a per-recipe arity audit. (ii)
+`ledger_invariants()` treated an arc that is BOTH queued and on merged history as a C-HE-04 breach,
+but `arc_metrics._drain_one` unlinks a queue entry only once the row is ALREADY committed, on a
+LATER drain pass — so that is the normal self-healing sweep window and, with the workspace drain
+held at 29 entries, the steady state; every pilot report would have failed on a condition that
+resolves itself. The spec-conformance lens ruled the corrected reading textually right: C-HE-04's
+"no third state" is a post-drain postcondition ("after any drain invocation, for every `arc_id` that
+was pending at entry"), and a globally-always reading would be unsatisfiable by any implementation
+because the sweep is by design a later independent pass. It is now surfaced as
+`rows_awaiting_queue_sweep`; the genuine breach (neither queued nor committed) still fails.
+
+**The dominant finding class, at cardinality six within this arc alone: a production seam every test
+bypasses.** In order — `main()`'s gate CLI dispatch had no caller; the guard's `_bash_args_safe`
+conjunct was unwitnessed because a pre-existing universal guard short-circuited every negative case
+before reaching the new branch; `_pilot_arcs` and `_loop_rows` were always monkeypatched away;
+`gate()`'s probe-verdict else-branch was bypassed because every direct test passed `probe=`
+explicitly; `_pilot_arcs`'s selection loop was covered only at its guard clauses; and finally
+`report()`'s SUCCESS path had never executed at all, on a tool whose whole purpose is producing that
+report. The sixth instance was in the FIXTURES: `_wire_report` stubbed the gate-log and ledger
+readers to `lambda: []`, which is exactly what a mutation hardcoding them away returns, so clause
+(a)'s BASE_TOCTOU check and clause (c)'s coordination-HIL check could have gone permanently vacuous
+with the suite green. **The rule this arc paid for: a stub whose return value equals the mutation's
+return value witnesses nothing** — a stub must return a call counter or content that must appear in
+the output. Each fix was mutation-probed with the tree restored byte-identical.
+
+**Two bounds this report cannot close, registered at `B-234` rather than patched around:** pilot
+membership is inferred from the reservations carrying `pilot_run_id` because nothing persists an
+expected roster, so a lane that died before recording it is invisible; and the door's own arcless
+release attestation falls outside any defensible friction window because three `merge_door._notify`
+details omit the leading arc id every other escalation carries. Four consecutive rounds converged on
+that family, which is the register-and-hold point: the root cause is producer-side. The interim
+floor is landed — the report prints `arcs`, `lanes` and a `membership: inferred …` field, so a PASS
+cannot be read as "every intended lane landed".
+
+**A carrier constraint worth recording for every future unit in this plan.**
+`codex_context_guard.DESIGN_RE` matches `.*Implementation_Plan_[A-Za-z_]+_v\d`, so THIS file is a
+DESIGN surface while `tools/` and `justfile` are IMPL; the two together are a HARD `DESIGN_IMPL_MIX`
+without a clearance marker. A marker records a design-substrate VERSION accepted for consumption, so
+minting one to carry step ticks would misuse the convention. Step ticks for any unit here therefore
+ride their OWN doc-only PR, before or after the code PR, never with it. (B-230's plan escaped this
+only because `loop-optimization-plan-2026-09-03.md` does not match that pattern.)
 
 ---
 
