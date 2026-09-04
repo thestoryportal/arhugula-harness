@@ -1454,9 +1454,11 @@ def test_refresh_files_mutated_during_wait_blocks_without_merge(door, monkeypatc
     assert (2, "r" * 40) not in g.merge_calls
 
 
-def test_wait_for_door_backoff_numbers_and_budget(door):
+def test_wait_for_door_backoff_numbers_and_budget(door, monkeypatch):
     t = {"now": 0.0}
     sleeps = []
+    # hermeticity: the wait's first `held` observation writes to the SHARED loop ledger
+    monkeypatch.setattr(rs, "emit_loop_row", lambda *a: None)
 
     def try_acquire():
         raise md.LeaseHeld("held")
@@ -1464,6 +1466,7 @@ def test_wait_for_door_backoff_numbers_and_budget(door):
     with pytest.raises(md.BudgetExhausted, match="lease_acquire_budget_exhausted"):
         md.wait_for_door(
             try_acquire,
+            lane_id="A",
             clock=lambda: t["now"],
             sleep=lambda s: (sleeps.append(s), t.__setitem__("now", t["now"] + s)),
             rng=lambda: 1.0,
@@ -1482,9 +1485,56 @@ def test_wait_for_door_backoff_numbers_and_budget(door):
     sleeps.clear()
     with pytest.raises(md.BudgetExhausted):
         md.wait_for_door(
-            rl, clock=lambda: t["now"], sleep=lambda s: sleeps.append(s), rng=lambda: 1.0
+            rl,
+            lane_id="A",
+            clock=lambda: t["now"],
+            sleep=lambda s: sleeps.append(s),
+            rng=lambda: 1.0,
         )
     assert len(sleeps) == 11 + 3
+
+
+def test_wait_for_door_emits_one_yield_row_per_contention_event(door, monkeypatch):
+    """Plan Task 8 Step 1: three `held` observations before success append exactly ONE
+    NOTIFY row — at backoff index 0, naming the holder's arc — through the loop-ledger
+    writer, and nothing at all to the gate log (a mid-wait gate-log row could never reach
+    merged history; §0 of the plan). An every-retry emitter would record three."""
+    rows: list[tuple[str, str, str, str]] = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, ln, c, d)))
+    # a FOREIGN lane holds the door
+    _open_backfilled("pr-2", "B", 2)
+    _acq(lane="B", arc="pr-2", pr=2)
+    n = {"held": 0}
+
+    def try_acquire():
+        if n["held"] < 3:
+            n["held"] += 1
+            raise md.LeaseHeld("held")
+        return {"lease_token": "won"}
+
+    lease = md.wait_for_door(try_acquire, lane_id="A", sleep=lambda s: None, rng=lambda: 1.0)
+    assert lease == {"lease_token": "won"} and n["held"] == 3
+    assert rows == [
+        ("NOTIFY", "A", "merge-door-lease-acquire:lease_held_yield", "holder=pr-2 backoff=0")
+    ]
+    assert not fr.GATE_LOG_JSONL.exists()  # the redirected gate log was never written
+
+
+def test_wait_for_door_yield_row_names_a_vanished_holder_as_null(door, monkeypatch):
+    """The holder released between the exclusive-create refusal and the read: the row still
+    lands (the event happened) with the ledger's null cell, never a crash or a skip."""
+    rows: list[str] = []
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append(d))
+    calls = iter([md.LeaseHeld("held"), {"lease_token": "won"}])
+
+    def try_acquire():
+        r = next(calls)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    md.wait_for_door(try_acquire, lane_id="A", sleep=lambda s: None, rng=lambda: 1.0)
+    assert rows == ["holder=- backoff=0"]
 
 
 def _fake_gh(bindir: Path, state: Path, log: Path, tree: str, state2: Path | None = None) -> None:
@@ -1898,7 +1948,7 @@ def test_cli_contention_routes_through_backoff_and_emits(door, monkeypatch):
     g = FakeGround()
     monkeypatch.setattr(md, "default_ground", lambda: g)
     rows = []
-    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c)))
+    monkeypatch.setattr(rs, "emit_loop_row", lambda k, ln, c, d: rows.append((k, c, d)))
     _open_backfilled("pr-9", "C", 9)
     md.acquire(lane_id="C", arc_id="pr-9", pr=9, head_sha="a" * 40, base_sha="b" * 40)
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
@@ -1910,10 +1960,13 @@ def test_cli_contention_routes_through_backoff_and_emits(door, monkeypatch):
     monkeypatch.setattr(md, "RATE_K", 10_000)
     rc = md.main(["land", "1", "--lane-id", "A", "--arc-id", "pr-1", "--no-refresh"])
     assert rc == 5  # BudgetExhausted, not the fail-fast LeaseError exit 4
-    assert (
-        "DEFERRED-HIL",
-        "merge-door-lease-acquire:HITL-recoverable:lease_acquire_budget_exhausted",
-    ) in rows
+    assert [(k, c) for k, c, _ in rows if k == "DEFERRED-HIL"] == [
+        ("DEFERRED-HIL", "merge-door-lease-acquire:HITL-recoverable:lease_acquire_budget_exhausted")
+    ]
+    # Task 8 Step 1 on the production path: ONE yield row across twelve held observations
+    assert [(k, c, d) for k, c, d in rows if k == "NOTIFY"] == [
+        ("NOTIFY", md.LEASE_HELD_YIELD_CAUSE, "holder=pr-9 backoff=0")
+    ]
     import finding_record as frr
 
     gate_rows = [r for r in frr.read_rows() if r.get("producer") == "merge-door-lease-acquire"]
@@ -2542,7 +2595,7 @@ def test_rate_limited_wait_is_deadline_bounded():
         raise md.RateLimited("limited")
 
     with pytest.raises(md.BudgetExhausted, match="rate-limit deadline"):
-        md.wait_for_door(always_limited, clock=clock, sleep=sleep, rng=lambda: 1.0)
+        md.wait_for_door(always_limited, lane_id="A", clock=clock, sleep=sleep, rng=lambda: 1.0)
 
 
 def test_notify_reports_a_lost_row_without_the_stale_pending_wording(monkeypatch, capsys):

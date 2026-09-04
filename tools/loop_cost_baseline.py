@@ -53,6 +53,10 @@ Rules the numbers follow (each one a reviewer finding on the registration PR or 
   * `--loop-status` counts the NOTIFY rows whose cause is exactly
     `merge-door-lease-acquire:lease_held_yield` (Task 8's out-of-repo contention row);
     without the flag that field is null — an honest could-not-look, never a zero.
+    `lease_held_yields_30d_max` is the B-232 trigger as a ROLLING window — the most
+    such rows whose `ts` fall in any half-open 30-day span [t, t + 30 d) — because a
+    lifetime count would read "triggered" forever after six events spread over years;
+    two rows exactly 30 days apart are in different windows.
 
 Usage:
     uv run python tools/loop_cost_baseline.py [--log PATH] [--loop-status PATH]
@@ -67,9 +71,11 @@ import collections
 import json
 import statistics
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 YIELD_CAUSE = "merge-door-lease-acquire:lease_held_yield"
+TRIGGER_WINDOW = timedelta(days=30)  # B-232: >5 yield rows in any 30-day window
 LEASE_PRODUCER = "merge-door-lease-acquire"
 CODEX_PRODUCER = "codex_review_wrapper"
 GEMINI_PRODUCER = "gemini_review_wrapper"
@@ -196,8 +202,11 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
     all_arcs = {str(r.get("arc_id")) for r in rows}
 
     yields: int | None = None
+    yields_30d_max: int | None = None
     if loop_status_rows is not None:
-        yields = sum(1 for line in loop_status_rows if _is_yield_row(line))
+        stamps = [_row_ts(line) for line in loop_status_rows if _is_yield_row(line)]
+        yields = len(stamps)
+        yields_30d_max = rolling_window_max(stamps, TRIGGER_WINDOW)
 
     return {
         "rows": len(rows),
@@ -218,7 +227,27 @@ def summarize(rows: list[dict], loop_status_rows: list[str] | None = None) -> di
         "unique_catch_unadjudicated": unadjudicated,
         "lease_acquire_events": lease_events,
         "lease_held_yields": yields,
+        "lease_held_yields_30d_max": yields_30d_max,
     }
+
+
+def _row_ts(line: str) -> datetime:
+    """The `ts` cell of a loop_status.md row, ISO-8601 with a `Z` suffix (loop_now). A
+    malformed stamp raises — a row the trigger cannot place in time is a defect in the
+    ledger, never a row to drop ([LAW:no-silent-failure])."""
+    return datetime.fromisoformat(line.split("|")[1].strip().replace("Z", "+00:00"))
+
+
+def rolling_window_max(stamps: list[datetime], window: timedelta) -> int:
+    """The most stamps inside any half-open window [t, t + window) — two-pointer over
+    the sorted stamps; pure ([LAW:effects-at-boundaries]). Empty input → 0."""
+    ordered = sorted(stamps)
+    best = lo = 0
+    for hi, t in enumerate(ordered):
+        while t - ordered[lo] >= window:
+            lo += 1
+        best = max(best, hi - lo + 1)
+    return best
 
 
 def _is_yield_row(line: str) -> bool:
