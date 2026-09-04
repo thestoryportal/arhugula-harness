@@ -3499,7 +3499,7 @@ def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path: Path, monkeyp
     assert '-- JOINT (N=1, "inventing") (n=3) arc span 1.0m (n=3, 1.0-1.0)' in out
     assert '-- JOINT (N=4, "applying") (n=3) arc span 4.0m (n=3, 4.0-4.0)' in out
     assert "drift incidence by concurrent_lanes_at_open: N=1: 0/6, N=2: 0/6, N=4: 1/6" in out
-    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "1 joined" in out
+    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "1 counted" in out
 
 
 def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
@@ -3545,8 +3545,11 @@ def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, mon
         ],
     )
     assert "4 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
-    assert "3 joined to a ledger arc by arc_id, 1 unjoinable, 1 whose lane_id disagrees" in out
-    assert "N=1: 1/7, N=2: 1/6, N=4: 1/6" in out
+    assert "2 counted, 1 unjoinable, 1 EXCLUDED for a lane_id disagreeing" in out
+    # The lane-disagreeing row joined arc "2-applying-1" by arc_id, so an arc_id-only
+    # numerator would read N=2: 1/6. It is excluded, so N=2 stays 0: a cell built from
+    # rows whose two attributions contradict each other measures nothing.
+    assert "N=1: 1/7, N=2: 0/6, N=4: 1/6" in out
 
 
 def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(

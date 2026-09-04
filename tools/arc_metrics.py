@@ -2517,6 +2517,16 @@ def summary(_args: argparse.Namespace) -> int:
     # the single-axis block above cannot separate a lane-count effect from that
     # confound; only the joint cell can.
     #
+    # The key is the 2-tuple the spec names and no wider. §1's "exact-lever-set
+    # discipline" is the NON-COLLAPSING principle -- its own parenthetical says "do
+    # not collapse every non-empty levers_active into one TREATED cohort", which is
+    # the lever cohorts' concern and is honoured intact above, where `by_levers` keys
+    # on the exact sorted set. It does not add a lever axis here: §1 then names the
+    # split explicitly as "joint on (concurrent_lanes_at_open, arc_type)", and §3
+    # enumerates the populated cells in that same 2-tuple form ("(N=1, inventing)",
+    # "(N=1, null)"). A third axis would also shatter a 35-row ledger into near
+    # singletons, making every cell's median a single arc.
+    #
     # The key is the raw (int|None, str|None) tuple -- both components hashable, as
     # C-HE-28 §1 requires of a cohort key -- and BOTH render through json.dumps at
     # print time, exactly as the single-axis block above. That is the one renderer
@@ -2597,16 +2607,27 @@ def summary(_args: argparse.Namespace) -> int:
     by_n: dict[object, list[dict]] = {}
     for r in rows:
         by_n.setdefault(r.get("concurrent_lanes_at_open"), []).append(r)
-    hits: dict[object, int] = dict.fromkeys(by_n, 0)
-    for _g, arc in matched:
-        hits[arc.get("concurrent_lanes_at_open")] += 1
     # A ledger row predating the lane field carries `lane_id: None` -- absent, which
-    # is not a disagreement, so it is not counted as a mismatch.
-    lane_mismatch = sum(
-        1
-        for g, arc in matched
-        if arc.get("lane_id") is not None and g.get("lane_id") != arc.get("lane_id")
-    )
+    # is not a disagreement, so it is not a mismatch. A real disagreement is: the
+    # finding says the arc ran on one lane, the ledger says another, and one of the
+    # two attributions is wrong with no way here to say which.
+    #
+    # Mismatches are EXCLUDED from the numerator, not merely reported beside it. The
+    # arc_id join alone would still yield an N for such a row, which is exactly the
+    # temptation: it looks like recoverable data. But a cell built partly from rows
+    # whose two recorded attributions contradict each other is not a measurement of
+    # anything, and folding them in silently launders the contradiction into a rate.
+    # They are counted and named on their own line instead, so excluding them cannot
+    # hide them either.
+    agreed, lane_mismatch = [], 0
+    for g, arc in matched:
+        if arc.get("lane_id") is not None and g.get("lane_id") != arc.get("lane_id"):
+            lane_mismatch += 1
+        else:
+            agreed.append(arc)
+    hits: dict[object, int] = dict.fromkeys(by_n, 0)
+    for arc in agreed:
+        hits[arc.get("concurrent_lanes_at_open")] += 1
     print(
         "drift incidence by concurrent_lanes_at_open: "
         + ", ".join(
@@ -2617,9 +2638,10 @@ def summary(_args: argparse.Namespace) -> int:
     print(
         f"     ^ numerator: {len(drift)} distinct {DRIFT_DETECTION} finding(s) "
         f"(reduced by finding_id, `rejected` dropped) among {len(gate_rows)} gate\n"
-        f"       row(s); {len(matched)} joined to a ledger arc by arc_id, "
-        f"{unjoinable} unjoinable, {lane_mismatch} whose lane_id disagrees with the\n"
-        f"       ledger's. A 0 numerator means the source is UNWIRED, not that "
+        f"       row(s); {len(agreed)} counted, {unjoinable} unjoinable, "
+        f"{lane_mismatch} EXCLUDED for a lane_id disagreeing with the ledger's\n"
+        f"       (contradictory attribution, not a measurement). A 0 numerator "
+        f"means the source is UNWIRED, not that "
         f"collisions were measured and found absent: {DRIFT_DETECTION} is\n"
         f"       raised as an in-memory CI guard finding and no emitter appends it "
         f"here, so read a 0 cell as unavailable, never as a\n"

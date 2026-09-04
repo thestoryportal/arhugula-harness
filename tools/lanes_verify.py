@@ -426,8 +426,16 @@ MANIFEST: list[Row] = [
     # restore. Same disposition, and the same reason, as the WR-14 row below
     # (probe outside the tool's expressible set; manual probe recorded on the
     # landing commit).
+    # The claim is SPLIT at §1+§3 on purpose, and §2 is deliberately not claimed.
+    # §2's correlation mechanism is built and tested, but no runtime emitter persists
+    # a ROADMAP_STATUS_DRIFT row to the gate log, so its numerator can only ever
+    # report UNWIRED in production while a synthetic-row test stays green. A manifest
+    # row asserting §2 covered would be a green check over a measurement that cannot
+    # happen — the shape C-HE-22's "result row required before pilots" P1 was. The
+    # emitter is producer-side work outside this unit's files and is registered as
+    # B-237; §2 is claimable when it lands, not before.
     Row(
-        "C-HE-28 §1–§3",
+        "C-HE-28 §1+§3",
         "pytest:tools/test_arc_metrics.py::test_cohort_by_concurrent_lanes_at_open_and_arc_type",
         "measurement",
         "local + CI",
