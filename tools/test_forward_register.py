@@ -553,6 +553,58 @@ def test_a_malformed_close_out_renders_as_malformed_not_as_absent(capsys) -> Non
     assert "(none —" not in header, header
 
 
+@pytest.mark.parametrize("status", ["closed", "held"])
+def test_a_null_close_out_is_absence_not_malformation(status: str) -> None:
+    """codex r10 [P2], PARTIALLY accepted — the rule's WORDING was fixed, not the rule.
+
+    The finding is right that "a field that is PRESENT must be well-formed" and a
+    `value is not None` test disagree, since `close_out: null` is a present KEY. It is
+    wrong that null should therefore be rejected: in YAML `null` IS a spelling of absence
+    (a bare `close_out:` parses to None, and round-tripping an omitted key through
+    safe_dump/safe_load can produce either form), and this register spells absence by
+    OMITTING the key on all 27 rows that lack a close_out, writing an explicit null
+    nowhere. Rejecting it would red a legitimate authoring style to draw a distinction the
+    data model does not make. This test pins that as a DECISION, not an accident.
+    """
+    data = copy.deepcopy(_data())
+    row = next(r for r in data["items"] if r["status"] == status)
+    row["close_out"] = None
+    assert not [v for v in forward_register.validate(data) if "close_out" in v], (
+        "null is absence: it must not be reported as malformed"
+    )
+
+
+def test_a_null_close_out_renders_as_absent_not_as_malformed(capsys) -> None:
+    """The render half of the same decision: null reaches the not-required line, never the
+    malformed one."""
+    import yaml as _yaml
+
+    ledger = {
+        "snapshot": {},
+        "items": [
+            {
+                "id": "B-9995",
+                "title": "t",
+                "summary": "s",
+                "status": "closed",
+                "pr": "#1",
+                "close_out": None,
+                "heading": "### B-9995 · null close_out",
+            }
+        ],
+    }
+    with tempfile.TemporaryDirectory() as d:
+        lp = Path(d) / "l.yaml"
+        lp.write_text(_yaml.safe_dump(ledger), encoding="utf-8")
+        pp = Path(d) / "p.md"
+        pp.write_text("### B-9995 · null close_out\n\n- **What it is.** Body.\n", encoding="utf-8")
+        forward_register.main(["--detail", "B-9995", "--ledger", str(lp), "--prose", str(pp)])
+        header = capsys.readouterr().out.split(forward_register.PROSE_DELIMITER, 1)[0]
+
+    assert "close_out: (none — not required once a row is closed)" in header, header
+    assert "PRESENT but not text" not in header, header
+
+
 # --- negative tests: each gate failure-class is caught ----------------------
 
 

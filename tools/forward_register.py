@@ -244,14 +244,20 @@ def validate(data: dict[str, Any]) -> list[str]:
             elif heading_id != rid:
                 violations.append(f"{rid}: heading names id {heading_id!r}, not the row's own id")
 
-        # A field that is PRESENT must be well-formed whatever the status. `close_out` and
+        # A field carrying a VALUE must be well-formed whatever the status. `close_out` and
         # `council` are only REQUIRED on open-class rows, so nothing type-checked them on a
         # closed or held row: `close_out: false` passed `--check` and then rendered as
         # "(none — not required...)", collapsing INVALID into ABSENT (codex r9 [P2]).
-        # A field that is PRESENT must be well-formed whatever the status. `close_out` and
-        # `council` are only REQUIRED on open-class rows, so nothing type-checked them on a
-        # closed or held row: `close_out: false` passed `--check` and then rendered as
-        # "(none — not required...)", collapsing INVALID into ABSENT (codex r9 [P2]).
+        #
+        # `null` counts as NO VALUE here, deliberately. codex r10 read the earlier wording
+        # ("a field that is PRESENT") as promising otherwise -- the rule and the code
+        # disagreed, and the RULE was the wrong half. In YAML `null` IS a spelling of
+        # absence: a bare `close_out:` parses to None, and round-tripping an omitted key
+        # through safe_dump/safe_load can produce either form. This register spells absence
+        # by OMITTING the key on all 27 rows that lack a close_out and writes an explicit
+        # null nowhere, so rejecting null would red a legitimate authoring style to draw a
+        # distinction the data model does not make. `false`, `0`, `[]` and `"   "` are
+        # different: each is a VALUE, and none of them is prose.
         for optional in ("close_out", "council"):
             value = r.get(optional)
             if value is not None and not _nonblank_text(value):
