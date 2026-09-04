@@ -959,3 +959,6 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | 2026-09-04T17:44:36Z | #1521 | 1b6fc926ab06 | merge-gate-concurrency | BLOCK | 1 finding(s) | r3 |
 | 2026-09-04T17:44:37Z | #1521 | 1b6fc926ab06 | merge-gate-spec-conformance | BLOCK | 2 finding(s) | r3 |
 | 2026-09-04T17:44:37Z | #1521 | 1b6fc926ab06 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r5 |
+| 2026-09-04T18:05:29Z | #1521 | 71c548f20eea | merge-gate-concurrency | APPROVE | 0 finding(s) | r4 |
+| 2026-09-04T18:05:29Z | #1521 | 71c548f20eea | merge-gate-spec-conformance | BLOCK | 1 finding(s) | r4 |
+| 2026-09-04T18:05:29Z | #1521 | 71c548f20eea | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r6 |

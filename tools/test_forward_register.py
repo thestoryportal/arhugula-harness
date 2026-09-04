@@ -495,19 +495,17 @@ def test_the_header_line_can_never_equal_the_prose_delimiter() -> None:
     not. Editing PROSE_DELIMITER to contain an em dash would silently retire the guarantee
     with every other test still green -- an argument no machine re-checks is a map already
     drifting from its territory.
+
+    ONE assertion, deliberately. A first draft also composed a "closest forgery" header and
+    asserted it differed from the delimiter; that was VACUOUS (merge-gate witness lens, 2nd
+    pass) -- the separator is spliced in outside the `_one_line` calls, so given the
+    assertion above the composed line can never equal the delimiter for ANY implementation,
+    including a reverted one, and neither forged input even had a newline for `_one_line` to
+    flatten. The flattening half is witnessed where it actually runs, end to end, by
+    `test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_status` and
+    `..._through_id`. A second assertion here would restate this one, not check it.
     """
     assert " \u2014 " not in forward_register.PROSE_DELIMITER
-
-    # The consequence, exercised through the real emitter rather than argued: the closest
-    # available forgery -- the delimiter split across both fields so the separator lands
-    # exactly where the delimiter's own text would continue -- still does not equal it.
-    forged_id = "---"
-    forged_status = "prose block (hand-maintained copy) ---"
-    header = (
-        f"{forward_register._one_line(forged_id)} \u2014 "
-        f"{forward_register._one_line(forged_status)}"
-    )
-    assert header != forward_register.PROSE_DELIMITER
 
 
 def test_leg_selfcheck_still_reports_a_heading_only_row_spoofed_through_id() -> None:
