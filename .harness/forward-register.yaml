@@ -11300,32 +11300,33 @@ items:
     of four bounds, and r8 found the plan paragraph still saying two inside a paragraph whose
     next sentence said three. Every one of those was a human re-typing a claim that had one
     authority.'
-  close_out: 'OPEN. Two shapes, and the choice between them is the decision: EITHER derive the
-    rendered detail body from the canonical YAML so the prose carrier stops being a second
-    authority (strongest -- it deletes the class rather than detecting it, but it changes what
-    --detail prints and needs the prose bodies that carry MORE than close_out reconciled first),
-    OR extend check_prose_drift() to semantic parity on the bodies it already pairs by heading
-    (weaker -- a second clock that at least alarms, and it cannot express that the docstring is a
-    third carrier). NOT fixable from the arc that found it: forward_register.py is tools/ and
-    matches codex_context_guard.IMPL_RE, while the plan is DESIGN, so the fix cannot ride a
-    doc-only PR. Interim, and the reason this is registered rather than held: the enumeration is
-    currently identical in the same order on all three register-side surfaces, verified by
-    reading each at head 27f3066ca -- so the live risk today is LATENT (future divergence),
-    not an actual disagreement. SHARPENED at codex r10, which re-raised this a third time and
-    was right to: neither closure shape as first written is as cheap as this row claimed.
-    DERIVING the rendered body from close_out would LOSE information, because the prose bodies
-    carry What-it-is, Closure-shape and Current-state text that close_out does not hold; and
-    full BODY PARITY cannot mean textual equality, because the two bodies are deliberately
-    different registers of prose. The specifiable fix is NARROWER than either: check that the
-    BLOCKING-BOUND ENUMERATION agrees across carriers -- extract the bound letters asserted by
-    close_out and by the prose Current state, compare the SETS, and fail on a mismatch. That is
-    the claim whose divergence is dangerous; the prose around it is not. RECOMMENDED NEXT,
-    ahead of U-HE-38: it lands as its own tools-only PR with no DESIGN surface in the change
-    set and no clearance marker needed. Re-raised as a standalone finding at codex r9
-    on the same arc, correctly: registering a defect does not repair it, and the reason this
-    row exists rather than a fix is a CI-enforced scope boundary, not a judgement that the
-    gap is acceptable. Interim mitigation landed with this row and named as insufficient: the
-    header of each carrier now states which file is canonical and that both bodies must be
-    edited in one commit -- a convention with nothing enforcing it.'
+  close_out: 'PARTIALLY CLOSED at the arc that follows u-he-37-plan-record -- the
+    OPERATOR-FACING half is repaired; the detection half is deliberately not built, and
+    the row stays open so that residual is tracked rather than named on a closed row.
+    WHAT LANDED: forward_register --detail now prints the CANONICAL close_out, read from
+    the YAML row, ABOVE the prose block, separated by PROSE_DELIMITER. The surface that
+    operator routing actually reads therefore carries the authority itself, so a drifted
+    prose body is now seen BESIDE the canonical text instead of standing in for it. An
+    absent close_out is stated in three distinguishable ways -- present, MISSING while
+    required at this status, and not required at this status -- never as silence.
+    WHY NOT THE SHAPE THIS ROW ORIGINALLY PRESCRIBED: extracting bound letters from both
+    prose bodies and comparing the sets would NOT have caught the r6 defect it was written
+    for. At r6 the YAML asserted (c) and (d) as the blocking set while MENTIONING (a) and
+    (b) elsewhere, so letter extraction yields the same four letters on both sides and
+    reports agreement; phrase-anchored extraction is fragile the other way, and a pattern
+    matching nothing on both sides passes VACUOUSLY -- a gate that cannot tell empty from
+    unlooked, which is the defect class this register exists to record. Rendering the
+    canonical field removes the need to parse prose for a fact at all.
+    RESIDUAL, tracked here: the two bodies can still diverge and nothing detects it. The
+    severity is materially lower now that the canonical text reaches the reader, so this
+    is registered rather than driven; a future pass may add parity on the specific claim,
+    not on the prose. NOT built as part of this arc: a structured blocking_bounds field.
+    Exactly one row carries bounds today, and minting a schema field for a generality that
+    does not exist is speculative carrying cost.
+    CONSUMER NOTE: tools/leg_selfcheck.py parses the prose half of --detail and now splits
+    on the imported PROSE_DELIMITER. Without that, the canonical header would have become
+    body[0] -- hard-failing every new row on the lead check, and, worse, making its
+    empty-body test unreachable so the YAML-only-row gate would have stopped firing
+    silently. Both directions are witnessed by mutation probe.'
   council: 'NO -- a tooling authority question inside one register, no cross-axis tension.'
   heading: '### B-235 · the register keeps one claim on two hand-maintained surfaces and the drift check compares only headings *(surfaced by codex r8 on u-he-37-plan-record, 2026-09-04; REGISTERED)*'

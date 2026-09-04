@@ -276,6 +276,62 @@ def test_register_check_fires_on_a_row_that_renders_a_heading_only():
     assert any("HEADING ONLY" in m for m in msgs), msgs
 
 
+def _real_shaped_detail(prose: str, *, rid: str = "B-999", status: str = "registered_finding"):
+    """Reproduce the SHAPE `forward_register --detail` actually emits: a canonical
+    close_out header, the delimiter, then the prose block. Every other fake in this
+    file predates that header and omits the delimiter, so they exercise the
+    compatibility fallback rather than the runtime path -- these two tests are the
+    ones that witness the real shape (B-235)."""
+    header = (
+        f"{rid} — {status}\n"
+        f"close_out (CANONICAL — /x/forward-register.yaml):\n"
+        f"  OPEN — the canonical disposition.\n\n"
+        f"{ls.PROSE_DELIMITER}\n\n"
+    )
+    return lambda _rid: (0, header + prose)
+
+
+def test_yaml_only_row_still_fires_through_the_real_detail_shape():
+    """B-235 regression. The canonical header made `--detail` output non-empty for a
+    row with NO prose body, so a naive `body` computation would make `not body`
+    unreachable and RETIRE this gate silently -- a gate that stops firing without
+    saying so. Feed the real shape and prove it still fires."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-999"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=_real_shaped_detail("### B-999 · a title and nothing else\n"),
+    )
+    msgs = _hard(report)
+    assert any("HEADING ONLY" in m for m in msgs), msgs
+
+
+def test_new_row_lead_check_reads_the_prose_lead_not_the_canonical_header():
+    """The same header would otherwise become `body[0]`, so every NEW row would
+    hard-fail with the header text as its 'lead'. The lead judged must be the
+    PROSE's first bullet."""
+    report = ls.Report()
+    ls.check_register_rows(
+        ["- id: B-999"],
+        _REGISTER_PATHS,
+        report,
+        detail_fn=_real_shaped_detail("### B-999 · t\n\n- **Close-out steps** run the thing.\n"),
+        register_added={
+            ".harness/post-phase-8-forward-register.md": ["### B-999 · t"],
+            ".harness/forward-register.yaml": ["- id: B-999"],
+        },
+        base_ids=set(),
+    )
+    msgs = _hard(report)
+    # Discriminating assertion: the REPORTED lead must quote the prose bullet. Asserting
+    # only that "LEADS with" appears was vacuous -- the canonical header also fails the
+    # accepted-lead pattern, so the check fired either way and the mutation did not kill
+    # it (mutation-probe non-kill is a finding, not a pass).
+    assert any("Close-out steps" in m for m in msgs), msgs
+    assert not any("registered_finding" in m for m in msgs), msgs
+
+
 def test_register_check_is_silent_and_prints_the_lead_when_a_prose_body_exists():
     """The current-state-first half is genuinely non-mechanical, so the leading
     bullet is surfaced for a human instead of pattern-matched into a fake pass."""

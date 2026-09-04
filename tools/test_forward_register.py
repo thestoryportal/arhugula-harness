@@ -112,8 +112,65 @@ def test_detail_cli_anchors_to_the_real_heading_line_not_a_decoy_substring(capsy
             ]
         )
         out = capsys.readouterr().out
-        assert out.startswith(heading)
+        # The canonical block prints first, so the anchoring property is asserted on
+        # the PROSE SECTION rather than on the whole output -- same proof, new offset.
+        prose_section = out.split(forward_register.PROSE_DELIMITER, 1)[1].lstrip("\n")
+        assert prose_section.startswith(heading)
         assert "An earlier section references" not in out
+
+
+def test_detail_renders_the_canonical_close_out_even_when_the_prose_disagrees(capsys) -> None:
+    """B-235. `--detail` renders the PROSE carrier, but `close_out` in the YAML is the
+    authority, and `check_prose_drift` compares headings only -- so a prose body edited
+    out of step with `close_out` used to leave operator-facing routing showing only the
+    hand-copy. The witness is behavioural, not a presence check: the prose copy is
+    mutated to CONTRADICT the canonical field, and the canonical text must still reach
+    the reader."""
+    row = next(r for r in _data()["items"] if r["id"] == "B-234")
+    canonical = row["close_out"]
+
+    def gut_the_prose(text: str) -> str:
+        # Replace the prose body's own disposition with a contradicting one.
+        return text.replace(
+            "REGISTERED, and **BLOCKING the Scope-level completeness of U-HE-37**",
+            "CLOSED — nothing blocks U-HE-37",
+        )
+
+    with _temp_prose(gut_the_prose) as tmp_path:
+        forward_register.main(
+            [
+                "--detail",
+                "B-234",
+                "--ledger",
+                str(forward_register.DEFAULT_LEDGER),
+                "--prose",
+                str(tmp_path),
+            ]
+        )
+        out = capsys.readouterr().out
+
+    # The canonical disposition reaches the reader despite the prose saying otherwise.
+    assert canonical.split("\n")[0].strip()[:60] in " ".join(out.split())[:4000] or (
+        canonical[:60] in out
+    )
+    assert "CANONICAL" in out
+    # ...and it is read BEFORE the hand-copy, so the authority is never met second.
+    assert out.index("CANONICAL") < out.index(forward_register.PROSE_DELIMITER)
+    # The contradicting prose is still shown -- the divergence is made visible, not hidden.
+    assert "CLOSED — nothing blocks U-HE-37" in out
+
+
+def test_detail_states_an_absent_close_out_rather_than_omitting_it(capsys) -> None:
+    """A closed row carries no `close_out` by design. Printing nothing would be
+    indistinguishable from a row whose close_out failed to load, so absence is
+    STATED (the gate-cannot-tell-empty-from-unlooked rule applied to a renderer)."""
+    row = next(r for r in _data()["items"] if r["id"] == "B-1")
+    assert not row.get("close_out"), "fixture assumption: B-1 is closed with no close_out"
+
+    forward_register.main(["--detail", "B-1"])
+    out = capsys.readouterr().out
+    assert "CANONICAL" in out
+    assert "(none" in out
 
 
 # --- negative tests: each gate failure-class is caught ----------------------

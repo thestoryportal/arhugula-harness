@@ -80,6 +80,12 @@ _SECTION_HEADING_ID_RE = re.compile(r"^##\s+.*\(([A-Z]+-\d+)\)\s*$", re.MULTILIN
 #: their "## A-N · ..." heading shape, so they never surface as false drift.
 
 
+#: Boundary between the CANONICAL header `--detail` prints and the hand-maintained
+#: prose block that follows it. Consumers that parse the prose (tools/leg_selfcheck.py)
+#: split here; it is imported, never re-typed, so the two cannot drift (B-235).
+PROSE_DELIMITER = "--- prose block (hand-maintained copy) ---"
+
+
 class RegisterError(ValueError):
     """A structural violation in the forward register (fails ``--check`` / CI)."""
 
@@ -328,6 +334,28 @@ def main(argv: list[str] | None = None) -> int:
         rest = text[start:]
         next_heading = re.search(r"\n(#{2,3})\s", rest[len(heading) :])
         end = len(rest) if next_heading is None else len(heading) + next_heading.start() + 1
+
+        # B-235. The prose below is a HAND-MAINTAINED copy, and `check_prose_drift`
+        # compares headings only -- so a body edited out of step with `close_out` used
+        # to leave this surface, the one operator-facing routing reads, showing the copy
+        # alone. The canonical field is printed FIRST: the authority must not be met
+        # second, after the reader has already formed a view from the copy.
+        status = row.get("status", "<no status>")
+        print(f"{row['id']} — {status}")
+        print(f"close_out (CANONICAL — {args.ledger}):")
+        close_out = row.get("close_out")
+        if close_out:
+            for line in str(close_out).strip().splitlines():
+                print(f"  {line}")
+        elif status in _NEEDS_CLOSE_OUT_AND_COUNCIL:
+            # Not the same fact as "not required here", and never rendered as silence:
+            # an absent-but-required close_out is a `--check` violation, not a shrug.
+            print("  (MISSING — required at this status; `--check` reports it)")
+        else:
+            print(f"  (none — not required at status {status!r})")
+        print()
+        print(PROSE_DELIMITER)
+        print()
         print(rest[:end].rstrip())
         return 0
 

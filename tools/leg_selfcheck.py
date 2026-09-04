@@ -46,6 +46,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The `--detail` boundary is IMPORTED, never re-typed: this module parses the prose
+# half of that output, and a second copy of the delimiter would be exactly the
+# two-carriers drift B-235 exists to remove.
+from forward_register import PROSE_DELIMITER  # noqa: E402
+
 # --- finding model -----------------------------------------------------------
 
 HARD = "HARD"
@@ -1135,7 +1140,13 @@ def check_register_rows(
             return
     for rid in ids:
         rc, stdout = detail(rid)
-        body = [ln for ln in stdout.splitlines() if ln.strip() and not ln.startswith("###")]
+        # `--detail` prints a CANONICAL close_out header, then PROSE_DELIMITER, then the
+        # prose block. Only the prose half is what these two checks judge: counting the
+        # header as body would make `not body` unreachable and silently retire the
+        # YAML-only-row detection below. An injected `detail_fn` (tests) may emit no
+        # delimiter, in which case the whole output IS the prose half.
+        prose_half = stdout.split(PROSE_DELIMITER, 1)[-1]
+        body = [ln for ln in prose_half.splitlines() if ln.strip() and not ln.startswith("###")]
         if rc != 0:
             report.add("register", HARD, f"{rid}: --detail exited {rc}")
         elif not body:
