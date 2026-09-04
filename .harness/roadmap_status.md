@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `59b55abaa3f3` |
-| `last_refreshed` | 2026-09-03T00:00:00Z |
-| `git_head` | `f8da46fa` —  |
+| `workspace_state_hash` | `6d38b573431c` |
+| `last_refreshed` | 2026-09-04T00:00:00Z |
+| `git_head` | `f5b8f6c6` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 120 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1511).** B-230 Task 2 landed at #1511 — `hook_roadmap_next` reads the pointer prose through an ordered rule table (a backticked plan pointer → `plan:<name>`, the explicit "next implementable unit is" phrase, the first bold unit, the unit after the FIRST `then `, then the backticked rule of record) so `[roadmap] next=` is no longer empty on a plan-pointer round, and `loop_notify_summary` renders each NOTIFY once at its last occurrence before the newest-5 cap; the CI-run consumer witness accepts any current-line carrier (codex r1 P1, absorbed). Drive `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 6 Steps 1–5 (the concurrency-lens-on-demand mechanics that need no spec change) under the lean protocol, carrying the §0 rows owed to the plan (the #1511 content-merge and refresh-merge `main` run wall clocks with skipped-job counts, a `tools/loop_cost_baseline.py` re-run), `just arc-metrics drain`, and `just roadmap-status --archive-superseded`; then raise the ONE batched AskUserQuestion (Task 6 Step 6's C-HE-34 spec leg, Task 7's `--delete-branch` recommend-no, Task 1 Step 8), then Task 8 Steps 1–3, then U-HE-37.
+**Current next action (post-#1513).** B-230 Task 6 Steps 1–5 landed at #1513 — `tools/concurrency_surface.py` (`touches_concurrency` over the diff's added and removed lines; one pattern tuple naming every construct the merge-gate Reviewer 1 prompt lists plus path-TOCTOU, module-global and GitHub Actions `concurrency:` / `cancel-in-progress:` shapes; `EmptyDiff` → exit 2 `run the lens`; fail-open on unnamed surfaces by construction) with its parity-wired test, and the Step 5 measurement in plan §0 / §0.1: over all 79 concurrency-lens rounds (digest-verified against each row's `diff_digest`) 74 fire / 5 would skip, every round carrying a concurrency finding fired, the `.harness/**`-excluded variant reads 70 / 9 with one measured miss (pr-1416, unadjudicated P1), and the lens's "88 findings" is 88 rows (21 `finding` rows, last 2026-08-27). Raise the ONE batched AskUserQuestion the plan schedules: `.harness/plan/loop-optimization-plan-2026-09-03.md` Task 6 Step 6 (open the C-HE-34 spec leg for a detector-gated concurrency lens with the typed skip row, saving one subagent in 5 of 79 gate rounds against the stated fail-open bound — or keep three lenses), Task 7 (`--delete-branch` in the fixed merge string, recommend no), and Task 1 Step 8 — carrying the §0 rows owed to the plan (the #1513 content-merge and refresh-merge `main` run wall clocks with skipped-job counts, a `tools/loop_cost_baseline.py` re-run), `just arc-metrics drain`, and `just roadmap-status --archive-superseded`; then Task 8 Steps 1–3, then U-HE-37.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1513 | 2026-09-04 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1511 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1509 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1507 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1505 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1503 | 2026-09-03 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
