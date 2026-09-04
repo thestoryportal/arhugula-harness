@@ -6774,13 +6774,15 @@ report can PASS while the door's post-merge checks are unfinished (`B-234` (iii)
 Registering those does not make the implementation complete, and a checkbox cannot express
 "implemented, with two named false-PASS paths open" — hence this line. **U-HE-37 must not be
 treated as closed for any decision that relies on a PASS being trustworthy.** The closing
-condition is ALL THREE of `B-234`'s false-PASS bounds, not the two door ones alone: a
-door-published completion marker the report can read, so "landed through the door and finished"
-stops being inferred from reservation payload (c); an absent-vs-unreadable lease read (d); AND an
-expected-participant roster (a) — a four-lane run that loses a lane before `pilot_run_id` is
-recorded is invisible and presents as a valid clean three-lane run, so terminal door evidence and
-lease tri-state cannot restore the iff-clause on their own. Bound (b), arcless friction rows, is
-reporting-only and does not gate a PASS. The ticks below record that the STEPS ran, not
+condition is bounds **(a), (c) and (d)** of `B-234` — all three of its false-PASS paths, not the
+two door ones alone. (a): an expected-participant roster, because a four-lane run that loses a lane
+before `pilot_run_id` is recorded is invisible and presents as a valid clean three-lane run, so
+terminal door evidence cannot restore the iff-clause on its own. (c): a door-published completion
+marker the report can read, so "landed through the door and finished" stops being inferred from
+reservation payload. (d): an absent-vs-unreadable lease read. Bound (b), arcless friction rows, is
+reporting-only and does NOT gate a PASS, so it is not in the blocking set. The same set, in the same
+order, is stated in `.harness/forward-register.yaml`'s `close_out` and in the prose carrier's
+`Current state` — three surfaces, one claim. The ticks below record that the STEPS ran, not
 that the guarantee holds.
 
 **Landed (Steps 1–4)** at PR #1517 → `569b8fbfa`, refresh #1518 → `15ece142a` (both `main` runs
