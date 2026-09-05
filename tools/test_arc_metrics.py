@@ -3457,12 +3457,16 @@ def _joint_rows() -> list[dict]:
     ]
 
 
-def _drift_row(arc_id: str, lane_id: str, **over) -> dict:
+def _drift_row(arc_id: str, lane_id: str, n: int = 1, **over) -> dict:
     """A refresh-collision row, lane-attributed per C-HE-24 §6.
 
     The detection names itself in `producer`, which is where every durable detection
     in the live log names its site, and `finding_type` carries the closed lifecycle
     vocabulary. B-237 records that contract for the unbuilt emitter.
+
+    `n` is the finding_id's sequence component, so a SECOND distinct finding on the
+    same arc is minted here rather than by merging an id onto the returned row —
+    every field the id is bound to must be settled BEFORE the validation below.
     """
     import finding_record as fr
 
@@ -3474,7 +3478,7 @@ def _drift_row(arc_id: str, lane_id: str, **over) -> dict:
         # components to the row's, so a hand-rolled id makes a fixture that
         # `append_row` would reject — a row no emitter could ever write, quietly
         # standing in for one that could.
-        "finding_id": fr.make_finding_id(producer, "0" * 40, location, 1),
+        "finding_id": fr.make_finding_id(producer, "0" * 40, location, n),
         "producer": producer,
         "finding_type": "terminal-block",
         "record_kind": "finding",
@@ -3702,8 +3706,11 @@ def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
     assert "N=1: --/4, N=null: --/1" in out
 
 
-# mutation-probe: count `gate_rows` directly instead of reducing by finding_id ->
-# the adjudicated finding is counted twice and N=4 reads 2/6.
+# mutation-probe: count `gate_rows` directly instead of reducing by finding_id -> the
+# adjudicated finding is counted twice and the distinct-FINDING line reads 2, which is
+# what reds this test. The NUMERATOR is unaffected: `affected_arcs` is a set keyed by
+# arc_id, so duplicate rows for one arc cannot move its cell -- the sibling
+# refuted-finding test is what pins the numerator half.
 def test_drift_incidence_counts_findings_not_log_rows(tmp_path: Path, monkeypatch, capsys):
     """An adjudication row copies finding_type/arc_id verbatim from its finding
     (measured at U-HE-38 r1: 527 of 2260 finding_ids), so counting rows would count
@@ -3876,13 +3883,11 @@ def test_two_collisions_on_one_arc_are_one_affected_arc(tmp_path: Path, monkeypa
     would each increment a finding-based numerator. Incidence counts arcs affected, not
     collisions suffered — and with an arc-based numerator over a cohort denominator the
     ratio can never exceed one, which a finding count could."""
-    import finding_record as fr
-
-    loc = ".harness/roadmap_status.md:4-inventing-0"
+    # `n` distinguishes the two findings THROUGH the helper, so the second row is minted
+    # AND validated exactly like the first. Merging a fresh finding_id onto the return
+    # value would place it after validation — the same bypass the negative controls had.
     first = _drift_row("4-inventing-0", "lane-4")
-    second = _drift_row("4-inventing-0", "lane-4") | {
-        "finding_id": fr.make_finding_id("ROADMAP_STATUS_DRIFT", "0" * 40, loc, 2)
-    }
+    second = _drift_row("4-inventing-0", "lane-4", n=2)
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [first, second])
     assert "N=4: 1/6" in out, "one arc affected, however many times it collided"
     assert "2/6" not in out, "two findings on one arc are one affected arc, not two"

@@ -420,8 +420,12 @@ MANIFEST: list[Row] = [
     # be refused as indeterminate rather than run. Both were performed manually and
     # are recorded on the U-HE-38 commits, each naming the test it actually kills:
     # (a) counting raw gate rows instead of reducing by finding_id and dropping
-    # `rejected` -> test_drift_incidence_counts_findings_not_log_rows and
-    # test_a_refuted_drift_finding_is_not_a_collision; (b) widening the drift
+    # `rejected` -> test_a_refuted_drift_finding_is_not_a_collision via the NUMERATOR
+    # (the undisposed row survives and N=4 flips 0/6 -> 1/6), and
+    # test_drift_incidence_counts_findings_not_log_rows via its distinct-FINDING count
+    # assertion only -- NOT via its numerator, because `affected_arcs` is a set keyed
+    # by arc_id, so duplicate rows for one arc cannot move that cell (corrected from
+    # the merge-gate witness-adequacy lens on PR #1523); (b) widening the drift
     # predicate back to either carrier -> test_drift_detection_binds_to_producer_only;
     # (c) dropping the siblings+1 conversion -> test_cohort_split_null_safe,
     # test_lane_cohort_medians_exclude_lower_bound_rows and
