@@ -3598,12 +3598,39 @@ def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, mon
         "4 drift-class row(s) of any kind observed, 1 unjoinable, 1 EXCLUDED for a lane_id" in out
     )
     # The lane-disagreeing row joined arc "2-applying-1" by arc_id, so an arc_id-only
-    # numerator would read N=2: 1/6. It is excluded, so N=2 stays 0: a cell built from
-    # rows whose two attributions contradict each other measures nothing.
-    # N=2's only row was lane-mismatched, so it is unattributable: that cohort was
-    # never validly looked at and reads `--`, not a measured 0. The legacy row sits at
-    # N=1 (absent key = C-HE-25 baseline) and was observed, so N=1 has a denominator.
+    # numerator would read N=2: 1/6. It is excluded from the numerator, so N=2 reads 0
+    # — a measured 0 here, because OTHER rows in this fixture were attributable, which
+    # is what tells us the detector ran at all. (When nothing is attributable the whole
+    # line renders `--`; that is the sibling case below.) The legacy row sits at N=1
+    # (absent key = C-HE-25 baseline), giving N=1 seven arcs and one affected.
     assert "N=1: 1/7, N=2: 0/6, N=4: 1/6" in out
+
+
+# mutation-probe: gate measurability on `observed` instead of `attributable` -> every
+# cohort prints 0/6 and this test goes red.
+def test_only_unattributable_rows_leave_every_cohort_unavailable(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A row that failed the join, or whose lane contradicts the ledger's, says a
+    collision may have happened somewhere while saying nothing about where. Treating it
+    as evidence the detector ran would print `0/K` across every cohort and launder an
+    unattributable collision into collision-free exposure — the one thing this line
+    exists to refuse. With nothing attributable, nothing is measurable."""
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            _drift_row("no-such-arc", "lane-9"),  # unjoinable
+            _drift_row("2-applying-1", "lane-WRONG"),  # joins, lane contradicts
+        ],
+    )
+    assert "N=1: --/6, N=2: --/6, N=4: --/6" in out, "no attributable row -> no measurement"
+    assert "0/6" not in out, "an unattributable collision must never render as a measured zero"
+    assert "2 drift-class row(s) of any kind observed, 1 unjoinable, 1 EXCLUDED" in out, (
+        "and both rows are still reported, so excluding them cannot hide them"
+    )
 
 
 def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(

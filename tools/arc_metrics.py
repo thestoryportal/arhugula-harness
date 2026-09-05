@@ -2720,12 +2720,24 @@ def summary(_args: argparse.Namespace) -> int:
     affected_arcs: dict[object, set] = {}
     for r in drift:
         affected_arcs.setdefault(lanes_at_open(by_arc[r["arc_id"]]), set()).add(r["arc_id"])
-    # While NOTHING has been observed the whole line renders `--`, never a digit: with
-    # no emitter there is no measurement to report, and `--` is the same unavailable
-    # token fmt_span and the N6 line already use. It is carried by the VALUE rather
-    # than by the caveat below, because a parser, a truncated paste, or a reader
-    # skimming the numbers takes `0/6` as a measured rate whatever the next line says.
-    measurable = bool(observed)
+    # While nothing ATTRIBUTABLE has been seen the whole line renders `--`, never a
+    # digit. The gate is `attributable`, not `observed`: a row that failed the join or
+    # whose lane contradicts the ledger's tells us a collision may have happened
+    # somewhere while telling us nothing about WHERE, so treating it as evidence the
+    # detector ran would print `0/K` across every cohort and launder an unattributable
+    # collision into collision-free exposure — the precise thing this line refuses.
+    #
+    # A consequence worth stating rather than hiding: with a findings-only emitter, a
+    # genuinely collision-free period also renders `--`, because zero rows is zero
+    # rows. That is an honest limit of the log rather than a defect in the reading —
+    # nothing in a detections-only stream separates "ran and found nothing" from "never
+    # ran". B-237's activation boundary is what resolves it: once the emitter's
+    # activation point is known, arcs after it are known-examined without needing a row
+    # each. `--` is the same unavailable token fmt_span and the N6 line already use, and
+    # it is carried by the VALUE rather than by the caveat below, because a parser, a
+    # truncated paste, or a reader skimming the numbers takes `0/6` as a measured rate
+    # whatever the next line says.
+    measurable = bool(attributable)
     print(
         "drift incidence by lanes_at_open (affected arcs / arcs in cohort): "
         + ", ".join(

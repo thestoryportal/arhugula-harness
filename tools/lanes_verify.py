@@ -427,11 +427,14 @@ MANIFEST: list[Row] = [
     # test_lane_cohort_medians_exclude_lower_bound_rows and
     # test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null; (d) a
     # finding-count numerator -> test_two_collisions_on_one_arc_are_one_affected_arc;
-    # (e) a cohort-size denominator -> test_an_unobserved_arc_contributes_no_exposure.
-    # All go green again on restore. (An earlier revision of this note claimed a probe
-    # against a test that could not have failed it — the either-carrier fixture set the
-    # name in `producer` under both branches — which is why each probe now names the
-    # tests it was actually observed to turn red.)
+    # (e) gating measurability on `observed` rather than `attributable` ->
+    # test_only_unattributable_rows_leave_every_cohort_unavailable.
+    # All go green again on restore. Two earlier revisions of this note named probes
+    # that could not have run as described — one against a test whose fixture made it
+    # unfailable, and one (a cohort-size denominator) against a test deleted when the
+    # committed implementation ADOPTED that very denominator at r8. Both are recorded
+    # rather than quietly dropped, because a probe list is only worth its accuracy:
+    # every entry above was re-run against THIS head.
     # Same disposition, and the same reason, as the WR-14 row below
     # (probe outside the tool's expressible set; manual probe recorded on the
     # landing commit).
