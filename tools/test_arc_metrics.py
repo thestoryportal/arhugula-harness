@@ -3571,13 +3571,9 @@ def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path: Path, monkeyp
             _drift_row("4-inventing-0", "lane-4"),
             # Negative control: a real reviewer finding shares the log and the
             # arc space, and must NOT enter the refresh-collision numerator.
-            {
-                "finding_id": "codex_review_wrapper:head:abc:1",
-                "producer": "codex_review_wrapper",
-                "finding_type": "terminal-block",
-                "lane_id": "lane-4",
-                "arc_id": "4-applying-0",
-            },
+            # Built through the validated helper — a hand-rolled literal here would be
+            # a row the production writer could never emit, standing in for one it could.
+            _drift_row("4-applying-0", "lane-4", producer="codex_review_wrapper"),
         ],
     )
     assert "CORRELATIONAL" in out and "operator-chosen" in out
@@ -3758,8 +3754,16 @@ def test_drift_detection_binds_to_producer_only(tmp_path: Path, monkeypatch, cap
         capsys,
         _joint_rows(),
         [
-            _drift_row("2-applying-0", "lane-2")
-            | {"producer": "some-other-checker", "finding_type": "ROADMAP_STATUS_DRIFT"}
+            # Passed as KWARGS, not merged onto the return value: `_drift_row` mints the
+            # finding_id for the producer it is given and validates the result, so an
+            # override applied after the call would leave the id's producer segment
+            # disagreeing with `producer` — a row `_check_finding_id_components` rejects.
+            _drift_row(
+                "2-applying-0",
+                "lane-2",
+                producer="some-other-checker",
+                finding_type="ROADMAP_STATUS_DRIFT",
+            )
         ],
     )
     assert "N=2: --/6" in out, "finding_type is not the carrier"
@@ -3772,17 +3776,13 @@ def test_drift_detection_binds_to_producer_only(tmp_path: Path, monkeypatch, cap
         capsys,
         _joint_rows(),
         [
-            {
-                "finding_id": "codex_review_wrapper:head:x:1",
-                "producer": "codex_review_wrapper",
-                "finding_type": "terminal-block",
-                "record_kind": "finding",
-                "disposition": None,
-                "lane_id": "lane-2",
-                "arc_id": "2-applying-0",
-                "observed_evidence": "a review finding that merely mentions "
+            _drift_row(
+                "2-applying-0",
+                "lane-2",
+                producer="codex_review_wrapper",
+                observed_evidence="a review finding that merely mentions "
                 "ROADMAP_STATUS_DRIFT in its prose",
-            }
+            )
         ],
     )
     # Sharper than 0/6: the row is not even OBSERVED, so the cell is unavailable.
