@@ -867,7 +867,8 @@ def test_lane_cohort_medians_exclude_lower_bound_rows(monkeypatch, tmp_path: Pat
     monkeypatch.setattr(am, "LEDGER", ledger)
     am.summary(am.argparse.Namespace())
     out = capsys.readouterr().out
-    lanes = out[out.index("-- LANES [concurrent_lanes_at_open=1]") :]
+    # stored value 1 is ONE SIBLING, i.e. 2 lanes (`lanes_at_open` = siblings + 1).
+    lanes = out[out.index("-- LANES [lanes_at_open=2]") :]
     assert "review rounds    4.5 (n=2" in lanes, (
         "median of [4,5]; both the unknown AND the partial-suffix row are out"
     )
@@ -1624,14 +1625,31 @@ def test_cohort_split_null_safe(monkeypatch, tmp_path: Path, capsys):
             "round_completeness": "complete",
             "concurrent_lanes_at_open": 2,
         },
+        # Row "a" above has the key ABSENT; this one CARRIES an explicit null. The
+        # spec's Verification bullet asks that the split group "without error on
+        # `null`", so the null case needs a row that actually holds one — before
+        # U-HE-38 this test asserted the null label against an absent-key row, which
+        # is the conflation itself.
+        {
+            "arc_id": "c",
+            "levers_active": [],
+            "arc_span_s": 180.0,
+            "review_rounds": 3,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": None,
+        },
     ]
     ledger.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
     monkeypatch.setattr(am, "LEDGER", ledger)
     assert am.summary(argparse.Namespace()) == 0
     out = capsys.readouterr().out
-    assert "LANES [concurrent_lanes_at_open=null] (n=1)" in out
-    assert "LANES [concurrent_lanes_at_open=2] (n=1)" in out
-    assert "concurrent_lanes_at_open=None" not in out
+    # C-HE-25: a row lacking the KEY predates the field and IS the N=1 baseline
+    # (C-HE-28 §3 places 18 such rows at N=1). Only an explicit null is an unknown.
+    assert "LANES [lanes_at_open=1] (n=1)" in out, "absent key -> the 1-lane baseline"
+    assert "LANES [lanes_at_open=null] (n=1)" in out, "explicit null stays unknown"
+    # row "b" stores 2 SIBLINGS, which is 3 lanes.
+    assert "LANES [lanes_at_open=3] (n=1)" in out
+    assert "lanes_at_open=None" not in out
 
 
 # ---- U-HE-12 (C-HE-26 §2): arc_type_open / arc_type_close on the single arc row ---------
@@ -3405,3 +3423,490 @@ def test_phase_spans_negative_span_fails_loud():
     }
     with pytest.raises(am.AbortError, match="end precedes start"):
         am.phase_spans(row)
+
+
+# ---------------------------------------------------------------------------
+# U-HE-38 / C-HE-28: joint (concurrent_lanes_at_open, arc_type) cohorts, the
+# ROADMAP_STATUS_DRIFT join, and the correlational header.
+# ---------------------------------------------------------------------------
+
+
+#: lanes -> the SIBLING count the producer actually stores (`open_with_sensor` sets it
+#: from `sibling_open_count`, which excludes the arc itself, so a solo arc stores 0).
+#: Fixtures use the producer's real scale, including 0, rather than writing lane counts
+#: into a sibling field.
+_SIBLINGS_FOR_LANES = {1: 0, 2: 1, 4: 3}
+
+
+def _joint_rows() -> list[dict]:
+    """C-HE-28 Verification fixture: N=1/2/4 LANES x arc_type, three arcs per cell."""
+    return [
+        {
+            "arc_id": f"{n}-{t}-{i}",
+            "levers_active": [],
+            "arc_span_s": 60.0 * n,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": _SIBLINGS_FOR_LANES[n],
+            "arc_type_open": t,
+            "lane_id": f"lane-{n}",
+        }
+        for n in (1, 2, 4)
+        for t in ("inventing", "applying")
+        for i in range(3)
+    ]
+
+
+def _drift_row(arc_id: str, lane_id: str, n: int = 1, **over) -> dict:
+    """A refresh-collision row, lane-attributed per C-HE-24 §6.
+
+    The detection names itself in `producer`, which is where every durable detection
+    in the live log names its site, and `finding_type` carries the closed lifecycle
+    vocabulary. B-237 records that contract for the unbuilt emitter.
+
+    `n` is the finding_id's sequence component, so a SECOND distinct finding on the
+    same arc is minted here rather than by merging an id onto the returned row —
+    every field the id is bound to must be settled BEFORE the validation below.
+    """
+    import finding_record as fr
+
+    producer = over.get("producer", "ROADMAP_STATUS_DRIFT")
+    location = f".harness/roadmap_status.md:{arc_id}"
+    row = {
+        # Built through the producer's own id constructor rather than hand-written:
+        # `_check_finding_id_components` binds the id's producer and location-hash
+        # components to the row's, so a hand-rolled id makes a fixture that
+        # `append_row` would reject — a row no emitter could ever write, quietly
+        # standing in for one that could.
+        "finding_id": fr.make_finding_id(producer, "0" * 40, location, n),
+        "producer": producer,
+        "finding_type": "terminal-block",
+        "record_kind": "finding",
+        "disposition": None,
+        "disposition_actor": None,
+        "cause_attribution": None,
+        "unique_catch": None,
+        "lineage_claim": "fresh",
+        "expected_contract": "refresh-collision detection",
+        "observed_evidence": "roadmap_status.md hash does not match computed",
+        "location": location,
+        "severity": "hard",
+        "ts": "2026-09-04T00:00:00Z",
+        "head_sha": None,
+        "base_sha": None,
+        "diff_digest": None,
+        "round_n": None,
+        "lane_id": lane_id,
+        "arc_id": arc_id,
+    } | over
+    # VALIDATED at construction, not merely shaped like a row. `read_rows` does not
+    # validate, so an invalid fixture would sail through every drift test and stand in
+    # for a row the production writer would refuse — which is exactly what happened
+    # twice in this arc (r8: a hand-rolled finding_id whose producer component
+    # disagreed with `producer`; r10: adjudication rows with a null disposition_actor).
+    # Routing every fixture through the emitter's own validator makes that class fail
+    # HERE, loudly, instead of a review round later.
+    fr.validate(row)
+    return row
+
+
+def _adjudication(finding: dict, disposition: str) -> dict:
+    """The adjudication row for a finding. `disposition_actor` is REQUIRED and must
+    differ from the producer (C-HE-24 §5: a reviewer never disposes its own finding) --
+    a null actor is what `finding_record.validate` refuses, and leaving it null is how
+    two of this arc's fixtures stood in for rows the production writer would reject."""
+    import finding_record as fr
+
+    row = finding | {
+        "record_kind": "finding_adjudication",
+        "disposition": disposition,
+        "disposition_actor": "claude_absorber",
+    }
+    fr.validate(row)
+    return row
+
+
+def _marker(arc_id: str, lane_id: str) -> dict:
+    """A `no_finding` marker: observation without incidence (C-HE-29 §2). Its id is
+    minted for its own producer and location, not borrowed from a finding."""
+    import finding_record as fr
+
+    row = _drift_row(arc_id, lane_id) | {
+        "record_kind": "no_finding",
+        "finding_id": fr.make_finding_id(
+            "ROADMAP_STATUS_DRIFT", "0" * 40, f".harness/roadmap_status.md:{arc_id}:marker", 1
+        ),
+        "location": f".harness/roadmap_status.md:{arc_id}:marker",
+    }
+    fr.validate(row)
+    return row
+
+
+def _run_summary(tmp_path: Path, monkeypatch, capsys, rows: list[dict], gate: list[dict] | None):
+    ledger = tmp_path / "l.jsonl"
+    ledger.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    monkeypatch.setattr(am, "LEDGER", ledger)
+    if gate is None:
+        monkeypatch.setattr(am, "GATE_LOG", tmp_path / "absent.jsonl")
+    else:
+        path = tmp_path / "g.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in gate))
+        monkeypatch.setattr(am, "GATE_LOG", path)
+    am.summary(argparse.Namespace())
+    return capsys.readouterr().out
+
+
+# mutation-probe: match the drift class on `producer` (the plan skeleton's
+# predicate) instead of `finding_type` -> the numerator empties and both the
+# `N=4: 1/6` cell and the "1 ROADMAP_STATUS_DRIFT row(s)" line go red.
+def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path: Path, monkeypatch, capsys):
+    """The joint split, its medians, the correlational header, and a drift row
+    joined to its arc's lane count."""
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            _drift_row("4-inventing-0", "lane-4"),
+            # Negative control: a real reviewer finding shares the log and the
+            # arc space, and must NOT enter the refresh-collision numerator.
+            # Built through the validated helper — a hand-rolled literal here would be
+            # a row the production writer could never emit, standing in for one it could.
+            _drift_row("4-applying-0", "lane-4", producer="codex_review_wrapper"),
+        ],
+    )
+    assert "CORRELATIONAL" in out and "operator-chosen" in out
+    # Both key components render through json.dumps, so an absent label could
+    # never be mistaken for a string (see test_joint_cohort_labels_null below).
+    assert '-- JOINT (N=2, "applying") (n=3) arc span 2.0m (n=3, 2.0-2.0)' in out
+    assert '-- JOINT (N=1, "inventing") (n=3) arc span 1.0m (n=3, 1.0-1.0)' in out
+    assert '-- JOINT (N=4, "applying") (n=3) arc span 4.0m (n=3, 4.0-4.0)' in out
+    assert "N=1: 0/6, N=2: 0/6, N=4: 1/6" in out, (
+        "the numerator is distinct AFFECTED arcs; the denominator is the cohort, because "
+        "the detector is a CI guard that examines every arc"
+    )
+    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    assert "1 drift-class row(s) of any kind observed" in out
+
+
+def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Absent gate log: the numerator is stated as 0 rows out of 0, alongside
+    N6's explicit "gate log absent" -- neither reads as a collision-free cohort."""
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), None)
+    assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "among 0 gate" in out
+    assert "no ATTRIBUTABLE row was seen" in out, "the caveat must print"
+    assert "N6 problems-prevented/hour  -- (gate log absent" in out
+
+
+# mutation-probe: drop the unjoinable/mismatch counters and print only the hits
+# -> the two rows the join could not honour vanish silently.
+def test_drift_rows_that_do_not_join_are_counted_not_dropped(tmp_path: Path, monkeypatch, capsys):
+    """A drift row whose arc is absent from the ledger, and one whose lane_id
+    contradicts the ledger's, are each reported rather than skipped past. A
+    ledger row with no lane_id is ABSENT, not disagreeing, so it is no mismatch."""
+    rows = _joint_rows()
+    rows.append(
+        {
+            "arc_id": "legacy-0",
+            "levers_active": [],
+            "arc_span_s": 60.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": 0,  # 0 siblings == 1 lane
+            "arc_type_open": "applying",
+            "lane_id": None,  # predates the lane field
+        }
+    )
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        rows,
+        [
+            _drift_row("4-inventing-0", "lane-4"),  # joins, lane agrees
+            _drift_row("no-such-arc", "lane-9"),  # unjoinable
+            _drift_row("2-applying-1", "lane-WRONG"),  # joins, lane disagrees
+            _drift_row("legacy-0", "lane-anything"),  # ledger lane_id is absent
+        ],
+    )
+    # `drift` is the ATTRIBUTABLE subset: the unjoinable and the lane-mismatched rows
+    # are observed but never become incidences, so 4 rows yield 2 distinct findings.
+    assert "2 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    assert (
+        "4 drift-class row(s) of any kind observed, 1 unjoinable, 1 EXCLUDED for a lane_id" in out
+    )
+    # The lane-disagreeing row joined arc "2-applying-1" by arc_id, so an arc_id-only
+    # numerator would read N=2: 1/6. It is excluded from the numerator, so N=2 reads 0
+    # — a measured 0 here, because OTHER rows in this fixture were attributable, which
+    # is what tells us the detector ran at all. (When nothing is attributable the whole
+    # line renders `--`; that is the sibling case below.) The legacy row sits at N=1
+    # (absent key = C-HE-25 baseline), giving N=1 seven arcs and one affected.
+    assert "N=1: 1/7, N=2: 0/6, N=4: 1/6" in out
+
+
+# mutation-probe: gate measurability on `observed` instead of `attributable` -> every
+# cohort prints 0/6 and this test goes red.
+def test_only_unattributable_rows_leave_every_cohort_unavailable(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """A row that failed the join, or whose lane contradicts the ledger's, says a
+    collision may have happened somewhere while saying nothing about where. Treating it
+    as evidence the detector ran would print `0/K` across every cohort and launder an
+    unattributable collision into collision-free exposure — the one thing this line
+    exists to refuse. With nothing attributable, nothing is measurable."""
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            _drift_row("no-such-arc", "lane-9"),  # unjoinable
+            _drift_row("2-applying-1", "lane-WRONG"),  # joins, lane contradicts
+        ],
+    )
+    assert "N=1: --/6, N=2: --/6, N=4: --/6" in out, "no attributable row -> no measurement"
+    assert "0/6" not in out, "an unattributable collision must never render as a measured zero"
+    assert "2 drift-class row(s) of any kind observed, 1 unjoinable, 1 EXCLUDED" in out, (
+        "and both rows are still reported, so excluding them cannot hide them"
+    )
+
+
+def test_joint_cohort_labels_null_and_sorts_the_unlabelled_cells_last(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """An unlabelled component groups under `null` -- a key, not an error -- rendered
+    as the JSON literal so it can never read as a cohort named "None", and sorted
+    after every labelled cell. Both axes are exercised: an unlabelled `arc_type_open`,
+    and an explicitly-null lane count (a row lacking the lane KEY is the N=1 baseline
+    instead, per C-HE-25, which the predating-row test pins)."""
+    rows = _joint_rows()[:3]
+    rows.append({"arc_id": "old-0", "levers_active": [], "review_rounds": 2})
+    rows.append(
+        {
+            "arc_id": "unknown-0",
+            "levers_active": [],
+            "review_rounds": 2,
+            "concurrent_lanes_at_open": None,
+            "arc_type_open": None,
+        }
+    )
+    out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
+    joint = out.split("-- JOINT", 1)[1]
+    assert "-- JOINT (N=1, null) (n=1) arc span --" in out, "unlabelled arc_type renders null"
+    assert "-- JOINT (N=null, null) (n=1) arc span --" in out, "explicit null lane count"
+    assert "None" not in joint, "never a cohort named None"
+    assert out.index('(N=1, "inventing")') < out.index("(N=null, null)"), "labelled cells first"
+    assert "N=1: --/4, N=null: --/1" in out
+
+
+# mutation-probe: count `gate_rows` directly instead of reducing by finding_id -> the
+# adjudicated finding is counted twice and the distinct-FINDING line reads 2, which is
+# what reds this test. The NUMERATOR is unaffected: `affected_arcs` is a set keyed by
+# arc_id, so duplicate rows for one arc cannot move its cell -- the sibling
+# refuted-finding test is what pins the numerator half.
+def test_drift_incidence_counts_findings_not_log_rows(tmp_path: Path, monkeypatch, capsys):
+    """An adjudication row copies finding_type/arc_id verbatim from its finding
+    (measured at U-HE-38 r1: 527 of 2260 finding_ids), so counting rows would count
+    every adjudicated collision at least twice -- and could push a cell's numerator
+    past its own denominator. One finding is one incidence."""
+    finding = _drift_row("4-inventing-0", "lane-4")
+    adjudication = _adjudication(finding, "accepted")
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, adjudication])
+    assert "N=4: 1/6" in out, "one finding, two rows -> one affected arc"
+    assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+    assert "among 2 gate" in out, "the row count stays visible beside the finding count"
+
+
+# mutation-probe: drop the `disposition != "rejected"` filter -> N=4 reads 1/6.
+def test_a_refuted_drift_finding_is_not_a_collision(tmp_path: Path, monkeypatch, capsys):
+    """Last-write-wins over finding_id, then `rejected` drops out: the same rule
+    C-HE-29 §2 states for unique_catch. A refuted collision is not a collision."""
+    finding = _drift_row("4-inventing-0", "lane-4")
+    refutation = _adjudication(finding, "rejected")
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, refutation])
+    assert "N=4: 0/6" in out, "refuted: the emitter ran, so 0 is a measurement here"
+    assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
+
+
+# mutation-probe: widen the predicate back to `DRIFT_DETECTION in (finding_type,
+# producer)` -> the finding_type-only row below is counted and this test goes red.
+def test_drift_detection_binds_to_producer_only(tmp_path: Path, monkeypatch, capsys):
+    """`producer` names the detection site; `finding_type` carries the closed lifecycle
+    vocabulary and is an unconstrained string. Binding to producer alone is what stops
+    an unrelated producer's row, whose classification happens to carry this name, being
+    counted as a refresh collision. B-237 records that obligation for the emitter."""
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [_drift_row("2-applying-0", "lane-2")],
+    )
+    assert "N=2: 1/6" in out, "the producer carrier counts"
+
+    # The name in `finding_type` instead: NOT a detection, however suggestive.
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            # Passed as KWARGS, not merged onto the return value: `_drift_row` mints the
+            # finding_id for the producer it is given and validates the result, so an
+            # override applied after the call would leave the id's producer segment
+            # disagreeing with `producer` — a row `_check_finding_id_components` rejects.
+            _drift_row(
+                "2-applying-0",
+                "lane-2",
+                producer="some-other-checker",
+                finding_type="ROADMAP_STATUS_DRIFT",
+            )
+        ],
+    )
+    assert "N=2: --/6" in out, "finding_type is not the carrier"
+    assert "0 drift-class row(s) of any kind observed" in out
+
+    # Negative control: the name only in free text is not a detection.
+    out = _run_summary(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        _joint_rows(),
+        [
+            _drift_row(
+                "2-applying-0",
+                "lane-2",
+                producer="codex_review_wrapper",
+                observed_evidence="a review finding that merely mentions "
+                "ROADMAP_STATUS_DRIFT in its prose",
+            )
+        ],
+    )
+    # Sharper than 0/6: the row is not even OBSERVED, so the cell is unavailable.
+    assert "N=2: --/6" in out and "0 drift-class row(s) of any kind observed" in out
+
+
+# mutation-probe: drop the `if measurable` guard and always render hits[n] -> the
+# unwired case prints 0/6 and this test goes red.
+def test_an_unobserved_numerator_renders_unavailable_not_zero(tmp_path: Path, monkeypatch, capsys):
+    """No drift-class row of any kind means the numerator was never looked at. The
+    denominator is real and stays visible; the numerator is `--`. A prose caveat
+    cannot stop a parser or a truncated paste from reading `0/6` as a rate."""
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [])
+    assert "N=1: --/6, N=2: --/6, N=4: --/6" in out
+    assert "0/6" not in out, "an unwired source must never render a digit numerator"
+    assert "no ATTRIBUTABLE row was seen" in out
+
+
+def test_a_no_finding_marker_makes_a_zero_legitimate(tmp_path: Path, monkeypatch, capsys):
+    """C-HE-29 §2's device: a `no_finding` marker records that the emitter looked and
+    saw nothing, which is observation without incidence. It makes the cohort countable
+    -- so 0 becomes a measurement -- while contributing nothing to the numerator."""
+    marker = _marker("4-inventing-0", "lane-4")
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [marker])
+    # Per cohort: the marker names an N=4 arc, so ONLY N=4 becomes countable. The
+    # other cohorts were not looked at and must not inherit its zero.
+    assert "N=1: 0/6, N=2: 0/6, N=4: 0/6" in out
+    assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out, "a marker is not an incidence"
+    assert "1 drift-class row(s) of any kind observed" in out
+
+
+# mutation-probe: replace lanes_at_open() with r.get("concurrent_lanes_at_open") ->
+# the two populations pool into one N=null cohort and this test goes red.
+def test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Two different facts that `dict.get()` renders identically. A row whose KEY IS
+    ABSENT predates the field and IS C-HE-25's implicit N=1 baseline — C-HE-28 §3
+    places 18 such rows at `(N=1, ...)` at a HEAD where no row carried the field. A row
+    CARRYING an explicit null has the field and its best-effort C-HE-03 §7 sensor
+    recorded nothing: an unknown, not a baseline. Pooling them puts a known cohort into
+    an unknown one."""
+    rows = [
+        # predates the field entirely
+        {
+            "arc_id": "old-0",
+            "levers_active": [],
+            "arc_span_s": 60.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "arc_type_open": None,
+        },
+        # has the field; the sensor recorded nothing
+        {
+            "arc_id": "new-0",
+            "levers_active": [],
+            "arc_span_s": 600.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": None,
+            "arc_type_open": None,
+        },
+    ]
+    # A THIRD row, storing 0 siblings: a solo arc recorded by the live sensor. It is
+    # ONE LANE, so it belongs in the same cohort as the pre-field row — which is what
+    # makes C-HE-28 §3's "(N=1, ...) n=18" true of a HEAD where no row carried the
+    # field. Reporting the raw field would split them and label this one `N=0`.
+    rows.append(
+        {
+            "arc_id": "solo-0",
+            "levers_active": [],
+            "arc_span_s": 60.0,
+            "review_rounds": 1,
+            "round_completeness": "complete",
+            "concurrent_lanes_at_open": 0,
+            "arc_type_open": None,
+        }
+    )
+    out = _run_summary(tmp_path, monkeypatch, capsys, rows, [])
+    assert "-- JOINT (N=1, null) (n=2) arc span" in out, (
+        "absent key and 0 siblings are the same 1-lane cohort"
+    )
+    assert "-- JOINT (N=null, null) (n=1) arc span 10.0m" in out, "explicit null is unknown"
+    assert "N=0" not in out, "no arc runs in zero lanes; the stored 0 is a SIBLING count"
+    assert "N=1: --/2, N=null: --/1" in out
+    joint_lines = [ln for ln in out.splitlines() if ln.startswith("-- JOINT")]
+    assert len(joint_lines) == 2, (
+        "two cells: the 1-lane cohort (pre-field + solo) and the unknown one — the "
+        "explicit null must never be absorbed into a measured cohort"
+    )
+
+
+# mutation-probe: count findings instead of distinct affected arcs -> N=4 reads 2/6
+# and this test goes red.
+def test_two_collisions_on_one_arc_are_one_affected_arc(tmp_path: Path, monkeypatch, capsys):
+    """Reducing by finding_id removes duplicate ROWS for one finding; it does nothing
+    about two DIFFERENT findings on the same arc, which carry distinct finding_ids and
+    would each increment a finding-based numerator. Incidence counts arcs affected, not
+    collisions suffered — and with an arc-based numerator over a cohort denominator the
+    ratio can never exceed one, which a finding count could."""
+    # `n` distinguishes the two findings THROUGH the helper, so the second row is minted
+    # AND validated exactly like the first. Merging a fresh finding_id onto the return
+    # value would place it after validation — the same bypass the negative controls had.
+    first = _drift_row("4-inventing-0", "lane-4")
+    second = _drift_row("4-inventing-0", "lane-4", n=2)
+    out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [first, second])
+    assert "N=4: 1/6" in out, "one arc affected, however many times it collided"
+    assert "2/6" not in out, "two findings on one arc are one affected arc, not two"
+    assert "2 distinct ROADMAP_STATUS_DRIFT finding(s)" in out, "both findings are still seen"
+
+
+def test_the_denominator_is_the_cohort_not_the_arcs_that_reported(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """Exposure is every arc that RAN at that lane count, because the detector is a CI
+    guard that examines every merge — not only the arcs that happened to report. An
+    earlier revision counted just the reporting arcs, which reads 1/1 where the plan's
+    own fixture expects 1/6 and, against a findings-only emitter, makes every non-empty
+    cohort 100%. The residual it was reaching for is narrower and lives at B-237: arcs
+    that ran BEFORE the emitter existed were genuinely unexamined and must leave the
+    denominator once an activation boundary exists."""
+    out = _run_summary(
+        tmp_path, monkeypatch, capsys, _joint_rows(), [_drift_row("4-inventing-0", "lane-4")]
+    )
+    assert "N=4: 1/6" in out, "one affected arc out of the six that ran at that lane count"
+    assert "1/1" not in out, "the reporting arc is not the whole exposure"
+    assert "arcs in cohort" in out, "the line names what its denominator is"

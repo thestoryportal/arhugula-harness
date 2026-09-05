@@ -409,6 +409,54 @@ MANIFEST: list[Row] = [
         "local + CI",
         False,
     ),
+    # C-HE-28 (U-HE-38) — §-granular for the same reason the C-HE-27 rows above
+    # are: this witness exercises the joint cohort split (§1), the drift-finding
+    # join (§2) and the correlational header (§3), and no C-HE-27 phase span, so
+    # the plan's draft "C-HE-27/28" label is narrowed here exactly as codex r4
+    # narrowed it there.
+    # mutation-probe `—`: the discriminating mutations are SUBSTITUTIONS, and no
+    # line DELETION expresses them — every line in the drift block is load-bearing
+    # for the next, so the probe tool's comment-out range would raise NameError and
+    # be refused as indeterminate rather than run. Both were performed manually and
+    # are recorded on the U-HE-38 commits, each naming the test it actually kills:
+    # (a) counting raw gate rows instead of reducing by finding_id and dropping
+    # `rejected` -> test_a_refuted_drift_finding_is_not_a_collision via the NUMERATOR
+    # (the undisposed row survives and N=4 flips 0/6 -> 1/6), and
+    # test_drift_incidence_counts_findings_not_log_rows via its distinct-FINDING count
+    # assertion only -- NOT via its numerator, because `affected_arcs` is a set keyed
+    # by arc_id, so duplicate rows for one arc cannot move that cell (corrected from
+    # the merge-gate witness-adequacy lens on PR #1523); (b) widening the drift
+    # predicate back to either carrier -> test_drift_detection_binds_to_producer_only;
+    # (c) dropping the siblings+1 conversion -> test_cohort_split_null_safe,
+    # test_lane_cohort_medians_exclude_lower_bound_rows and
+    # test_a_row_predating_the_lane_field_is_not_a_row_that_recorded_null; (d) a
+    # finding-count numerator -> test_two_collisions_on_one_arc_are_one_affected_arc;
+    # (e) gating measurability on `observed` rather than `attributable` ->
+    # test_only_unattributable_rows_leave_every_cohort_unavailable.
+    # All go green again on restore. Two earlier revisions of this note named probes
+    # that could not have run as described — one against a test whose fixture made it
+    # unfailable, and one (a cohort-size denominator) against a test deleted when the
+    # committed implementation ADOPTED that very denominator at r8. Both are recorded
+    # rather than quietly dropped, because a probe list is only worth its accuracy:
+    # every entry above was re-run against THIS head.
+    # Same disposition, and the same reason, as the WR-14 row below
+    # (probe outside the tool's expressible set; manual probe recorded on the
+    # landing commit).
+    # The claim is SPLIT at §1+§3 on purpose, and §2 is deliberately not claimed.
+    # §2's correlation mechanism is built and tested, but no runtime emitter persists
+    # a ROADMAP_STATUS_DRIFT row to the gate log, so its numerator can only ever
+    # report UNWIRED in production while a synthetic-row test stays green. A manifest
+    # row asserting §2 covered would be a green check over a measurement that cannot
+    # happen — the shape C-HE-22's "result row required before pilots" P1 was. The
+    # emitter is producer-side work outside this unit's files and is registered as
+    # B-237; §2 is claimable when it lands, not before.
+    Row(
+        "C-HE-28 §1+§3",
+        "pytest:tools/test_arc_metrics.py::test_cohort_by_concurrent_lanes_at_open_and_arc_type",
+        "measurement",
+        "local + CI",
+        False,
+    ),
     # C-HE-30 (U-HE-14)
     # spec §8.1: mutation-probe `—` (static doc witness; no deletion-expressible target)
     Row("C-HE-30", "pytest:tools/test_store_audit.py", "phase0", "local + CI", False),

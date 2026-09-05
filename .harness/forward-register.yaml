@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 236
+  total: 239
   open: 1
   design_substrate_gated: 3
-  registered_finding: 78
+  registered_finding: 81
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 9e830e725384296e
+  identity_digest: 46693d9de4eb9f21
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11375,3 +11375,122 @@ items:
   council: NO -- a single-tool timing question inside one checker, no cross-axis tension.
   heading: '### B-236 · the dirty-carrier guard checks the tree once, then renders it N times *(surfaced
     by the merge-gate concurrency lens on b-235, 2026-09-04; REGISTERED)*'
+- id: B-237
+  title: no runtime emitter persists a ROADMAP_STATUS_DRIFT row to the gate log, so C-HE-28 §2's
+    refresh-collision numerator can never be measured
+  pr: '#TBD (surfaced by the out-of-family reviewer on the u-he-38 arc, r1+r2)'
+  status: registered_finding
+  summary: 'C-HE-28 §2 requires refresh-collision incidence to be correlated against `concurrent_lanes_at_open`.
+    U-HE-38 built and tested that correlation in `tools/arc_metrics.py` `summary()`, but its numerator
+    source does not exist: `ROADMAP_STATUS_DRIFT` is raised by `tools/codex_context_guard.py:1515` as an
+    in-memory CI guard `Finding(severity, code, message)` and is never appended to `.harness/merge-gate-log.jsonl`.
+    Zero rows carry the name in `producer` or `finding_type` across the live log. Because the durable
+    row has never existed, its SHAPE is also unspecified -- the log''s own convention puts detection identity
+    in `producer` (merge-door-post-merge-ci, merge-door-lease-acquire) and a closed severity vocabulary
+    in `finding_type` (terminal-block, clean-approve, probe-sample, transient-retry, HITL-recoverable,
+    permanent-fail-exit, probe-result), so `producer` is the likelier carrier but nothing binds it.'
+  close_out: 'REGISTERED, not driven: the emitter is producer-side work in `codex_context_guard`, outside
+    U-HE-38''s declared files (`tools/arc_metrics.py`, `tools/test_arc_metrics.py`), and wiring an unreviewed
+    new durable-write path into the CI guard mid-arc would be the worse trade. NOT HELD BARE -- the same-round
+    fail-closed floor landed with it, in two parts. (i) The report refuses to launder the gap: its provenance
+    line states that a `--` numerator means the source was never looked at, while a numeric 0 means an
+    emitter ran and recorded no collision, so while nothing attributable has been seen every cohort
+    renders `--/<cohort size>` and can never be read as a measured rate. (r3 landed this as a 0-with-caveat; r5/r6 replaced the caveat with the
+    `--` value itself, and this row is corrected to the shipped behaviour rather than the interim one.) (ii) The verification manifest claim
+    was SPLIT rather than over-stated -- `tools/lanes_verify.py` registers `C-HE-28 §1+§3` and deliberately
+    does NOT claim §2, so no green check stands over a measurement that cannot happen (the shape C-HE-22''s
+    "result row required before pilots" P1 had). WHAT CLOSES THIS ROW, for whoever takes it: give the guard
+    a durable append at its detection site, decide the carrier field explicitly (and record it, since the
+    consumer binds to `producer`, per the log''s own convention, and the either-carrier hedge was removed
+    at r6 because an unconstrained `finding_type` made it a misclassification risk), then flip the manifest
+    row to cover §2. TWO FURTHER EMITTER OBLIGATIONS, both surfaced at u-he-38 r6 and both load-bearing
+    for the consumer that is already built. (1) NAME THE DETECTION IN `producer`. `finding_type` carries
+    the closed lifecycle vocabulary and is an unconstrained string, so a detection name there could be
+    forged or collided into by an unrelated producer. (2) THE ACTIVATION BOUNDARY IS THE DENOMINATOR''S ONLY
+    OPEN QUESTION, and it is now the whole of it. An interim revision of this row required a `no_finding`
+    marker per CHECKED arc so the denominator could be distinct OBSERVED arcs; that requirement is
+    WITHDRAWN (u-he-38 r8). It invented a producer contract no spec states, it contradicted the plan''s
+    own fixture (which expects 1/6, not 1/1), and against the real detector it inverts: `codex_context_guard`
+    runs in CI on every merge, so every arc IS examined and the exposure is simply the cohort. The consumer
+    now uses the cohort as the denominator. What survives is narrower and real: arcs that ran BEFORE the
+    emitter existed were genuinely never examined, so once it lands they must LEAVE the denominator rather
+    than dilute it. C-HE-28 defines no such boundary, and guessing a date or commit here would bake an
+    unreviewed constant into the metric, so it is producer-side work owed with the emitter. ALSO OWED AT THAT MOMENT, and
+    surfaced by the same reviewer at u-he-38 r3: an EMITTER-ACTIVATION BOUNDARY. Every ledger arc that
+    ran before the emitter exists would otherwise stay in the denominator as collision-free exposure and
+    permanently dilute each cohort''s incidence. The boundary is not invented here because C-HE-28 does
+    not define one and guessing it would bake an unreviewed constant into the metric; it is producer-side
+    work that belongs with the emitter that makes it meaningful. Until then nothing can be diluted: with
+    no observed drift-class row the report renders every cell `--/<denominator>` rather than a digit. Until then the consumer side is
+    complete and inert: reduce-by-finding_id, `rejected` dropped, lane-mismatch rows excluded.'
+  council: 'NO -- a single producer-side wiring decision (which field carries the detection name), no cross-axis
+    tension.'
+  heading: '### B-237 · C-HE-28 §2''s drift numerator has no emitter, so the correlation is built but unmeasurable
+    *(surfaced by the out-of-family reviewer on u-he-38, 2026-09-04; REGISTERED)*'
+- id: B-238
+  title: revisit lever stratification of the C-HE-28 joint cohort key once the ledger carries enough
+    treated arcs to support a third axis
+  pr: '#TBD (raised twice by the out-of-family reviewer on u-he-38, r2 and r5; REJECTED both times
+    on the same grounds, registered so the concern is tracked rather than merely refused)'
+  status: registered_finding
+  summary: 'The reviewer argued twice that the joint cohort key must stratify by `levers_active`
+    as well, so that a lever effect cannot be attributed to lane count. The concern is live rather
+    than theoretical: 6 of 35 ledger rows carry levers, across 3 distinct exact lever sets (`B-211
+    + B-212` x3, `defect-class-preflight + register-pr-prose` x1, the same pair plus `review-loop-gate`
+    x2), and those arcs currently pool with the 29 baseline arcs inside each (N, arc_type) cell.'
+  close_out: 'REJECTED as a change to THIS unit, on grounds that did not move between the two raisings.
+    C-HE-28 §1 names the split explicitly -- "the split MUST be joint on (concurrent_lanes_at_open,
+    arc_type)" -- a 2-tuple; and §3''s honest-first-months claim enumerates the populated cells in
+    that same 2-tuple form, "(N=1, inventing) n=6 and (N=1, null) n=12", which is the spec''s own
+    worked example of what a joint cell IS. The "exact-lever-set discipline" §1 invokes is scoped
+    by its own parenthetical -- "do not collapse every non-empty levers_active into one TREATED cohort"
+    -- to the lever cohorts, which `by_levers` honours intact by keying on the exact sorted set.
+    Note the evidentiary symmetry: the SAME §3 enumeration was decisive in ACCEPTING the r5 finding
+    that historical rows belong at N=1, so it is being weighed consistently, not selectively.
+    WHY IT IS REGISTERED ANYWAY: the confound is real and will matter once treated arcs are numerous
+    enough for a cell to be more than a singleton. At 35 rows a third axis shatters the ledger --
+    4 lever sets x 6 lane values x 3 arc types -- and every median becomes one arc, so stratifying
+    now would destroy the descriptive counts it aims to protect. NOT HELD BARE: the standing floor
+    is C-HE-28 §3 itself, which this report prints in its header as the CORRELATIONAL note and which
+    forbids an effect estimate at this sample size -- the confound cannot be laundered into a causal
+    claim while that holds. WHAT REOPENS THIS ROW: enough treated arcs that a (lever set, N, arc_type)
+    cell is non-singleton, or any move to state an effect rather than a count -- at which point the
+    stratification is owed before the claim, and a spec amendment naming the 3-tuple is owed with it.'
+  council: 'NO -- a cohort-key scoping question inside one report, resolved by reading two spec clauses;
+    no cross-axis tension.'
+  heading: '### B-238 · lever stratification of the joint cohort key, deferred until the ledger can
+    carry a third axis *(raised twice and rejected on u-he-38, 2026-09-04; REGISTERED)*'
+- id: B-239
+  title: C-HE-28 names `concurrent_lanes_at_open` as the cohort key while §3 counts in LANES, and the
+    two scales differ by one
+  pr: '#TBD (surfaced by the out-of-family reviewer on u-he-38 r6; the consumer resolved it, the spec
+    text still carries the ambiguity)'
+  status: registered_finding
+  summary: 'Two scales share one name across the cleared spec. The SENSOR stores siblings: `open_with_sensor`
+    sets `concurrent_lanes_at_open` from `sibling_open_count(arc_id)` (`tools/reservations.py:786`),
+    which excludes the arc''s own reservation, and C-HE-03 §7 defines the field as the "count of sibling
+    `open` reservations". A solo arc therefore stores 0 and a stored 1 means two live lanes. But C-HE-28
+    §1 names that field as the cohort key, while §3 counts in LANES: "the only populated joint cells are
+    (N=1, inventing) n=6 and (N=1, null) n=12" -- 18 rows at N=1 at a HEAD where NO row carried the field
+    -- and "every N >= 2 cell ... starts at 0". Both §3 sentences are true only of lanes: a lone arc is
+    one lane, and AC#10 asks whether two or more lanes help, which is N>=2 in lanes but >=1 in siblings.
+    Read literally as the raw field, §1 would label a solo arc N=0 (no arc runs in zero lanes) and would
+    make "N >= 2" mean three lanes.'
+  close_out: 'RESOLVED IN THE CONSUMER, REGISTERED FOR THE SPEC. `tools/arc_metrics.py` `lanes_at_open`
+    converts siblings to lanes (+1), reports absent-key rows as the 1-lane baseline alongside stored-0
+    solo arcs, and renames the report labels to `lanes_at_open` rather than continuing to name a field
+    whose raw value they no longer show -- so no live surface is ambiguous today. What is NOT fixed is
+    the spec text, and it is registered rather than edited because editing `design-substrate`-class
+    wording from an implementation arc is the silent-absorption failure mode (root CLAUDE.md §4.3/§4.4);
+    a cleared contract''s prose is amended through back-flow, not from the consumer that noticed. NOTE
+    the cost of leaving it: this ambiguity survived SIX review rounds on this arc. Rounds 4 and 5 both
+    reasoned about the cohort key at length, and one of them (r5) shipped a fix that mapped historical
+    rows onto a stored 1 -- i.e. onto "two lanes" -- precisely because the field name asserts lanes while
+    the sensor counts siblings. WHAT CLOSES THIS ROW: a spec amendment that either renames the field to
+    say siblings, or states the conversion at C-HE-28 §1 where the cohort key is defined, so the next
+    consumer does not re-derive it from `reservations.py`. Either is a wording change to a cleared
+    artifact and routes through design-phase back-flow.'
+  council: 'NO -- a naming/scale ambiguity with one correct reading, established by reading the producer
+    and three spec clauses; no cross-domain tension to convene over.'
+  heading: '### B-239 · the cohort field is named for lanes and stores siblings, and the spec counts both
+    ways *(surfaced on u-he-38 r6, 2026-09-04; consumer resolved, spec text REGISTERED)*'
