@@ -2755,8 +2755,11 @@ def summary(_args: argparse.Namespace) -> int:
         f"measurement). The numerator is distinct AFFECTED arcs and the\n"
         f"       denominator every arc in the cohort: the detector is a CI guard that "
         f"runs on every merge, so each arc is examined. A `--`\n"
-        f"       means no emitter has written to this log at all, a numeric 0 means it "
-        f"ran and recorded no collision. Those are different facts\n"
+        f"       means no ATTRIBUTABLE row was seen -- either none was written, or every "
+        f"one that was could not be tied to an arc (see the\n"
+        f"       unjoinable and excluded counts above) -- while a numeric 0 means the "
+        f"detector ran and recorded no collision. Those are\n"
+        f"       different facts\n"
         f"       and the report will not merge them (gate log: {GATE_LOG})."
     )
     print()

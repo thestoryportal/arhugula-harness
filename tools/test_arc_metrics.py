@@ -3468,7 +3468,7 @@ def _drift_row(arc_id: str, lane_id: str, **over) -> dict:
 
     producer = over.get("producer", "ROADMAP_STATUS_DRIFT")
     location = f".harness/roadmap_status.md:{arc_id}"
-    return {
+    row = {
         # Built through the producer's own id constructor rather than hand-written:
         # `_check_finding_id_components` binds the id's producer and location-hash
         # components to the row's, so a hand-rolled id makes a fixture that
@@ -3495,6 +3495,47 @@ def _drift_row(arc_id: str, lane_id: str, **over) -> dict:
         "lane_id": lane_id,
         "arc_id": arc_id,
     } | over
+    # VALIDATED at construction, not merely shaped like a row. `read_rows` does not
+    # validate, so an invalid fixture would sail through every drift test and stand in
+    # for a row the production writer would refuse — which is exactly what happened
+    # twice in this arc (r8: a hand-rolled finding_id whose producer component
+    # disagreed with `producer`; r10: adjudication rows with a null disposition_actor).
+    # Routing every fixture through the emitter's own validator makes that class fail
+    # HERE, loudly, instead of a review round later.
+    fr.validate(row)
+    return row
+
+
+def _adjudication(finding: dict, disposition: str) -> dict:
+    """The adjudication row for a finding. `disposition_actor` is REQUIRED and must
+    differ from the producer (C-HE-24 §5: a reviewer never disposes its own finding) --
+    a null actor is what `finding_record.validate` refuses, and leaving it null is how
+    two of this arc's fixtures stood in for rows the production writer would reject."""
+    import finding_record as fr
+
+    row = finding | {
+        "record_kind": "finding_adjudication",
+        "disposition": disposition,
+        "disposition_actor": "claude_absorber",
+    }
+    fr.validate(row)
+    return row
+
+
+def _marker(arc_id: str, lane_id: str) -> dict:
+    """A `no_finding` marker: observation without incidence (C-HE-29 §2). Its id is
+    minted for its own producer and location, not borrowed from a finding."""
+    import finding_record as fr
+
+    row = _drift_row(arc_id, lane_id) | {
+        "record_kind": "no_finding",
+        "finding_id": fr.make_finding_id(
+            "ROADMAP_STATUS_DRIFT", "0" * 40, f".harness/roadmap_status.md:{arc_id}:marker", 1
+        ),
+        "location": f".harness/roadmap_status.md:{arc_id}:marker",
+    }
+    fr.validate(row)
+    return row
 
 
 def _run_summary(tmp_path: Path, monkeypatch, capsys, rows: list[dict], gate: list[dict] | None):
@@ -3556,7 +3597,7 @@ def test_drift_join_never_reports_an_absent_log_as_a_measured_zero(
     N6's explicit "gate log absent" -- neither reads as a collision-free cohort."""
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), None)
     assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out and "among 0 gate" in out
-    assert "no emitter has written to this log at all" in out, "the caveat must print"
+    assert "no ATTRIBUTABLE row was seen" in out, "the caveat must print"
     assert "N6 problems-prevented/hour  -- (gate log absent" in out
 
 
@@ -3669,7 +3710,7 @@ def test_drift_incidence_counts_findings_not_log_rows(tmp_path: Path, monkeypatc
     every adjudicated collision at least twice -- and could push a cell's numerator
     past its own denominator. One finding is one incidence."""
     finding = _drift_row("4-inventing-0", "lane-4")
-    adjudication = finding | {"record_kind": "finding_adjudication", "disposition": "accepted"}
+    adjudication = _adjudication(finding, "accepted")
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, adjudication])
     assert "N=4: 1/6" in out, "one finding, two rows -> one affected arc"
     assert "1 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
@@ -3681,7 +3722,7 @@ def test_a_refuted_drift_finding_is_not_a_collision(tmp_path: Path, monkeypatch,
     """Last-write-wins over finding_id, then `rejected` drops out: the same rule
     C-HE-29 §2 states for unique_catch. A refuted collision is not a collision."""
     finding = _drift_row("4-inventing-0", "lane-4")
-    refutation = finding | {"record_kind": "finding_adjudication", "disposition": "rejected"}
+    refutation = _adjudication(finding, "rejected")
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [finding, refutation])
     assert "N=4: 0/6" in out, "refuted: the emitter ran, so 0 is a measurement here"
     assert "0 distinct ROADMAP_STATUS_DRIFT finding(s)" in out
@@ -3750,17 +3791,14 @@ def test_an_unobserved_numerator_renders_unavailable_not_zero(tmp_path: Path, mo
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [])
     assert "N=1: --/6, N=2: --/6, N=4: --/6" in out
     assert "0/6" not in out, "an unwired source must never render a digit numerator"
-    assert "no emitter has written to this log at all" in out
+    assert "no ATTRIBUTABLE row was seen" in out
 
 
 def test_a_no_finding_marker_makes_a_zero_legitimate(tmp_path: Path, monkeypatch, capsys):
     """C-HE-29 §2's device: a `no_finding` marker records that the emitter looked and
     saw nothing, which is observation without incidence. It makes the cohort countable
     -- so 0 becomes a measurement -- while contributing nothing to the numerator."""
-    marker = _drift_row("4-inventing-0", "lane-4") | {
-        "record_kind": "no_finding",
-        "finding_id": "codex_context_guard:head:marker:1",
-    }
+    marker = _marker("4-inventing-0", "lane-4")
     out = _run_summary(tmp_path, monkeypatch, capsys, _joint_rows(), [marker])
     # Per cohort: the marker names an N=4 arc, so ONLY N=4 becomes countable. The
     # other cohorts were not looked at and must not inherit its zero.
