@@ -5,9 +5,9 @@ evidence. Mutation-probe-backed: minutes per annotation, never shipped as "low-r
 The line range comes from `.harness/mutation-probe-log.jsonl`, which `tools/mutation_probe.py`
 appends on every exit: that log is the one record of which lines an annotation's mutation
 removes, so this check keeps no second map of it. A logged range is re-run only while the probed
-file still digests to the row's `target_sha` -- the exact bytes whose line numbers it recorded;
-code that changed since the probe is reported stale, never probed at numbers that now name
-other lines."""
+file and its test still digest to the row's `target_sha` and `test_sha` -- the exact bytes whose
+line numbers it recorded, and the annotation that names them; a change to either since the probe
+is reported stale, never probed at numbers that may now name other lines."""
 
 from __future__ import annotations
 
@@ -71,6 +71,10 @@ def _probed(row: dict, node: str, target: str) -> bool:
     return [lv._relative(t) for t in targets] == [node] and same_file
 
 
+def _digest(path: Path) -> str | None:
+    return pin_scope.digest16(path.read_bytes()) if path.is_file() else None
+
+
 def logged_range(rows: Sequence[dict], node: str, target: str, root: Path) -> Pinned | Stale | None:
     """The annotation's latest PINNED (rc 0) probe, live or stale against the bytes at `root`;
     None when it was never pinned."""
@@ -78,9 +82,15 @@ def logged_range(rows: Sequence[dict], node: str, target: str, root: Path) -> Pi
     if not pinned:
         return None
     last = pinned[-1]
-    path = root / target
-    # the recorded line numbers name these lines only in the exact bytes the probe measured
-    live = path.is_file() and pin_scope.digest16(path.read_bytes()) == last.get("target_sha")
+    target_sha, test_sha = last.get("target_sha"), last.get("test_sha")
+    # the range names these lines only in the exact bytes the probe measured -- the probed file
+    # AND the test, whose annotation says which lines its mutation removes
+    test_rel = node.split("::", 1)[0]
+    live = (
+        bool(target_sha and test_sha)
+        and _digest(root / target) == target_sha
+        and _digest(root / test_rel) == test_sha
+    )
     return Pinned(last["lines"]) if live else Stale(last["lines"])
 
 
@@ -125,7 +135,7 @@ class Check:
                 MechFinding(
                     node,
                     f"logged range {target}:{logged.lines} no longer pins the current bytes "
-                    "(the probed file's bytes changed since the probe ran)",
+                    "(the probed file or its test changed since the probe ran)",
                     "re-probe the annotation before its mutation is re-verified",
                 )
             ]

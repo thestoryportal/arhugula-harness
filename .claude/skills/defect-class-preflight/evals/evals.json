@@ -458,6 +458,21 @@
     "states the consequence: subject code runs with inherited credentials and can fake a clean result — noting only a theoretical risk does not pass",
     "proposes an absolute trusted executable (not a module lookup) with a test that plants `ruff.py` in the subject — asserting argv shape alone does not pass"
    ]
+  },
+  {
+   "id": 28,
+   "eval_name": "predictable-staging-file-follows-planted-symlink",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/state_tmp_symlink_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the predictable staging name as a containment hole: `checks-state.json.tmp` is a fixed path anyone with write access to `.harness/` can pre-plant as a symlink, `write_text` follows it and truncates the link's target, and `replace()` then installs the symlink itself as the state file — on an auto-allowed path. Atomic rename does not help; the staging file must be exclusively created (`tempfile.mkstemp` in the same directory, O_EXCL, no symlink follow) and cleaned up on failure, with a test that plants the symlink and asserts its target is untouched.",
+   "files": [
+    "fixtures-uhe40/state_tmp_symlink_notes.md"
+   ],
+   "assertions": [
+    "names the predictable `.tmp` staging name plus `write_text` following a pre-planted symlink as the defect — a review that stops at 'writes are atomic' does not pass",
+    "states the consequence on the auto-allowed path: an arbitrary writable file is truncated and the symlink becomes the state file — a generic 'race condition' remark does not pass",
+    "proposes exclusive creation of the staging file (mkstemp / O_EXCL) with a planted-symlink test — adding a lock or an existence check before writing does not pass"
+   ]
   }
  ]
 }

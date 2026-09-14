@@ -56,7 +56,9 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def _paths(*outputs: str) -> tuple[str, ...]:
-    return tuple(sorted({line for out in outputs for line in out.splitlines() if line}))
+    """Paths from NUL-delimited git output (`-z`): without it git quotes and escapes any name with
+    non-ASCII characters, tabs or quotes, and the escaped text is no longer the file's name."""
+    return tuple(sorted({path for out in outputs for path in out.split("\0") if path}))
 
 
 def gh_pr_body(repo: Path, ref: str | None) -> str | None:
@@ -83,11 +85,11 @@ def gh_pr_body(repo: Path, ref: str | None) -> str | None:
 def working_tree_subject(repo: Path, *, base: str, pr_body: PrBody = gh_pr_body) -> core.Subject:
     """The change as a pre-commit / pre-review / pre-PR boundary sees it: the working tree
     against `base` (committed + staged + unstaged) plus untracked files that are not ignored."""
-    untracked = _git(repo, "ls-files", "--others", "--exclude-standard")
+    untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z")
     return core.Subject(
         repo,
-        _paths(_git(repo, "diff", "--name-only", base), untracked),
-        _paths(_git(repo, "ls-files", "--cached", "--others", "--exclude-standard")),
+        _paths(_git(repo, "diff", "--name-only", "-z", base), untracked),
+        _paths(_git(repo, "ls-files", "--cached", "--others", "--exclude-standard", "-z")),
         _git(repo, "diff", "--unified=0", base),
         _git(repo, "log", "--format=%B", f"{base}..HEAD"),
         pr_body(repo, None),
@@ -102,8 +104,8 @@ def commit_subject(repo: Path, sha: str, *, pr_body: PrBody = gh_pr_body) -> Ite
     `(#N)` the subject names -- never the current branch's."""
     message = _git(repo, "log", "-1", "--format=%B", sha)
     number = SQUASH_SUBJECT.search(message)
-    changed = _paths(_git(repo, "diff", "--name-only", f"{sha}^", sha))
-    universe = _paths(_git(repo, "ls-tree", "-r", "--name-only", sha))
+    changed = _paths(_git(repo, "diff", "--name-only", "-z", f"{sha}^", sha))
+    universe = _paths(_git(repo, "ls-tree", "-r", "--name-only", "-z", sha))
     diff = _git(repo, "diff", "--unified=0", f"{sha}^", sha)
     body = pr_body(repo, number.group(1)) if number is not None else None
     with tempfile.TemporaryDirectory(prefix="mech-replay-") as tmp:

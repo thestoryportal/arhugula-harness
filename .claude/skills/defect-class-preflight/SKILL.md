@@ -98,7 +98,9 @@ any) governs it? Evidence read back from a log or cache is bound to the bytes or
 implementation that produced it, or it measures something else (u-he-40 codex r3, twice: a
 logged probe line range reused after the code moved, a cached replay result reused after the
 checker changed; round 4 found two more — replay rows re-measuring history advanced the LIVE
-demotion windows, and a digest of the check's own module missed the modules it delegates to). Two dimensions field-level inventories measurably miss (u-he-33,
+demotion windows, and a digest of the check's own module missed the modules it delegates to; round 7 another — a
+logged line range bound to the source bytes but not to the test whose annotation names
+those lines). Two dimensions field-level inventories measurably miss (u-he-33,
 2 P1s): **venue semantics** — which interpreters/venues can IMPORT or reach the
 producer module at all (a 3.12-only producer consumed from a stdlib-3.9 venue
 silently no-ops every downstream check), and **lifecycle semantics** — where the
@@ -205,7 +207,10 @@ one promotion could demote the next) — re-validate the snapshot's identity und
 WRITES that another actor can pre-plant gets the containment idiom: open with
 `O_NOFOLLOW|O_NONBLOCK` + post-open `fstat` `S_ISREG`, refuse symlinks/special files
 loudly, publish via same-directory temp + `os.replace` (the finding_record/merge_door
-hardening; missed unfired on the B-215 gate's state file, codex r1).
+hardening; missed unfired on the B-215 gate's state file, codex r1). Missed a second time on u-he-40
+(codex r7 P1): a state writer staged through a PREDICTABLE `<name>.tmp` opened with
+`write_text`, which follows a planted symlink — the staging file needs exclusive creation
+(`mkstemp`) exactly as much as the target does.
 
 ### 2. Prose that will drift (151 findings)
 Docstrings, comments, and `.harness` prose containing checkable facts: counts, line
@@ -298,7 +303,9 @@ on when NOTHING is set, and write that path into your review — "falls back to
 `~/.reports/` (the operator's real store) when the env var is unset" is a *named
 finding*, not an implementation default to read past. Def-time constants bake the env
 at import (`QUEUE_DIR`) — a later env change does not reach them. A worktree does NOT
-isolate `$HOME`-absolute paths; isolate by ENVIRONMENT.
+isolate `$HOME`-absolute paths; isolate by ENVIRONMENT. Paths read back from git are data too: without `-z`, git quotes and
+escapes any name holding non-ASCII characters, tabs or quotes, so a suffix test on
+`test_é.py` silently fails (u-he-40 codex r7) — request NUL-delimited output.
 
 ### 10. Fixture scope / lifecycle phase (35 findings, but two P1s)
 pytest specifics that shipped defects: a per-item bracket covers setup+call+teardown

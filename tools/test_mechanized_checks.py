@@ -105,6 +105,20 @@ def test_tracked_state_file_covers_every_registered_check():
     assert set(core.load_state()) == {c.check_id for c in mc.CHECKS}
 
 
+def test_save_state_never_follows_a_planted_temp_symlink(tmp_path, monkeypatch):
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(core, "STATE_PATH", state_path)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me\n")
+    (tmp_path / "state.json.tmp").symlink_to(victim)  # the old predictable staging name
+    core.save_state({"stale_carry": core.Advisory()})
+    assert victim.read_text() == "keep me\n"
+    assert state_path.is_file() and not state_path.is_symlink()
+    assert json.loads(state_path.read_text()) == {
+        "stale_carry": {"mode": "advisory", "windows": []}
+    }
+
+
 def test_a_malformed_state_file_is_refused_loudly(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE_PATH", tmp_path / "state.json")
     (tmp_path / "state.json").write_text(
@@ -265,7 +279,7 @@ def _probe_fixture(tmp_path: Path, *, logged: bool) -> core.Subject:
         "file": "tools/x.py",
         "lines": "2-2",
         "rc": 0,
-        # the recorded range stays valid while the probed file still digests to target_sha
+        # the recorded range stays valid while both files still digest to what the probe measured
         "target_sha": pin_scope.digest16((tools / "x.py").read_bytes()),
         "test_sha": pin_scope.digest16((tools / "test_x.py").read_bytes()),
     }
@@ -297,7 +311,7 @@ def test_mutation_probe_reverify_pinned_is_clean_and_indeterminate_is_named(tmp_
     assert all("REFUSED: why" in f.evidence for f in found)
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:133-137 drop the restore abort
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:143-147 drop the restore abort
 def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch):
     log = tmp_path / "gate.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
@@ -315,7 +329,7 @@ def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path
     assert not log.exists()  # no finding row stands in for a possibly-mutated tree
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:115-122 drop the unprobed arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:125-132 drop the unprobed arm
 def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("probed without a logged range")).run(
         _probe_fixture(tmp_path, logged=False)
@@ -324,7 +338,7 @@ def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(
     assert "never probed" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:123-131 drop the stale-pin arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:133-141 drop the stale-pin arm
 def test_mutation_probe_reverify_never_probes_a_range_whose_pin_went_stale(tmp_path):
     subject = _probe_fixture(tmp_path, logged=True)
     (tmp_path / "tools" / "x.py").write_text(
@@ -342,6 +356,16 @@ def test_a_block_scoped_pin_whose_block_moved_is_stale_too(tmp_path):
     log.write_text(json.dumps({**row, "pin_scope": "block", "block_sha": "any"}) + "\n")
     (tmp_path / "tools" / "x.py").write_text("Z = 0\nA = 1\nB = 2\n")  # the block moved down
     found = mpr.Check(probe=lambda *a: pytest.fail("probed a moved block")).run(subject)
+    assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_x.py::test_t")]
+
+
+def test_a_logged_range_goes_stale_when_the_test_file_changes(tmp_path):
+    subject = _probe_fixture(tmp_path, logged=True)
+    # the annotation now names different lines of the same, unchanged source file
+    (tmp_path / "tools" / "test_x.py").write_text(
+        "# mutation-probe: tools/x.py:1 drop A\ndef test_t():\n    assert True\n"
+    )
+    found = mpr.Check(probe=lambda *a: pytest.fail("re-probed the old range")).run(subject)
     assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_x.py::test_t")]
 
 
@@ -445,7 +469,7 @@ def test_only_a_blocking_checks_warn_or_hard_finding_fails_the_run(tmp_path, mon
     assert run(info, core.Blocking(PROMOTED)) == 0
 
 
-# mutation-probe: tools/mechanized_checks/core.py:324-326 drop the gate_demotion row + NOTIFY
+# mutation-probe: tools/mechanized_checks/core.py:332-334 drop the gate_demotion row + NOTIFY
 def test_promotion_demotion_state_machine(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE_PATH", tmp_path / "state.json")
     log = tmp_path / "gate.jsonl"
@@ -503,7 +527,7 @@ def test_rejected_windows_end_at_the_latest_arc():
     assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [2, 2]
 
 
-# mutation-probe: tools/mechanized_checks/core.py:290 drop the since-promotion window filter
+# mutation-probe: tools/mechanized_checks/core.py:298 drop the since-promotion window filter
 def test_rejected_windows_ignore_observations_from_before_promotion():
     rows = [_row(a, "no_finding") for a in range(40)]
     rows += [_row(a, "finding", n=2) for a in (19, 20, 39)]
@@ -525,7 +549,7 @@ def test_rejected_windows_ignore_observations_from_before_promotion():
     assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [1, 2]
 
 
-# mutation-probe: tools/mechanized_checks/core.py:289 drop the replay-lineage filter
+# mutation-probe: tools/mechanized_checks/core.py:297 drop the replay-lineage filter
 def test_rejected_windows_never_count_replay_observations():
     rows = [_row(a, "no_finding") for a in range(40)]
     rows += [_row(500 + a, "no_finding", lineage="replay") for a in range(40)]
@@ -631,6 +655,25 @@ def test_subjects_gather_the_change_at_the_edge(tmp_path):
         assert _git(replayed.repo, "rev-parse", "HEAD") == head
         tree = replayed.repo
     assert not tree.exists() and str(tree) not in _git(repo, "worktree", "list")
+
+
+def test_subjects_keep_non_ascii_paths_literal(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "a.md").write_text("one\n")
+    _git(repo, "add", "a.md")
+    _git(repo, "commit", "-qm", "base")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "notes_é.md").write_text("TBD\n")
+    _git(repo, "add", "notes_é.md")
+    _git(repo, "commit", "-qm", "notes (#8)")
+    head = _git(repo, "rev-parse", "HEAD")
+    live = runner.working_tree_subject(repo, base=base, pr_body=lambda r, ref: None)
+    assert live.changed == ("notes_é.md",)
+    assert live.changed_texts(".md") == [("notes_é.md", "TBD\n")]
+    with runner.commit_subject(repo, head, pr_body=lambda r, ref: None) as replayed:
+        assert replayed.changed == ("notes_é.md",) and "notes_é.md" in replayed.universe
 
 
 def test_state_transitions_serialize_on_the_state_lock(tmp_path, monkeypatch):

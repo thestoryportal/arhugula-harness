@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections import Counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -194,10 +195,17 @@ def _encode(state: CheckState) -> dict:
 
 
 def save_state(state: dict[str, CheckState]) -> None:
-    body = json.dumps({k: _encode(v) for k, v in state.items()}, indent=2, sort_keys=True)
-    tmp = STATE_PATH.with_name(STATE_PATH.name + ".tmp")
-    tmp.write_text(body + "\n")
-    tmp.replace(STATE_PATH)
+    body = json.dumps({k: _encode(v) for k, v in state.items()}, indent=2, sort_keys=True) + "\n"
+    # an exclusively created staging file in the same directory: a planted `*.tmp` symlink can
+    # never redirect the write, and os.replace publishes only a complete regular file
+    fd, tmp = tempfile.mkstemp(dir=STATE_PATH.parent, prefix=f".{STATE_PATH.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as staged:
+            staged.write(body)
+        os.replace(tmp, STATE_PATH)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 @contextmanager
