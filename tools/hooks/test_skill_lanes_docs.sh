@@ -144,6 +144,10 @@ fi
 # RESIDUAL, by construction: a cap stated with neither a qualifier nor a number ("a pair of
 # lanes") is outside what a pattern can see. Section 1 still pins the N ≥ 2 statement itself.
 QUAL='(only|at most|no more than|up to|a maximum of|maximum of|limited to|capped at)'
+# One optional modifier, used by EVERY branch below, so a branch cannot drift from its
+# siblings (gemini failover, round 7: 'two concurrent lanes at most' passed the count-first
+# branch, which lacked the modifier the qualifier-first branch had).
+LMOD='((concurrent|parallel)[- ])?'
 for key in TL RC; do
   case "$key" in TL) hay=$FLAT_TL ;; RC) hay=$FLAT_RC ;; esac
   name=$(skill "$(file_of "$key")")
@@ -153,7 +157,7 @@ for key in TL RC; do
   fi
   two=$(scan_flat "$hay" '-w' 'TWO'); r1=$?
   neq=$(scan_flat "$hay" '-E' '(^|[^0-9A-Za-z])N ?(=|≤|<=) ?2([^0-9]|$)'); r2=$?
-  qual=$(scan_flat "$hay" '-iE' "(^|[^a-z])${QUAL} (two|2) (concurrent |parallel )?(lanes?|arcs?)([^a-z]|$)|(^|[^a-z0-9])(two|2) (lanes?|arcs?) (at most|maximum|max)([^a-z]|$)"); r3=$?
+  qual=$(scan_flat "$hay" '-iE' "(^|[^a-z])${QUAL} (two|2) ${LMOD}(lanes?|arcs?)([^a-z]|$)|(^|[^a-z0-9])(two|2) ${LMOD}(lanes?|arcs?) (at most|maximum|max)([^a-z]|$)"); r3=$?
   if [ "$r1" -gt 1 ] || [ "$r2" -gt 1 ] || [ "$r3" -gt 1 ]; then
     bad "$name: two-lane-cap scan could not run (grep exit $r1/$r2/$r3)"
   elif [ -n "$two$neq$qual" ]; then
@@ -190,7 +194,11 @@ CAP='(^|[^a-z])(max|maximum|cap|capped|ceiling|limit|limited)'
 # "cap ... rounds ... ten"; "capped at ten rounds"; number-first "a ten-round limit" (lens
 # round 1); and a qualifier-phrased "no more than / at most / up to ten rounds" or "ten rounds
 # at most", reusing section 3's QUAL (lens round 5; flattening: gemini failover, round 5).
-RCAP="${CAP}[^.]{0,20}rounds?[^.]{0,10}[^a-z]${NUM}([^a-z]|$)|${CAP}[^.]{0,40}[^a-z]${NUM} (review |fix )?rounds?([^a-z]|$)|(^|[^a-z])${NUM}[- ]rounds?[- ](max|maximum|cap|ceiling|limit|threshold)([^a-z]|$)|(^|[^a-z])${QUAL} ${NUM} (review |fix |fix-and-re-gate )?rounds?([^a-z]|$)|(^|[^a-z])${NUM} rounds? (at most|maximum|max)([^a-z]|$)"
+# One optional modifier, used by every branch that names rounds after a number (gemini
+# failover, round 7: '10 review rounds at most' and '10 review rounds max' passed branches
+# that lacked the modifier the qualifier branch had).
+RMOD='((review|fix|fix-and-re-gate)[- ])?'
+RCAP="${CAP}[^.]{0,20}rounds?[^.]{0,10}[^a-z]${NUM}([^a-z]|$)|${CAP}[^.]{0,40}[^a-z]${NUM} ${RMOD}rounds?([^a-z]|$)|(^|[^a-z])${NUM}[- ]${RMOD}rounds?[- ](max|maximum|cap|ceiling|limit|threshold)([^a-z]|$)|(^|[^a-z])${QUAL} ${NUM} ${RMOD}rounds?([^a-z]|$)|(^|[^a-z])${NUM} ${RMOD}rounds? (at most|maximum|max)([^a-z]|$)"
 for key in MG SP RC TL; do
   case "$key" in MG) hay=$FLAT_MG ;; SP) hay=$FLAT_SP ;; RC) hay=$FLAT_RC ;; TL) hay=$FLAT_TL ;; esac
   name=$(skill "$(file_of "$key")")

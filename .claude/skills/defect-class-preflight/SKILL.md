@@ -233,7 +233,7 @@ assertion (KeyError before the emit); a child process that never instantiates th
 thing under test; an assertion after an early return; and, in a doc or prose witness, a
 needle on a list marker, heading or label (`- **K5 —`, a bare `checkpoint`) instead of the
 claim text after it — invert the claim, keep the marker, and the test stays green (U-HE-39,
-merge-gate witness lens r1: three of four dispositions pinned only by their bullet). For a
+merge-gate witness lens r1: K5, K7 and K8 of the four K-dispositions pinned only by their bullet). For a
 doc witness the mutation to reason is *negate the sentence*, not *delete the line* — and a
 claim-text needle that stops mid-sentence is the same defect one clause later: pin the WHOLE
 claim, matched against the file with its whitespace flattened so a wrapped sentence is one
