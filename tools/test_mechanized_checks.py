@@ -200,7 +200,7 @@ def test_unrun_cli_reruns_read_only_claims_and_flags_failures(tmp_path):
     ]
 
 
-# mutation-probe: tools/mechanized_checks/unrun_cli.py:64-72 drop the read-only grammar gate
+# mutation-probe: tools/mechanized_checks/unrun_cli.py:66-74 drop the read-only grammar gate
 def test_unrun_cli_never_executes_outside_the_read_only_grammar(tmp_path):
     subject = _subject(
         tmp_path, claims_text="Ran: `just main-protection-apply`\nChecked: `just check; rm -rf /`\n"
