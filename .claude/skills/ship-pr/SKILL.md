@@ -639,8 +639,14 @@ cohort split on that field.
 **Step 2 — drain, inside the NEXT arc's PR.** Early in the next arc, before opening its PR:
 
 ```
-just arc-metrics drain
+HARNESS_LANE_ID=<lane-id> just arc-metrics drain
 ```
+
+`<lane-id>` is this lane's persisted id — the content of `.harness/.lane-id` — typed as a
+literal. The prefix is load-bearing: drain folds a `merged` reservation's row only for the
+lane that holds it, and a bare call runs under a fallback lane id, so every merged arc reads
+as another lane's and stays held. 25 arcs' rows sat stranded that way until U-HE-39's
+prefixed drain folded them.
 
 This folds every queued arc into `.harness/arc-metrics.jsonl` as an ordinary tracked change,
 committed inside that arc's own PR (`git add .harness/arc-metrics.jsonl` — never
