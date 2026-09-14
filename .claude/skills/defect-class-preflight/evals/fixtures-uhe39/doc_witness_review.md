@@ -11,11 +11,13 @@ RP=.claude/skills/review-policy/SKILL.md
 has() { if grep -qF -- "$3" "$1"; then ok "$2"; else bad "$2 missing"; fi; }
 
 has "$RP" "policy heading" '## Review dispositions'
-for k in P1 P2 P3 P4; do
+for k in P1 P2 P4; do
   has "$RP" "the $k disposition" "- **$k —"
 done
 has "$RP" "P2 no-self-suppression rule" \
-  'a reviewer never suppresses its own finding'
+  'dropped: a reviewer never suppresses its own finding.'
+has "$RP" "P3 routing deferred" \
+  'routing by finding class is deferred until its predictiveness is'
 has "$RP" "checkpoint statement" 'recorded-decision checkpoint'
 ```
 
@@ -25,8 +27,9 @@ has "$RP" "checkpoint statement" 'recorded-decision checkpoint'
 ## Review dispositions
 
 - **P1 —** alternatives in a finding are optional, not mandated.
-- **P2 —** dropped: a reviewer never suppresses its own finding by self-classifying scope.
-- **P3 —** routing by finding class is deferred until its predictiveness is measured.
+- **P2 —** dropped: a reviewer never suppresses its own finding.
+- **P3 —** routing by finding class is deferred until its predictiveness is measured; shadow
+  mode only, if run at all.
 - **P4 —** a blocking post-edit hook is admitted only for fast deterministic checks.
 
 Every ten rounds is a recorded-decision checkpoint, not a cap: continuation is unbounded.

@@ -343,14 +343,15 @@
    "eval_name": "doc-witness-pins-marker-not-claim",
    "skill": "defect-class-preflight",
    "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit a shell doc witness and the skill text it checks; both are excerpted in .claude/skills/defect-class-preflight/evals/fixtures-uhe39/doc_witness_review.md. Run the defect-class-preflight sweep over the witness as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails (a specific edit to the skill text -> the witness result it produces). Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run the witness or any tests.",
-   "expected_output": "review.md naming the witness as vacuous for three of its four dispositions: P1, P3 and P4 are pinned only by their `- **Pn —` bullet marker, so negating the claim text after a marker (e.g. P1 'optional, not mandated' -> 'mandatory') keeps the witness at PASS=7; only P2 has a claim-text pin. It also names the checkpoint needle as the same shape: the bare noun 'recorded-decision checkpoint' survives changing 'not a cap' to 'a cap'.",
+   "expected_output": "review.md naming the witness as vacuous in two shapes. Marker-only: P1 and P4 are pinned only by their `- **Pn —` bullet marker, so negating the claim after the marker (e.g. P1 'optional, not mandated' -> 'mandatory') keeps the witness at PASS=7. Half-claim: P3 is pinned only by the first half of its sentence, so its second clause 'shadow mode only, if run at all' can be inverted with the witness still green. The bare 'recorded-decision checkpoint' needle is the same shape: the noun survives changing 'not a cap' to 'a cap'. Only P2 is pinned by its whole claim.",
    "files": [
     "fixtures-uhe39/doc_witness_review.md"
    ],
    "assertions": [
-    "flags that P1, P3 and P4 are pinned only by the bullet marker rather than the disposition text — passes only if the review names the marker-versus-claim distinction; a generic 'grep-based doc tests are weak' or 'add more tests' does not pass",
-    "gives a concrete surviving mutation: an edit that keeps the `- **Pn —` marker but negates or inverts the claim after it, with the witness still green — deleting a whole bullet line does not pass, because the marker loop already catches that",
-    "names the `recorded-decision checkpoint` needle as the same vacuity (the noun survives an inversion of 'not a cap'), and does NOT flag the P2 claim-text pin as vacuous"
+    "flags that P1 and P4 are pinned only by the bullet marker rather than the disposition text — passes only if the review names the marker-versus-claim distinction; a generic 'grep-based doc tests are weak' or 'add more tests' does not pass",
+    "flags that P3's needle stops mid-sentence and names its unpinned second clause ('shadow mode only, if run at all') as invertible with the witness green — noting only that P3 has a claim pin, or treating it as adequately covered, does not pass",
+    "gives a concrete surviving mutation that keeps the pinned text but negates or inverts the unpinned part (after a marker, or after a half-sentence needle), with the witness still green — deleting a whole bullet line does not pass, because the marker loop already catches that",
+    "names the `recorded-decision checkpoint` needle as the same vacuity (the noun survives an inversion of 'not a cap'), and does NOT flag the P2 pin, which covers P2's whole claim, as vacuous"
    ]
   }
  ]

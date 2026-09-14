@@ -234,7 +234,10 @@ thing under test; an assertion after an early return; and, in a doc or prose wit
 needle on a list marker, heading or label (`- **K5 —`, a bare `checkpoint`) instead of the
 claim text after it — invert the claim, keep the marker, and the test stays green (U-HE-39,
 merge-gate witness lens r1: three of four dispositions pinned only by their bullet). For a
-doc witness the mutation to reason is *negate the sentence*, not *delete the line*. Where
+doc witness the mutation to reason is *negate the sentence*, not *delete the line* — and a
+claim-text needle that stops mid-sentence is the same defect one clause later: pin the WHOLE
+claim, matched against the file with its whitespace flattened so a wrapped sentence is one
+string (U-HE-39 r2: K7's "shadow mode only" clause sat outside a first-half needle). Where
 feasible, actually run the
 mutation probe (`just mutation-probe`) rather than reasoning it — and probe the fix
 BOTH ways (kill confirmed, then green restored).
