@@ -2674,8 +2674,8 @@ same spec leg.
 
 ### B-241 · the promotion replay has never run live *(named on u-he-40, 2026-09-14; REGISTERED)*
 
-- **What it is.** `just mech-replay <check_id>` measures a check over the last 20 squash-merged arcs from `git archive` extracts and refuses promotion while any arc is unmeasured or any finding is unadjudicated. At the u-he-40 head it is pinned only by `test_replay_measures_each_arc_once` (a three-commit hermetic repo, window patched to 2).
-- **Current state.** No live replay has run for any check. Unmeasured: the adjudication load a replay puts on the gate log before promotion can evaluate, and the per-arc environment `uv run` provisions when `mutation_probe_reverify` is replayed inside an extract.
+- **What it is.** `just mech-replay <check_id>` measures a check over the last 20 squash-merged arcs from detached worktrees and refuses promotion while any arc is unmeasured or any finding is unadjudicated. At the u-he-40 head it is pinned only by `test_replay_measures_each_arc_once` (a three-commit hermetic repo, window patched to 2).
+- **Current state.** No live replay has run for any check. Unmeasured: the adjudication load a replay puts on the gate log before promotion can evaluate, and the per-arc environment `uv run` provisions when `mutation_probe_reverify` is replayed inside a worktree.
 - **What closes this row.** A first live replay of one deterministic check with its findings adjudicated, recording wall clock and adjudication load, and a measured per-extract provisioning cost before any hybrid-class replay.
 
 ### B-242 · the store audit lags the landed state file, and its lock is invisible to the extractor *(surfaced on u-he-40, 2026-09-14; REGISTERED)*

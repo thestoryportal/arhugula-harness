@@ -1,14 +1,10 @@
 """unrun-CLI claims (C-HE-31 §1, deterministic): a command named on a `Verified:` / `Checked:` /
 `Ran:` line is re-run, and must exit 0 AND print something before it counts as clean.
 
-The claim text is authored in a commit message or PR body, so a command is re-run only when it
-parses into one of three argv shapes with every token pinned:
-- `just <recipe>` -- exactly one recipe token (`just` runs extra tokens as further recipes),
-  named `check` or `*-check` / `*-verify`, and never a recipe that runs this runner;
-- `uv run pytest <arg>...` -- repo-relative test paths / node ids and the output flags `-q`,
-  `-v`, `-x` only (a `--basetemp` would delete its directory);
-- `uv run python tools/<name>.py check|verify|--check` -- a top-level tools script, one verb.
-Anything else is reported as not re-run -- never run."""
+The claim text is authored in a commit message or PR body, so it never chooses what runs: only
+an exact allowlist of provider-free static checks is re-run -- the ruff and pyright recipes the
+`codex-check` gate already chains. Every other claim, test runs included (a named test can be a
+billed live e2e with inherited credentials), is reported as not re-run -- never run."""
 
 from __future__ import annotations
 
@@ -21,35 +17,20 @@ from .core import MechFinding, Subject
 
 CLAIM_LINE = re.compile(r"^(?:Verified|Checked|Ran):[ \t]*(?P<rest>.*)$", re.M | re.I)
 COMMAND = re.compile(r"`(?P<cmd>(?:just|uv run) [^`]+)`")
-#: The justfile recipes whose bodies invoke tools/mechanized_checks/runner.py: a claim that
-#: re-runs one recurses into this check (`test_runner_recipes_match_the_justfile` pins the set).
-RUNNER_RECIPES = frozenset({"lanes-verify", "mech-check", "mech-replay"})
-_RECIPE = re.compile(r"check|[\w-]+-(?:check|verify)")
-_PYTEST_ARG = re.compile(r"-[qvx]|(?:\w[\w-]*/)*\w[\w.-]*(?:::[\w.\[\]-]+)*")
-_TOOLS_SCRIPT = re.compile(r"tools/\w[\w-]*\.py")
+#: Claim text -> the argv re-run for it. Each recipe body is one ruff or pyright invocation
+#: (`test_rerun_allowlist_is_static_checks_only` pins the bodies to the justfile).
+RERUN: dict[str, tuple[str, ...]] = {
+    "just lint": ("just", "lint"),
+    "just fmt-check": ("just", "fmt-check"),
+    "just typecheck": ("just", "typecheck"),
+}
 Execute = Callable[[list[str], Path], tuple[int, str]]
 
 
-def rerunnable(cmd: str) -> list[str] | None:
-    """The argv a claim may re-run, or None when any token falls outside the pinned shapes."""
-    argv = cmd.split(" ")
-    match argv:
-        case ["just", recipe] if _RECIPE.fullmatch(recipe) and recipe not in RUNNER_RECIPES:
-            return argv
-        case ["uv", "run", "pytest", *args] if all(_PYTEST_ARG.fullmatch(a) for a in args):
-            return argv
-        case ["uv", "run", "python", script, "check" | "verify" | "--check"] if (
-            _TOOLS_SCRIPT.fullmatch(script)
-        ):
-            return argv
-        case _:
-            return None
-
-
 def execute_argv(argv: list[str], cwd: Path) -> tuple[int, str]:
-    """An argv, never a shell string: no shell is ever given the chance to reinterpret it."""
-    # the longest read-only verification the grammar admits is `just codex-check` (~10 min
-    # locally); 30 min is 3x that, so a hang fails loud instead of stalling the boundary
+    """An allowlisted argv, never a shell string."""
+    # bounds a hung linter only: these are the static passes `codex-check` already runs in
+    # sequence ahead of its test suites, so a normal run finishes far inside 30 min
     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=1800)
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -83,17 +64,17 @@ class Check:
         return absent + [finding for cmd in claims for finding in self._verify(subject.repo, cmd)]
 
     def _verify(self, repo: Path, cmd: str) -> list[MechFinding]:
-        argv = rerunnable(cmd)
+        argv = RERUN.get(cmd)
         if argv is None:
             return [
                 MechFinding(
                     cmd,
-                    "claim not re-run: outside the read-only verification grammar",
+                    "claim not re-run: outside the provider-free static-check allowlist",
                     "a claimed check this tool can safely re-run",
                     "info",
                 )
             ]
-        rc, out = self.execute(argv, repo)
+        rc, out = self.execute(list(argv), repo)
         clean = rc == 0 and bool(out.strip())
         return (
             []

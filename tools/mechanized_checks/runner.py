@@ -5,7 +5,8 @@ checks, append the C-HE-24 rows, report.
   check [--base REF]  `just mech-check`: the working tree against REF (default origin/main).
                       Exit 1 iff a BLOCKING check reports a warn or hard finding.
   replay CHECK_ID     `just mech-replay`: run CHECK_ID over the last 20 merged arcs (each a
-                      `git archive` extract of its squash commit, measured once per arc), then
+                      detached worktree of its squash commit, measured once per arc and
+                      checker implementation), then
                       evaluate §4(a). Exit 0 promoted; 1 not promoted (unmeasured, pending
                       adjudication, or a rejected finding).
   demote              `just lanes-verify`: record each blocking check's windows and apply any
@@ -18,6 +19,7 @@ checks, append the C-HE-24 rows, report.
 from __future__ import annotations
 
 import argparse
+import inspect
 import re
 import subprocess
 import sys
@@ -29,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import finding_record as fr
+import pin_scope
 import review_wrapper_common as rwc
 
 from mechanized_checks import CHECKS, core
@@ -152,6 +155,13 @@ def run_checks(
     return int(blocking > 0)
 
 
+def implementation_digest(check: core.Check) -> str:
+    """The bytes of the module defining the check. Replay evidence and its adjudications belong
+    to the implementation that produced them, so a changed checker is measured afresh rather
+    than promoted on an older implementation's rows."""
+    return pin_scope.digest16(Path(inspect.getfile(type(check))).read_bytes())
+
+
 def replay(
     repo: Path,
     check: core.Check,
@@ -162,7 +172,8 @@ def replay(
 ) -> core.ReplayVerdict:
     log = _git(repo, "log", "--first-parent", "--format=%H%x09%s", ref).splitlines()
     shas = select_replay_commits(log, core.WINDOW)
-    arc_ids = [f"replay-{sha[:12]}" for sha in shas]
+    impl = implementation_digest(check)
+    arc_ids = [f"replay-{sha[:12]}-{impl}" for sha in shas]
     measured = {
         r["arc_id"]
         for r in fr.read_rows()

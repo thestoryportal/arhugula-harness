@@ -94,7 +94,10 @@ semantics — not the schema you assume, the semantics the writers actually impl
 can it be null? absent entirely (older rows, optional emit paths)? partially
 written — what does a mid-crash write leave on disk? what provenance / generation /
 versioning does it carry, and must the consumer honor it? which `C-*` contract (if
-any) governs it? Two dimensions field-level inventories measurably miss (u-he-33,
+any) governs it? Evidence read back from a log or cache is bound to the bytes or
+implementation that produced it, or it measures something else (u-he-40 codex r3, twice: a
+logged probe line range reused after the code moved, a cached replay result reused after the
+checker changed). Two dimensions field-level inventories measurably miss (u-he-33,
 2 P1s): **venue semantics** — which interpreters/venues can IMPORT or reach the
 producer module at all (a 3.12-only producer consumed from a stdlib-3.9 venue
 silently no-ops every downstream check), and **lifecycle semantics** — where the
@@ -222,7 +225,10 @@ statement; route the failure to ONE loud enforcement point instead. Rider for
 DETECTION/ENFORCEMENT surfaces: any input that can SUPPRESS a check (an attestation
 set, an exemption list, an allowlist, a dedupe key) is itself attack surface —
 sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
-forged entries) before trusting it to mute anything. A sibling shape (u-he-40 codex r2
+forged entries) before trusting it to mute anything. A substring match on the suppressing
+call is forgeable by a comment that merely mentions it (u-he-40 codex r3: a
+`# assert_fake_is_subclass(FakeClock, Clock)` comment exempted a double) — parse the file
+and require the executable call. A sibling shape (u-he-40 codex r2
 P1): a subprocess exit code that means the WORLD may now be damaged — a mutation probe's
 `3 = restore failure`, a partial-apply code — mapped onto a finding or a warn row. A
 finding is a statement ABOUT the tree; that exit code says the tree may no longer be the
@@ -275,7 +281,11 @@ of the variable before repurposing it.
 Monkeypatching a Python seam cannot reach a child process — only inherited env can.
 Children get a COPY of env at spawn; later parent changes don't propagate. Nested
 sessions of the same tool (pytest-in-pytest) re-run your own hooks against
-already-modified state — first-writer-wins any value that must survive nesting.
+already-modified state — first-writer-wins any value that must survive nesting. A token derived from a filename or
+other authored text, interpolated into a command STRING another tool runs with `shell=True`,
+is shell-live even when your own call passes an argv (u-he-40 codex r3 P1: a test file named
+`tools/test_$(id).py` reached `mutation_probe.py --test`) — `shlex.quote` it at the
+interpolation; the outer argv does not protect the nested shell.
 
 ### 9. Path / default resolution (56 findings)
 Any path computed from env-or-default: TRACE the chain to the concrete path it lands
@@ -325,7 +335,9 @@ degrees of freedom before committing: extra positional tokens (`just a b` also r
 path segments (`tools/../x.py`), and recursion (a recipe or script that runs the executor
 itself). Parse each claim into a pinned argv — exact arity, enumerated verbs and flags, a
 denylist derived from the file that defines it and pinned by a test — never a token
-character class followed by `*`.
+character class followed by `*`. A test-running shape is never read-only here: a named test
+can be a billed live e2e run with inherited credentials (u-he-40 codex r3 P1) — allowlist
+exact provider-free commands instead of admitting a grammar.
 
 ### 12. A quoted contract phrase with no line behind it (added U-SR-01; both of the u-he-35 arc's P1s)
 Fires whenever the diff QUOTES a contract — a spec phrase in a docstring, a

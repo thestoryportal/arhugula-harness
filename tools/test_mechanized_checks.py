@@ -11,6 +11,7 @@ never shell out, so what is under test is exactly how each one reads a tree.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import finding_record as fr
 import mechanized_checks as mc
+import pin_scope
 from mechanized_checks import (
     cited_symbol_exists,
     core,
@@ -180,54 +182,49 @@ def test_unswept_consumers_ignores_edited_and_moved_definitions(tmp_path):
     assert unswept_consumers.Check().run(_subject(tmp_path, diff=diff)) == []
 
 
-def test_unrun_cli_reruns_read_only_claims_and_flags_failures(tmp_path):
+def test_unrun_cli_reruns_allowlisted_claims_and_flags_failures(tmp_path):
     calls: list[list[str]] = []
 
     def execute(argv: list[str], cwd: Path) -> tuple[int, str]:
         calls.append(argv)
-        return (1, "") if argv[1] == "broken-check" else (0, "ok")
+        return (1, "") if argv[1] == "typecheck" else (0, "ok")
 
     subject = _subject(
         tmp_path,
-        claims_text="feat: x\n\nVerified: `just broken-check` and `just codex-check`\n",
-        pr_body="Ran: `uv run pytest tools/test_x.py -q`\n",
+        claims_text="feat: x\n\nVerified: `just lint` and `just typecheck`\n",
+        pr_body="Ran: `just fmt-check`\n",
     )
     found = unrun_cli.Check(execute=execute).run(subject)
-    assert [(f.severity, f.location) for f in found] == [("warn", "just broken-check")]
-    assert calls == [
-        ["just", "broken-check"],
-        ["just", "codex-check"],
-        ["uv", "run", "pytest", "tools/test_x.py", "-q"],
-    ]
+    assert [(f.severity, f.location) for f in found] == [("warn", "just typecheck")]
+    assert calls == [["just", "lint"], ["just", "typecheck"], ["just", "fmt-check"]]
 
 
-# mutation-probe: tools/mechanized_checks/unrun_cli.py:87-95 drop the read-only grammar gate
-def test_unrun_cli_never_executes_outside_the_read_only_grammar(tmp_path):
+# mutation-probe: tools/mechanized_checks/unrun_cli.py:68-76 drop the allowlist gate
+def test_unrun_cli_never_executes_outside_the_static_check_allowlist(tmp_path):
     refused = [
-        "just main-protection-apply",
+        "just codex-check",
         "just check; rm -rf /",
-        "just fmt-check fmt",  # `just` runs extra tokens as further recipes
+        "just lint fmt",  # `just` runs extra tokens as further recipes
         "just fmt-check main-protection-rollback",
-        "just mech-check",  # recipes that run this runner would recurse
-        "just lanes-verify",
+        "just mech-check",  # a recipe that runs this runner would recurse
+        "uv run pytest tools/test_x.py -q",  # a named test can be a billed live e2e
+        "uv run pytest harness-runtime/tests/integration/"
+        "test_r412_e2b_full_vm_tool_execution_e2e.py -q",
         "uv run python tools/mechanized_checks/runner.py check",
-        "uv run python tools/../escape.py check",
-        "uv run pytest --basetemp=/tmp/wiped",  # pytest deletes its basetemp
-        "uv run pytest ../elsewhere/test_x.py",
     ]
     subject = _subject(tmp_path, claims_text="".join(f"Ran: `{c}`\n" for c in refused))
     found = unrun_cli.Check(execute=lambda argv, cwd: pytest.fail(f"executed {argv}")).run(subject)
     assert [(f.severity, f.location) for f in found] == [("info", c) for c in refused]
 
 
-def test_runner_recipes_match_the_justfile():
-    recipe, invoking = None, set()
-    for line in (core.REPO / "justfile").read_text().splitlines():
-        header = re.match(r"^([A-Za-z][\w-]*)(?:\s[^:]*)?:(?!=)", line)
-        recipe = header.group(1) if header else recipe
-        if "mechanized_checks/runner.py" in line:
-            invoking.add(recipe)
-    assert invoking == unrun_cli.RUNNER_RECIPES
+def test_rerun_allowlist_is_static_checks_only():
+    lines = (core.REPO / "justfile").read_text().splitlines()
+    static = re.compile(r"uv run (?:ruff check \.|ruff format --check \.|pyright)")
+    for claim, argv in unrun_cli.RERUN.items():
+        assert claim == " ".join(argv)
+        start = lines.index(f"{argv[1]}:")
+        body = list(itertools.takewhile(lambda ln: ln.startswith((" ", "\t")), lines[start + 1 :]))
+        assert body and all(static.fullmatch(ln.strip()) for ln in body), (claim, body)
 
 
 def test_unrun_cli_reports_an_unavailable_pr_body(tmp_path):
@@ -250,22 +247,22 @@ def test_default_executor_runs_argv_without_a_shell(monkeypatch, tmp_path):
 
 
 def _probe_fixture(tmp_path: Path, *, logged: bool) -> core.Subject:
-    (tmp_path / "tools").mkdir()
-    (tmp_path / "tools" / "x.py").write_text("A = 1\nB = 2\n")
-    (tmp_path / "tools" / "test_x.py").write_text(
-        "# mutation-probe: drop B\ndef test_t():\n    assert True\n"
-    )
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "x.py").write_text("A = 1\nB = 2\n")
+    (tools / "test_x.py").write_text("# mutation-probe: drop B\ndef test_t():\n    assert True\n")
     (tmp_path / ".harness").mkdir()
-    rows = [
-        {
-            "test": "uv run pytest tools/test_x.py::test_t -q",
-            "file": "tools/x.py",
-            "lines": "2-2",
-            "rc": 0,
-        }
-    ]
+    pinned = {
+        "test": "uv run pytest tools/test_x.py::test_t -q",
+        "file": "tools/x.py",
+        "lines": "2-2",
+        "rc": 0,
+        # a file-scope pin: live while both files still digest to what the probe measured
+        "target_sha": pin_scope.digest16((tools / "x.py").read_bytes()),
+        "test_sha": pin_scope.digest16((tools / "test_x.py").read_bytes()),
+    }
     (tmp_path / ".harness" / "mutation-probe-log.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in rows[: int(logged)])
+        (json.dumps(pinned) + "\n") * int(logged)
     )
     return _subject(tmp_path, changed=["tools/test_x.py"])
 
@@ -292,7 +289,7 @@ def test_mutation_probe_reverify_pinned_is_clean_and_indeterminate_is_named(tmp_
     assert all("REFUSED: why" in f.evidence for f in found)
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:94-98 drop the restore abort
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:129-133 drop the restore abort
 def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch):
     log = tmp_path / "gate.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
@@ -310,7 +307,7 @@ def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path
     assert not log.exists()  # no finding row stands in for a possibly-mutated tree
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:85-92 drop the unprobed arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:111-118 drop the unprobed arm
 def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("probed without a logged range")).run(
         _probe_fixture(tmp_path, logged=False)
@@ -319,7 +316,30 @@ def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(
     assert "never probed" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/double_fidelity.py:20-23 drop the issubclass raise
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:119-127 drop the stale-pin arm
+def test_mutation_probe_reverify_never_probes_a_range_whose_pin_went_stale(tmp_path):
+    subject = _probe_fixture(tmp_path, logged=True)
+    (tmp_path / "tools" / "x.py").write_text(
+        "Z = 0\nA = 1\nB = 2\n"
+    )  # a line lands above the block
+    found = mpr.Check(probe=lambda *a: pytest.fail("probed a stale range")).run(subject)
+    assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_x.py::test_t")]
+    assert "no longer pins" in found[0].evidence
+
+
+def test_probe_command_quotes_the_filename_derived_node(monkeypatch, tmp_path):
+    seen: dict = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(mpr.subprocess, "run", fake_run)
+    mpr.run_probe(tmp_path, "tools/x.py", "2-2", "tools/test_$(id).py::test_t")
+    assert seen["argv"][-1] == "uv run pytest 'tools/test_$(id).py::test_t' -q"
+
+
+# mutation-probe: tools/mechanized_checks/double_fidelity.py:22-25 drop the issubclass raise
 def test_assert_fake_is_subclass_detects_a_false_fidelity_claim():
     class Real: ...
 
@@ -332,20 +352,23 @@ def test_assert_fake_is_subclass_detects_a_false_fidelity_claim():
         tdf.assert_fake_is_subclass(Fake, Real)
 
 
-# mutation-probe: tools/mechanized_checks/double_fidelity.py:41 drop the assertion exemption
-def test_double_fidelity_flags_a_bare_double_without_an_assertion(tmp_path):
-    (tmp_path / "test_a.py").write_text(
-        "class FakeClock:\n    pass\n\ndef test_a():\n    use(FakeClock())\n"
-    )
-    (tmp_path / "test_b.py").write_text(
-        "class FakeClock:\n    pass\n\nassert_fake_is_subclass(FakeClock, Clock)\n\n"
-        "def test_b():\n    use(FakeClock())\n"
-    )
-    (tmp_path / "test_c.py").write_text(
-        "class FakeClock(Clock):\n    pass\n\ndef test_c():\n    use(FakeClock())\n"
-    )
-    found = tdf.Check().run(_subject(tmp_path, changed=["test_a.py", "test_b.py", "test_c.py"]))
-    assert [f.location for f in found] == ["test_a.py:1"]
+# mutation-probe: tools/mechanized_checks/double_fidelity.py:63 drop the assertion exemption
+def test_double_fidelity_flags_a_bare_double_without_an_executed_assertion(tmp_path):
+    files = {
+        "test_a.py": "class FakeClock:\n    pass\n\ndef test_a():\n    use(FakeClock())\n",
+        "test_b.py": "class FakeClock:\n    pass\n\nassert_fake_is_subclass(FakeClock, Clock)\n\n"
+        "def test_b():\n    use(FakeClock())\n",
+        "test_c.py": "class FakeClock(Clock):\n    pass\n\ndef test_c():\n    use(FakeClock())\n",
+        # a comment or a string that only MENTIONS the assertion exempts nothing
+        "test_d.py": "class FakeClock:\n    pass\n\n# assert_fake_is_subclass(FakeClock, Clock)\n"
+        "NOTE = 'assert_fake_is_subclass(FakeClock'\n\ndef test_d():\n    use(FakeClock())\n",
+        "test_e.py": "def test_e(:\n",
+    }
+    for name, text in files.items():
+        (tmp_path / name).write_text(text)
+    found = tdf.Check().run(_subject(tmp_path, changed=list(files)))
+    assert [f.location for f in found] == ["test_a.py:1", "test_d.py:1", "test_e.py:1"]
+    assert "does not parse" in found[-1].evidence
 
 
 # --- emission, run verdict, replay ------------------------------------------------------
@@ -570,6 +593,9 @@ def test_replay_measures_each_arc_once(tmp_path, monkeypatch):
 
     assert run() == run() == core.Measured((False, False))
     assert check.seen == [("a.md",), ("a.md",)]  # two arcs, each measured by the first replay only
+    monkeypatch.setattr(runner, "implementation_digest", lambda check: "changed-checker")
+    assert run() == core.Measured((False, False))
+    assert len(check.seen) == 4  # a changed implementation re-measures every arc
 
 
 def test_runner_demotion_verbs_detect_then_record_a_due_demotion(tmp_path, monkeypatch, capsys):

@@ -398,6 +398,36 @@
     "explains the consequence: later probes and checks run against a possibly mutated tree while advisory mode still exits 0 — noting only that the severity is too low does not pass",
     "proposes aborting the whole run on exit 3 whatever the mode, preserving the subprocess output, with a test that feeds exit 3 — raising the finding's severity to hard does not pass"
    ]
+  },
+  {
+   "id": 24,
+   "eval_name": "filename-derived-token-into-nested-shell",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/nested_shell_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming shell injection through the node id: the node is built from a changed file's path and interpolated unquoted into the `--test` string, which `mutation_probe.py` runs with `shell=True`, so a test file named `tools/test_$(id).py` executes the command substitution. The `argv` list protects only the outer call, not the nested shell. The fix quotes the node with `shlex.quote` at the interpolation, with a test that feeds a metacharacter filename and asserts the quoted `--test` value.",
+   "files": [
+    "fixtures-uhe40/nested_shell_notes.md"
+   ],
+   "assertions": [
+    "names the injection path: a filename-derived node interpolated into a command string the probe tool runs with shell=True — a generic 'validate inputs' remark does not pass",
+    "refutes the stated safety argument: the argv list protects only the outer subprocess, not the nested shell — accepting 'argv is a list, so it is safe' does not pass",
+    "proposes shlex.quote at the interpolation with a test using a metacharacter filename such as `$(id)` — sanitizing filenames by rejecting characters elsewhere, with no quoting, does not pass"
+   ]
+  },
+  {
+   "id": 25,
+   "eval_name": "reused-evidence-not-bound-to-what-it-measured",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/evidence_reuse_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming both caches as unbound evidence: (1) the logged `lines` range is re-run without checking the row's `target_sha`/`test_sha` against the current bytes, so after lines are inserted above the probed block the probe deletes different code and can report the annotation verified; (2) replay results are keyed only by check_id and commit, so after the checker's implementation changes every arc is skipped and promotion evaluates the old implementation's rows. Fixes: use a logged range only while its digests still match (report stale otherwise), and bind replay arc ids to a digest of the checker implementation.",
+   "files": [
+    "fixtures-uhe40/evidence_reuse_notes.md"
+   ],
+   "assertions": [
+    "names the stale-range hazard: the logged line numbers are reused after the code moved, so the probe mutates unrelated lines — noting only that 'caches can go stale' does not pass",
+    "names the replay hazard: results keyed by check_id and commit survive a change to the checker, so promotion measures an implementation that never ran — missing it does not pass",
+    "proposes binding each reuse to what it measured (digest check before reusing a range; checker-implementation digest in the replay key) — adding a TTL or a manual cache-clear does not pass"
+   ]
   }
  ]
 }
