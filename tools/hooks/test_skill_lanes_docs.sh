@@ -126,17 +126,25 @@ else
   bad "ship-pr: the live #14 carrier 'INCOMPLETE, never green (C-HE-19)' is missing"
 fi
 
-# --- 3. C-HE-01: no N=2 literal cap in the lane-model carriers ---------------------------
+# --- 3. C-HE-01: no two-lane cap in the lane-model carriers ------------------------------
+# Three shapes: the all-caps literal `TWO` the old description carried; a digit `N=2`, `N ≤ 2`
+# or `N <= 2`; and a qualifier-phrased cap in ordinary prose — "only two lanes", "at most 2
+# arcs", "two lanes at most" (U-HE-39 witness lens, round 4). Bare lowercase "two" is NOT
+# matched on purpose: the pairwise A/B walkthrough uses it legitimately.
+# RESIDUAL, by construction: a cap stated with neither a qualifier nor a number ("a pair of
+# lanes") is outside what a pattern can see. Section 1 still pins the N ≥ 2 statement itself.
+QUAL='(only|at most|no more than|up to|a maximum of|maximum of|limited to|capped at)'
 for f in "$TL" "$RC"; do
   # grep exit 1 = no match; exit >= 2 = the scan did not run, which must never read as clean.
   two=$(grep -nw 'TWO' "$f"); r1=$?
-  neq=$(grep -nE '(^|[^0-9A-Za-z])N ?= ?2([^0-9]|$)' "$f"); r2=$?
-  if [ "$r1" -gt 1 ] || [ "$r2" -gt 1 ]; then
-    bad "$(skill "$f"): N=2 scan could not run (grep exit $r1/$r2)"
-  elif [ -n "$two$neq" ]; then
-    bad "$(skill "$f") states an N=2 literal cap: $(printf '%s %s' "$two" "$neq" | cut -c1-160)"
+  neq=$(grep -nE '(^|[^0-9A-Za-z])N ?(=|≤|<=) ?2([^0-9]|$)' "$f"); r2=$?
+  qual=$(grep -niE "(^|[^a-z])${QUAL} (two|2) (concurrent |parallel )?(lanes?|arcs?)([^a-z]|$)|(^|[^a-z0-9])(two|2) (lanes?|arcs?) (at most|maximum|max)([^a-z]|$)" "$f"); r3=$?
+  if [ "$r1" -gt 1 ] || [ "$r2" -gt 1 ] || [ "$r3" -gt 1 ]; then
+    bad "$(skill "$f"): two-lane-cap scan could not run (grep exit $r1/$r2/$r3)"
+  elif [ -n "$two$neq$qual" ]; then
+    bad "$(skill "$f") states a two-lane cap: $(printf '%s %s %s' "$two" "$neq" "$qual" | cut -c1-160)"
   else
-    ok "$(skill "$f") states no N=2 literal cap"
+    ok "$(skill "$f") states no two-lane cap"
   fi
 done
 
