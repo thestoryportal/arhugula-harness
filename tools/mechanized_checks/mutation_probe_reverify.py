@@ -125,7 +125,7 @@ class Check:
                 MechFinding(
                     node,
                     f"logged range {target}:{logged.lines} no longer pins the current bytes "
-                    "(the code or the test changed since it was probed)",
+                    "(the probed file's bytes changed since the probe ran)",
                     "re-probe the annotation before its mutation is re-verified",
                 )
             ]

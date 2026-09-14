@@ -172,7 +172,14 @@ def test_unswept_consumers_flags_references_to_a_vanished_symbol(tmp_path):
     assert unswept_consumers.Check().run(_subject(tmp_path, diff=diff)) == []
 
 
-# mutation-probe: tools/mechanized_checks/unswept_consumers.py:47 drop the still-defined filter
+def test_unswept_consumers_ignore_attribute_references_to_the_removed_name(tmp_path):
+    (tmp_path / "a.py").write_text("def kept():\n    pass\n")
+    (tmp_path / "b.py").write_text("import subprocess\nsubprocess.run(['x'])\nrun()\n")
+    found = unswept_consumers.Check().run(_subject(tmp_path, diff="-def run():\n"))
+    assert [f.location for f in found] == ["b.py:3"]  # `subprocess.run` is not the removed `run`
+
+
+# mutation-probe: tools/mechanized_checks/unswept_consumers.py:48 drop the still-defined filter
 def test_unswept_consumers_ignores_edited_and_moved_definitions(tmp_path):
     (tmp_path / "a.py").write_text("def kept(x, y):\n    pass\n")
     (tmp_path / "c.py").write_text("def moved():\n    pass\n")
@@ -258,7 +265,7 @@ def _probe_fixture(tmp_path: Path, *, logged: bool) -> core.Subject:
         "file": "tools/x.py",
         "lines": "2-2",
         "rc": 0,
-        # a file-scope pin: live while both files still digest to what the probe measured
+        # the recorded range stays valid while the probed file still digests to target_sha
         "target_sha": pin_scope.digest16((tools / "x.py").read_bytes()),
         "test_sha": pin_scope.digest16((tools / "test_x.py").read_bytes()),
     }

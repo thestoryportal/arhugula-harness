@@ -1,6 +1,7 @@
 """unswept consumers (C-HE-31 §1, deterministic): a `def`/`class`/shell function this change
 removed that is now defined nowhere in the tree, yet is still referenced. An edited signature
-(removed and re-added) or a moved definition (still defined elsewhere) is not a removal."""
+(removed and re-added) or a moved definition (still defined elsewhere) is not a removal, and an
+attribute reference (`subprocess.run`) names another object's member, not the removed symbol."""
 
 from __future__ import annotations
 
@@ -46,5 +47,5 @@ class Check:
             if name not in readded
             if name not in defined
             for rel, text in code
-            for m in re.finditer(rf"\b{re.escape(name)}\b", text)
+            for m in re.finditer(rf"(?<![\w.]){re.escape(name)}\b", text)
         ]
