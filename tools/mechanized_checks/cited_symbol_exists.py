@@ -26,6 +26,7 @@ def _defines(name: str) -> re.Pattern[str]:
 class Check:
     check_id = "cited_symbol_exists"
     kind = "deterministic"
+    replayable = True
 
     def run(self, subject: Subject) -> list[MechFinding]:
         texts = subject.changed_texts(".md")

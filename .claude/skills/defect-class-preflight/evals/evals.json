@@ -443,6 +443,21 @@
     "notes that the recipe-body test pins only the current repository, not the historical or modified subject that is executed — missing the replay/subject distinction does not pass",
     "proposes executing trusted tooling from the executor's environment rather than the subject's recipes — tightening the allowlist or adding more recipe-body tests does not pass"
    ]
+  },
+  {
+   "id": 27,
+   "eval_name": "python-dash-m-resolves-from-untrusted-cwd",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/python_m_cwd_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming `python -m ruff` with `cwd=subject_repo` as subject-controlled: module lookup searches the working directory first, so a `ruff.py` in the subject tree runs instead of ruff — executing subject code with inherited credentials and able to exit 0 with fake output, recording the claim as clean. `sys.executable` being trusted does not make the module lookup trusted. The fix invokes ruff's absolute executable (and scrubs credentials from the environment), with a test that plants a `ruff.py` in the subject and asserts it never runs.",
+   "files": [
+    "fixtures-uhe40/python_m_cwd_notes.md"
+   ],
+   "assertions": [
+    "names the cwd module shadowing: `-m ruff` resolves a `ruff.py` in the subject tree before the installed package — a review that accepts 'sys.executable is trusted' does not pass",
+    "states the consequence: subject code runs with inherited credentials and can fake a clean result — noting only a theoretical risk does not pass",
+    "proposes an absolute trusted executable (not a module lookup) with a test that plants `ruff.py` in the subject — asserting argv shape alone does not pass"
+   ]
   }
  ]
 }

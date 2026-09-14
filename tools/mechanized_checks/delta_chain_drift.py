@@ -31,6 +31,7 @@ def _retabling(subject: Subject, cite: re.Match[str]) -> list[str]:
 class Check:
     check_id = "delta_chain_drift"
     kind = "deterministic"
+    replayable = True
 
     def run(self, subject: Subject) -> list[MechFinding]:
         return [

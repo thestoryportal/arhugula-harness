@@ -2,9 +2,11 @@
 `Ran:` line is re-run, and must exit 0 AND print something before it counts as clean.
 
 The claim text is authored in a commit message or PR body, so it never chooses what runs: a claim
-naming one of two provider-free static checks is re-run as THIS interpreter's own ruff against the
-subject tree -- never through the subject's justfile, whose recipe bodies the subject controls.
-Ruff reads the subject's configuration and never executes its code. Every other claim, test runs
+naming one of two provider-free static checks is re-run as this harness environment's own ruff
+EXECUTABLE, by absolute path, against the subject tree -- never through the subject's justfile,
+whose recipe bodies the subject controls, and never as `python -m ruff`, which would resolve a
+`ruff.py` in the subject's working directory first. Ruff reads the subject's configuration and
+never executes its code. Every other claim, test runs
 included (a named test can be a billed live e2e), is reported as not re-run -- never run."""
 
 from __future__ import annotations
@@ -15,15 +17,17 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from .core import MechFinding, Subject
+from .core import MechFinding, Subject, subject_env
 
 CLAIM_LINE = re.compile(r"^(?:Verified|Checked|Ran):[ \t]*(?P<rest>.*)$", re.M | re.I)
 COMMAND = re.compile(r"`(?P<cmd>(?:just|uv run) [^`]+)`")
-#: Claim text -> the trusted argv re-run for it (the command the workspace recipe of that name
-#: runs, taken from this harness's own environment rather than from the subject tree).
+#: The ruff executable installed beside this interpreter: an absolute path the subject tree cannot
+#: shadow, unlike a module lookup that searches the subprocess's working directory.
+RUFF = str(Path(sys.executable).parent / "ruff")
+#: Claim text -> the trusted argv re-run for it (what the workspace recipe of that name runs).
 RERUN: dict[str, tuple[str, ...]] = {
-    "just lint": (sys.executable, "-m", "ruff", "check", "."),
-    "just fmt-check": (sys.executable, "-m", "ruff", "format", "--check", "."),
+    "just lint": (RUFF, "check", "."),
+    "just fmt-check": (RUFF, "format", "--check", "."),
 }
 Execute = Callable[[list[str], Path], tuple[int, str]]
 
@@ -32,13 +36,16 @@ def execute_argv(argv: list[str], cwd: Path) -> tuple[int, str]:
     """A trusted argv, never a shell string."""
     # bounds a hung linter only: a ruff pass over this repo is one of the static steps
     # `codex-check` runs ahead of its test suites, so a normal run finishes far inside 30 min
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=1800)
+    proc = subprocess.run(
+        argv, cwd=cwd, env=subject_env(), capture_output=True, text=True, timeout=1800
+    )
     return proc.returncode, proc.stdout + proc.stderr
 
 
 class Check:
     check_id = "unrun_cli"
     kind = "deterministic"
+    replayable = True
 
     def __init__(self, execute: Execute = execute_argv):
         self.execute = execute

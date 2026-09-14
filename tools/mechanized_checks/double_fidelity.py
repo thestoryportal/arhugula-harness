@@ -67,6 +67,7 @@ def _findings(rel: str, text: str) -> list[MechFinding]:
 class Check:
     check_id = "test_double_fidelity"
     kind = "hybrid"
+    replayable = True
 
     def run(self, subject: Subject) -> list[MechFinding]:
         return [

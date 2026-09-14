@@ -28,6 +28,21 @@ STATE_PATH = REPO / ".harness" / "mechanized-checks-state.json"
 WINDOW = 20
 PROMOTE_MAX_REJECTED = 0
 DEMOTE_STRIKES = 2
+#: Provider credentials a subject-executing check never hands to subject code, plus a keyring it
+#: never reaches: the scrub `tools/codex-parity-check.sh` applies before running the suites
+#: (`test_subject_env_matches_the_parity_scrub` pins this tuple to that script's `unset` lines).
+SUBJECT_ENV_DROP = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "E2B_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "HARNESS_CODEX_REVIEW_ISOLATED",
+)
 #: The rows that record a check RAN on an arc: its findings and its clean marker.
 OBSERVATION_KINDS = ("finding", "no_finding")
 
@@ -78,8 +93,15 @@ class Subject:
 class Check(Protocol):
     check_id: str
     kind: Kind
+    replayable: bool  # False: it executes subject code, so it never runs on a historical tree
 
     def run(self, subject: Subject) -> list[MechFinding]: ...
+
+
+def subject_env() -> dict[str, str]:
+    """The environment for a subprocess that runs subject code or reads the subject tree."""
+    kept = {k: v for k, v in os.environ.items() if k not in SUBJECT_ENV_DROP}
+    return {**kept, "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring"}
 
 
 def line_of(text: str, offset: int) -> int:
@@ -259,17 +281,22 @@ def rejected_windows(rows: Sequence[dict], check_id: str, *, since: str) -> list
     windows that END at the latest arc -- the oldest partial window is the one dropped, so the
     last two entries are always the two most recent windows. Replay observations re-measure
     history and never advance a window."""
-    rejected = Counter(r["arc_id"] for r in _mine(rows, check_id) if r["disposition"] == "rejected")
-    arcs = list(
-        dict.fromkeys(
-            r["arc_id"]
-            for r in rows
-            if r.get("producer") == check_id
-            and r["record_kind"] in OBSERVATION_KINDS
-            and r["lineage_claim"] == "fresh"
-            and r["ts"] >= since
-        )
+    observed = [
+        r
+        for r in rows
+        if r.get("producer") == check_id
+        and r["record_kind"] in OBSERVATION_KINDS
+        and r["lineage_claim"] == "fresh"
+        and r["ts"] >= since
+    ]
+    # a rejection counts only for a finding observed inside that same qualifying set: an arc
+    # rechecked after promotion never imports its earlier, pre-promotion rejections
+    qualifying = {r["finding_id"] for r in observed if r["record_kind"] == "finding"}
+    last = fr.reduce_last_by_finding_id(list(rows))
+    rejected = Counter(
+        last[f]["arc_id"] for f in qualifying if last[f]["disposition"] == "rejected"
     )
+    arcs = list(dict.fromkeys(r["arc_id"] for r in observed))
     recent = arcs[len(arcs) % WINDOW :]
     return [sum(rejected[a] for a in recent[i : i + WINDOW]) for i in range(0, len(recent), WINDOW)]
 
@@ -281,20 +308,25 @@ def demotion_due(state: CheckState, windows: Sequence[int]) -> bool:
     return isinstance(state, Blocking) and len(last_two) == 2 and min(last_two) >= DEMOTE_STRIKES
 
 
-def evaluate_demotion(check_id: str, windows: Sequence[int]) -> bool:
+def evaluate_demotion(check_id: str, windows: Sequence[int], *, promoted_at: str) -> bool:
     """Record the check's latest windows; when a demotion is due, write the `gate_demotion` row
     and the NOTIFY FIRST (§4(c): at the moment it fires), then flip the state -- a crash between
-    the two leaves a duplicate audit row on retry, never a demotion with no audit row."""
+    the two leaves a duplicate audit row on retry, never a demotion with no audit row. The windows
+    were computed outside the lock for the promotion stamped `promoted_at`; they apply only while
+    the check still carries that promotion, so a concurrent demote-and-repromote is never judged
+    by the previous promotion's windows."""
     with state_lock():
         state = load_state()
         current = state[check_id]
         last_two = tuple(windows[-2:])
-        demoted = demotion_due(current, last_two)
+        same_promotion = isinstance(current, Blocking) and current.promoted_at == promoted_at
+        demoted = same_promotion and demotion_due(current, last_two)
         if demoted:
             _demotion_row(check_id, last_two)
             _notify(check_id, last_two)
-        state[check_id] = Advisory(last_two) if demoted else replace(current, windows=last_two)
-        save_state(state)
+        if same_promotion:
+            state[check_id] = Advisory(last_two) if demoted else replace(current, windows=last_two)
+            save_state(state)
     return demoted
 
 

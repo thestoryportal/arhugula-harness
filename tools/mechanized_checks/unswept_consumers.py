@@ -23,6 +23,7 @@ CODE_SUFFIXES = (".py", ".sh", ".js", ".ts", ".toml", ".yml", ".yaml")
 class Check:
     check_id = "unswept_consumers"
     kind = "deterministic"
+    replayable = True
 
     def run(self, subject: Subject) -> list[MechFinding]:
         edges = [(m["sign"], m["py"] or m["sh"]) for m in DEF_EDGE.finditer(subject.diff)]

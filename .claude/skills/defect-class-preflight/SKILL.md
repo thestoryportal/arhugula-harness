@@ -199,7 +199,9 @@ act, what can another lane, process, or signal do?* Shapes: absence-check then c
 mid-sequence leaves a half-state. This workspace's idioms: exclusive-create CAS
 (reservations), temp-then-`os.link` publication, single-writer leases. If your diff
 adds coordination, name which existing idiom it uses — a new hand-rolled one is a
-finding waiting to be filed. And any file a privileged or auto-allowed path READS or
+finding waiting to be filed. A state snapshot read OUTSIDE a lock and
+applied INSIDE it is the same shape one level up (u-he-40 codex r5: windows computed for
+one promotion could demote the next) — re-validate the snapshot's identity under the lock. And any file a privileged or auto-allowed path READS or
 WRITES that another actor can pre-plant gets the containment idiom: open with
 `O_NOFOLLOW|O_NONBLOCK` + post-open `fstat` `S_ISREG`, refuse symlinks/special files
 loudly, publish via same-directory temp + `os.replace` (the finding_record/merge_door
@@ -286,7 +288,9 @@ already-modified state — first-writer-wins any value that must survive nesting
 other authored text, interpolated into a command STRING another tool runs with `shell=True`,
 is shell-live even when your own call passes an argv (u-he-40 codex r3 P1: a test file named
 `tools/test_$(id).py` reached `mutation_probe.py --test`) — `shlex.quote` it at the
-interpolation; the outer argv does not protect the nested shell.
+interpolation; the outer argv does not protect the nested shell. And `python -m <tool>` searches
+the working directory first: with `cwd` set to an untrusted tree, a `<tool>.py` there runs
+instead of the tool (u-he-40 codex r5 P1) — invoke the tool's absolute executable.
 
 ### 9. Path / default resolution (56 findings)
 Any path computed from env-or-default: TRACE the chain to the concrete path it lands
@@ -342,7 +346,10 @@ exact provider-free commands instead of admitting a grammar. And pinning a comma
 pinning what runs: a recipe, script, alias or config file the subject tree defines is
 subject-controlled (u-he-40 codex r4 P1: an allowlisted `just lint` ran whatever the subject's
 justfile said), so an executor runs trusted tooling from its own environment against the
-subject — never the subject's recipe bodies.
+subject — never the subject's recipe bodies. The same holds for a trusted SCRIPT named by a
+relative path: inside a replayed or checked-out tree, `tools/x.py` is that tree's copy (u-he-40
+codex r5 P1). A check that must execute subject code (tests) cannot be replayed against
+historical trees in the reviewer's environment at all — refuse it rather than sandbox by hope.
 
 ### 12. A quoted contract phrase with no line behind it (added U-SR-01; both of the u-he-35 arc's P1s)
 *(u-he-40 codex r4: a docstring quoted C-HE-31 §4(b)'s "rolling" windows over code that cut

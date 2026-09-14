@@ -36,6 +36,7 @@ def _data_rows(table: str) -> int:
 class Check:
     check_id = "stale_carry"
     kind = "deterministic"
+    replayable = True
 
     def run(self, subject: Subject) -> list[MechFinding]:
         texts = subject.changed_texts(".md")

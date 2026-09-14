@@ -179,6 +179,11 @@ def replay(
     ref: str = "origin/main",
     pr_body: PrBody = gh_pr_body,
 ) -> core.ReplayVerdict:
+    if not check.replayable:
+        raise ReplayError(
+            f"{check.check_id} executes subject tests; replaying it would run historical code in "
+            "this environment -- its promotion waits on an isolated venue (B-241)"
+        )
     log = _git(repo, "log", "--first-parent", "--format=%H%x09%s", ref).splitlines()
     shas = select_replay_commits(log, core.WINDOW)
     impl = implementation_digest()
@@ -230,10 +235,11 @@ def report_replay(check_id: str, verdict: core.ReplayVerdict) -> int:
             return 0 if promoted else 1
 
 
-def _blocking_windows(state: dict[str, core.CheckState]) -> dict[str, list[int]]:
+def _blocking_windows(state: dict[str, core.CheckState]) -> dict[str, tuple[str, list[int]]]:
+    """Each blocking check's promotion stamp and the windows computed for that promotion."""
     rows = fr.read_rows()
     return {
-        check_id: core.rejected_windows(rows, check_id, since=s.promoted_at)
+        check_id: (s.promoted_at, core.rejected_windows(rows, check_id, since=s.promoted_at))
         for check_id, s in state.items()
         if isinstance(s, core.Blocking)
     }
@@ -259,15 +265,17 @@ def main(argv: list[str] | None = None) -> int:
             check = next(c for c in CHECKS if c.check_id == args.check_id)
             return report_replay(check.check_id, replay(repo, check, lane_id=lane_id))
         case "demote":
-            for check_id, windows in _blocking_windows(state).items():
-                demoted = core.evaluate_demotion(check_id, windows)
+            for check_id, (promoted_at, windows) in _blocking_windows(state).items():
+                demoted = core.evaluate_demotion(check_id, windows, promoted_at=promoted_at)
                 print(
                     f"{check_id}: windows {windows} -> {'DEMOTED' if demoted else 'stays blocking'}"
                 )
             return 0
         case _:
             due = {
-                c: w for c, w in _blocking_windows(state).items() if core.demotion_due(state[c], w)
+                c: w
+                for c, (_promoted_at, w) in _blocking_windows(state).items()
+                if core.demotion_due(state[c], w)
             }
             for check_id, windows in due.items():
                 print(f"DEMOTION DUE {check_id}: windows {windows} (run `just lanes-verify`)")

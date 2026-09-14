@@ -129,7 +129,7 @@ def test_stale_carry_flags_count_mismatch_and_placeholders(tmp_path):
     ]
 
 
-# mutation-probe: tools/mechanized_checks/stale_carry.py:51 drop the count-vs-table mismatch filter
+# mutation-probe: tools/mechanized_checks/stale_carry.py:52 drop the count-vs-table mismatch filter
 def test_stale_carry_clean(tmp_path):
     (tmp_path / "ok.md").write_text(
         "Two contracts:\n| id | name |\n|---|---|\n| a | x |\n| b | y |\n\n"
@@ -138,7 +138,7 @@ def test_stale_carry_clean(tmp_path):
     assert stale_carry.Check().run(_subject(tmp_path, changed=["ok.md"])) == []
 
 
-# mutation-probe: tools/mechanized_checks/cited_symbol_exists.py:40 drop the cited-line-count filter
+# mutation-probe: tools/mechanized_checks/cited_symbol_exists.py:41 drop the cited-line-count filter
 def test_cited_symbol_exists_fixture_and_clean(tmp_path):
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "x.py").write_text("def real():\n    pass\n")
@@ -172,7 +172,7 @@ def test_unswept_consumers_flags_references_to_a_vanished_symbol(tmp_path):
     assert unswept_consumers.Check().run(_subject(tmp_path, diff=diff)) == []
 
 
-# mutation-probe: tools/mechanized_checks/unswept_consumers.py:46 drop the still-defined filter
+# mutation-probe: tools/mechanized_checks/unswept_consumers.py:47 drop the still-defined filter
 def test_unswept_consumers_ignores_edited_and_moved_definitions(tmp_path):
     (tmp_path / "a.py").write_text("def kept(x, y):\n    pass\n")
     (tmp_path / "c.py").write_text("def moved():\n    pass\n")
@@ -198,10 +198,10 @@ def test_unrun_cli_reruns_trusted_ruff_never_the_subjects_recipes(tmp_path):
     found = unrun_cli.Check(execute=execute).run(subject)
     assert [(f.severity, f.location) for f in found] == [("warn", "just fmt-check")]
     assert calls == [list(unrun_cli.RERUN["just lint"]), list(unrun_cli.RERUN["just fmt-check"])]
-    assert all(argv[:3] == [sys.executable, "-m", "ruff"] for argv in calls)
+    assert all(Path(argv[0]) == Path(sys.executable).parent / "ruff" for argv in calls)
 
 
-# mutation-probe: tools/mechanized_checks/unrun_cli.py:69-77 drop the allowlist gate
+# mutation-probe: tools/mechanized_checks/unrun_cli.py:76-84 drop the allowlist gate
 def test_unrun_cli_never_executes_outside_the_static_check_allowlist(tmp_path):
     refused = [
         "just codex-check",
@@ -222,7 +222,7 @@ def test_unrun_cli_never_executes_outside_the_static_check_allowlist(tmp_path):
 
 def test_rerun_allowlist_runs_only_this_interpreters_ruff():
     for claim, argv in unrun_cli.RERUN.items():
-        assert argv[:3] == (sys.executable, "-m", "ruff"), claim
+        assert Path(argv[0]) == Path(sys.executable).parent / "ruff", claim
         assert "just" not in argv, claim
 
 
@@ -241,7 +241,9 @@ def test_default_executor_runs_argv_without_a_shell(monkeypatch, tmp_path):
         return subprocess.CompletedProcess(argv, 0, "out", "err")
 
     monkeypatch.setattr(unrun_cli.subprocess, "run", fake_run)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret")
     assert unrun_cli.execute_argv(["just", "check"], tmp_path) == (0, "outerr")
+    assert "ANTHROPIC_API_KEY" not in seen["env"]
     assert seen["argv"] == ["just", "check"] and not seen.get("shell") and seen["cwd"] == tmp_path
 
 
@@ -288,7 +290,7 @@ def test_mutation_probe_reverify_pinned_is_clean_and_indeterminate_is_named(tmp_
     assert all("REFUSED: why" in f.evidence for f in found)
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:132-136 drop the restore abort
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:133-137 drop the restore abort
 def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch):
     log = tmp_path / "gate.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
@@ -306,7 +308,7 @@ def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path
     assert not log.exists()  # no finding row stands in for a possibly-mutated tree
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:114-121 drop the unprobed arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:115-122 drop the unprobed arm
 def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("probed without a logged range")).run(
         _probe_fixture(tmp_path, logged=False)
@@ -315,7 +317,7 @@ def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(
     assert "never probed" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:122-130 drop the stale-pin arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:123-131 drop the stale-pin arm
 def test_mutation_probe_reverify_never_probes_a_range_whose_pin_went_stale(tmp_path):
     subject = _probe_fixture(tmp_path, logged=True)
     (tmp_path / "tools" / "x.py").write_text(
@@ -340,11 +342,13 @@ def test_probe_command_quotes_the_filename_derived_node(monkeypatch, tmp_path):
     seen: dict = {}
 
     def fake_run(argv, **kw):
-        seen["argv"] = argv
+        seen.update(argv=argv, **kw)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(mpr.subprocess, "run", fake_run)
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
     mpr.run_probe(tmp_path, "tools/x.py", "2-2", "tools/test_$(id).py::test_t")
+    assert "OPENAI_API_KEY" not in seen["env"]  # subject tests never inherit provider keys
     assert seen["argv"][-1] == "uv run pytest 'tools/test_$(id).py::test_t' -q"
 
 
@@ -404,6 +408,7 @@ def test_emit_writes_findings_and_a_clean_marker_and_reruns_never_collide(tmp_pa
 
 class Canned:
     kind = "deterministic"
+    replayable = True
 
     def __init__(self, check_id: str, findings: list[core.MechFinding]):
         self.check_id, self.findings = check_id, findings
@@ -433,7 +438,7 @@ def test_only_a_blocking_checks_warn_or_hard_finding_fails_the_run(tmp_path, mon
     assert run(info, core.Blocking(PROMOTED)) == 0
 
 
-# mutation-probe: tools/mechanized_checks/core.py:293-295 drop the gate_demotion row + NOTIFY
+# mutation-probe: tools/mechanized_checks/core.py:324-326 drop the gate_demotion row + NOTIFY
 def test_promotion_demotion_state_machine(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE_PATH", tmp_path / "state.json")
     log = tmp_path / "gate.jsonl"
@@ -448,11 +453,23 @@ def test_promotion_demotion_state_machine(tmp_path, monkeypatch):
     assert isinstance(core.load_state()["stale_carry"], core.Advisory)
     assert core.evaluate_promotion("stale_carry", [False] * 20) is True
     assert isinstance(core.load_state()["stale_carry"], core.Blocking)
+    promoted_at = core.load_state()["stale_carry"].promoted_at
+    # windows computed for a different promotion never apply, whatever they read
+    assert (
+        core.evaluate_demotion("stale_carry", [3, 2], promoted_at="2000-01-01T00:00:00Z") is False
+    )
+    assert isinstance(core.load_state()["stale_carry"], core.Blocking) and not log.exists()
 
-    assert core.evaluate_demotion("stale_carry", [3]) is False  # one window: no demotion
-    assert core.evaluate_demotion("stale_carry", [3, 1]) is False  # second window < 2
+    assert (
+        core.evaluate_demotion("stale_carry", [3], promoted_at=promoted_at) is False
+    )  # one window: no demotion
+    assert (
+        core.evaluate_demotion("stale_carry", [3, 1], promoted_at=promoted_at) is False
+    )  # second window < 2
     assert not log.exists()
-    assert core.evaluate_demotion("stale_carry", [3, 2]) is True  # two consecutive windows >= 2
+    assert (
+        core.evaluate_demotion("stale_carry", [3, 2], promoted_at=promoted_at) is True
+    )  # two consecutive windows >= 2
     assert isinstance(core.load_state()["stale_carry"], core.Advisory)
     [row] = fr.read_rows(log)
     assert (row["record_kind"], row["producer"], row["severity"], row["location"]) == (
@@ -465,7 +482,7 @@ def test_promotion_demotion_state_machine(tmp_path, monkeypatch):
     notify = [ln for ln in ledger.read_text().splitlines() if "| NOTIFY |" in ln]
     assert len(notify) == 1 and "stale_carry" in notify[0]
     assert (
-        core.evaluate_demotion("stale_carry", [3, 2]) is False
+        core.evaluate_demotion("stale_carry", [3, 2], promoted_at=promoted_at) is False
     )  # an advisory check is never re-demoted
     assert len(fr.read_rows(log)) == 1
 
@@ -479,7 +496,7 @@ def test_rejected_windows_end_at_the_latest_arc():
     assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [2, 2]
 
 
-# mutation-probe: tools/mechanized_checks/core.py:270 drop the since-promotion window filter
+# mutation-probe: tools/mechanized_checks/core.py:290 drop the since-promotion window filter
 def test_rejected_windows_ignore_observations_from_before_promotion():
     rows = [_row(a, "no_finding") for a in range(40)]
     rows += [_row(a, "finding", n=2) for a in (19, 20, 39)]
@@ -501,7 +518,7 @@ def test_rejected_windows_ignore_observations_from_before_promotion():
     assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [1, 2]
 
 
-# mutation-probe: tools/mechanized_checks/core.py:269 drop the replay-lineage filter
+# mutation-probe: tools/mechanized_checks/core.py:289 drop the replay-lineage filter
 def test_rejected_windows_never_count_replay_observations():
     rows = [_row(a, "no_finding") for a in range(40)]
     rows += [_row(500 + a, "no_finding", lineage="replay") for a in range(40)]
@@ -512,6 +529,34 @@ def test_rejected_windows_never_count_replay_observations():
     ]
     # counted, the replay arcs would add two full windows of rejections: [0, 0, 20, 20]
     assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [0, 0]
+
+
+def test_rejected_windows_ignore_rejections_recorded_before_promotion():
+    early = "2026-09-01T00:00:00Z"
+    rows = [_row(a, "finding", n=2, ts=early) for a in (1, 2, 21, 22)]
+    rows += [
+        _row(a, "finding_adjudication", n=2, ts=early, disposition="rejected")
+        for a in (1, 2, 21, 22)
+    ]
+    rows += [_row(a, "no_finding") for a in range(40)]  # the same arcs, rechecked clean since
+    assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [0, 0]
+
+
+def test_subject_env_matches_the_parity_scrub(monkeypatch):
+    script = (core.REPO / "tools" / "codex-parity-check.sh").read_text().splitlines()
+    unset = {name for line in script if line.startswith("unset ") for name in line.split()[1:]}
+    assert set(core.SUBJECT_ENV_DROP) == unset
+    for name in unset:
+        monkeypatch.setenv(name, "secret")
+    env = core.subject_env()
+    assert not unset & set(env) and env["PYTHON_KEYRING_BACKEND"] == "keyring.backends.null.Keyring"
+
+
+def test_default_rerun_never_imports_a_subject_ruff_module(tmp_path):
+    marker = tmp_path / "shadowed"
+    (tmp_path / "ruff.py").write_text(f"open({str(marker)!r}, 'w').close()\n")
+    rc, out = unrun_cli.execute_argv(list(unrun_cli.RERUN["just lint"]), tmp_path)
+    assert not marker.exists() and out.strip(), (rc, out)
 
 
 def test_replay_verdict_never_reads_unlooked_or_unadjudicated_as_clean():
@@ -628,6 +673,11 @@ def test_replay_measures_each_arc_once(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "implementation_digest", lambda: "changed-checker")
     assert run() == core.Measured((False, False))
     assert len(check.seen) == 4  # a changed implementation re-measures every arc
+
+
+def test_replay_refuses_a_check_that_executes_subject_tests(tmp_path):
+    with pytest.raises(runner.ReplayError, match="executes subject tests"):
+        runner.replay(tmp_path, mpr.Check(), lane_id="lane-a", pr_body=lambda r, ref: None)
 
 
 def test_runner_demotion_verbs_detect_then_record_a_due_demotion(tmp_path, monkeypatch, capsys):

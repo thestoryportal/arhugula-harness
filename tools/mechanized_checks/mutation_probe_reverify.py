@@ -21,7 +21,7 @@ from pathlib import Path
 import lanes_verify as lv  # [LAW:one-source-of-truth] the annotation grammar lives there
 import pin_scope
 
-from .core import MechFinding, Subject
+from .core import MechFinding, Subject, subject_env
 
 PROBE_LOG = ".harness/mutation-probe-log.jsonl"
 Probe = Callable[[Path, str, str, str], tuple[int, str]]
@@ -58,7 +58,7 @@ def run_probe(repo: Path, file: str, lines: str, node: str) -> tuple[int, str]:
         "--test",
         f"uv run pytest {shlex.quote(node)} -q",
     ]
-    proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True)
+    proc = subprocess.run(argv, cwd=repo, env=subject_env(), capture_output=True, text=True)
     return proc.returncode, proc.stdout + proc.stderr
 
 
@@ -87,6 +87,7 @@ def logged_range(rows: Sequence[dict], node: str, target: str, root: Path) -> Pi
 class Check:
     check_id = "mutation_probe_reverify"
     kind = "hybrid"
+    replayable = False  # runs subject tests through the subject's own probe script
 
     def __init__(self, probe: Probe = run_probe):
         self.probe = probe
