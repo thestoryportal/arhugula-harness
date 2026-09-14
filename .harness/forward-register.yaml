@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 242
+  total: 243
   open: 1
   design_substrate_gated: 3
-  registered_finding: 84
+  registered_finding: 85
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 8e695851f736f646
+  identity_digest: 8f43ec0cdccc5d7b
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11518,3 +11518,11 @@ items:
   close_out: 'REGISTERED, not edited: the page lives under `.harness/spec/`, and amending cleared audit prose from an implementation arc is the silent-absorption failure mode (root CLAUDE.md §4.3/§4.4). Extending the extractor alone would turn the store-audit test red on that same page text, so the two land together. WHAT CLOSES THIS ROW: an audit-page amendment through back-flow that drops the "not yet on main" qualifier and adds a writer-exclusion row for the state-transition sidecar, landed with an extractor pattern for the `<name> + ".lock"` idiom so the sidecar is checked rather than invisible.'
   council: 'NO -- a documentation lag on one audit page plus the extractor pattern that would have caught it.'
   heading: '### B-242 · the store audit lags the landed state file, and its lock is invisible to the extractor *(surfaced on u-he-40, 2026-09-14; REGISTERED)*'
+- id: B-243
+  title: 'the codex review channel reports a subscription usage-limit refusal as "empty output", so the cause of a REVIEWER_UNAVAILABLE round never reaches its log'
+  pr: '#TBD (grounded on the u-he-40 arc, 2026-09-14)'
+  status: registered_finding
+  summary: 'On the u-he-40 arc, out-of-family review round 1 at `a1152e0c5` ended REVIEWER_UNAVAILABLE on both channels with the codex reason `attempt 2: empty output`. A direct `codex exec` probe minutes later exited 1 with empty stdout and, on stderr, "You''ve hit your usage limit ... try again at 2:25 AM". The wrapper cannot report that: `run_with_retry` (`tools/review_wrapper_common.py`) builds the recorded reason from `parse_verdict` over stdout alone, which names only the shape that arrived (`empty output`), while stderr feeds only the transient/permanent `classify` call; `tools/codex_review.py` consults stderr only for a conclusive verdict. A quota refusal, a crashed CLI and a genuinely silent reviewer therefore record the same reason, and the transient class spends the immediate re-invocation on a refusal that does not clear for minutes to hours. The same `attempt 2: empty output` reason ended U-HE-39''s review rounds 5-7; whether those were quota refusals is not recoverable from their rows.'
+  close_out: 'REGISTERED, not driven in U-HE-40: the review wrappers are the C-HE-15..C-HE-18 surface, outside this unit''s Files, and the reason text is carried into the C-HE-24 rows every gate-log consumer reads. WHAT CLOSES THIS ROW: when stdout carries no verdict, the unavailable reason names the stderr cause -- a bounded, secret-free excerpt, or a cause class such as `usage-limit` with its reset time -- with a witness that feeds the observed refusal text and asserts it reaches the round log; and a usage-limit refusal does not spend the immediate re-invocation.'
+  council: 'NO -- an observability defect in one wrapper''s reason text, no design tension.'
+  heading: '### B-243 · a codex usage-limit refusal is logged as "empty output" *(grounded on u-he-40, 2026-09-14; REGISTERED)*'
