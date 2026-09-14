@@ -5,8 +5,8 @@ checks, append the C-HE-24 rows, report.
   check [--base REF]  `just mech-check`: the working tree against REF (default origin/main).
                       Exit 1 iff a BLOCKING check reports a warn or hard finding.
   replay CHECK_ID     `just mech-replay`: run CHECK_ID over the last 20 merged arcs (each a
-                      detached worktree of its squash commit, measured once per arc and
-                      checker implementation), then
+                      detached worktree of its squash commit, measured once per arc,
+                      checker implementation and PR body as fetched), then
                       evaluate §4(a). Exit 0 promoted; 1 not promoted (unmeasured, pending
                       adjudication, or a rejected finding).
   demote              `just lanes-verify`: record each blocking check's windows and apply any
@@ -96,18 +96,27 @@ def working_tree_subject(repo: Path, *, base: str, pr_body: PrBody = gh_pr_body)
     )
 
 
+def arc_pr_body(repo: Path, sha: str, pr_body: PrBody = gh_pr_body) -> str | None:
+    """The body of the PR a squash commit's `(#N)` names -- never the current branch's -- or None
+    when the subject names none or gh cannot produce it."""
+    number = SQUASH_SUBJECT.search(_git(repo, "log", "-1", "--format=%B", sha))
+    return pr_body(repo, number.group(1)) if number is not None else None
+
+
+def _body_key(body: str | None) -> str:
+    return "nobody" if body is None else hashlib.sha256(body.encode()).hexdigest()[:16]
+
+
 @contextmanager
-def commit_subject(repo: Path, sha: str, *, pr_body: PrBody = gh_pr_body) -> Iterator[core.Subject]:
+def commit_subject(repo: Path, sha: str, *, body: str | None) -> Iterator[core.Subject]:
     """A merged arc as its squash commit left the tree: a detached worktree of `sha` -- a real
     checkout, so a mutation probe there can verify its restore against the index -- removed on
-    exit. The change is the commit against its first parent. The PR body is read only for the
-    `(#N)` the subject names -- never the current branch's."""
+    exit. The change is the commit against its first parent; `body` is the arc's PR body as the
+    replay fetched it (`arc_pr_body`)."""
     message = _git(repo, "log", "-1", "--format=%B", sha)
-    number = SQUASH_SUBJECT.search(message)
     changed = _paths(_git(repo, "diff", "--name-only", "-z", f"{sha}^", sha))
     universe = _paths(_git(repo, "ls-tree", "-r", "--name-only", "-z", sha))
     diff = _git(repo, "diff", "--unified=0", f"{sha}^", sha)
-    body = pr_body(repo, number.group(1)) if number is not None else None
     with tempfile.TemporaryDirectory(prefix="mech-replay-") as tmp:
         tree = Path(tmp) / "tree"
         _git(repo, "worktree", "add", "--detach", str(tree), sha)
@@ -189,7 +198,15 @@ def replay(
     log = _git(repo, "log", "--first-parent", "--format=%H%x09%s", ref).splitlines()
     shas = select_replay_commits(log, core.WINDOW)
     impl = implementation_digest()
-    arc_ids = [f"replay-{sha[:12]}-{impl}" for sha in shas]
+    bodies = [arc_pr_body(repo, sha, pr_body) for sha in shas]
+    # beyond its commit, an arc id binds the tools tree and the PR body as fetched now -- a body
+    # edited since, or one gh could not fetch last time, re-measures the arc instead of reusing a
+    # result read from other input. Named bound: third-party versions (ruff) stay outside the
+    # key, as implementation_digest states.
+    arc_ids = [
+        f"replay-{sha[:12]}-{impl}-{_body_key(body)}"
+        for sha, body in zip(shas, bodies, strict=True)
+    ]
     measured = {
         r["arc_id"]
         for r in fr.read_rows()
@@ -197,10 +214,12 @@ def replay(
     }
     # an arc already replayed keeps its rows and whatever adjudications they have gathered
     todo = [
-        (sha, arc_id) for sha, arc_id in zip(shas, arc_ids, strict=True) if arc_id not in measured
+        (sha, body, arc_id)
+        for sha, body, arc_id in zip(shas, bodies, arc_ids, strict=True)
+        if arc_id not in measured
     ]
-    for sha, arc_id in todo:
-        with commit_subject(repo, sha, pr_body=pr_body) as subject:
+    for sha, body, arc_id in todo:
+        with commit_subject(repo, sha, body=body) as subject:
             findings = check.run(subject)
         core.emit(
             check.check_id,

@@ -106,7 +106,11 @@ producer module at all (a 3.12-only producer consumed from a stdlib-3.9 venue
 silently no-ops every downstream check), and **lifecycle semantics** — where the
 data goes when its carrier ends (a lease's `unblocked_from` had to be found again
 in the moved-aside `released.*` records after release; the live object is not the
-record's whole life). Instruments: `graft callers` / `graft grep` on the producer symbol
+record's whole life). A third (u-he-40 codex r9): **encoding semantics** — how the producer
+serializes and tokenizes what it writes. A writer shell-quoted a test node into a probe log
+whose producer and every reader split the command on whitespace, so the quoted node's own
+evidence never matched it; match the surface's tokenization, or refuse the inputs it cannot
+carry, rather than adding a second decoder beside the one the producer uses. Instruments: `graft callers` / `graft grep` on the producer symbol
 to read every WRITER's semantics — the meta-rule's blast-radius pass, pointed the
 other way — and `just overlay-query` for the `C-*`/`U-*` contract cites. Record the
 answers in a TABLE, field × semantics. That table IS the test matrix — and the unit
@@ -244,7 +248,11 @@ covers the KEY that looks up a check's evidence: a key coarser than the claim it
 lets one piece of evidence answer for several claims (u-he-40 codex r8: annotations keyed by
 test node and file, dropping the lines each names, so two stacked annotations both
 re-verified the first one's row and the second was never checked). Key evidence by the
-claim's full identity. A sibling shape (u-he-40 codex r2
+claim's full identity. A reuse or cache key is the same rule from the other side: it binds
+EVERY input the cached result read, not just the obvious ones (u-he-40 codex r9, one round
+after this sentence was written: replay results keyed by commit and checker implementation,
+while one check also reads the PR body — mutable, and fetched over a network that can fail —
+so an edited body, or one gh could not fetch last time, kept reusing the stale measurement). A sibling shape (u-he-40 codex r2
 P1): a subprocess exit code that means the WORLD may now be damaged — a mutation probe's
 `3 = restore failure`, a partial-apply code — mapped onto a finding or a warn row. A
 finding is a statement ABOUT the tree; that exit code says the tree may no longer be the

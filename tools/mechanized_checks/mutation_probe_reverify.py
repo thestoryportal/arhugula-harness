@@ -155,6 +155,17 @@ class Check:
     def _verify(
         self, repo: Path, a: Annotation, logged: Pinned | Stale | None
     ) -> list[MechFinding]:
+        # mutation_probe.py and lanes_verify.py both split the logged command on whitespace, so a
+        # node that needs shell quoting has no logged evidence they (or this check) can match
+        if shlex.quote(a.node) != a.node:
+            return [
+                MechFinding(
+                    a.node,
+                    "test node needs shell quoting, which the probe log's whitespace-split "
+                    "command cannot carry -- it can be neither matched nor re-verified",
+                    "a shell-safe test path and name (letters, digits, @%+=:,./-_)",
+                )
+            ]
         if logged is None:
             named = f":{a.lines[0]}-{a.lines[1]}" if a.lines else ""
             return [

@@ -311,7 +311,7 @@ def test_mutation_probe_reverify_pinned_is_clean_and_indeterminate_is_named(tmp_
     assert all("REFUSED: why" in f.evidence for f in found)
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:198-202 drop the restore abort
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:209-213 drop the restore abort
 @pytest.mark.parametrize("rc", [3, -9, 137])  # restore unverified, SIGKILL, a shell's 128+9
 def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch, rc):
     log = tmp_path / "gate.jsonl"
@@ -330,7 +330,7 @@ def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path
     assert not log.exists()  # no finding row stands in for a possibly-mutated tree
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:158-166 drop the unprobed arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:169-177 drop the unprobed arm
 def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("probed without a logged range")).run(
         _probe_fixture(tmp_path, logged=False)
@@ -339,7 +339,7 @@ def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(
     assert "never probed" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:167-175 drop the stale-pin arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:178-186 drop the stale-pin arm
 def test_mutation_probe_reverify_never_probes_a_range_whose_pin_went_stale(tmp_path):
     subject = _probe_fixture(tmp_path, logged=True)
     (tmp_path / "tools" / "x.py").write_text(
@@ -369,6 +369,29 @@ def test_a_logged_range_goes_stale_when_the_test_file_changes(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("re-probed the old range")).run(subject)
     assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_x.py::test_t")]
     assert "no longer pins" in found[0].evidence
+
+
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:160-168 drop the shell-safe guard
+def test_a_node_that_needs_shell_quoting_is_named_not_reported_unprobed(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "x.py").write_text("A = 1\n")
+    test_e = tools / "test_é.py"
+    test_e.write_text("# mutation-probe: tools/x.py:1 drop A\ndef test_t():\n    assert True\n")
+    (tmp_path / ".harness").mkdir()
+    row = {  # the command run_probe itself logs: the node shell-quoted
+        "test": "uv run pytest 'tools/test_é.py::test_t' -q",
+        "file": "tools/x.py",
+        "lines": "1",
+        "rc": 0,
+        "target_sha": pin_scope.digest16((tools / "x.py").read_bytes()),
+        "test_sha": pin_scope.digest16(test_e.read_bytes()),
+    }
+    (tmp_path / ".harness" / "mutation-probe-log.jsonl").write_text(json.dumps(row) + "\n")
+    subject = _subject(tmp_path, changed=["tools/test_é.py"])
+    found = mpr.Check(probe=lambda *a: pytest.fail("probed a node it cannot match")).run(subject)
+    assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_é.py::test_t")]
+    assert "needs shell quoting" in found[0].evidence
 
 
 # mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:119 drop the named-lines match
@@ -684,7 +707,10 @@ def test_subjects_gather_the_change_at_the_edge(tmp_path):
         and live.pr_body is None
     )
 
-    with runner.commit_subject(repo, head, pr_body=lambda repo, ref: "body") as replayed:
+    assert (
+        runner.arc_pr_body(repo, head, pr_body=lambda repo, ref: f"body of #{ref}") == "body of #7"
+    )
+    with runner.commit_subject(repo, head, body="body") as replayed:
         assert replayed.changed == ("a.md",) and replayed.universe == ("a.md",)
         assert (
             replayed.read("a.md") == "two\n"
@@ -712,7 +738,7 @@ def test_subjects_keep_non_ascii_paths_literal(tmp_path):
     live = runner.working_tree_subject(repo, base=base, pr_body=lambda r, ref: None)
     assert live.changed == ("notes_é.md",)
     assert live.changed_texts(".md") == [("notes_é.md", "TBD\n")]
-    with runner.commit_subject(repo, head, pr_body=lambda r, ref: None) as replayed:
+    with runner.commit_subject(repo, head, body=None) as replayed:
         assert replayed.changed == ("notes_é.md",) and "notes_é.md" in replayed.universe
 
 
@@ -743,7 +769,8 @@ class Counting(Canned):
         return []
 
 
-def test_replay_measures_each_arc_once(tmp_path, monkeypatch):
+def _replay_repo(tmp_path: Path, monkeypatch) -> Path:
+    """Three squash-merged arcs (#1..#3); replay windows of two select #3 and #2."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -753,6 +780,11 @@ def test_replay_measures_each_arc_once(tmp_path, monkeypatch):
         _git(repo, "commit", "-qm", f"feat: step {n} (#{n + 1})")
     monkeypatch.setattr(core, "WINDOW", 2)
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "gate.jsonl")
+    return repo
+
+
+def test_replay_measures_each_arc_once(tmp_path, monkeypatch):
+    repo = _replay_repo(tmp_path, monkeypatch)
     check = Counting("stale_carry")
 
     def run() -> core.ReplayVerdict:
@@ -763,6 +795,24 @@ def test_replay_measures_each_arc_once(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "implementation_digest", lambda: "changed-checker")
     assert run() == core.Measured((False, False))
     assert len(check.seen) == 4  # a changed implementation re-measures every arc
+
+
+def test_replay_remeasures_an_arc_whose_pr_body_changed(tmp_path, monkeypatch):
+    repo = _replay_repo(tmp_path, monkeypatch)
+    check = Counting("stale_carry")
+    bodies: dict[str, str | None] = {"2": None, "3": None}  # gh could not fetch either body
+
+    def run() -> core.ReplayVerdict:
+        return runner.replay(
+            repo, check, lane_id="lane-a", ref="HEAD", pr_body=lambda r, ref: bodies[ref]
+        )
+
+    run()
+    run()
+    assert len(check.seen) == 2  # an unchanged body reuses the measurement
+    bodies["3"] = "Ran: `just lint`\n"  # gh recovers for #3 only
+    run()
+    assert len(check.seen) == 3  # #3 re-measured against the body it now has; #2 reused
 
 
 def test_replay_refuses_a_check_that_executes_subject_tests(tmp_path):

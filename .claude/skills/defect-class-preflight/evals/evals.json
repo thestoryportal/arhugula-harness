@@ -518,6 +518,36 @@
     "states the gap against the notes' own promise of an executed assertion — a generic 'static analysis is imprecise' remark does not pass",
     "proposes exempting only a statement position known to run (module level) with fixtures for the guarded and helper cases — requiring the call to be inside a test function does not pass"
    ]
+  },
+  {
+   "id": 32,
+   "eval_name": "reuse-key-omits-a-mutable-input",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/replay_key_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the reuse key as missing an input the cached result read: arcs are keyed by commit and implementation digest, but `unrun_cli` also reads the PR body fetched by `gh pr view`, which is mutable and can fail. Once an arc is measured its body is never fetched again, so a PR body edited to add a failing claim keeps the old clean result eligible for promotion, and an arc measured during a gh outage (body None) stays frozen at that result after gh recovers. The fix binds the key to the body as fetched now (a digest, or a distinct marker for an unavailable body), with a test that changes one arc's body and asserts only that arc is re-measured.",
+   "files": [
+    "fixtures-uhe40/replay_key_notes.md"
+   ],
+   "assertions": [
+    "names the PR body as an input the measurement reads but the reuse key omits — a review that only checks the implementation digest does not pass",
+    "states both consequences: an edited body keeps a stale result, and a body unavailable at first measurement stays frozen after gh recovers — a generic 'cache invalidation is hard' remark does not pass",
+    "proposes binding the key to the fetched body (digest or unavailable marker) with a test re-measuring only the changed arc — dropping the reuse entirely does not pass"
+   ]
+  },
+  {
+   "id": 33,
+   "eval_name": "writer-encoding-diverges-from-surface-tokenization",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/probe_log_quoting_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the writer/reader round trip as broken: `run_probe` shell-quotes the node, and the probe tool logs the command verbatim, but the probe tool and every reader tokenize it with `split()`, which leaves the quotes on the token. A node that needs quoting (a non-ASCII or metacharacter filename) therefore never matches its own logged evidence, and a valid probe is reported as never probed. The fix matches the surface's tokenization rather than adding a private `shlex.split` beside it: refuse nodes that need quoting with a named finding (every other node quotes to itself), with a test whose logged row carries the quoted command.",
+   "files": [
+    "fixtures-uhe40/probe_log_quoting_notes.md"
+   ],
+   "assertions": [
+    "names the quoted node versus the whitespace-split readers as a round-trip mismatch on the logged command — a review that praises the quoting as injection-safe and stops does not pass",
+    "states the consequence: valid evidence for a quoting-requiring node is reported as never probed — 'quoting might confuse parsing' without the false never-probed outcome does not pass",
+    "proposes aligning with the surface's single tokenization (refuse or name unquotable nodes) and a test using the quoted logged command — switching only this reader to shlex.split while the producer still splits on whitespace does not pass"
+   ]
   }
  ]
 }
