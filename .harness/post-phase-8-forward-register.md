@@ -2681,6 +2681,6 @@ same spec leg.
 ### B-242 · the store audit lags the landed state file, and its lock is invisible to the extractor *(surfaced on u-he-40, 2026-09-14; REGISTERED)*
 
 - **What it is.** `.harness/spec/store-audit-he-loop-lanes.md` still heads the state-file row "Mechanized-check runtime state (C-HE-31 §4d; lands with Arc 4, not yet on main)", and its "Transient writer-exclusion + staging artifacts" table has no row for `.harness/mechanized-checks-state.json.lock`, the flock sidecar U-HE-40 added to serialize promotion/demotion transitions.
-- **Why the test is green anyway.** The store-literal extractor does not recognise the `STATE_PATH.name + ".lock"` idiom; at the u-he-40 head it reports only the state file and `.tmp` for `tools/mechanized_checks/core.py`.
+- **Current state.** OPEN against the audit page text and the extractor; `tools/test_store_audit.py` passes at the u-he-40 head only because the store-literal extractor does not recognise the `STATE_PATH.name + ".lock"` idiom; at the u-he-40 head it reports only the state file and `.tmp` for `tools/mechanized_checks/core.py`.
 - **Why it is registered, not edited.** The page lives under `.harness/spec/`; amending cleared audit prose from an implementation arc is the silent-absorption failure mode (root CLAUDE.md §4.3/§4.4), and an extractor pattern alone would turn the test red on that same page.
 - **What closes this row.** A back-flow amendment of the audit page (drop the qualifier; add the writer-exclusion row) landed together with an extractor pattern for the `<name> + ".lock"` idiom.
