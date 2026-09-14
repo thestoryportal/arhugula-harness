@@ -93,15 +93,20 @@ done <<< "$rows"
 # --- 3. C-HE-21: invariants by live carriage, #16 void, checkpoint not cap ---------------
 has "$MG" "the live-carriage rule" 'Invariants bind by live carriage (C-HE-21 §2)'
 has "$MG" "the #16-void statement" '**invariant #16 is void**'
-has "$MG" "#14's carrier" '#14 is C-HE-19'
+# Claims are pinned by their claim text, never by a marker or bare noun: a `- **Kn —` or
+# `recorded-decision checkpoint` needle stays green when the words after it are inverted
+# (U-HE-39 merge-gate witness lens, round 1).
+has "$MG" "#5's live-carrier claim" '**#5 is live** (no verdict inferred from absence)'
+has "$MG" "#14's carrier claim" '**#14 is C-HE-19**: CANCELLED is INCOMPLETE, never green'
 has "$MG" "the no-model-judge-gate refusal" 'No eval-harness / model-judge as a governance gate'
 has_line "$MG" "cited for #5" '## Parsing — fail closed'
 has_line "$SP" "cited for #5" \
   '## Pre-merge gate — CI green + decorrelated 3-lens review (before the merge door)'
 has "$SP" "the live #14 carrier (CANCELLED is INCOMPLETE)" 'INCOMPLETE, never green (C-HE-19)'
-for f in "$MG" "$SP"; do
-  has "$f" "the checkpoint-not-cap statement" 'recorded-decision checkpoint'
-done
+has "$MG" "the checkpoint-not-cap claim" 'recorded-decision checkpoint, not a cap**'
+has "$MG" "the unbounded-continuation claim" 'Continuation is unbounded'
+has "$SP" "the checkpoint-not-cap claim" 'every ten rounds — a checkpoint, never a cap (C-HE-21 §1)'
+has "$SP" "the continue-or-hold claim" 'its recorded answer continues review (unbounded) or holds it'
 
 # --- 4. C-HE-34 non-goals + C-HE-35 K5–K8 dispositions ----------------------------------
 has_line "$SP" "for C-HE-34" '## Non-goals (C-HE-34)'
@@ -111,15 +116,26 @@ has "$SP" "non-goal: no fast mode" 'No fast mode for throughput'
 has "$SP" "non-goal: no agent framework" 'No agent framework'
 has "$SP" "non-goal: no collapsing review layers" 'No collapsing of review layers'
 for k in K5 K6 K7 K8; do
-  has "$MG" "the $k disposition" "- **$k —"
+  has "$MG" "the $k disposition label" "- **$k —"
 done
-has "$MG" "the K6 no-self-suppression rule" \
+# The label alone passes with the disposition inverted; each claim is pinned by its text.
+has "$MG" "K5: alternatives optional, not mandated" \
+  'admissible alternatives are optional, not mandated'
+has "$MG" "K6: a reviewer never self-suppresses" \
   'a reviewer never acquires authority to suppress its own finding'
+has "$MG" "K6: ambiguous scope blocks" 'Ambiguous scope blocks.'
+has "$MG" "K7: deferred until predictiveness is measured" \
+  'routing by arc type and finding class is deferred until their predictiveness is'
+has "$MG" "K8: blocking hook only for fast deterministic checks" \
+  'a blocking post-edit hook is admitted only for fast, deterministic, low-false-positive'
+has "$MG" "K8: not on every intermediate edit" 'not on every intermediate edit'
 
 # --- 5. §8 AC#7: no numeric round cap in any loop skill ----------------------------------
 NUM='([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty)'
-CAP='(^|[^a-z])(max|cap|capped|ceiling)'
-hits=$(grep -EinH -- "${CAP}[^.]{0,20}rounds?[^.]{0,10}[^a-z]${NUM}([^a-z]|$)|${CAP}[^.]{0,40}[^a-z]${NUM} (review |fix )?rounds?([^a-z]|$)" \
+CAP='(^|[^a-z])(max|maximum|cap|capped|ceiling|limit|limited)'
+# Three shapes: "cap ... rounds ... ten", "capped at ten rounds", and number-first
+# "a ten-round limit" (the last added after U-HE-39's witness lens, round 1).
+hits=$(grep -EinH -- "${CAP}[^.]{0,20}rounds?[^.]{0,10}[^a-z]${NUM}([^a-z]|$)|${CAP}[^.]{0,40}[^a-z]${NUM} (review |fix )?rounds?([^a-z]|$)|(^|[^a-z])${NUM}[- ]rounds?[- ](max|maximum|cap|ceiling|limit|threshold)([^a-z]|$)" \
   "$MG" "$SP" "$RC" "$TL"); rc=$?
 if [ "$rc" -gt 1 ]; then
   bad "AC#7: round-cap scan could not run (grep exit $rc)"

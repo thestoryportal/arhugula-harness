@@ -183,14 +183,17 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
   call (B-230 Task 5).** Write each lens's full response to
   `.harness/tmp/merge-gate-lens-<id>.txt` (in-worktree, gitignored — the permission guard
   auto-allows the wrapper only on in-worktree paths) and, once all three files exist, run
-  `just merge-gate-emit-all --pr <PR#> --arc-id <arc-id> --concurrency-json .harness/tmp/merge-gate-lens-concurrency.txt --spec-json .harness/tmp/merge-gate-lens-spec-conformance.txt --witness-json .harness/tmp/merge-gate-lens-witness-adequacy.txt`
+  `HARNESS_LANE_ID=<lane-id> just merge-gate-emit-all --pr <PR#> --arc-id <arc-id> --concurrency-json .harness/tmp/merge-gate-lens-concurrency.txt --spec-json .harness/tmp/merge-gate-lens-spec-conformance.txt --witness-json .harness/tmp/merge-gate-lens-witness-adequacy.txt`
   (`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's
   `arc_id` to `pr-<N>`, which breaks the join N6 and the reservation phase rows key on;
-  U-HE-34 r6). It records concurrency, spec-conformance and witness-adequacy in that
+  U-HE-34 r6. `<lane-id>` is this lane's `.harness/.lane-id` content, typed as a literal:
+  a bare call records the `-nolane` fallback in every row's `lane_id`, which C-HE-24 §6
+  requires to name the lane — every lens row recorded before U-HE-39 carries that
+  fallback). It records concurrency, spec-conformance and witness-adequacy in that
   order, ALWAYS all three (a recorded BLOCK is a result, not an abort), and exits with the
   worst of the three per-lens codes below. **Repair, never re-run:** if one lens exits 2,
   re-run THAT lens and record it alone with the per-lens form
-  `just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
+  `HARNESS_LANE_ID=<lane-id> just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
   — re-running `emit-all` would mint a fresh round for the two lenses that were fine (the
   duplicate-gate-round noise Task 0 measured). There is no resumption: the JSONL is the only
   record, and nothing is skipped on its say-so.

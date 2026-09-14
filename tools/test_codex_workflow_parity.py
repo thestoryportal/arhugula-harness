@@ -936,6 +936,8 @@ def test_merge_gate_honors_operator_authorized_ten_round_checkpoint() -> None:
         assert "eleventh" in merge_gate.lower(), path
         assert "disagreement" in merge_gate, path
         assert "recorded-decision checkpoint" in merge_gate, path
+        # The noun alone survives "the checkpoint is a cap"; pin the negation (U-HE-39 lens r1).
+        assert "not a cap" in merge_gate or "never a cap" in merge_gate, path
         assert "capped at ten" not in merge_gate.lower(), path
         assert "cap this at ten" not in merge_gate.lower(), path
         assert "cap automatic fix/re-gate at ten" not in merge_gate.lower(), path

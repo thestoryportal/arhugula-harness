@@ -230,7 +230,12 @@ load-bearing line were deleted or inverted, does this test actually red?* Traps 
 repeatedly: presence-check standing in for behavior (asserting a variable is set, not
 that the writer honors it); a witness that dies before reaching its discriminating
 assertion (KeyError before the emit); a child process that never instantiates the
-thing under test; an assertion after an early return. Where feasible, actually run the
+thing under test; an assertion after an early return; and, in a doc or prose witness, a
+needle on a list marker, heading or label (`- **K5 —`, a bare `checkpoint`) instead of the
+claim text after it — invert the claim, keep the marker, and the test stays green (U-HE-39,
+merge-gate witness lens r1: three of four dispositions pinned only by their bullet). For a
+doc witness the mutation to reason is *negate the sentence*, not *delete the line*. Where
+feasible, actually run the
 mutation probe (`just mutation-probe`) rather than reasoning it — and probe the fix
 BOTH ways (kill confirmed, then green restored).
 
