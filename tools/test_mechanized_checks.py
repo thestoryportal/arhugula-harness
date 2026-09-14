@@ -371,7 +371,7 @@ def test_a_logged_range_goes_stale_when_the_test_file_changes(tmp_path):
     assert "no longer pins" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:160-168 drop the shell-safe guard
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:160-168 drop the shell-safe arm
 def test_a_node_that_needs_shell_quoting_is_named_not_reported_unprobed(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
