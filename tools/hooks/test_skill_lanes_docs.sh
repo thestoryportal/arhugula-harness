@@ -50,6 +50,11 @@ has_line() {
 # $1 = file: the file as one line, every run of newlines/tabs/spaces collapsed to one space.
 flat() { tr '\n\t' '  ' < "$1" | tr -s ' '; }
 
+# $1 = flattened text, $2 = grep flags, $3 = pattern. Prints every match; returns grep's own
+# status (0 hit, 1 none, >= 2 could not run). No `head`: a closed pipe would SIGPIPE grep and
+# turn a real hit into a false 'could not run'.
+scan_flat() { printf '%s' "$1" | grep -o $2 -- "$3"; return "${PIPESTATUS[1]}"; }
+
 file_of() {
   case "$1" in
     TL) printf '%s' "$TL" ;; RC) printf '%s' "$RC" ;;
@@ -60,7 +65,10 @@ file_of() {
 
 # --- 1. Whole claims (C-HE-01, C-HE-21, C-HE-34, C-HE-35) ---------------------------------
 # One claim per line, `KEY|full sentence as it reads with whitespace flattened`.
-FLAT_TL=$(flat "$TL"); FLAT_RC=$(flat "$RC"); FLAT_MG=$(flat "$MG"); FLAT_SP=$(flat "$SP")
+FLAT_TL=$(flat "$TL") || bad "two-lane: could not read the carrier to flatten it"
+FLAT_RC=$(flat "$RC") || bad "roadmap-continue: could not read the carrier to flatten it"
+FLAT_MG=$(flat "$MG") || bad "merge-gate: could not read the carrier to flatten it"
+FLAT_SP=$(flat "$SP") || bad "ship-pr: could not read the carrier to flatten it"
 EXPECTED_CLAIMS=30
 seen=0
 while IFS='|' read -r key claim; do
@@ -130,21 +138,28 @@ fi
 # Three shapes: the all-caps literal `TWO` the old description carried; a digit `N=2`, `N ≤ 2`
 # or `N <= 2`; and a qualifier-phrased cap in ordinary prose — "only two lanes", "at most 2
 # arcs", "two lanes at most" (U-HE-39 witness lens, round 4). Bare lowercase "two" is NOT
-# matched on purpose: the pairwise A/B walkthrough uses it legitimately.
+# matched on purpose: the pairwise A/B walkthrough uses it legitimately. Every scan runs over
+# the flattened carrier, so a cap wrapped across a line break is one string (gemini failover,
+# round 5).
 # RESIDUAL, by construction: a cap stated with neither a qualifier nor a number ("a pair of
 # lanes") is outside what a pattern can see. Section 1 still pins the N ≥ 2 statement itself.
 QUAL='(only|at most|no more than|up to|a maximum of|maximum of|limited to|capped at)'
-for f in "$TL" "$RC"; do
-  # grep exit 1 = no match; exit >= 2 = the scan did not run, which must never read as clean.
-  two=$(grep -nw 'TWO' "$f"); r1=$?
-  neq=$(grep -nE '(^|[^0-9A-Za-z])N ?(=|≤|<=) ?2([^0-9]|$)' "$f"); r2=$?
-  qual=$(grep -niE "(^|[^a-z])${QUAL} (two|2) (concurrent |parallel )?(lanes?|arcs?)([^a-z]|$)|(^|[^a-z0-9])(two|2) (lanes?|arcs?) (at most|maximum|max)([^a-z]|$)" "$f"); r3=$?
+for key in TL RC; do
+  case "$key" in TL) hay=$FLAT_TL ;; RC) hay=$FLAT_RC ;; esac
+  name=$(skill "$(file_of "$key")")
+  if [ -z "$hay" ]; then
+    bad "$name: two-lane-cap scan could not run (carrier unreadable)"
+    continue
+  fi
+  two=$(scan_flat "$hay" '-w' 'TWO'); r1=$?
+  neq=$(scan_flat "$hay" '-E' '(^|[^0-9A-Za-z])N ?(=|≤|<=) ?2([^0-9]|$)'); r2=$?
+  qual=$(scan_flat "$hay" '-iE' "(^|[^a-z])${QUAL} (two|2) (concurrent |parallel )?(lanes?|arcs?)([^a-z]|$)|(^|[^a-z0-9])(two|2) (lanes?|arcs?) (at most|maximum|max)([^a-z]|$)"); r3=$?
   if [ "$r1" -gt 1 ] || [ "$r2" -gt 1 ] || [ "$r3" -gt 1 ]; then
-    bad "$(skill "$f"): two-lane-cap scan could not run (grep exit $r1/$r2/$r3)"
+    bad "$name: two-lane-cap scan could not run (grep exit $r1/$r2/$r3)"
   elif [ -n "$two$neq$qual" ]; then
-    bad "$(skill "$f") states a two-lane cap: $(printf '%s %s %s' "$two" "$neq" "$qual" | cut -c1-160)"
+    bad "$name states a two-lane cap: $(printf '%s %s %s' "$two" "$neq" "$qual" | cut -c1-160)"
   else
-    ok "$(skill "$f") states no two-lane cap"
+    ok "$name states no two-lane cap"
   fi
 done
 
@@ -171,18 +186,27 @@ done <<< "$rows"
 # --- 5. §8 AC#7: no numeric round cap in any loop skill ----------------------------------
 NUM='([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty)'
 CAP='(^|[^a-z])(max|maximum|cap|capped|ceiling|limit|limited)'
-# Three shapes: "cap ... rounds ... ten", "capped at ten rounds", and number-first
-# "a ten-round limit" (the last added after U-HE-39's witness lens, round 1).
-hits=$(grep -EinH -- "${CAP}[^.]{0,20}rounds?[^.]{0,10}[^a-z]${NUM}([^a-z]|$)|${CAP}[^.]{0,40}[^a-z]${NUM} (review |fix )?rounds?([^a-z]|$)|(^|[^a-z])${NUM}[- ]rounds?[- ](max|maximum|cap|ceiling|limit|threshold)([^a-z]|$)" \
-  "$MG" "$SP" "$RC" "$TL"); rc=$?
-if [ "$rc" -gt 1 ]; then
-  bad "AC#7: round-cap scan could not run (grep exit $rc)"
-elif [ -z "$hits" ]; then
-  ok "AC#7: no numeric round cap in the loop skills"
-else
-  bad "AC#7: numeric round cap found:"
-  printf '%s\n' "$hits" | cut -c1-200 | sed 's/^/      /'
-fi
+# Five shapes, each matched over the flattened carrier so a wrapped cap is one string:
+# "cap ... rounds ... ten"; "capped at ten rounds"; number-first "a ten-round limit" (lens
+# round 1); and a qualifier-phrased "no more than / at most / up to ten rounds" or "ten rounds
+# at most", reusing section 3's QUAL (lens round 5; flattening: gemini failover, round 5).
+RCAP="${CAP}[^.]{0,20}rounds?[^.]{0,10}[^a-z]${NUM}([^a-z]|$)|${CAP}[^.]{0,40}[^a-z]${NUM} (review |fix )?rounds?([^a-z]|$)|(^|[^a-z])${NUM}[- ]rounds?[- ](max|maximum|cap|ceiling|limit|threshold)([^a-z]|$)|(^|[^a-z])${QUAL} ${NUM} (review |fix |fix-and-re-gate )?rounds?([^a-z]|$)|(^|[^a-z])${NUM} rounds? (at most|maximum|max)([^a-z]|$)"
+for key in MG SP RC TL; do
+  case "$key" in MG) hay=$FLAT_MG ;; SP) hay=$FLAT_SP ;; RC) hay=$FLAT_RC ;; TL) hay=$FLAT_TL ;; esac
+  name=$(skill "$(file_of "$key")")
+  if [ -z "$hay" ]; then
+    bad "$name: AC#7 round-cap scan could not run (carrier unreadable)"
+    continue
+  fi
+  hit=$(scan_flat "$hay" '-iE' "$RCAP"); rc=$?
+  if [ "$rc" -gt 1 ]; then
+    bad "$name: AC#7 round-cap scan could not run (grep exit $rc)"
+  elif [ -n "$hit" ]; then
+    bad "$name: AC#7 numeric round cap found: $(printf '%s' "$hit" | cut -c1-160)"
+  else
+    ok "$name: AC#7 no numeric round cap"
+  fi
+done
 
 # --- 6. The lane-id prefix on every documented lane-attributed command --------------------
 # merge_gate_log.py and arc_metrics.py fall back to a synthesized lane id when HARNESS_LANE_ID
