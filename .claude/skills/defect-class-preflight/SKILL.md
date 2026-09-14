@@ -97,7 +97,8 @@ versioning does it carry, and must the consumer honor it? which `C-*` contract (
 any) governs it? Evidence read back from a log or cache is bound to the bytes or
 implementation that produced it, or it measures something else (u-he-40 codex r3, twice: a
 logged probe line range reused after the code moved, a cached replay result reused after the
-checker changed). Two dimensions field-level inventories measurably miss (u-he-33,
+checker changed; round 4 found two more — replay rows re-measuring history advanced the LIVE
+demotion windows, and a digest of the check's own module missed the modules it delegates to). Two dimensions field-level inventories measurably miss (u-he-33,
 2 P1s): **venue semantics** — which interpreters/venues can IMPORT or reach the
 producer module at all (a 3.12-only producer consumed from a stdlib-3.9 venue
 silently no-ops every downstream check), and **lifecycle semantics** — where the
@@ -337,9 +338,15 @@ itself). Parse each claim into a pinned argv — exact arity, enumerated verbs a
 denylist derived from the file that defines it and pinned by a test — never a token
 character class followed by `*`. A test-running shape is never read-only here: a named test
 can be a billed live e2e run with inherited credentials (u-he-40 codex r3 P1) — allowlist
-exact provider-free commands instead of admitting a grammar.
+exact provider-free commands instead of admitting a grammar. And pinning a command NAME is not
+pinning what runs: a recipe, script, alias or config file the subject tree defines is
+subject-controlled (u-he-40 codex r4 P1: an allowlisted `just lint` ran whatever the subject's
+justfile said), so an executor runs trusted tooling from its own environment against the
+subject — never the subject's recipe bodies.
 
 ### 12. A quoted contract phrase with no line behind it (added U-SR-01; both of the u-he-35 arc's P1s)
+*(u-he-40 codex r4: a docstring quoted C-HE-31 §4(b)'s "rolling" windows over code that cut
+fixed partitions counted from promotion — the adjective was the undischarged phrase.)*
 Fires whenever the diff QUOTES a contract — a spec phrase in a docstring, a
 requirement copied into a verification-manifest row, a comment restating what the
 code guarantees. Ask it per phrase: *which line discharges this?* Name that line. An

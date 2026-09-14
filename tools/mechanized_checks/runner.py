@@ -19,7 +19,7 @@ checks, append the C-HE-24 rows, report.
 from __future__ import annotations
 
 import argparse
-import inspect
+import hashlib
 import re
 import subprocess
 import sys
@@ -31,7 +31,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import finding_record as fr
-import pin_scope
 import review_wrapper_common as rwc
 
 from mechanized_checks import CHECKS, core
@@ -145,7 +144,13 @@ def run_checks(
     for check in checks:
         findings = check.run(subject)
         core.emit(
-            check.check_id, check.kind, findings, arc_id=arc_id, lane_id=lane_id, head_sha=head_sha
+            check.check_id,
+            check.kind,
+            findings,
+            arc_id=arc_id,
+            lane_id=lane_id,
+            head_sha=head_sha,
+            lineage="fresh",
         )
         mode = "blocking" if isinstance(state[check.check_id], core.Blocking) else "advisory"
         print(f"{check.check_id} [{check.kind}, {mode}]: {len(findings)} finding(s)")
@@ -155,11 +160,15 @@ def run_checks(
     return int(blocking > 0)
 
 
-def implementation_digest(check: core.Check) -> str:
-    """The bytes of the module defining the check. Replay evidence and its adjudications belong
-    to the implementation that produced them, so a changed checker is measured afresh rather
-    than promoted on an older implementation's rows."""
-    return pin_scope.digest16(Path(inspect.getfile(type(check))).read_bytes())
+def implementation_digest() -> str:
+    """The tools tree the runner imports from -- the check modules AND everything they delegate
+    to (lanes_verify, pin_scope, finding_record, ...). Replay evidence and its adjudications
+    belong to the implementation that produced them, so any change there re-measures every arc.
+    Named bound: third-party libraries (jsonschema) are outside the digest."""
+    h = hashlib.sha256()
+    for path in sorted((core.REPO / "tools").rglob("*.py")):
+        h.update(path.relative_to(core.REPO).as_posix().encode() + b"\0" + path.read_bytes())
+    return h.hexdigest()[:16]
 
 
 def replay(
@@ -172,7 +181,7 @@ def replay(
 ) -> core.ReplayVerdict:
     log = _git(repo, "log", "--first-parent", "--format=%H%x09%s", ref).splitlines()
     shas = select_replay_commits(log, core.WINDOW)
-    impl = implementation_digest(check)
+    impl = implementation_digest()
     arc_ids = [f"replay-{sha[:12]}-{impl}" for sha in shas]
     measured = {
         r["arc_id"]
@@ -187,7 +196,13 @@ def replay(
         with commit_subject(repo, sha, pr_body=pr_body) as subject:
             findings = check.run(subject)
         core.emit(
-            check.check_id, check.kind, findings, arc_id=arc_id, lane_id=lane_id, head_sha=sha
+            check.check_id,
+            check.kind,
+            findings,
+            arc_id=arc_id,
+            lane_id=lane_id,
+            head_sha=sha,
+            lineage="replay",
         )
     return core.replay_verdict(fr.read_rows(), check.check_id, arc_ids)
 

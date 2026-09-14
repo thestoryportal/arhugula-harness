@@ -1,15 +1,17 @@
 """unrun-CLI claims (C-HE-31 §1, deterministic): a command named on a `Verified:` / `Checked:` /
 `Ran:` line is re-run, and must exit 0 AND print something before it counts as clean.
 
-The claim text is authored in a commit message or PR body, so it never chooses what runs: only
-an exact allowlist of provider-free static checks is re-run -- the ruff and pyright recipes the
-`codex-check` gate already chains. Every other claim, test runs included (a named test can be a
-billed live e2e with inherited credentials), is reported as not re-run -- never run."""
+The claim text is authored in a commit message or PR body, so it never chooses what runs: a claim
+naming one of two provider-free static checks is re-run as THIS interpreter's own ruff against the
+subject tree -- never through the subject's justfile, whose recipe bodies the subject controls.
+Ruff reads the subject's configuration and never executes its code. Every other claim, test runs
+included (a named test can be a billed live e2e), is reported as not re-run -- never run."""
 
 from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,20 +19,19 @@ from .core import MechFinding, Subject
 
 CLAIM_LINE = re.compile(r"^(?:Verified|Checked|Ran):[ \t]*(?P<rest>.*)$", re.M | re.I)
 COMMAND = re.compile(r"`(?P<cmd>(?:just|uv run) [^`]+)`")
-#: Claim text -> the argv re-run for it. Each recipe body is one ruff or pyright invocation
-#: (`test_rerun_allowlist_is_static_checks_only` pins the bodies to the justfile).
+#: Claim text -> the trusted argv re-run for it (the command the workspace recipe of that name
+#: runs, taken from this harness's own environment rather than from the subject tree).
 RERUN: dict[str, tuple[str, ...]] = {
-    "just lint": ("just", "lint"),
-    "just fmt-check": ("just", "fmt-check"),
-    "just typecheck": ("just", "typecheck"),
+    "just lint": (sys.executable, "-m", "ruff", "check", "."),
+    "just fmt-check": (sys.executable, "-m", "ruff", "format", "--check", "."),
 }
 Execute = Callable[[list[str], Path], tuple[int, str]]
 
 
 def execute_argv(argv: list[str], cwd: Path) -> tuple[int, str]:
-    """An allowlisted argv, never a shell string."""
-    # bounds a hung linter only: these are the static passes `codex-check` already runs in
-    # sequence ahead of its test suites, so a normal run finishes far inside 30 min
+    """A trusted argv, never a shell string."""
+    # bounds a hung linter only: a ruff pass over this repo is one of the static steps
+    # `codex-check` runs ahead of its test suites, so a normal run finishes far inside 30 min
     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=1800)
     return proc.returncode, proc.stdout + proc.stderr
 

@@ -97,6 +97,7 @@ def emit(
     arc_id: str,
     lane_id: str,
     head_sha: str | None,
+    lineage: Literal["fresh", "replay"],
 ) -> list[dict]:
     """C-HE-24 rows with `producer=<check_id>`. A clean run writes one `no_finding` marker, so
     "ran and found nothing" stays distinguishable from "never ran" -- §5 measures a class by
@@ -111,7 +112,7 @@ def emit(
             "expected_contract": f.expected,
             "severity": f.severity,
             "finding_type": f"mechanized-{kind}",
-            "lineage_claim": "fresh",
+            "lineage_claim": lineage,
             "producer": check_id,
         }
         return core, fr.Envelope(record_kind, ts, arc_id, lane_id, head_sha, None, None, None)
@@ -253,10 +254,11 @@ def evaluate_promotion(check_id: str, replay_rejected: Sequence[bool]) -> bool:
 
 
 def rejected_windows(rows: Sequence[dict], check_id: str, *, since: str) -> list[int]:
-    """§4(b)'s rolling windows: the arcs this check observed at or after `since` (its promotion)
-    in first-observation order, cut into consecutive non-overlapping WINDOW-arc windows, each
-    counting the findings whose latest disposition is `rejected`. A trailing partial window is
-    not yet a window."""
+    """§4(b)'s rolling windows: the arcs this check observed LIVE at or after `since` (its
+    promotion), in first-observation order, cut into consecutive non-overlapping WINDOW-arc
+    windows that END at the latest arc -- the oldest partial window is the one dropped, so the
+    last two entries are always the two most recent windows. Replay observations re-measure
+    history and never advance a window."""
     rejected = Counter(r["arc_id"] for r in _mine(rows, check_id) if r["disposition"] == "rejected")
     arcs = list(
         dict.fromkeys(
@@ -264,11 +266,12 @@ def rejected_windows(rows: Sequence[dict], check_id: str, *, since: str) -> list
             for r in rows
             if r.get("producer") == check_id
             and r["record_kind"] in OBSERVATION_KINDS
+            and r["lineage_claim"] == "fresh"
             and r["ts"] >= since
         )
     )
-    complete = len(arcs) - len(arcs) % WINDOW
-    return [sum(rejected[a] for a in arcs[i : i + WINDOW]) for i in range(0, complete, WINDOW)]
+    recent = arcs[len(arcs) % WINDOW :]
+    return [sum(rejected[a] for a in recent[i : i + WINDOW]) for i in range(0, len(recent), WINDOW)]
 
 
 def demotion_due(state: CheckState, windows: Sequence[int]) -> bool:

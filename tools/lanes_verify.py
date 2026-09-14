@@ -634,9 +634,8 @@ def default_probe_target(test_artifact: str) -> str:
     return str(p.with_name(p.name.removeprefix("test_")))
 
 
-def _pin_is_live(e: dict, target: str, probe_file: str, root: Path | None = None) -> bool:
-    """A PINNED entry is evidence only while the bytes it measured are the bytes at `root`
-    (HEAD's tree by default; a replay worktree for the mechanized re-verify check).
+def _pin_is_live(e: dict, target: str, probe_file: str) -> bool:
+    """A PINNED entry is evidence only while the bytes it measured are the bytes at HEAD.
     Which bytes is the row's `pin_scope` (U-SR-09 b1; `pin_scope.py` owns the theorem):
     `file` (absent -- every pre-U-SR-09 row) -- the mutated source file (`file` +
     `target_sha`) AND the test artifact (`test_sha`) must both still digest to the logged
@@ -646,24 +645,23 @@ def _pin_is_live(e: dict, target: str, probe_file: str, root: Path | None = None
     unknown scope never counts. The probed file must be THE annotated target (`probe_file`),
     an existing source file -- never the test artifact itself, never an unrelated module
     (codex R3/R4 P2)."""
-    root = root or REPO  # resolved AT CALL TIME: tests redirect REPO after import
     tsha, fsha = e.get("target_sha"), e.get("test_sha")
     if not tsha or not fsha or not e.get("file"):
         return False
     src = Path(_relative(str(e["file"])))
     test_file = Path(target.split("::", 1)[0])
-    if src == test_file or str(src) != probe_file or not (root / src).is_file():
+    if src == test_file or str(src) != probe_file or not (REPO / src).is_file():
         return False
     scope = e.get("pin_scope", pin_scope.PIN_SCOPE_FILE)
     if scope == pin_scope.PIN_SCOPE_FILE:
-        return _sha16(root / src) == tsha and _sha16(root / test_file) == fsha
+        return _sha16(REPO / src) == tsha and _sha16(REPO / test_file) == fsha
     pin = pin_scope.BlockPin.from_row(e, target) if scope == pin_scope.PIN_SCOPE_BLOCK else None
     if pin is None:
         return False
     try:
         # bytes -> decode, NOT read_text(): universal newlines would turn a CRLF source's
         # block into LF and never match the producer's digest (codex u-sr-09 r4)
-        return pin.live((root / src).read_bytes().decode("utf-8"), (root / test_file).read_bytes())
+        return pin.live((REPO / src).read_bytes().decode("utf-8"), (REPO / test_file).read_bytes())
     except (OSError, UnicodeDecodeError):
         return False
 

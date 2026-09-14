@@ -4,9 +4,10 @@ evidence. Mutation-probe-backed: minutes per annotation, never shipped as "low-r
 
 The line range comes from `.harness/mutation-probe-log.jsonl`, which `tools/mutation_probe.py`
 appends on every exit: that log is the one record of which lines an annotation's mutation
-removes, so this check keeps no second map of it. A logged range is re-run only while its pin
-still matches the bytes it measured (`lanes_verify._pin_is_live`): code that moved since the
-probe is reported stale, never probed at numbers that now name other lines."""
+removes, so this check keeps no second map of it. A logged range is re-run only while the probed
+file still digests to the row's `target_sha` -- the exact bytes whose line numbers it recorded;
+code that changed since the probe is reported stale, never probed at numbers that now name
+other lines."""
 
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-import lanes_verify as lv  # [LAW:one-source-of-truth] annotation grammar + pin liveness live there
+import lanes_verify as lv  # [LAW:one-source-of-truth] the annotation grammar lives there
 import pin_scope
 
 from .core import MechFinding, Subject
@@ -77,7 +78,9 @@ def logged_range(rows: Sequence[dict], node: str, target: str, root: Path) -> Pi
     if not pinned:
         return None
     last = pinned[-1]
-    live = lv._pin_is_live(last, node, target, root=root)
+    path = root / target
+    # the recorded line numbers name these lines only in the exact bytes the probe measured
+    live = path.is_file() and pin_scope.digest16(path.read_bytes()) == last.get("target_sha")
     return Pinned(last["lines"]) if live else Stale(last["lines"])
 
 

