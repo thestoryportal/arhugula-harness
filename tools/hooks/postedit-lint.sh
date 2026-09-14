@@ -4,6 +4,7 @@
 # edit, parse-check that file with pyyaml instead. NON-BLOCKING by design
 # (PostToolUse cannot undo — it only informs; the Stop gate / CI ruff + ledger jobs
 # are the hard enforcement). Silent when the file is clean. Bounded so it can't hang.
+# Advisory by contract (C-HE-31 §3): findings only, never a blocking exit per edit.
 #
 # Trigger: PostToolUse, matcher "Edit|Write|MultiEdit". Early-exits for every other
 # extension. The .py branch prefers a `ruff` on PATH; falls back to `uv run ruff`.

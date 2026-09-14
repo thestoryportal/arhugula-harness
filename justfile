@@ -313,7 +313,20 @@ mutation-probe *ARGS:
 # tools/lanes_verify.py owns the manifest as data; rows are appended by the unit
 # that lands each artifact. `lanes-verify` runs every row.
 lanes-verify:
+    uv run python tools/mechanized_checks/runner.py demote
     uv run python tools/lanes_verify.py verify
+
+# C-HE-31 §3: the mechanized defect-class checks, sited at the stable boundary only
+# (pre-commit / pre-review / pre-PR) -- never a blocking per-edit hook. Exit 1 iff a
+# BLOCKING check reports a warn/hard finding; every check ships advisory. Rows carry
+# the arc/lane only when prefixed: HARNESS_ARC_ID=<arc> HARNESS_LANE_ID=<lane> just mech-check
+mech-check base="origin/main":
+    uv run python tools/mechanized_checks/runner.py check --base {{base}}
+
+# C-HE-31 §4(a): replay one check over the last 20 merged arcs (once per arc), then
+# promote on zero rejected. Replay findings need finding_adjudication rows first.
+mech-replay check_id:
+    uv run python tools/mechanized_checks/runner.py replay {{check_id}}
 
 # Phase-0 gate: every phase0 row must PASS at HEAD; a skip counts as NOT passed
 # (C-HE-13 §1). Consumed by the mechanical pilot gate.

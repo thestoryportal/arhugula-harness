@@ -1,0 +1,30 @@
+{
+  "cited_symbol_exists": {
+    "mode": "advisory",
+    "windows": []
+  },
+  "delta_chain_drift": {
+    "mode": "advisory",
+    "windows": []
+  },
+  "mutation_probe_reverify": {
+    "mode": "advisory",
+    "windows": []
+  },
+  "stale_carry": {
+    "mode": "advisory",
+    "windows": []
+  },
+  "test_double_fidelity": {
+    "mode": "advisory",
+    "windows": []
+  },
+  "unrun_cli": {
+    "mode": "advisory",
+    "windows": []
+  },
+  "unswept_consumers": {
+    "mode": "advisory",
+    "windows": []
+  }
+}

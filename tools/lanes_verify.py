@@ -460,6 +460,19 @@ MANIFEST: list[Row] = [
     # C-HE-30 (U-HE-14)
     # spec §8.1: mutation-probe `—` (static doc witness; no deletion-expressible target)
     Row("C-HE-30", "pytest:tools/test_store_audit.py", "phase0", "local + CI", False),
+    # C-HE-31 (U-HE-40) — mechanized defect-class checks: per-class defect and clean
+    # fixtures, the two hybrid classes' false-claim detection, emission and the replay
+    # verdict. layer2: the hybrid classes are mutation-probe-backed (minutes, not phase0).
+    Row("C-HE-31", "pytest:tools/test_mechanized_checks.py", "layer2", "local + CI", True),
+    # C-HE-31 §4 — the promotion/demotion state machine: mechanism correctness only, not
+    # evidence the thresholds are calibrated.
+    Row(
+        "C-HE-31 §4",
+        "pytest:tools/test_mechanized_checks.py::test_promotion_demotion_state_machine",
+        "layer2",
+        "local + CI",
+        False,
+    ),
     # C-HE-01/14/21/34/35 (U-HE-39) — skill-carrier doc sweep: N ≥ 2 lane model, the
     # C-HE-14 table byte-exact, live-carrier invariant cites, non-goals, K5–K8, and the
     # §8 AC#7 no-numeric-round-cap scan. mutation-probe `—`: markdown skill prose, the

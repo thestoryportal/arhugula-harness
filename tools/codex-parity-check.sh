@@ -41,6 +41,7 @@ tools/test_concurrency_surface.py \
   tools/test_lanes_verify.py \
   tools/test_lanes_pilot_gate.py \
   tools/test_main_protection.py \
+  tools/test_mechanized_checks.py \
   tools/test_merge_door.py \
   tools/test_merge_gate_log.py \
   tools/test_merge_gate_emit_all.py \
@@ -68,6 +69,11 @@ tools/test_concurrency_surface.py \
   tools/test_sandbox_host_readiness.py \
   tools/test_self_hosted_readiness.py \
   tools/test_tools_test_coverage_guard.py
+
+# C-HE-31 §4(b): CI is one of the demotion evaluation sites. Read-only here -- CI state does
+# not persist -- so a blocking check whose windows already require demotion fails the gate
+# until `just lanes-verify` records the demotion.
+uv run python tools/mechanized_checks/runner.py demotion-due
 
 # tools/roadmap-audit/ is named explicitly alongside the other two dirs: pytest's
 # testpaths does not reach tools/, so a shell suite that is not listed here simply never
