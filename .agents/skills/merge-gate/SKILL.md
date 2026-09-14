@@ -152,9 +152,10 @@ there is no resumption — the JSONL is the only record).
   (the prefix is REQUIRED for the guard's auto-allow and holder-bound to this lane's
   live reservation; actor must differ from the lens producer, write-time enforced).
   The `finding_id` is on the emitted JSONL row. Exit 2 = not recorded; re-run.
-- Cap automatic fix/re-gate at ten rounds (operator decision, 2026-08-01). An eleventh
+- Automatic fix/re-gate pauses at a recorded-decision checkpoint every ten rounds (period by
+  operator decision, 2026-08-01; a checkpoint, not a cap, under C-HE-21 §1). An eleventh
   substantive disagreement is a genuine decision point; surface all verdicts together
-  rather than looping or choosing silently.
+  rather than looping or choosing silently, and continue only on a recorded decision.
 
 Commit and push the gate-log row before merge, then wait for CI on that final PR HEAD to be
 green. The log-only commit does not require re-running approved lenses, but any code, test,
