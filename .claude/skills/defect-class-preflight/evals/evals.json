@@ -368,6 +368,36 @@
     "explains why the existing substring assert cannot discriminate: `just widget-emit` is present whether or not the prefix is — noting only that the test is 'weak' or 'old' does not pass",
     "proposes a witness that pins the prefixed form in BOTH carriers and also fails on a remaining bare `just widget-emit` line — a single-carrier pin, or a presence check with no bare-copy check, does not pass"
    ]
+  },
+  {
+   "id": 22,
+   "eval_name": "claim-executor-grammar-admits-authority",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/claim_rerun_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the grammar as admitting commands beyond read-only verification: the trailing `(?: {TOKEN})*` lets `just lint-check fmt` or `just lint-check protection-rollback` run further recipes (just runs extra tokens as recipe names), `uv run pytest --basetemp=<dir>` deletes that directory, and `just claims-check` matches `*-check` and re-enters the checker on the same claim. The fix parses each claim into a pinned argv (one recipe token, enumerated pytest flags, the checker's own recipes denied by a set pinned to the justfile) with a refused-shape test per hole.",
+   "files": [
+    "fixtures-uhe40/claim_rerun_notes.md"
+   ],
+   "assertions": [
+    "names the trailing-token hole with a concrete multi-recipe example (a `*-check` recipe followed by another recipe name that then runs) — a generic 'the regex is too permissive' does not pass",
+    "names the recursion: `just claims-check` matches the grammar and re-runs the checker on the same claim — a review that misses it does not pass",
+    "proposes pinning the argv shape (exact arity, enumerated flags, a denylist of the checker's own recipes) with a refused-shape test per hole — a fix that only escapes shell metacharacters does not pass"
+   ]
+  },
+  {
+   "id": 23,
+   "eval_name": "restore-failure-exit-mapped-to-finding",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/probe_wrapper_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming exit 3 as folded into the `warn` indeterminate finding: exit 3 means the probed source file may still be mutated, so continuing — further probes, the remaining checks, an exit 0 in advisory mode — runs everything after it against a possibly damaged tree and reports success. The run must abort on exit 3 whatever the mode, preserving the probe's output (discarded today by `capture_output` + `.returncode`), with a test that feeds exit 3 and asserts the run stops and writes no finding.",
+   "files": [
+    "fixtures-uhe40/probe_wrapper_notes.md"
+   ],
+   "assertions": [
+    "names exit 3 (restore failure) as wrongly mapped to the same warn finding as exit 2 — a review that only asks for 'better handling of non-zero exit codes' does not pass",
+    "explains the consequence: later probes and checks run against a possibly mutated tree while advisory mode still exits 0 — noting only that the severity is too low does not pass",
+    "proposes aborting the whole run on exit 3 whatever the mode, preserving the subprocess output, with a test that feeds exit 3 — raising the finding's severity to hard does not pass"
+   ]
   }
  ]
 }

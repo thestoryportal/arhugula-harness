@@ -222,7 +222,12 @@ statement; route the failure to ONE loud enforcement point instead. Rider for
 DETECTION/ENFORCEMENT surfaces: any input that can SUPPRESS a check (an attestation
 set, an exemption list, an allowlist, a dedupe key) is itself attack surface —
 sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
-forged entries) before trusting it to mute anything.
+forged entries) before trusting it to mute anything. A sibling shape (u-he-40 codex r2
+P1): a subprocess exit code that means the WORLD may now be damaged — a mutation probe's
+`3 = restore failure`, a partial-apply code — mapped onto a finding or a warn row. A
+finding is a statement ABOUT the tree; that exit code says the tree may no longer be the
+one under review, so it must abort the whole run (advisory mode included) with the
+subprocess output preserved, never ride the channel an ordinary result rides.
 
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
@@ -311,6 +316,16 @@ input) in a table with its pinning authority (enum, identity set, holder state,
 ask-gate), and close them ALL in that absorption. The sibling sweep's unit is the
 mechanism's whole authority surface, never the literal flagged shape — otherwise
 the reviewer walks the remaining dimensions one full round each.
+**Executor surfaces fire this class too (u-he-40 codex r2: two findings on one grammar).**
+A diff that adds a check or tool which EXECUTES command text taken from authored input — a
+commit message, a PR body, a claim line — has built an authority-bearing surface: the text
+is caller-supplied and the executor is its authority. Enumerate the accepted grammar's
+degrees of freedom before committing: extra positional tokens (`just a b` also runs recipe
+`b`), option tokens with side effects (`pytest --basetemp=<dir>` deletes that directory),
+path segments (`tools/../x.py`), and recursion (a recipe or script that runs the executor
+itself). Parse each claim into a pinned argv — exact arity, enumerated verbs and flags, a
+denylist derived from the file that defines it and pinned by a test — never a token
+character class followed by `*`.
 
 ### 12. A quoted contract phrase with no line behind it (added U-SR-01; both of the u-he-35 arc's P1s)
 Fires whenever the diff QUOTES a contract — a spec phrase in a docstring, a

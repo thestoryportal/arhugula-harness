@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -97,10 +98,10 @@ def test_every_class_declared_with_kind():
     }
 
 
-def test_tracked_state_file_ships_every_check_advisory():
-    state = core.load_state()
-    assert set(state) == {c.check_id for c in mc.CHECKS}
-    assert all(isinstance(s, core.Advisory) for s in state.values())
+def test_tracked_state_file_covers_every_registered_check():
+    # parses and names exactly the registered checks; each entry's MODE is runtime state a
+    # promotion rewrites, so it is never pinned here
+    assert set(core.load_state()) == {c.check_id for c in mc.CHECKS}
 
 
 def test_a_malformed_state_file_is_refused_loudly(tmp_path, monkeypatch):
@@ -200,16 +201,33 @@ def test_unrun_cli_reruns_read_only_claims_and_flags_failures(tmp_path):
     ]
 
 
-# mutation-probe: tools/mechanized_checks/unrun_cli.py:66-74 drop the read-only grammar gate
+# mutation-probe: tools/mechanized_checks/unrun_cli.py:87-95 drop the read-only grammar gate
 def test_unrun_cli_never_executes_outside_the_read_only_grammar(tmp_path):
-    subject = _subject(
-        tmp_path, claims_text="Ran: `just main-protection-apply`\nChecked: `just check; rm -rf /`\n"
-    )
-    found = unrun_cli.Check(execute=lambda argv, cwd: pytest.fail(f"executed {argv}")).run(subject)
-    assert [(f.severity, f.location) for f in found] == [
-        ("info", "just main-protection-apply"),
-        ("info", "just check; rm -rf /"),
+    refused = [
+        "just main-protection-apply",
+        "just check; rm -rf /",
+        "just fmt-check fmt",  # `just` runs extra tokens as further recipes
+        "just fmt-check main-protection-rollback",
+        "just mech-check",  # recipes that run this runner would recurse
+        "just lanes-verify",
+        "uv run python tools/mechanized_checks/runner.py check",
+        "uv run python tools/../escape.py check",
+        "uv run pytest --basetemp=/tmp/wiped",  # pytest deletes its basetemp
+        "uv run pytest ../elsewhere/test_x.py",
     ]
+    subject = _subject(tmp_path, claims_text="".join(f"Ran: `{c}`\n" for c in refused))
+    found = unrun_cli.Check(execute=lambda argv, cwd: pytest.fail(f"executed {argv}")).run(subject)
+    assert [(f.severity, f.location) for f in found] == [("info", c) for c in refused]
+
+
+def test_runner_recipes_match_the_justfile():
+    recipe, invoking = None, set()
+    for line in (core.REPO / "justfile").read_text().splitlines():
+        header = re.match(r"^([A-Za-z][\w-]*)(?:\s[^:]*)?:(?!=)", line)
+        recipe = header.group(1) if header else recipe
+        if "mechanized_checks/runner.py" in line:
+            invoking.add(recipe)
+    assert invoking == unrun_cli.RUNNER_RECIPES
 
 
 def test_unrun_cli_reports_an_unavailable_pr_body(tmp_path):
@@ -255,9 +273,9 @@ def _probe_fixture(tmp_path: Path, *, logged: bool) -> core.Subject:
 def test_mutation_probe_reverify_detects_a_false_annotation(tmp_path):
     probed = []
 
-    def probe(repo: Path, file: str, lines: str, node: str) -> int:
+    def probe(repo: Path, file: str, lines: str, node: str) -> tuple[int, str]:
         probed.append((file, lines, node))
-        return 1  # PROBE FAILED: the test stayed green with the named lines removed
+        return 1, ""  # PROBE FAILED: the test stayed green with the named lines removed
 
     found = mpr.Check(probe=probe).run(_probe_fixture(tmp_path, logged=True))
     assert probed == [("tools/x.py", "2-2", "tools/test_x.py::test_t")]
@@ -267,13 +285,32 @@ def test_mutation_probe_reverify_detects_a_false_annotation(tmp_path):
 
 @pytest.mark.parametrize(("rc", "expected"), [(0, []), (2, [("warn", "tools/test_x.py::test_t")])])
 def test_mutation_probe_reverify_pinned_is_clean_and_indeterminate_is_named(tmp_path, rc, expected):
-    found = mpr.Check(probe=lambda repo, file, lines, node: rc).run(
+    found = mpr.Check(probe=lambda repo, file, lines, node: (rc, "noise\nREFUSED: why")).run(
         _probe_fixture(tmp_path, logged=True)
     )
     assert [(f.severity, f.location) for f in found] == expected
+    assert all("REFUSED: why" in f.evidence for f in found)
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:78-85 drop the unprobed arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:94-98 drop the restore abort
+def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch):
+    log = tmp_path / "gate.jsonl"
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
+    restore_failed = mpr.Check(probe=lambda repo, file, lines, node: (3, "RESTORE FAILED: x.py"))
+    subject = _probe_fixture(tmp_path, logged=True)
+    with pytest.raises(mpr.ProbeRestoreError, match=r"(?s)may still be mutated.*RESTORE FAILED"):
+        runner.run_checks(
+            subject,
+            [restore_failed],
+            {"mutation_probe_reverify": core.Advisory()},
+            arc_id="u-he-40",
+            lane_id="lane-a",
+            head_sha=HEAD,
+        )
+    assert not log.exists()  # no finding row stands in for a possibly-mutated tree
+
+
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:85-92 drop the unprobed arm
 def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("probed without a logged range")).run(
         _probe_fixture(tmp_path, logged=False)
@@ -476,14 +513,17 @@ def test_subjects_gather_the_change_at_the_edge(tmp_path):
         and live.pr_body is None
     )
 
-    extract = tmp_path / "extract"
-    replayed = runner.commit_subject(repo, head, extract, pr_body=lambda repo, ref: "body")
-    assert replayed.changed == ("a.md",) and replayed.universe == ("a.md",)
-    assert (
-        replayed.read("a.md") == "two\n"
-        and replayed.read("b.md") is None
-        and replayed.pr_body == "body"
-    )
+    with runner.commit_subject(repo, head, pr_body=lambda repo, ref: "body") as replayed:
+        assert replayed.changed == ("a.md",) and replayed.universe == ("a.md",)
+        assert (
+            replayed.read("a.md") == "two\n"
+            and replayed.read("b.md") is None
+            and replayed.pr_body == "body"
+        )
+        # a real checkout at the arc's commit, so a mutation probe can verify its restore there
+        assert _git(replayed.repo, "rev-parse", "HEAD") == head
+        tree = replayed.repo
+    assert not tree.exists() and str(tree) not in _git(repo, "worktree", "list")
 
 
 def test_state_transitions_serialize_on_the_state_lock(tmp_path, monkeypatch):

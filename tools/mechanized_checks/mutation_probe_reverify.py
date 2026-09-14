@@ -19,10 +19,16 @@ import pin_scope
 from .core import MechFinding, Subject
 
 PROBE_LOG = ".harness/mutation-probe-log.jsonl"
-Probe = Callable[[Path, str, str, str], int]
+Probe = Callable[[Path, str, str, str], tuple[int, str]]
 
 
-def run_probe(repo: Path, file: str, lines: str, node: str) -> int:
+class ProbeRestoreError(RuntimeError):
+    """tools/mutation_probe.py exit 3: the probed file may not have been restored. Never a
+    finding -- the tree itself may now be wrong, so the whole mech-check run stops here,
+    advisory or blocking alike."""
+
+
+def run_probe(repo: Path, file: str, lines: str, node: str) -> tuple[int, str]:
     """tools/mutation_probe.py exit: 0 pinned, 1 PROBE FAILED, 2 refused, 3 restore failure."""
     argv = [
         "uv",
@@ -36,7 +42,8 @@ def run_probe(repo: Path, file: str, lines: str, node: str) -> int:
         "--test",
         f"uv run pytest {node} -q",
     ]
-    return subprocess.run(argv, cwd=repo, capture_output=True, text=True).returncode
+    proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True)
+    return proc.returncode, proc.stdout + proc.stderr
 
 
 def _logged_ranges(log_text: str) -> dict[tuple[str, str], str]:
@@ -83,7 +90,13 @@ class Check:
                     "each # mutation-probe: annotation names a mutation the probe tool has run",
                 )
             ]
-        rc = self.probe(repo, target, lines, node)
+        rc, output = self.probe(repo, target, lines, node)
+        if rc == 3:
+            raise ProbeRestoreError(
+                f"{node}: the probe of {target}:{lines} could not verify its restore -- the file "
+                f"may still be mutated; stop and inspect it:\n{output[-2000:]}"
+            )
+        last = (output.strip().splitlines() or [""])[-1][:200]
         outcomes = {
             0: [],
             1: [
@@ -98,7 +111,7 @@ class Check:
         indeterminate = [
             MechFinding(
                 node,
-                f"probe indeterminate (exit {rc}) on {target}:{lines}",
+                f"probe indeterminate (exit {rc}) on {target}:{lines}: {last}",
                 "the probe returns pinned (0) or failed (1)",
             )
         ]

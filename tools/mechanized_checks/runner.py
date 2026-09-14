@@ -18,13 +18,12 @@ checks, append the C-HE-24 rows, report.
 from __future__ import annotations
 
 import argparse
-import io
 import re
 import subprocess
 import sys
-import tarfile
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -93,32 +92,25 @@ def working_tree_subject(repo: Path, *, base: str, pr_body: PrBody = gh_pr_body)
     )
 
 
-def commit_subject(
-    repo: Path, sha: str, workdir: Path, *, pr_body: PrBody = gh_pr_body
-) -> core.Subject:
-    """A merged arc as its squash commit left the tree: `git archive` extracted into `workdir`
-    (no worktree registered, no ref moved), the change = the commit against its first parent.
-    The PR body is read only for the `(#N)` the subject names -- never the current branch's."""
-    archive = subprocess.run(
-        ["git", "-C", str(repo), "archive", "--format=tar", sha], capture_output=True
-    )
-    if archive.returncode != 0:
-        raise RunnerError(
-            f"git archive {sha} failed: {archive.stderr.decode(errors='replace').strip()}"
-        )
-    workdir.mkdir(parents=True)
-    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-        tar.extractall(workdir, filter="data")
+@contextmanager
+def commit_subject(repo: Path, sha: str, *, pr_body: PrBody = gh_pr_body) -> Iterator[core.Subject]:
+    """A merged arc as its squash commit left the tree: a detached worktree of `sha` -- a real
+    checkout, so a mutation probe there can verify its restore against the index -- removed on
+    exit. The change is the commit against its first parent. The PR body is read only for the
+    `(#N)` the subject names -- never the current branch's."""
     message = _git(repo, "log", "-1", "--format=%B", sha)
     number = SQUASH_SUBJECT.search(message)
-    return core.Subject(
-        workdir,
-        _paths(_git(repo, "diff", "--name-only", f"{sha}^", sha)),
-        _paths(_git(repo, "ls-tree", "-r", "--name-only", sha)),
-        _git(repo, "diff", "--unified=0", f"{sha}^", sha),
-        message,
-        pr_body(repo, number.group(1)) if number is not None else None,
-    )
+    changed = _paths(_git(repo, "diff", "--name-only", f"{sha}^", sha))
+    universe = _paths(_git(repo, "ls-tree", "-r", "--name-only", sha))
+    diff = _git(repo, "diff", "--unified=0", f"{sha}^", sha)
+    body = pr_body(repo, number.group(1)) if number is not None else None
+    with tempfile.TemporaryDirectory(prefix="mech-replay-") as tmp:
+        tree = Path(tmp) / "tree"
+        _git(repo, "worktree", "add", "--detach", str(tree), sha)
+        try:
+            yield core.Subject(tree, changed, universe, diff, message, body)
+        finally:
+            _git(repo, "worktree", "remove", "--force", str(tree))
 
 
 def select_replay_commits(log_lines: Sequence[str], n: int) -> list[str]:
@@ -181,8 +173,7 @@ def replay(
         (sha, arc_id) for sha, arc_id in zip(shas, arc_ids, strict=True) if arc_id not in measured
     ]
     for sha, arc_id in todo:
-        with tempfile.TemporaryDirectory(prefix="mech-replay-") as tmp:
-            subject = commit_subject(repo, sha, Path(tmp) / "tree", pr_body=pr_body)
+        with commit_subject(repo, sha, pr_body=pr_body) as subject:
             findings = check.run(subject)
         core.emit(
             check.check_id, check.kind, findings, arc_id=arc_id, lane_id=lane_id, head_sha=sha
