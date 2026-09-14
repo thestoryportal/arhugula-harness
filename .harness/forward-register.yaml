@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 243
+  total: 244
   open: 1
   design_substrate_gated: 3
-  registered_finding: 85
+  registered_finding: 86
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 8f43ec0cdccc5d7b
+  identity_digest: 769aa5600599ac2c
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11526,3 +11526,11 @@ items:
   close_out: 'REGISTERED, not driven in U-HE-40: the review wrappers are the C-HE-15..C-HE-18 surface, outside this unit''s Files, and the reason text is carried into the C-HE-24 rows every gate-log consumer reads. WHAT CLOSES THIS ROW: when stdout carries no verdict, the unavailable reason names the stderr cause -- a bounded, secret-free excerpt, or a cause class such as `usage-limit` with its reset time -- with a witness that feeds the observed refusal text and asserts it reaches the round log; and a usage-limit refusal does not spend the immediate re-invocation.'
   council: 'NO -- an observability defect in one wrapper''s reason text, no design tension.'
   heading: '### B-243 · a codex usage-limit refusal is logged as "empty output" *(grounded on u-he-40, 2026-09-14; REGISTERED)*'
+- id: B-244
+  title: 'U-HE-40 is held unmerged: its round-9 absorption never received an out-of-family verdict'
+  pr: '#TBD (branch feat/u-he-40-mechanized-checks, held 2026-09-14)'
+  status: registered_finding
+  summary: 'U-HE-40 (the C-HE-31 mechanized pre-checks, branch `feat/u-he-40-mechanized-checks`) ran out-of-family review rounds 1-10 under a round budget of 10 that the operator extended by 2 after round 8. Round 1 was REVIEWER_UNAVAILABLE on both channels (B-243); rounds 2-9 BLOCKed (codex, with the gemini failover carrying round 6), and every accepted finding was absorbed with mutation-probed witnesses. The round-9 absorption (`3ef6dc710`, then the line-limit fix `a51b9bdfa` and probe re-pins through `2b8aca90e`) never received a verdict. HELD, by operator decision on 2026-09-14 (asked: extend one round after codex reset, or hold; answer: hold the arc now). Round 10 at `2b8aca90e` ended REVIEWER_UNAVAILABLE on both channels: codex hit its subscription usage limit mid-review (session error `usage_limit_exceeded`, reset 12:30 PM MDT), which the wrapper logged only as `attempt 2: empty output` (B-243), and the gemini failover lacked its segment-completeness marker. That round spent the last budget pairs (the gate reports 13 spent against a budget of 12). Verified at `2b8aca90e`: `just codex-check` 1790 passed with only the in-place venue failure (`test_codex_stop_gate`, HARD ROOT_CHECKOUT_EDIT), and its skipped steps run by hand (demotion-due exit 0, no shell-suite failure, main pytest 7969 passed); all 15 C-HE-31 mutation-probe annotations pinned; `just leg-selfcheck` OK. The reservation `u-he-40` stays `pending` on its lane; the commit that registers this row adds nothing else.'
+  close_out: 'REGISTERED and HELD 2026-09-14. WHAT CLOSES THIS ROW: An operator-extended review round (`just review-attest-budget`, ask-gated) at the branch head reaches APPROVE, directly or after its findings are absorbed, and U-HE-40 then ships through ship-pr and the merge door; or the operator abandons the arc and its reservation transitions to `abandoned`. Named residual carried with the branch: round 9''s rejected finding (a test-local no-op `assert_fake_is_subclass` suppressing the fidelity finding) was dispositioned as out-of-scope forgery, not fixed.'
+  council: 'NO -- a review-coverage residual on a held branch, no design tension.'
+  heading: '### B-244 · U-HE-40 is held unmerged with its round-9 fixes unreviewed *(surfaced on u-he-40, 2026-09-14; REGISTERED)*'
