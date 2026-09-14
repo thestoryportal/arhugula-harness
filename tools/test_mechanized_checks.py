@@ -470,24 +470,27 @@ def test_promotion_demotion_state_machine(tmp_path, monkeypatch):
     assert len(fr.read_rows(log)) == 1
 
 
+def test_rejected_windows_end_at_the_latest_arc():
+    # 41 live arcs; rejections on arcs 19, 20, 39 and 40. Windows counted from the first arc
+    # would read [1, 2]; windows ending at the latest arc read [2, 2]
+    rows = [_row(a, "no_finding") for a in range(41)]
+    rows += [_row(a, "finding", n=2) for a in (19, 20, 39, 40)]
+    rows += [_row(a, "finding_adjudication", n=2, disposition="rejected") for a in (19, 20, 39, 40)]
+    assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [2, 2]
+
+
 # mutation-probe: tools/mechanized_checks/core.py:270 drop the since-promotion window filter
-def test_rejected_windows_count_arcs_observed_since_promotion():
-    early = "2026-09-01T00:00:00Z"  # before promotion: its arc belongs to no window
-    rows = [
+def test_rejected_windows_ignore_observations_from_before_promotion():
+    rows = [_row(a, "no_finding") for a in range(40)]
+    rows += [_row(a, "finding", n=2) for a in (19, 20, 39)]
+    rows += [_row(a, "finding_adjudication", n=2, disposition="rejected") for a in (19, 20, 39)]
+    # a back-filled observation stamped before promotion, appended last: counted, it would be
+    # the latest arc and shift both windows ([1, 2] -> [2, 2])
+    early = "2026-09-01T00:00:00Z"
+    rows += [
         _row(99, "no_finding", ts=early),
         _row(99, "finding", n=2, ts=early),
         _row(99, "finding_adjudication", n=2, ts=early, disposition="rejected"),
-    ]
-    # 41 live arcs; rejections on the 20th, 21st, 40th and 41st (arcs 19, 20, 39, 40)
-    rows += [_row(a, "no_finding") for a in range(41)]
-    rows += [_row(a, "finding", n=2) for a in (19, 20, 39, 40)]
-    rows += [_row(a, "finding_adjudication", n=2, disposition="rejected") for a in (19, 20, 39, 40)]
-    # replay rows re-measure history: they must not advance or fill any window
-    rows += [_row(500 + a, "no_finding", lineage="replay") for a in range(40)]
-    rows += [_row(500 + a, "finding", n=2, lineage="replay") for a in range(40)]
-    rows += [
-        _row(500 + a, "finding_adjudication", n=2, disposition="rejected", lineage="replay")
-        for a in range(40)
     ]
     rows += [
         _row(7, "finding", n=2, producer="cited_symbol_exists"),
@@ -495,8 +498,20 @@ def test_rejected_windows_count_arcs_observed_since_promotion():
             7, "finding_adjudication", n=2, disposition="rejected", producer="cited_symbol_exists"
         ),
     ]
-    # windows end at the latest arc: arcs 1..20 and 21..40 each hold two rejections
-    assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [2, 2]
+    assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [1, 2]
+
+
+# mutation-probe: tools/mechanized_checks/core.py:269 drop the replay-lineage filter
+def test_rejected_windows_never_count_replay_observations():
+    rows = [_row(a, "no_finding") for a in range(40)]
+    rows += [_row(500 + a, "no_finding", lineage="replay") for a in range(40)]
+    rows += [_row(500 + a, "finding", n=2, lineage="replay") for a in range(40)]
+    rows += [
+        _row(500 + a, "finding_adjudication", n=2, disposition="rejected", lineage="replay")
+        for a in range(40)
+    ]
+    # counted, the replay arcs would add two full windows of rejections: [0, 0, 20, 20]
+    assert core.rejected_windows(rows, "stale_carry", since=PROMOTED) == [0, 0]
 
 
 def test_replay_verdict_never_reads_unlooked_or_unadjudicated_as_clean():
