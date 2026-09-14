@@ -2664,3 +2664,23 @@ same spec leg.
 - **Why the spec text is registered, not edited.** Amending `design-substrate`-class wording from an implementation arc is the silent-absorption failure mode (root `CLAUDE.md` §4.3/§4.4); a cleared contract's prose is amended through back-flow, not by the consumer that noticed.
 - **The cost of leaving it, measured.** This ambiguity survived **six review rounds** on this arc. Rounds 4 and 5 both reasoned about the cohort key at length, and r5 shipped a fix that mapped historical rows onto a stored `1` — onto *two lanes* — precisely because the field name asserts lanes while the sensor counts siblings.
 - **What closes this row.** A spec amendment that either renames the field to say siblings, or states the conversion at C-HE-28 §1 where the cohort key is defined, so the next consumer does not have to re-derive it from `reservations.py`. Either is a wording change to a cleared artifact and routes through design-phase back-flow.
+
+### B-240 · the mechanized checks have no invoker, so they fire only by hand *(surfaced on u-he-40, 2026-09-14; REGISTERED)*
+
+- **What it is.** U-HE-40 landed the seven C-HE-31 checks and `just mech-check` at the stable boundary C-HE-31 §3 names (pre-commit / pre-review / pre-PR), but nothing runs the recipe: neither the plan's U-HE-40 Files list nor the contract names an invoker, CI runs only the read-only `runner.py demotion-due`, and no skill or hook calls it.
+- **Current state.** At the u-he-40 head the only mechanized-check rows on the gate log are the one manual run committed at `04f731211`. §5 requires a class to be measured before any claim that it removed findings, so the checks currently neither catch defects upstream of review nor accrue that evidence.
+- **Why it is registered, not wired.** An invoker edits a loop carrier or a hook, both outside U-HE-40's Files, and the boundary choice is constrained by §3 (blocking only where fast, deterministic and low-false-positive; `mutation_probe_reverify` runs one mutation probe per annotation in the change).
+- **What closes this row.** One invoker at one named stable boundary — for example the roadmap-continue step-4 line before the out-of-family review — run with the `HARNESS_ARC_ID`/`HARNESS_LANE_ID` prefix, a permission-guard allow for that exact shape, and a witness pinning the documented command (defect-class-preflight class 13).
+
+### B-241 · the promotion replay has never run live *(named on u-he-40, 2026-09-14; REGISTERED)*
+
+- **What it is.** `just mech-replay <check_id>` measures a check over the last 20 squash-merged arcs from `git archive` extracts and refuses promotion while any arc is unmeasured or any finding is unadjudicated. At the u-he-40 head it is pinned only by `test_replay_measures_each_arc_once` (a three-commit hermetic repo, window patched to 2).
+- **Current state.** No live replay has run for any check. Unmeasured: the adjudication load a replay puts on the gate log before promotion can evaluate, and the per-arc environment `uv run` provisions when `mutation_probe_reverify` is replayed inside an extract.
+- **What closes this row.** A first live replay of one deterministic check with its findings adjudicated, recording wall clock and adjudication load, and a measured per-extract provisioning cost before any hybrid-class replay.
+
+### B-242 · the store audit lags the landed state file, and its lock is invisible to the extractor *(surfaced on u-he-40, 2026-09-14; REGISTERED)*
+
+- **What it is.** `.harness/spec/store-audit-he-loop-lanes.md` still heads the state-file row "Mechanized-check runtime state (C-HE-31 §4d; lands with Arc 4, not yet on main)", and its "Transient writer-exclusion + staging artifacts" table has no row for `.harness/mechanized-checks-state.json.lock`, the flock sidecar U-HE-40 added to serialize promotion/demotion transitions.
+- **Why the test is green anyway.** The store-literal extractor does not recognise the `STATE_PATH.name + ".lock"` idiom; at the u-he-40 head it reports only the state file and `.tmp` for `tools/mechanized_checks/core.py`.
+- **Why it is registered, not edited.** The page lives under `.harness/spec/`; amending cleared audit prose from an implementation arc is the silent-absorption failure mode (root CLAUDE.md §4.3/§4.4), and an extractor pattern alone would turn the test red on that same page.
+- **What closes this row.** A back-flow amendment of the audit page (drop the qualifier; add the writer-exclusion row) landed together with an extractor pattern for the `<name> + ".lock"` idiom.

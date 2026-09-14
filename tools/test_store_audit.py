@@ -34,13 +34,12 @@ LANDED = [
     "tools/hooks/lane-init.sh",  # U-HE-31: lane index registry + persisted lane id
     "tools/merge_door.py",  # U-HE-22
     "tools/reservations.py",  # U-HE-17
+    "tools/mechanized_checks/core.py",  # U-HE-40: STATE_PATH home + its transition lock
+    "tools/mechanized_checks/mutation_probe_reverify.py",  # U-HE-40: reads the probe log
 ]
 #: Planned store creators -- skipped until they land; the landing unit (U-HE-17 / U-HE-22 /
 #: U-HE-31 lane-init) MUST move its module into LANDED in the same change.
-PENDING = [
-    "tools/mechanized_checks/__init__.py",  # STATE_PATH home (U-HE-40)
-    "tools/mechanized_checks/runner.py",
-]
+PENDING: list[str] = []
 #: (first-cell name, phrase the spec's "Authority for" cell carries) -- C-HE-30 table order.
 EIGHT: list[tuple[str, str]] = [
     ("Queue entries", "not yet in committed history"),

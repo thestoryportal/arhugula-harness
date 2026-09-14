@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 239
+  total: 242
   open: 1
   design_substrate_gated: 3
-  registered_finding: 81
+  registered_finding: 84
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 46693d9de4eb9f21
+  identity_digest: 8e695851f736f646
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11494,3 +11494,27 @@ items:
     and three spec clauses; no cross-domain tension to convene over.'
   heading: '### B-239 · the cohort field is named for lanes and stores siblings, and the spec counts both
     ways *(surfaced on u-he-38 r6, 2026-09-04; consumer resolved, spec text REGISTERED)*'
+- id: B-240
+  title: 'no loop carrier, hook or CI job invokes `just mech-check`, so the C-HE-31 checks fire only when run by hand'
+  pr: '#TBD (surfaced on the u-he-40 arc by the transcript-brief reviewer, 2026-09-14)'
+  status: registered_finding
+  summary: 'U-HE-40 landed the seven C-HE-31 checks and the `just mech-check` recipe at the stable boundary C-HE-31 §3 names (pre-commit / pre-review / pre-PR). Neither the plan''s U-HE-40 Files list nor C-HE-31 names an invoker, and at the u-he-40 head none exists: CI runs only the read-only `runner.py demotion-due`, and no skill or hook calls the recipe. The only measurement rows on the gate log come from the single manual run committed at `04f731211`. §5 requires a class to be measured before any claim that it removed findings, so without an invoker the checks neither catch defects upstream of review nor accrue the evidence §5 asks for.'
+  close_out: 'REGISTERED, not driven in U-HE-40. Wiring an invoker edits a loop carrier or a hook, both outside the unit''s Files, and choosing the boundary is a siting decision C-HE-31 §3 constrains (blocking only where fast, deterministic and low-false-positive; all seven checks ship advisory, and `mutation_probe_reverify` runs one mutation probe per annotation in the change). WHAT CLOSES THIS ROW: one invoker at one named stable boundary -- for example the roadmap-continue step-4 line before the out-of-family review -- run with the `HARNESS_ARC_ID`/`HARNESS_LANE_ID` prefix, with a permission-guard allow for that exact shape and a witness pinning the documented command (defect-class-preflight class 13).'
+  council: 'NO -- a single siting decision inside the loop''s own pre-review step, no cross-domain tension.'
+  heading: '### B-240 · the mechanized checks have no invoker, so they fire only by hand *(surfaced on u-he-40, 2026-09-14; REGISTERED)*'
+- id: B-241
+  title: 'the C-HE-31 §4(a) promotion replay has run only against a hermetic witness, never over main''s last 20 merged arcs'
+  pr: '#TBD (named on the u-he-40 arc, 2026-09-14)'
+  status: registered_finding
+  summary: '`just mech-replay <check_id>` measures a check over the last 20 squash-merged arcs, each from a `git archive` extract of its commit, and refuses promotion while any arc is unmeasured or any of its findings lacks a finding_adjudication row. At the u-he-40 head that path is pinned only by `test_replay_measures_each_arc_once` (a three-commit hermetic repo with the window patched to 2); no live replay has run for any check. Two costs are unmeasured: a replay puts every historical finding onto the gate log to be adjudicated before promotion can evaluate, and `mutation_probe_reverify` replayed inside an extract runs `uv run` there, which provisions an environment per arc.'
+  close_out: 'REGISTERED, not driven: every check ships advisory, so nothing waits on a promotion. WHAT CLOSES THIS ROW: a first live replay of one deterministic check with its findings adjudicated, recording its wall clock and how many findings adjudication consumed, and a measured per-extract provisioning cost before any hybrid-class replay is attempted.'
+  council: 'NO -- measurement of an existing mechanism, no design decision.'
+  heading: '### B-241 · the promotion replay has never run live *(named on u-he-40, 2026-09-14; REGISTERED)*'
+- id: B-242
+  title: 'the C-HE-30 store-audit page still calls the mechanized-check state file not yet landed, and the extractor cannot see its transition lock'
+  pr: '#TBD (surfaced by tools/test_store_audit.py on the u-he-40 arc, 2026-09-14)'
+  status: registered_finding
+  summary: 'U-HE-40 landed `.harness/mechanized-checks-state.json` and moved its modules into `tools/test_store_audit.py`''s LANDED list. The audit page `.harness/spec/store-audit-he-loop-lanes.md` still heads that family row "Mechanized-check runtime state (C-HE-31 §4d; lands with Arc 4, not yet on main)", and its "Transient writer-exclusion + staging artifacts" table has no row for `.harness/mechanized-checks-state.json.lock`, the flock sidecar U-HE-40 added so two lanes'' promotion/demotion transitions serialize. The literal check cannot catch that omission: the store-literal extractor does not recognise the `STATE_PATH.name + ".lock"` idiom, so at the u-he-40 head it reports only the state file and `.tmp` for `core.py`.'
+  close_out: 'REGISTERED, not edited: the page lives under `.harness/spec/`, and amending cleared audit prose from an implementation arc is the silent-absorption failure mode (root CLAUDE.md §4.3/§4.4). Extending the extractor alone would turn the store-audit test red on that same page text, so the two land together. WHAT CLOSES THIS ROW: an audit-page amendment through back-flow that drops the "not yet on main" qualifier and adds a writer-exclusion row for the state-transition sidecar, landed with an extractor pattern for the `<name> + ".lock"` idiom so the sidecar is checked rather than invisible.'
+  council: 'NO -- a documentation lag on one audit page plus the extractor pattern that would have caught it.'
+  heading: '### B-242 · the store audit lags the landed state file, and its lock is invisible to the extractor *(surfaced on u-he-40, 2026-09-14; REGISTERED)*'

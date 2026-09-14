@@ -3,7 +3,7 @@ promotion/demotion machine over `.harness/mechanized-checks-state.json`.
 
 Sited ONLY at a stable boundary (`just mech-check`: pre-commit / pre-review / pre-PR), never as a
 blocking PostToolUse on every intermediate edit (§3). The live mode/window state is runtime
-state, plan-owned, stored outside the spec (§4(d)): no runtime path writes to `.harness/spec/`.
+state, plan-owned, stored outside the spec (§4(d)): no runtime path here writes the spec.
 No mechanized check is ever cited as grounds for a round cap (C-HE-31 Invariants).
 """
 
