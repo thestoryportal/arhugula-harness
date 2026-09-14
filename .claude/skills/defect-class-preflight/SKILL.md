@@ -352,7 +352,11 @@ cheap place to commit it.
 ### 13. A new command the loop must reach (added U-SR-01; u-he-35 r2, one round)
 Class 11 asks what a new verb can AUTHORIZE. This asks the other half: can the loop
 INVOKE it at all? The trigger is mechanical — the diff adds a justfile recipe (or any
-new command shape) whose verification-manifest `runs_in` includes "loop". Answer
+new command shape) whose verification-manifest `runs_in` includes "loop" — and equally a
+diff that CHANGES a documented command shape in a carrier to fix what the command records
+(an added env prefix, flag or argument): that fix is only as durable as the pin on it
+(U-HE-39 witness lens r3: a `HARNESS_LANE_ID=` prefix added to six carrier lines shipped
+unpinned, and the one existing assert matched the command with or without it). Answer
 both halves: is the permission guard wired to auto-allow the EXACT shape the loop
 will type, and does a witness pin that shape so reverting the wiring goes red? The
 precedent commits already model the whole chain — recipe ⇒ guard allow ⇒ witness

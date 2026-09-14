@@ -176,5 +176,47 @@ else
   printf '%s\n' "$hits" | cut -c1-200 | sed 's/^/      /'
 fi
 
+# --- 6. The lane-id prefix on every documented lane-attributed command --------------------
+# merge_gate_log.py and arc_metrics.py fall back to a synthesized lane id when HARNESS_LANE_ID
+# is unset: a bare emit wrote `-nolane` into every lens row, and a bare drain held every merged
+# arc. Each carrier must document the prefixed form AND keep no bare copy beside it — a stale
+# copy-paste of the old line would otherwise pass (U-HE-39 merge-gate witness lens, round 3).
+AMG="$ROOT/.agents/skills/merge-gate/SKILL.md"
+ASP="$ROOT/.agents/skills/ship-pr/SKILL.md"
+for f in "$AMG" "$ASP"; do
+  [ -f "$f" ] || { echo "FATAL: missing $f"; exit 1; }
+done
+carrier() { printf '%s %s' "$(basename "$(dirname "$(dirname "$(dirname "$1")")")")" "$(skill "$1")"; }
+prefixed() { # $1 = file, $2 = the command that must follow the prefix
+  if grep -qF -- "HARNESS_LANE_ID=<lane-id> $2" "$1"; then
+    ok "$(carrier "$1") documents the lane-prefixed '$2'"
+  else
+    bad "$(carrier "$1") lacks 'HARNESS_LANE_ID=<lane-id> $2'"
+  fi
+}
+prefixed "$MG"  "just merge-gate-emit-all --pr <PR#> --arc-id <arc-id>"
+prefixed "$MG"  "just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id>"
+prefixed "$AMG" "just merge-gate-emit-all --pr <N> --arc-id <arc-id>"
+prefixed "$AMG" "just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id>"
+prefixed "$SP"  "just arc-metrics drain"
+prefixed "$ASP" "just arc-metrics drain"
+for f in "$MG" "$AMG" "$SP" "$ASP"; do
+  # Strip every prefixed occurrence, then look for what is left. sed runs on its own (not in a
+  # pipeline) so a failed read is its own exit status, never masked as grep's "no match".
+  stripped=$(sed 's/HARNESS_LANE_ID=<lane-id> just /PREFIXED_JUST /g' "$f"); rs=$?
+  if [ "$rs" -ne 0 ]; then
+    bad "$(carrier "$f"): bare-command scan could not run (sed exit $rs)"
+    continue
+  fi
+  left=$(printf '%s\n' "$stripped" | grep -nE 'just (merge-gate-emit(-all)?|arc-metrics drain)([^A-Za-z-]|$)'); rg=$?
+  if [ "$rg" -gt 1 ]; then
+    bad "$(carrier "$f"): bare-command scan could not run (grep exit $rg)"
+  elif [ -n "$left" ]; then
+    bad "$(carrier "$f") documents a bare lane-attributed command: $(printf '%s' "$left" | head -1 | cut -c1-140)"
+  else
+    ok "$(carrier "$f") documents no bare emit/drain command"
+  fi
+done
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
