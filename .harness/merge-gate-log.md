@@ -978,3 +978,4 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | 2026-09-14T04:34:22Z | #1525 | cee2122ca1a5 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r4 |
 | 2026-09-14T04:47:24Z | #1525 | 1f804e787e16 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r5 |
 | 2026-09-14T05:07:20Z | #1525 | 0d8f79e104e6 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r6 |
+| 2026-09-14T05:50:24Z | #1525 | 97c6fe99675a | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r7 |
