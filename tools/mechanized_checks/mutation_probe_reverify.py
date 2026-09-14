@@ -4,14 +4,19 @@ evidence. Mutation-probe-backed: minutes per annotation, never shipped as "low-r
 
 The line range comes from `.harness/mutation-probe-log.jsonl`, which `tools/mutation_probe.py`
 appends on every exit: that log is the one record of which lines an annotation's mutation
-removes, so this check keeps no second map of it. A logged range is re-run only while the probed
-file and its test still digest to the row's `target_sha` and `test_sha` -- the exact bytes whose
-line numbers it recorded, and the annotation that names them; a change to either since the probe
-is reported stale, never probed at numbers that may now name other lines."""
+removes, so this check keeps no second map of it. An annotation in the red-first
+`<path>:<lines>` form matches only log rows for the lines it names, so two annotations stacked on
+one test each verify their own mutation; a prose-form annotation names no lines and takes the
+latest pinned row for its test and file (two prose annotations on one test and file cannot be
+told apart -- a named residual). A logged range is re-run only while the probed file and its
+test still digest to the row's `target_sha` and `test_sha` -- the exact bytes whose line numbers
+it recorded, and the annotation that names them; a change to either since the probe is reported
+stale, never probed at numbers that may now name other lines."""
 
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 from collections.abc import Callable, Sequence
@@ -25,12 +30,22 @@ from .core import MechFinding, Subject, subject_env
 
 PROBE_LOG = ".harness/mutation-probe-log.jsonl"
 Probe = Callable[[Path, str, str, str], tuple[int, str]]
+Span = tuple[int, int]
+_LINES = re.compile(r"(\d+)(?:-(\d+))?\b")
 
 
 class ProbeRestoreError(RuntimeError):
-    """tools/mutation_probe.py exit 3: the probed file may not have been restored. Never a
-    finding -- the tree itself may now be wrong, so the whole mech-check run stops here,
-    advisory or blocking alike."""
+    """tools/mutation_probe.py ended without a verdict it vouches for: exit 3 (restore unverified),
+    a signal (a negative returncode), or any other exit outside 0/1/2. SIGKILL leaves the file
+    mutated until a later probe reconciles it. Never a finding -- the tree itself may now be
+    wrong, so the whole mech-check run stops here, advisory or blocking alike."""
+
+
+@dataclass(frozen=True)
+class Annotation:
+    node: str
+    target: str
+    lines: Span | None  # None: a prose-form annotation, which names no lines
 
 
 @dataclass(frozen=True)
@@ -62,6 +77,25 @@ def run_probe(repo: Path, file: str, lines: str, node: str) -> tuple[int, str]:
     return proc.returncode, proc.stdout + proc.stderr
 
 
+def _span(text: str) -> Span | None:
+    """`A-B` or `A` -> (A, B); the probe tool accepts both spellings of one range."""
+    m = _LINES.match(text)
+    return (int(m[1]), int(m[2] or m[1])) if m else None
+
+
+def annotations(rel: str, text: str) -> list[Annotation]:
+    """Every `# mutation-probe:` annotation in one test file, with the lines it names."""
+    out: list[Annotation] = []
+    for m in lv._ANNOT.finditer(text):
+        desc = m.group("desc").strip()
+        named = lv._DESC_TARGET.match(desc)
+        path = named.group("path") if named else None
+        target = m.group("target") or path or lv.default_probe_target(rel)
+        lines = _span(desc[named.end() - 1 :]) if named else None
+        out.append(Annotation(f"{rel}::{m.group('name')}", target, lines))
+    return out
+
+
 def _probed(row: dict, node: str, target: str) -> bool:
     """The row is a probe of THIS annotation: one pytest target equal to the node, run against
     the annotated file."""
@@ -75,20 +109,25 @@ def _digest(path: Path) -> str | None:
     return pin_scope.digest16(path.read_bytes()) if path.is_file() else None
 
 
-def logged_range(rows: Sequence[dict], node: str, target: str, root: Path) -> Pinned | Stale | None:
+def logged_range(rows: Sequence[dict], a: Annotation, root: Path) -> Pinned | Stale | None:
     """The annotation's latest PINNED (rc 0) probe, live or stale against the bytes at `root`;
     None when it was never pinned."""
-    pinned = [r for r in rows if r.get("rc") == 0 and r.get("lines") and _probed(r, node, target)]
+    pinned = [
+        r
+        for r in rows
+        if r.get("rc") == 0 and r.get("lines") and _probed(r, a.node, a.target)
+        if a.lines is None or _span(str(r["lines"])) == a.lines
+    ]
     if not pinned:
         return None
     last = pinned[-1]
     target_sha, test_sha = last.get("target_sha"), last.get("test_sha")
     # the range names these lines only in the exact bytes the probe measured -- the probed file
     # AND the test, whose annotation says which lines its mutation removes
-    test_rel = node.split("::", 1)[0]
+    test_rel = a.node.split("::", 1)[0]
     live = (
         bool(target_sha and test_sha)
-        and _digest(root / target) == target_sha
+        and _digest(root / a.target) == target_sha
         and _digest(root / test_rel) == test_sha
     )
     return Pinned(last["lines"]) if live else Stale(last["lines"])
@@ -105,63 +144,60 @@ class Check:
     def run(self, subject: Subject) -> list[MechFinding]:
         log = subject.read(PROBE_LOG) or ""
         rows = [json.loads(line) for line in log.splitlines() if line.strip()]
-        annotated = [
-            (f"{rel}::{name}", target or lv.default_probe_target(rel))
-            for rel, _text in subject.changed_texts(".py")
-            if Path(rel).name.startswith("test_")
-            for name, target in lv._annotations(subject.repo / rel)
-        ]
         return [
             finding
-            for node, target in annotated
-            for finding in self._verify(
-                subject.repo, node, target, logged_range(rows, node, target, subject.repo)
-            )
+            for rel, text in subject.changed_texts(".py")
+            if Path(rel).name.startswith("test_")
+            for a in annotations(rel, text)
+            for finding in self._verify(subject.repo, a, logged_range(rows, a, subject.repo))
         ]
 
     def _verify(
-        self, repo: Path, node: str, target: str, logged: Pinned | Stale | None
+        self, repo: Path, a: Annotation, logged: Pinned | Stale | None
     ) -> list[MechFinding]:
         if logged is None:
+            named = f":{a.lines[0]}-{a.lines[1]}" if a.lines else ""
             return [
                 MechFinding(
-                    node,
-                    f"annotation never probed: no pinned probe-log row names a range of {target}",
+                    a.node,
+                    f"annotation never probed: no pinned probe-log row for {a.target}{named}",
                     "each # mutation-probe: annotation names a mutation the probe tool has run",
                 )
             ]
         if isinstance(logged, Stale):
             return [
                 MechFinding(
-                    node,
-                    f"logged range {target}:{logged.lines} no longer pins the current bytes "
+                    a.node,
+                    f"logged range {a.target}:{logged.lines} no longer pins the current bytes "
                     "(the probed file or its test changed since the probe ran)",
                     "re-probe the annotation before its mutation is re-verified",
                 )
             ]
-        rc, output = self.probe(repo, target, logged.lines, node)
-        if rc == 3:
-            raise ProbeRestoreError(
-                f"{node}: the probe of {target}:{logged.lines} could not verify its restore -- "
-                f"the file may still be mutated; stop and inspect it:\n{output[-2000:]}"
-            )
+        rc, output = self.probe(repo, a.target, logged.lines, a.node)
         last = (output.strip().splitlines() or [""])[-1][:200]
-        outcomes = {
+        verdicts = {
             0: [],
             1: [
                 MechFinding(
-                    node,
-                    f"annotation is FALSE: test stayed green with {target}:{logged.lines} removed",
+                    a.node,
+                    "annotation is FALSE: test stayed green with "
+                    f"{a.target}:{logged.lines} removed",
                     "the named mutation turns the test red",
                     "hard",
                 )
             ],
+            # the probe tool refused or found the run indeterminate, and restored the file itself
+            2: [
+                MechFinding(
+                    a.node,
+                    f"probe indeterminate (exit 2) on {a.target}:{logged.lines}: {last}",
+                    "the probe returns pinned (0) or failed (1)",
+                )
+            ],
         }
-        indeterminate = [
-            MechFinding(
-                node,
-                f"probe indeterminate (exit {rc}) on {target}:{logged.lines}: {last}",
-                "the probe returns pinned (0) or failed (1)",
+        if rc not in verdicts:
+            raise ProbeRestoreError(
+                f"{a.node}: the probe of {a.target}:{logged.lines} exited {rc} without a verdict "
+                f"-- the file may still be mutated; stop and inspect it:\n{output[-2000:]}"
             )
-        ]
-        return outcomes.get(rc, indeterminate)
+        return verdicts[rc]

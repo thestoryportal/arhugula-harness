@@ -236,12 +236,24 @@ sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
 forged entries) before trusting it to mute anything. A substring match on the suppressing
 call is forgeable by a comment that merely mentions it (u-he-40 codex r3: a
 `# assert_fake_is_subclass(FakeClock, Clock)` comment exempted a double) — parse the file
-and require the executable call. A sibling shape (u-he-40 codex r2
+and require a call that is KNOWN to run. A parsed call is not yet an executed one: the
+u-he-40 codex r8 fix still exempted `if False: assert_fake_is_subclass(...)` and a call
+inside a helper nobody invokes. Name the statement position that guarantees execution (a
+module-level statement runs whenever the file imports) and exempt only that. The same rider
+covers the KEY that looks up a check's evidence: a key coarser than the claim it vouches for
+lets one piece of evidence answer for several claims (u-he-40 codex r8: annotations keyed by
+test node and file, dropping the lines each names, so two stacked annotations both
+re-verified the first one's row and the second was never checked). Key evidence by the
+claim's full identity. A sibling shape (u-he-40 codex r2
 P1): a subprocess exit code that means the WORLD may now be damaged — a mutation probe's
 `3 = restore failure`, a partial-apply code — mapped onto a finding or a warn row. A
 finding is a statement ABOUT the tree; that exit code says the tree may no longer be the
 one under review, so it must abort the whole run (advisory mode included) with the
-subprocess output preserved, never ride the channel an ordinary result rides.
+subprocess output preserved, never ride the channel an ordinary result rides. Enumerate
+the SAFE exits, never the damaging ones: u-he-40 codex r8 found the r2 fix aborting on `3`
+while a SIGKILL (a negative returncode, or 137 through a shell) still became an ordinary
+"indeterminate" warning — and the probe tool documents that SIGKILL leaves the file mutated.
+Every exit outside the documented verdict set aborts.
 
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the

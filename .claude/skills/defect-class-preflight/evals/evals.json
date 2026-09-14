@@ -473,6 +473,51 @@
     "states the consequence on the auto-allowed path: an arbitrary writable file is truncated and the symlink becomes the state file — a generic 'race condition' remark does not pass",
     "proposes exclusive creation of the staging file (mkstemp / O_EXCL) with a planted-symlink test — adding a lock or an existence check before writing does not pass"
    ]
+  },
+  {
+   "id": 29,
+   "eval_name": "damaging-exit-enumerated-instead-of-safe-exits",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/probe_exit_table_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the exit table as enumerating the one damaging code instead of the safe ones: only `rc == 3` aborts, so a SIGKILL of the probe (a negative returncode, or 137 through a shell) falls into `indeterminate` and becomes an ordinary warning — while the notes themselves say SIGKILL leaves the file mutated, and advisory mode lets the run exit 0 on a possibly-mutated tree. The fix is to treat exits 0/1/2 as the verdict set and abort on every other exit, with a test parametrized over 3, a negative signal code and 137.",
+   "files": [
+    "fixtures-uhe40/probe_exit_table_notes.md"
+   ],
+   "assertions": [
+    "names the signal-killed probe (negative returncode or 128+N) landing in the indeterminate warning arm as the defect — a review that only praises the exit-3 abort does not pass",
+    "ties it to the documented consequence: the file may stay mutated while the advisory run continues and can exit 0 — a generic 'handle more exit codes' remark does not pass",
+    "proposes aborting on every exit outside the documented verdict set (0/1/2) with a test over a signal exit — adding one more `rc == 137` special case does not pass"
+   ]
+  },
+  {
+   "id": 30,
+   "eval_name": "evidence-key-coarser-than-the-claim",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/annotation_identity_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the evidence key as coarser than the claim: `annotations()` keeps only (test name, file) and discards the `<lines>` each annotation names, and `logged_range` matches rows on node and file alone, so two stacked annotations on one test and file (`x.py:1` and `x.py:2`) both select the same latest row — one range is re-verified twice and the other is never checked, yet the run reports clean. The fix keeps the named lines in the annotation's identity and matches only rows for those lines, with a stacked-annotation test whose second annotation has no row.",
+   "files": [
+    "fixtures-uhe40/annotation_identity_notes.md"
+   ],
+   "assertions": [
+    "names the dropped `<lines>` in the annotation identity, so stacked annotations share one log row, as the defect — a review that only checks the rc filter does not pass",
+    "states the consequence concretely: one annotation's range is verified twice and the other annotation is never verified while the check reports no finding — 'annotations might collide' without the silent-pass outcome does not pass",
+    "proposes carrying the named lines in the identity and matching rows on them, witnessed by a stacked-annotation test — deduplicating the annotation list does not pass"
+   ]
+  },
+  {
+   "id": 31,
+   "eval_name": "parsed-call-treated-as-executed-call",
+   "skill": "defect-class-preflight",
+   "prompt": "You are in /Users/robertrhu/Projects/arhugula-v2. A teammate is about to commit the change described in .claude/skills/defect-class-preflight/evals/fixtures-uhe40/syntactic_exemption_notes.md. Run the defect-class-preflight sweep over it as it stands: for each problem, say what is wrong, cite the line, and say concretely how it fails. Write your review to the outputs directory given to you as review.md. Constraints: read-only outside your outputs directory; do NOT modify repo files, do NOT run tests.",
+   "expected_output": "review.md naming the exemption as syntactic presence standing in for execution: `ast.walk` collects every call anywhere in the tree, so `if False: assert_fake_is_subclass(FakeClock, Clock)` or a call inside a helper nobody invokes exempts the double, though the notes promise an EXECUTED fidelity assertion. The fix names a statement position that guarantees execution — a module-level expression statement, which runs whenever the file imports — and exempts only that, with fixtures for the `if False:` guard and the uncalled helper.",
+   "files": [
+    "fixtures-uhe40/syntactic_exemption_notes.md"
+   ],
+   "assertions": [
+    "names a parsed call under a never-taken branch or in an uncalled helper still granting the exemption as the defect — a review satisfied that the file is parsed rather than grepped does not pass",
+    "states the gap against the notes' own promise of an executed assertion — a generic 'static analysis is imprecise' remark does not pass",
+    "proposes exempting only a statement position known to run (module level) with fixtures for the guarded and helper cases — requiring the call to be inside a test function does not pass"
+   ]
   }
  ]
 }

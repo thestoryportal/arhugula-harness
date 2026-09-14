@@ -311,11 +311,12 @@ def test_mutation_probe_reverify_pinned_is_clean_and_indeterminate_is_named(tmp_
     assert all("REFUSED: why" in f.evidence for f in found)
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:143-147 drop the restore abort
-def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch):
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:198-202 drop the restore abort
+@pytest.mark.parametrize("rc", [3, -9, 137])  # restore unverified, SIGKILL, a shell's 128+9
+def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path, monkeypatch, rc):
     log = tmp_path / "gate.jsonl"
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", log)
-    restore_failed = mpr.Check(probe=lambda repo, file, lines, node: (3, "RESTORE FAILED: x.py"))
+    restore_failed = mpr.Check(probe=lambda repo, file, lines, node: (rc, "RESTORE FAILED: x.py"))
     subject = _probe_fixture(tmp_path, logged=True)
     with pytest.raises(mpr.ProbeRestoreError, match=r"(?s)may still be mutated.*RESTORE FAILED"):
         runner.run_checks(
@@ -329,7 +330,7 @@ def test_mutation_probe_restore_failure_stops_the_run_whatever_the_mode(tmp_path
     assert not log.exists()  # no finding row stands in for a possibly-mutated tree
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:125-132 drop the unprobed arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:158-166 drop the unprobed arm
 def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(tmp_path):
     found = mpr.Check(probe=lambda *a: pytest.fail("probed without a logged range")).run(
         _probe_fixture(tmp_path, logged=False)
@@ -338,7 +339,7 @@ def test_mutation_probe_reverify_never_reads_an_unprobed_annotation_as_verified(
     assert "never probed" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:133-141 drop the stale-pin arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:167-175 drop the stale-pin arm
 def test_mutation_probe_reverify_never_probes_a_range_whose_pin_went_stale(tmp_path):
     subject = _probe_fixture(tmp_path, logged=True)
     (tmp_path / "tools" / "x.py").write_text(
@@ -361,12 +362,40 @@ def test_a_block_scoped_pin_whose_block_moved_is_stale_too(tmp_path):
 
 def test_a_logged_range_goes_stale_when_the_test_file_changes(tmp_path):
     subject = _probe_fixture(tmp_path, logged=True)
-    # the annotation now names different lines of the same, unchanged source file
+    # the test changed (its annotation now names the logged lines) while the source did not
     (tmp_path / "tools" / "test_x.py").write_text(
-        "# mutation-probe: tools/x.py:1 drop A\ndef test_t():\n    assert True\n"
+        "# mutation-probe: tools/x.py:2 drop B\ndef test_t():\n    assert True\n"
     )
     found = mpr.Check(probe=lambda *a: pytest.fail("re-probed the old range")).run(subject)
     assert [(f.severity, f.location) for f in found] == [("warn", "tools/test_x.py::test_t")]
+    assert "no longer pins" in found[0].evidence
+
+
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:119 drop the named-lines match
+def test_stacked_annotations_each_verify_their_own_named_lines(tmp_path):
+    subject = _probe_fixture(tmp_path, logged=True)  # one live pinned row: tools/x.py lines 2-2
+    test_x = tmp_path / "tools" / "test_x.py"
+    test_x.write_text(
+        "# mutation-probe: tools/x.py:1 drop A\n# mutation-probe: tools/x.py:2 drop B\n"
+        "def test_t():\n    assert True\n"
+    )
+    log = tmp_path / ".harness" / "mutation-probe-log.jsonl"
+    row = json.loads(log.read_text())
+    log.write_text(json.dumps({**row, "test_sha": pin_scope.digest16(test_x.read_bytes())}) + "\n")
+    probed = []
+
+    def probe(repo: Path, file: str, lines: str, node: str) -> tuple[int, str]:
+        probed.append(lines)
+        return 0, ""
+
+    found = mpr.Check(probe=probe).run(subject)
+    assert probed == ["2-2"]  # line 2's own row, probed once -- never on line 1's behalf
+    assert [(f.location, f.evidence) for f in found] == [
+        (
+            "tools/test_x.py::test_t",
+            "annotation never probed: no pinned probe-log row for tools/x.py:1-1",
+        )
+    ]
 
 
 def test_probe_command_quotes_the_filename_derived_node(monkeypatch, tmp_path):
@@ -383,7 +412,7 @@ def test_probe_command_quotes_the_filename_derived_node(monkeypatch, tmp_path):
     assert seen["argv"][-1] == "uv run pytest 'tools/test_$(id).py::test_t' -q"
 
 
-# mutation-probe: tools/mechanized_checks/double_fidelity.py:22-25 drop the issubclass raise
+# mutation-probe: tools/mechanized_checks/double_fidelity.py:24-27 drop the issubclass raise
 def test_assert_fake_is_subclass_detects_a_false_fidelity_claim():
     class Real: ...
 
@@ -396,7 +425,7 @@ def test_assert_fake_is_subclass_detects_a_false_fidelity_claim():
         tdf.assert_fake_is_subclass(Fake, Real)
 
 
-# mutation-probe: tools/mechanized_checks/double_fidelity.py:63 drop the assertion exemption
+# mutation-probe: tools/mechanized_checks/double_fidelity.py:72 drop the assertion exemption
 def test_double_fidelity_flags_a_bare_double_without_an_executed_assertion(tmp_path):
     files = {
         "test_a.py": "class FakeClock:\n    pass\n\ndef test_a():\n    use(FakeClock())\n",
@@ -406,12 +435,23 @@ def test_double_fidelity_flags_a_bare_double_without_an_executed_assertion(tmp_p
         # a comment or a string that only MENTIONS the assertion exempts nothing
         "test_d.py": "class FakeClock:\n    pass\n\n# assert_fake_is_subclass(FakeClock, Clock)\n"
         "NOTE = 'assert_fake_is_subclass(FakeClock'\n\ndef test_d():\n    use(FakeClock())\n",
+        # a call that may never run exempts nothing: under an `if`, or inside an uncalled helper
+        "test_f.py": "class FakeClock:\n    pass\n\nif False:\n"
+        "    assert_fake_is_subclass(FakeClock, Clock)\n\ndef test_f():\n    use(FakeClock())\n",
+        "test_g.py": "class FakeClock:\n    pass\n\ndef _fidelity():\n"
+        "    assert_fake_is_subclass(FakeClock, Clock)\n\ndef test_g():\n    use(FakeClock())\n",
         "test_e.py": "def test_e(:\n",
     }
     for name, text in files.items():
         (tmp_path / name).write_text(text)
     found = tdf.Check().run(_subject(tmp_path, changed=list(files)))
-    assert [f.location for f in found] == ["test_a.py:1", "test_d.py:1", "test_e.py:1"]
+    assert [f.location for f in found] == [
+        "test_a.py:1",
+        "test_d.py:1",
+        "test_f.py:1",
+        "test_g.py:1",
+        "test_e.py:1",
+    ]
     assert "does not parse" in found[-1].evidence
 
 
