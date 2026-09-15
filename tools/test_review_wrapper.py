@@ -817,8 +817,9 @@ def _tracked_text_files(root: Path) -> list[Path]:
 
 
 def test_every_codex_review_invocation_pins_gpt_5_6_sol_at_medium_effort(tmp_path):
-    """Scope: every tracked file outside `.harness/` history and test files (codex u-he merge-gate
-    witness lens on #1528: a fixed list of globs let an unpinned call elsewhere ship unseen)."""
+    """Scope: every tracked file outside `.harness/` history and test files (the merge-gate
+    witness-adequacy lens on #1528: a fixed list of globs let an unpinned call elsewhere ship
+    unseen)."""
     cmd = cr.build_command(Path("/r"), "INSTR", output_file=tmp_path / "last.md")
     for pin in REVIEW_MODEL_PINS:
         assert cmd[cmd.index(pin) - 1] == "-c", cmd
