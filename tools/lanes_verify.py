@@ -472,6 +472,15 @@ MANIFEST: list[Row] = [
         "local + CI",
         False,
     ),
+    # C-HE-32/33 (U-HE-42) — local/CI guard parity: the CI step and the CI-shaped recipe
+    # pass the same argv, and the CI and local shapes differ only within the named exclusions.
+    Row(
+        "C-HE-32/33",
+        "pytest:tools/test_codex_context_guard.py::test_local_ci_parity",
+        "layer2",
+        "local + CI",
+        False,
+    ),
     # WR-14 (U-SR-07) — session-shape habit lines at their loop-skill carriers.
     # mutation-probe `—`: the probed artifact is markdown skill prose, outside the
     # probe tool's language set (C-HE-30 static-doc-witness precedent); the manual

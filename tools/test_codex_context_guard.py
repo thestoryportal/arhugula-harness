@@ -2252,3 +2252,252 @@ def test_tree_with_only_attestation_artifacts_yields_no_status_entries(
     codes = {f.code for f in cg.validate(dirty, mode="check")}
     assert "ROOT_CHECKOUT_EDIT" in codes
     assert "DETECTIONS_UNAVAILABLE" in codes
+
+
+# --- U-HE-42: local/CI guard parity (C-HE-33) ----------------------------------
+
+import shlex  # noqa: E402  -- section-local import, same posture as the sections above
+
+import pytest  # noqa: E402
+import yaml  # noqa: E402
+
+_ROOT = Path(__file__).resolve().parent.parent
+_GUARD = ["/usr/bin/python3", "tools/codex_context_guard.py"]
+
+# C-HE-33 §2: the findings a CI-shaped and a local-shaped invocation may disagree on for
+# the same committed SHA, each for a reason no local run can reproduce.
+PARITY_EXCLUSIONS = frozenset(
+    {
+        # gh availability is per venue: CI's guard job sets no GH_TOKEN.
+        "OPEN_PRS_UNAVAILABLE",
+        # the checkpoint lives in the gitignored .harness/.checkpoints/, which CI never has.
+        "CONTEXT_CHECKPOINT_MISSING",
+        "CONTEXT_CHECKPOINT_STALE",
+        # the loop state is the gitignored .harness/codex_loop_state.json.
+        "CODEX_LOOP_INCOMPLETE",
+        # the one flag CI passes and `codex-context-check` does not: --allow-roadmap-drift.
+        "ROADMAP_STATUS_DRIFT_ALLOWED",
+        "ROADMAP_STATUS_BRANCH_DIVERGED",
+    }
+)
+
+
+def _ci_guard_argv(base: str, head: str) -> list[str]:
+    # [LAW:one-source-of-truth] the argv is read from ci.yml itself, so a CI edit the
+    # recipe does not follow reds this test instead of drifting silently.
+    workflow = yaml.safe_load((_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    (step,) = [
+        s
+        for s in workflow["jobs"]["codex-context-guard"]["steps"]
+        if s.get("name") == "Codex context guard runtime check"
+    ]
+    run = (
+        step["run"]
+        .replace("${{ github.event.pull_request.base.sha || github.event.before }}", base)
+        .replace("${{ github.event.pull_request.head.sha || github.sha }}", head)
+    )
+    assert "${{" not in run, f"unrecognised CI ref expression: {run}"
+    argv = shlex.split(run)
+    assert argv[:2] == _GUARD, argv
+    return argv[2:]
+
+
+def _recipe_body(recipe: str) -> list[str]:
+    lines = (_ROOT / "justfile").read_text(encoding="utf-8").splitlines()
+    body: list[str] = []
+    for line in lines[lines.index(f"{recipe}:") + 1 :]:
+        if not line.startswith("    "):
+            break
+        body.append(line.strip())
+    return body
+
+
+def _is_guard_call(line: str) -> bool:
+    return line.startswith(" ".join(_GUARD) + " ")
+
+
+def _recipe_guard_argvs(recipe: str, *, base: str, head: str) -> list[list[str]]:
+    """Every guard invocation in a justfile recipe body, `$base`/`$head` bound to SHAs. A
+    literal `HEAD` is deliberately left unbound: CI passes resolved SHAs, so a recipe that hands
+    the guard a live ref no longer matches CI's argv."""
+    bound = {"$base": base, "$head": head}
+    return [
+        [bound.get(tok, tok) for tok in shlex.split(line)[2:]]
+        for line in _recipe_body(recipe)
+        if _is_guard_call(line)
+    ]
+
+
+def _open_prs_available(root: Path) -> tuple[str, bool]:
+    return ("", True)
+
+
+def _finding_codes(capsys: pytest.CaptureFixture[str], argv: list[str]) -> set[str]:
+    cg.main([*argv, "--json"])
+    return {f["code"] for f in json.loads(capsys.readouterr().out)["findings"]}
+
+
+def test_local_ci_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """C-HE-33: `codex-context-check-ci` passes CI's argv exactly, and for one committed SHA
+    in a clean worktree CI's guard step and the local `codex-context-check` recipe report
+    the same findings apart from PARITY_EXCLUSIONS. Uncommitted edits sit outside the
+    claim: CI's checkout never has any."""
+    repo = _init_repo(tmp_path)
+    (repo / ".gitignore").write_text(
+        ".harness/.checkpoints/\n.harness/codex_loop_state.json\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore local guard state, as the workspace does")
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / ".harness" / "class_3_drift_parity.md").write_text("drift\n", encoding="utf-8")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "parity.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "mixed branch change")
+    base = _git(repo, "merge-base", "main", "HEAD")
+    head = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+
+    ci = _ci_guard_argv(base, head)
+    assert _recipe_guard_argvs("codex-context-check-ci", base=base, head=head) == [ci]
+
+    ci_codes = _finding_codes(capsys, ci)
+    *setup, local_check = _recipe_guard_argvs("codex-context-check", base=base, head=head)
+    for argv in setup:
+        cg.main(argv)
+        capsys.readouterr()
+    local_codes = _finding_codes(capsys, local_check)
+
+    # non-vacuous: the branch's hard finding reaches both shapes
+    assert "DESIGN_IMPL_MIX" in ci_codes & local_codes
+    # the only live difference on this tree is the roadmap-drift flag pair
+    assert ci_codes ^ local_codes == {
+        "ROADMAP_STATUS_DRIFT_ALLOWED",
+        "ROADMAP_STATUS_BRANCH_DIVERGED",
+    }
+    assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS
+
+
+def _run_recipe_body(recipe: str, repo: Path) -> subprocess.CompletedProcess[str]:
+    """Run a recipe body with its guard call swapped for printf, so the witness sees the
+    argv the recipe would pass without running the guard against a fixture repo."""
+    script = "\n".join(
+        "printf '%s\\n' " + line[len(" ".join(_GUARD)) + 1 :] if _is_guard_call(line) else line
+        for line in _recipe_body(recipe)
+        if not line.startswith("#!")
+    )
+    return subprocess.run(
+        ["bash", "-c", script], cwd=repo, capture_output=True, text=True, check=False
+    )
+
+
+def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
+    """C-HE-33: CI diffs from the PR base, which equals the local base only on a branch that
+    contains origin/main. The recipe passes origin/main for such a branch and refuses any
+    other before the guard runs (codex u-he-42 r1: main advancing past the branch point)."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "branch change")
+    branch_point = _git(repo, "rev-parse", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", branch_point)
+    feature_head = _git(repo, "rev-parse", "HEAD")
+
+    current = _run_recipe_body("codex-context-check-ci", repo)
+    assert current.returncode == 0, current.stderr
+    assert current.stdout.split() == [
+        "check",
+        "--base-ref",
+        branch_point,
+        "--head-ref",
+        feature_head,
+        "--allow-roadmap-drift",
+    ]
+
+    _git(repo, "checkout", "main")
+    (repo / "advanced.md").write_text("main moved on\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "main advances")
+    _git(repo, "update-ref", "refs/remotes/origin/main", _git(repo, "rev-parse", "HEAD"))
+    _git(repo, "checkout", "feature")
+
+    behind = _run_recipe_body("codex-context-check-ci", repo)
+    assert behind.returncode == 1
+    assert "HEAD does not contain origin/main" in behind.stderr
+    assert behind.stdout == ""
+
+
+def _flat(path: str) -> str:
+    return " ".join((_ROOT / path).read_text(encoding="utf-8").split())
+
+
+def test_ci_recipe_is_not_a_codex_loop_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex u-he-42 r2: inside an active Codex loop the CI-shaped `check` hard-fails from the
+    ship commit on, because the pre-closeout gates stay bound to the pre-commit HEAD until
+    every ship gate exists. So the Claude carrier runs the recipe before its push and the
+    Codex carrier names the exclusion instead of running it."""
+    repo = _init_repo(tmp_path)
+    (repo / ".gitignore").write_text(
+        ".harness/.checkpoints/\n.harness/codex_loop_state.json\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore local guard state, as the workspace does")
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "work.txt").write_text("work\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "the arc's work")
+    base = _git(repo, "merge-base", "main", "HEAD")
+    (repo / ".harness" / "codex_loop_state.json").write_text(
+        json.dumps(
+            {
+                "arc_id": "B-LOOP",
+                "branch": "feature",
+                "head8": _git(repo, "rev-parse", "--short=8", "HEAD"),
+                "worktree_fingerprint": cg.worktree_fingerprint(repo),
+                "events": [
+                    {
+                        "phase": phase,
+                        "status": "failed" if phase == "red" else "passed",
+                        "branch": "feature",
+                        "head8": _git(repo, "rev-parse", "--short=8", "HEAD"),
+                        "worktree_fingerprint": cg.worktree_fingerprint(repo),
+                        "linked_worktree": True,
+                    }
+                    for phase in cg.CODEX_LOOP_PRE_CLOSEOUT_GATES
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+
+    before_commit = _finding_codes(capsys, _ci_guard_argv(base, _git(repo, "rev-parse", "HEAD")))
+    assert "CODEX_LOOP_INCOMPLETE" not in before_commit
+
+    (repo / "ship.txt").write_text("the ship commit\n", encoding="utf-8")
+    _git(repo, "add", "ship.txt")
+    _git(repo, "commit", "-m", "ship commit")
+    after_commit = _finding_codes(capsys, _ci_guard_argv(base, _git(repo, "rev-parse", "HEAD")))
+    assert "CODEX_LOOP_INCOMPLETE" in after_commit
+    assert "CODEX_LOOP_INCOMPLETE" in PARITY_EXCLUSIONS
+
+    assert "Run `just codex-context-check-ci` on the committed branch" in _flat(
+        ".claude/skills/ship-pr/SKILL.md"
+    )
+    codex_carrier = _flat(".agents/skills/ship-pr/SKILL.md")
+    assert (
+        "This carrier does not run `just codex-context-check-ci`, the Claude carrier's "
+        "CI-shaped pre-push guard (U-HE-42, C-HE-33): an active Codex loop binds its "
+        "pre-closeout gates to the pre-commit HEAD, so `check` reports "
+        "`CODEX_LOOP_INCOMPLETE` from the commit until every ship gate is recorded"
+    ) in codex_carrier

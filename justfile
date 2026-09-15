@@ -86,6 +86,23 @@ codex-context-check:
     /usr/bin/python3 tools/codex_context_guard.py checkpoint --label local-check --include-branch-diff
     /usr/bin/python3 tools/codex_context_guard.py check --require-fresh-checkpoint --include-branch-diff
 
+# C-HE-33 §3: the guard as CI's `codex-context-guard` job runs it -- explicit committed-range
+# refs plus --allow-roadmap-drift, no checkpoint -- so a PR's guard verdict converges before
+# the push. CI's two-endpoint diff starts at the PR base; on a branch that contains
+# origin/main that base, main's tip and the merge-base are one commit, so the recipe refuses
+# any other branch rather than report a parity it cannot have (fetch, then rebase). Both refs
+# are read once and the guard gets the resolved SHAs, as CI passes them: origin/main is shared
+# by every worktree and HEAD can move mid-run, so a second read could check one commit and
+# diff another. What still differs from the local shape above is named in
+# tools/test_codex_context_guard.py::test_local_ci_parity.
+codex-context-check-ci:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="$(git rev-parse origin/main)"
+    head="$(git rev-parse HEAD)"
+    git merge-base --is-ancestor "$base" "$head" || { echo "codex-context-check-ci: HEAD does not contain origin/main; rebase onto it first, or CI's diff will include main's newer commits" >&2; exit 1; }
+    /usr/bin/python3 tools/codex_context_guard.py check --base-ref "$base" --head-ref "$head" --allow-roadmap-drift
+
 # Log a credential-gated unit after all non-credential work is closed.
 codex-credential-gate *args:
     /usr/bin/python3 tools/codex_context_guard.py credential-gate {{args}}
