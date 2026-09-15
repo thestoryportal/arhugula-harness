@@ -221,8 +221,10 @@ the default branch.
 `--base-ref origin/main` / `--head-ref HEAD` and `--allow-roadmap-drift`, no
 checkpoint. It refuses a branch that does not contain `origin/main`, because CI's
 two-endpoint diff would then include main's newer commits; fetch and rebase first.
-Run it on the committed branch before the push so the CI guard verdict is known
-locally (C-HE-33). The findings the two local
+It is the Claude lane's pre-push step (C-HE-33). The Codex ship flow does not run it:
+inside an active Codex autonomous loop the pre-closeout gates are bound to the
+pre-commit HEAD, so `check` reports `CODEX_LOOP_INCOMPLETE` from the commit until
+every ship gate is recorded, a local-only finding CI never sees. The findings the two local
 recipes may legitimately disagree on are named in
 `tools/test_codex_context_guard.py::test_local_ci_parity`.
 

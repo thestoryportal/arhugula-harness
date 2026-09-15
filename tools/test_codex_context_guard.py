@@ -2428,3 +2428,73 @@ def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
     assert behind.returncode == 1
     assert "HEAD does not contain origin/main" in behind.stderr
     assert behind.stdout == ""
+
+
+def _flat(path: str) -> str:
+    return " ".join((_ROOT / path).read_text(encoding="utf-8").split())
+
+
+def test_ci_recipe_is_not_a_codex_loop_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex u-he-42 r2: inside an active Codex loop the CI-shaped `check` hard-fails from the
+    ship commit on, because the pre-closeout gates stay bound to the pre-commit HEAD until
+    every ship gate exists. So the Claude carrier runs the recipe before its push and the
+    Codex carrier names the exclusion instead of running it."""
+    repo = _init_repo(tmp_path)
+    (repo / ".gitignore").write_text(
+        ".harness/.checkpoints/\n.harness/codex_loop_state.json\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore local guard state, as the workspace does")
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "work.txt").write_text("work\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "the arc's work")
+    base = _git(repo, "merge-base", "main", "HEAD")
+    (repo / ".harness" / "codex_loop_state.json").write_text(
+        json.dumps(
+            {
+                "arc_id": "B-LOOP",
+                "branch": "feature",
+                "head8": _git(repo, "rev-parse", "--short=8", "HEAD"),
+                "worktree_fingerprint": cg.worktree_fingerprint(repo),
+                "events": [
+                    {
+                        "phase": phase,
+                        "status": "failed" if phase == "red" else "passed",
+                        "branch": "feature",
+                        "head8": _git(repo, "rev-parse", "--short=8", "HEAD"),
+                        "worktree_fingerprint": cg.worktree_fingerprint(repo),
+                        "linked_worktree": True,
+                    }
+                    for phase in cg.CODEX_LOOP_PRE_CLOSEOUT_GATES
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+
+    before_commit = _finding_codes(capsys, _ci_guard_argv(base, _git(repo, "rev-parse", "HEAD")))
+    assert "CODEX_LOOP_INCOMPLETE" not in before_commit
+
+    (repo / "ship.txt").write_text("the ship commit\n", encoding="utf-8")
+    _git(repo, "add", "ship.txt")
+    _git(repo, "commit", "-m", "ship commit")
+    after_commit = _finding_codes(capsys, _ci_guard_argv(base, _git(repo, "rev-parse", "HEAD")))
+    assert "CODEX_LOOP_INCOMPLETE" in after_commit
+    assert "CODEX_LOOP_INCOMPLETE" in PARITY_EXCLUSIONS
+
+    assert "Run `just codex-context-check-ci` on the committed branch" in _flat(
+        ".claude/skills/ship-pr/SKILL.md"
+    )
+    codex_carrier = _flat(".agents/skills/ship-pr/SKILL.md")
+    assert (
+        "This carrier does not run `just codex-context-check-ci`, the Claude carrier's "
+        "CI-shaped pre-push guard (U-HE-42, C-HE-33): an active Codex loop binds its "
+        "pre-closeout gates to the pre-commit HEAD, so `check` reports "
+        "`CODEX_LOOP_INCOMPLETE` from the commit until every ship gate is recorded"
+    ) in codex_carrier
