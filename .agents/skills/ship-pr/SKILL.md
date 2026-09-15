@@ -73,7 +73,9 @@ review the new diff again. Never count self-review by the authoring model as dec
 
 ## Commit, PR, and CI
 
-1. Commit the explicit staged scope and push the topic branch.
+1. Commit the explicit staged scope, run `just codex-context-check-ci` (the context guard
+   with CI's explicit refs and `--allow-roadmap-drift`; U-HE-42, C-HE-33), then push the
+   topic branch once.
 2. Disjointness re-check at ship (U-HE-36; B-228) — AFTER that commit, so `HEAD` carries
    the arc's changes (codex u-he-36 r8: before it, staged work is invisible to the gate):
    run `uv run python tools/arc_disjoint_check.py check --candidate HEAD` (the same

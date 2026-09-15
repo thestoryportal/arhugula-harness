@@ -2252,3 +2252,123 @@ def test_tree_with_only_attestation_artifacts_yields_no_status_entries(
     codes = {f.code for f in cg.validate(dirty, mode="check")}
     assert "ROOT_CHECKOUT_EDIT" in codes
     assert "DETECTIONS_UNAVAILABLE" in codes
+
+
+# --- U-HE-42: local/CI guard parity (C-HE-33) ----------------------------------
+
+import shlex  # noqa: E402  -- section-local import, same posture as the sections above
+
+import pytest  # noqa: E402
+import yaml  # noqa: E402
+
+_ROOT = Path(__file__).resolve().parent.parent
+_GUARD = ["/usr/bin/python3", "tools/codex_context_guard.py"]
+
+# C-HE-33 §2: the findings a CI-shaped and a local-shaped invocation may disagree on for
+# the same committed SHA, each for a reason no local run can reproduce.
+PARITY_EXCLUSIONS = frozenset(
+    {
+        # gh availability is per venue: CI's guard job sets no GH_TOKEN.
+        "OPEN_PRS_UNAVAILABLE",
+        # the checkpoint lives in the gitignored .harness/.checkpoints/, which CI never has.
+        "CONTEXT_CHECKPOINT_MISSING",
+        "CONTEXT_CHECKPOINT_STALE",
+        # the loop state is the gitignored .harness/codex_loop_state.json.
+        "CODEX_LOOP_INCOMPLETE",
+        # the one flag CI passes and `codex-context-check` does not: --allow-roadmap-drift.
+        "ROADMAP_STATUS_DRIFT_ALLOWED",
+        "ROADMAP_STATUS_BRANCH_DIVERGED",
+    }
+)
+
+
+def _ci_guard_argv(base: str, head: str) -> list[str]:
+    # [LAW:one-source-of-truth] the argv is read from ci.yml itself, so a CI edit the
+    # recipe does not follow reds this test instead of drifting silently.
+    workflow = yaml.safe_load((_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    (step,) = [
+        s
+        for s in workflow["jobs"]["codex-context-guard"]["steps"]
+        if s.get("name") == "Codex context guard runtime check"
+    ]
+    run = (
+        step["run"]
+        .replace("${{ github.event.pull_request.base.sha || github.event.before }}", base)
+        .replace("${{ github.event.pull_request.head.sha || github.sha }}", head)
+    )
+    assert "${{" not in run, f"unrecognised CI ref expression: {run}"
+    argv = shlex.split(run)
+    assert argv[:2] == _GUARD, argv
+    return argv[2:]
+
+
+def _recipe_guard_argvs(recipe: str, *, base: str, head: str) -> list[list[str]]:
+    """Every guard invocation in a justfile recipe body, `$base`/`HEAD` bound to SHAs."""
+    lines = (_ROOT / "justfile").read_text(encoding="utf-8").splitlines()
+    body: list[str] = []
+    for line in lines[lines.index(f"{recipe}:") + 1 :]:
+        if not line.startswith("    "):
+            break
+        body.append(line.strip())
+    if recipe == "codex-context-check-ci":
+        assert 'base="$(git merge-base origin/main HEAD)"' in body, body
+    bound = {"$base": base, "HEAD": head}
+    return [
+        [bound.get(tok, tok) for tok in shlex.split(line)[2:]]
+        for line in body
+        if shlex.split(line)[:2] == _GUARD
+    ]
+
+
+def _open_prs_available(root: Path) -> tuple[str, bool]:
+    return ("", True)
+
+
+def _finding_codes(capsys: pytest.CaptureFixture[str], argv: list[str]) -> set[str]:
+    cg.main([*argv, "--json"])
+    return {f["code"] for f in json.loads(capsys.readouterr().out)["findings"]}
+
+
+def test_local_ci_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """C-HE-33: `codex-context-check-ci` passes CI's argv exactly, and for one committed SHA
+    in a clean worktree CI's guard step and the local `codex-context-check` recipe report
+    the same findings apart from PARITY_EXCLUSIONS. Uncommitted edits sit outside the
+    claim: CI's checkout never has any."""
+    repo = _init_repo(tmp_path)
+    (repo / ".gitignore").write_text(
+        ".harness/.checkpoints/\n.harness/codex_loop_state.json\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-m", "ignore local guard state, as the workspace does")
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / ".harness" / "class_3_drift_parity.md").write_text("drift\n", encoding="utf-8")
+    (repo / "tools").mkdir()
+    (repo / "tools" / "parity.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "mixed branch change")
+    base = _git(repo, "merge-base", "main", "HEAD")
+    head = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+
+    ci = _ci_guard_argv(base, head)
+    assert _recipe_guard_argvs("codex-context-check-ci", base=base, head=head) == [ci]
+
+    ci_codes = _finding_codes(capsys, ci)
+    *setup, local_check = _recipe_guard_argvs("codex-context-check", base=base, head=head)
+    for argv in setup:
+        cg.main(argv)
+        capsys.readouterr()
+    local_codes = _finding_codes(capsys, local_check)
+
+    # non-vacuous: the branch's hard finding reaches both shapes
+    assert "DESIGN_IMPL_MIX" in ci_codes & local_codes
+    # the only live difference on this tree is the roadmap-drift flag pair
+    assert ci_codes ^ local_codes == {
+        "ROADMAP_STATUS_DRIFT_ALLOWED",
+        "ROADMAP_STATUS_BRANCH_DIVERGED",
+    }
+    assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS

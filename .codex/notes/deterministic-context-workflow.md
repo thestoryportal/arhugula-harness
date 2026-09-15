@@ -217,6 +217,13 @@ and context-check recipes pass `--include-branch-diff`, so a clean feature
 worktree is still checked against committed changes since the merge-base with
 the default branch.
 
+`codex-context-check-ci` runs the guard the way CI does: `check` with explicit
+`--base-ref <merge-base with origin/main>` / `--head-ref HEAD` and
+`--allow-roadmap-drift`, no checkpoint. Run it on the committed branch before the
+push so the CI guard verdict is known locally (C-HE-33). The findings the two local
+recipes may legitimately disagree on are named in
+`tools/test_codex_context_guard.py::test_local_ci_parity`.
+
 CI runs the guard directly without local checkpoint freshness because
 `.harness/.checkpoints/` is intentionally untracked. The CI invocation passes
 explicit `--base-ref` / `--head-ref` values from the GitHub event so the guard

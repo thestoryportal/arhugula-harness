@@ -86,6 +86,18 @@ codex-context-check:
     /usr/bin/python3 tools/codex_context_guard.py checkpoint --label local-check --include-branch-diff
     /usr/bin/python3 tools/codex_context_guard.py check --require-fresh-checkpoint --include-branch-diff
 
+# C-HE-33 §3: the guard as CI's `codex-context-guard` job runs it -- explicit committed-range
+# refs plus --allow-roadmap-drift, no checkpoint -- so a PR's guard verdict converges before
+# the push. Base = the merge-base with origin/main (fetch first): each of the 80 pull_request
+# runs sampled 2026-09-15 started with its branch current with main, so the PR base CI passes
+# and the merge-base were the same commit. What still differs from the local shape above is
+# named in tools/test_codex_context_guard.py::test_local_ci_parity.
+codex-context-check-ci:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base="$(git merge-base origin/main HEAD)"
+    /usr/bin/python3 tools/codex_context_guard.py check --base-ref "$base" --head-ref HEAD --allow-roadmap-drift
+
 # Log a credential-gated unit after all non-credential work is closed.
 codex-credential-gate *args:
     /usr/bin/python3 tools/codex_context_guard.py credential-gate {{args}}
