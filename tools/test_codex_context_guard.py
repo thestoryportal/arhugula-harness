@@ -2302,21 +2302,27 @@ def _ci_guard_argv(base: str, head: str) -> list[str]:
     return argv[2:]
 
 
-def _recipe_guard_argvs(recipe: str, *, base: str, head: str) -> list[list[str]]:
-    """Every guard invocation in a justfile recipe body, `$base`/`HEAD` bound to SHAs."""
+def _recipe_body(recipe: str) -> list[str]:
     lines = (_ROOT / "justfile").read_text(encoding="utf-8").splitlines()
     body: list[str] = []
     for line in lines[lines.index(f"{recipe}:") + 1 :]:
         if not line.startswith("    "):
             break
         body.append(line.strip())
-    if recipe == "codex-context-check-ci":
-        assert 'base="$(git merge-base origin/main HEAD)"' in body, body
+    return body
+
+
+def _is_guard_call(line: str) -> bool:
+    return line.startswith(" ".join(_GUARD) + " ")
+
+
+def _recipe_guard_argvs(recipe: str, *, base: str, head: str) -> list[list[str]]:
+    """Every guard invocation in a justfile recipe body, `$base`/`HEAD` bound to SHAs."""
     bound = {"$base": base, "HEAD": head}
     return [
         [bound.get(tok, tok) for tok in shlex.split(line)[2:]]
-        for line in body
-        if shlex.split(line)[:2] == _GUARD
+        for line in _recipe_body(recipe)
+        if _is_guard_call(line)
     ]
 
 
@@ -2372,3 +2378,53 @@ def test_local_ci_parity(
         "ROADMAP_STATUS_BRANCH_DIVERGED",
     }
     assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS
+
+
+def _run_recipe_body(recipe: str, repo: Path) -> subprocess.CompletedProcess[str]:
+    """Run a recipe body with its guard call swapped for printf, so the witness sees the
+    argv the recipe would pass without running the guard against a fixture repo."""
+    script = "\n".join(
+        "printf '%s\\n' " + line[len(" ".join(_GUARD)) + 1 :] if _is_guard_call(line) else line
+        for line in _recipe_body(recipe)
+        if not line.startswith("#!")
+    )
+    return subprocess.run(
+        ["bash", "-c", script], cwd=repo, capture_output=True, text=True, check=False
+    )
+
+
+def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
+    """C-HE-33: CI diffs from the PR base, which equals the local base only on a branch that
+    contains origin/main. The recipe passes origin/main for such a branch and refuses any
+    other before the guard runs (codex u-he-42 r1: main advancing past the branch point)."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "branch change")
+    branch_point = _git(repo, "rev-parse", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/main", branch_point)
+
+    current = _run_recipe_body("codex-context-check-ci", repo)
+    assert current.returncode == 0, current.stderr
+    assert current.stdout.split() == [
+        "check",
+        "--base-ref",
+        branch_point,
+        "--head-ref",
+        "HEAD",
+        "--allow-roadmap-drift",
+    ]
+
+    _git(repo, "checkout", "main")
+    (repo / "advanced.md").write_text("main moved on\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "main advances")
+    _git(repo, "update-ref", "refs/remotes/origin/main", _git(repo, "rev-parse", "HEAD"))
+    _git(repo, "checkout", "feature")
+
+    behind = _run_recipe_body("codex-context-check-ci", repo)
+    assert behind.returncode == 1
+    assert "HEAD does not contain origin/main" in behind.stderr
+    assert behind.stdout == ""
