@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from itertools import count
 from pathlib import Path
@@ -772,6 +773,62 @@ def test_build_command_is_codex_exec_read_only_with_output_file(tmp_path):
         tmp_path / "last.md"
     )
     assert "--base" not in cmd and 'preferred_auth_method="chatgpt"' in cmd
+
+
+#: Operator direction 2026-09-15: out-of-family review runs gpt-5.6-sol at medium reasoning
+#: effort, pinned by each review invocation rather than inherited from ~/.codex/config.toml.
+REVIEW_MODEL_PINS = ('model="gpt-5.6-sol"', 'model_reasoning_effort="medium"')
+_REVIEW_INVOCATION = re.compile(
+    r"HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec|codex (?:exec|review)\b.*preferred_auth_method"
+)
+
+
+def _joined_lines(text: str) -> list[str]:
+    """Physical lines with backslash continuations folded, so a multi-line command is one."""
+    out: list[str] = []
+    buf = ""
+    for line in text.splitlines():
+        if line.rstrip().endswith("\\"):
+            buf += line.rstrip()[:-1] + " "
+            continue
+        out.append(buf + line)
+        buf = ""
+    return out
+
+
+def test_every_codex_review_invocation_pins_gpt_5_6_sol_at_medium_effort(tmp_path):
+    cmd = cr.build_command(Path("/r"), "INSTR", output_file=tmp_path / "last.md")
+    for pin in REVIEW_MODEL_PINS:
+        assert cmd[cmd.index(pin) - 1] == "-c", cmd
+
+    root = Path(__file__).resolve().parent.parent
+    carriers = [
+        *sorted((root / ".agents" / "skills").glob("*/SKILL.md")),
+        root / "justfile",
+        *sorted(
+            p for p in (root / "tools" / "hooks").glob("*.sh") if not p.name.startswith("test_")
+        ),
+    ]
+    invocations = [
+        (path.relative_to(root).as_posix(), line)
+        for path in carriers
+        for line in _joined_lines(path.read_text(encoding="utf-8"))
+        if _REVIEW_INVOCATION.search(line)
+    ]
+    unpinned = [
+        (path, line.strip()[:120])
+        for path, line in invocations
+        if not all(p in line for p in REVIEW_MODEL_PINS)
+    ]
+    assert unpinned == []
+    found = {path for path, _ in invocations}
+    for required in (
+        ".agents/skills/merge-gate/SKILL.md",
+        ".agents/skills/c1-orchestration-control/SKILL.md",
+        "justfile",
+        "tools/hooks/resolve_lib.sh",
+    ):
+        assert required in found, required
 
 
 def test_review_instructions_name_the_bound_diff_and_carry_all_six_binding_values():
