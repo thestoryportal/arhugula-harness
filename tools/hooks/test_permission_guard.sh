@@ -396,6 +396,7 @@ for c in \
   "just codex-preflight" \
   "just codex-checkpoint after-review" \
   "just codex-closeout" \
+  "just codex-context-check" \
   "just codex-context-check-ci" \
   "just codex-autonomous-arc R-123" \
   "just codex-loop-record --phase plan --status passed --command plan --evidence grounded" \

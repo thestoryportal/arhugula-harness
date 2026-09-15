@@ -218,8 +218,8 @@ worktree is still checked against committed changes since the merge-base with
 the default branch.
 
 `codex-context-check-ci` runs the guard the way CI does: `check` with explicit
-`--base-ref origin/main` / `--head-ref HEAD` and `--allow-roadmap-drift`, no
-checkpoint. It refuses a branch that does not contain `origin/main`, because CI's
+`--base-ref` / `--head-ref` set to the SHAs of `origin/main` and `HEAD`, each read
+once, and `--allow-roadmap-drift`, no checkpoint. It refuses a branch that does not contain `origin/main`, because CI's
 two-endpoint diff would then include main's newer commits; fetch and rebase first.
 It is the Claude lane's pre-push step (C-HE-33). The Codex ship flow does not run it:
 inside an active Codex autonomous loop the pre-closeout gates are bound to the

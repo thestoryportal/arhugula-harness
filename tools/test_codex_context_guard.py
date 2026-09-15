@@ -2317,8 +2317,10 @@ def _is_guard_call(line: str) -> bool:
 
 
 def _recipe_guard_argvs(recipe: str, *, base: str, head: str) -> list[list[str]]:
-    """Every guard invocation in a justfile recipe body, `$base`/`HEAD` bound to SHAs."""
-    bound = {"$base": base, "HEAD": head}
+    """Every guard invocation in a justfile recipe body, `$base`/`$head` bound to SHAs. A
+    literal `HEAD` is deliberately left unbound: CI passes resolved SHAs, so a recipe that hands
+    the guard a live ref no longer matches CI's argv."""
+    bound = {"$base": base, "$head": head}
     return [
         [bound.get(tok, tok) for tok in shlex.split(line)[2:]]
         for line in _recipe_body(recipe)
@@ -2405,6 +2407,7 @@ def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
     _git(repo, "commit", "-m", "branch change")
     branch_point = _git(repo, "rev-parse", "main")
     _git(repo, "update-ref", "refs/remotes/origin/main", branch_point)
+    feature_head = _git(repo, "rev-parse", "HEAD")
 
     current = _run_recipe_body("codex-context-check-ci", repo)
     assert current.returncode == 0, current.stderr
@@ -2413,7 +2416,7 @@ def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
         "--base-ref",
         branch_point,
         "--head-ref",
-        "HEAD",
+        feature_head,
         "--allow-roadmap-drift",
     ]
 
