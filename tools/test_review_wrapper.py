@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 from itertools import count
 from pathlib import Path
@@ -796,22 +797,36 @@ def _joined_lines(text: str) -> list[str]:
     return out
 
 
+def _tracked_text_files(root: Path) -> list[Path]:
+    """Every tracked UTF-8 file except `.harness/` history and test files, which quote old or
+    deliberately unpinned invocations as records and fixtures."""
+    listing = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"], capture_output=True, text=True, check=True
+    ).stdout
+    files: list[Path] = []
+    for rel in filter(None, listing.split("\0")):
+        path = root / rel
+        if rel.startswith(".harness/") or path.name.startswith("test_") or not path.is_file():
+            continue
+        try:
+            path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        files.append(path)
+    return files
+
+
 def test_every_codex_review_invocation_pins_gpt_5_6_sol_at_medium_effort(tmp_path):
+    """Scope: every tracked file outside `.harness/` history and test files (codex u-he merge-gate
+    witness lens on #1528: a fixed list of globs let an unpinned call elsewhere ship unseen)."""
     cmd = cr.build_command(Path("/r"), "INSTR", output_file=tmp_path / "last.md")
     for pin in REVIEW_MODEL_PINS:
         assert cmd[cmd.index(pin) - 1] == "-c", cmd
 
     root = Path(__file__).resolve().parent.parent
-    carriers = [
-        *sorted((root / ".agents" / "skills").glob("*/SKILL.md")),
-        root / "justfile",
-        *sorted(
-            p for p in (root / "tools" / "hooks").glob("*.sh") if not p.name.startswith("test_")
-        ),
-    ]
     invocations = [
         (path.relative_to(root).as_posix(), line)
-        for path in carriers
+        for path in _tracked_text_files(root)
         for line in _joined_lines(path.read_text(encoding="utf-8"))
         if _REVIEW_INVOCATION.search(line)
     ]
