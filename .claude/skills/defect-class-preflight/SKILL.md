@@ -208,7 +208,10 @@ Rule: a fact checkable against HEAD does not belong in prose unless bound to a c
 or a round ("six witnesses" was wrong twice in one arc; the census "6288+82" implied a
 false partition). Fix at authoring: delete the count, bind the claim, or verify the
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
-skill.)
+skill.) `drift` joined this class's vocabulary on 2026-09-16: reviewers name the
+mechanism by that word ("the docstring will drift", "cite drift"); at the 2026-09-16
+corpus of 2,103 findings, 30 of the 35 rows saying it had matched no class-2 term (11 of
+them no class at all), so the class-2 tally there moved 334 → 364 and unmatched 648 → 637.
 
 ### 3. Silent failure / meaning-changing fallback (114 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the

@@ -54,7 +54,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
     ),
     "2 prose stale / counts / cites": (
-        r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
+        r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition|\bdrift"
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"

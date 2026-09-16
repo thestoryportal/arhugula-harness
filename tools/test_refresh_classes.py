@@ -46,6 +46,28 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
     assert out["a:2"] == []
 
 
+def test_drift_vocabulary_lands_in_class_2():
+    # handoff-s2 §2 B: reviewers name the prose-decay mechanism "drift"; before 2026-09-16
+    # such rows matched no class-2 term ("drifted" and "cite drift" both count, "adrift" not)
+    rows = [
+        {
+            "finding_id": "d:1",
+            "observed_evidence": "the docstring will drift from HEAD",
+            "location": "",
+        },
+        {
+            "finding_id": "d:2",
+            "observed_evidence": "cite drifted after the relocation",
+            "location": "",
+        },
+        {"finding_id": "d:3", "observed_evidence": "the lease is left adrift", "location": ""},
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    assert "2 prose stale / counts / cites" in out["d:1"]
+    assert "2 prose stale / counts / cites" in out["d:2"]
+    assert "2 prose stale / counts / cites" not in out["d:3"]
+
+
 def test_classify_reads_the_location_too():
     # the location carries file-shaped vocabulary the row text may lack
     rows = [{"finding_id": "b:1", "observed_evidence": "", "location": "tools/conftest.py fixture"}]
@@ -88,6 +110,27 @@ def test_report_counts_agree_with_classify(tmp_path: Path):
     assert "2 findings in" in proc.stdout
     assert "    1  3 silent failure / fallback" in proc.stdout
     assert "Unmatched findings (new-class candidates): 1" in proc.stdout
+    # the same rows through the verb: its per-class tally and its unmatched count must be
+    # the numbers the report printed — one function, two consumers (handoff-s2 §2 B, P3)
+    finding_rows = [
+        {"finding_id": f"r:{i}", "observed_evidence": r["observed_evidence"], "location": ""}
+        for i, r in enumerate(rows)
+        if r["record_kind"] == "finding"
+    ]
+    verb = subprocess.run(
+        [sys.executable, str(copy), "classify"],
+        input=json.dumps(finding_rows),
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert verb.returncode == 0, verb.stderr
+    by_id = json.loads(verb.stdout)
+    assert len(by_id) == 2
+    unmatched = sum(1 for hits in by_id.values() if not hits)
+    silent = sum(1 for hits in by_id.values() if "3 silent failure / fallback" in hits)
+    assert f"Unmatched findings (new-class candidates): {unmatched}" in proc.stdout
+    assert f"    {silent}  3 silent failure / fallback" in proc.stdout
     assert "the widget frobnicates" in proc.stdout
 
 
