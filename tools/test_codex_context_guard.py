@@ -2440,6 +2440,48 @@ def test_open_prs_unavailable_is_a_driven_parity_exclusion(
     assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS
 
 
+def test_checkpoint_exclusions_are_driven_parity_exclusions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """merge-gate r3 (witness P2): the round-2 fix drove OPEN_PRS_UNAVAILABLE and left its two
+    class siblings declared-but-undriven. CI never passes --require-fresh-checkpoint
+    (.github/workflows/ci.yml:642-645), so CONTEXT_CHECKPOINT_MISSING and _STALE can only ever
+    land on the local side. Drive both: no checkpoint written, then a checkpoint HEAD moved past.
+    Parity holds only because the exclusions name them -- drop either entry and this goes red."""
+    repo, base, head = _parity_repo(tmp_path)
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+    *setup, local_check = _recipe_guard_argvs("codex-context-check", base=base, head=head)
+
+    ci_codes = _finding_codes(capsys, _ci_guard_argv(base, head))
+    missing = _finding_codes(capsys, local_check)
+    assert "CONTEXT_CHECKPOINT_MISSING" in missing - ci_codes
+    assert ci_codes ^ missing == {
+        "ROADMAP_STATUS_DRIFT_ALLOWED",
+        "ROADMAP_STATUS_BRANCH_DIVERGED",
+        "CONTEXT_CHECKPOINT_MISSING",
+    }
+    assert ci_codes ^ missing <= PARITY_EXCLUSIONS
+
+    for argv in setup:
+        cg.main(argv)
+        capsys.readouterr()
+    (repo / "after.txt").write_text("head moves past the checkpoint\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "head moves past the checkpoint")
+    moved = _git(repo, "rev-parse", "HEAD")
+
+    ci_moved = _finding_codes(capsys, _ci_guard_argv(base, moved))
+    stale = _finding_codes(capsys, local_check)
+    assert "CONTEXT_CHECKPOINT_STALE" in stale - ci_moved
+    assert ci_moved ^ stale == {
+        "ROADMAP_STATUS_DRIFT_ALLOWED",
+        "ROADMAP_STATUS_BRANCH_DIVERGED",
+        "CONTEXT_CHECKPOINT_STALE",
+    }
+    assert ci_moved ^ stale <= PARITY_EXCLUSIONS
+
+
 def test_git_helper_supplies_identity_when_git_refuses_to_guess(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
