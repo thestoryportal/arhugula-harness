@@ -2475,12 +2475,16 @@ def test_ci_recipe_refreshes_a_stale_origin_main(tmp_path: Path) -> None:
     assert _git(repo, "rev-parse", "refs/remotes/origin/main") != stale
 
 
-def test_guard_refuses_when_head_moved_since_the_passed_head_ref(tmp_path: Path) -> None:
-    """codex u-he-42 r4 (P2, justfile:104): passing a resolved $head does not make the check a
-    single-SHA snapshot. derive() independently re-reads live HEAD for head8/branch/status and
-    the context hash while changed_files honours --head-ref, so a commit landing mid-invocation
-    is reported and hashed against a commit whose diff was never evaluated. The recipe's own
-    comment claims both refs are read once; this pins that claim to the guard's behaviour."""
+def test_guard_discloses_but_does_not_fail_when_head_differs_from_head_ref(
+    tmp_path: Path,
+) -> None:
+    """codex u-he-42 r5 (P1): HEAD differing from --head-ref is the NORMAL shape on every CI
+    pull_request run -- actions/checkout leaves the synthetic merge ref at HEAD
+    (.github/workflows/ci.yml:430-436) while the guard receives the PR head sha (:644). An
+    earlier fix emitted a HARD finding here, which would have failed the blocking guard job on
+    every PR; the first version of this test could not see it because it ran with HEAD equal to
+    the supplied sha. The divergence is DISCLOSED (info) so a verdict is never silently read as
+    describing live HEAD, and it never blocks."""
     repo = _init_repo(tmp_path)
     _git(repo, "branch", "-m", "main")
     base = _git(repo, "rev-parse", "HEAD")
@@ -2490,7 +2494,8 @@ def test_guard_refuses_when_head_moved_since_the_passed_head_ref(tmp_path: Path)
     _git(repo, "commit", "-m", "branch change")
     checked_head = _git(repo, "rev-parse", "HEAD")
 
-    # The commit that lands between the recipe's `git rev-parse HEAD` and the guard call.
+    # HEAD moves past the checked sha: locally a commit landing mid-invocation, in CI the
+    # synthetic merge ref actions/checkout leaves at HEAD. Both reach the guard identically.
     (repo / "racing.txt").write_text("landed mid-invocation\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "concurrent commit")
@@ -2512,8 +2517,13 @@ def test_guard_refuses_when_head_moved_since_the_passed_head_ref(tmp_path: Path)
         check=False,
     )
 
-    assert "HEAD_MOVED_DURING_CHECK" in result.stdout, result.stdout
-    assert result.returncode == 1
+    # Disclosed, so the verdict is never silently read as describing live HEAD ...
+    assert "CHECKED_HEAD_NOT_LIVE_HEAD" in result.stdout, result.stdout
+    assert checked_head[:12] in result.stdout
+    # ... and never blocking: this fixture's only other findings are warn-severity, so a hard
+    # finding here is the sole thing that could make the guard job exit 1 (codex r5 P1).
+    assert result.returncode == 0, result.stdout
+    assert "HEAD_MOVED_DURING_CHECK" not in result.stdout
 
 
 def _flat(path: str) -> str:

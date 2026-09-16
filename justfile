@@ -97,8 +97,10 @@ codex-context-check:
 # CI would never use. The fetch runs under `set -euo pipefail`, so an unreachable remote fails
 # loudly rather than falling back to the stale ref. Both refs are then read once and the guard
 # gets the resolved SHAs, as CI passes them: HEAD can move mid-run, so a second read could
-# check one commit and diff another -- the guard refuses a HEAD that moved since `--head-ref`
-# (HEAD_MOVED_DURING_CHECK) rather than attribute the verdict to an unevaluated commit. What
+# check one commit and diff another -- the guard DISCLOSES a HEAD that differs from
+# `--head-ref` (CHECKED_HEAD_NOT_LIVE_HEAD, info) rather than attribute the verdict silently to
+# an unevaluated commit; it never refuses on it, because CI's merge-ref checkout diverges by
+# construction on every pull_request run (codex u-he-42 r5 P1). What
 # still differs from the local shape above is named in
 # tools/test_codex_context_guard.py::test_local_ci_parity.
 codex-context-check-ci:
