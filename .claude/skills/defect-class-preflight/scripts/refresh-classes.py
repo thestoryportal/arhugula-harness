@@ -117,6 +117,15 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         # alternative because there is no boundary inside it either.
         r"\block\b|\blocks\b|RLock|mutex|reentran|acquire",
     ),
+    # Added by the preflight-finding-intake arc through its own intake line (the first
+    # finding to flow in mechanically): the review-loop gate classified the working
+    # tree while the attestation bound base..HEAD; the 2026-08-19 row is the same
+    # defect on the reviewer wrapper. Conjunction: a tree-state term AND a binding term
+    # — either alone is co-occurrence noise (`committed` is in half the corpus).
+    "15 bound bytes are not the executed bytes": (
+        r"working tree|live worktree|uncommitted|mutable tree|dirty",
+        r"binding|base_sha|head_sha|\bHEAD\b|committed (diff|range|bytes|base)",
+    ),
 }
 
 

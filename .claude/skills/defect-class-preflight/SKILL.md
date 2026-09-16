@@ -392,6 +392,19 @@ because the handler that only sets a flag this round grows a cleanup call the ne
 Keep handlers to what is async-signal-safe (set a flag, write one byte to a
 self-pipe) and let an ordinary thread do the work under the lock.
 
+### 15. Bound bytes are not the executed bytes (added preflight-finding-intake; 10 rows at the 2026-09-16 corpus, 2 of them this exact shape)
+
+A check, reviewer, or classifier runs against the **working tree** while the record it
+produces binds the **committed** `base..HEAD` range — so an uncommitted edit can make
+the check pass, the attestation records HEAD, and the edit is then reverted or never
+lands. The 2026-08-19 wrapper finding ("the reviewer runs against the live worktree
+while the binding covers only the committed diff") and this arc's own codex r1 P2
+(the class table read from the tree while the sweep attestation bound HEAD) are the
+same defect. **Question:** *for every artifact whose record names a binding, do the
+bytes it actually read come from that binding (`git show HEAD:<path>`, `base..head`
+diff), never from the tree?* If a test can make the check pass by writing a file
+without committing it, this is the class.
+
 ## After every review round — the class-sibling sweep (before the next invocation)
 
 A reviewer finding names an INSTANCE; the absorption owes the CLASS. Measured on the
