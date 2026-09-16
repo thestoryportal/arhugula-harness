@@ -2465,7 +2465,11 @@ def test_ci_recipe_refreshes_a_stale_origin_main(tmp_path: Path) -> None:
     # A second clone advances the real remote; this repo never fetches, so its tracking
     # ref still names the branch point -- the exact state that used to pass.
     other = tmp_path / "other"
-    _git(repo, "clone", "-q", str(remote), str(other))
+    # --branch main, not a bare clone (codex u-he-42 r7 P2): `git init --bare` points the
+    # remote's HEAD at init.defaultBranch, so where that is `master` the remote holds only
+    # `main` while advertising an unborn `master`; the clone would check out no branch and the
+    # commit below would raise. Naming the branch makes the fixture default-independent.
+    _git(repo, "clone", "-q", "--branch", "main", str(remote), str(other))
     (other / "advanced.md").write_text("main moved on\n", encoding="utf-8")
     _git(other, "add", ".")
     _git(other, "commit", "-m", "main advances")
