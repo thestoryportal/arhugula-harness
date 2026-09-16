@@ -8,6 +8,7 @@ checks instead of remembered process.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -45,6 +46,17 @@ def _state(**overrides) -> cg.GuardState:
     return cg.GuardState(**{**base.__dict__, **overrides})
 
 
+# [LAW:single-enforcer] every test repo -- init'd or cloned -- gets its author identity from
+# this one env, so a fresh clone commits on a runner with no global git config (CI run
+# 35044540267 died on "Author identity unknown" in the stale-origin-main fixture's clone).
+_GIT_IDENTITY_ENV = {
+    "GIT_AUTHOR_NAME": "Codex Test",
+    "GIT_AUTHOR_EMAIL": "codex@example.test",
+    "GIT_COMMITTER_NAME": "Codex Test",
+    "GIT_COMMITTER_EMAIL": "codex@example.test",
+}
+
+
 def _git(cwd: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", *args],
@@ -52,6 +64,7 @@ def _git(cwd: Path, *args: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        env={**os.environ, **_GIT_IDENTITY_ENV},
     )
     return proc.stdout.strip()
 
@@ -60,8 +73,6 @@ def _init_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init")
-    _git(repo, "config", "user.email", "codex@example.test")
-    _git(repo, "config", "user.name", "Codex Test")
     (repo / ".harness").mkdir()
     (repo / ".harness" / "roadmap_status.md").write_text(
         "\n".join(
