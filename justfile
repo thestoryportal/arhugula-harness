@@ -90,14 +90,21 @@ codex-context-check:
 # refs plus --allow-roadmap-drift, no checkpoint -- so a PR's guard verdict converges before
 # the push. CI's two-endpoint diff starts at the PR base; on a branch that contains
 # origin/main that base, main's tip and the merge-base are one commit, so the recipe refuses
-# any other branch rather than report a parity it cannot have (fetch, then rebase). Both refs
-# are read once and the guard gets the resolved SHAs, as CI passes them: origin/main is shared
-# by every worktree and HEAD can move mid-run, so a second read could check one commit and
-# diff another. What still differs from the local shape above is named in
+# any other branch rather than report a parity it cannot have (rebase onto the fresh tip).
+# origin/main is REFRESHED first (codex u-he-42 r4 P2): the tracking ref is shared by every
+# worktree and goes stale silently, and a stale one is an ancestor of a branch that the real
+# main has already moved past -- the ancestry check then passes and the guard is handed a base
+# CI would never use. The fetch runs under `set -euo pipefail`, so an unreachable remote fails
+# loudly rather than falling back to the stale ref. Both refs are then read once and the guard
+# gets the resolved SHAs, as CI passes them: HEAD can move mid-run, so a second read could
+# check one commit and diff another -- the guard refuses a HEAD that moved since `--head-ref`
+# (HEAD_MOVED_DURING_CHECK) rather than attribute the verdict to an unevaluated commit. What
+# still differs from the local shape above is named in
 # tools/test_codex_context_guard.py::test_local_ci_parity.
 codex-context-check-ci:
     #!/usr/bin/env bash
     set -euo pipefail
+    git fetch --quiet origin main
     base="$(git rev-parse origin/main)"
     head="$(git rev-parse HEAD)"
     git merge-base --is-ancestor "$base" "$head" || { echo "codex-context-check-ci: HEAD does not contain origin/main; rebase onto it first, or CI's diff will include main's newer commits" >&2; exit 1; }

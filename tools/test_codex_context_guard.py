@@ -2401,12 +2401,17 @@ def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
     other before the guard runs (codex u-he-42 r1: main advancing past the branch point)."""
     repo = _init_repo(tmp_path)
     _git(repo, "branch", "-m", "main")
+    # A real remote, not a hand-set tracking ref: the recipe refreshes origin/main before
+    # trusting it (codex u-he-42 r4 P2), so the fixture must have something to fetch from.
+    remote = tmp_path / "remote.git"
+    _git(repo, "init", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "origin", "main")
     _git(repo, "checkout", "-b", "feature")
     (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "branch change")
     branch_point = _git(repo, "rev-parse", "main")
-    _git(repo, "update-ref", "refs/remotes/origin/main", branch_point)
     feature_head = _git(repo, "rev-parse", "HEAD")
 
     current = _run_recipe_body("codex-context-check-ci", repo)
@@ -2424,13 +2429,91 @@ def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
     (repo / "advanced.md").write_text("main moved on\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-m", "main advances")
-    _git(repo, "update-ref", "refs/remotes/origin/main", _git(repo, "rev-parse", "HEAD"))
+    _git(repo, "push", "-q", "origin", "main")
     _git(repo, "checkout", "feature")
 
     behind = _run_recipe_body("codex-context-check-ci", repo)
     assert behind.returncode == 1
     assert "HEAD does not contain origin/main" in behind.stderr
     assert behind.stdout == ""
+
+
+def test_ci_recipe_refreshes_a_stale_origin_main(tmp_path: Path) -> None:
+    """codex u-he-42 r4 (P2, justfile:101): the recipe read the local origin/main tracking ref
+    without refreshing it, so a branch behind the REAL remote main passed the ancestry check
+    and was checked against a stale base while CI diffed from the newer PR base. The behind-main
+    regression test advances origin/main by hand, so it cannot observe that false pass -- this
+    one advances the REMOTE and leaves this repo's tracking ref stale."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    remote = tmp_path / "remote.git"
+    _git(repo, "init", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "origin", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "branch change")
+
+    # A second clone advances the real remote; this repo never fetches, so its tracking
+    # ref still names the branch point -- the exact state that used to pass.
+    other = tmp_path / "other"
+    _git(repo, "clone", "-q", str(remote), str(other))
+    (other / "advanced.md").write_text("main moved on\n", encoding="utf-8")
+    _git(other, "add", ".")
+    _git(other, "commit", "-m", "main advances")
+    _git(other, "push", "-q", "origin", "main")
+
+    stale = _git(repo, "rev-parse", "refs/remotes/origin/main")
+    result = _run_recipe_body("codex-context-check-ci", repo)
+
+    # Without the refresh the stale ref is an ancestor, so the recipe exits 0 and prints an
+    # argv whose base is a commit CI would never use.
+    assert result.returncode == 1, result.stdout
+    assert "HEAD does not contain origin/main" in result.stderr
+    assert result.stdout == ""
+    assert _git(repo, "rev-parse", "refs/remotes/origin/main") != stale
+
+
+def test_guard_refuses_when_head_moved_since_the_passed_head_ref(tmp_path: Path) -> None:
+    """codex u-he-42 r4 (P2, justfile:104): passing a resolved $head does not make the check a
+    single-SHA snapshot. derive() independently re-reads live HEAD for head8/branch/status and
+    the context hash while changed_files honours --head-ref, so a commit landing mid-invocation
+    is reported and hashed against a commit whose diff was never evaluated. The recipe's own
+    comment claims both refs are read once; this pins that claim to the guard's behaviour."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "branch change")
+    checked_head = _git(repo, "rev-parse", "HEAD")
+
+    # The commit that lands between the recipe's `git rev-parse HEAD` and the guard call.
+    (repo / "racing.txt").write_text("landed mid-invocation\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "concurrent commit")
+
+    result = subprocess.run(
+        [
+            _GUARD[0],
+            str(_ROOT / "tools" / "codex_context_guard.py"),
+            "check",
+            "--base-ref",
+            base,
+            "--head-ref",
+            checked_head,
+            "--allow-roadmap-drift",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert "HEAD_MOVED_DURING_CHECK" in result.stdout, result.stdout
+    assert result.returncode == 1
 
 
 def _flat(path: str) -> str:

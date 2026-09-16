@@ -1779,6 +1779,26 @@ def main(argv: list[str] | None = None) -> int:
         allow_roadmap_drift=args.allow_roadmap_drift,
         require_fresh_checkpoint=args.require_fresh_checkpoint,
     )
+    # codex u-he-42 r4 (P2): a resolved `--head-ref` bounds only `changed_files`; derive()
+    # independently reads live HEAD for head8, branch, status_entries and computed_hash. A
+    # commit landing between the caller's `git rev-parse HEAD` and this run would therefore be
+    # REPORTED and HASHED while the evaluated range is the older one -- a verdict attributed to
+    # a commit whose diff was never checked. Distinct from the BASE_TOCTOU detection above,
+    # which is the merge door's base race; this is the guard's own head race.
+    if args.head_ref:
+        live_head = _out(["git", "rev-parse", "HEAD"], cwd=state.root)
+        checked_head = _out(["git", "rev-parse", f"{args.head_ref}^{{commit}}"], cwd=state.root)
+        if live_head and checked_head and live_head != checked_head:
+            findings = [
+                *findings,
+                Finding(
+                    "hard",
+                    "HEAD_MOVED_DURING_CHECK",
+                    f"HEAD is {live_head[:12]} but --head-ref named {checked_head[:12]}; the "
+                    "report and context hash describe the live commit while the diff was taken "
+                    "against the passed one -- re-run against a settled HEAD",
+                ),
+            ]
     print(_json_report(state, findings) if args.json else _text_report(state, findings))
     if args.mode in {"preflight", "checkpoint"}:
         path = write_checkpoint(
