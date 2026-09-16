@@ -29,6 +29,30 @@ the record.
 | E7 | Subagent preload: card brief vs full context | `e7_preload_brief.sh` → `E7/`, `E7-results.md` | Clean pairs (Q10, Q15): full 162k tokens and ~56k first-turn context vs brief 88k and ~28k, same correct answers. Brief 4/4 correct. Two full-context runs were derailed by the repo's own Stop-hook lint gate (8 and 27 turns, up to 2.6 M tokens) and answered nothing. | **Supported**, with the strongest single number in this set: a card brief halves subagent context at equal correctness. The derailment is a second finding: in-repo `claude -p` agents inherit hooks that can consume a run. |
 | E8 | Dev-side oracle for the product memory substrate | `E8-product-eval-oracle.md` | C-MEM-11 ranks by scope, recency, confidence, authority, pinning and filters, not similarity; C-MEM-20 asks for determinism and denial tests. | **Not a fit; do not build.** |
 
+## Known defects in the scripts (codex review, 2026-09-16, not absorbed)
+
+The scripts are committed as they ran, so the results above are reproducible from them. The
+out-of-family review of this commit found seven defects; none changes a verdict, and each is
+left in place so the record matches the runs. Anyone re-running an evaluation should fix the
+relevant one first.
+
+- `e7_preload_brief.sh:31` — the full-context `claude -p` runs execute inside the shared
+  checkout with the repo's hooks; `E7/full_Q01.json` and `full_Q06.json` show those runs
+  invoking ruff fixes and attempting edits. Re-run in an isolated worktree.
+- `e7_preload_brief.sh:31` — only `set -u`; a nonzero `claude` exit is ignored and the script
+  still prints `E7 runs complete`. Check each exit status and each JSON before trusting a pair.
+- `E2/reviewer_prompt.txt:4` — the reviewer is pointed at a fixed live checkout, not a tree at
+  the reviewed PR's head. Bind the tree to each head before reusing the prompt.
+- `e5_duckdb_ledgers.py:39` — the cohort CASE puts every row without a target lever into
+  `baseline`, including undeclared and unrelated-lever rows the reference tool excludes; this
+  is the 25/19-vs-13 gap the E5 row records.
+- `e5_duckdb_ledgers.py:42` — `median(p1_rounds)` is a median over a list column, not over each
+  row's P1 count (`len(p1_rounds)` in the reference tool); the `med_p1` column in
+  `E5-results.md` is wrong.
+- `e5_duckdb_ledgers.py:49` — the reference-tool subprocess's exit code and JSON shape are not
+  checked; a failure would be embedded as comparison output.
+- `e5_duckdb_ledgers.py:82` — a fixed `_register.json` temp path; concurrent runs would collide.
+
 ## Side findings recorded during the runs
 
 - `graft build` inside the repo (v0.18.0) rewrote four tracked files: `.claude/settings.json`
