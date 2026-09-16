@@ -489,8 +489,29 @@ Then add the miss as a planted-defect case in the skill's eval set
 regression-tested like code. The skill file is tracked; its git history is the audit
 trail — no separate ledger.
 
-**Staleness check:** `scripts/refresh-classes.py` re-clusters the live gate log and
-prints per-class counts plus recent findings matching NO known class — those
+**The loop is enforced at the sweep attestation, not remembered.** This obligation
+executed zero times across the ten absorption commits of U-HE-35 while it lived only
+in this prose (charter §1, "nothing flows in"). So `just review-template-sweep`
+classifies every outstanding reviewer finding against `scripts/refresh-classes.py`'s
+table (its `classify` verb) and stamps the result above each finding; a finding that
+matches NO class is marked `UNMATCHED` and pre-filled with an `intake:` slot that
+`just review-attest-sweep` refuses to leave empty. Exactly one of:
+
+- `intake: class-extended <class-number> <what changed>` — you extended a row in
+  `refresh-classes.py` (and this file) so the finding now matches;
+- `intake: new-class <name> <what changed>` — you added a class in both places;
+- `intake: instance-only <why no class should carry it>` — a genuine one-off.
+
+A repair claim is **verified, never trusted**: attest re-classifies with the live
+table, and a finding still unmatched under `class-extended` / `new-class` refuses the
+attestation until the row lands (or the disposition becomes `instance-only`). A
+finding whose repair landed simply matches and owes no intake line. `instance-only`
+dispositions are recorded on the sweep attestation (`intake_instance_only`), so the
+escape hatch's rate is measurable — an arc that dispositions every unmatched finding
+as a one-off has answered the letter of the loop and none of its intent.
+
+**Staleness check:** `scripts/refresh-classes.py` (no verb) re-clusters the live gate
+log and prints per-class counts plus recent findings matching NO known class — those
 unmatched findings are new-class candidates. Run it when the log has grown
 meaningfully since the counts in this file (the class headings are bound to the
 corpus named above them).

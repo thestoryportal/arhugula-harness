@@ -83,6 +83,23 @@ import review_wrapper_common as rw
 
 STATE_REL = Path(".harness/review_loop_gate_state.json")
 PREFLIGHT_SCRIPT_REL = Path(".claude/skills/defect-class-preflight/scripts/preflight-grep.sh")
+#: The skill's class table, consulted at the same seam as the sweep script: the gate
+#: never copies the table ([LAW:one-source-of-truth]); it asks the script.
+CLASSIFY_SCRIPT_REL = Path(".claude/skills/defect-class-preflight/scripts/refresh-classes.py")
+#: A finding no preflight class matches is a NEW-CLASS CANDIDATE, and the skill's own
+#: repair loop (SKILL.md "When a reviewer catches what this sweep missed") obliges its
+#: author to say what became of it. The obligation executed zero times over ten
+#: absorption commits while it lived in prose ([A] §4, charter §1) — so the sweep
+#: template names each unmatched finding and attest refuses the file until every one
+#: carries an `intake:` line of one of three kinds:
+#:   class-extended <class-number> — an existing class row now matches it
+#:   new-class <name>              — a class was added that matches it
+#:   instance-only <reason>        — a one-off; no class should carry it
+#: A repair claim is VERIFIED, not trusted: attest re-classifies with the live table,
+#: and a finding still unmatched under a repair claim refuses the attestation.
+INTAKE_PREFIX = "intake:"
+INTAKE_REPAIR_KINDS = ("class-extended", "new-class")
+INTAKE_KINDS = (*INTAKE_REPAIR_KINDS, "instance-only")
 #: Producers whose rows are review-LOOP rounds. Merge-gate lenses and detection
 #: producers are excluded: lens rounds are per-producer and their numbers collide
 #: with loop rounds; detection rows carry round_n=None (same filter round_n_for uses).
@@ -132,6 +149,10 @@ class SweepAttestation:
     finding_ids: tuple[str, ...]  # the obligations this sweep answered (any producer, any round)
     answers_digest: str
     ts: str
+    # findings no class matched that the author dispositioned as one-offs — the
+    # skill's intake escape hatch, recorded so its rate is measurable (a repaired
+    # finding needs no record: it matches the table, which is the durable evidence)
+    intake_instance_only: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -154,7 +175,7 @@ _KINDS = {
     "sweep": (SweepAttestation, "sweeps"),
     "budget_extension": (BudgetExtension, "extensions"),
 }
-_TUPLE_FIELDS = ("hit_labels", "finding_ids")
+_TUPLE_FIELDS = ("hit_labels", "finding_ids", "intake_instance_only")
 
 
 # ── decisions ([LAW:types-are-the-program]: three arms, no boolean folklore) ─
@@ -730,6 +751,90 @@ def _run_sweep_script(repo: Path, diff_range: str) -> tuple[str, ...]:
     return tuple(_HIT_LABEL.findall(proc.stdout))
 
 
+def _classify_findings(
+    repo: Path, rows: list[dict], ids: tuple[str, ...]
+) -> dict[str, tuple[str, ...]]:
+    """Every outstanding finding's preflight classes, from the skill's live table
+    (`refresh-classes.py classify`). Same seam as `_run_sweep_script`: the skill owns
+    the table, the gate asks. Empty tuple = unmatched = new-class candidate. A script
+    that cannot run, or an answer missing an asked id, is GateError — 'couldn't
+    classify' must never read as 'nothing matched' ([LAW:no-silent-failure])."""
+    by_id = {r["finding_id"]: r for r in rows if r.get("finding_id") in ids}
+    payload = [
+        {
+            "finding_id": fid,
+            "observed_evidence": by_id[fid].get("observed_evidence") or "",
+            "location": by_id[fid].get("location") or "",
+        }
+        for fid in ids
+    ]
+    proc = subprocess.run(
+        [sys.executable, str(repo / CLASSIFY_SCRIPT_REL), "classify"],
+        cwd=repo,
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise GateError(
+            f"finding classifier did not run (exit {proc.returncode}): {proc.stderr.strip()}"
+        )
+    try:
+        out = json.loads(proc.stdout)
+        return {fid: tuple(str(c) for c in out[fid]) for fid in ids}
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise GateError(f"finding classifier returned an unusable answer: {exc}") from exc
+
+
+@dataclass(frozen=True)
+class Intake:
+    """One unmatched finding's authored disposition, parsed once at attest
+    ([LAW:parse-dont-validate]): kind is one of INTAKE_KINDS, detail is non-empty."""
+
+    finding_id: str
+    kind: str
+    detail: str
+
+
+def _parse_intakes(
+    ids: tuple[str, ...], unmatched: tuple[str, ...], answers: str
+) -> tuple[Intake, ...]:
+    """The `intake:` line each unmatched finding owes, read from that finding's own
+    section of the answers file (sections bounded by EVERY outstanding id, matched
+    or not). Missing, duplicated, or malformed → GateError naming the finding — an
+    unmatched reviewer finding with no stated disposition is exactly the silent
+    non-execution this venue exists to stop."""
+    lines = answers.splitlines()
+    out = []
+    for n in unmatched:
+        # keyed by line so a cross-reference to `n` inside another finding's answer,
+        # whose section runs on into n's own, counts n's intake line once, not twice
+        found: dict[int, str] = {}
+        for i, ln in enumerate(lines):
+            if n not in _line_ids(ln, ids):
+                continue
+            for j, follower in _section(lines, i, ids, n):
+                fs = follower.lstrip()
+                if fs.startswith(INTAKE_PREFIX):
+                    found[j] = fs[len(INTAKE_PREFIX) :].strip()
+        if len(found) != 1:
+            raise GateError(
+                f"finding {n} matches no preflight class and its section carries "
+                f"{len(found)} `{INTAKE_PREFIX}` lines (exactly one required: "
+                f"`{INTAKE_PREFIX} {' | '.join(INTAKE_KINDS)} <detail>`)"
+            )
+        (line,) = found.values()
+        kind, _, detail = line.partition(" ")
+        detail = detail.strip()
+        if kind not in INTAKE_KINDS or not detail or TEMPLATE_PLACEHOLDER in detail:
+            raise GateError(
+                f"finding {n}: `{INTAKE_PREFIX} {line}` is not one of "
+                f"{', '.join(INTAKE_KINDS)} followed by a detail"
+            )
+        out.append(Intake(finding_id=n, kind=kind, detail=detail))
+    return tuple(out)
+
+
 def _read_answers(path: Path) -> str:
     # same containment read as the state file (codex r4 P2): the attest verbs are
     # guard-auto-allowed, so their one file INPUT gets the same O_NOFOLLOW +
@@ -814,25 +919,23 @@ def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
     # an id heading followed by the answer on later lines stays valid, the section
     # ending at the next bracket heading or another id's line.
     lines = answers.splitlines()
-
-    def line_ids(ln: str) -> set[str]:
-        toks = set(re.split(r"[\s,;()\[\]{}'\"`]+", ln))
-        return {n for n in ids if n in toks}
-
     out = []
     for n in ids:
         answered = False
         for i, ln in enumerate(lines):
-            if n not in line_ids(ln):
+            if n not in _line_ids(ln, ids):
                 continue
             if _has_residue(ln, *ids):
                 answered = True
                 break
-            for follower in lines[i + 1 :]:
+            for _, follower in _section(lines, i, ids, n):
                 fs = follower.lstrip()
-                if fs.startswith("[") or (line_ids(follower) - {n}):
-                    break
-                if not fs.startswith("#") and _has_residue(follower, *ids):
+                # an `intake:` line is the finding's CLASS disposition, parsed by
+                # _parse_intakes — never its fix answer, or the intake slot alone
+                # would attest an unfixed finding
+                if fs.startswith(("#", INTAKE_PREFIX)):
+                    continue
+                if _has_residue(follower, *ids):
                     answered = True
                     break
             if answered:
@@ -840,6 +943,23 @@ def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
         if not answered:
             out.append(n)
     return out
+
+
+def _line_ids(ln: str, ids: tuple[str, ...]) -> set[str]:
+    """The obligation ids a line names as whole tokens (token-exact, never substring)."""
+    toks = set(re.split(r"[\s,;()\[\]{}'\"`]+", ln))
+    return {n for n in ids if n in toks}
+
+
+def _section(lines: list[str], i: int, ids: tuple[str, ...], n: str):
+    """The (index, line) pairs belonging to the finding heading at `lines[i]`:
+    everything below it up to the next bracket heading or a line naming another id.
+    One definition of a section boundary for both the fix-answer and the intake reads."""
+    for j in range(i + 1, len(lines)):
+        follower = lines[j]
+        if follower.lstrip().startswith("[") or (_line_ids(follower, ids) - {n}):
+            break
+        yield j, follower
 
 
 #: The template's provenance stamp: attest parses it back and refuses a mismatch
@@ -856,6 +976,7 @@ def _template_text(
     diff_digest: str,
     labels: tuple[str, ...],
     finding_ids: tuple[str, ...],
+    classes: dict[str, tuple[str, ...]],
 ) -> str:
     """Answers-template body: every obligation the matching attest verb will enforce,
     pre-filled so authoring happens AGAINST the label set instead of guessing at it
@@ -873,8 +994,19 @@ def _template_text(
     ]
     for fid in finding_ids:
         # the id stands whitespace-delimited: _unanswered_ids is token-exact, and a
-        # trailing colon would glue into the token and fail its own attest
-        lines += [f"- finding {fid} — {TEMPLATE_PLACEHOLDER}", ""]
+        # trailing colon would glue into the token and fail its own attest. The class
+        # stamp is comment chrome (never residue); an unmatched finding additionally
+        # owes an intake line, pre-filled so attest's refusal names a slot the author
+        # saw rather than a rule they had to recall.
+        stamp = ", ".join(classes[fid]) or "UNMATCHED — no preflight class covers this finding"
+        lines += [f"# classes: {stamp}", f"- finding {fid} — {TEMPLATE_PLACEHOLDER}"]
+        if not classes[fid]:
+            lines += [
+                f"  {INTAKE_PREFIX} {TEMPLATE_PLACEHOLDER}  "
+                f"({' | '.join(INTAKE_KINDS)} <detail>; a repair claim is re-checked "
+                "against the live class table)"
+            ]
+        lines += [""]
     for label in labels:
         lines += [f"[{label}]", f"- {TEMPLATE_PLACEHOLDER}", ""]
     if not finding_ids and not labels:
@@ -1019,7 +1151,7 @@ def _template_preflight(repo: Path, base: str, answers_path: Path, arc_id: str) 
     final = _write_template(
         repo,
         answers_path,
-        _template_text(arc_id, "preflight", diff_range, b["diff_digest"], labels, ()),
+        _template_text(arc_id, "preflight", diff_range, b["diff_digest"], labels, (), {}),
     )
     print(f"review-gate: preflight template at {final} ({len(labels)} hit labels pre-filled)")
     return 0
@@ -1042,14 +1174,17 @@ def _template_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> i
     b = rw.code_binding(repo, base)
     diff_range = f"{b['base_sha']}..{b['head_sha']}"
     labels = _run_sweep_script(repo, diff_range)
+    classes = _classify_findings(repo, rows, tuple(ids))
     final = _write_template(
         repo,
         answers_path,
-        _template_text(arc_id, "sweep", diff_range, b["diff_digest"], labels, tuple(ids)),
+        _template_text(arc_id, "sweep", diff_range, b["diff_digest"], labels, tuple(ids), classes),
     )
+    unmatched = sum(1 for fid in ids if not classes[fid])
     print(
         f"review-gate: sweep template at {final} "
-        f"({len(ids)} findings + {len(labels)} hit labels pre-filled)"
+        f"({len(ids)} findings + {len(labels)} hit labels pre-filled; "
+        f"{unmatched} findings match no preflight class and owe an intake line)"
     )
     return 0
 
@@ -1165,6 +1300,23 @@ def _attest_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int
             file=sys.stderr,
         )
         return 1
+    # the skill's repair loop, enforced here and only here ([LAW:single-enforcer]):
+    # classify with the LIVE table, so a finding whose class repair landed simply
+    # matches and owes nothing, while one still unmatched owes a stated intake — and
+    # an intake that CLAIMS a repair the table does not show is refused, not trusted
+    classes = _classify_findings(repo, rows, tuple(ids))
+    unmatched = tuple(fid for fid in ids if not classes[fid])
+    intakes = _parse_intakes(tuple(ids), unmatched, answers)
+    unlanded = [i for i in intakes if i.kind in INTAKE_REPAIR_KINDS]
+    if unlanded:
+        print(
+            "review-gate: sweep NOT attested — intake claims a class repair the live "
+            "table does not show (refresh-classes.py still leaves the finding "
+            "unmatched; land the row, or disposition it instance-only): "
+            + "; ".join(f"{i.finding_id} ({i.kind} {i.detail})" for i in unlanded),
+            file=sys.stderr,
+        )
+        return 1
     _append_record(
         repo,
         "sweep",
@@ -1175,9 +1327,13 @@ def _attest_sweep(repo: Path, base: str, answers_path: Path, arc_id: str) -> int
             finding_ids=tuple(ids),
             answers_digest=hashlib.sha256(answers.encode()).hexdigest(),
             ts=_now_iso(),
+            intake_instance_only=tuple(i.finding_id for i in intakes),
         ),
     )
-    print(f"review-gate: sweep attested at {b['head_sha'][:12]} ({len(ids)} findings answered)")
+    print(
+        f"review-gate: sweep attested at {b['head_sha'][:12]} ({len(ids)} findings answered; "
+        f"{len(intakes)} unmatched by any preflight class, dispositioned instance-only)"
+    )
     return 0
 
 
