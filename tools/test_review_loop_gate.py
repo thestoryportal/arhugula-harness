@@ -347,19 +347,31 @@ CLASSIFIER_REL = Path(".claude/skills/defect-class-preflight/scripts/refresh-cla
 REAL_CLASSIFIER = Path(__file__).resolve().parent.parent / CLASSIFIER_REL
 
 
-def _plant_classifier(repo: Path, unmatched: tuple[str, ...]) -> None:
+def _commit(repo: Path, msg: str) -> None:
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", msg], check=True)
+
+
+def _plant_classifier(repo: Path, unmatched: tuple[str, ...], body: str | None = None) -> None:
     """A stand-in for the skill's `refresh-classes.py classify` verb honouring its
     contract (JSON list in, {finding_id: [class names]} out): the named ids are
-    unmatched, every other id matches one stub class."""
+    unmatched, every other id matches one stub class. COMMITTED — the gate reads the
+    classifier at HEAD, the same binding the attestation records."""
     p = repo / CLASSIFIER_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
-        "import json, sys\n"
-        f"UNMATCHED = {set(unmatched)!r}\n"
-        "rows = json.load(sys.stdin)\n"
-        "json.dump({r['finding_id']: ([] if r['finding_id'] in UNMATCHED else ['stub class'])"
-        " for r in rows}, sys.stdout)\n"
+        body
+        if body is not None
+        else (
+            "import json, sys\n"
+            f"UNMATCHED = {set(unmatched)!r}\n"
+            "rows = json.load(sys.stdin)\n"
+            "json.dump({r['finding_id']: ([] if r['finding_id'] in UNMATCHED else ['stub class'])"
+            " for r in rows}, sys.stdout)\n"
+        )
     )
+    _commit(repo, "plant classifier")
 
 
 def _plant_real_classifier(repo: Path) -> Path:
@@ -369,6 +381,7 @@ def _plant_real_classifier(repo: Path) -> Path:
     p = repo / CLASSIFIER_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(REAL_CLASSIFIER.read_text())
+    _commit(repo, "plant real classifier")
     return p
 
 
@@ -699,22 +712,46 @@ def test_attest_sweep_malformed_intake_refuses(
     assert "cw:aa:11:2" in capsys.readouterr().err
 
 
-def test_intake_counted_once_when_another_answer_cross_references_the_id(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+def test_intake_belongs_to_its_heading_not_to_a_cross_reference(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-    # finding 1's answer names finding 2's id; 2's section (and its intake line)
-    # then also follows that mention — one intake line, read once
+    # codex r1 P1: BOTH findings unmatched; finding 1's answer cites finding 2's id
+    # and carries an intake line. Finding 2 owes its OWN intake — it must not inherit
+    # 1's through the cross-reference
+    _two_findings(repo, monkeypatch)
+    _plant_classifier(repo, unmatched=("cw:aa:11:1", "cw:aa:11:2"))
+    (repo / ".harness/tmp").mkdir()
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "- finding cw:aa:11:1 fixed at f.py:1, same root as cw:aa:11:2\n"
+        "  intake: instance-only a one-off\n"
+        "- finding cw:aa:11:2 fixed at f.py:2\n"
+    )
+    assert _attest_sweep_rc(repo, ".harness/tmp/sweep.md") == 1
+    assert "finding cw:aa:11:2 matches no preflight class" in capsys.readouterr().err
+    (repo / ".harness/tmp/sweep.md").write_text(
+        "- finding cw:aa:11:1 fixed at f.py:1, same root as cw:aa:11:2\n"
+        "  intake: instance-only a one-off\n"
+        "- finding cw:aa:11:2 fixed at f.py:2\n"
+        "  intake: instance-only its twin\n"
+    )
+    assert _attest_sweep_rc(repo, ".harness/tmp/sweep.md") == 0
+    (sw,) = rlg.load_state(repo).sweeps
+    assert set(sw.intake_instance_only) == {"cw:aa:11:1", "cw:aa:11:2"}
+
+
+def test_intake_line_above_any_heading_is_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
     _two_findings(repo, monkeypatch)
     _plant_classifier(repo, unmatched=("cw:aa:11:2",))
     (repo / ".harness/tmp").mkdir()
     (repo / ".harness/tmp/sweep.md").write_text(
-        "- finding cw:aa:11:1 fixed at f.py:1, same root as cw:aa:11:2\n"
+        "intake: instance-only orphaned\n"
+        "- finding cw:aa:11:1 fixed at f.py:1\n"
         "- finding cw:aa:11:2 fixed at f.py:2\n"
-        "  intake: instance-only a one-off\n"
     )
-    assert _attest_sweep_rc(repo, ".harness/tmp/sweep.md") == 0
-    (sw,) = rlg.load_state(repo).sweeps
-    assert sw.intake_instance_only == ("cw:aa:11:2",)
+    assert _attest_sweep_rc(repo, ".harness/tmp/sweep.md") == 1
+    assert "under no finding heading" in capsys.readouterr().err
 
 
 def test_one_finding_flows_into_the_class_table_end_to_end(
@@ -745,11 +782,16 @@ def test_one_finding_flows_into_the_class_table_end_to_end(
     (repo / ".harness/tmp/sweep.md").write_text(answers)
     assert _attest_sweep_rc(repo, ".harness/tmp/sweep.md") == 1
     assert "class repair the live table does not show" in capsys.readouterr().err
-    # the absorption commit: one data row in the skill's table
+    # the absorption commit: one data row in the skill's table. Written but NOT yet
+    # committed it changes nothing — the gate classifies with HEAD's bytes, the
+    # binding the attestation records (codex r1 P2)
     src = script.read_text()
     marker = "CLASSES: dict[str, str | tuple[str, ...]] = {\n"
     assert marker in src
     script.write_text(src.replace(marker, marker + '    "15 zorb frobnication": r"frobnicat",\n'))
+    assert _attest_sweep_rc(repo, ".harness/tmp/sweep.md") == 1
+    assert "class repair the live table does not show" in capsys.readouterr().err
+    _commit(repo, "absorb: class 15")
     assert _attest_sweep_rc(repo, ".harness/tmp/sweep.md") == 0
     (sw,) = rlg.load_state(repo).sweeps
     assert sw.intake_instance_only == ()
@@ -760,13 +802,30 @@ def test_classifier_that_cannot_run_is_loud_not_all_unmatched(
     repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     _two_findings(repo, monkeypatch)
-    (repo / CLASSIFIER_REL).write_text("import sys\nsys.exit(3)\n")
+    _plant_classifier(repo, (), body="import sys\nsys.exit(3)\n")
     assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 1
     assert "finding classifier did not run (exit 3)" in capsys.readouterr().err
     assert not (repo / ".harness/tmp/sweep.md").exists()
-    (repo / CLASSIFIER_REL).write_text("print('{}')\n")  # an answer missing the asked ids
+    for body in (
+        "print('{}')",  # an answer missing the asked ids
+        "print('[]')",  # not an object
+        'print(\'{"cw:aa:11:1": "stub class", "cw:aa:11:2": []}\')',  # a string, not a list
+        'print(\'{"cw:aa:11:1": [""], "cw:aa:11:2": [1]}\')',  # empty / non-string names
+    ):
+        _plant_classifier(repo, (), body=body + "\n")
+        assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 1, body
+        assert "unusable answer" in capsys.readouterr().err, body
+
+
+def test_classifier_must_be_committed_at_head(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    _two_findings(repo, monkeypatch)
+    subprocess.run(["git", "-C", str(repo), "rm", "-q", str(CLASSIFIER_REL)], check=True)
+    _commit(repo, "remove classifier")
+    (repo / CLASSIFIER_REL).write_text("print('{}')\n")  # present in the tree, not at HEAD
     assert _template(repo, "template-sweep", ".harness/tmp/sweep.md") == 1
-    assert "unusable answer" in capsys.readouterr().err
+    assert "is not committed at HEAD" in capsys.readouterr().err
 
 
 def test_state_written_before_intake_field_still_loads(repo: Path):

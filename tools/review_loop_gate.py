@@ -754,11 +754,26 @@ def _run_sweep_script(repo: Path, diff_range: str) -> tuple[str, ...]:
 def _classify_findings(
     repo: Path, rows: list[dict], ids: tuple[str, ...]
 ) -> dict[str, tuple[str, ...]]:
-    """Every outstanding finding's preflight classes, from the skill's live table
-    (`refresh-classes.py classify`). Same seam as `_run_sweep_script`: the skill owns
-    the table, the gate asks. Empty tuple = unmatched = new-class candidate. A script
-    that cannot run, or an answer missing an asked id, is GateError — 'couldn't
-    classify' must never read as 'nothing matched' ([LAW:no-silent-failure])."""
+    """Every outstanding finding's preflight classes, from the skill's class table AS
+    COMMITTED AT HEAD (`git show HEAD:<script>`, run as `classify`): the attestation
+    binds the committed base..HEAD bytes, so the table that decides 'matched' must be
+    the committed one — an uncommitted row could otherwise attest a repair that was
+    never landed (codex r1 P2). Same seam as `_run_sweep_script`: the skill owns the
+    table, the gate asks. Empty tuple = unmatched = new-class candidate. A script
+    that cannot be read or run, or an answer that is not {asked id: [non-empty
+    class names]}, is GateError — 'couldn't classify' must never read as 'nothing
+    matched' ([LAW:no-silent-failure]; shape check per codex r1 P3)."""
+    shown = subprocess.run(
+        ["git", "show", f"HEAD:{CLASSIFY_SCRIPT_REL.as_posix()}"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    if shown.returncode != 0:
+        raise GateError(
+            f"finding classifier {CLASSIFY_SCRIPT_REL} is not committed at HEAD: "
+            f"{shown.stderr.strip()}"
+        )
     by_id = {r["finding_id"]: r for r in rows if r.get("finding_id") in ids}
     payload = [
         {
@@ -769,7 +784,7 @@ def _classify_findings(
         for fid in ids
     ]
     proc = subprocess.run(
-        [sys.executable, str(repo / CLASSIFY_SCRIPT_REL), "classify"],
+        [sys.executable, "-c", shown.stdout, "classify"],
         cwd=repo,
         input=json.dumps(payload),
         capture_output=True,
@@ -781,9 +796,20 @@ def _classify_findings(
         )
     try:
         out = json.loads(proc.stdout)
-        return {fid: tuple(str(c) for c in out[fid]) for fid in ids}
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+    except json.JSONDecodeError as exc:
         raise GateError(f"finding classifier returned an unusable answer: {exc}") from exc
+    if not isinstance(out, dict):
+        raise GateError("finding classifier returned an unusable answer: not an object")
+    result: dict[str, tuple[str, ...]] = {}
+    for fid in ids:
+        names = out.get(fid)
+        if not isinstance(names, list) or not all(isinstance(c, str) and c.strip() for c in names):
+            raise GateError(
+                f"finding classifier returned an unusable answer for {fid}: expected a "
+                f"list of non-empty class names, got {names!r}"
+            )
+        result[fid] = tuple(names)
+    return result
 
 
 @dataclass(frozen=True)
@@ -796,34 +822,46 @@ class Intake:
     detail: str
 
 
+#: A finding heading: the template's `- finding <id>` line, or its hand-authored
+#: `finding <id>` shape — the same label word _has_residue strips. Only a heading owns
+#: the lines below it; a cross-reference to an id inside another finding's answer is
+#: not a heading (codex r1 P1: two unmatched findings, one citing the other, let the
+#: second inherit the first's intake line and attest with no disposition of its own).
+_FINDING_HEADING = re.compile(r"^\s*[-*]?\s*finding\s+(\S+)", re.I)
+
+
 def _parse_intakes(
     ids: tuple[str, ...], unmatched: tuple[str, ...], answers: str
 ) -> tuple[Intake, ...]:
-    """The `intake:` line each unmatched finding owes, read from that finding's own
-    section of the answers file (sections bounded by EVERY outstanding id, matched
-    or not). Missing, duplicated, or malformed → GateError naming the finding — an
-    unmatched reviewer finding with no stated disposition is exactly the silent
-    non-execution this venue exists to stop."""
-    lines = answers.splitlines()
+    """The `intake:` line each unmatched finding owes, attributed to the nearest
+    preceding finding heading. Missing, duplicated, orphaned, or malformed →
+    GateError naming the finding — an unmatched reviewer finding with no stated
+    disposition is exactly the silent non-execution this venue exists to stop."""
+    found: dict[str, list[str]] = {n: [] for n in ids}
+    owner: str | None = None
+    for ln in answers.splitlines():
+        m = _FINDING_HEADING.match(ln)
+        if m and m.group(1) in found:
+            owner = m.group(1)
+            continue
+        fs = ln.lstrip()
+        if not fs.startswith(INTAKE_PREFIX):
+            continue
+        if owner is None:
+            raise GateError(
+                f"`{fs}` sits under no finding heading — an intake line belongs directly "
+                "below its `- finding <id>` line"
+            )
+        found[owner].append(fs[len(INTAKE_PREFIX) :].strip())
     out = []
     for n in unmatched:
-        # keyed by line so a cross-reference to `n` inside another finding's answer,
-        # whose section runs on into n's own, counts n's intake line once, not twice
-        found: dict[int, str] = {}
-        for i, ln in enumerate(lines):
-            if n not in _line_ids(ln, ids):
-                continue
-            for j, follower in _section(lines, i, ids, n):
-                fs = follower.lstrip()
-                if fs.startswith(INTAKE_PREFIX):
-                    found[j] = fs[len(INTAKE_PREFIX) :].strip()
-        if len(found) != 1:
+        if len(found[n]) != 1:
             raise GateError(
                 f"finding {n} matches no preflight class and its section carries "
-                f"{len(found)} `{INTAKE_PREFIX}` lines (exactly one required: "
+                f"{len(found[n])} `{INTAKE_PREFIX}` lines (exactly one required: "
                 f"`{INTAKE_PREFIX} {' | '.join(INTAKE_KINDS)} <detail>`)"
             )
-        (line,) = found.values()
+        (line,) = found[n]
         kind, _, detail = line.partition(" ")
         detail = detail.strip()
         if kind not in INTAKE_KINDS or not detail or TEMPLATE_PLACEHOLDER in detail:
@@ -919,23 +957,28 @@ def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
     # an id heading followed by the answer on later lines stays valid, the section
     # ending at the next bracket heading or another id's line.
     lines = answers.splitlines()
+
+    def line_ids(ln: str) -> set[str]:
+        toks = set(re.split(r"[\s,;()\[\]{}'\"`]+", ln))
+        return {n for n in ids if n in toks}
+
     out = []
     for n in ids:
         answered = False
         for i, ln in enumerate(lines):
-            if n not in _line_ids(ln, ids):
+            if n not in line_ids(ln):
                 continue
             if _has_residue(ln, *ids):
                 answered = True
                 break
-            for _, follower in _section(lines, i, ids, n):
+            for follower in lines[i + 1 :]:
                 fs = follower.lstrip()
+                if fs.startswith("[") or (line_ids(follower) - {n}):
+                    break
                 # an `intake:` line is the finding's CLASS disposition, parsed by
                 # _parse_intakes — never its fix answer, or the intake slot alone
                 # would attest an unfixed finding
-                if fs.startswith(("#", INTAKE_PREFIX)):
-                    continue
-                if _has_residue(follower, *ids):
+                if not fs.startswith(("#", INTAKE_PREFIX)) and _has_residue(follower, *ids):
                     answered = True
                     break
             if answered:
@@ -943,23 +986,6 @@ def _unanswered_ids(ids: tuple[str, ...], answers: str) -> list[str]:
         if not answered:
             out.append(n)
     return out
-
-
-def _line_ids(ln: str, ids: tuple[str, ...]) -> set[str]:
-    """The obligation ids a line names as whole tokens (token-exact, never substring)."""
-    toks = set(re.split(r"[\s,;()\[\]{}'\"`]+", ln))
-    return {n for n in ids if n in toks}
-
-
-def _section(lines: list[str], i: int, ids: tuple[str, ...], n: str):
-    """The (index, line) pairs belonging to the finding heading at `lines[i]`:
-    everything below it up to the next bracket heading or a line naming another id.
-    One definition of a section boundary for both the fix-answer and the intake reads."""
-    for j in range(i + 1, len(lines)):
-        follower = lines[j]
-        if follower.lstrip().startswith("[") or (_line_ids(follower, ids) - {n}):
-            break
-        yield j, follower
 
 
 #: The template's provenance stamp: attest parses it back and refuses a mismatch

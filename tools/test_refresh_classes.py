@@ -89,3 +89,17 @@ def test_report_counts_agree_with_classify(tmp_path: Path):
     assert "    1  3 silent failure / fallback" in proc.stdout
     assert "Unmatched findings (new-class candidates): 1" in proc.stdout
     assert "the widget frobnicates" in proc.stdout
+
+
+def test_every_class_row_has_its_skill_section_and_vice_versa():
+    # the table and the author-facing checklist are two carriers of one class list
+    # (codex r1 P2 on the intake arc): a row landed in one without the other is the
+    # drift the skill's own docstring forbids, so it fails here rather than in review
+    import re
+    import runpy
+
+    table = runpy.run_path(str(SCRIPT))["CLASSES"]
+    table_numbers = {name.split(" ", 1)[0] for name in table}
+    skill = (SCRIPT.parents[1] / "SKILL.md").read_text()
+    section_numbers = set(re.findall(r"^### (\d+)\. ", skill, re.M))
+    assert table_numbers == section_numbers
