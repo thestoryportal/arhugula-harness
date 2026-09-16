@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1527).** U-HE-39 per the §4 queue (hook next=U-HE-39). Before it, two doc-only debts from the U-HE-42 close: (1) plan checkbox ticks for U-HE-38, U-HE-39 and U-HE-42 in Implementation_Plan_HE_Loop_Lanes_v1.md; (2) the B-245 (C-HE-28 §4 outcome-measure cohorts UNOWNED) and B-246 (measured C-HE-33 §3 parity break in CI's two-parent checkout) forward-register rows, whose texts live in the C-HE-33 fork doc on main and the #1527 body, once U-HE-40 (held unmerged, B-244) lands or is abandoned -- every register row conflicts textually with that branch.
+**Current next action (post-#1527).** The next implementable unit is U-HE-39 (§4 queue). Before it, two doc-only debts from the U-HE-42 close: (1) plan checkbox ticks for U-HE-38, U-HE-39 and U-HE-42 in Implementation_Plan_HE_Loop_Lanes_v1.md; (2) the B-245 (C-HE-28 §4 outcome-measure cohorts UNOWNED) and B-246 (measured C-HE-33 §3 parity break in CI's two-parent checkout) forward-register rows, whose texts live in the C-HE-33 fork doc on main and the #1527 body, once U-HE-40 (held unmerged, B-244) lands or is abandoned -- every register row conflicts textually with that branch.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
