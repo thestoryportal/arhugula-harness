@@ -16,7 +16,8 @@ from pathlib import Path
 import duckdb
 import yaml
 
-REPO = Path(__file__).resolve().parents[3]  # [LAW:one-source-of-truth] the checkout this file lives in, not a hard-coded home
+# [LAW:one-source-of-truth] the checkout this file lives in, not a hard-coded home
+REPO = Path(__file__).resolve().parents[3]
 OUT = Path(__file__).with_name("E5-results.md")
 LEVERS = ("B-211", "B-212")
 

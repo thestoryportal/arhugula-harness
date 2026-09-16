@@ -21,8 +21,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 from common import embed, top_k
 
-REPO = Path(__file__).resolve().parents[3]  # [LAW:one-source-of-truth] the checkout this file lives in, not a hard-coded home
-PROJ = Path.home() / ".claude" / "projects" / str(REPO).replace("/", "-")  # Claude Code's per-project transcript dir
+# [LAW:one-source-of-truth] the checkout this file lives in, not a hard-coded home
+REPO = Path(__file__).resolve().parents[3]
+# Claude Code's per-project transcript dir
+PROJ = Path.home() / ".claude" / "projects" / str(REPO).replace("/", "-")
 OUT = Path(__file__).with_name("E4-results.md")
 CHUNK = 1500
 

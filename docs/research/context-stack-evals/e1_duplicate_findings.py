@@ -17,7 +17,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 from common import embed
 
-REPO = Path(__file__).resolve().parents[3]  # [LAW:one-source-of-truth] the checkout this file lives in, not a hard-coded home
+# [LAW:one-source-of-truth] the checkout this file lives in, not a hard-coded home
+REPO = Path(__file__).resolve().parents[3]
 LEDGER = REPO / ".harness" / "merge-gate-log.jsonl"
 OUT = Path(__file__).with_name("E1-results.md")
 
