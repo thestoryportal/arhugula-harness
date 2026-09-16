@@ -107,7 +107,9 @@ codex-context-check:
 # invokes the guard directly (.github/workflows/ci.yml:642-645) and never runs this recipe, so
 # the merge-ref divergence that made a guard-side refusal a P1 cannot reach this line. What
 # still differs from the local shape above is named in
-# tools/test_codex_context_guard.py::test_local_ci_parity.
+# tools/test_codex_context_guard.py::test_local_ci_parity. The window AFTER the recipe exits
+# and before the push is outside it (merge-gate r2 concurrency P2), so on success the recipe
+# prints the sha it checked and the carrier pushes that sha by name, never HEAD.
 codex-context-check-ci:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -118,6 +120,7 @@ codex-context-check-ci:
     /usr/bin/python3 tools/codex_context_guard.py check --base-ref "$base" --head-ref "$head" --allow-roadmap-drift
     live="$(git rev-parse HEAD)"
     [ "$live" = "$head" ] || { echo "codex-context-check-ci: HEAD moved from $head to $live while the guard ran; the verdict describes the old commit -- re-run before pushing" >&2; exit 1; }
+    echo "codex-context-check-ci: checked $head -- push this sha, not HEAD"
 
 # Log a credential-gated unit after all non-credential work is closed.
 codex-credential-gate *args:

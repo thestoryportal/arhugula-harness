@@ -37,7 +37,10 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   u-he-42 r7 P2): every BLOCK round below lands a fix commit, which moves HEAD past whatever
   this gate last checked, so a gate run before the review loop says nothing about the commit
   you actually push. Re-run it after the FINAL review-driven commit; the recipe itself refuses
-  a HEAD that moved while the guard ran, but only for the run you actually make. Same cadence
+  a HEAD that moved while the guard ran, but only for the run you actually make. On success it
+  prints `checked <sha>`: push THAT sha by name (`git push origin <sha>:refs/heads/<branch>`),
+  never `HEAD` (merge-gate r2 concurrency P2) — the check-exit-to-push window is outside the
+  recipe, and a commit that lands in it cannot ride a push that names the checked sha. Same cadence
   as `just leg-selfcheck` below, and for the same reason. `just codex-context-check` stays the
   checkpoint-bound local gate; what the two shapes may differ on is named in
   `tools/test_codex_context_guard.py::test_local_ci_parity`.

@@ -2356,13 +2356,12 @@ def _finding_codes(capsys: pytest.CaptureFixture[str], argv: list[str]) -> set[s
     return {f["code"] for f in json.loads(capsys.readouterr().out)["findings"]}
 
 
-def test_local_ci_parity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """C-HE-33: `codex-context-check-ci` passes CI's argv exactly, and for one committed SHA
-    in a clean worktree CI's guard step and the local `codex-context-check` recipe report
-    the same findings apart from PARITY_EXCLUSIONS. Uncommitted edits sit outside the
-    claim: CI's checkout never has any."""
+def _open_prs_unavailable(root: Path) -> tuple[str, bool]:
+    return ("", False)
+
+
+def _parity_repo(tmp_path: Path) -> tuple[Path, str, str]:
+    """A committed mixed branch over main: the one tree both parity witnesses run on."""
     repo = _init_repo(tmp_path)
     (repo / ".gitignore").write_text(
         ".harness/.checkpoints/\n.harness/codex_loop_state.json\n", encoding="utf-8"
@@ -2378,6 +2377,25 @@ def test_local_ci_parity(
     _git(repo, "commit", "-m", "mixed branch change")
     base = _git(repo, "merge-base", "main", "HEAD")
     head = _git(repo, "rev-parse", "HEAD")
+    return repo, base, head
+
+
+def _local_codes(capsys: pytest.CaptureFixture[str], *, base: str, head: str) -> set[str]:
+    *setup, local_check = _recipe_guard_argvs("codex-context-check", base=base, head=head)
+    for argv in setup:
+        cg.main(argv)
+        capsys.readouterr()
+    return _finding_codes(capsys, local_check)
+
+
+def test_local_ci_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """C-HE-33: `codex-context-check-ci` passes CI's argv exactly, and for one committed SHA
+    in a clean worktree CI's guard step and the local `codex-context-check` recipe report
+    the same findings apart from PARITY_EXCLUSIONS. Uncommitted edits sit outside the
+    claim: CI's checkout never has any."""
+    repo, base, head = _parity_repo(tmp_path)
     monkeypatch.chdir(repo)
     monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
 
@@ -2385,11 +2403,7 @@ def test_local_ci_parity(
     assert _recipe_guard_argvs("codex-context-check-ci", base=base, head=head) == [ci]
 
     ci_codes = _finding_codes(capsys, ci)
-    *setup, local_check = _recipe_guard_argvs("codex-context-check", base=base, head=head)
-    for argv in setup:
-        cg.main(argv)
-        capsys.readouterr()
-    local_codes = _finding_codes(capsys, local_check)
+    local_codes = _local_codes(capsys, base=base, head=head)
 
     # non-vacuous: the branch's hard finding reaches both shapes
     assert "DESIGN_IMPL_MIX" in ci_codes & local_codes
@@ -2399,6 +2413,62 @@ def test_local_ci_parity(
         "ROADMAP_STATUS_BRANCH_DIVERGED",
     }
     assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS
+
+
+def test_open_prs_unavailable_is_a_driven_parity_exclusion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """merge-gate r2 (witness P2): PARITY_EXCLUSIONS licenses OPEN_PRS_UNAVAILABLE because
+    CI's guard job sets no GH_TOKEN, but every parity run patched `_open_prs` identically on
+    both sides, so the licensed divergence was declared and never driven. Here CI's shape has
+    no gh and the local shape does: the finding lands on exactly one side, and parity holds
+    only because the exclusion names it -- drop the entry and this goes red."""
+    repo, base, head = _parity_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_unavailable)
+    ci_codes = _finding_codes(capsys, _ci_guard_argv(base, head))
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+    local_codes = _local_codes(capsys, base=base, head=head)
+
+    assert "OPEN_PRS_UNAVAILABLE" in ci_codes - local_codes
+    assert ci_codes ^ local_codes == {
+        "ROADMAP_STATUS_DRIFT_ALLOWED",
+        "ROADMAP_STATUS_BRANCH_DIVERGED",
+        "OPEN_PRS_UNAVAILABLE",
+    }
+    assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS
+
+
+def test_git_helper_supplies_identity_when_git_refuses_to_guess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """merge-gate r2 (witness P2) / CI run 35044540267: `_GIT_IDENTITY_ENV` exists because a
+    fixture's fresh clone committed with no identity on a runner whose account has none git
+    can guess from. A developer machine guesses one, so nothing else in this file notices if
+    the env is dropped. `user.useConfigOnly` makes git refuse to guess, as the runner does;
+    the env identity still satisfies it. Delete the env from `_git` and the clone's commit
+    raises here."""
+    monkeypatch.setenv("HOME", str(tmp_path / "nohome"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "user.useConfigOnly")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    remote = tmp_path / "remote.git"
+    _git(repo, "init", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "origin", "main")
+    other = tmp_path / "other"
+    _git(repo, "clone", "-q", "--branch", "main", str(remote), str(other))
+    (other / "advanced.md").write_text("main moved on\n", encoding="utf-8")
+    _git(other, "add", ".")
+    _git(other, "commit", "-m", "main advances")
+
+    assert _git(other, "log", "-1", "--format=%an <%ae>") == "Codex Test <codex@example.test>"
 
 
 def test_ci_shape_emits_the_checked_head_disclosure_on_a_merge_ref_checkout(
@@ -2479,7 +2549,8 @@ def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
 
     current = _run_recipe_body("codex-context-check-ci", repo)
     assert current.returncode == 0, current.stderr
-    assert current.stdout.split() == [
+    *argv, checked_line = current.stdout.splitlines()
+    assert argv == [
         "check",
         "--base-ref",
         branch_point,
@@ -2487,6 +2558,10 @@ def test_ci_recipe_refuses_a_branch_behind_origin_main(tmp_path: Path) -> None:
         feature_head,
         "--allow-roadmap-drift",
     ]
+    # merge-gate r2 (concurrency P2): the carrier pushes the sha the recipe names, never HEAD
+    assert (
+        checked_line == f"codex-context-check-ci: checked {feature_head} -- push this sha, not HEAD"
+    )
 
     _git(repo, "checkout", "main")
     (repo / "advanced.md").write_text("main moved on\n", encoding="utf-8")
