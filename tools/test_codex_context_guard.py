@@ -2278,6 +2278,14 @@ PARITY_EXCLUSIONS = frozenset(
         # the one flag CI passes and `codex-context-check` does not: --allow-roadmap-drift.
         "ROADMAP_STATUS_DRIFT_ALLOWED",
         "ROADMAP_STATUS_BRANCH_DIVERGED",
+        # CI's checkout shape, which no local run reproduces (codex u-he-42 r8 P2): on
+        # pull_request, actions/checkout leaves the SYNTHETIC merge ref at HEAD
+        # (.github/workflows/ci.yml:430-436) while the guard is handed the PR head sha
+        # (:644), so the CI-shaped invocation always emits this info finding and the local
+        # shape, run on the commit it is standing on, never does. Exercised by
+        # test_ci_shape_emits_the_checked_head_disclosure_on_a_merge_ref_checkout below --
+        # an exclusion without a case that drives it is an excuse, not a named difference.
+        "CHECKED_HEAD_NOT_LIVE_HEAD",
     }
 )
 
@@ -2380,6 +2388,43 @@ def test_local_ci_parity(
         "ROADMAP_STATUS_BRANCH_DIVERGED",
     }
     assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS
+
+
+def test_ci_shape_emits_the_checked_head_disclosure_on_a_merge_ref_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """codex u-he-42 r8 (P2): test_local_ci_parity keeps HEAD equal to the supplied head, so it
+    never sees the shape CI actually runs -- actions/checkout leaves the SYNTHETIC merge ref at
+    HEAD while the guard receives the PR head sha. In that shape the guard emits
+    CHECKED_HEAD_NOT_LIVE_HEAD, a real CI/local divergence that must be a NAMED exclusion
+    rather than an unasserted one. This drives the merge-ref shape so the entry in
+    PARITY_EXCLUSIONS is exercised, not merely declared."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "branch change")
+    pr_head = _git(repo, "rev-parse", "HEAD")
+
+    # The synthetic merge commit actions/checkout leaves at HEAD on a pull_request run: a
+    # commit that is not the PR head, with the PR head still passed as --head-ref.
+    _git(repo, "checkout", "-b", "synthetic-merge")
+    (repo / "merged.txt").write_text("merge ref\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "Merge feature into main")
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cg, "_open_prs", _open_prs_available)
+
+    ci_codes = _finding_codes(capsys, _ci_guard_argv(base, pr_head))
+
+    # The divergence is real in the shape CI runs ...
+    assert "CHECKED_HEAD_NOT_LIVE_HEAD" in ci_codes
+    # ... it is a NAMED exclusion, so parity's symmetric-difference assertion still holds ...
+    assert "CHECKED_HEAD_NOT_LIVE_HEAD" in PARITY_EXCLUSIONS
+    # ... and it never blocks: r5's P1 was exactly a hard finding on this shape.
+    assert _git(repo, "rev-parse", "HEAD") != pr_head
 
 
 def _run_recipe_body(
