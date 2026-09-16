@@ -2382,11 +2382,18 @@ def test_local_ci_parity(
     assert ci_codes ^ local_codes <= PARITY_EXCLUSIONS
 
 
-def _run_recipe_body(recipe: str, repo: Path) -> subprocess.CompletedProcess[str]:
+def _run_recipe_body(
+    recipe: str, repo: Path, *, guard_cmd: str = ""
+) -> subprocess.CompletedProcess[str]:
     """Run a recipe body with its guard call swapped for printf, so the witness sees the
-    argv the recipe would pass without running the guard against a fixture repo."""
+    argv the recipe would pass without running the guard against a fixture repo.
+
+    `guard_cmd` replaces that stub outright, so a witness can make something happen DURING
+    the guard call -- a commit landing mid-run, say (codex u-he-42 r6 P2)."""
     script = "\n".join(
-        "printf '%s\\n' " + line[len(" ".join(_GUARD)) + 1 :] if _is_guard_call(line) else line
+        (guard_cmd or "printf '%s\\n' " + line[len(" ".join(_GUARD)) + 1 :])
+        if _is_guard_call(line)
+        else line
         for line in _recipe_body(recipe)
         if not line.startswith("#!")
     )
@@ -2524,6 +2531,42 @@ def test_guard_discloses_but_does_not_fail_when_head_differs_from_head_ref(
     # finding here is the sole thing that could make the guard job exit 1 (codex r5 P1).
     assert result.returncode == 0, result.stdout
     assert "HEAD_MOVED_DURING_CHECK" not in result.stdout
+
+
+def test_ci_recipe_refuses_when_head_moves_while_the_guard_runs(tmp_path: Path) -> None:
+    """codex u-he-42 r6 (P2, justfile:113): this recipe is the Claude carrier's pre-push gate
+    (.claude/skills/ship-pr/SKILL.md), so a HEAD that advances while the guard runs would let
+    the following push publish a commit the gate never checked -- the guard itself only
+    DISCLOSES that divergence (info), by design, because CI's merge-ref checkout diverges on
+    every pull_request run. Refusing belongs in the recipe, which CI never executes."""
+    repo = _init_repo(tmp_path)
+    _git(repo, "branch", "-m", "main")
+    remote = tmp_path / "remote.git"
+    _git(repo, "init", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "origin", "main")
+    _git(repo, "checkout", "-b", "feature")
+    (repo / "feature.txt").write_text("feature\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "branch change")
+    checked_head = _git(repo, "rev-parse", "HEAD")
+
+    # The guard stub lands a commit, so HEAD advances between the recipe's snapshot and the
+    # moment the gate would be treated as passed -- the race the finding names, made explicit.
+    moved = _run_recipe_body(
+        "codex-context-check-ci",
+        repo,
+        guard_cmd=(
+            "printf 'racing\\n' > racing.txt && git add racing.txt "
+            "&& git -c user.email=codex@example.test -c user.name='Codex Test' "
+            "commit -q -m 'concurrent commit'"
+        ),
+    )
+
+    assert moved.returncode == 1, moved.stdout
+    assert "HEAD moved from" in moved.stderr
+    assert checked_head in moved.stderr
+    assert _git(repo, "rev-parse", "HEAD") != checked_head
 
 
 def _flat(path: str) -> str:

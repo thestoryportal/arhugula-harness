@@ -100,7 +100,12 @@ codex-context-check:
 # check one commit and diff another -- the guard DISCLOSES a HEAD that differs from
 # `--head-ref` (CHECKED_HEAD_NOT_LIVE_HEAD, info) rather than attribute the verdict silently to
 # an unevaluated commit; it never refuses on it, because CI's merge-ref checkout diverges by
-# construction on every pull_request run (codex u-he-42 r5 P1). What
+# construction on every pull_request run (codex u-he-42 r5 P1). The RECIPE then re-checks
+# HEAD after the guard returns (codex u-he-42 r6 P2): this is the Claude carrier's pre-push
+# gate (`.claude/skills/ship-pr/SKILL.md`), so a HEAD that advanced mid-run would let the push
+# publish a commit the gate never checked. Refusing is safe HERE and not in the guard: CI
+# invokes the guard directly (.github/workflows/ci.yml:642-645) and never runs this recipe, so
+# the merge-ref divergence that made a guard-side refusal a P1 cannot reach this line. What
 # still differs from the local shape above is named in
 # tools/test_codex_context_guard.py::test_local_ci_parity.
 codex-context-check-ci:
@@ -111,6 +116,8 @@ codex-context-check-ci:
     head="$(git rev-parse HEAD)"
     git merge-base --is-ancestor "$base" "$head" || { echo "codex-context-check-ci: HEAD does not contain origin/main; rebase onto it first, or CI's diff will include main's newer commits" >&2; exit 1; }
     /usr/bin/python3 tools/codex_context_guard.py check --base-ref "$base" --head-ref "$head" --allow-roadmap-drift
+    live="$(git rev-parse HEAD)"
+    [ "$live" = "$head" ] || { echo "codex-context-check-ci: HEAD moved from $head to $live while the guard ran; the verdict describes the old commit -- re-run before pushing" >&2; exit 1; }
 
 # Log a credential-gated unit after all non-credential work is closed.
 codex-credential-gate *args:
