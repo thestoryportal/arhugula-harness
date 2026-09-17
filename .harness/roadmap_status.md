@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `8d6475476bba` |
+| `workspace_state_hash` | `7d35295f8386` |
 | `last_refreshed` | 2026-09-17T00:00:00Z |
-| `git_head` | `e0b8c36a` —  |
+| `git_head` | `e73dfe48` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1550).** U-HE-43 (shadow trial, C-HE-29) is open as PR #1550 at c283ff9b5 after six codex rounds (19 + 4 + 3 + 2 findings absorbed, B-250 and B-251 registered); merge via safe-merge once CI and the three merge-gate lenses are green, run the arc-close tail and the terminating roadmap refresh, then U-HE-44.
+**Current next action (post-#1553).** The main-protection tiebreaker now watches required checks only (PR #1553), so `just main-protection-apply` + `apply-confirm` can land the two C-HE-08 contexts and the loop-lanes pilot gate (`lanes_pilot.py gate`) turns green; re-run the apply-confirm, verify, then start the first pilot (`just lanes-pilot <run_id>`), then U-HE-44.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1553 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1550 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1548 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1546 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1544 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1542 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
