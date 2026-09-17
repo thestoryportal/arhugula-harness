@@ -152,7 +152,7 @@ def test_stale_carry_clean(tmp_path):
     assert stale_carry.Check().run(_subject(tmp_path, changed=["ok.md"])) == []
 
 
-# mutation-probe: tools/mechanized_checks/cited_symbol_exists.py:41 drop the cited-line-count filter
+# mutation-probe: tools/mechanized_checks/cited_symbol_exists.py:48-50 drop the cited-range filter
 def test_cited_symbol_exists_fixture_and_clean(tmp_path):
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "x.py").write_text("def real():\n    pass\n")
