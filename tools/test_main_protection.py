@@ -463,13 +463,14 @@ def _watch_seq(monkeypatch, results):
 
 
 def test_watch_checks_retries_not_yet_started_then_green(monkeypatch, tmp_path):
-    """The 'no checks reported' exit is not-yet-started, never a red (scratch PR #1419
-    live witness): retry, then accept a green watch whose reported names cover every
-    required context."""
+    """The not-yet-started exit is never a red (scratch PR #1419 live witness): retry, then
+    accept a green watch whose reported names cover every required context. Under
+    `--required` gh words it "no required checks reported on the '<b>' branch" (codex r1
+    P2 on #1553) — the phrasing the watcher now sees live."""
     seq = _watch_seq(
         monkeypatch,
         [
-            ("watch", 1, "no checks reported on the 'x' branch"),
+            ("watch", 1, "no required checks reported on the 'x' branch"),
             ("watch", 0, ""),
             ("names", 0, "a — blocking\nb — blocking\nextra job\n"),
         ],

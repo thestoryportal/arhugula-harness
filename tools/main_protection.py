@@ -660,7 +660,10 @@ def _watch_checks(prno: str, cwd: Path, required: list[str], attempts: int = 8) 
                 return True
             time.sleep(20)
             continue
-        if "no checks reported" in blob:
+        # gh's not-yet-started diagnostic is "no checks reported on the '<b>' branch" for an
+        # unscoped watch and "no required checks reported on the '<b>' branch" under
+        # `--required` (both strings live in the gh binary; codex r1 P2 on #1553).
+        if "checks reported on the" in blob:
             time.sleep(20)
             continue
         return False
