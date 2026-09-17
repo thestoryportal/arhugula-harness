@@ -19,6 +19,14 @@ Mutation-reasoning table — each mutation and the test that MUST go red for it:
    9 break the AGENTS.md roadmap-recipe cite    -> test_agents_roadmap_cite_is_preserved
   10 leave a root section body in root AND pack -> (covered by U-CTX-13's own verification;
        this module pins the ROUTER, not the relocation)
+  11 a pack header claims a § the pack lacks    -> test_pack_sections_match_origin_header
+  12 a venue advertises a different § list      -> test_venues_advertise_pack_section_list
+
+Rows 11-12 were added 2026-09-17. Until then every assertion above compared pack FILENAMES,
+so `project-framing.md` could advertise a relocation of root §7 into a pack that has never
+carried a §7 and the whole module stayed green (it did, from 0f05512ca until that date; the
+same wrong claim had been copied into all three venues). A runner that needs §7 follows the
+router to a pack without it, which is the failure these two rows forbid.
 """
 
 from __future__ import annotations
@@ -148,6 +156,82 @@ def test_agents_roadmap_cite_is_preserved() -> None:
     # must still resolve, so root §12.2 has to remain a real heading.
     assert "per CLAUDE.md §12.2)" in _read(AGENTS)
     assert re.search(r"^### 12\.2 ", _read(ROOT_CLAUDE), flags=re.MULTILINE)
+
+
+# A venue names a pack's sections as `§N`, an inclusive range `§A–§B` (en dash, as the
+# packs write it) or the `§N.x` family shorthand CONTEXT.md and AGENTS.md use. Ranges and
+# `.x` are resolved AGAINST THE PACK'S OWN HEADINGS, so a venue may abbreviate, but an
+# endpoint or an explicit id that names nothing real still fails.
+SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)(?:\s*[–-]\s*§(\d+(?:\.\d+)*)|(\.x))?")
+# Located by its text, not by a line number: `test_packs_declare_their_origin` only
+# requires this sentence to be PRESENT, so pinning it to a line index would invent a
+# stricter contract than the module already enforces.
+PACK_ORIGIN_MARKER = "Relocated BYTE-VERBATIM from Root `CLAUDE.md`"
+
+
+def _section_key(section: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in section.split("."))
+
+
+def _expand_sections(spec: str, pack_headings: set[str]) -> set[str]:
+    resolved: set[str] = set()
+    for start, end, dot_x in SECTION_TOKEN_RE.findall(spec):
+        if end:
+            lo, hi = _section_key(start), _section_key(end)
+            resolved |= {h for h in pack_headings if lo <= _section_key(h) <= hi}
+        elif dot_x:
+            resolved |= {h for h in pack_headings if h == start or h.startswith(f"{start}.")}
+        else:
+            resolved.add(start)
+    return resolved
+
+
+def pack_headings(pack: str) -> set[str]:
+    body = _read(GOVERNANCE / pack)
+    return set(re.findall(r"^#{2,4} (\d+(?:\.\d+)*)\.? ", body, flags=re.MULTILINE))
+
+
+def pack_claimed_sections(pack: str) -> set[str]:
+    """The sections a pack's own origin header says were relocated into it."""
+    lines = [ln for ln in _read(GOVERNANCE / pack).splitlines() if PACK_ORIGIN_MARKER in ln]
+    assert len(lines) == 1, f"{pack}: expected exactly one origin header, found {len(lines)}"
+    return _expand_sections(lines[0], pack_headings(pack))
+
+
+def venue_advertised_sections(pack: str) -> dict[str, set[str]]:
+    """Per venue, the sections that venue tells a runner to expect inside `pack`.
+
+    README.md and CONTEXT.md carry a table row whose second cell is the section list;
+    AGENTS.md is a single prose line with a parenthetical after each pack path.
+    """
+    headings = pack_headings(pack)
+    quoted = re.escape(pack)
+    row = re.compile(rf"^\|\s*`docs/governance/{quoted}`\s*\|([^|]*)\|", re.MULTILINE)
+    paren = re.compile(rf"`docs/governance/{quoted}`\s*\(([^)]*)\)")
+    found: dict[str, set[str]] = {}
+    for venue, text, pattern in (
+        ("README.md", _read(README), row),
+        ("CONTEXT.md", _read(CONTEXT), row),
+        ("AGENTS.md", _read(AGENTS), paren),
+    ):
+        match = pattern.search(text)
+        assert match, f"{venue} advertises no section list for {pack}"
+        found[venue] = _expand_sections(match.group(1), headings)
+    return found
+
+
+def test_pack_sections_match_origin_header() -> None:
+    # Set equality both ways: a claimed-but-absent § is the 2026-09-17 defect, and an
+    # unclaimed heading means a section was relocated in without the header saying so.
+    for pack in sorted(filesystem_packs()):
+        assert pack_claimed_sections(pack) == pack_headings(pack), pack
+
+
+def test_venues_advertise_pack_section_list() -> None:
+    for pack in sorted(filesystem_packs()):
+        claimed = pack_claimed_sections(pack)
+        for venue, advertised in venue_advertised_sections(pack).items():
+            assert advertised == claimed, f"{venue} vs {pack}: {advertised} != {claimed}"
 
 
 def test_packs_declare_their_origin() -> None:

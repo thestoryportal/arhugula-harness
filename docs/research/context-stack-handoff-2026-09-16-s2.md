@@ -102,12 +102,19 @@ of them described it as "the Phase 7 sub-phase enumeration" — under `project-f
 so an agent that needed §7 would have loaded a pack that does not contain it. Treat the
 E3b count as a floor: it measures headers, not the routing tables that quote them.
 
-Nothing in CI witnesses this. Reinstating the wrong claim in both
-`docs/governance/project-framing.md:3` and `CONTEXT.md:33` leaves
-`tools/test_governance_router.py` green (10 passed), so the router tests check routing, not
-whether a pack's claimed §-list matches its actual headings. A witness for that belongs in
-`test_governance_router.py`; it is not filed as a register row yet because
-`.harness/forward-register.yaml` was fenced by two sibling lanes when this landed.
+Nothing witnessed this until now. `tools/test_governance_router.py` compared pack
+FILENAMES across the three venues, never the §-lists beside them, so reinstating the wrong
+claim in `project-framing.md:3` and `CONTEXT.md:33` left the module green at 10 passed.
+Rows 11 and 12 of that module's mutation table now close it:
+`test_pack_sections_match_origin_header` reads each pack's origin header and requires set
+equality against the pack's own headings, and
+`test_venues_advertise_pack_section_list` requires each of README.md,
+CONTEXT.md and AGENTS.md to advertise that same set (resolving `§A–§B` and the `§N.x`
+shorthand against the pack's headings, so a venue may abbreviate but not misstate). Both
+go red on each of the three defect shapes, verified by mutation probe. The new witness
+immediately found a second, older drift: `AGENTS.md` advertised `roadmap-protocol.md` as
+`§12.1–§12.3, §12.5.x`, omitting the `§12` the pack carries and both other venues list.
+Fixed here too.
 
 ### F. U-HE-43 — merged.
 
@@ -115,12 +122,17 @@ whether a pack's claimed §-list matches its actual headings. A witness for that
 
 - **Venue.** If the session is an in-place background job, `just codex-check` reds exactly
   `tools/test_codex_stop_gate.py::test_stop_gate_emits_valid_stop_hook_json`
-  (`ROOT_CHECKOUT_EDIT`; `DESIGN_IMPL_MIX` no longer fires for untracked `docs/research/`,
-  which #1540 committed, but still fires on any diff mixing `docs/**` with code). CI's own
+  (`ROOT_CHECKOUT_EDIT`). CI's own
   checkout passes; state it in the PR body. `just codex-context-check-ci` on the committed
   range is the authority.
 - **Local pyright.** Run `uv sync --all-packages` once; before it `uv run pyright` reported
   11,699 errors from unsynced members (CI shape is 0).
+- **`arc_disjoint_check` exit 1 is often not about your arc.** It `git merge-tree`s each
+  sibling head against your candidate, so a sibling that is merely STALE against `main`
+  reports CONFLICT on the files `main` moved — with your candidate set to an unmodified
+  `origin/main`, and again with this arc's commit on top, it named the same four
+  `.harness/` paths, none of which either candidate touched. Read the paths before
+  re-deriving: if none is yours, the refusal is inherited and no unit choice clears it.
 - **Arc ceremony that worked, in order:** `arc_disjoint_check.py check --candidate HEAD` →
   `reservations.py reserve` → commit → `review-template-preflight` / fill / `review-attest-preflight`
   → `review-with-failover-logged .harness/tmp/<arc>-rounds/r1.log` (background, 600 s timeout
@@ -135,10 +147,19 @@ whether a pack's claimed §-list matches its actual headings. A witness for that
   attested_merge_tree` → `transition --to open` → `.harness/.next-action-draft` →
   `safe-merge.sh <pr>` (background; it merged, waited main, opened and merged the refresh) →
   `/context-save-lean` → `just arc-close …` → `defer.sh` branch-hygiene row.
-- **Doc-only, never bundled with code.** The stop-gate classifies `docs/**` as a design
-  surface, so docs beside a code diff trip `DESIGN_IMPL_MIX`. A doc-only PR also skips the
-  merge-gate, which means it writes no gate-log rows and cannot collide with a sibling lane
-  on the ledgers — the reason this file's own supersede was safe to run mid-flight.
+- **`DESIGN_IMPL_MIX` does not fire on `docs/**`** — §2 A of this file used to say it did,
+  and that was never checked. `DESIGN_RE` at `tools/codex_context_guard.py:25-28` matches
+  `design-substrate/`, `.harness/class_[123]_`, `.harness/architect_recommendation_`,
+  `Spec_*_v<n>`, `Implementation_Plan_*_v<n>` and `ADR-[FD]<n>` — nothing under `docs/`.
+  Bundling `docs/**` with code is a review-scope judgement, not a gate refusal.
+- **Doc-only does NOT keep an arc off the gate ledgers.** Skipping the three-lens merge-gate
+  is not the same as writing no gate rows: the mandatory codex round publishes a
+  `no_finding` / `finding` / `reviewer_unavailable` row through
+  `tools/review_wrapper_common.py:454-496` into `.harness/merge-gate-log.jsonl`. This arc
+  proved it — it opened believing a doc-only PR could not collide with a sibling lane on
+  the ledgers, and its own round-1 row landed in the file two sibling lanes were holding.
+  Plan for a hand-resolved ledger conflict on any arc that runs a reviewer at all; never
+  `merge=union` on the append-only ledgers (B-255).
 - **Lean protocol for tooling and doc arcs** (memory `feedback-b230-lean-protocol-one-codex-round`):
   one codex round, absorb P1/contract findings, single witness lens only when gate mechanics
   change, no round 2.
