@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `da152252db1b` |
+| `workspace_state_hash` | `93ec01822474` |
 | `last_refreshed` | 2026-09-17T00:00:00Z |
-| `git_head` | `4ad00c3a` —  |
+| `git_head` | `74c369c6` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1563).** Ledger merge strategy is settled: B-255 closed as WONT-FIX-BY-UNION. `merge=union` is unsound for the append-only gate log because `finding_record.reduce_last_by_finding_id` makes physical file order authoritative for a finding's disposition, so merge direction would silently decide `accepted` vs `rejected` — witnessed in a scratch repo, and legal at every row, since C-HE-24 §5 permits adjudications to follow adjudications. A guard now refuses any union-merged tracked `.jsonl` and an executable witness carries the measurement, so cross-lane ledger conflicts stay hand-resolved by design; the forward option (a semantic merge driver that re-validates and deterministically orders same-id lineages) is recorded on B-255 with its `git config` distribution caveat. U-HE-40 remains HELD at 15/15 review rounds with a round-12 P1 outstanding (B-244), and is separately blocked by the adopted-arc adjudication gap — `merge_gate_log.adjudicate` reads the persisted `.harness/.lane-id` and ignores `HARNESS_LANE_ID`, so an adopted arc cannot dispose its own findings. Next: the first manual pilot at 3-4 lanes (`just lanes-pilot <run_id>`, operator-driven per C-HE-13 §3; mind B-234's report bounds and the C-HE-01 residual before a Codex lane), then U-HE-44.
+**Current next action (post-#1562).** The first manual multi-lane pilot ran at three lanes (C-HE-13 §3) and lane 3's arc `class-16-codifying-witness` landed through the door: defect class 16, "the witness codifies the divergence" — a test that asserts a departure from a cleared contract and so ships the breach with regression armour. It closes the named residual the class-2 drift note left behind, and closes handoff-s2 §2 B honestly, because grounding found that item's own `\bdrift` proposal already refused at HEAD and pinned by `test_bare_drift_is_not_class_2_vocabulary` — that §2 B text is stale and still instructs future lanes to redo refused work, so superseding it is owed as a doc-only arc. The class took eight review rounds and every absorption REMOVED something (`pins the`, a trailing `[\w-]*` measured byte-identical when deleted, the bare pronouns `it`/`which`, then the whole `CI|witness|fixture` arm once measured to add zero to the new-class pile): a two-conjunct tuple worn down to one regex, with the pile at 14 at every step against base `63e19e3ee`. Sibling lanes: PR #1561 carries the zsh `lane-init` portability fix this lane surfaced (`BASH_SOURCE` is unset under zsh, so `_LI_ROOT` resolved to `$HOME`), and #1563 landed B-255's ledger-merge guard, which refuses `merge=union` on `.harness/merge-gate-log.jsonl` because adjudications are separate rows and a union would decide a disposition by merge direction; `u-he-40` remains the held B-244 arc whose `pending` reservation still fences every other lane's selection-time disjointness gate. Two coordination findings from lane 3 owe `B-*` rows and were deliberately not bundled, because `.harness/forward-register.yaml` was concurrently written by the other lanes: the review-gate recipe family (`review-template-preflight`, `review-attest-preflight`, `review-with-failover-logged`, and their sweep twins) defaults to `base='main'`, which in a lane worktree is routinely stale and cannot be fast-forwarded because `main` is checked out in another worktree — so the default widens not just the attestation but the REVIEWED BYTES; and `arc_disjoint_check`'s exit-1 remedy ("re-derive and pick the next unit") cannot clear a refusal that is candidate-vs-sibling and therefore unit-independent. Next: register those two rows and supersede handoff-s2 §2 B in one doc-only arc, then U-HE-44.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -44,7 +44,6 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1561 | `fix/lane-init-shell-portability` | — | — |
-| #1562 | `feat/class-16-codifying-witness` | — | — |
 
 ---
 
@@ -52,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1563 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1559 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1557 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1553 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1550 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
