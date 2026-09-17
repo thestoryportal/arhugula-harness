@@ -290,11 +290,17 @@ of that interactive shell, and can clobber a caller's own name. So every variabl
 file introduces owes the same question as an `os.environ` write: *who unsets it, on which
 paths?* The answer must be ALL of them — success and every failure arm — because the one
 path that forgets is the one a lane actually takes. Read the file's existing cleanup sites
-first: if it already unsets its locals in thirteen places, a new local that appears in one
+first: if it already unsets its locals at every one of its exits, a new local that appears at one
 is not a smaller version of the convention, it is the exception that breaks it.
 
-The vocabulary for this half deliberately names a SHELL (`caller's shell`, `interactive
-shell`). Terms like `caller state` or `caller-scoped` read just as naturally in ownership,
+This half has NO surviving vocabulary in class 7, and that is the finding, not an
+oversight. `caller's shell` was tried and measured against the committed gate log: it
+matched 2 findings, one of them (tools/hooks/lib.sh:144) about a caller's `set -e`
+propagating INTO a sourced file -- the opposite direction -- for a precision of 1/2, and
+`tools/test_refresh_classes.py::test_class_7_does_not_claim_sourced_shell_caller_state`
+now pins the absence. A shell-sourcing finding therefore lands UNMATCHED, which is the
+intended outcome: unmatched is where the next class comes from. The rule that removed it
+still stands, and is why it went -- terms like `caller state` or `caller-scoped` read just as naturally in ownership,
 aliasing and scoping findings, and stealing one of those is worse than missing it — a class
 hit is what removes a finding from the unmatched new-class pile, so an over-wide term
 silently switches the intake loop off for everything it claims.

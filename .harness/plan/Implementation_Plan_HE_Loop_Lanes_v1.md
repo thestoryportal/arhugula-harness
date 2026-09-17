@@ -6014,7 +6014,14 @@ def project(k: int) -> str:
 #!/usr/bin/env bash
 # Lane initialisation (C-HE-11). Source at worktree start: exports HARNESS_LANE_ID, HARNESS_LANE_INDEX,
 # sets gc.auto 0 ONCE (repo-wide, idempotent), and defines lane_stack_allowed for the Docker stack.
-_LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# As-built 2026-09-17 (#1561): root resolution must NOT rest on ${BASH_SOURCE[0]} alone. This
+# file is SOURCED and zsh does not set that variable, so under zsh it resolved against the cwd
+# and BOTH libraries silently failed to load -- rc=0 with zero of five functions defined, which
+# left gc.auto 0 (C-HE-11 §2) unattempted and the headroom NOTIFY (§5) unemittable. Ladder:
+# ${BASH_SOURCE[0]} -> ${(%):-%x} (zsh's own authority, behind an eval + ZSH_VERSION guard so
+# bash never parses it; %N was measured and rejected -- under eval it returns "(eval)") -> $0.
+# Authoritative form: tools/hooks/lane-init.sh:56-66. This skeleton stays indicative.
+_LI_ROOT="$(CDPATH= cd "$(dirname "$_LI_SRC")/../.." && pwd)"   # _LI_SRC := the ladder above
 source "$_LI_ROOT/tools/hooks/lib.sh"; source "$_LI_ROOT/tools/hooks/loop_lib.sh"
 _LI_Q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
 [ -n "${HARNESS_LANE_ID:-}" ] || export HARNESS_LANE_ID="$(uv run --quiet python "$_LI_ROOT/tools/reservations.py" mint-lane-id --worktree "$PWD" 2>/dev/null || printf '%s-%s-%s' "$(hostname -s)" "$(basename "$PWD")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')")"

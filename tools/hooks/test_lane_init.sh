@@ -1104,6 +1104,31 @@ printf 'rc=%s orphan=%s fn=%s' \"\$?\" \"\${_LI_ORPHAN_DIR:+set}\" \"\$(type lan
     || bad "$SH: later-exit refusal left the prior lane callable: '$FAR_EXIT'"
 done
 
+# A refused init must publish NO CLAIM -- asserted behaviourally, at the EXECUTED entry point.
+# `return` at the top level of a non-sourced script is an error in bash that does NOT stop
+# execution, so the library-load refusal needs the `2>/dev/null || exit 1` tail that every
+# other top-level exit in the file carries. Without it the run announces "lane NOT initialised", then walks the whole
+# protocol with neither library loaded, persists a lane id, takes an EXCLUSIVE claim in the
+# shared registry, and exits 0 -- a slot nothing ever reclaims, since release matches a removed
+# worktree path, and no caller notices because the status is 0. The file is mode 755, so the
+# executed entry point is reachable even though every call site sources today.
+# This pins the CONTRACT (a refusal leaves no claim and no identity), not the shape of the exit
+# line, so it cannot be evaded by rewriting the exit -- the lexical-scanner trap this arc
+# already paid for once. (merge-gate concurrency lens, r5 @6812163ce.)
+EXECFIX="$ROOT/execwt"; mkdir -p "$EXECFIX/tools/hooks" "$ROOT/execq/lanes"
+cp "$INIT" "$EXECFIX/tools/hooks/" || { echo "FATAL: execwt populate"; exit 1; }
+# lib.sh / loop_lib.sh deliberately NOT copied: that is what forces the library-load refusal.
+for SH in $SHELLS; do
+  rm -rf "$EXECFIX/.harness" "$ROOT/execq/lanes"; mkdir -p "$ROOT/execq/lanes"
+  EXEC_REFUSED=$(cd "$EXECFIX" && ARC_METRICS_QUEUE_DIR="$ROOT/execq" "$SH" tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s claims=%s id=%s' "$?" \
+  "$([ -d "$ROOT/execq/lanes" ] && ls "$ROOT/execq/lanes" | wc -l | tr -d ' ' || echo NODIR)" \
+  "$([ -f "$EXECFIX/.harness/.lane-id" ] && echo persisted || echo absent)")
+  [ "$EXEC_REFUSED" = "rc=1 claims=0 id=absent" ] \
+    && ok "$SH: an EXECUTED lane-init that refuses publishes no claim and persists no identity" \
+    || bad "$SH: executed refusal leaked state: '$EXEC_REFUSED' (want rc=1 claims=0 id=absent)"
+done
+
 # A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.
 # Every refusal case above enters from a fresh shell and therefore cannot see state an earlier
 # successful source left behind: measured before the fix, `lane_stack_allowed` survived a

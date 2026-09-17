@@ -173,6 +173,16 @@ def test_a_complete_guarded_unset_is_not_falsely_flagged():
 
 
 def test_unset_f_alone_is_not_a_cleanup_site():
+    """`unset -f` drops FUNCTIONS, so it is never a namespace cleanup site.
+
+    The first input is the discriminating one and the reason this test exists: its
+    names are in the namespace, so only the flag inspection can exclude it. Delete
+    that branch and this line reddens with [(1, ["_LI_SRC", "_LI_ROOT"])]. The
+    original lowercase fixture below is kept, but it cannot witness the branch --
+    `_LI_[A-Z_]+` never matches a lowercase name, so it is discarded as
+    not-a-cleanup-site before the flags are ever read.
+    """
+    assert subset_violations("  unset -f _LI_Q _LI_WT") == []
     assert subset_violations("  unset -f lane_stack_allowed _li_reset") == []
 
 
