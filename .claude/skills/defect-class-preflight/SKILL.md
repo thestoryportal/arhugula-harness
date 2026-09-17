@@ -260,6 +260,15 @@ mechanism that owns both modes (`MonkeyPatch`, a context manager) — delete the
 rather than contriving a witness for it.
 
 ### 7. Env-var mutation and restore (73 findings)
+
+**Shell half (added 2026-09-17, lane-init `_LI_SRC`).** A SOURCED file mutates its caller's
+shell the way `os.environ` mutates a process — the variable outlives the call, for the life
+of that interactive shell, and can clobber a caller's own name. So every variable a sourced
+file introduces owes the same question as an `os.environ` write: *who unsets it, on which
+paths?* The answer must be ALL of them — success and every failure arm — because the one
+path that forgets is the one a lane actually takes. Read the file's existing cleanup sites
+first: if it already unsets its locals in thirteen places, a new local that appears in one
+is not a smaller version of the convention, it is the exception that breaks it.
 Any `os.environ` write: who restores it, does the restore survive a mid-test
 `monkeypatch.undo()` (use an INDEPENDENT `MonkeyPatch`), does it leak into suites that
 assert the namespace empty (`HARNESS_*` must never escape tools items), and — the P1

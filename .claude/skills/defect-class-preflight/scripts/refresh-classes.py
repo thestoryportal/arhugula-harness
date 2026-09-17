@@ -77,7 +77,13 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "6 unreachable / dead branch": (
         r"unreachable|dead|never reach|no witness could|half-dead|cannot see|restore arm"
     ),
-    "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
+    # A SOURCED shell file mutates its caller's shell exactly as os.environ mutates a
+    # process: same concern, different substrate, and the prior alphabet was Python-only,
+    # so the lane-init `_LI_SRC` leak (codex r3, 2026-09-17) matched no class at all.
+    "7 env-var mutation / restore": (
+        r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"
+        r"|caller's shell|leaks? into the caller|cleanup path|sourced.*leave|left defined"
+    ),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (
         r"fallback ledger|venue|QUEUE_DIR|path default|resolves|home default|\$HOME"
