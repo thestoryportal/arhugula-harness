@@ -944,6 +944,34 @@ for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done
     || bad "$SH: sourced lane-init left these undefined: $MISSING"
 done
 
+# zsh names the sourced file in `$0` only while FUNCTION_ARGZERO is set. It is on by
+# default, but it is an ordinary option a lane's zsh config may turn off, and then `$0` is
+# the bare shell name and any root derived from it resolves against the caller's cwd. The
+# non-default state therefore needs its own witness -- the default-state case above passes
+# either way and cannot discriminate. (codex r1 P2.)
+if command -v zsh >/dev/null 2>&1; then
+  NOFAZ=$(zsh -c "setopt NO_FUNCTION_ARGZERO; cd / && source '$INIT' >/dev/null 2>&1
+for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done")
+  [ -z "$NOFAZ" ] && ok "zsh: libraries load under NO_FUNCTION_ARGZERO too" \
+    || bad "zsh NO_FUNCTION_ARGZERO left these undefined: $NOFAZ"
+fi
+
+# CDPATH is consulted only for an operand that does not begin with / ./ or ../ -- so this
+# hazard exists ONLY when the root is reached by a relative spelling, which is exactly how
+# the loop skill types it (`source tools/hooks/lane-init.sh`). The absolute `$INIT` used
+# elsewhere in this file cannot reach the mechanism, so this case builds its own tree and
+# sources it relatively, with a decoy `tools/hooks` on CDPATH for `cd` to prefer.
+CDFIX="$ROOT/cdfix"; mkdir -p "$CDFIX/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$CDFIX/tools/hooks/" \
+  || { echo "FATAL: cdfix populate"; exit 1; }
+CDTRAP="$ROOT/cdtrap"; mkdir -p "$CDTRAP/tools/hooks"
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  TRAPPED=$(cd "$CDFIX" && CDPATH="$CDTRAP" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1; type hook_git_retry >/dev/null 2>&1 && echo yes")
+  [ "$TRAPPED" = "yes" ] && ok "$SH: a hostile CDPATH does not relocate the library root" \
+    || bad "$SH: CDPATH relocated the root; libraries did not load"
+done
+
 # `$0`/`BASH_SOURCE` carry the spelling the caller used, never a canonical path, so a root
 # derived from either is only as cwd-proof as this pins it. Sourcing by absolute path from
 # an unrelated cwd must still find the libraries beside the script.

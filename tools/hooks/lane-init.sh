@@ -30,8 +30,17 @@
 # environmental cause family rather than a coordination one -- could not be emitted at all).
 # zsh sets `$0` to the sourced file and bash sets it to the shell, so neither is the
 # authority alone; the pair is.
-_LI_SRC="${BASH_SOURCE[0]:-$0}"
-_LI_ROOT="$(cd "$(dirname "$_LI_SRC")/../.." && pwd)"
+_LI_SRC="${BASH_SOURCE[0]:-}"
+# zsh sets no BASH_SOURCE, and its `$0` names the sourced file only while FUNCTION_ARGZERO
+# is set. That is the default, but it is an ordinary option a lane's zsh config may turn
+# off -- and then `$0` is the bare shell name and the root resolves against the caller's
+# cwd. `%x` is zsh's own authority for "the file whose source is executing" and is immune
+# to that option (`%N` is NOT: under `eval` it reports the eval, not the file). It reaches
+# us through `eval` so that bash, which cannot parse the expansion, never sees it.
+if [ -z "$_LI_SRC" ] && [ -n "${ZSH_VERSION:-}" ]; then
+  _LI_SRC="$(eval 'printf %s "${(%):-%x}"')"
+fi
+_LI_ROOT="$(CDPATH= cd "$(dirname "${_LI_SRC:-$0}")/../.." && pwd)"
 
 # A root that does not yield both libraries is not a root, so the load is CHECKED rather
 # than assumed. Testing readability first and sourcing after would leave a window (and would
