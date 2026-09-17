@@ -150,28 +150,47 @@ def test_class_7_covers_a_sourced_files_caller_shell_locals_but_not_generic_clea
         assert "7 env-var mutation / restore" not in out[fid], (fid, out[fid])
 
 
-def test_class_3_intake_vocabulary_does_not_claim_unrelated_intake_paths():
-    """`intake path` reads naturally in findings about ingestion endpoints, so the class-3
-    suppression vocabulary names the PILE, not a path. Removed rather than sharpened: a
-    false hit here is self-defeating, since it removes the finding from the very pile the
-    term exists to protect."""
+def test_class_3_does_not_describe_the_class_table_itself():
+    """No class term names this table's own machinery, deliberately.
+
+    Every phrasing tried ("intake path", "intake pile", "classifies unrelated") also reads
+    naturally in findings about ingestion endpoints and queue growth, and narrowing never
+    converged: four consecutive review rounds, each correct, each attacking the phrase the
+    last added. A classifier cannot be widened to catch the complaint that it is too wide.
+    Findings about the table stay unmatched, which is where a human reads them.
+    """
     rows = [
         {
-            "finding_id": "i:1",
+            "finding_id": "m:1",
             "observed_evidence": (
-                "classifies unrelated findings, which removes it from the unmatched intake pile"
+                "classifies unrelated ownership findings, which removes it from the "
+                "unmatched intake pile"
             ),
             "location": "",
         },
         {
-            "finding_id": "i:2",
+            "finding_id": "m:2",
+            "observed_evidence": (
+                "the webhook intake pile grows without bound and exhausts memory under burst"
+            ),
+            "location": "",
+        },
+        {
+            "finding_id": "m:3",
             "observed_evidence": "the unsigned webhook intake path accepts forged payloads",
+            "location": "",
+        },
+        # ...while genuine class-3 vocabulary is untouched by the removal.
+        {
+            "finding_id": "m:4",
+            "observed_evidence": "the except arm swallows the error and returns an empty list",
             "location": "",
         },
     ]
     out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
-    assert "3 silent failure / fallback" in out["i:1"], out["i:1"]
-    assert "3 silent failure / fallback" not in out["i:2"], out["i:2"]
+    for fid in ("m:1", "m:2", "m:3"):
+        assert "3 silent failure / fallback" not in out[fid], (fid, out[fid])
+    assert "3 silent failure / fallback" in out["m:4"], out["m:4"]
 
 
 def test_classify_reads_the_location_too():

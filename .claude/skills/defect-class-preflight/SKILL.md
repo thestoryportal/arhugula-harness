@@ -224,7 +224,8 @@ set, an exemption list, an allowlist, a dedupe key) is itself attack surface —
 sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
 forged entries) before trusting it to mute anything.
 
-**The classifier's own terms are a suppression input too (added 2026-09-17).** A class pattern
+**The classifier's own terms are a suppression input too (added 2026-09-17, and the
+rule below is all that survived of it).** A class pattern
 that matches too widely removes findings from the unmatched-intake pile with no signal that
 anything was dropped — `|| true` aimed at the review machinery rather than at code. So a new
 class term is judged on its FALSE POSITIVES first: name the unrelated findings it would
@@ -238,6 +239,13 @@ spent on terms added to this table; the terms were removed rather than sharpened
 because this file's own policy is to prefer to miss and its header already records that
 successive regex layers trade one imprecision for another. A shape that keeps drawing
 findings is telling you the vocabulary does not exist, not that you have not found it yet.
+
+That is what happened to the term added for THIS rule: four consecutive rounds, each finding
+correct, each attacking the phrase the last one added, because every way of naming the
+classifier's own machinery also names ordinary ingestion and queue findings. No matcher
+vocabulary for it exists in the table now. Findings about the class table stay in the
+unmatched pile and get an `instance-only` disposition, which is the honest record: they are
+artifacts of editing the table, not a defect class in the product.
 
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the

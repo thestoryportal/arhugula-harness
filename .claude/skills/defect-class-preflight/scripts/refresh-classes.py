@@ -66,9 +66,15 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "2 prose stale / counts / cites": (
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
     ),
+    # No term here describes THIS TABLE, deliberately. Every phrasing tried for it
+    # ("intake path", "intake pile", "classifies unrelated") reads just as naturally in
+    # findings about ingestion endpoints and queue growth, and the narrowing never converged:
+    # four consecutive review rounds of one arc, each finding correct, each attacking the
+    # phrase the last one added. A classifier cannot be widened to catch the complaint that
+    # it is too wide. Findings ABOUT this table stay in the unmatched pile, where a human
+    # reads them -- the prefer-to-miss policy stated above, applied to the table itself.
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
-        r"|intake pile|classifies unrelated|removes it from the unmatched"
     ),
     "4 vacuous witness": (
         r"witness|vacuous|stays green|cannot fail|only .*presence|never red"
