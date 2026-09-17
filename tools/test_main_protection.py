@@ -369,6 +369,30 @@ def test_apply_keeps_validated_fence_on_cleanup_failure(monkeypatch, tmp_path):
     assert len(_puts(calls)) == 1 and _deletes(calls) == []
 
 
+# mutation-probe: drop `--required` from the watch argv in _watch_checks
+def test_watch_checks_ignores_a_failing_non_required_check(monkeypatch, tmp_path):
+    """gh's live behavior on scratch PR #1552 (2026-09-17): `gh pr checks --watch` exits 1
+    because the NON-required classify-diff job fails on the empty scratch diff, while
+    `--watch --required` exits 0 with every required context green. The watcher must judge
+    what strict:true enforces — the required contexts — not the whole check set."""
+    required = ["ruff (lint + format) — blocking", "pytest (all axis packages) — blocking"]
+    argvs: list[list[str]] = []
+
+    def fake_run(argv, **kw):
+        argvs.append(list(argv))
+        if "--watch" in argv:
+            rc = 0 if "--required" in argv else 1  # the non-required job is red
+            return subprocess.CompletedProcess(argv, rc, stdout="", stderr="")
+        assert "--json" in argv  # the registration-complete listing
+        names = [*required, "classify diff (bookkeeping fast path)"]
+        return subprocess.CompletedProcess(argv, 0, stdout="\n".join(names) + "\n", stderr="")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    monkeypatch.setattr(mp.time, "sleep", lambda *_: None)
+    assert mp._watch_checks("1552", tmp_path, required) is True
+    assert any("--watch" in a and "--required" in a for a in argvs)
+
+
 def test_real_tiebreaker_refuses_when_fence_not_live(monkeypatch, capsys):
     """Drives the REAL tiebreaker (no stub, codex r9 P2): with the fence not live it must
     FAIL at the precondition — before creating any scratch state (no subprocess runs)."""
@@ -439,13 +463,14 @@ def _watch_seq(monkeypatch, results):
 
 
 def test_watch_checks_retries_not_yet_started_then_green(monkeypatch, tmp_path):
-    """The 'no checks reported' exit is not-yet-started, never a red (scratch PR #1419
-    live witness): retry, then accept a green watch whose reported names cover every
-    required context."""
+    """The not-yet-started exit is never a red (scratch PR #1419 live witness): retry, then
+    accept a green watch whose reported names cover every required context. Under
+    `--required` gh words it "no required checks reported on the '<b>' branch" (codex r1
+    P2 on #1553) — the phrasing the watcher now sees live."""
     seq = _watch_seq(
         monkeypatch,
         [
-            ("watch", 1, "no checks reported on the 'x' branch"),
+            ("watch", 1, "no required checks reported on the 'x' branch"),
             ("watch", 0, ""),
             ("names", 0, "a — blocking\nb — blocking\nextra job\n"),
         ],
@@ -472,6 +497,17 @@ def test_watch_checks_green_during_partial_registration_does_not_count(monkeypat
     # regression to "any green watch + any successful names call counts" returns True
     # after step 2 and leaves the last two scripted steps unconsumed.
     assert seq == []
+
+
+# mutation-probe: broaden the not-yet-started match to `checks reported` (drop "on the")
+def test_watch_checks_only_gh_not_yet_started_phrasing_retries(monkeypatch, tmp_path):
+    """The retry branch matches gh's two not-yet-started templates and nothing looser:
+    both end in "checks reported on the '<b>' branch" (`strings $(which gh)`, 2.100.0). A
+    failing watch whose text merely contains "checks reported" is a genuine red and must
+    return False on the first attempt — no retry, no sleep (merge-gate r1 witness P2)."""
+    _watch_seq(monkeypatch, [("watch", 1, "2 checks reported: 1 failing, 1 cancelled")])
+    monkeypatch.setattr(mp.time, "sleep", lambda s: pytest.fail("retried on a genuine red"))
+    assert mp._watch_checks("7", tmp_path, ["a — blocking"]) is False
 
 
 def test_watch_checks_genuine_failure_is_false(monkeypatch, tmp_path):

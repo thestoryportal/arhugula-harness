@@ -627,16 +627,20 @@ def _classify_merge_refusal(stderr: str) -> str:
 
 
 def _watch_checks(prno: str, cwd: Path, required: list[str], attempts: int = 8) -> bool:
-    """`gh pr checks --watch` hardened two ways (both live-witnessed / fix-round r1):
+    """`gh pr checks --watch` hardened three ways (all live-witnessed):
     (a) not-yet-started retry — the watch exits 1 with "no checks reported" when polled
     before CI registers any check-run on a fresh branch (scratch PR #1419); that is
     never a red — re-poll with backoff; (b) registration-complete validation — a green
     watch during PARTIAL registration must not count until every required blocking
     context has actually reported, else a later refusal for a missing required check
-    could masquerade as strict enforcement."""
+    could masquerade as strict enforcement; (c) REQUIRED-only watch — gh exits 1 when ANY
+    listed check fails, and the scratch PR's empty diff makes the non-required classify
+    job fail by that job's own contract, so an all-checks watch read a fully green set of
+    required contexts as red and rolled the fence back (scratch PR #1552, 2026-09-17);
+    `--required` scopes the exit code to what strict:true actually enforces."""
     for _ in range(attempts):
         w = subprocess.run(
-            ["gh", "pr", "checks", prno, "--watch"],
+            ["gh", "pr", "checks", prno, "--watch", "--required"],
             capture_output=True,
             text=True,
             timeout=1800,
@@ -656,7 +660,10 @@ def _watch_checks(prno: str, cwd: Path, required: list[str], attempts: int = 8) 
                 return True
             time.sleep(20)
             continue
-        if "no checks reported" in blob:
+        # gh's not-yet-started diagnostic is "no checks reported on the '<b>' branch" for an
+        # unscoped watch and "no required checks reported on the '<b>' branch" under
+        # `--required` (both strings live in the gh binary; codex r1 P2 on #1553).
+        if "checks reported on the" in blob:
             time.sleep(20)
             continue
         return False
