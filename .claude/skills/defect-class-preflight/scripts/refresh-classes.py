@@ -196,17 +196,28 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # subject. Subjecthood is grammar. Zero pile contribution against an unclosable false
     # -match surface is not a tradeoff; the arm's own ≤2-word gap went with it.
     #
-    # Residual bound — ONE now, named rather than chased (the same policy as class 13's
+    # Residual bound — named rather than chased (the same policy as class 13's
     # co-occurrence bound above). Within one sentence the window admits the word `test`
-    # before a blessing verb in two shapes this row does not try to tell apart: the verb's
-    # subject is something else ("the test ran green and the spec codifies the older
-    # rule"), and `test` in its ordinary-English sense rather than the software one ("the
-    # A/B test codifies the winning variant" — verified live). What keeps the bound narrow
-    # enough to accept is that the word `test` must appear AT ALL for this class to fire,
-    # and the window is one sentence wide. THREE earlier wordings of this paragraph
-    # understated what the pattern admits (lens r3, r5 and r6 each caught one), so state
-    # it against the shipped regex and never against the intent: a named bound that
-    # understates admission is a wrong claim with a disclaimer.
+    # before a blessing verb in THREE shapes this row does not try to tell apart, each
+    # verified live: the verb's subject is something else ("the test ran green and the
+    # spec codifies the older rule"); `test` in its ordinary-English sense rather than the
+    # software one ("the A/B test codifies the winning variant"); and the verb NEGATED
+    # ("the test does not codify the drift" — lens r8).
+    #
+    # The negation shape is named rather than guarded, and the measurement is why: ZERO of
+    # the base anchor's 2,162 findings put a negation between this class's `test` token and
+    # a blessing verb, matched or not. Contrast the `!`/`?` terminator gap one round
+    # earlier, where 13 rows carried the shape and the regex was duly fixed. A negation
+    # lookahead would also buy a false NEGATIVE that the corpus makes plausible — "the test
+    # does not merely codify X, it enshrines Y" is a real member this class would then lose
+    # — so guarding it trades one imprecision for another, which is exactly what the header
+    # above records as measured-and-non-converging.
+    #
+    # What keeps the bound narrow enough to accept is that the word `test` must appear AT
+    # ALL for this class to fire, and the window is one sentence wide. FOUR earlier
+    # wordings of this paragraph understated what the pattern admits (lens r3, r5, r6 and
+    # r8 each caught one), so state it against the shipped regex and never against the
+    # intent: a named bound that understates admission is a wrong claim with a disclaimer.
     #
     # The window's `{0,80}` is derived, not chosen by eye: the widest artifact→verb gap
     # among the real members is 60 ("test at <path>:1301 enshrines"), and 80 is that plus

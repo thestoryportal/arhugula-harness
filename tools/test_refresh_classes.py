@@ -178,8 +178,11 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             " so CI codifies the admitted cohort gap instead of detecting it.",
             "location": ".agents/skills/ship-pr/SKILL.md:208",
         },
-        # the artifact is a test NAME, so `\btest\b` would miss it: the underscore is a
-        # word character, which is why the token stays `tests?[\w-]*`
+        # the artifact is a test NAME, so a trailing `\b` would miss it: the underscore is
+        # a word character, which is why the token ends in the `(?![a-z])` lookahead —
+        # `test` may be followed by `_`, but not by another letter. (This comment cited the
+        # long-deleted `tests?[\w-]*` until lens r8; the token it credits must be the one
+        # the row actually ships.)
         {
             "finding_id": "c:6",
             "observed_evidence": "test_happy_path_lands_holds_through_ci_and_releases"

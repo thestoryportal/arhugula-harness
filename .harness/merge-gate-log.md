@@ -1043,3 +1043,4 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | 2026-09-17T19:49:18Z | #1562 | 5c54d7dcb967 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r5 |
 | 2026-09-17T20:03:43Z | #1562 | 9bb7cf37151c | merge-gate-witness-adequacy | BLOCK | 3 finding(s) | r6 |
 | 2026-09-17T21:18:08Z | #1562 | aacc0343252a | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r7 |
+| 2026-09-17T21:44:56Z | #1562 | 4b6dac361a56 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r8 |
