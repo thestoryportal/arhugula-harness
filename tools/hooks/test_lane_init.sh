@@ -991,6 +991,19 @@ DET_RC=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' >/dev/null 2>&1; echo \$?"
 [ "$DET_RC" != "0" ] \
   && ok "an unresolvable library root makes sourcing fail loudly (rc=$DET_RC)" \
   || bad "unresolvable library root still returned 0 -- a silently half-initialised lane"
+# This file cleans up every `_LI_*` local on every exit path -- it is sourced, so anything
+# left defined is written into the caller's interactive shell for good. A newly introduced
+# local has to join that discipline or it is a permanent leak (and can clobber a caller's
+# own variable of the same name). Asserted on the SUCCESS path, which is the one a lane
+# actually takes. (codex r3 P3.)
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  LEAKED=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
+  [ -z "$LEAKED" ] && ok "$SH: a successful init leaves no _LI_* local in the caller's shell" \
+    || bad "$SH: init leaked into the caller's shell: $LEAKED"
+done
+
 # A refusal must also STRIP the lane identity, which is what every other failure path in
 # lane-init.sh does. The case that matters is not a fresh shell (it has nothing to leak) but
 # one already carrying lane A's identity that then sources a broken init for lane B: if the

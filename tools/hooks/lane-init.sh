@@ -97,7 +97,7 @@ case "$_LI_Q" in
   /*) ;;
   *) echo "lane-init: ARC_METRICS_QUEUE_DIR must be an absolute path, got '$_LI_Q'" >&2
      unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-     unset _LI_ROOT _LI_Q _LI_WT
+     unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
      return 1 2>/dev/null || exit 1 ;;
 esac
 
@@ -248,7 +248,7 @@ _lane_init_id() {
 }
 if ! _LI_ID="$(_lane_init_id)"; then
   unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-  unset _LI_ROOT _LI_Q _LI_WT _LI_ID
+  unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _LI_ID
   unset -f _lane_init_id
   return 1 2>/dev/null || exit 1
 fi
@@ -277,18 +277,18 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   case "$HARNESS_LANE_INDEX" in
     ''|*[!0-9]*)
       echo "lane-init: HARNESS_LANE_INDEX must be an integer 0..349, got '$HARNESS_LANE_INDEX'" >&2
-      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
     0) ;;
     0*)
       echo "lane-init: HARNESS_LANE_INDEX must be canonical (no leading zeros), got '$HARNESS_LANE_INDEX'" >&2
-      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
   esac
   # Bound the LENGTH before the comparison: a digit string too large for the shell's integer
   # type makes `test -ge` exit 2, which `if` reads as false — and a 30-digit index would then
   # be published as a claim filename. Every valid index is at most three digits.
   if [ "${#HARNESS_LANE_INDEX}" -gt 3 ] || [ "$HARNESS_LANE_INDEX" -ge 350 ]; then
     echo "lane-init: HARNESS_LANE_INDEX must be < 350 (no port block exists above it), got '$HARNESS_LANE_INDEX'" >&2
-    unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
   fi
 fi
 
@@ -312,7 +312,7 @@ for _li_f in "$_LI_Q"/lanes/*; do
            > "$_LI_Q/lanes/.orphaned-$_li_have" 2>/dev/null; then
         echo "lane-init: cannot fence inherited lane index $_li_have (marker unwritable) — refusing to adopt a stack this lane cannot account for" >&2
         unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-        unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
+        unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
         return 1 2>/dev/null || exit 1
       fi
       # ATOMIC rebind, and checked. Truncating the authoritative claim in place opens a
@@ -324,7 +324,7 @@ for _li_f in "$_LI_Q"/lanes/*; do
         rm -f "${_li_tmp:-}" 2>/dev/null
         echo "lane-init: could not rebind inherited lane index $_li_have to this lane — refusing rather than running on a claim that names someone else" >&2
         unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-        unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_tmp
+        unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_tmp
         return 1 2>/dev/null || exit 1
       fi
       unset _li_tmp
@@ -339,7 +339,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   if [ -n "$_li_have" ] && [ "$_li_have" != "$HARNESS_LANE_INDEX" ]; then
     echo "lane-init: this worktree already holds lane index $_li_have — refusing to also take $HARNESS_LANE_INDEX" >&2
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
   fi
   _li_published=""
   if [ -z "$_li_have" ]; then
@@ -364,7 +364,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   if [ -z "$_li_ok" ]; then
     echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX could not be claimed for this worktree (claim: [$(cat "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null)]) — refusing to run on a project this lane does not own" >&2
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_id _li_path _li_ok
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_id _li_path _li_ok
     return 1 2>/dev/null || exit 1
   fi
   unset _li_id _li_path _li_ok
@@ -421,7 +421,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
       echo "lane-init: raced a concurrent init of this worktree holding lane index $_li_min; this claim on $HARNESS_LANE_INDEX is the lowest and stands — the other sources withdraw" >&2
     fi
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_published _li_min _li_n
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_published _li_min _li_n
     return 1 2>/dev/null || exit 1
   fi
   unset _li_f _li_id _li_path _li_published _li_min _li_n
@@ -552,7 +552,7 @@ else
       echo "lane-init: raced a concurrent init of this worktree holding lane index $_li_min; this claim on $_li_k is the lowest and stands — the other sources withdraw" >&2
     fi
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_tmp _li_retried _li_f _li_id _li_path _li_published _li_min _li_n
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_tmp _li_retried _li_f _li_id _li_path _li_published _li_min _li_n
     return 1 2>/dev/null || exit 1
   fi
   export HARNESS_LANE_INDEX="$_li_k"
@@ -707,5 +707,5 @@ lane_stack_allowed() {
   return 1
 }
 
-unset _LI_ROOT _LI_Q _LI_WT
+unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
 unset -f _lane_init_id _li_sanitize
