@@ -119,9 +119,11 @@ env -u HARNESS_CODEX_REVIEW_ISOLATED PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALL
 # --- 2. the two guarded shapes, with the exact re-issue ----------------------------------
 expect_deny "--glob" 'rg --glob "*.py" "def main" tools' 'rtk proxy rg --glob "*.py" "def main" tools' '--glob/-g'
 expect_deny "-g short form" 'rg -g "*.py" main tools' 'rtk proxy rg -g "*.py" main tools' '--glob/-g'
-expect_deny "bare paren" 'grep -rn "hook_emit(" tools/hooks' 'rtk proxy grep -rn "hook_emit(" tools/hooks' 'unescaped paren'
-expect_deny "closing paren" 'grep -n "x)" f.txt' 'rtk proxy grep -n "x)" f.txt' 'unescaped paren'
-expect_deny "alternation + paren (the [B] parse-error shape)" 'grep -n "a\|f(" f.txt' 'rtk proxy grep -n "a\|f(" f.txt' 'unescaped paren'
+# shape (2) RETIRED 2026-09-17: rtk 0.49.0 translates a paren in a BRE pattern (section 4
+# witnesses it live) -- the three former deny shapes are silence, and a re-added arm reds here
+expect_silent "bare paren (shape 2 retired)" 'grep -rn "hook_emit(" tools/hooks'
+expect_silent "closing paren (shape 2 retired)" 'grep -n "x)" f.txt'
+expect_silent "alternation + paren (shape 2 retired)" 'grep -n "a\|f(" f.txt'
 # a compound command is NEVER re-joined (codex r3/r4: redirections and globs would not survive a
 # token re-join) -- the deny still fires, with "re-issue by hand"; a single simple command is
 # prefixed VERBATIM (the cases above)
@@ -133,19 +135,19 @@ expect_deny_by_hand() { # <label> <cmd>
     *) bad "$1: '$2' -> deny but no by-hand instruction: $reason" ;;
   esac
 }
-expect_deny_by_hand "after ; no re-join is offered" 'cd /tmp; grep -n "f(" *.py'
-expect_deny_by_hand "before && no re-join is offered" 'grep -n "f(" f && echo ok'
+expect_deny_by_hand "after ; no re-join is offered" 'cd /tmp; rg -g "*.py" x'
+expect_deny_by_hand "before && no re-join is offered" 'rg -g "*.py" x f && echo ok'
 rc=$(run_guard 'rg -g "*.py" "f(" tools'); reason=$(deny_reason "$OUT")
 # codex r6: only the ORIGINAL executable's shape is a rewrite defect -- an rg original is
 # denied for the glob alone (rg chokes on the paren natively), a grep original for the paren
 # alone (grep never had -g)
 case "$reason" in *'--glob/-g'*'unescaped paren'*) bad "rg original: the paren is rg's own failure, not the rewrite's: $reason" ;; *'--glob/-g'*) ok "rg original with both shapes: glob named, paren not (rg fails on it natively)" ;; *) bad "rg original: glob expected: $reason" ;; esac
-rc=$(run_guard 'grep -g "*.py" "f(" tools'); reason=$(deny_reason "$OUT")
-case "$reason" in *'--glob/-g'*) bad "grep original: -g never worked on grep, not a rewrite defect: $reason" ;; *'unescaped paren'*) ok "grep original with both shapes: paren named, glob not (grep never had -g)" ;; *) bad "grep original: paren expected: $reason" ;; esac
+expect_silent "grep original with -g and a paren: neither is a rewrite defect now" 'grep -g "*.py" "f(" tools'
+rc=0; reason=""
 expect_silent "rg original with only a paren (fails on rg natively; no remedy helps)" 'rg "f(" x'
 expect_silent "grep original with only -g (never worked on grep)" 'grep -g "*.py" x'
 # codex u-sr-09 r1 (three P2s on the sed-based first cut): quote-aware end to end
-expect_deny "quoted && inside the pattern is not a separator" "grep -n 'a && f(' file" "rtk proxy grep -n 'a && f(' file" 'unescaped paren'
+expect_deny "quoted && inside the pattern is not a separator" "rg -g '*.py' 'a && b' file" "rtk proxy rg -g '*.py' 'a && b' file" '--glob/-g'
 expect_deny "attached -g value" "rg -g'*.py' needle tree" "rtk proxy rg -g'*.py' needle tree" '--glob/-g'
 expect_deny "quoted '; grep literal' argument is left alone in the re-issue" "rg -g '*.py' needle '; grep literal'" "rtk proxy rg -g '*.py' needle '; grep literal'" '--glob/-g'
 expect_silent "a quoted separator word as the pattern is a word" "grep '|' file.txt"
@@ -182,7 +184,8 @@ env HARNESS_CODEX_REVIEW_ISOLATED=1 PATH="$STUBDIR:$PATH" RTK_STUB_CALLS="$CALLS
 # --- 4. EXIT PLAN -- the real rtk (presence-gated, stated loudly) ---------------------------
 # Each guarded shape must STILL fail under `rtk grep` and work under `rtk proxy`; `\|` alone
 # must still round-trip (the reason it is not guarded). A flip here means rtk changed: on a
-# fix, delete rtk-shape-guard.sh + this test + the lanes_verify row + the settings entry.
+# fix of the LAST guarded shape (--glob), delete rtk-shape-guard.sh + this test + the
+# lanes_verify row + the settings entry (the paren shape was retired this way 2026-09-17).
 if command -v rtk >/dev/null 2>&1 && command -v rg >/dev/null 2>&1; then
   echo "  rtk present: $(rtk --version 2>&1 | head -1)"
   FX="$REPO/fx/sub"; mkdir -p "$FX"; printf 'alpha\nbeta\nf(x)\n' > "$FX/f.txt"
@@ -190,10 +193,11 @@ if command -v rtk >/dev/null 2>&1 && command -v rg >/dev/null 2>&1; then
   ( cd "$REPO/fx" && rtk proxy rg --glob "*.txt" alpha sub >/dev/null 2>&1 ); rc_good=$?
   [ "$rc_bad" -ne 0 ] && [ "$rc_good" -eq 0 ] && ok "real rtk: --glob still fails under rtk grep (rc=$rc_bad) and works under rtk proxy" \
     || bad "real rtk: --glob shape changed (rtk grep rc=$rc_bad, rtk proxy rc=$rc_good) -- rtk fixed this: DELETE the guard"
-  ( cd "$REPO/fx" && rtk grep -n "f(" sub/f.txt >/dev/null 2>&1 ); rc_bad=$?
-  good=$(cd "$REPO/fx" && rtk proxy grep -n "f(" sub/f.txt 2>/dev/null)
-  [ "$rc_bad" -ne 0 ] && [ "$good" = "3:f(x)" ] && ok "real rtk: bare paren still fails under rtk grep (rc=$rc_bad) and works under rtk proxy" \
-    || bad "real rtk: paren shape changed (rtk grep rc=$rc_bad, rtk proxy '$good') -- rtk fixed this: DELETE the guard"
+  # shape (2) retired 2026-09-17: rtk >= 0.49.0 translates the paren; a regression reds here
+  # and the retired arm (git log -S 'unescaped paren' tools/rtk_shape_guard.py) comes back
+  now=$(cd "$REPO/fx" && rtk grep -n "f(" sub/f.txt 2>/dev/null); rc_now=$?
+  [ "$rc_now" -eq 0 ] && [ "$now" = "3:f(x)" ] && ok "real rtk: bare paren translates under rtk grep (shape 2 retired)" \
+    || bad "real rtk: paren shape REGRESSED (rtk grep rc=$rc_now, '$now') -- re-add shape (2) to the guard"
   alt=$(cd "$REPO/fx" && rtk grep -n "alpha\|beta" sub/f.txt 2>/dev/null)
   case "$alt" in *alpha*beta*) ok "real rtk: \\| alone still round-trips (the reason it is not guarded)" ;; *) bad "real rtk: \\| alone no longer round-trips: '$alt' -- add it to the guard" ;; esac
   # the re-issue shape through rtk's REAL hook (the dry-run's print form varies; the JSON

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse(Bash) guard for the two grep shapes the rtk rewrite mangles (U-SR-09 b4,
+# PreToolUse(Bash) guard for the grep shape the rtk rewrite mangles (U-SR-09 b4,
 # plan §8 R2; [B] F5: 29 wasted calls ≈ 1.2M IET on one arc).
 #
 # The user-level `rtk hook claude` (Rust Token Killer 0.40.0) rewrites `grep …`/`rg …` to
@@ -7,11 +7,13 @@
 # DETERMINISTICALLY under that translation, witnessed at U-SR-09 on the installed binary:
 #   (1) `--glob` / `-g`  -- an rg-only flag; rtk hands the call to BSD grep, which exits 2
 #                           with "unrecognized option";
-#   (2) an unescaped `(` or `)` in a BRE pattern (no -E/-F/-P) -- a literal paren to grep, a
-#                           group to rg: "regex parse error … unclosed group", exit 2.
-#   [B]'s third shape, `\|` alternation, round-trips on 0.40.0 (rtk translates it); it fails
-#   only when combined with a paren, which shape (2) already covers -- so it is NOT guarded
-#   (a deny on a working command would be a false positive that costs the call it saves).
+#   (2) RETIRED 2026-09-17 -- an unescaped `(` or `)` in a BRE pattern failed on 0.40.0
+#                           ("regex parse error … unclosed group"); rtk 0.49.0 translates it
+#                           (live-witnessed on four paren shapes; test section 4 reds on a
+#                           regression). Only shape (1) is guarded now.
+#   [B]'s third shape, `\|` alternation, round-trips on 0.40.0 (rtk translates it) and is
+#   NOT guarded (a deny on a working command would be a false positive that costs the call
+#   it saves).
 #
 # Why a DENY and not a fix or a pass-through, stated once: the rewrite lives in rtk (not
 # workspace code); rtk's `[hooks] exclude_commands` is a command-PREFIX match (`"grep -F"`

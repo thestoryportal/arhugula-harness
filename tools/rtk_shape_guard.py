@@ -299,10 +299,10 @@ def shapes(
     rewritten_segment: list[str], original: str | None = None, at: int | None = None
 ) -> list[str]:
     """The mangled shapes one rewritten segment carries (empty = the rewrite is fine).
-    `original` is the word the caller actually ran: a paren is judged only for a `grep`
-    original (BRE; `rg "f("` fails natively and no remedy helps -- codex r6) and a glob
-    only for an `rg` original (`grep -g` never worked); an unknown original is judged for
-    both, the conservative reading. `at` is the rewrite's index when the caller already
+    `original` is the word the caller actually ran: a glob is judged only for an `rg`
+    original (`grep -g` never worked); an unknown original is judged as `rg`, the
+    conservative reading. The paren shape (codex r6's grep-original rule) is retired.
+    `at` is the rewrite's index when the caller already
     established it against the original segment."""
     at = rewritten_at(rewritten_segment) if at is None else at
     if at is None:
@@ -313,15 +313,10 @@ def shapes(
         found.append(
             "an rg-only --glob/-g flag (rtk lands it on BSD grep: 'unrecognized option', exit 2)"
         )
-    if (
-        original in (None, "grep")
-        and not regex_safe(parsed)
-        and any(has_unescaped_paren(p) for p in patterns_of(parsed))
-    ):
-        found.append(
-            "an unescaped paren in a BRE pattern (a literal to grep, a group to rg: "
-            "'regex parse error', exit 2)"
-        )
+    # Shape (2) — an unescaped paren in a BRE pattern — was RETIRED 2026-09-17: rtk 0.49.0
+    # translates it (live-witnessed on `f(`, `x)`, an alternation with a paren, and
+    # `-e 'f('`); test section 4 reds
+    # if rtk ever regresses, and this arm is what would come back.
     return found
 
 

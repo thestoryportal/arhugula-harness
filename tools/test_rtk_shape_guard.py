@@ -57,35 +57,16 @@ def test_segments_split_at_bare_separators_only():
         ("rtk grep -g*.py main tools", [GLOB]),  # attached value (codex r1 P2)
         ("rtk grep --glob=*.py main tools", [GLOB]),
         ("rtk grep -ng x tools", [GLOB]),  # g inside a short cluster
-        ('rtk grep -rn "hook_emit(" tools/hooks', [PAREN]),
-        ('rtk grep -n "x)" f.txt', [PAREN]),
-        ("rtk grep -n 'a && f(' file", [PAREN]),  # quoted separator (codex r1 P2)
-        ('rtk grep -n "a\\|f(" f.txt', [PAREN]),  # the [B] parse-error shape
-        ("rtk grep -e 'f(' f.txt", [PAREN]),  # pattern given via -e
-        ("rtk grep -g '*.py' 'f(' tools", [GLOB, PAREN]),
+        ("rtk grep -g '*.py' 'f(' tools", [GLOB]),
         # codex u-sr-09 r2: option grammar corners
-        ("rtk grep -eF\\( file", [PAREN]),  # -e takes the rest of the cluster: F( is the pattern
-        ("rtk grep -nA 2 'f(' file", [PAREN]),  # clustered -nA consumes its value
-        ("rtk grep -nA2 'f(' file", [PAREN]),
-        ("rtk grep -m1 'f(' file", [PAREN]),
-        ("rtk grep 'f\\\\(' file", [PAREN]),  # even backslash run: the paren is live
-        ("rtk grep --regexp='f(' file", [PAREN]),
-        ("rtk grep -- '(' file", [PAREN]),  # after `--` the paren IS the pattern: rg still chokes
-        ("rtk grep '\\[(]' file", [PAREN]),  # codex r4: an ESCAPED `[` opens no bracket expression
         # codex u-sr-09 r3: EVERY -e pattern is judged; a bracket expression is not a group
-        ("rtk grep -e ok -e 'f(' file", [PAREN]),
-        ("rtk grep --regexp ok --regexp='f(' file", [PAREN]),
-        ("rtk grep '[a]f(' file", [PAREN]),  # a paren OUTSIDE the bracket expression
-        ("rtk grep -n 'f(' file 2>/dev/null", [PAREN]),  # a redirection is not a pattern
-        ("rtk grep 2>/dev/null 'f(' file", [PAREN]),  # codex r7: the fd digit is not the pattern
-        ("rtk grep 'f(' 2>&1 file", [PAREN]),
     ],
 )
 def test_shapes_found(rewritten, want):
     toks = g.tokens(rewritten)
     assert toks is not None
     found = g.shapes(g.segments(toks)[0])
-    assert [w for w in (GLOB, PAREN) if any(w in f for f in found)] == want
+    assert [w for w in (GLOB,) if any(w in f for f in found)] == want
 
 
 @pytest.mark.parametrize(
@@ -111,6 +92,27 @@ def test_shapes_found(rewritten, want):
         "rtk grep -e ok -e '[(]' file",
         "rtk grep '\\\\[(]' file",  # an ESCAPED escape: `\\` then a real bracket expression
         "rtk grep x 2>/dev/null",  # the redirection target is not an operand
+        # shape (2) RETIRED 2026-09-17 (rtk 0.49.0 translates parens): every former paren
+        # deny is now silence — a re-added paren arm fails these
+        'rtk grep -rn "hook_emit(" tools/hooks',
+        'rtk grep -n "x)" f.txt',
+        "rtk grep -n 'a && f(' file",  # quoted separator (codex r1 P2)
+        'rtk grep -n "a\\|f(" f.txt',  # the [B] parse-error shape
+        "rtk grep -e 'f(' f.txt",  # pattern given via -e
+        "rtk grep -eF\\( file",  # -e takes the rest of the cluster: F( is the pattern
+        "rtk grep -nA 2 'f(' file",  # clustered -nA consumes its value
+        "rtk grep -nA2 'f(' file",
+        "rtk grep -m1 'f(' file",
+        "rtk grep 'f\\\\(' file",  # even backslash run: the paren is live
+        "rtk grep --regexp='f(' file",
+        "rtk grep -- '(' file",  # after `--` the paren IS the pattern: rg still chokes
+        "rtk grep '\\[(]' file",  # codex r4: an ESCAPED `[` opens no bracket expression
+        "rtk grep -e ok -e 'f(' file",
+        "rtk grep --regexp ok --regexp='f(' file",
+        "rtk grep '[a]f(' file",  # a paren OUTSIDE the bracket expression
+        "rtk grep -n 'f(' file 2>/dev/null",  # a redirection is not a pattern
+        "rtk grep 2>/dev/null 'f(' file",  # codex r7: the fd digit is not the pattern
+        "rtk grep 'f(' 2>&1 file",
     ],
 )
 def test_shapes_silent(rewritten):
@@ -120,15 +122,15 @@ def test_shapes_silent(rewritten):
 
 
 def test_shapes_are_judged_against_the_original_executable():
-    """codex u-sr-09 r6: a paren is a rewrite defect only for a grep original (rg chokes on
-    it natively, so no remedy helps); a glob only for an rg original (grep never had -g); a
-    prefixed command still carries the `rtk grep` pair mid-segment."""
+    """codex u-sr-09 r6: a glob is a rewrite defect only for an rg original (grep never had
+    -g); a prefixed command still carries the `rtk grep` pair mid-segment. The paren shape is
+    retired (rtk 0.49.0): a grep original with a paren is silence now."""
     assert g.judge('rg "f(" x', 'rtk grep "f(" x') is None  # the original fails on its own
     assert g.judge('grep -g "*.py" x', 'rtk grep -g "*.py" x') is None  # grep never had -g
-    assert g.judge('grep "f(" x', 'rtk grep "f(" x') is not None
+    assert g.judge('grep "f(" x', 'rtk grep "f(" x') is None  # shape (2) retired
     assert g.judge('rg -g "*.py" x', 'rtk grep -g "*.py" x') is not None
-    reason = g.judge('env FOO=1 grep "f(" x', 'env FOO=1 rtk grep "f(" x')
-    assert reason is not None and PAREN in reason and "Re-issue by hand" in reason
+    reason = g.judge('env FOO=1 rg -g "*.py" x', 'env FOO=1 rtk grep -g "*.py" x')
+    assert reason is not None and GLOB in reason and "Re-issue by hand" in reason
     assert g.judge('sudo rg -g "*.py" x', 'sudo rtk grep -g "*.py" x') is not None
     # an unknown original (segment counts disagree) is judged conservatively for both
     assert g.shapes(g.tokens('rtk grep -g "*.py" "f(" x') or [], None) == g.shapes(
@@ -151,7 +153,7 @@ def test_shapes_are_judged_against_the_original_executable():
         is None
     )
     assert (
-        g.judge("grep 'f(' file; printf %s rtk grep", "rtk grep 'f(' file; printf %s rtk grep")
+        g.judge("rg -g '*.py' x; printf %s rtk grep", "rtk grep -g '*.py' x; printf %s rtk grep")
         is not None
     )
     assert g.original_word(["env", "FOO=1", "rg", "x"]) == "rg"
@@ -161,10 +163,10 @@ def test_judge_only_looks_at_rtk_grep_segments():
     assert g.judge('ls | grep "f("', 'rtk ls | grep "f("') is None  # pipeline grep untouched
     assert g.judge("egrep 'f(x)' f", "No rewrite for: egrep 'f(x)' f") is None
     assert g.judge('grep "f(" f', "grep 'f(") is None  # the rewrite does not lex: no verdict
-    reason = g.judge('cd /tmp; grep -n "f(" f', 'cd /tmp; rtk grep -n "f(" f')
-    assert reason is not None and PAREN in reason and "`rtk grep -n 'f(' f`" in reason
+    reason = g.judge('cd /tmp; rg -g "*.py" x f', 'cd /tmp; rtk grep -g "*.py" x f')
+    assert reason is not None and GLOB in reason and "`rtk grep -g '*.py' x f`" in reason
     # codex r4: an escaped `\|` is an operand, so the second grep is the pipeline's, untouched
-    assert g.judge('grep "f(" \\| wc', 'rtk grep "f(" \\| wc') is not None
+    assert g.judge('rg -g "*.py" x \\| wc', 'rtk grep -g "*.py" x \\| wc') is not None
 
 
 # mutation-probe: drop the `if any(isinstance(t, (Sep, Redirect)) …)` refusal in reissue()
@@ -185,7 +187,7 @@ def test_reissue_is_verbatim_for_one_command_and_quote_safe_otherwise():
     assert g.reissue('cd /tmp; grep -n "f(" *.py') is None
     assert g.reissue('grep -n "f(" f && echo ok') is None
     assert g.reissue("ls | grep 'a && f(' f") is None
-    reason = g.judge('cd /tmp; grep -n "f(" *.py', 'cd /tmp; rtk grep -n "f(" *.py')
+    reason = g.judge('cd /tmp; rg -g "*.md" x *.py', 'cd /tmp; rtk grep -g "*.md" x *.py')
     assert (
         reason is not None
         and "Re-issue by hand" in reason
@@ -230,25 +232,25 @@ def test_judge_reason_names_shapes_and_reissue():
     # both shapes appear together only for an unknown original
     only_glob = g.judge("rg -g '*.py' 'f(' tools", "rtk grep -g '*.py' 'f(' tools")
     assert only_glob is not None and GLOB in only_glob and PAREN not in only_glob
-    only_paren = g.judge("grep -g '*.py' 'f(' tools", "rtk grep -g '*.py' 'f(' tools")
-    assert only_paren is not None and PAREN in only_paren and GLOB not in only_paren
+    # a grep original with both: -g never worked on grep and the paren shape is retired,
+    # so neither is a rewrite defect -- silence
+    assert g.judge("grep -g '*.py' 'f(' tools", "rtk grep -g '*.py' 'f(' tools") is None
     # codex u-sr-09 r10: a MIXED failure (the original also fails on its own) gets no
     # re-issue it cannot keep -- the reason says what to fix first instead
     assert (
         "Re-issue as" not in only_glob and "fails on its own" in only_glob and "group" in only_glob
     )
-    assert "Re-issue as" not in only_paren and "no -g/--glob" in only_paren
     clean = g.judge("rg -g '*.py' x tools", "rtk grep -g '*.py' x tools")
     assert clean is not None and "Re-issue as: rtk proxy rg -g '*.py' x tools" in clean
     both = g.shapes(g.tokens("rtk grep -g '*.py' 'f(' tools") or [], None)
-    assert [w for w in (GLOB, PAREN) if any(w in f for f in both)] == [GLOB, PAREN]
+    assert [w for w in (GLOB, PAREN) if any(w in f for f in both)] == [GLOB]
 
 
 def test_cli_prints_the_reason_or_nothing_and_always_exits_0(capsys):
     assert g.main(["grep -n foo f", "rtk grep -n foo f"]) == 0
     assert capsys.readouterr().out == ""
-    assert g.main(['grep -n "f(" f', 'rtk grep -n "f(" f']) == 0
-    assert PAREN in capsys.readouterr().out
+    assert g.main(['rg -g "*.py" f', 'rtk grep -g "*.py" f']) == 0
+    assert GLOB in capsys.readouterr().out
     assert g.main(["only-one-arg"]) == 0
 
 
@@ -263,10 +265,10 @@ def test_runs_under_the_hook_shells_python():
         [
             "/usr/bin/python3",
             str(Path(__file__).resolve().parent / "rtk_shape_guard.py"),
-            'grep -n "f(" f',
-            'rtk grep -n "f(" f',
+            'rg -g "*.py" f',
+            'rtk grep -g "*.py" f',
         ],
         capture_output=True,
         text=True,
     )
-    assert r.returncode == 0 and PAREN in r.stdout and r.stderr == "", r.stderr
+    assert r.returncode == 0 and GLOB in r.stdout and r.stderr == "", r.stderr
