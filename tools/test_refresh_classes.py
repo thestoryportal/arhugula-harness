@@ -226,6 +226,30 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             "observed_evidence": "The test passes cleanly. The spec codifies the older rule.",
             "location": "",
         },
+        # `test` as a SUBSTRING of this workspace's own vocabulary — at-TEST-ation, la-TEST
+        # (merge-gate witness lens, P2). The leading \b is what refuses these, and dropping
+        # it is the likeliest regression here precisely because `attest` is everywhere in
+        # this repo: a finding about the attestation step is not a finding about a test.
+        {
+            "finding_id": "n:6",
+            "observed_evidence": "the attestation step now codifies the loosened threshold"
+            " as permanent policy",
+            "location": "",
+        },
+        {
+            "finding_id": "n:7",
+            "observed_evidence": "the latest commit codifies a workaround instead of fixing it",
+            "location": "",
+        },
+        # an `assert`-shaped PATH: the old tuple's artifact half matched `assert` anywhere,
+        # so a path alone satisfied it. Ordering refuses it now — this case existed only in
+        # the arc's transient measurement until the lens noted the comment claimed a probe
+        # the suite did not carry
+        {
+            "finding_id": "n:8",
+            "observed_evidence": "the ADR codifies a different bound",
+            "location": "tools/test_assertions.py:12",
+        },
     ]
     out = json.loads(_run("classify", stdin=json.dumps(codifying + not_codifying)).stdout)
     for r in codifying:

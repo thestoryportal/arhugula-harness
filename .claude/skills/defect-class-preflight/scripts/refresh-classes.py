@@ -145,31 +145,40 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # PHRASES, not a tuple (codex r1 P2 on this arc). The first draft paired a verb
     # conjunct with an artifact conjunct, and `matches()` reads `finding_text` — evidence
     # PLUS location — so any finding located in a test file satisfied the artifact half
-    # for free: 263 of those 2,163 rows carry such a location, 30 of them carry the
-    # artifact term in the location alone, and "the governing spec codifies the required
-    # behavior" at `tools/test_widget.py` classified as this class. A conjunct a path can
-    # satisfy does not constrain, and a false match is the one direction the policy above
-    # forbids — it removes the row from the intake pile silently. Class 13 paid for this
-    # same lesson with `justfile`; class 12 states the remedy: each alternative carries
-    # BOTH halves on its own ([LAW:types-are-the-program] — the strongest theorem still
-    # true is one about a phrase, never two tokens that co-occur).
+    # for free. Measured under THAT draft's own artifact half
+    # (`\btest|witness|assert|fixture|\bCI\b`, the predicate the claim is about): 263 of
+    # the 2,163 rows carry a location satisfying it and 30 carry it in the location
+    # alone, and "the governing spec codifies the required behavior" at
+    # `tools/test_widget.py` classified as this class. A conjunct a path can satisfy does
+    # not constrain, and a false match is the one direction the policy above forbids — it
+    # removes the row from the intake pile silently. Class 13 paid for this same lesson
+    # with `justfile`; class 12 states the remedy: each alternative carries BOTH halves on
+    # its own ([LAW:types-are-the-program] — the strongest theorem still true is one about
+    # a phrase, never two tokens that co-occur).
     #
     # ORDERING is what fences the location out, structurally rather than by luck: the
     # location is appended LAST, so an artifact-BEFORE-verb phrase can never be satisfied
-    # by it (a path contains no verb, and nothing follows a path to supply one). That is
-    # why the artifact token may stay generous (`tests?[\w-]*` admits `test_happy_path`).
+    # by it (a path contains no verb, and nothing follows a path to supply one). The
+    # artifact token is therefore generous on its RIGHT (`\btests?[\w-]*` admits
+    # `test_happy_path`) and strict on its LEFT. Both boundaries are load-bearing and for
+    # opposite reasons — the first draft of this fix dropped the LEADING `\b` after
+    # measuring that a TRAILING `\b` breaks `test_happy_path`, which made "at-TEST-ation"
+    # and "la-TEST" match a class about tests (merge-gate witness lens, P2). `attest` is
+    # this workspace's own vocabulary, so that was the likeliest false match of all.
     # `(?:[^.]|\.\S)` keeps the window inside ONE sentence while still crossing a file
     # path: `.py` is a dot followed by non-space, a sentence end is a dot followed by
     # space — so "test at tools/x.py:1301 enshrines" matches and "The test passes. The
     # spec codifies the rule" does not. The pronoun arm's ≤2-word gap is what keeps "this
-    # witness instead blesses". Recall is unchanged at 30/15, and four false-match probes
-    # now refuse (test-file location, a `/tests/` directory, an `assert`-shaped path, and
-    # the cross-sentence co-occurrence) — see test_class_16_*.
+    # witness instead blesses". Recall is unchanged at 30/15 across every revision of this
+    # row, and each false-match shape measured along the way is pinned by its own case in
+    # test_class_16_* — a verb with no witness, a witness with no verb, a test-file
+    # location, a `/tests/` directory, an `assert`-shaped path, the cross-sentence
+    # co-occurrence, and the `attestation` substring.
     #
     # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
     # of these proves the wrong thing.
     "16 witness codifies the divergence": (
-        r"tests?[\w-]*(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
+        r"\btests?[\w-]*(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
         r"|\b(it|CI|witness|fixture|which)\s+(?:\w+\s+){0,2}(codif|enshrin|blesses)"
     ),
 }
