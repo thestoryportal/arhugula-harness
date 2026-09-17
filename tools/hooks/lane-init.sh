@@ -21,11 +21,34 @@
 #     cause family, never a coordination one (C-HE-13 §3), and it skips the stack rather
 #     than letting `docker compose up` fail opaquely mid-pilot (C-HE-11 §5).
 
-_LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# shellcheck source=lib.sh
-. "$_LI_ROOT/tools/hooks/lib.sh"
-# shellcheck source=loop_lib.sh
-. "$_LI_ROOT/tools/hooks/loop_lib.sh"
+# `BASH_SOURCE` is bash-only, and this file is SOURCED by whatever shell the lane opens in --
+# zsh in this workspace's interactive venue. Under zsh the array expanded empty, `dirname`
+# returned `.`, `_LI_ROOT` landed two levels above $HOME, BOTH library loads below failed,
+# and sourcing still returned 0. The caller got a lane with no `hook_git_retry` (so the
+# repo-wide `gc.auto 0` of C-HE-11 §2 was never attempted) and no `loop_log_structured` (so
+# the C-HE-11 §5 headroom-shortfall NOTIFY -- which that clause requires be attributed to an
+# environmental cause family rather than a coordination one -- could not be emitted at all).
+# zsh sets `$0` to the sourced file and bash sets it to the shell, so neither is the
+# authority alone; the pair is.
+_LI_SRC="${BASH_SOURCE[0]:-$0}"
+_LI_ROOT="$(cd "$(dirname "$_LI_SRC")/../.." && pwd)"
+
+# A root that does not yield both libraries is not a root, so the load is CHECKED rather
+# than assumed. Testing readability first and sourcing after would leave a window (and would
+# still miss a library that parses badly); taking the status of the `.` itself has neither
+# gap. Refusing here is what keeps the half-initialised lane unrepresentable: every export
+# below is reached only from a root that has already produced the functions those exports
+# call. `return`, never `exit`/`set -e` -- a sourced file must not fell its caller's shell.
+for _li_lib in lib.sh loop_lib.sh; do
+  # shellcheck source=/dev/null
+  if ! . "$_LI_ROOT/tools/hooks/$_li_lib"; then
+    echo "lane-init: failed to load tools/hooks/$_li_lib from '$_LI_ROOT' (resolved from '$_LI_SRC')" >&2
+    echo "lane-init: lane NOT initialised -- do not treat this worktree as an open lane" >&2
+    unset _li_lib
+    return 1
+  fi
+done
+unset _li_lib
 
 # Corpse repair (of a zero-byte marker or claim) must be MUTUALLY EXCLUSIVE. Atomic replace
 # alone is not enough: two repairers each minting a value, replacing in sequence, and each

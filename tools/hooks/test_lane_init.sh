@@ -923,5 +923,55 @@ OUT=$(
 [ -f "$THREEQ2/lanes/1" ] && ok "the minimum of three keeps its claim — exactly one survivor" \
   || bad "the minimum withdrew too; the worktree would hold no claim"
 
+# --- the sourced script must load its libraries in EVERY shell a lane may use -------
+# Regression (2026-09-17): `_LI_ROOT` was resolved from `${BASH_SOURCE[0]}` alone, which
+# only bash sets. Sourced from zsh -- this workspace's interactive venue -- it expanded
+# empty, `dirname` gave `.`, the root landed two levels above $HOME, BOTH library loads
+# failed, and `source` still returned 0. The caller walked away with a lane holding no
+# `hook_git_retry` (so the repo-wide `gc.auto 0` of C-HE-11 §2 was never attempted) and no
+# `loop_log_structured` (so the C-HE-11 §5 shortfall NOTIFY could not be emitted). The
+# contract asserted here is behavioural: after sourcing, the library functions lane-init
+# calls are callable.
+LIB_FNS="hook_bounded hook_git_retry loop_log_structured loop_status_ensure loop_status_path"
+for SH in bash zsh; do
+  if ! command -v "$SH" >/dev/null 2>&1; then
+    echo "  NOTE: $SH is not installed here -- lane-init portability is UNVERIFIED for it"
+    continue
+  fi
+  MISSING=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done")
+  [ -z "$MISSING" ] && ok "$SH: sourcing lane-init loads lib.sh + loop_lib.sh" \
+    || bad "$SH: sourced lane-init left these undefined: $MISSING"
+done
+
+# `$0`/`BASH_SOURCE` carry the spelling the caller used, never a canonical path, so a root
+# derived from either is only as cwd-proof as this pins it. Sourcing by absolute path from
+# an unrelated cwd must still find the libraries beside the script.
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  ABS=$("$SH" -c "cd / && source '$INIT' >/dev/null 2>&1; type hook_git_retry >/dev/null 2>&1 && echo yes" 2>/dev/null)
+  [ "$ABS" = "yes" ] && ok "$SH: absolute-path sourcing resolves the root from an unrelated cwd" \
+    || bad "$SH: absolute-path sourcing from / did not load the libraries"
+done
+
+# ...and when the libraries genuinely cannot be resolved, sourcing must say so and refuse,
+# never hand back a half-built lane at rc=0. A copy with no `tools/hooks` siblings beside
+# it is the cheapest way to make the root unresolvable without touching the real tree.
+DETACHED="$ROOT/detached-lane-init.sh"
+cp "$INIT" "$DETACHED" || { echo "FATAL: cp lane-init"; exit 1; }
+DET_RC=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' >/dev/null 2>&1; echo \$?")
+[ "$DET_RC" != "0" ] \
+  && ok "an unresolvable library root makes sourcing fail loudly (rc=$DET_RC)" \
+  || bad "unresolvable library root still returned 0 -- a silently half-initialised lane"
+DET_ERR=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' 2>&1 >/dev/null")
+case "$DET_ERR" in
+  *"lane-init: failed to load"*lib.sh*) ok "and it names the library it could not load" ;;
+  *) bad "failure message does not name the missing library: '$DET_ERR'" ;;
+esac
+case "$DET_ERR" in
+  *"lane NOT initialised"*) ok "and it says the lane is not initialised" ;;
+  *) bad "failure message does not state the lane is uninitialised: '$DET_ERR'" ;;
+esac
+
 echo "---"; echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
