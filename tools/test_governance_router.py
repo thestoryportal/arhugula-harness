@@ -21,6 +21,8 @@ Mutation-reasoning table — each mutation and the test that MUST go red for it:
        this module pins the ROUTER, not the relocation)
   11 a pack header claims a § the pack lacks    -> test_pack_sections_match_origin_header
   12 a venue advertises a different § list      -> test_venues_advertise_pack_section_list
+  13 a range endpoint names no real section     -> both of rows 11-12 (unresolvable set)
+  14 a pack with zero headings passes vacuously -> both of rows 11-12 (per-pack non-empty)
 
 Rows 11-12 were added 2026-09-17. Until then every assertion above compared pack FILENAMES,
 so `project-framing.md` could advertise a relocation of root §7 into a pack that has never
@@ -160,8 +162,16 @@ def test_agents_roadmap_cite_is_preserved() -> None:
 
 # A venue names a pack's sections as `§N`, an inclusive range `§A–§B` (en dash, as the
 # packs write it) or the `§N.x` family shorthand CONTEXT.md and AGENTS.md use. Ranges and
-# `.x` are resolved AGAINST THE PACK'S OWN HEADINGS, so a venue may abbreviate, but an
-# endpoint or an explicit id that names nothing real still fails.
+# `.x` are resolved AGAINST THE PACK'S OWN HEADINGS, so a venue may abbreviate.
+#
+# Resolving against the headings is what makes abbreviation legal, and it is also what
+# would make a range self-satisfying: `§12.5.1–§99` filters to exactly the same true
+# subset as `§12.5.1–§12.5.4`, so set equality alone can never see the bad endpoint
+# (merge-gate witness lens, round 2 P2 — an earlier version of this comment claimed such
+# an endpoint "still fails", which was a guarantee the code did not provide). So every
+# token is ALSO required to name something real, and that is reported separately from the
+# resolved set: a range whose endpoint is not a heading, or a `.x` prefix no heading sits
+# under, is unresolvable no matter what the range brackets.
 SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)(?:\s*[–-]\s*§(\d+(?:\.\d+)*)|(\.x))?")
 # Located by its text, not by a line number: `test_packs_declare_their_origin` only
 # requires this sentence to be PRESENT, so pinning it to a line index would invent a
@@ -173,17 +183,30 @@ def _section_key(section: str) -> tuple[int, ...]:
     return tuple(int(part) for part in section.split("."))
 
 
-def _expand_sections(spec: str, pack_headings: set[str]) -> set[str]:
+def _expand_sections(spec: str, pack_headings: set[str]) -> tuple[set[str], set[str]]:
+    """`(resolved sections, tokens naming nothing in this pack)`.
+
+    The second element is the half set equality cannot carry: a bad range endpoint
+    changes no resolved section, so it has to be reported on its own.
+    """
     resolved: set[str] = set()
+    unresolvable: set[str] = set()
     for start, end, dot_x in SECTION_TOKEN_RE.findall(spec):
         if end:
             lo, hi = _section_key(start), _section_key(end)
             resolved |= {h for h in pack_headings if lo <= _section_key(h) <= hi}
+            # BOTH endpoints must be real headings; bracketing the true set is not enough.
+            unresolvable |= {bound for bound in (start, end) if bound not in pack_headings}
         elif dot_x:
-            resolved |= {h for h in pack_headings if h == start or h.startswith(f"{start}.")}
+            family = {h for h in pack_headings if h == start or h.startswith(f"{start}.")}
+            resolved |= family
+            if not family:
+                unresolvable.add(f"{start}.x")
         else:
             resolved.add(start)
-    return resolved
+            if start not in pack_headings:
+                unresolvable.add(start)
+    return resolved, unresolvable
 
 
 def pack_headings(pack: str) -> set[str]:
@@ -191,14 +214,14 @@ def pack_headings(pack: str) -> set[str]:
     return set(re.findall(r"^#{2,4} (\d+(?:\.\d+)*)\.? ", body, flags=re.MULTILINE))
 
 
-def pack_claimed_sections(pack: str) -> set[str]:
+def pack_claimed_sections(pack: str) -> tuple[set[str], set[str]]:
     """The sections a pack's own origin header says were relocated into it."""
     lines = [ln for ln in _read(GOVERNANCE / pack).splitlines() if PACK_ORIGIN_MARKER in ln]
     assert len(lines) == 1, f"{pack}: expected exactly one origin header, found {len(lines)}"
     return _expand_sections(lines[0], pack_headings(pack))
 
 
-def venue_advertised_sections(pack: str) -> dict[str, set[str]]:
+def venue_advertised_sections(pack: str) -> dict[str, tuple[set[str], set[str]]]:
     """Per venue, the sections that venue tells a runner to expect inside `pack`.
 
     README.md and CONTEXT.md carry a table row whose second cell is the section list;
@@ -208,7 +231,7 @@ def venue_advertised_sections(pack: str) -> dict[str, set[str]]:
     quoted = re.escape(pack)
     row = re.compile(rf"^\|\s*`docs/governance/{quoted}`\s*\|([^|]*)\|", re.MULTILINE)
     paren = re.compile(rf"`docs/governance/{quoted}`\s*\(([^)]*)\)")
-    found: dict[str, set[str]] = {}
+    found: dict[str, tuple[set[str], set[str]]] = {}
     for venue, text, pattern in (
         ("README.md", _read(README), row),
         ("CONTEXT.md", _read(CONTEXT), row),
@@ -224,13 +247,21 @@ def test_pack_sections_match_origin_header() -> None:
     # Set equality both ways: a claimed-but-absent § is the 2026-09-17 defect, and an
     # unclaimed heading means a section was relocated in without the header saying so.
     for pack in sorted(filesystem_packs()):
-        assert pack_claimed_sections(pack) == pack_headings(pack), pack
+        headings = pack_headings(pack)
+        # Non-vacuity, per pack: the aggregate roster guard above says nothing about
+        # whether THIS pack has any headings, and `set() == set()` would pass.
+        assert headings, f"{pack}: no numbered section headings"
+        claimed, unresolvable = pack_claimed_sections(pack)
+        assert not unresolvable, f"{pack}: origin header names no-such-section {unresolvable}"
+        assert claimed == headings, pack
 
 
 def test_venues_advertise_pack_section_list() -> None:
     for pack in sorted(filesystem_packs()):
-        claimed = pack_claimed_sections(pack)
-        for venue, advertised in venue_advertised_sections(pack).items():
+        claimed, _ = pack_claimed_sections(pack)
+        assert claimed, f"{pack}: origin header claims nothing"
+        for venue, (advertised, unresolvable) in venue_advertised_sections(pack).items():
+            assert not unresolvable, f"{venue} vs {pack}: no-such-section {unresolvable}"
             assert advertised == claimed, f"{venue} vs {pack}: {advertised} != {claimed}"
 
 

@@ -46,6 +46,46 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
     assert out["a:2"] == []
 
 
+def test_class_2_claims_prose_that_contradicts_the_code():
+    # The claim-vs-code half of class 2 (added 2026-09-17). Pins BOTH directions, because
+    # the vocabulary was chosen by measurement and either direction can be lost silently:
+    # without this test, deleting the added alternation leaves every other test in this
+    # module green (merge-gate witness lens, round 2 P2).
+    rows = [
+        # CLAIMED: prose asserting a mechanism behaviour the code does not have.
+        {
+            "finding_id": "c2:1",
+            "observed_evidence": (
+                "The claim that `docs/**` plus code triggers DESIGN_IMPL_MIX is false."
+            ),
+            "location": "docs/research/handoff.md:139",
+        },
+        {
+            "finding_id": "c2:2",
+            "observed_evidence": (
+                "The close-out says the landing wires the split, but the row states otherwise."
+            ),
+            "location": ".harness/forward-register.yaml:1",
+        },
+        # NOT CLAIMED: code departing from a cleared contract. That is classes 12/16, and
+        # a bare `contradict` term would sweep this whole cluster into class 2 — the same
+        # wrong direction the LEFT OUT note records for `drift`.
+        {
+            "finding_id": "c2:3",
+            "observed_evidence": (
+                "The holder gate now permits appending against a terminal merged "
+                "reservation, contradicting C-HE-03 6's explicit prohibition."
+            ),
+            "location": "tools/arc_metrics.py:565",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    klass = "2 prose stale / counts / cites"
+    assert klass in out["c2:1"], out["c2:1"]
+    assert klass in out["c2:2"], out["c2:2"]
+    assert klass not in out["c2:3"], out["c2:3"]
+
+
 def test_bare_drift_is_not_class_2_vocabulary():
     # handoff-s2 §2 B proposed `\bdrift` for class 2; the corpus said no (30 of 35 "drift"
     # rows are contract / configuration / roadmap drift or the arc-metrics drift cohort —
