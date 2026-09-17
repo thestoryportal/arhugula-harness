@@ -140,12 +140,15 @@ def test_report_counts_agree_with_classify(tmp_path: Path):
 
 
 def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
-    # Evidence quoted from the rows measured into this class (2026-09-17 corpus of 2,163;
-    # 15 rows matched no other class). The PHRASE is the contract: one alternative must
-    # carry both halves, so a blessing verb whose subject is no witness is NOT this class
-    # — the measured `--match-head-commit merely pins the merge` false match, and a spec
-    # that codifies a rule is not a test that blesses a departure. Asserted through the
-    # `classify` verb, never against the regex ([LAW:behavior-not-structure]).
+    # Evidence quoted from the rows measured into this class — 14 of them, in the gate log
+    # as of base 63e19e3ee (2,162 findings), the same anchor the class row cites, because
+    # this class is measured against the log its own arc's findings append to and a live
+    # total is stale before it can be committed. The PHRASE is the contract: one
+    # alternative must carry both halves, so a blessing verb whose subject is no witness
+    # is NOT this class — the measured `--match-head-commit merely pins the merge` false
+    # match, and a spec that codifies a rule is not a test that blesses a departure.
+    # Asserted through the `classify` verb, never against the regex
+    # ([LAW:behavior-not-structure]).
     codifying = [
         {
             "finding_id": "c:1",
@@ -239,6 +242,22 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         {
             "finding_id": "n:7",
             "observed_evidence": "the latest commit codifies a workaround instead of fixing it",
+            "location": "",
+        },
+        # a BARE PRONOUN before a blessing verb, with no test artifact anywhere in the
+        # sentence (merge-gate witness lens r3). `it`/`which` were in the pronoun arm's
+        # first draft and carried zero recall, so they were cut rather than bounded: these
+        # are ordinary config-drift findings and must stay in the intake pile.
+        {
+            "finding_id": "n:11",
+            "observed_evidence": "The retry budget grew from 3 to 5, and it blesses looser"
+            " SLAs without updating the plan.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:12",
+            "observed_evidence": "The team raised the timeout, which enshrines the"
+            " assumption of network latency.",
             "location": "",
         },
         # a word that merely BEGINS with `test` (merge-gate witness lens r2). The leading

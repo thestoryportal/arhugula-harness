@@ -58,8 +58,8 @@ from pathlib import Path
 # rows under any prose-adjacent form tried. A bare `\bdrift` would have moved the 30
 # out of the new-class intake pile, the wrong direction under the policy above (codex
 # r1 P2 on the class-2-drift-extension arc). The recurring "test codifies the drift"
-# shape that note pointed at is now class 16 — measured at 15 unmatched rows on the
-# 2026-09-17 corpus of 2,163 — and is still not a class-2 term.
+# shape that note pointed at is now class 16 — 14 unmatched rows in the gate log as of
+# base 63e19e3ee (2,162 findings) — and is still not a class-2 term.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -178,11 +178,26 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # credited it for work it never did (lens r2, second P2). Recall is 29 corpus / 14
     # pile at the base anchor, IDENTICAL across all three drafts.
     #
+    # The pronoun arm names SUBJECTS, never bare pronouns. `it` and `which` were in the
+    # first phrase draft and carried ZERO recall — cutting them loses no member of the 29,
+    # while "and it blesses looser SLAs" / "which enshrines the assumption of network
+    # latency" stopped matching (lens r3 P2). They were pure false-match surface, and
+    # worse than the artifact arm's: that arm at least requires the word `test` somewhere,
+    # whereas a bare pronoun requires no test vocabulary at all — which is why the bound
+    # below, written one round earlier, did not cover them. A named bound that understates
+    # what the pattern admits is not a bound; it is a wrong claim with a disclaimer.
+    #
     # Residual bound, named rather than chased (the same policy as class 13's
-    # co-occurrence bound above): the window still admits a test artifact and a blessing
-    # verb that co-occur in one sentence without the verb being ABOUT the artifact. Three
-    # rounds of boundary defects on one token is the evidence that further layers trade
-    # one imprecision for another; this row stops here and the bound stands documented.
+    # co-occurrence bound above): WITHIN one sentence, the window still admits the word
+    # `test` and a blessing verb whose subject is something else. A test artifact must be
+    # named for this class to fire at all — that is the part the r3 finding showed the
+    # earlier wording had wrong.
+    #
+    # Every round of review on this row removed an alternative rather than adding a layer
+    # (`pins the`, then `[\w-]*`, then `it|which`), and none of the three cost recall:
+    # 29 corpus / 14 pile at the base anchor, unchanged throughout. That is the shape of
+    # an overbuilt first draft being worn down, not the non-convergent hardening the
+    # step-6 arms-race rule forbids — which is why the rounds were worth paying for.
     # `(?:[^.]|\.\S)` keeps the window inside ONE sentence while still crossing a file
     # path: `.py` is a dot followed by non-space, a sentence end is a dot followed by
     # space — so "test at tools/x.py:1301 enshrines" matches and "The test passes. The
@@ -197,7 +212,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # of these proves the wrong thing.
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
-        r"|\b(it|CI|witness|fixture|which)\s+(?:\w+\s+){0,2}(codif|enshrin|blesses)"
+        r"|\b(CI|witness|fixture)\s+(?:\w+\s+){0,2}(codif|enshrin|blesses)"
     ),
 }
 
