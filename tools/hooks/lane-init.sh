@@ -17,6 +17,11 @@
 #   * the lane index is claimed by EXCLUSIVE CREATE of `QUEUE_DIR/lanes/<k>` and released
 #     by `safe-worktree-remove.sh` at teardown. A worktree that already holds an entry
 #     REUSES it: two entries for one path would strand whichever the release missed.
+#   * `_LI_*` is this file's OWN namespace, never caller storage. Every exit path clears it
+#     unconditionally -- `_LI_ROOT`/`_LI_Q`/`_LI_WT` always have, and `_LI_SRC` on the same
+#     terms. Save/restore was proposed and refused: it would make one member behave unlike
+#     its siblings, and its caller-had-a-value arm is a two-armed restore no real caller
+#     reaches. Anything keeping state in `_LI_*` already collides with three variables.
 #   * a RAM shortfall is ENVIRONMENTAL. It is reported as a NOTIFY under a `lane-env:`
 #     cause family, never a coordination one (C-HE-13 §3), and it skips the stack rather
 #     than letting `docker compose up` fail opaquely mid-pilot (C-HE-11 §5).
@@ -483,6 +488,7 @@ else
           echo "lane-init: a stale repair lock blocks $_LI_Q/lanes/$_li_k.repair — remove it and re-open the lane" >&2
           unset HARNESS_LANE_ID HARNESS_LANE_INDEX
           unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
+          unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
           return 1 2>/dev/null || exit 1
         fi
       fi
@@ -496,6 +502,7 @@ else
       echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
       unset HARNESS_LANE_ID HARNESS_LANE_INDEX
       unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
+      unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
       return 1 2>/dev/null || exit 1
     fi
   done

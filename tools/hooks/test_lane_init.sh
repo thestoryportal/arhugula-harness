@@ -1004,6 +1004,40 @@ for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && p
     || bad "$SH: init leaked into the caller's shell: $LEAKED"
 done
 
+# ...and the refusal paths must clear it too, not just the success path. The index-exhaustion
+# refusal is the reachable one to drive: fill every lane slot < 350 with a FOREIGN worktree's
+# claim and this lane can allocate nothing. Before this arc that exit cleared HARNESS_* and
+# the `_li_*` locals but left the whole outer `_LI_*` scope defined. (codex r4 P3.)
+EXHQ="$ROOT/exhaust-q"; mkdir -p "$EXHQ/lanes"
+_i=0; while [ "$_i" -lt 350 ]; do printf 'foreign /not/this/worktree\n' > "$EXHQ/lanes/$_i"; _i=$((_i+1)); done
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  EXH=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$EXHQ" "$SH" -c "source '$INIT' >/dev/null 2>&1
+printf 'rc=%s ' \$?
+for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
+  case "$EXH" in
+    "rc=1 ") ok "$SH: index exhaustion refuses AND clears the whole _LI_* scope" ;;
+    rc=1*)   bad "$SH: exhaustion refused but leaked: $EXH" ;;
+    *)       bad "$SH: exhaustion did not refuse: $EXH" ;;
+  esac
+done
+
+# `_LI_*` is lane-init's OWN namespace, and a caller's value in it is CLEARED, not preserved
+# -- deliberately, and identically for the variable this arc introduced and the one that has
+# always been there. codex r4 proposed save/restore for `_LI_SRC` alone; refused, because it
+# would make one member behave unlike its siblings and add a restore arm no real caller
+# reaches. This pins the decision so that "fixing" it later goes red instead of passing
+# silently: both variables must read `cleared` even when the caller set them.
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  OWNED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=caller-value _LI_ROOT=caller-root
+source '$INIT' >/dev/null 2>&1
+printf '%s/%s' \"\${_LI_SRC:-cleared}\" \"\${_LI_ROOT:-cleared}\"")
+  [ "$OWNED" = "cleared/cleared" ] \
+    && ok "$SH: _LI_* is lane-init's namespace — a caller's value is cleared, as for _LI_ROOT" \
+    || bad "$SH: _LI_* not uniformly owned (_LI_SRC/_LI_ROOT): $OWNED"
+done
+
 # A refusal must also STRIP the lane identity, which is what every other failure path in
 # lane-init.sh does. The case that matters is not a fresh shell (it has nothing to leak) but
 # one already carrying lane A's identity that then sources a broken init for lane B: if the
