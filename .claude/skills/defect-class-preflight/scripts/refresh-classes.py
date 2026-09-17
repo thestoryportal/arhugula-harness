@@ -58,7 +58,8 @@ from pathlib import Path
 # rows under any prose-adjacent form tried. A bare `\bdrift` would have moved the 30
 # out of the new-class intake pile, the wrong direction under the policy above (codex
 # r1 P2 on the class-2-drift-extension arc). The recurring "test codifies the drift"
-# shape (7+ rows) is a new-class candidate, not a class-2 term.
+# shape that note pointed at is now class 16 — 14 unmatched rows in the gate log as of
+# base 63e19e3ee (2,162 findings) — and is still not a class-2 term.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -149,6 +150,124 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "15 bound bytes are not the executed bytes": (
         r"working tree|live worktree|uncommitted|mutable tree|dirty",
         r"binding|base_sha|head_sha|\bHEAD\b|committed (diff|range|bytes|base)",
+    ),
+    # Every count here is anchored to the gate log AS OF base 63e19e3ee, never to "the
+    # current corpus": this class was measured against the same log its own arc's gate
+    # rows append to, so a live total is stale before it is committed (merge-gate witness
+    # lens r2, P3 — it read 2,165 where the prose said 2,163). At that base the log holds
+    # 2,162 findings, 29 carry a blessing verb, and 14 of those matched no other class —
+    # exactly the pile this class empties. `pins the` was measured and DROPPED: its one
+    # unmatched hit read "--match-head-commit merely pins the merge", a binding claim with
+    # no witness in it.
+    #
+    # PHRASES, not a tuple (codex r1 P2 on this arc). The first draft paired a verb
+    # conjunct with an artifact conjunct, and `matches()` reads `finding_text` — evidence
+    # PLUS location — so any finding located in a test file satisfied the artifact half
+    # for free. Measured under THAT draft's own artifact half
+    # (`\btest|witness|assert|fixture|\bCI\b`, the predicate the claim is about): 263 of
+    # the base's 2,162 rows carry a location satisfying it and 30 carry it in the location
+    # alone, and "the governing spec codifies the required behavior" at
+    # `tools/test_widget.py` classified as this class. A conjunct a path can satisfy does
+    # not constrain, and a false match is the one direction the policy above forbids — it
+    # removes the row from the intake pile silently. Class 13 paid for this same lesson
+    # with `justfile`; class 12 states the remedy: each alternative carries BOTH halves on
+    # its own ([LAW:types-are-the-program] — the strongest theorem still true is one about
+    # a phrase, never two tokens that co-occur).
+    #
+    # ORDERING is what fences the location out, structurally rather than by luck: the
+    # location is appended LAST, so an artifact-BEFORE-verb phrase can never be satisfied
+    # by it (a path contains no verb, and nothing follows a path to supply one).
+    #
+    # The artifact token took THREE reviewed revisions, all on its boundaries, and the
+    # third was subtraction rather than another layer (the step-6 arms-race rule: two
+    # consecutive rounds on a mechanism the absorption itself invented). What it is now:
+    # `\btests?(?![a-z])` — the WORD, refusing a longer word that merely starts with it.
+    # What it was, and why each failed: `\btest\b` (draft 1) rejected `test_happy_path`,
+    # since `_` is a word character; `tests?[\w-]*` (draft 2) dropped the LEADING `\b` to
+    # fix that and so matched "at-TEST-ation" and "la-TEST" — `attest` is this workspace's
+    # own vocabulary, making it the likeliest false match of all (lens r1 P2); the leading
+    # `\b` came back, but `[\w-]*` still admitted `testament`/`testimony`/`testify` (lens
+    # r2 P2). The identifier tail is carried by the window below, NOT by a trailing class
+    # — deleting `[\w-]*` was measured byte-identical on every case, so draft 2's comment
+    # credited it for work it never did (lens r2, second P2). The artifact token's three
+    # drafts are recall-IDENTICAL at the base anchor: 29 corpus / 14 pile each, measured
+    # while the noun arm below was still present. The SHIPPED pattern matches 28 of those
+    # 29 — the one it drops is the noun arm's only member, and the pile is 14 either way.
+    #
+    # ONE ALTERNATIVE, because the second one bought nothing. A `\b(it|CI|witness|
+    # fixture|which)\s+...` arm carried the phrasings where the blessing verb's subject is
+    # a witness noun rather than the word `test`. Measured at the base anchor it added
+    # exactly ONE corpus member over the artifact arm alone (29 vs 28) — and that member
+    # already matched another class, so its contribution to the NEW-CLASS PILE, the only
+    # thing this class exists to fill, was ZERO: 14 with the arm, 14 without.
+    #
+    # It was cut in two steps, both measured. `it`/`which` went first (lens r3 P2): bare
+    # pronouns matched "and it blesses looser SLAs" with no test vocabulary anywhere. The
+    # remaining literal nouns went next (lens r5 P2), because they carry the SAME defect
+    # one word later — "The team ignoring the fixture blesses the shortcut", "A witness
+    # account later enshrines a different version of events" — and no regex can fix it,
+    # since it requires knowing that `fixture` is the sentence's object rather than its
+    # subject. Subjecthood is grammar. Zero pile contribution against an unclosable false
+    # -match surface is not a tradeoff; the arm's own ≤2-word gap went with it.
+    #
+    # Residual bound — named rather than chased (the same policy as class 13's
+    # co-occurrence bound above). Within one sentence the window admits the word `test`
+    # before a blessing verb in THREE shapes this row does not try to tell apart, each
+    # verified live: the verb's subject is something else ("the test ran green and the
+    # spec codifies the older rule"); `test` in its ordinary-English sense rather than the
+    # software one ("the A/B test codifies the winning variant"); and the verb NEGATED
+    # ("the test does not codify the drift" — lens r8).
+    #
+    # The negation shape is named rather than guarded, and the measurement is why: ZERO of
+    # the base anchor's 2,162 findings put a negation between this class's `test` token and
+    # a blessing verb, matched or not. Contrast the `!`/`?` terminator gap one round
+    # earlier, where 13 rows carried the shape and the regex was duly fixed. A negation
+    # lookahead would also buy a false NEGATIVE that the corpus makes plausible — "the test
+    # does not merely codify X, it enshrines Y" is a real member this class would then lose
+    # — so guarding it trades one imprecision for another, which is exactly what the header
+    # above records as measured-and-non-converging.
+    #
+    # What keeps the bound narrow enough to accept is that the word `test` must appear AT
+    # ALL for this class to fire, and the window is one sentence wide. FOUR earlier
+    # wordings of this paragraph understated what the pattern admits (lens r3, r5, r6 and
+    # r8 each caught one), so state it against the shipped regex and never against the
+    # intent: a named bound that understates admission is a wrong claim with a disclaimer.
+    #
+    # The window's `{0,80}` is derived, not chosen by eye: the widest artifact→verb gap
+    # among the real members is 60 ("test at <path>:1301 enshrines"), and 80 is that plus
+    # headroom. n:16 pins it — a 117-char gap that an unbounded window would admit.
+    #
+    # Every round of review on this row removed something rather than adding a layer
+    # (`pins the`, then `[\w-]*`, then `it|which`, then the whole noun arm) and the
+    # new-class pile was 14 at every step. An overbuilt first draft worn down to one
+    # regex — not the non-convergent hardening the step-6 arms-race rule forbids.
+    #
+    # `(?:[^.!?]|[.!?]\S)` keeps the window inside ONE sentence while still crossing a
+    # file path. A sentence ends with a terminator followed by SPACE; a path's dot is
+    # followed by non-space — so "test at tools/x.py:1301 enshrines" matches while "The
+    # test passes. The spec codifies the rule" does not. All THREE terminators count:
+    # an earlier draft listed only `.`, and "Did the test pass? The spec codifies the
+    # older rule." false-matched (merge-gate witness lens r7 P2). 13 base-corpus rows pair
+    # this class's own `test` token with `!` or `?`, so that was a live surface, not a
+    # hypothetical. n:17/n:18 pin it.
+    #
+    # The `{0,80}` bounds REPETITIONS, not characters: a repetition is one char, or a
+    # terminator plus a non-space, so the reachable character span is ≥ 80. The widest
+    # artifact→verb gap among the real members is 60 chars, which is what 80 has headroom
+    # over; n:16 pins the cap with a 117-char gap an unbounded window would admit.
+    #
+    # The false-match shapes this row refuses are enumerated ONCE, in
+    # test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it's own cases,
+    # each with the comment naming the guard it pins. A prose list here was a second
+    # authority over the same facts and drifted the moment a case was added — it claimed
+    # to be exhaustive and was falsified twice in this arc (lens r2 and r7), which is a
+    # copy that cannot be kept true rather than a wording that needs care
+    # ([LAW:one-source-of-truth]).
+    #
+    # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
+    # of these proves the wrong thing.
+    "16 witness codifies the divergence": (
+        r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
 }
 

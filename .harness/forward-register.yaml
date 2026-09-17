@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 249
+  total: 250
   open: 1
   design_substrate_gated: 3
   registered_finding: 91
   operator_gated: 0
   held: 3
-  closed: 151
-  identity_digest: 13ffb116a7947b78
+  closed: 152
+  identity_digest: b299d9b975242cfc
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11638,6 +11638,14 @@ items:
   close_out: 'REGISTERED 2026-09-17. WHAT CLOSES THIS ROW: an arc that (1) makes the tiebreaker emit the terminating refresh for its own landings (roadmap_status_refresh.py --emit-refresh-pr-json for the stale-branch PR, merged as the door''s continuation) or lands the scratch pair off main, AND/OR (2) teaches step (vii) to distinguish a drift-only red inherited from prior un-refreshed landings (the guard''s verified-refresh-point rule) from this arc''s own failure, AND (3) adds a CLI `release` verb (C-HE-06 §6 names "the normal verb" but the door exposes none) — each with a witness; plus a change-note at C-HE-08 §4 / C-HE-06 §4(viii) stating which. Memory: tiebreaker-scratch-landings-owe-a-refresh-and-wedge-the-next-door.'
   council: 'NO -- a mechanism gap between two carriers of one protocol (§12.2 vs C-HE-08 §4); the fix is engineering, not a cross-domain tension.'
   heading: '### B-253 · tiebreaker landings skip the terminating refresh and wedge the next merge door *(surfaced 2026-09-17 on #1555–#1558; REGISTERED)*'
+- id: B-255
+  title: 'append-only ledgers have no merge strategy, and merge=union is not the fix'
+  pr: '#TBD (surfaced on u-he-40 while merging main forward, 2026-09-17)'
+  status: closed
+  summary: 'Under the C-HE-01 lane model two lanes appending to the same ledger is the NORMAL case, and git has no merge strategy for these files, so every concurrent append pair becomes a conflict a human resolves by hand. Measured 2026-09-17: merging main forward into one held branch raised five conflicts, two of them append-only JSONL ledgers; and that branch''s own appended rows then fenced a sibling lane''s selection-time disjointness gate on .harness/merge-gate-log.jsonl alone. The obvious fix -- merge=union -- was implemented, reviewed, and REVERTED within this same arc: it is unsound here, and the measurement is recorded so nobody re-derives it.'
+  close_out: 'CLOSED 2026-09-17 as WONT-FIX-BY-UNION. Being append-only is NOT sufficient for merge=union; the rows must also be INDEPENDENT, and in merge-gate-log.jsonl they are not: finding_record.reduce_last_by_finding_id makes PHYSICAL FILE ORDER the ordering authority for a finding''s disposition (its docstring explicitly refuses to reorder by ts), while _check_against_prior_rows runs only inside the locked append path, so a merge never re-validates the rows it combines. WITNESSED in a scratch repo: one branch appending accepted and another rejected for the same finding_id merge CLEANLY under union and reduce to rejected in one merge direction and accepted in the other -- silent, direction-dependent corruption of adjudication state. mutation-probe-log.jsonl acquires the same order-sensitivity the moment U-HE-40 lands (its logged_range takes the LAST matching row), and codex_credential_gates.jsonl is write-only audit with no row readers, so unioning it alone would buy nothing while leaving a half-true rule others would extend. arc-metrics.jsonl was excluded from the outset (whole-file rewritten by relabel_arc_type_close -- union keeps both the pre- and post-relabel row for one arc and merges clean, the SPLIT_BRAIN_LEDGER state that module refuses). A conflict in these files is therefore the CORRECT outcome: it routes two lanes'' colliding rows to a human. The decision and its measurement live at the point of temptation, in .gitattributes, and are pinned by tools/test_gitattributes_ledger_merge.py -- a guard that no tracked .jsonl is union-merged (mutation-verified: re-adding merge=union reds it) plus an executable witness of the direction-dependence that will itself fail if git ever changes union''s ordering. FORWARD OPTION, not taken here: a SEMANTIC merge driver that re-validates and deterministically orders same-id lineages. That is a larger unit with its own distribution problem -- a custom driver needs git config merge.<name>.driver in every clone, worktree and CI checkout, and is inert wherever unset (falling back to conflict, which is safe).'
+  council: 'NO -- one empirically-settled question (is union sound for these rows); the forward semantic-driver option is engineering, not a cross-domain tension.'
+  heading: '### B-255 · append-only ledgers have no merge strategy, and merge=union is not the fix *(surfaced on u-he-40, 2026-09-17; CLOSED as WONT-FIX-BY-UNION)*'
 - id: B-256
   title: the _LI_* namespace scanner is lexical, so three shapes evade or misreport it
   status: registered_finding

@@ -1036,6 +1036,14 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | #1553 | 2026-09-17 | fix/main-protection-tiebreaker-required-checks | merge-gate-concurrency: NOT RUN (lean protocol, tooling fix) | merge-gate-spec-conformance: NOT RUN (same) | merge-gate-witness-adequacy: APPROVE (r2 @dccc2c974, 0 findings; the qualifier witness kills the broadened-match mutant; the P3 disposition judged honest — the post-merge tiebreaker run polls its fresh scratch PR under --required) | outcome: APPROVE at the reviewed head dccc2c974 — merge after the gate-row commit and the landing-delta check | blast-radius: _watch_checks ← tiebreaker (two call sites), static edges only |
 | 2026-09-17T09:20:02Z | #1557 | d79d8dd74a7f | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r1 |
 | #1557 | 2026-09-17 | fix/rtk-paren-shape-retired | merge-gate-concurrency: NOT RUN (lean protocol, tooling fix; gate mechanics untouched) | merge-gate-spec-conformance: NOT RUN (same) | merge-gate-witness-adequacy: APPROVE (r1 @d79d8dd74, 0 findings; six named mutations reproduced in scratch copies and all caught; the 71 re-pinned Phase-0 rows confirmed live at HEAD by the content-addressed coverage check; one P3 in prose: section 4 re-witnesses only the translates side on this 0.49.0 venue) | outcome: APPROVE at the reviewed head d79d8dd74 — merge after the gate-row commit and the landing-delta check | blast-radius: rtk_shape_guard.shapes/judge/main ← rtk-shape-guard.sh; finding_record._read_rows_fd ← append_row/append_observations/append_derived; static edges only |
+| 2026-09-17T19:03:27Z | #1562 | 1387d61f0806 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r1 |
+| 2026-09-17T19:17:00Z | #1562 | 1f41e2b145d7 | merge-gate-witness-adequacy | BLOCK | 3 finding(s) | r2 |
+| 2026-09-17T19:30:43Z | #1562 | 41f26a3fe83e | merge-gate-witness-adequacy | REVIEWER_UNAVAILABLE | 0 finding(s) | r3 |
+| 2026-09-17T19:31:30Z | #1562 | 41f26a3fe83e | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r4 |
+| 2026-09-17T19:49:18Z | #1562 | 5c54d7dcb967 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r5 |
+| 2026-09-17T20:03:43Z | #1562 | 9bb7cf37151c | merge-gate-witness-adequacy | BLOCK | 3 finding(s) | r6 |
+| 2026-09-17T21:18:08Z | #1562 | aacc0343252a | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r7 |
+| 2026-09-17T21:44:56Z | #1562 | 4b6dac361a56 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r8 |
 | 2026-09-17T20:34:43Z | #1561 | 90b66b3b8c29 | merge-gate-concurrency | REVIEWER_UNAVAILABLE | 0 finding(s) | r1 |
 | 2026-09-17T20:34:44Z | #1561 | 90b66b3b8c29 | merge-gate-spec-conformance | REVIEWER_UNAVAILABLE | 0 finding(s) | r1 |
 | 2026-09-17T20:34:44Z | #1561 | 90b66b3b8c29 | merge-gate-witness-adequacy | REVIEWER_UNAVAILABLE | 0 finding(s) | r1 |

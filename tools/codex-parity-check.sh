@@ -55,6 +55,7 @@ tools/test_concurrency_surface.py \
   tools/test_compose_lanes.py \
   --deselect tools/test_compose_lanes.py::test_two_lanes_disjoint_names_and_ports \
   tools/test_docs_completeness.py \
+  tools/test_gitattributes_ledger_merge.py \
   tools/test_graft_reachability.py \
   tools/test_leg_selfcheck.py \
   tools/test_loop_status_isolation.py \

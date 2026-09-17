@@ -10,3 +10,20 @@
 *.toml  text eol=lf
 *.yaml  text eol=lf
 *.yml   text eol=lf
+
+# --- ledger merge strategy: DELIBERATELY NONE (B-255) --------------------------------
+# Do NOT add `merge=union` to these ledgers. Being append-only is NOT sufficient; the
+# rows must also be INDEPENDENT, and in .harness/merge-gate-log.jsonl they are not:
+#   * `finding_record.reduce_last_by_finding_id` makes PHYSICAL FILE ORDER the ordering
+#     authority for a finding's disposition, and explicitly refuses to reorder by `ts`;
+#   * `finding_record._check_against_prior_rows` runs only inside the locked append
+#     path, so a merge never re-validates the rows it combines.
+# Union therefore decides a finding's disposition by MERGE DIRECTION. Measured
+# 2026-09-17 in a scratch repo: one branch appending `accepted` and another `rejected`
+# for the same finding_id reduce to `rejected` when merged one way and `accepted` the
+# other -- silently, with no conflict shown. `.harness/mutation-probe-log.jsonl` acquires
+# the same order-sensitivity once U-HE-40 lands (its `logged_range` takes the LAST
+# matching row). A conflict here is the correct outcome: it routes two lanes' colliding
+# rows to a human. tools/test_gitattributes_ledger_merge.py pins this and carries the
+# direction-dependence witness. The forward option is a semantic merge driver that
+# re-validates and deterministically orders same-id lineages (B-255 close_out).
