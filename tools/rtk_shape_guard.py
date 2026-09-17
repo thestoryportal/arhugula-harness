@@ -338,12 +338,13 @@ def shapes(
     # Shape (2) — an unescaped paren in a BRE pattern — is judged only while the venue's rtk
     # still mangles it (`paren_mangled`, below RTK_PAREN_FIXED; codex r1 on #1557): a
     # grep original only, since `rg "f("` fails natively (codex r6).
-    if (
+    paren_hit = (
         paren_mangled
         and original in (None, "grep")
         and not regex_safe(parsed)
         and any(has_unescaped_paren(p) for p in patterns_of(parsed))
-    ):
+    )
+    if paren_hit:
         found.append(
             "an unescaped paren in a BRE pattern (a literal to grep, a group to rg: "
             "'regex parse error', exit 2)"
