@@ -890,7 +890,7 @@ def test_cited_range_validates_start_and_end_independently(tmp_path):
     assert found == {"tools/x.py:999-1", "tools/x.py:0"}  # the in-range cite stays clean
 
 
-# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:170 drop the changed-target arm
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:171 drop the changed-target arm
 def test_mutation_probe_reverify_sees_a_changed_target_under_an_unchanged_test(tmp_path):
     """r11 P2: the asymmetric case. A probed SOURCE file changes while its annotated test
     does not, so the pin's target digest goes stale -- scanning only CHANGED test files left
@@ -905,7 +905,7 @@ def test_mutation_probe_reverify_sees_a_changed_target_under_an_unchanged_test(t
     assert "no longer pins the current bytes" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/runner.py:212 drop the `with core.record_lock():` wrapper
+# mutation-probe: tools/mechanized_checks/core.py:249 drop record_lock's flock acquisition
 def test_record_lock_is_exclusive_and_times_out_loudly(tmp_path, monkeypatch):
     """r11 P2: replay's select-then-emit is one operation. The lock that makes it one must
     actually exclude a second holder, and say so rather than silently proceeding."""

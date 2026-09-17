@@ -167,7 +167,9 @@ class Check:
             text = subject.read(rel)
             if text is None:
                 continue
-            if rel in changed or any(a.target in changed for a in annotations(rel, text)):
+            due = rel in changed
+            due = due or any(a.target in changed for a in annotations(rel, text))
+            if due:
                 found.append((rel, text))
         return found
 
