@@ -74,11 +74,11 @@ snapshot:
   total: 266
   open: 1
   design_substrate_gated: 3
-  registered_finding: 106
+  registered_finding: 107
   operator_gated: 0
   held: 3
-  closed: 153
-  identity_digest: 0d9a9e06903f540f
+  closed: 152
+  identity_digest: aa2c6fdfa9659136
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11710,13 +11710,13 @@ items:
   council: 'NO -- a threshold to be measured, not adjudicated.'
   heading: '### B-265 · spec §11 #13 — pair the `strict:true` / SHA-keyed `main` concurrency change with a queue-depth cap once N-lane cadence data exists *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
 - id: B-266
-  title: 'plan §6 item 13 is stale — C-HE-06 §7''s lease invariant was already re-worded at spec v1.4 X4a'
-  pr: 'spec v1.4 X4a (the C-HE-06 §7 re-wording that discharged it); discovered and recorded by U-HE-44, 2026-09-17'
-  status: closed
-  summary: 'C-HE-06 §7''s Invariants bullet once said "no lease exists whose reservation is not `open`", which cannot hold literally across the Council G4 continuation: C-HE-03 §4 flips the reservation to `merged` on confirmed merge while C-HE-06 §4(vii)-(viii) HOLDS the lease through post-merge CI and the terminating refresh. Codex round 2 on PR #1393 surfaced the tension and the plan recorded it at §6 item 13 as an owed v1.1 change-note. VERIFIED AT THIS HEAD: the re-wording has ALREADY LANDED. C-HE-06 §7 now reads "The lease MAY be ACQUIRED only by an arc whose reservation is `open` and held by the acquiring lane; from step (vi) the reservation legitimately reads `merged` while the lease is held through the (vii)-(ix) continuation", carrying its own change-note marker (*v1.4 X4a — the pre-v1.4 "held only while open" wording contradicted §4''s own lifecycle*). That is the wording the plan asked for.'
-  close_out: 'CLOSED 2026-09-17 by U-HE-44 as ALREADY-RESOLVED, on reading the spec rather than transcribing the plan. The debt plan §6 item 13 describes was discharged at spec v1.4 X4a; no change-note is owed and no implementation changes, since the code was always correct against §7''s acquisition-time reading and against G4. RESIDUAL, not closed by this row: plan §6 item 13 is STALE — it still presents the tension as open and names U-HE-44 as the unit that registers it. A plan revision should tick that row to point at v1.4 X4a instead. Recorded here rather than edited into the plan because a plan-body revision is its own change with its own clearance.'
-  council: 'NO -- the substance was adjudicated at G4 and the wording already landed.'
-  heading: '### B-266 · plan §6 item 13 is stale — C-HE-06 §7''s lease invariant was already re-worded at spec v1.4 X4a *(registered by U-HE-44, 2026-09-17; CLOSED)*'
+  title: 'plan §6 item 13 still presents the C-HE-06 §7 lease-invariant tension as open, but spec v1.4 X4a already re-worded it'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'C-HE-06 §7''s Invariants bullet once said "no lease exists whose reservation is not `open`", which cannot hold literally across the Council G4 continuation: C-HE-03 §4 flips the reservation to `merged` on confirmed merge while C-HE-06 §4(vii)-(viii) HOLDS the lease through post-merge CI and the terminating refresh. Codex round 2 on PR #1393 surfaced that tension and plan §6 item 13 recorded it as an owed v1.1 change-note naming U-HE-44 as the unit that registers it. VERIFIED AT THIS HEAD: the re-wording ALREADY LANDED. C-HE-06 §7 now reads "The lease MAY be ACQUIRED only by an arc whose reservation is `open` and held by the acquiring lane; from step (vi) the reservation legitimately reads `merged` while the lease is held through the (vii)-(ix) continuation", carrying its own marker (*v1.4 X4a — the pre-v1.4 "held only while open" wording contradicted §4''s own lifecycle*). So the SPEC debt is discharged and the code was always correct against §7''s acquisition-time reading. What remains open is the PLAN: §6 item 13 still describes the tension as live and points at a change-note that exists, so a reader of the plan is told to do work that is already done.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §6 item 13; spec C-HE-06 §7 / v1.4 X4a; U-HE-22/23). Deliberately NOT closed: the spec half is discharged, but the plan half is real remaining work, and a closed row drops out of the open-work projection where that work would then be tracked by nobody. WHAT CLOSES THIS ROW: a plan revision ticking §6 item 13 to record that the re-wording landed at v1.4 X4a and removing its U-HE-44 pointer — a plan-body change with its own clearance ceremony, which is why this arc records the finding rather than making the edit.'
+  council: 'NO -- the substance was adjudicated at G4 and the spec wording already landed; what is owed is a plan tick.'
+  heading: '### B-266 · plan §6 item 13 still presents the C-HE-06 §7 lease-invariant tension as open, but spec v1.4 X4a already re-worded it *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
 - id: B-267
   title: 'residual defect class (a) crash-window idempotency in multi-step filesystem protocols'
   pr: '#TBD (U-HE-44, 2026-09-17)'

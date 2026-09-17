@@ -5,8 +5,6 @@
 tiebreaker PASS lines and pre-change `show` output are recorded by the session that runs
 the gate (C-HE-08 §2–§5, U-HE-27 Step 5).*
 
-*Section families (U-HE-44): branch-protection show/apply/tiebreaker · reviewer-concurrency probe verdicts (U-HE-35) · pilot reports (U-HE-37) · RED-first runs of AC#2 (U-HE-20) · equivalence proofs (U-HE-41). The first two grew organically above; the last three are opened below so the units that own them append rather than invent a home.*
-
 ## U-HE-27 landing record — B-190 bounded by the C-HE-08 §2 server fence (2026-08-21)
 
 Per B-190's close-out step (2) (`.harness/post-phase-8-forward-register.md`) and the
@@ -412,6 +410,8 @@ AFTER:
 ```
 
 ---
+
+*Section families opened by U-HE-44 (append-only: this note and everything below it were APPENDED; the header and the records above are untouched). The two families the log grew organically — branch-protection show/apply/tiebreaker, and reviewer-concurrency probe verdicts (U-HE-35) — are above. The three below are opened so the units that own them append rather than invent a home: pilot reports (U-HE-37), RED-first runs of AC#2 (U-HE-20), equivalence proofs (U-HE-41).*
 
 ## Pilot reports (U-HE-37, C-HE-13 §3)
 
