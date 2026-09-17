@@ -68,6 +68,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
+        r"|intake pile|intake path|classifies unrelated|removes it from the unmatched"
     ),
     "4 vacuous witness": (
         r"witness|vacuous|stays green|cannot fail|only .*presence|never red"

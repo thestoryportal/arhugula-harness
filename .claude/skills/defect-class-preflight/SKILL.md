@@ -224,6 +224,15 @@ set, an exemption list, an allowlist, a dedupe key) is itself attack surface —
 sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
 forged entries) before trusting it to mute anything.
 
+**The classifier's own terms are a suppression input too (added 2026-09-17).** A class pattern
+that matches too widely removes findings from the unmatched-intake pile with no signal that
+anything was dropped — `|| true` aimed at the review machinery rather than at code. So a new
+class term is judged on its FALSE POSITIVES first: name the unrelated findings it would
+claim, and pin them as negatives in the same commit. Under-matching leaves a finding in the
+intake pile where a human sees it; over-matching hides it. Two consecutive rounds of one arc
+were spent narrowing a single added term (`cleanup path`, then `caller state`), which is what
+this rule exists to skip.
+
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
 load-bearing line were deleted or inverted, does this test actually red?* Traps seen
