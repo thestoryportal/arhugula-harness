@@ -79,6 +79,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "4 vacuous witness": (
         r"witness|vacuous|stays green|cannot fail|only .*presence|never red"
         r"|does not red|remains green|unexercised"
+        r"|leaves? (this|the) (test|suite) green"
     ),
     "5 timeout / retry / budget": r"timeout|retry|budget|backoff|deadline",
     "6 unreachable / dead branch": (

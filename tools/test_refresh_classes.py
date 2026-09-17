@@ -117,6 +117,54 @@ def test_class_7_does_not_claim_sourced_shell_caller_state():
     assert "7 env-var mutation / restore" in out["k:1"], out["k:1"]
 
 
+def test_class_4_claims_the_leaves_this_test_green_idiom():
+    """The canonical vacuous-witness phrasing, adopted on MEASURED evidence.
+
+    Run against the committed corpus this alternative newly matched 24 rows and all 24 were
+    audited individually: every one is "removing/reverting/deleting X leaves this test
+    green", which is class 4 exactly. Three sibling candidates were measured in the same
+    pass and rejected for mixing in races, spec findings and lock ordering -- `cannot
+    detect`, `never (exercis|reach)`, `claim ... is false`. Measuring first is the whole
+    difference between this term and the ones this arc withdrew.
+    """
+    positives = [
+        {
+            "finding_id": "g:1",
+            "observed_evidence": (
+                "the test exercises only the readability preflight and never the new "
+                "per-source status check; removing the guard would leave this test green"
+            ),
+            "location": "tools/hooks/test_lane_init.sh:1053",
+        },
+        {
+            "finding_id": "g:2",
+            "observed_evidence": (
+                "deleting the production _kill_after call would leave the suite green"
+            ),
+            "location": "",
+        },
+    ]
+    negatives = [
+        {
+            "finding_id": "g:n1",
+            "observed_evidence": "a peer can claim the file between glob and read",
+            "location": "",
+        },
+        {
+            "finding_id": "g:n2",
+            "observed_evidence": (
+                "the holder gate admits a terminal merged reservation, contradicting C-HE-03 §6"
+            ),
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(positives + negatives)).stdout)
+    for fid in ("g:1", "g:2"):
+        assert "4 vacuous witness" in out[fid], (fid, out[fid])
+    for fid in ("g:n1", "g:n2"):
+        assert "4 vacuous witness" not in out[fid], (fid, out[fid])
+
+
 def test_class_3_does_not_describe_the_class_table_itself():
     """No class term names this table's own machinery, deliberately.
 
