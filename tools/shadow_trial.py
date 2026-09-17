@@ -366,18 +366,41 @@ def _emit_loop_row(kind: str, lane_id: str, cause: str, detail: str) -> None:
     rs.emit_loop_row(kind, lane_id, cause, detail)
 
 
+#: loop_log_structured's stated bound: one append interleaves once a row passes ~32-65 KB;
+#: the evidence text is cut well below it with an explicit elision (codex r8 P2).
+DETAIL_LIMIT_BYTES = 16 * 1024
+
+
+def _bounded(detail: str, lens: str) -> str:
+    if len(detail.encode()) <= DETAIL_LIMIT_BYTES:
+        return detail
+    tail = (
+        f" … [evidence truncated to {DETAIL_LIMIT_BYTES} bytes; the full list is "
+        f"`just shadow-trial-decide {lens}`]"
+    )
+    body = detail.encode()[: DETAIL_LIMIT_BYTES - len(tail.encode())].decode(errors="ignore")
+    return body + tail
+
+
+def sampled_evidence(decision: dict) -> list[dict]:
+    """The §4 evidence: the sampled rounds' findings — what the decision was made from. A
+    finding scored after the n-th round is outside the frozen sample and is neither delivered
+    nor part of the proposal's identity (codex r8 P2)."""
+    return [c for c in decision.get("catches", []) if c["in_sample"]]
+
+
 def hitl_request(decision: dict, lens: str) -> None:
     """C-HE-29 §4: the kill/keep evaluation is delivered as an escalation-kind HITL request
-    presenting the sampled rounds and every unique-catch disposition alongside the threshold and
-    the three permitted responses; nothing is adopted or killed here."""
+    presenting the sampled rounds and every sampled finding's unique-catch disposition alongside
+    the threshold and the three permitted responses; findings outside the frozen sample are
+    counted, not listed; nothing is adopted or killed here."""
     sample = decision.get("sample", [])
     rounds = ", ".join(f"{a}/r{r}" for a, r in sample) or "(none)"
+    outside = len(decision.get("catches", [])) - len(sampled_evidence(decision))
 
     def why(c: dict) -> str:
         if c["counted"]:
             return "COUNTED"
-        if not c["in_sample"]:
-            return "not counted: outside the frozen sample"
         if c["disposition"] is None:
             return "not counted: undisposed (adjudication pending)"
         if c["blocked"]:
@@ -390,19 +413,23 @@ def hitl_request(decision: dict, lens: str) -> None:
         "; ".join(
             f"{c['finding_id']}@{c['arc_id']}/r{c['round_n']}={c['disposition'] or 'undisposed'} "
             f"[{why(c)}]"
-            for c in decision.get("catches", [])
+            for c in sampled_evidence(decision)
         )
         or "(no unique_catch rows)"
+    )
+    detail = (
+        f"SHADOW-{lens} — n={decision['n']} scored={decision['scored']} "
+        f"unique={decision['unique']} (catch-rounds; findings={decision['unique_findings']}) "
+        f"threshold={decision['threshold']} → proposed {decision['decision'].upper()}; "
+        f"sample rounds: {rounds}; outside the frozen sample: {outside}; "
+        "respond approve-kill | reject-keep | amend-threshold; "
+        f"unique_catch dispositions: {catches}"
     )
     _emit_loop_row(
         "DEFERRED-HIL",
         "shadow_trial",
         "shadow-trial-adjudicate:HITL-recoverable:kill_keep_decision",
-        f"SHADOW-{lens} — n={decision['n']} scored={decision['scored']} "
-        f"unique={decision['unique']} (catch-rounds; findings={decision['unique_findings']}) "
-        f"threshold={decision['threshold']} → proposed {decision['decision'].upper()}; "
-        f"sample rounds: {rounds}; unique_catch dispositions: {catches}; "
-        "respond approve-kill | reject-keep | amend-threshold",
+        _bounded(detail, lens),
     )
 
 
@@ -423,16 +450,17 @@ def evidence_digest(catches: list[dict]) -> str:
 
 def delivery_identity(decision: dict) -> str:
     """What makes a decision the SAME proposal: the frozen sample, the rule in force, the
-    outcome AND the evidence delivered with it (every finding's disposition and whether it
-    counted). An amended threshold, a changed outcome or a re-adjudication that changes the
-    evidence is a new proposal and is delivered again (codex r4 P2, r7 P2)."""
+    outcome AND the evidence delivered with it (every SAMPLED finding's disposition and whether
+    it counted — a finding outside the sample changes nothing; codex r8 P2). An amended
+    threshold, a changed outcome or a re-adjudication that changes the evidence is a new
+    proposal and is delivered again (codex r4 P2, r7 P2)."""
     digest = sample_digest([tuple(x) for x in decision["sample"]])
     parts = [
         f"sample={digest}",
         f"n={decision['n']}",
         f"threshold={decision['threshold']}",
         f"decision={decision['decision']}",
-        f"evidence={evidence_digest(decision['catches'])}",
+        f"evidence={evidence_digest(sampled_evidence(decision))}",
     ]
     return " ".join(parts)
 
@@ -506,11 +534,17 @@ def _rows_under_lock(path: Path | None) -> list[dict]:
 
 
 def undisposed_findings(rows: list[dict], lens: str) -> list[dict]:
+    """Lens findings awaiting an adjudicator — on heads the trial can score: a finding on a
+    same-family head can never count, so no adjudication is requested for it (codex r8 P3)."""
     last = fr.reduce_last_by_finding_id(rows)
+    excluded = _same_family_heads(rows, lens)
     return [
         r
         for r in last.values()
-        if r["producer"] == lens and r["record_kind"] == "finding" and r["disposition"] is None
+        if r["producer"] == lens
+        and r["record_kind"] == "finding"
+        and r["disposition"] is None
+        and (r["arc_id"], r["head_sha"]) not in excluded
     ]
 
 

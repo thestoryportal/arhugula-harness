@@ -382,7 +382,7 @@ def test_hitl_request_presents_the_sample_and_every_disposition(monkeypatch: pyt
     assert "/r12=rejected [not counted: last disposition rejected]" in detail
     assert "/r20=accepted [not counted: a blocking reviewer reported the same key]" in detail
     assert "/r8=suppressed [not counted: adjudicated unique_catch=false]" in detail
-    assert "/r31=accepted [not counted: outside the frozen sample]" in detail
+    assert "/r31=" not in detail and "outside the frozen sample: 1" in detail
     assert "/r9=accepted [not counted: adjudicated unique_catch=false]" in detail
     assert "approve-kill" in detail and "reject-keep" in detail and "amend-threshold" in detail
 
@@ -466,6 +466,60 @@ def test_changed_evidence_is_a_new_proposal(tmp_path: Path, monkeypatch: pytest.
     assert d["decision"] == "kill" and d["unique"] == 1 and d["delivered"] is True
     assert len(seen) == 2 and "findings=2" in seen[1][3]
     assert st.deliver_decision(LENS, p)["delivered"] is False and len(seen) == 2
+
+
+# mutation-probe: hash every finding in delivery_identity (drop the in_sample filter)
+def test_a_finding_outside_the_sample_never_re_delivers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The evidence is the sampled rounds': an adjudicated round-31 catch changes neither the
+    decision nor its identity, so the delivered proposal is not re-emitted (codex r8 P2)."""
+    p = tmp_path / "g.jsonl"
+    for r in _markers(31):
+        fr.append_row(r, p)
+    seen: list[tuple] = []
+    monkeypatch.setattr(st, "_emit_loop_row", lambda *a: seen.append(a))
+    assert st.deliver_decision(LENS, p)["decision"] == "kill" and len(seen) == 1
+    fr.append_row(_row(31, LENS, location="late", uc=True), p)
+    fr.append_row(_adj(31, "late", "accepted", ts="2026-08-18T00:00:32Z"), p)
+    d = st.deliver_decision(LENS, p)
+    assert d["decision"] == "kill" and d["delivered"] is False and len(seen) == 1
+    assert "/r31=" not in seen[0][3]
+
+
+# mutation-probe: return `detail` unbounded from _bounded
+def test_the_delivered_evidence_is_bounded(monkeypatch: pytest.MonkeyPatch):
+    """loop_log_structured interleaves rows past ~32-65 KB; the evidence text is cut below
+    that with an explicit elision naming where the full list lives (codex r8 P2)."""
+    rows = _markers(30)
+    for i in range(600):
+        rows.append(_row(3, LENS, location=f"loc-{i:03d}", uc=None, n=i + 1))
+    d = st.decide(rows, LENS)
+    assert d["decision"] == "pending" and len(d["awaiting"]) == 600
+    seen: list[tuple] = []
+    monkeypatch.setattr(st, "_emit_loop_row", lambda *a: seen.append(a))
+    st.hitl_request(d, LENS)
+    detail = seen[0][3]
+    assert len(detail.encode()) <= st.DETAIL_LIMIT_BYTES
+    assert detail.endswith(f"`just shadow-trial-decide {LENS}`]")
+    assert "respond approve-kill | reject-keep | amend-threshold" in detail  # never cut
+
+
+# mutation-probe: drop the same-family exclusion from undisposed_findings
+def test_no_adjudication_is_requested_on_a_same_family_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A finding on a head where the lens's own family supplied the blocking terminal can never
+    count, so the operator is not asked to adjudicate it (codex r8 P3)."""
+    p = tmp_path / "g.jsonl"
+    g = "g" * 40
+    fr.append_row(_row(1, LENS, location="scorable"), p)
+    fr.append_row(_row(2, LENS, location="own-family", head=g), p)
+    fr.append_row(_row(2, "gemini_review_wrapper", kind="no_finding", location="gemini", head=g), p)
+    seen: list[tuple] = []
+    monkeypatch.setattr(st, "_emit_loop_row", lambda *a: seen.append(a))
+    assert [f["location"] for f in st.request_adjudications(LENS, p)] == ["scorable"]
+    assert len(seen) == 1
 
 
 # mutation-probe: drop n/threshold/decision from delivery_identity (key on the sample only)
