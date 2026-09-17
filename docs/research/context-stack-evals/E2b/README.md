@@ -1,1 +1,1 @@
-# E2b raw inputs kept out of git (see ../.gitignore): the assembled prompts (~50–216 KB each) and the PR diffs; regenerate with `gh pr diff <n>` and `e2b_assemble.py`.
+# E2b raw inputs are not committed: `../.gitignore` ignores `E2b/*.diff` and `E2b/prompt_*.txt` (the assembled prompts are 50–216 KB each). Regenerate a prompt with `gh pr diff <n> > E2b/pr<n>.diff` and `e2b_assemble.py E2/reviewer_prompt.txt E2b/pr<n>.diff E2b/pr<n>.blast.md <worktree-at-the-PR-head>`; the packs, reviewer outputs, codex output and verification notes beside this file are the record.

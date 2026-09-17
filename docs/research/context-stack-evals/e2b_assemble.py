@@ -11,6 +11,7 @@ usage: e2b_assemble.py <template> <diff-file> <pack-file|none> <worktree-path> >
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -19,14 +20,19 @@ NO_PACK = "(no structural context provided)"
 
 
 def assemble(template: str, diff: str, pack: str | None, worktree: str) -> str:
-    for token in ("{{PACK}}", "{{DIFF}}", E2_REPO_PATH):
+    fills = {
+        E2_REPO_PATH: worktree,
+        "{{PACK}}": pack if pack is not None else NO_PACK,
+        "{{DIFF}}": diff,
+    }
+    for token in fills:
         if token not in template:  # [LAW:no-silent-failure] a drifted template is a loud exit
             raise SystemExit(f"e2b_assemble: template lacks {token!r}")
-    return (
-        template.replace(E2_REPO_PATH, worktree)
-        .replace("{{PACK}}", pack if pack is not None else NO_PACK)
-        .replace("{{DIFF}}", diff)
-    )
+    # One pass over the TEMPLATE only: a token that appears inside an inserted pack or
+    # diff (a diff quoting the template, a pack quoting a diff) is never re-substituted
+    # (codex r1 P3 on the e2-callers arc). [LAW:dataflow-not-control-flow]
+    pattern = re.compile("|".join(re.escape(t) for t in fills))
+    return pattern.sub(lambda m: fills[m.group(0)], template)
 
 
 def main() -> int:

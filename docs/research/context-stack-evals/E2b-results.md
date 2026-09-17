@@ -36,8 +36,12 @@ pack — the production transcript-less reviewer.
 | 1341 pack | 1 | 1 (one step not re-traced) | P1 | yes | The basis is derived for every fan-out branch and carried to every later step of it (`workflow_driver_types.py:585-601`, "a branch child never re-derives it"), so a gate escalating after a child was dispatched still mints a token and `_escalation_operator_surface` stamps `resolvability: UNIFORM_FALLBACK_ONLY` on a pause that is directly addressable. The spec's population is "pre-dispatch gate-owning escalation" (CP v1.119 §25.20 table, §0.4 arm 3, §26.9 absence rule); the implementation's is "every fan-out-branch escalation", by the §0.4.1 correction that derives unconditionally. Carrier, resolver arm 2 and the unconditional stamp verified; the reviewer's route to a post-dispatch escalation through the same `step_context` (dispatch loop, durable-async branch) is its trace, not re-traced here. |
 | 1341 codex + pack | 2 | 2 | P2, P2 | yes | (a) `test_two_peers_sharing_a_child_workflow_id_now_produce_distinct_keys` asserts dedup survival on a dict comprehension, not the C-IS-07 §7.5 audit path; (b) all 28 carrier tests use `PARALLELIZATION` (one `SINGLE_THREADED_LINEAR`) while the diff has hunks in `_execute_orchestrator_workers` and `_cancel_worker`. 294 s, 225,503 tokens. |
 
-Every reported finding verified; no false positives in five runs. Both Sonnet pack runs
-said the pack changed what they looked at; both no-pack runs found a real defect anyway.
+Tally: 6 findings reported; 4 verified in full; 2 verified with a qualification (the 1341
+no-pack P1 names a change the spec directs, so only its test-gap residue stands; the 1341
+pack P1 rests on one trace step the reviewer made and this run did not re-trace); 0 refuted.
+The precision claim below counts the qualified two as partial, not as clean hits. Both Sonnet
+pack runs said the pack changed what they looked at; both no-pack runs found a real defect
+anyway.
 
 ## Pack vs no pack
 
@@ -56,9 +60,10 @@ said the pack changed what they looked at; both no-pack runs found a real defect
 
 ## Verdict
 
-**Supported for precision, not for recall, at n=2.** A pack does not make a transcript-less
-reviewer find more defects on these PRs; it makes the finding it does report land on the
-right file and reach the operator-visible consequence. Adoption shape: attach the blast
+**Supported for precision, not for recall, at n=2, with the two qualified rows counted as
+partial.** A pack does not make a transcript-less reviewer find more defects on these PRs; it
+makes the finding it does report land on the right file and reach the operator-visible
+consequence. Adoption shape: attach the blast
 markdown to the out-of-family review prompt (it is $0 and ~3 KB), and judge it by citation
 accuracy in the finding rows, which the gate log already records.
 
