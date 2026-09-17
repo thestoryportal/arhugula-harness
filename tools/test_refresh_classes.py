@@ -49,7 +49,11 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
 def test_bare_drift_is_not_class_2_vocabulary():
     # handoff-s2 §2 B proposed `\bdrift` for class 2; the corpus said no (30 of 35 "drift"
     # rows are contract / configuration / roadmap drift or the arc-metrics drift cohort —
-    # see the LEFT OUT note above CLASSES). These shapes must stay in the intake pile.
+    # see the LEFT OUT note above CLASSES). This test pins only that class 2 does not
+    # claim them. It no longer means "these stay in the intake pile": d:1 is a test
+    # codifying a drift, so class 16 claims it now — which is the whole point of that
+    # class, and is why the LEFT OUT note routes this shape there rather than to class 2
+    # (merge-gate witness lens r6 P3: this diff invalidated the older wording).
     rows = [
         {
             "finding_id": "d:1",
@@ -137,6 +141,201 @@ def test_report_counts_agree_with_classify(tmp_path: Path):
     assert f"Unmatched findings (new-class candidates): {unmatched}" in proc.stdout
     assert f"    {silent}  3 silent failure / fallback" in proc.stdout
     assert "the widget frobnicates" in proc.stdout
+
+
+def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
+    # Evidence quoted from the rows measured into this class — 14 of them, in the gate log
+    # as of base 63e19e3ee (2,162 findings), the same anchor the class row cites, because
+    # this class is measured against the log its own arc's findings append to and a live
+    # total is stale before it can be committed. The PHRASE is the contract, and after
+    # five review rounds it is a single one: the word `test` must appear BEFORE a blessing
+    # verb, within one sentence. So a blessing verb with no `test` in its sentence is not
+    # this class (the measured `--match-head-commit merely pins the merge` false match, a
+    # spec that codifies a rule, a bare pronoun, a witness noun in the object position),
+    # and neither is a `test` that blesses nothing. Asserted through the `classify` verb,
+    # never against the regex ([LAW:behavior-not-structure]).
+    codifying = [
+        {
+            "finding_id": "c:1",
+            "observed_evidence": "The new merged-holder test codifies this contract drift"
+            " while the clearance claims no spec contract changed.",
+            "location": "tools/arc_metrics.py:564",
+        },
+        {
+            "finding_id": "c:2",
+            "observed_evidence": "The rewritten test now expects the sibling R-999 row,"
+            " so it blesses rather than detects this regression",
+            "location": "tools/arc_exit_report.py:600",
+        },
+        {
+            "finding_id": "c:3",
+            "observed_evidence": "the new row-order test enshrines the opposite contract",
+            "location": "tools/loop_cost_baseline.py:47",
+        },
+        {
+            "finding_id": "c:4",
+            "observed_evidence": "test_codex_workflow_parity.py even requires the omission,"
+            " so CI codifies the admitted cohort gap instead of detecting it.",
+            "location": ".agents/skills/ship-pr/SKILL.md:208",
+        },
+        # the artifact is a test NAME, so a trailing `\b` would miss it: the underscore is
+        # a word character, which is why the token ends in the `(?![a-z])` lookahead —
+        # `test` may be followed by `_`, but not by another letter. (This comment cited the
+        # long-deleted `tests?[\w-]*` until lens r8; the token it credits must be the one
+        # the row actually ships.)
+        {
+            "finding_id": "c:6",
+            "observed_evidence": "test_happy_path_lands_holds_through_ci_and_releases"
+            " currently codifies this refresh-free path as the happy path.",
+            "location": "tools/merge_door.py:1226",
+        },
+    ]
+    not_codifying = [
+        # a blessing verb, no witness anywhere in the text
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "--match-head-commit merely pins the merge to that"
+            " unreviewed H2, and the spec codifies the older rule.",
+            "location": "",
+        },
+        # a witness, but nothing blessing anything
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "the added failure test asserts the warning",
+            "location": "",
+        },
+        # THE production failure mode (codex r1 P2): classification reads evidence PLUS
+        # location, so a paired verb/artifact conjunct was satisfied by the location
+        # alone — every finding located in a test file became this class. An empty
+        # location cannot witness that, which is why n:1/n:2 above did not catch it.
+        {
+            "finding_id": "n:3",
+            "observed_evidence": "the governing spec codifies the required behavior,"
+            " but implementation violates it",
+            "location": "tools/test_widget.py",
+        },
+        # same hole one directory shape over: `/tests/` survives a word boundary that
+        # `test_widget` does not, so the boundary alone was never the fix — ordering is
+        {
+            "finding_id": "n:4",
+            "observed_evidence": "the spec codifies the older rule",
+            "location": "harness-cp/tests/test_foo.py",
+        },
+        # co-occurrence ACROSS a sentence break: the witness and the blessing belong to
+        # different claims, which is what the one-sentence window refuses
+        {
+            "finding_id": "n:5",
+            "observed_evidence": "The test passes cleanly. The spec codifies the older rule.",
+            "location": "",
+        },
+        # `test` as a SUBSTRING of this workspace's own vocabulary — at-TEST-ation, la-TEST
+        # (merge-gate witness lens r1). The two are pinned by DIFFERENT guards, measured:
+        # `attestation` is refused by the `(?![a-z])` lookahead (the char after the
+        # embedded "test" is a letter), so n:6 stays green if the leading \b is deleted;
+        # only `latest` — where a space follows — actually depends on that \b, so n:7 is
+        # its witness. An earlier comment here credited \b for both (lens r5 P2).
+        {
+            "finding_id": "n:6",
+            "observed_evidence": "the attestation step now codifies the loosened threshold"
+            " as permanent policy",
+            "location": "",
+        },
+        {
+            "finding_id": "n:7",
+            "observed_evidence": "the latest commit codifies a workaround instead of fixing it",
+            "location": "",
+        },
+        # a BARE PRONOUN before a blessing verb, with no test artifact anywhere in the
+        # sentence (merge-gate witness lens r3). `it`/`which` were in the pronoun arm's
+        # first draft and carried zero recall, so they were cut rather than bounded: these
+        # are ordinary config-drift findings and must stay in the intake pile.
+        {
+            "finding_id": "n:11",
+            "observed_evidence": "The retry budget grew from 3 to 5, and it blesses looser"
+            " SLAs without updating the plan.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:12",
+            "observed_evidence": "The team raised the timeout, which enshrines the"
+            " assumption of network latency.",
+            "location": "",
+        },
+        # a sentence break on `?` or `!` rather than `.` — the window's terminator set was
+        # `.` alone for six rounds, so "Did the test pass? The spec codifies the older
+        # rule." false-matched (merge-gate witness lens r7 P2). 13 base-corpus rows pair
+        # this class's `test` token with `!` or `?`, so the surface was live.
+        {
+            "finding_id": "n:17",
+            "observed_evidence": "Did the test pass? The spec codifies the older rule.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:18",
+            "observed_evidence": "The test failed! The spec codifies the older rule.",
+            "location": "",
+        },
+        # an artifact->verb gap WIDER than the window: the cap is 80 and this gap is 117,
+        # so the sentence is refused. The widest gap among the real members is 60
+        # ("test at <path>:1301 enshrines"), which is where 80 comes from -- 60 plus
+        # headroom, not a round number chosen by eye. Without this case the cap is
+        # unwitnessed and a regression to an unbounded window would pass every other
+        # test (merge-gate witness lens r6 P2).
+        {
+            "finding_id": "n:16",
+            "observed_evidence": "The test suite ran green and the deployment completed"
+            " cleanly and the release notes were filed by the operator, and the spec"
+            " codifies the older rule",
+            "location": "",
+        },
+        # a witness noun that is the sentence's OBJECT, not the subject of the blessing
+        # verb (merge-gate witness lens r5). No regex can tell those apart, so the whole
+        # `CI|witness|fixture` arm was cut once measured to add zero to the new-class
+        # pile; these cases pin that it stays cut.
+        {
+            "finding_id": "n:13",
+            "observed_evidence": "The team ignoring the fixture blesses the shortcut anyway.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:14",
+            "observed_evidence": "A witness account later enshrines a different version of"
+            " events in the transcript.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:15",
+            "observed_evidence": "The CI dashboard owner blesses this manually every week.",
+            "location": "",
+        },
+        # a word that merely BEGINS with `test` (merge-gate witness lens r2). The leading
+        # \b admits these — `testament` starts at a word boundary — so the token needs the
+        # `(?![a-z])` lookahead too: it is the WORD `test`, not a prefix of a longer word.
+        {
+            "finding_id": "n:9",
+            "observed_evidence": "the last testament codifies the will's provisions",
+            "location": "",
+        },
+        {
+            "finding_id": "n:10",
+            "observed_evidence": "her testimony codifies the account",
+            "location": "",
+        },
+        # an `assert`-shaped PATH: the old tuple's artifact half matched `assert` anywhere,
+        # so a path alone satisfied it. Ordering refuses it now — this case existed only in
+        # the arc's transient measurement until the lens noted the comment claimed a probe
+        # the suite did not carry
+        {
+            "finding_id": "n:8",
+            "observed_evidence": "the ADR codifies a different bound",
+            "location": "tools/test_assertions.py:12",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(codifying + not_codifying)).stdout)
+    for r in codifying:
+        assert "16 witness codifies the divergence" in out[r["finding_id"]], r["location"]
+    for r in not_codifying:
+        assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
 
 
 def test_every_class_row_has_its_skill_section_and_vice_versa():
