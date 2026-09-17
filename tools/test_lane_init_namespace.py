@@ -14,8 +14,17 @@ substring, so `unset -f lane_stack_allowed; unset _LI_ROOT _LI_Q _LI_WT` was inv
 real drop read as present. Both were verified against fixtures. Parsing a shell statement
 correctly needs comment stripping, `;` splitting and flag handling; that is a parser, and a
 parser belongs somewhere it can have its own tests -- which is the point of this module. The
-evasions are regression cases below, so a future simplification that reintroduces either one
-fails here instead of passing silently.
+evasions found so far are regression cases below, so a simplification that reintroduces one
+fails here rather than passing silently.
+
+This is a lexical SCANNER, not a shell parser, and that distinction is the honest bound on it.
+It recognises `unset` statements separated by `;`, `&&`, `||` or `&`, strips comments
+quote-aware, and excludes `unset -f` by the statement's own flags. It does NOT evaluate the
+shell: a name list reached by variable indirection (`unset $VARS`) carries no literal token to
+find, a statement continued across physical lines with a backslash is scored per line, and a
+cleanup legitimately split across two `unset` statements reads as two partial ones. Those
+shapes are registered as forward work rather than chased here -- none occurs in lane-init.sh
+today, and only the first is a SILENT miss; the other two fail loud.
 
 This is a deliberate static assertion, complementing rather than replacing behaviour: three
 exits (library-load refusal, bad-index refusal, index exhaustion) are witnessed behaviourally
@@ -36,6 +45,13 @@ LANE_INIT = Path(__file__).resolve().parent / "hooks" / "lane-init.sh"
 NAMESPACE = ("_LI_SRC", "_LI_ROOT", "_LI_Q", "_LI_WT")
 
 _UNSET = re.compile(r"^\s*unset\b(?P<args>.*)$")
+
+#: Shell statement separators. `;` alone missed the one-line-guard form
+#: (`[ cond ] && unset ...`), which is the dominant idiom in the file being checked -- 44
+#: occurrences in tools/hooks/lane-init.sh -- so a cleanup site refactored into that shape
+#: was invisible. `&` is included so a backgrounded statement cannot hide one either; the
+#: alternation is ordered longest-first so `&&` is never split as two `&`.
+_SEPARATORS = re.compile(r"&&|\|\||;|&")
 
 
 def _strip_comment(line: str) -> str:
@@ -63,13 +79,16 @@ def _strip_comment(line: str) -> str:
 def unset_statements(line: str) -> list[str]:
     """Every `unset` statement on one line, as its argument string.
 
-    Split on `;` first: an `unset -f` statement and a namespace `unset` can share a line, and
-    treating the line as one unit is precisely the bypass this function exists to remove.
+    Split on every shell statement separator first: an `unset -f` statement and a namespace
+    `unset` can share a line, and treating the line as one unit is precisely the bypass this
+    function exists to remove. `;` alone was not enough -- a guarded one-liner
+    (`[ cond ] && unset ...`) kept the namespace `unset` out of any segment that STARTS with
+    it, which is how the same bypass class survived a second time.
     `unset -f` removes FUNCTIONS and is not a namespace cleanup, so it is dropped here by
     inspecting the statement's own flags rather than by matching the substring anywhere.
     """
     statements = []
-    for part in _strip_comment(line).split(";"):
+    for part in _SEPARATORS.split(_strip_comment(line)):
         m = _UNSET.match(part)
         if not m:
             continue
@@ -134,6 +153,23 @@ def test_a_comment_naming_the_variable_does_not_mask_its_removal():
     """
     text = "  unset _LI_ROOT _LI_Q _LI_WT  # keeping _LI_SRC alive, see the _LI_SRC note"
     assert subset_violations(text) == [(1, ["_LI_SRC"])]
+
+
+def test_a_guarded_one_line_unset_is_not_invisible():
+    """The third evasion of the same class (merge-gate witness lens, round 4).
+
+    Splitting only on `;` and requiring each segment to START with `unset` made a cleanup
+    written as a one-line guard silently invisible -- and that guard form occurs 44 times in
+    the file this module checks, so it was a likelier future shape than either evasion the
+    module was originally written for.
+    """
+    for sep in ("&&", "||", "&"):
+        text = f'  [ -n "$x" ] {sep} unset _LI_ROOT _LI_Q _LI_WT'
+        assert subset_violations(text) == [(1, ["_LI_SRC"])], (sep, subset_violations(text))
+
+
+def test_a_complete_guarded_unset_is_not_falsely_flagged():
+    assert subset_violations('  [ -n "$x" ] && unset _LI_SRC _LI_ROOT _LI_Q _LI_WT') == []
 
 
 def test_unset_f_alone_is_not_a_cleanup_site():
