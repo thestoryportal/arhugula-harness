@@ -905,7 +905,7 @@ def test_mutation_probe_reverify_sees_a_changed_target_under_an_unchanged_test(t
     assert "no longer pins the current bytes" in found[0].evidence
 
 
-# mutation-probe: tools/mechanized_checks/core.py:249 drop record_lock's flock acquisition
+# mutation-probe: tools/mechanized_checks/core.py:231 drop the shared sidecar-lock flock acquisition
 def test_record_lock_is_exclusive_and_times_out_loudly(tmp_path, monkeypatch):
     """r11 P2: replay's select-then-emit is one operation. The lock that makes it one must
     actually exclude a second holder, and say so rather than silently proceeding."""

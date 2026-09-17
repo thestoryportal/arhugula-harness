@@ -219,18 +219,27 @@ def save_state(state: dict[str, CheckState]) -> None:
 
 
 @contextmanager
-def state_lock() -> Iterator[None]:
-    """Serialize every read-modify-write of the state file, so two lanes' `just lanes-verify`
-    cannot interleave load and save and silently undo a demotion. The house bounded flock
-    (`finding_record._lock_exclusive`, loud on timeout) on a gitignored sidecar: `save_state`
-    replaces the state file, so a lock on its inode would not serialize the next opener."""
-    lock = STATE_PATH.with_name(STATE_PATH.name + ".lock")
+def _sidecar_lock(guarded: Path) -> Iterator[None]:
+    """The house bounded flock (`finding_record._lock_exclusive`, loud on timeout) on a
+    gitignored `<name>.lock` sidecar BESIDE the guarded file, never on that file's own inode:
+    `save_state` replaces the state file, so a lock on its inode would not serialize the next
+    opener. One body for both locks below -- two copies would be two places for the
+    containment flags to drift apart."""
+    lock = guarded.with_name(guarded.name + ".lock")
     fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
     try:
         fr._lock_exclusive(fd, lock)
         yield
     finally:
         os.close(fd)
+
+
+@contextmanager
+def state_lock() -> Iterator[None]:
+    """Serialize every read-modify-write of the state file, so two lanes' `just lanes-verify`
+    cannot interleave load and save and silently undo a demotion."""
+    with _sidecar_lock(STATE_PATH):
+        yield
 
 
 @contextmanager
@@ -243,13 +252,8 @@ def record_lock() -> Iterator[None]:
     and minting duplicate adjudications (codex r11 P2). `state_lock`'s lock is the state
     file's and does not cover the record, so this is its own sidecar.
     """
-    lock = fr.GATE_LOG_JSONL.with_name(fr.GATE_LOG_JSONL.name + ".lock")
-    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
-    try:
-        fr._lock_exclusive(fd, lock)
+    with _sidecar_lock(fr.GATE_LOG_JSONL):
         yield
-    finally:
-        os.close(fd)
 
 
 # --- promotion (§4(a)) -------------------------------------------------------------------
