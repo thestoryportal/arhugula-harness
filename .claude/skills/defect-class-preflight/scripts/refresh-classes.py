@@ -175,44 +175,54 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # `\b` came back, but `[\w-]*` still admitted `testament`/`testimony`/`testify` (lens
     # r2 P2). The identifier tail is carried by the window below, NOT by a trailing class
     # — deleting `[\w-]*` was measured byte-identical on every case, so draft 2's comment
-    # credited it for work it never did (lens r2, second P2). Recall is 29 corpus / 14
-    # pile at the base anchor, IDENTICAL across all three drafts.
+    # credited it for work it never did (lens r2, second P2). The artifact token's three
+    # drafts are recall-IDENTICAL at the base anchor: 29 corpus / 14 pile each, measured
+    # while the noun arm below was still present. The SHIPPED pattern matches 28 of those
+    # 29 — the one it drops is the noun arm's only member, and the pile is 14 either way.
     #
-    # The pronoun arm names SUBJECTS, never bare pronouns. `it` and `which` were in the
-    # first phrase draft and carried ZERO recall — cutting them loses no member of the 29,
-    # while "and it blesses looser SLAs" / "which enshrines the assumption of network
-    # latency" stopped matching (lens r3 P2). They were pure false-match surface, and
-    # worse than the artifact arm's: that arm at least requires the word `test` somewhere,
-    # whereas a bare pronoun requires no test vocabulary at all — which is why the bound
-    # below, written one round earlier, did not cover them. A named bound that understates
-    # what the pattern admits is not a bound; it is a wrong claim with a disclaimer.
+    # ONE ALTERNATIVE, because the second one bought nothing. A `\b(it|CI|witness|
+    # fixture|which)\s+...` arm carried the phrasings where the blessing verb's subject is
+    # a witness noun rather than the word `test`. Measured at the base anchor it added
+    # exactly ONE corpus member over the artifact arm alone (29 vs 28) — and that member
+    # already matched another class, so its contribution to the NEW-CLASS PILE, the only
+    # thing this class exists to fill, was ZERO: 14 with the arm, 14 without.
     #
-    # Residual bound, named rather than chased (the same policy as class 13's
-    # co-occurrence bound above): WITHIN one sentence, the window still admits the word
-    # `test` and a blessing verb whose subject is something else. A test artifact must be
-    # named for this class to fire at all — that is the part the r3 finding showed the
-    # earlier wording had wrong.
+    # It was cut in two steps, both measured. `it`/`which` went first (lens r3 P2): bare
+    # pronouns matched "and it blesses looser SLAs" with no test vocabulary anywhere. The
+    # remaining literal nouns went next (lens r5 P2), because they carry the SAME defect
+    # one word later — "The team ignoring the fixture blesses the shortcut", "A witness
+    # account later enshrines a different version of events" — and no regex can fix it,
+    # since it requires knowing that `fixture` is the sentence's object rather than its
+    # subject. Subjecthood is grammar. Zero pile contribution against an unclosable false
+    # -match surface is not a tradeoff; the arm's own ≤2-word gap went with it.
     #
-    # Every round of review on this row removed an alternative rather than adding a layer
-    # (`pins the`, then `[\w-]*`, then `it|which`), and none of the three cost recall:
-    # 29 corpus / 14 pile at the base anchor, unchanged throughout. That is the shape of
-    # an overbuilt first draft being worn down, not the non-convergent hardening the
-    # step-6 arms-race rule forbids — which is why the rounds were worth paying for.
+    # Residual bound — ONE now, named rather than chased (the same policy as class 13's
+    # co-occurrence bound above): within one sentence the window admits the word `test`
+    # and a blessing verb whose subject is something else. The word `test` must appear for
+    # this class to fire at all, which is what makes the bound narrow enough to keep. Two
+    # earlier wordings of this paragraph UNDERSTATED what the pattern admitted (lens r3
+    # and r5 each caught one), so state it against the shipped regex, never against the
+    # intent: a named bound that understates admission is a wrong claim with a disclaimer.
+    #
+    # Every round of review on this row removed something rather than adding a layer
+    # (`pins the`, then `[\w-]*`, then `it|which`, then the whole noun arm) and the
+    # new-class pile was 14 at every step. An overbuilt first draft worn down to one
+    # regex — not the non-convergent hardening the step-6 arms-race rule forbids.
+    #
     # `(?:[^.]|\.\S)` keeps the window inside ONE sentence while still crossing a file
     # path: `.py` is a dot followed by non-space, a sentence end is a dot followed by
     # space — so "test at tools/x.py:1301 enshrines" matches and "The test passes. The
-    # spec codifies the rule" does not. The pronoun arm's ≤2-word gap is what keeps "this
-    # witness instead blesses". Each false-match shape measured across the three drafts is
-    # pinned by its own case in test_class_16_* — a verb with no witness, a witness with
-    # no verb, a test-file location, a `/tests/` directory, an `assert`-shaped path, the
-    # cross-sentence co-occurrence, the `attestation` substring, and a word that merely
-    # BEGINS with `test`.
+    # spec codifies the rule" does not. Every false-match shape measured across the five
+    # rounds is pinned by its own case in test_class_16_*: a verb with no witness, a
+    # witness with no verb, a test-file location, a `/tests/` directory, an
+    # `assert`-shaped path, the cross-sentence co-occurrence, the `attestation` substring,
+    # a word merely BEGINNING with `test`, a bare pronoun, and a witness noun that is the
+    # object rather than the subject.
     #
     # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
     # of these proves the wrong thing.
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
-        r"|\b(CI|witness|fixture)\s+(?:\w+\s+){0,2}(codif|enshrin|blesses)"
     ),
 }
 

@@ -143,12 +143,13 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
     # Evidence quoted from the rows measured into this class — 14 of them, in the gate log
     # as of base 63e19e3ee (2,162 findings), the same anchor the class row cites, because
     # this class is measured against the log its own arc's findings append to and a live
-    # total is stale before it can be committed. The PHRASE is the contract: one
-    # alternative must carry both halves, so a blessing verb whose subject is no witness
-    # is NOT this class — the measured `--match-head-commit merely pins the merge` false
-    # match, and a spec that codifies a rule is not a test that blesses a departure.
-    # Asserted through the `classify` verb, never against the regex
-    # ([LAW:behavior-not-structure]).
+    # total is stale before it can be committed. The PHRASE is the contract, and after
+    # five review rounds it is a single one: the word `test` must appear BEFORE a blessing
+    # verb, within one sentence. So a blessing verb with no `test` in its sentence is not
+    # this class (the measured `--match-head-commit merely pins the merge` false match, a
+    # spec that codifies a rule, a bare pronoun, a witness noun in the object position),
+    # and neither is a `test` that blesses nothing. Asserted through the `classify` verb,
+    # never against the regex ([LAW:behavior-not-structure]).
     codifying = [
         {
             "finding_id": "c:1",
@@ -172,15 +173,6 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             "observed_evidence": "test_codex_workflow_parity.py even requires the omission,"
             " so CI codifies the admitted cohort gap instead of detecting it.",
             "location": ".agents/skills/ship-pr/SKILL.md:208",
-        },
-        # the subject sits an adverb away from its verb ("witness INSTEAD blesses"), which
-        # is what the pronoun arm's <=2-word gap buys; without it this true member drops
-        {
-            "finding_id": "c:5",
-            "observed_evidence": "this witness instead blesses 4,636,541 (4.64M) and labels"
-            " the difference a correction. That changes the measurement baseline without"
-            " updating the governing plan",
-            "location": "tools/test_arc_cost.py:243",
         },
         # the artifact is a test NAME, so `\btest\b` would miss it: the underscore is a
         # word character, which is why the token stays `tests?[\w-]*`
@@ -230,9 +222,11 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             "location": "",
         },
         # `test` as a SUBSTRING of this workspace's own vocabulary — at-TEST-ation, la-TEST
-        # (merge-gate witness lens, P2). The leading \b is what refuses these, and dropping
-        # it is the likeliest regression here precisely because `attest` is everywhere in
-        # this repo: a finding about the attestation step is not a finding about a test.
+        # (merge-gate witness lens r1). The two are pinned by DIFFERENT guards, measured:
+        # `attestation` is refused by the `(?![a-z])` lookahead (the char after the
+        # embedded "test" is a letter), so n:6 stays green if the leading \b is deleted;
+        # only `latest` — where a space follows — actually depends on that \b, so n:7 is
+        # its witness. An earlier comment here credited \b for both (lens r5 P2).
         {
             "finding_id": "n:6",
             "observed_evidence": "the attestation step now codifies the loosened threshold"
@@ -258,6 +252,26 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             "finding_id": "n:12",
             "observed_evidence": "The team raised the timeout, which enshrines the"
             " assumption of network latency.",
+            "location": "",
+        },
+        # a witness noun that is the sentence's OBJECT, not the subject of the blessing
+        # verb (merge-gate witness lens r5). No regex can tell those apart, so the whole
+        # `CI|witness|fixture` arm was cut once measured to add zero to the new-class
+        # pile; these cases pin that it stays cut.
+        {
+            "finding_id": "n:13",
+            "observed_evidence": "The team ignoring the fixture blesses the shortcut anyway.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:14",
+            "observed_evidence": "A witness account later enshrines a different version of"
+            " events in the transcript.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:15",
+            "observed_evidence": "The CI dashboard owner blesses this manually every week.",
             "location": "",
         },
         # a word that merely BEGINS with `test` (merge-gate witness lens r2). The leading
