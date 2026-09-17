@@ -17,7 +17,8 @@ options; `--opt=value` and `--opt value` both bind; EVERY `-e`/`--regexp` is a p
 (codex r3: only the first was judged).
 
 Two shapes are judged on the `rtk grep …` segment (the ones rtk 0.40.0 mangles
-deterministically -- the header of the wrapper carries the witnessed failures):
+deterministically -- the header of the wrapper carries the witnessed failures); the paren
+shape only while the venue's rtk is below RTK_PAREN_FIXED (0.49.0 translates it):
   glob   -- an rg-only `--glob`/`-g` (attached or separate value; anywhere in a short
             cluster), which rtk hands to BSD grep: 'unrecognized option', exit 2;
   paren  -- an unescaped `(` or `)` in a PATTERN, outside a bracket expression (`[()]` is
@@ -295,13 +296,34 @@ def native_failures(rewritten_segment: list[str], original: str | None, at: int)
     return out
 
 
+#: The first rtk that translates an unescaped paren in a BRE pattern correctly
+#: (live-witnessed 2026-09-17 on `f(`, `x)`, an alternation with a paren, and `-e 'f('`;
+#: 0.40.0 fails them all with 'regex parse error … unclosed group').
+RTK_PAREN_FIXED = (0, 49, 0)
+_RTK_VERSION = re.compile(r"\brtk\s+v?(\d+)\.(\d+)\.(\d+)")
+
+
+def paren_mangled(version_line: str) -> bool:
+    """Whether THIS venue's rtk still mangles the paren shape: its `rtk --version` line
+    parses to a version below RTK_PAREN_FIXED. An unparseable line reads as NOT mangled —
+    the wrapper's posture for every oracle that fails: no deny, the call proceeds as it
+    did before the guard existed (a false deny would cost the call it saves)."""
+    m = _RTK_VERSION.search(version_line)
+    return bool(m) and tuple(int(x) for x in m.groups()) < RTK_PAREN_FIXED
+
+
 def shapes(
-    rewritten_segment: list[str], original: str | None = None, at: int | None = None
+    rewritten_segment: list[str],
+    original: str | None = None,
+    at: int | None = None,
+    *,
+    paren_mangled: bool = False,
 ) -> list[str]:
     """The mangled shapes one rewritten segment carries (empty = the rewrite is fine).
     `original` is the word the caller actually ran: a glob is judged only for an `rg`
-    original (`grep -g` never worked); an unknown original is judged as `rg`, the
-    conservative reading. The paren shape (codex r6's grep-original rule) is retired.
+    original (`grep -g` never worked) and, while `paren_mangled`, a paren only for a `grep`
+    original (`rg "f("` fails natively, codex r6); an unknown original is judged for both,
+    the conservative reading.
     `at` is the rewrite's index when the caller already
     established it against the original segment."""
     at = rewritten_at(rewritten_segment) if at is None else at
@@ -313,10 +335,19 @@ def shapes(
         found.append(
             "an rg-only --glob/-g flag (rtk lands it on BSD grep: 'unrecognized option', exit 2)"
         )
-    # Shape (2) — an unescaped paren in a BRE pattern — was RETIRED 2026-09-17: rtk 0.49.0
-    # translates it (live-witnessed on `f(`, `x)`, an alternation with a paren, and
-    # `-e 'f('`); test section 4 reds
-    # if rtk ever regresses, and this arm is what would come back.
+    # Shape (2) — an unescaped paren in a BRE pattern — is judged only while the venue's rtk
+    # still mangles it (`paren_mangled`, below RTK_PAREN_FIXED; codex r1 on #1557): a
+    # grep original only, since `rg "f("` fails natively (codex r6).
+    if (
+        paren_mangled
+        and original in (None, "grep")
+        and not regex_safe(parsed)
+        and any(has_unescaped_paren(p) for p in patterns_of(parsed))
+    ):
+        found.append(
+            "an unescaped paren in a BRE pattern (a literal to grep, a group to rg: "
+            "'regex parse error', exit 2)"
+        )
     return found
 
 
@@ -339,7 +370,7 @@ def _render(toks: list[str]) -> str:
     return " ".join(t if isinstance(t, (Sep, Redirect)) else shlex.quote(t) for t in toks)
 
 
-def judge(original: str, rewritten: str) -> str | None:
+def judge(original: str, rewritten: str, *, paren_mangled: bool = False) -> str | None:
     """The deny reason for this (original, rtk-rewritten) pair, or None when nothing rtk does
     to it breaks: no `rtk grep` segment, only safe shapes, or a command that does not lex."""
     rtoks = tokens(rewritten)
@@ -361,7 +392,7 @@ def judge(original: str, rewritten: str) -> str | None:
         if at is None:
             continue
         word = original_word(oseg) if oseg is not None else None
-        hits = shapes(seg, word, at)
+        hits = shapes(seg, word, at, paren_mangled=paren_mangled)
         native.extend(native_failures(seg, word, at))
         if hits:
             found.extend(hits)
@@ -388,12 +419,16 @@ def judge(original: str, rewritten: str) -> str | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: `rtk_shape_guard.py <original> <rewritten>` prints the deny reason (nothing when
-    there is none). Always exit 0 -- the wrapper decides from the output, never the code."""
+    """CLI: `rtk_shape_guard.py <original> <rewritten> [<rtk --version line>]` prints the
+    deny reason (nothing when there is none). The optional third argument is the venue's
+    rtk version line, read by the wrapper; absent or unparseable = the paren shape is not
+    judged. Always exit 0 -- the wrapper decides from the output, never the code."""
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 2:
+    if len(args) not in (2, 3):
         return 0
-    reason = judge(args[0], args[1])
+    reason = judge(
+        args[0], args[1], paren_mangled=paren_mangled(args[2]) if len(args) == 3 else False
+    )
     if reason:
         sys.stdout.write(reason)
     return 0
