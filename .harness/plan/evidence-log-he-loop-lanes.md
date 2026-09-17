@@ -255,6 +255,27 @@ AFTER:
 ```
 
 ## main-protection apply 2026-09-17T08:04:12Z
+
+**Outcome of this apply (agent-authored record; the tool appends only the payloads).**
+`just main-protection-apply-confirm 81cd03a786a668fa` — the SECOND confirm on this digest
+(two apply headers on 2026-09-17: 07:01:44Z and this one; two scratch tiebreaker PRs, #1552
+and #1555). The first (07:01Z above) applied provisionally and rolled back: the §4
+tiebreaker's check watch counted the NON-required `classify diff` job, which fails by
+contract on the scratch PR's empty diff (scratch PR #1552 UNSTABLE while every required
+context passed). PR #1553 (merged e73dfe48c, main run 35196617540 green) scoped the watch to
+required checks; its codex round 1 also caught, in review and before any live rollback, that
+gh's not-yet-started diagnostic changes wording under `--required`, and #1553 covers both.
+(Correction: the commit message of 58df3b057 on PR #1557 says "two rollbacks"; that count was
+written from memory and is wrong — one rollback, this record is authoritative.) This second
+confirm: applied provisionally; **tiebreaker PASS** — scratch
+PR #1555 landed under strict:true and the stale-branch PR #1556 fast-forwarded cleanly onto
+the pre-merge lineage; **protection persists**; `just main-protection-verify` → **PASS**
+(the two C-HE-08 contexts `merge-gate log consistency (C-HE-23 §2 reducer) — blocking` and
+`split-brain ledger backstop — blocking` are required on `main` alongside the twelve prior
+ones; `enforce_admins` true, force-push and deletion disabled). U-HE-27 step 5 is ticked on
+this record. Residual: the tiebreaker's own landings (#1555, #1556) ran no terminating
+refresh and left main red on ROADMAP_STATUS_DRIFT until #1558 — B-253.
+
 ```
 BEFORE:
 {
