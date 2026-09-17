@@ -6,6 +6,9 @@ read back from the module, and the one production writer of `unique_catch` is `a
 
 from __future__ import annotations
 
+import functools
+import os
+import subprocess
 import sys
 from math import comb
 from pathlib import Path
@@ -660,7 +663,8 @@ def test_the_emission_runs_with_the_gate_log_unlocked(
     p = tmp_path / "g.jsonl"
     for r in _markers(30):
         fr.append_row(r, p)
-    monkeypatch.setattr(fr, "LOCK_TIMEOUT_S", 0.5)
+    # the default binds at def time; patch the callee _under_log_lock resolves by name
+    monkeypatch.setattr(fr, "_lock_exclusive", functools.partial(fr._lock_exclusive, timeout_s=0.5))
     emitted: list[str] = []
 
     def emit_taking_the_lock(kind: str, _lane: str, cause: str, detail: str) -> None:
@@ -706,27 +710,73 @@ def test_a_proposal_superseded_between_emission_and_marker_is_delivered_again(
     assert len(seen) == 2 and "KEEP" in seen[1][3]
 
 
-def test_shadow_trial_score_recipe_threads_the_shadow_lens_off_path():
-    """merge-gate r1 (witness-adequacy P2): the unattended entry point ship-pr runs is the
-    justfile recipe, so its body is the witness surface — the config row is required first
-    (a failed append skips the review and exits 0), the review runs as the SHADOW lens, and
-    the request step follows; the two off-path steps never block (`|| true`)."""
+def _score_recipe_script(tmp_path: Path, base: str = "main") -> Path:
+    """The `shadow-trial-score` recipe body exactly as just would run it (the body's own
+    shebang kept: it is what makes just hand the multi-line if/fi to ONE bash)."""
     justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
     body = justfile.split("shadow-trial-score base='main':", 1)[1].split("\n\n", 1)[0]
-    lines = [
-        ln.strip() for ln in body.splitlines() if ln.strip() and not ln.strip().startswith("#")
-    ]
-    config = next(
-        i
-        for i, ln in enumerate(lines)
-        if "shadow_trial.py config --lens gemini-shadow --if-absent" in ln
+    lines = [ln[4:] if ln.startswith("    ") else ln for ln in body.splitlines()]
+    lines = lines[1:] if lines and not lines[0] else lines  # the header line's remainder
+    script = tmp_path / "shadow-trial-score.sh"
+    script.write_text("\n".join(lines).replace("{{base}}", base) + "\n")
+    script.chmod(0o755)
+    return script
+
+
+@pytest.mark.parametrize(
+    ("config_rc", "review_rc", "review_runs"),
+    [(0, 0, True), (1, 0, False), (0, 1, True)],
+    ids=["all-green", "config-append-fails", "review-fails"],
+)
+def test_shadow_trial_score_recipe_runs_the_shadow_off_path(
+    tmp_path: Path, config_rc: int, review_rc: int, review_runs: bool
+):
+    """merge-gate r1/r2 (witness-adequacy P2): the unattended entry point ship-pr runs is the
+    justfile recipe, so the recipe is EXECUTED — directly, through its own shebang — under a
+    shim `uv` and `just` that record argv and HARNESS_SHADOW_LENS. Config row first (a failed
+    append skips the review, says so, exits 0); the review runs as the SHADOW lens; the request
+    step follows; nothing in it ever blocks (exit 0 on every path)."""
+    shim = tmp_path / "bin"
+    shim.mkdir()
+    calls = tmp_path / "calls.log"
+    (shim / "uv").write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "uv $* lens=${{HARNESS_SHADOW_LENS:-unset}}" >> "{calls}"\n'
+        'case "$*" in\n'
+        '  *"config --lens gemini-shadow --if-absent"*) exit "$SHIM_CONFIG_RC" ;;\n'
+        '  *"request-adjudications --lens gemini-shadow"*) exit 0 ;;\n'
+        '  *) echo "unexpected uv call: $*" >&2; exit 99 ;;\n'
+        "esac\n"
     )
-    assert lines[config].startswith("if !") and lines[config + 2] == "exit 0"
-    review = lines.index("HARNESS_SHADOW_LENS=1 just gemini-review {{base}} || true")
-    request = lines.index(
-        "uv run python tools/shadow_trial.py request-adjudications --lens gemini-shadow || true"
+    (shim / "just").write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "just $* lens=${{HARNESS_SHADOW_LENS:-unset}}" >> "{calls}"\n'
+        'exit "$SHIM_REVIEW_RC"\n'
     )
-    assert config < review < request
+    for f in (shim / "uv", shim / "just"):
+        f.chmod(0o755)
+    env = dict(
+        os.environ,
+        PATH=f"{shim}:{os.environ['PATH']}",
+        SHIM_CONFIG_RC=str(config_rc),
+        SHIM_REVIEW_RC=str(review_rc),
+    )
+    env.pop("HARNESS_SHADOW_LENS", None)  # the recipe must set it itself, for the review only
+    script = _score_recipe_script(tmp_path)
+    proc = subprocess.run([str(script)], env=env, capture_output=True, text=True, cwd=tmp_path)
+    assert proc.returncode == 0, proc.stderr  # never blocks ship-pr
+    seen = calls.read_text().splitlines()
+    assert seen[0].startswith(
+        "uv run python tools/shadow_trial.py config --lens gemini-shadow --if-absent"
+    )
+    if not review_runs:
+        assert seen == seen[:1] and "shadow review skipped" in proc.stderr
+        return
+    assert seen[1] == "just gemini-review main lens=1"  # the SHADOW lens, threaded
+    assert seen[2].startswith(
+        "uv run python tools/shadow_trial.py request-adjudications --lens gemini-shadow"
+    )
+    assert seen[2].endswith("lens=unset") and len(seen) == 3
 
 
 # mutation-probe: drop the `already` filter in request_adjudications (re-request every run)

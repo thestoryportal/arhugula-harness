@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 246
+  total: 247
   open: 1
   design_substrate_gated: 3
-  registered_finding: 88
+  registered_finding: 89
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 76bea303476f6254
+  identity_digest: 5770cbd19e3d821d
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11605,3 +11605,11 @@ items:
   close_out: 'REGISTERED 2026-09-17 on u-he-43 (codex round 6 P2, adjudicated rejected-as-registered: the reducer follows the spec key; the dedupe rule is a spec decision). WHAT CLOSES THIS ROW: a Spec_HE_Loop_Lanes change-note at C-HE-29 §2 stating the scored-round identity under re-runs (recommended: DISTINCT (arc_id, head_sha) for the shadow lens, the first row in append order wins, so a re-run on one head never adds a round) + successor clearance marker + `just artifact-heads-write`, then the reducer edit in tools/shadow_trial.py::scored_rounds / first_n_rounds with a witness that two shadow rows on one (arc_id, head_sha) count once.'
   council: 'NO -- one design fork with two nameable options inside one contract (C-HE-29 §2); the spec-writer applies whichever the operator picks, nothing cross-domain to convene over.'
   heading: '### B-251 · C-HE-29 §2 scored-round identity under repeated shadow runs on one head *(surfaced on u-he-43 codex r6, 2026-09-17; REGISTERED)*'
+- id: B-252
+  title: 'tools/shadow_trial.py discards a shadow round on an (arc_id, head_sha) where a blocking producer of the lens''s own family recorded a terminal (the D-C failover, a Gemini-authored change); C-HE-29 defines neither "family" for scoring nor this exclusion'
+  pr: '#u-he-43 (landed on codex r7 P2; surfaced as unregistered by merge-gate r2 spec-conformance)'
+  status: registered_finding
+  summary: 'C-HE-29 §1 says the second reviewer''s lens runs live off the blocking path; §2 uses "model family" only for adjudicator eligibility. The landed reducer (_same_family_heads, consumed by _scored / unique_catches / undisposed_findings) reads §1''s "second reviewer" as a premise the rows must satisfy: a shadow round on a head where gemini_review_wrapper recorded the blocking terminal measures no second family, so it is not a scored round and its findings never count nor get adjudication requests. Both ship-pr carriers and the justfile comment describe the same rule. The spec text does not state it — it is an execution-time reading of the same class as B-250/B-251 (it changes what a scored round IS) and was named a residual at codex r5 before r7 built it.'
+  close_out: 'REGISTERED 2026-09-17 on u-he-43 (merge-gate r2 spec-conformance P2, adjudicated accepted-as-registered: the reducer keeps the reading; the spec owes the decision). WHAT CLOSES THIS ROW: a Spec_HE_Loop_Lanes change-note at C-HE-29 §1/§2 that either RATIFIES the exclusion (state it: a lens round on a head whose blocking terminal came from a producer of the lens''s family is not scored, naming MODEL_FAMILIES as the family map) or REVERSES it (delete _same_family_heads and its three consumers, keep the carriers'' operational rule only) + successor clearance marker + `just artifact-heads-write`; the witnesses to carry or drop are test_a_shadow_round_where_its_own_family_blocked_is_not_scored and test_no_adjudication_is_requested_on_a_same_family_head.'
+  council: 'NO -- one fork with two nameable arms inside one contract (C-HE-29); the spec-writer applies the operator''s pick; nothing cross-domain to convene over.'
+  heading: '### B-252 · C-HE-29 same-family round exclusion is an unstated reading *(landed on u-he-43 codex r7, surfaced by merge-gate r2, 2026-09-17; REGISTERED)*'

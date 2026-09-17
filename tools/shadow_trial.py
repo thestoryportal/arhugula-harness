@@ -20,9 +20,11 @@ Vocabulary (C-HE-24 §2, C-HE-29 §2):
 
 The trial's authorship premise: the diff under review is Claude-authored, so the blocking
 reviewer is codex and the gemini shadow lens is a SECOND family. Where Gemini is already the
-blocking reviewer (a Codex-authored change; `just gemini-review` on the blocking path) there is
-no second family to measure and the carriers do not run the shadow (codex r5 P2) — which is also
-why MODEL_FAMILIES names gemini and anthropic, never openai, as the families under trial.
+blocking reviewer (a Codex-authored change; `just gemini-review` on the blocking path, or the
+D-C failover) there is no second family to measure: the carriers do not run the shadow there
+(codex r5 P2) and the reducer discards such a round (`_same_family_heads`, codex r7 P2) — the
+latter is a reading of C-HE-29 the spec does not state and is registered as B-252 — which is
+also why MODEL_FAMILIES names gemini and anthropic, never openai, as the families under trial.
 
 `adjudicate` is the ONE production writer of `unique_catch` for the lens ([LAW:single-enforcer]);
 it derives the value and appends under the same log lock ([LAW:no-ambient-temporal-coupling]).
@@ -116,8 +118,11 @@ def family_of(producer: str) -> str | None:
 def _same_family_heads(rows: list[dict], lens: str) -> set[tuple[str, str | None]]:
     """(arc_id, head_sha) where a BLOCKING producer of the lens's own family recorded a terminal
     — the D-C failover verdict, or a change the lens's family authored. A shadow round there
-    re-reviews its own family's verdict and measures no second family (C-HE-29 §1; codex r7
-    P2), so it is not a scored round and its findings never count."""
+    re-reviews its own family's verdict and measures no second family, so it is not a scored
+    round and its findings never count. This is an execution-time READING of C-HE-29 (§1 names
+    "the second reviewer's lens"; the spec text defines neither "family" for scoring nor this
+    exclusion) landed on codex r7 P2 and REGISTERED as B-252, which owes the spec change-note
+    that ratifies or reverses it (merge-gate r2 spec-conformance P2)."""
     fam = family_of(lens)
     return {
         (r["arc_id"], r["head_sha"])
