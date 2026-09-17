@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 249
+  total: 266
   open: 1
   design_substrate_gated: 3
-  registered_finding: 90
+  registered_finding: 107
   operator_gated: 0
   held: 3
   closed: 152
-  identity_digest: 91df1bc488401ae8
+  identity_digest: aa2c6fdfa9659136
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11623,9 +11623,146 @@ items:
   heading: '### B-253 · tiebreaker landings skip the terminating refresh and wedge the next merge door *(surfaced 2026-09-17 on #1555–#1558; REGISTERED)*'
 - id: B-255
   title: 'append-only ledgers have no merge strategy, and merge=union is not the fix'
-  pr: '#TBD (surfaced on u-he-40 while merging main forward, 2026-09-17)'
+  pr: '#1563 (merged 4ad00c3a7; surfaced on u-he-40 while merging main forward, 2026-09-17)'
   status: closed
   summary: 'Under the C-HE-01 lane model two lanes appending to the same ledger is the NORMAL case, and git has no merge strategy for these files, so every concurrent append pair becomes a conflict a human resolves by hand. Measured 2026-09-17: merging main forward into one held branch raised five conflicts, two of them append-only JSONL ledgers; and that branch''s own appended rows then fenced a sibling lane''s selection-time disjointness gate on .harness/merge-gate-log.jsonl alone. The obvious fix -- merge=union -- was implemented, reviewed, and REVERTED within this same arc: it is unsound here, and the measurement is recorded so nobody re-derives it.'
   close_out: 'CLOSED 2026-09-17 as WONT-FIX-BY-UNION. Being append-only is NOT sufficient for merge=union; the rows must also be INDEPENDENT, and in merge-gate-log.jsonl they are not: finding_record.reduce_last_by_finding_id makes PHYSICAL FILE ORDER the ordering authority for a finding''s disposition (its docstring explicitly refuses to reorder by ts), while _check_against_prior_rows runs only inside the locked append path, so a merge never re-validates the rows it combines. WITNESSED in a scratch repo: one branch appending accepted and another rejected for the same finding_id merge CLEANLY under union and reduce to rejected in one merge direction and accepted in the other -- silent, direction-dependent corruption of adjudication state. mutation-probe-log.jsonl acquires the same order-sensitivity the moment U-HE-40 lands (its logged_range takes the LAST matching row), and codex_credential_gates.jsonl is write-only audit with no row readers, so unioning it alone would buy nothing while leaving a half-true rule others would extend. arc-metrics.jsonl was excluded from the outset (whole-file rewritten by relabel_arc_type_close -- union keeps both the pre- and post-relabel row for one arc and merges clean, the SPLIT_BRAIN_LEDGER state that module refuses). A conflict in these files is therefore the CORRECT outcome: it routes two lanes'' colliding rows to a human. The decision and its measurement live at the point of temptation, in .gitattributes, and are pinned by tools/test_gitattributes_ledger_merge.py -- a guard that no tracked .jsonl is union-merged (mutation-verified: re-adding merge=union reds it) plus an executable witness of the direction-dependence that will itself fail if git ever changes union''s ordering. FORWARD OPTION, not taken here: a SEMANTIC merge driver that re-validates and deterministically orders same-id lineages. That is a larger unit with its own distribution problem -- a custom driver needs git config merge.<name>.driver in every clone, worktree and CI checkout, and is inert wherever unset (falling back to conflict, which is safe).'
   council: 'NO -- one empirically-settled question (is union sound for these rows); the forward semantic-driver option is engineering, not a cross-domain tension.'
   heading: '### B-255 · append-only ledgers have no merge strategy, and merge=union is not the fix *(surfaced on u-he-40, 2026-09-17; CLOSED as WONT-FIX-BY-UNION)*'
+- id: B-256
+  title: 'spec §11 #3 — P9(a): a prewritten testable done-condition before implementation'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'Spec §11 #3 carries P9(a) to the forward register: the unit''s testable done-condition is written BEFORE its implementation, not derived afterwards from what was built. Decision register D7 (operator, 2026-08-18) put P9(c) in v1 and sent P9(a) forward, so no v1 unit is required to produce one; the per-unit acceptance criteria in the plan are the nearest existing practice.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (spec §11 #3, D7). WHAT CLOSES THIS ROW: a decision either adopting P9(a) as a standing authoring step — the done-condition written and reviewed before the unit''s first line, with a carrier that refuses a unit lacking one — or ruling it redundant against the existing per-unit acceptance criteria, with the reasoning recorded. Registered, not built.'
+  council: 'NO -- an authoring-discipline decision with one owner; no cross-domain tension.'
+  heading: '### B-256 · spec §11 #3 — P9(a): a prewritten testable done-condition before implementation *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-257
+  title: 'spec §11 #4 — K7 stop rule for `applying` arcs'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'Spec §11 #4 carries the K7 stop rule for `applying` arcs to the forward register. It is not buildable yet: it presupposes the C-HE-26 §3 arc-type labels (which land with the reservation record) plus the > 3/18 mapping, so the rule has no input until enough labelled `applying` arcs exist to populate it.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (spec §11 #4). WHAT CLOSES THIS ROW: once C-HE-26 §3 labels are recorded across enough `applying` arcs to evaluate the > 3/18 mapping, an arc that states the stop rule''s trigger and its enforcement site, or records that the observed distribution does not support one. Registered, not built.'
+  council: 'NO -- a measurement-gated rule; the tension is data availability, not domains.'
+  heading: '### B-257 · spec §11 #4 — K7 stop rule for `applying` arcs *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-258
+  title: 'spec §11 #9 — cross-carrier merge-door fencing: a Claude lane and a Codex-exec lane can both reach `gh pr merge`'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  operator_may_reverse: true
+  summary: 'Spec §11 #9: the merge door fences Claude lanes only. `.agents/skills/ship-pr/SKILL.md:133` reaches `gh pr merge` directly, and `permission-guard.sh` has no jurisdiction over `codex exec`, so a Claude lane and a Codex-exec lane running concurrently can both reach the merge command with nothing serialising them. Council G5 (2026-08-18, C1 ruling with C10 concurrence) scoped Codex-exec lanes OUT of v1 for C-HE-06/07 — and the spec records that the OPERATOR MAY REVERSE that scoping. Three parts travel together: a Codex-side hook-equivalent or a rewiring of that skill to `tools/hooks/safe-merge.sh` under Codex posture; the invariant-#3 restatement the spec locates at `AGENTS.md:56-57` -- a cite that no longer resolves: at this HEAD that file has no invariant-#3 text, and `gh pr merge` sits at `.agents/skills/ship-pr/SKILL.md:133`, not `:96`, so whoever closes this row re-locates both before acting; and Docker port isolation for Codex legs, which get no `HARNESS_LANE_INDEX`. Live residual, and UNREGISTERED until this row: a `.codex-worktrees/` lane is present in the workspace, which is the C-HE-01 §1 condition above rather than a hypothetical. The loop-status ledger tags that observation `[b-232]`, but B-232 is an unrelated row (the merge-door lease-release / refresh-batching trigger), and no register row recorded the residual before this one -- so B-258 is where it now lives.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (spec §11 #9; C-HE-01 §1, C-HE-11 §1, C-HE-06 §10). WHAT CLOSES THIS ROW: a joint Claude/Codex arc landing all three parts, OR an operator reversal of the Council G5 v1 scoping that brings Codex-exec lanes into C-HE-06/07 and schedules the work. The row carries the structured field `operator_may_reverse: true` that U-HE-44 Step 1 requires, so the reversibility is queryable rather than buried in prose (the register validates no key allowlist, so the field is additive and `--check` accepts it). Registered, not built.'
+  council: 'NO -- already council-adjudicated (G5); reversal is an operator call, not a re-convening.'
+  heading: '### B-258 · spec §11 #9 — cross-carrier merge-door fencing: a Claude lane and a Codex-exec lane can both reach `gh pr merge` *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-259
+  title: 'spec §11 #10 — SPRT alternative to the fixed n=30 / kill-if-<2 shadow-trial rule'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'Spec §11 #10 offers a sequential probability ratio test (H0 p≈0.02 vs H1 p≈0.15, with stated α/β) as an alternative to Council G15''s fixed n=30 / kill-if-<2 shadow-trial rule (C-HE-29 §3). The fixed rule is what U-HE-43 built; SPRT would reach a verdict on fewer rounds when the true rate is far from the boundary, at the cost of a more complex stopping rule. Plan §6 item 11 records this as registered, not built.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (spec §11 #10; C-HE-29 §3, Council G15). WHAT CLOSES THIS ROW: an operator amendment adopting SPRT with its α/β stated and the OC curve recomputed, plus the change-note at C-HE-29 §3 — or a decision to keep the fixed rule, recording why the sample-size saving does not justify the added stopping complexity. Registered, not built.'
+  council: 'NO -- a statistics choice inside one contract; G15 already ruled once.'
+  heading: '### B-259 · spec §11 #10 — SPRT alternative to the fixed n=30 / kill-if-<2 shadow-trial rule *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-260
+  title: 'spec §11 #11 — cross-`head_sha` same-defect tracking for `finding_id` (content hash over `location` + `finding_type`)'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'A `finding_id` binds its `head_sha` (`<producer>:<head>:<location-hash>:<n>`), so the SAME defect re-found at a later head mints a NEW id. Nothing therefore links a finding across heads, which is why a defect that survives an absorption looks like a fresh finding rather than a recurrence. Spec §11 #11 proposes a content hash over `location` + `finding_type` as the cross-head identity. C-HE-24 §4 is the carrier.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (spec §11 #11; C-HE-24 §4). WHAT CLOSES THIS ROW: an arc adding the cross-head content hash as a SECOND, additive field — the existing `finding_id` grammar is load-bearing (`_check_finding_id_components` rejects a mismatched location hash, and `reduce_last_by_finding_id` keys on the full id), so recurrence tracking must ride alongside it rather than redefine it — with a witness that the same defect at two heads reduces to one recurrence. Registered, not built.'
+  council: 'NO -- an additive identity field inside one contract.'
+  heading: '### B-260 · spec §11 #11 — cross-`head_sha` same-defect tracking for `finding_id` (content hash over `location` + `finding_type`) *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-261
+  title: 'spec §11 #12 — randomized lane assignment, if a causal AC#10 claim is ever wanted'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'C-HE-28 §3 labels the lever results CORRELATIONAL: arcs are assigned to lanes by whoever is free, so a cohort difference cannot be read as caused by the lever. Spec §11 #12 carries randomized or quasi-randomized assignment over a controlled arc subset as the change that would license a causal AC#10 claim. Nothing in v1 needs it — the correlational label is honest as it stands.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (spec §11 #12; C-HE-28 §3). WHAT CLOSES THIS ROW: either a decision that a causal claim is wanted — which brings an assignment mechanism, a controlled subset, and a restatement of C-HE-28 §3''s correlational caveat — or a ruling that the correlational reading suffices and the caveat stands permanently. Registered, not built.'
+  council: 'NO -- an experimental-design choice; one domain.'
+  heading: '### B-261 · spec §11 #12 — randomized lane assignment, if a causal AC#10 claim is ever wanted *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-262
+  title: 'spec §11 #5 — a `result_capture` process-exit vs log-write divergence is recorded, not audit-worthy in v1'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'Spec §11 #5 asked whether a divergence between a step''s process-exit time and its log-write time is itself audit-worthy. Plan §6 item 7 records the S5 decision: the row carries BOTH timestamps and the divergence is RECORDED, with no finding emitted on divergence in v1 (U-HE-34). This row exists so the decision is discoverable from the register rather than only from a plan table, and so the v1 bound is explicit rather than looking like an oversight.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 as a DECIDED bound (spec §11 #5; plan §6 item 7; C-HE-27 §1; U-HE-34). WHAT CLOSES THIS ROW: evidence from recorded spans that the divergence carries signal — a distribution with a tail that correlates with a real failure — which would justify promoting it from recorded to audit-worthy; or a later confirmation that it does not, closing the question. Registered as decided, not open.'
+  council: 'NO -- already decided at S5; this row makes the decision discoverable.'
+  heading: '### B-262 · spec §11 #5 — a `result_capture` process-exit vs log-write divergence is recorded, not audit-worthy in v1 *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-263
+  title: 'plan §6 item 3 — reservation bootstrap-at-drain is a one-time migration and must be removed once the legacy queue drains'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'Queue entries that predate the reservation store get a reservation BOOTSTRAPPED at drain, with `arc_type_declared_at="close"` and a `NOTIFY` emitted (U-HE-19; the code path is cited in `tools/reservations.py` as the legacy-queue bootstrap). Plan §6 item 3 is explicit that this is a ONE-TIME migration path and not a standing mechanism, to be removed after the queue drains once post-S4b. Left in place it becomes a permanent second way for a reservation to come into existence — one whose `arc_type` was never declared at open, which is exactly what C-HE-26 §1 requires.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §6 item 3; U-HE-19; C-HE-26 §1). WHAT CLOSES THIS ROW: a check that the legacy queue has drained at least once post-S4b, then removal of the bootstrap path and its `arc_type_declared_at="close"` branch, with the test that covered it either deleted or converted to assert the path is gone. Registered, not built.'
+  council: 'NO -- a scheduled removal with a clear precondition.'
+  heading: '### B-263 · plan §6 item 3 — reservation bootstrap-at-drain is a one-time migration and must be removed once the legacy queue drains *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-264
+  title: 'plan §6 item 1 — `severity` carries two vocabularies (`P1|P2|P3` and `hard|warn|info`) on one field'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'The finding record''s `severity` accepts BOTH the reviewer triple `P1|P2|P3` (C-HE-15 §4) and the projection triple `hard|warn|info` — C-HE-31 §4(c) writes `warn`. Both are legal today and the schema admits the union, so a consumer reading `severity` must handle either vocabulary, and any ordering or comparison across the two is undefined. Plan §6 item 1 flags that preferring a single vocabulary would be a v1.1 spec note.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §6 item 1; U-HE-01; C-HE-15 §4, C-HE-31 §4(c)). WHAT CLOSES THIS ROW: a v1.1 spec note either picking one vocabulary and migrating the writers of the other, or stating that the two are deliberately disjoint by producer and forbidding comparison across them — plus, either way, a check that no consumer orders or compares the two sets. Registered, not built.'
+  council: 'NO -- a vocabulary choice inside one record contract.'
+  heading: '### B-264 · plan §6 item 1 — `severity` carries two vocabularies (`P1|P2|P3` and `hard|warn|info`) on one field *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-265
+  title: 'spec §11 #13 — pair the `strict:true` / SHA-keyed `main` concurrency change with a queue-depth cap once N-lane cadence data exists'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'Branch protection runs `strict:true` and `main` CI concurrency is keyed by SHA (Council G4), so every landing queues its own `main` run. Spec §11 #13 asks whether that should be paired with a queue-depth cap, and defers the question until N-lane cadence data exists to size one. Plan §6 item 11 records it as registered, not built. C-HE-06 §4''s CI-concurrency clause already states that under an N-lane cadence full runs can queue concurrently and a `NOTIFY` fires, which is the observation surface a cap would be derived from.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (spec §11 #13; plan §6 item 11; C-HE-06 §4). WHAT CLOSES THIS ROW: N-lane cadence data — queued-run depth observed across pilots — then either a cap derived FROM that distribution (not invented from how the number reads) with its enforcement site named, or a recording that observed depth never approached a level worth capping. Registered, not built.'
+  council: 'NO -- a threshold to be measured, not adjudicated.'
+  heading: '### B-265 · spec §11 #13 — pair the `strict:true` / SHA-keyed `main` concurrency change with a queue-depth cap once N-lane cadence data exists *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-266
+  title: 'plan §6 item 13 still presents the C-HE-06 §7 lease-invariant tension as open, but spec v1.4 X4a already re-worded it'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'C-HE-06 §7''s Invariants bullet once said "no lease exists whose reservation is not `open`", which cannot hold literally across the Council G4 continuation: C-HE-03 §4 flips the reservation to `merged` on confirmed merge while C-HE-06 §4(vii)-(viii) HOLDS the lease through post-merge CI and the terminating refresh. Codex round 2 on PR #1393 surfaced that tension and plan §6 item 13 recorded it as an owed v1.1 change-note naming U-HE-44 as the unit that registers it. VERIFIED AT THIS HEAD: the re-wording ALREADY LANDED. C-HE-06 §7 now reads "The lease MAY be ACQUIRED only by an arc whose reservation is `open` and held by the acquiring lane; from step (vi) the reservation legitimately reads `merged` while the lease is held through the (vii)-(ix) continuation", carrying its own marker (*v1.4 X4a — the pre-v1.4 "held only while open" wording contradicted §4''s own lifecycle*). So the SPEC debt is discharged and the code was always correct against §7''s acquisition-time reading. What remains open is the PLAN: §6 item 13 still describes the tension as live and points at a change-note that exists, so a reader of the plan is told to do work that is already done.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §6 item 13; spec C-HE-06 §7 / v1.4 X4a; U-HE-22/23). Deliberately NOT closed: the spec half is discharged, but the plan half is real remaining work, and a closed row drops out of the open-work projection where that work would then be tracked by nobody. WHAT CLOSES THIS ROW: a plan revision ticking §6 item 13 to record that the re-wording landed at v1.4 X4a and removing its U-HE-44 pointer — a plan-body change with its own clearance ceremony, which is why this arc records the finding rather than making the edit.'
+  council: 'NO -- the substance was adjudicated at G4 and the spec wording already landed; what is owed is a plan tick.'
+  heading: '### B-266 · plan §6 item 13 still presents the C-HE-06 §7 lease-invariant tension as open, but spec v1.4 X4a already re-worded it *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-267
+  title: 'residual defect class (a) crash-window idempotency in multi-step filesystem protocols'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'A protocol that publishes through several filesystem steps — marker then move then publish; sidecar then PR create — has a window at each step where a crash leaves a half-state. Every round of the plan''s review found instances. Recorded at plan §7 item 8 as one of the six classes the five codex rounds on PR #1393 kept finding — P1 yield across those rounds was 7 / 8 / 11 / 7 / 7, flat rather than converging, which is why the plan stopped reviewing its own text and moved to unit execution. Registered by U-HE-44 both as a forward-register row AND as a candidate class for U-HE-40''s mechanized checks.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §7 item 8, residual class (a)). WHAT CLOSES THIS ROW: a mechanized check that flags a multi-step publish whose intermediate states are not each independently recoverable, or a ruling that the shape is too varied to mechanize and stays a review-time question. Registered, not built; U-HE-40 is held unmerged at review-budget exhaustion, so the mechanized-check route is itself blocked today (its own register row lands with that branch).'
+  council: 'NO -- a defect-class candidate; the decision is whether it mechanizes.'
+  heading: '### B-267 · residual defect class (a) crash-window idempotency in multi-step filesystem protocols *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-268
+  title: 'residual defect class (b) test bodies that are stand-ins or pass vacuously'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'Test bodies left as `...` stand-ins, or written so they pass without exercising the discriminating behaviour. This is the vacuous-witness class the preflight already names, found repeatedly against not-yet-executed plan code. Recorded at plan §7 item 8 as one of the six classes the five codex rounds on PR #1393 kept finding — P1 yield across those rounds was 7 / 8 / 11 / 7 / 7, flat rather than converging, which is why the plan stopped reviewing its own text and moved to unit execution. Registered by U-HE-44 both as a forward-register row AND as a candidate class for U-HE-40''s mechanized checks.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §7 item 8, residual class (b)). WHAT CLOSES THIS ROW: a mechanized check for stand-in bodies and assertion-free tests (the deterministic half is cheap: a test function whose body contains no assertion and no pytest.raises). Registered, not built; U-HE-40 is held unmerged at review-budget exhaustion, so the mechanized-check route is itself blocked today (its own register row lands with that branch).'
+  council: 'NO -- a defect-class candidate; the decision is whether it mechanizes.'
+  heading: '### B-268 · residual defect class (b) test bodies that are stand-ins or pass vacuously *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-269
+  title: 'residual defect class (c) payload-shape mismatches against a live API'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'A payload built for one API shape and sent to another — GET-shaped data in a PUT, or a required nullable field omitted. Found against the GitHub branch-protection API during U-HE-27, where the PUT requires a `restrictions` key that may be null. Recorded at plan §7 item 8 as one of the six classes the five codex rounds on PR #1393 kept finding — P1 yield across those rounds was 7 / 8 / 11 / 7 / 7, flat rather than converging, which is why the plan stopped reviewing its own text and moved to unit execution. Registered by U-HE-44 both as a forward-register row AND as a candidate class for U-HE-40''s mechanized checks.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §7 item 8, residual class (c)). WHAT CLOSES THIS ROW: a check that a request payload is validated against the endpoint''s own documented schema before send, or a recording that the only defence is the probe-the-interface discipline. Registered, not built; U-HE-40 is held unmerged at review-budget exhaustion, so the mechanized-check route is itself blocked today (its own register row lands with that branch).'
+  council: 'NO -- a defect-class candidate; the decision is whether it mechanizes.'
+  heading: '### B-269 · residual defect class (c) payload-shape mismatches against a live API *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-270
+  title: 'residual defect class (d) string-parsing edge cases in the permission guard'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'The guard decides on parsed command text, so every grammar corner it does not model is an admit-or-refuse error: quoting, options appearing anywhere, trailing tokens. B-233 and B-217 are individual instances against this guard; B-227 records the SAME open-ended-grammar shape for a different one (the rtk-shape-guard), which is why it is the class rather than the tool that is worth mechanizing. Recorded at plan §7 item 8 as one of the six classes the five codex rounds on PR #1393 kept finding — P1 yield across those rounds was 7 / 8 / 11 / 7 / 7, flat rather than converging, which is why the plan stopped reviewing its own text and moved to unit execution. Registered by U-HE-44 both as a forward-register row AND as a candidate class for U-HE-40''s mechanized checks.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §7 item 8, residual class (d)). WHAT CLOSES THIS ROW: convergence with B-227/B-233/B-217 — either a parser that consumes the real grammar rather than matching shapes, or an accepted bound on which corners are modelled. Registered, not built; U-HE-40 is held unmerged at review-budget exhaustion, so the mechanized-check route is itself blocked today (its own register row lands with that branch).'
+  council: 'NO -- a defect-class candidate; the decision is whether it mechanizes.'
+  heading: '### B-270 · residual defect class (d) string-parsing edge cases in the permission guard *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-271
+  title: 'residual defect class (e) default-argument capture vs call-time resolution'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'A path or ledger bound at def time (a default argument, a module constant) captures the environment at import and cannot be redirected later — so a test monkeypatching the destination still writes the real one. Fixed repeatedly by resolving at call time. Recorded at plan §7 item 8 as one of the six classes the five codex rounds on PR #1393 kept finding — P1 yield across those rounds was 7 / 8 / 11 / 7 / 7, flat rather than converging, which is why the plan stopped reviewing its own text and moved to unit execution. Registered by U-HE-44 both as a forward-register row AND as a candidate class for U-HE-40''s mechanized checks.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §7 item 8, residual class (e)). WHAT CLOSES THIS ROW: a mechanized check for a module-level or default-argument binding of a path that any test or env var is expected to redirect. Registered, not built; U-HE-40 is held unmerged at review-budget exhaustion, so the mechanized-check route is itself blocked today (its own register row lands with that branch).'
+  council: 'NO -- a defect-class candidate; the decision is whether it mechanizes.'
+  heading: '### B-271 · residual defect class (e) default-argument capture vs call-time resolution *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
+- id: B-272
+  title: 'residual defect class (f) invariant statements that hold at one time but not across a window'
+  pr: '#TBD (U-HE-44, 2026-09-17)'
+  status: registered_finding
+  summary: 'An invariant true at one instant (acquisition) stated as if it held continuously, when a legitimate window (the G4 continuation) violates it. C-HE-06 §7 is the instance that surfaced this class; it has since been REPAIRED at spec v1.4 X4a, which B-266 records, so the class stands as a candidate while its founding instance is closed. Recorded at plan §7 item 8 as one of the six classes the five codex rounds on PR #1393 kept finding — P1 yield across those rounds was 7 / 8 / 11 / 7 / 7, flat rather than converging, which is why the plan stopped reviewing its own text and moved to unit execution. Registered by U-HE-44 both as a forward-register row AND as a candidate class for U-HE-40''s mechanized checks.'
+  close_out: 'REGISTERED 2026-09-17 by U-HE-44 (plan §7 item 8, residual class (f)). WHAT CLOSES THIS ROW: a review-time question added to the contract-quoting class (preflight class 12): for every invariant, name the window over which it is claimed to hold. Registered, not built; U-HE-40 is held unmerged at review-budget exhaustion, so the mechanized-check route is itself blocked today (its own register row lands with that branch).'
+  council: 'NO -- a defect-class candidate; the decision is whether it mechanizes.'
+  heading: '### B-272 · residual defect class (f) invariant statements that hold at one time but not across a window *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
