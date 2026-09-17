@@ -17,10 +17,14 @@
 #   * the lane index is claimed by EXCLUSIVE CREATE of `QUEUE_DIR/lanes/<k>` and released
 #     by `safe-worktree-remove.sh` at teardown. A worktree that already holds an entry
 #     REUSES it: two entries for one path would strand whichever the release missed.
-#   * `_LI_*` is this file's OWN namespace, never caller storage. Every exit path clears it
-#     unconditionally. That is true as of this change and was NOT true before it: two refusal
-#     exits (the stale-repair-lock and no-free-index branches) cleared neither `_LI_ROOT`,
-#     `_LI_Q` nor `_LI_WT`, and now clear all four alongside `_LI_SRC`. Save/restore was proposed and refused: it would make one member behave unlike
+#   * `_LI_*` is this file's OWN namespace, never caller storage. Four of its five members --
+#     `_LI_SRC`, `_LI_ROOT`, `_LI_Q`, `_LI_WT` -- are cleared unconditionally on every exit.
+#     That became true with this change and was NOT true before it: two refusal exits (the
+#     stale-repair-lock and no-free-index branches) cleared none of them. The fifth,
+#     `_LI_ORPHAN_DIR` (set at the orphan sweep), DELIBERATELY survives: `lane_stack_allowed`
+#     reads it after sourcing returns, so clearing it would break the function this file
+#     exports. It is the one documented exception, not an oversight -- pinned as a survivor
+#     by the leak tests so a future "cleanup" of it goes red (codex r9 P3). Save/restore was proposed and refused: it would make one member behave unlike
 #     its siblings, and its caller-had-a-value arm is a two-armed restore no real caller
 #     reaches. Anything keeping state in `_LI_*` already collides with three variables.
 #   * a RAM shortfall is ENVIRONMENTAL. It is reported as a NOTIFY under a `lane-env:`

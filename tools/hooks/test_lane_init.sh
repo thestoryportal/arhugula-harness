@@ -941,6 +941,10 @@ OUT=$(
 # Which shells this runner can verify is a VALUE, resolved once. `SHELLS_UNVERIFIED` is
 # reported beside PASS/FAIL so a run that skipped a shell can never be mistaken for one that
 # covered it -- absence of coverage and absence of defects must not print the same.
+# Both shells are REQUIRED, not opportunistic. The defect this file exists to pin is
+# zsh-only, so a runner without zsh would gate green on a reverted fix -- and CI gates on the
+# exit status, which a printed NOTE never reaches. Absence is therefore a counted FAILURE,
+# and CI installs zsh for the job that runs this suite (codex r9 P2).
 SHELLS=""; SHELLS_UNVERIFIED=""
 for _s in bash zsh; do
   if command -v "$_s" >/dev/null 2>&1; then SHELLS="$SHELLS $_s"
@@ -948,8 +952,9 @@ for _s in bash zsh; do
 done
 SHELLS="${SHELLS# }"; SHELLS_UNVERIFIED="${SHELLS_UNVERIFIED# }"
 [ -n "$SHELLS" ] || { echo "FATAL: neither bash nor zsh is executable here"; exit 1; }
-[ -z "$SHELLS_UNVERIFIED" ] \
-  || echo "  NOTE: lane-init portability is UNVERIFIED for:$SHELLS_UNVERIFIED (not installed)"
+for _s in $SHELLS_UNVERIFIED; do
+  bad "$_s is not installed -- lane-init portability is UNVERIFIED for it, and the defect this suite pins is zsh-only"
+done
 
 LIB_FNS="hook_bounded hook_git_retry loop_log_structured loop_status_ensure loop_status_path"
 for SH in $SHELLS; do
@@ -1059,6 +1064,36 @@ type hook_bounded >/dev/null 2>&1 && printf 'hook_bounded-LEAKED'")
   [ "$HALF" = "rc=1 " ] \
     && ok "$SH: a missing SECOND library leaves none of the first's functions in the caller" \
     || bad "$SH: half-initialised after second-library failure: $HALF"
+done
+
+# ...and the OTHER arm of the two-phase load. The case above deletes loop_lib.sh, so the
+# PRESENCE preflight rejects it and the per-source status check is never reached -- removing
+# that check's `|| { _li_fail=...; break; }` would leave the case above green. This one
+# supplies a loop_lib.sh that is readable (passing the preflight) and RETURNS NONZERO, which
+# only the status check can catch (codex r9 P3).
+FAILFIX="$ROOT/failwt"; mkdir -p "$FAILFIX/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$FAILFIX/tools/hooks/" || { echo "FATAL: failwt populate"; exit 1; }
+printf 'hook_from_failing_lib() { :; }\nreturn 3\n' > "$FAILFIX/tools/hooks/loop_lib.sh"
+for SH in $SHELLS; do
+  FAILED=$(cd "$FAILFIX" && "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s' \$?")
+  [ "$FAILED" = "rc=1" ] \
+    && ok "$SH: a readable SECOND library that returns nonzero is rejected by the status check" \
+    || bad "$SH: nonzero second library was not rejected: $FAILED"
+done
+
+# `_LI_ORPHAN_DIR` is the fifth member of this namespace and the one documented exception:
+# `lane_stack_allowed` reads it after sourcing returns, so it MUST survive a successful init.
+# The leak cases above enumerate four names and therefore cannot see it either way -- which
+# is exactly how the header came to claim that all of `_LI_*` is cleared. Pinned in both
+# directions here: it must survive success, and it must not be the reason a refusal looks
+# clean. (codex r9 P3.)
+for SH in $SHELLS; do
+  ORPH=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+printf 'rc=%s orphan=%s' \"\$?\" \"\${_LI_ORPHAN_DIR:+set}\"")
+  [ "$ORPH" = "rc=0 orphan=set" ] \
+    && ok "$SH: _LI_ORPHAN_DIR survives a successful init (lane_stack_allowed reads it)" \
+    || bad "$SH: _LI_ORPHAN_DIR disposition wrong: '$ORPH' (lane_stack_allowed would break)"
 done
 
 # The namespace contract covers every exit, so pin the REFUSAL path too, with all four
