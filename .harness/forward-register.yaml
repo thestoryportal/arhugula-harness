@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 250
+  total: 251
   open: 1
   design_substrate_gated: 3
-  registered_finding: 91
+  registered_finding: 92
   operator_gated: 0
   held: 3
   closed: 152
-  identity_digest: b299d9b975242cfc
+  identity_digest: 42d0282ac6fb8b87
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11680,3 +11680,11 @@ items:
     dependency against this workspace''s framework-pull discipline. Until then the bound is
     stated in the module''s own docstring rather than implied, and shape (1) is the only
     SILENT one -- the other two fail loud and would be noticed immediately.'
+- id: B-257
+  title: 'the gate-log consistency reducer is blind to narrative-only rounds'
+  status: registered_finding
+  pr: '#1561'
+  heading: '### B-257 · the gate-log consistency reducer is blind to narrative-only rounds *(surfaced by the merge-gate spec-conformance lens on #1561, 2026-09-17; REGISTERED)*'
+  summary: '`just merge-gate-log-check` (tools/merge_gate_log.py check) asserts that every markdown gate row has a JSONL sibling — the consistency check C-HE-23 §2 names at .harness/spec/Spec_HE_Loop_Lanes_v1.md:617. It compares only rows matching _MD_ROW (tools/merge_gate_log.py:68), the structured shape `| ts | #pr | 12-hex head | lens | verdict | N finding(s) | rN |`. The same log also carries LEGACY NARRATIVE rows in a different column order, and :503 concedes in its own comment that "the legacy narrative rows never match it". A round recorded ONLY as a narrative row therefore presents no md row to compare, so the reducer reports 0 missing siblings BY BLINDNESS, not by compliance — and the one clause it exists to enforce (a verdict that cannot be recorded does not count) is exactly the clause it cannot see being violated. MEASURED on this arc, not hypothesised: gate rounds at heads d3096f294 and 4e9a5eb4c were recorded as narrative rows with ZERO JSONL rows (grep -c returns 0 for each, against 18 for 90b66b3b8 and 6 for 66e50d6d6), and `just merge-gate-log-check` stayed green at 0 missing / 0 orphan throughout. read_md_rows sees 332 structured rows; the narrative rows are not compared at all.'
+  close_out: 'OPEN 2026-09-17. The erratum row appended to .harness/merge-gate-log.md for #1561 is the honest disposition of the two uncountable rounds; it does not fix the reducer. WHAT CLOSES THIS ROW, two candidates: (a) teach the reducer a second pattern for the narrative shape and compare those rows too — but every historical narrative row predating the JSONL sibling would then surface as missing, so this needs a cutoff keyed to the first JSONL verdict, which the module already reasons about at :496-497; or (b) declare the narrative shape CLOSED to new writes — a guard that fails when a gate row is appended in any shape other than _MD_ROW, which makes the blind spot UNREPRESENTABLE rather than merely checked, and leaves the existing narrative rows as inert history. (b) is the stronger form and is the one this workspace should prefer: B-256, one row above, is the record of what widening a classifier costs — three successive generations of that fix each shipped a new bypass of the same class. Either closure owes a witness that a narrative-only round REDS the reducer; today no test asserts that, which is why the gap survived.'
+  council: 'NO — one mechanism question (which rows the reducer compares), and both candidate closures are engineering calls, not a cross-domain tension.'
