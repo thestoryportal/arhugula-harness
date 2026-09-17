@@ -460,6 +460,22 @@ MANIFEST: list[Row] = [
     # C-HE-30 (U-HE-14)
     # spec §8.1: mutation-probe `—` (static doc witness; no deletion-expressible target)
     Row("C-HE-30", "pytest:tools/test_store_audit.py", "phase0", "local + CI", False),
+    # C-HE-29 (U-HE-43) — the shadow-trial kill rule is reproducible from rows alone, a later
+    # `rejected` never counts, and the OC table is recomputed by the test from the binomial.
+    Row(
+        "C-HE-29",
+        "pytest:tools/test_shadow_trial.py::test_kill_rule_reproducible_from_rows_and_rejected_excluded",
+        "measurement",
+        "local + CI",
+        True,
+    ),
+    Row(
+        "C-HE-29",
+        "pytest:tools/test_shadow_trial.py::test_oc_table_matches_spec_numbers",
+        "measurement",
+        "local + CI",
+        True,
+    ),
     # C-HE-31 (U-HE-40) — mechanized defect-class checks: per-class defect and clean
     # fixtures, the two hybrid classes' false-claim detection, emission and the replay
     # verdict. layer2: the hybrid classes are mutation-probe-backed (minutes, not phase0).
@@ -482,6 +498,20 @@ MANIFEST: list[Row] = [
         "C-HE-01/14/21/34/35",
         "shell:tools/hooks/test_skill_lanes_docs.sh",
         "phase0",
+        "local + CI",
+        False,
+    ),
+    # C-HE-32/33 §3 (U-HE-42) — local/CI guard PARITY only: the CI step and the CI-shaped
+    # recipe pass the same argv, and the CI and local shapes differ only within the named
+    # exclusions. Scoped to §3 deliberately (codex u-he-42 r7 P2): C-HE-33 §4 also requires the
+    # >=6-CI-run branch share and the CANCELLED-run share, which this arc does NOT build —
+    # `ci_metrics(row.merge_sha)` counts runs on the merge commit and stores no per-run
+    # conclusion, so neither measure has an input. That gap is the owed B-245 register row; an
+    # unscoped "C-HE-32/33" here would read as a green witness over an absent contract part.
+    Row(
+        "C-HE-32/33 §3",
+        "pytest:tools/test_codex_context_guard.py::test_local_ci_parity",
+        "layer2",
         "local + CI",
         False,
     ),

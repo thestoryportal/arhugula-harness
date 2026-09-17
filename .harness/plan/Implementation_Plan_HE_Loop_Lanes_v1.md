@@ -5292,7 +5292,7 @@ main-protection-tiebreaker:
     uv run python tools/main_protection.py tiebreaker
 ```
 - [ ] **Step 4: GREEN** unit tests; register `Row("C-HE-08", "just:main-protection-verify", "phase0", "local", False, ("gh-auth-absent",))` and `Row("C-HE-08", "live:main-protection-tiebreaker + apply (operator-gated; evidence log)", "operator-gated", "loop, live", False)`.
-- [ ] **Step 5: The operator gate (the ONE decision this unit surfaces).** Run `just main-protection-show` (expect 404 today) and `just main-protection-apply` **outside loop mode** — it prints the diff and mutates nothing (exit 3); Claude then asks one AskUserQuestion: *"Apply branch protection to `main` now? [the printed diff]"*; on approval `just main-protection-apply-confirm` applies **provisionally, runs the tiebreaker in a throwaway worktree, and rolls back automatically on FAIL** (C-HE-08 §4: tiebreaker before enforcing). Then `just main-protection-verify` (must be GREEN before `lanes-phase0-check` can pass). Record `show` (pre), `apply` (post), tiebreaker PASS lines in `.harness/plan/evidence-log-he-loop-lanes.md` (created in U-HE-44).
+- [x] **Step 5: The operator gate (the ONE decision this unit surfaces).** *Applied 2026-09-17: the operator lifted the 2026-09-16 "Not now" hold; `just main-protection-apply` (digest `81cd03a786a668fa`) and `apply-confirm` landed the two C-HE-08 contexts on the second confirm, after PR #1553 made the tiebreaker watch required checks only (the first confirm, 07:01Z, rolled back on the non-required classify-diff job — the evidence log's 08:04Z record is authoritative); tiebreaker PASS on scratch PR #1555, `main-protection-verify` PASS. The tiebreaker's own landings (#1555, #1556) skipped the terminating refresh and left main red until #1558 — registered as B-253.* Run `just main-protection-show` (404 was the expectation while `main` was unprotected — as of 2026-09-17 it returns the live policy with the fourteen required contexts) and `just main-protection-apply` **outside loop mode** — it prints the diff and mutates nothing (exit 3); Claude then asks one AskUserQuestion: *"Apply branch protection to `main` now? [the printed diff]"*; on approval `just main-protection-apply-confirm` applies **provisionally, runs the tiebreaker in a throwaway worktree, and rolls back automatically on FAIL** (C-HE-08 §4: tiebreaker before enforcing). Then `just main-protection-verify` (must be GREEN before `lanes-phase0-check` can pass). Record `show` (pre), `apply` (post), tiebreaker PASS lines in `.harness/plan/evidence-log-he-loop-lanes.md` (created in U-HE-44).
 - [ ] **Step 6: Commit** — `git add tools/main_protection.py tools/test_main_protection.py justfile tools/lanes_verify.py tools/codex-parity-check.sh && git commit -m "feat(he-lanes): U-HE-27 main branch-protection recipes + verify phase0 row (C-HE-08 §2-5)"`.
 
 **Rev 2026-08-21 (U-HE-27 execution corrections, as-built — 10 out-of-family rounds, 34 findings absorbed, 1 class register-and-held as B-191).** The Step-3 sketch above is the plan-time draft; the landed module diverges in the following load-bearing ways, each traceable to a codex round against the committed branch. *(i) Digest-bound approval (r2/r9 P1):* `apply` dry-run prints an approval digest over the (repository, BEFORE, AFTER) triple — slug derived from the repo's own `origin` remote, never gh ambient state — and `apply-confirm` takes it as a positional `just` arg (`main-protection-apply-confirm <digest>`), re-validating against fresh state INSIDE the lock; the approved slug is threaded verbatim through every mutation. *(ii) Lockfile-serialized transaction (r4/r5/r7/r9):* an exclusive-create lock in the git COMMON dir (one lock across linked worktrees) serializes apply-confirm, manual rollback, and the standalone tiebreaker. *(iii) Rollback correctness (r1/r2/r7/r8):* any tiebreaker escape reaches the rollback; prior policy restored by a single PUT (no unprotected DELETE window); rollback is CAS-guarded (re-read must still match OUR provisional payload) and the manual path refuses non-matching policies; ambiguous PUT/merge failures reconcile against authoritative state (live policy / PR `.state`) before deciding. *(iv) verify() is desired-relative* (serves the §2 target AND the restore-check), compares (context, app_id) pairs with the null↔-1 any-app normalization, always compares the optional controls (conversation-resolution/block_creations/lock_branch/fork_syncing), and flags app-bound checks against the any-app target. *(v) Tiebreaker witness shape (r1–r10):* fence-liveness precondition (a clean ffwd is also the no-protection outcome); both merges EXERCISED and reconciled, never inferred from `mergeStateStatus`; three-tier refusal attribution (strict / generic-needs-BEHIND / transport-indeterminate) with `base branch` in the generic tier; ffwd arm accepts any DESCENDANT of the pre-merge sample and re-verifies the fence before PASS; setup inside the GC scope; ownership-tracked timeout-safe cleanup in worktree→local→remote order, with PASS-but-cleanup-incomplete surfacing as rc 2 (apply keeps the validated fence, exits nonzero). *(vi) `_loop_mode()` scans all linked worktrees' `.loop-active` markers.* *(vii) Residual (B-191, register-and-held):* non-atomic remote CAS (GitHub exposes no If-Match for this endpoint) + evidence-log-only prior-policy restore — concurrent-trusted-administrator classes outside the X9 threat model. *(viii) Step 5 EXECUTED 2026-08-21/22 (post-#1418 follow-up arc):* operator approved via one AskUserQuestion; apply-confirm landed the fence (digest `09582edbd7a3f2b2`); two as-built live corrections surfaced and fixed same-session — GitHub stores a `contexts` submission as `checks` auto-bound to the Actions app (the r6 any-app comparison misflagged our own round-trip; now allows null/-1/15368 and still flags foreign apps), and `gh pr checks --watch` exits 1 with "no checks reported" before CI registers (retry + registration-complete validation in `_watch_checks`); `verify` PASS; §4 tiebreaker PASS (scratch #1420/#1421, clean ffwd onto the pre-merge lineage, fence re-verified in the PASS arm); full record in the evidence log — **the fence is LIVE and B-190's bound is IN FORCE**.
@@ -6929,7 +6929,9 @@ only because `loop-optimization-plan-2026-09-03.md` does not match that pattern.
 
 **Depends on.** U-HE-11, U-HE-12, U-HE-33.
 
-- [ ] **Step 1: Test**
+**Unit status (as-built, ticked 2026-09-16).** Steps 1–4 ran and are merged on PR #1523 (2026-09-05; ten codex rounds to convergence — 30 findings, 27 accepted, 3 rejected, per the PR body). Divergence from the sketch below: Step 4's row is registered as `"C-HE-28 §1+§3"`, not the draft `"C-HE-27/28"` — narrowed at codex r4, and the comment beside the row in `tools/lanes_verify.py` records why. Residuals registered rather than absorbed: B-237 (no emitter appends the §2 drift numerator), B-238 (lever stratification of the joint key, deferred), B-239 (C-HE-28 names the cohort field for lanes while the sensor stores siblings — spec wording routed to back-flow, consumer converts).
+
+- [x] **Step 1: Test**
 ```python
 def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path, monkeypatch, capsys):
     rows = []
@@ -6946,7 +6948,7 @@ def test_cohort_by_concurrent_lanes_at_open_and_arc_type(tmp_path, monkeypatch, 
     assert "correlational" in out and "(N=2, applying) n=3" in out and "median 120.0" in out.split("(N=2, applying)")[1][:80]
     assert "drift incidence by concurrent_lanes_at_open" in out and "N=4: 1/6" in out
 ```
-- [ ] **Step 2–3:** RED; implement the joint grouping (`(r.get("concurrent_lanes_at_open"), r.get("arc_type_open"))` → label `(N=<n>, <t>)`, `null` rendered), the drift join (`GATE_LOG = REPO/".harness"/"merge-gate-log.jsonl"`; rows with `producer == "ROADMAP_STATUS_DRIFT"` counted per `concurrent_lanes_at_open` of the joined arc), and the header line: `NOTE: cohort deltas are CORRELATIONAL — assignment to N is operator-chosen (C-HE-28 §3); descriptive counts only until N>=2 and 'applying' cells populate.`
+- [x] **Step 2–3:** RED; implement the joint grouping (`(r.get("concurrent_lanes_at_open"), r.get("arc_type_open"))` → label `(N=<n>, <t>)`, `null` rendered), the drift join (`GATE_LOG = REPO/".harness"/"merge-gate-log.jsonl"`; rows with `producer == "ROADMAP_STATUS_DRIFT"` counted per `concurrent_lanes_at_open` of the joined arc), and the header line: `NOTE: cohort deltas are CORRELATIONAL — assignment to N is operator-chosen (C-HE-28 §3); descriptive counts only until N>=2 and 'applying' cells populate.`
 
 In `arc_metrics.py` (`GATE_LOG = REPO / ".harness" / "merge-gate-log.jsonl"` next to `LEDGER`; block appended to `summary()` after the lever cohorts):
 ```python
@@ -6975,7 +6977,7 @@ In `arc_metrics.py` (`GATE_LOG = REPO / ".harness" / "merge-gate-log.jsonl"` nex
     print("drift incidence by concurrent_lanes_at_open: " + ", ".join(f"N={n}: {hits[0]}/{len([r for r in rows if json.dumps(r.get('concurrent_lanes_at_open')) == n])}" for n, hits in sorted(per_n.items())))
 ```
 
-- [ ] **Step 4:** Register `Row("C-HE-27/28", "pytest:tools/test_arc_metrics.py::test_cohort_by_concurrent_lanes_at_open_and_arc_type", "measurement", "local + CI", False)`. Commit `feat(he-lanes): U-HE-38 joint (N, arc_type) cohorts + drift join, correlational header (C-HE-28)`.
+- [x] **Step 4:** Register `Row("C-HE-27/28", "pytest:tools/test_arc_metrics.py::test_cohort_by_concurrent_lanes_at_open_and_arc_type", "measurement", "local + CI", False)`. Commit `feat(he-lanes): U-HE-38 joint (N, arc_type) cohorts + drift join, correlational header (C-HE-28)`.
 
 ---
 
@@ -6989,7 +6991,9 @@ In `arc_metrics.py` (`GATE_LOG = REPO / ".harness" / "merge-gate-log.jsonl"` nex
 
 **Depends on.** U-HE-07, U-HE-28, U-HE-37.
 
-- [ ] **Step 1: Test** (`tools/hooks/test_skill_lanes_docs.sh`):
+**Unit status (as-built, ticked 2026-09-16).** Steps 1–4 ran and are merged on PR #1525 (2026-09-14). Step 1's witness shipped as `tools/hooks/test_skill_lanes_docs.sh` at 54 checks — PASS=8 FAIL=56 against the pre-sweep skills, PASS=54 FAIL=0 at the landed head — wider than the six-line sketch below; Step 4's row is registered as `"C-HE-01/14/21/34/35"` as written. Touched beyond the sketch: `.agents/skills/merge-gate` (the Codex projection's cap line, bound by `test_codex_workflow_parity.py`) and two lane-id fixes the PR body names. Named residual in the witness: a cap stated with neither a qualifier nor a number is outside what its pattern can see.
+
+- [x] **Step 1: Test** (`tools/hooks/test_skill_lanes_docs.sh`):
 ```bash
 TL=.claude/skills/two-lane/SKILL.md; RC=.claude/skills/roadmap-continue/SKILL.md; MG=.claude/skills/merge-gate/SKILL.md; SP=.claude/skills/ship-pr/SKILL.md
 grep -q 'N ≥ 2' "$TL" && grep -q 'N ≥ 2' "$RC" && ok "N >= 2 model stated" || bad "N>=2 wording missing"
@@ -6999,8 +7003,8 @@ grep -q 'invariant #16' "$MG" && grep -q 'void' "$MG" && ok "#16 void stated" ||
 ! grep -Eiq '(max|cap)[^.]{0,20}(round|rounds)[^.]{0,10}[0-9]+|round cap[^.]{0,10}[0-9]+' "$MG" "$SP" "$RC" "$TL" && ok "AC#7: no numeric round cap in loop skills" || bad "numeric round cap found"
 grep -q 'C-HE-34' "$SP" && grep -q 'K6' "$MG" && ok "non-goals + K5–K8 recorded" || bad "non-goals missing"
 ```
-- [ ] **Step 2–3:** RED; edits: `two-lane/SKILL.md:8` → *"N ≥ 2 lanes build concurrently in isolated worktrees, each with its own gates and reviewers, and land through exactly one merge door, one arc at a time (C-HE-01 §1). N is a dial (§2). Throughput: well under N×; merges serialize; trailing lanes re-gate on head change — **prior, not measurement** until AC#10 (C-HE-28) produces a baseline."* + a `## Rejected and blocked mechanisms (C-HE-14)` section copying the eleven-row table verbatim; `roadmap-continue` gains the same N ≥ 2 sentence + the lane-init/reservation steps (U-HE-21); `merge-gate/SKILL.md` gains *"Invariants bind by live carriage (C-HE-21 §2): #5 is live at merge-gate/SKILL.md 'Parsing — fail closed' and ship-pr's post-merge acceptance; #14 is C-HE-19; **invariant #16 is void** (no concurrent-reviewer-cap carrier exists). No flat round cap anywhere (C-HE-21 §1). K6 self-classification is dropped: a reviewer never acquires authority to suppress its own finding (C-HE-35). No eval-harness / model-judge as a governance gate."*; `ship-pr/SKILL.md` gains a `## Non-goals (C-HE-34)` list (no round cap; no best-of-N as speed fix; no fast mode for throughput; no agent framework; no collapsing review layers).
-- [ ] **Step 4:** Register `Row("C-HE-01/14/21/34/35", "shell:tools/hooks/test_skill_lanes_docs.sh", "phase0", "local + CI", False)`. Commit `docs(he-lanes): U-HE-39 skill carriers — N>=2 model, blocked list, live-carrier cites, no round cap, non-goals (C-HE-01/14/21/34/35)`.
+- [x] **Step 2–3:** RED; edits: `two-lane/SKILL.md:8` → *"N ≥ 2 lanes build concurrently in isolated worktrees, each with its own gates and reviewers, and land through exactly one merge door, one arc at a time (C-HE-01 §1). N is a dial (§2). Throughput: well under N×; merges serialize; trailing lanes re-gate on head change — **prior, not measurement** until AC#10 (C-HE-28) produces a baseline."* + a `## Rejected and blocked mechanisms (C-HE-14)` section copying the eleven-row table verbatim; `roadmap-continue` gains the same N ≥ 2 sentence + the lane-init/reservation steps (U-HE-21); `merge-gate/SKILL.md` gains *"Invariants bind by live carriage (C-HE-21 §2): #5 is live at merge-gate/SKILL.md 'Parsing — fail closed' and ship-pr's post-merge acceptance; #14 is C-HE-19; **invariant #16 is void** (no concurrent-reviewer-cap carrier exists). No flat round cap anywhere (C-HE-21 §1). K6 self-classification is dropped: a reviewer never acquires authority to suppress its own finding (C-HE-35). No eval-harness / model-judge as a governance gate."*; `ship-pr/SKILL.md` gains a `## Non-goals (C-HE-34)` list (no round cap; no best-of-N as speed fix; no fast mode for throughput; no agent framework; no collapsing review layers).
+- [x] **Step 4:** Register `Row("C-HE-01/14/21/34/35", "shell:tools/hooks/test_skill_lanes_docs.sh", "phase0", "local + CI", False)`. Commit `docs(he-lanes): U-HE-39 skill carriers — N>=2 model, blocked list, live-carrier cites, no round cap, non-goals (C-HE-01/14/21/34/35)`.
 
 ---
 # S7 — Mechanize classes → dedupe executions → local/CI gap (Layer 2)
@@ -7455,7 +7459,9 @@ Recipe: `equivalence-proof removed proof_by context_diff:` → `uv run python -c
 
 **Depends on.** U-HE-33.
 
-- [ ] **Step 1: Test**
+**Unit status (as-built, ticked 2026-09-16).** Steps 1–4 ran and are merged on PR #1527 (2026-09-16; the C-HE-33 §4 Class 1 fork, its Reading-C ratification and this plan's Rev 2026-09-15 line landed first on doc-only PR #1530). Divergences from the sketch below: Step 1's `--local-shape` flag was never built — parity is witnessed by running the real recipe body parsed from the `justfile` against CI's argv parsed from `ci.yml`, and `PARITY_EXCLUSIONS` holds seven named entries, each driven by its own test; Step 2–3's recipe fetches `origin/main` first, resolves both refs once, refuses a HEAD that moved while the guard ran, and prints the checked sha for the carrier to push by name; Step 4's row is registered as `"C-HE-32/33 §3"` (the §4 measure moved to C-HE-28 §4 per the Rev line). Review: codex r1–r12 with one gemini failover, merge-gate lens rounds 1–6 — 28 findings, 28 adjudicated (25 accepted, 3 rejected). A tick here means the step was carried out — never that the sketch is what shipped or that the Scope's parity guarantee is fully met: B-246 records, measured, that parity is false in CI's two-parent merge checkout while the landed witness drives the one-parent shape. Residual rows: B-247 (C-HE-27 spans keep only round 1) is registered on PR #1532; B-245 (C-HE-28 §4 outcome-measure cohorts unowned) and B-246 are drafted and owed — held behind the unmerged U-HE-40 branch (B-244), not yet on the register.
+
+- [x] **Step 1: Test**
 ```python
 def test_local_ci_parity(tmp_path, monkeypatch):
     """Same SHA: CI-shaped and local-shaped invocations → identical finding codes (named exclusions only)."""
@@ -7464,20 +7470,24 @@ def test_local_ci_parity(tmp_path, monkeypatch):
     assert codes(ci) - EXCLUDED == codes(local) - EXCLUDED
     assert EXCLUDED == {"OPEN_PRS_UNAVAILABLE"}   # gh-dependent: named, not silently dropped
 ```
-- [ ] **Step 2–3:** RED; recipe:
+- [x] **Step 2–3:** RED; recipe:
 ```make
 # C-HE-33: CI-shaped invocation of the guard (explicit refs, roadmap-drift tolerated as on main's push run).
 codex-context-check-ci:
     /usr/bin/python3 tools/codex_context_guard.py check --base-ref "$(git merge-base origin/main HEAD)" --head-ref HEAD --allow-roadmap-drift
 ```
-`ship-pr`: *"Before the single push: `just codex-context-check-ci` (parity with CI's guard job — converge locally, push once)."* Track the outcome measure (≥ 6-CI-run branch share; CANCELLED share) as two lines in `summary` (`arc_metrics.py`) over `ci_runs` (already on the row) — no new store.
-- [ ] **Step 4:** Register `Row("C-HE-32/33", "pytest:tools/test_codex_context_guard.py::test_local_ci_parity", "layer2", "CI", False)`. Commit `feat(he-lanes): U-HE-42 codex-context-check-ci parity recipe + parity test (C-HE-33)`.
+`ship-pr`: *"Before the single push: `just codex-context-check-ci` (parity with CI's guard job — converge locally, push once)."* The outcome measure (≥ 6-CI-run branch share; CANCELLED share) is tracked under **C-HE-28 §4**, NOT built here — see `.harness/class_1_fork_c_he_33_outcome_measure_mandates_an_input_that_does_not_exist.md`.
+
+**Rev 2026-09-15 (U-HE-42 execution correction, as-built — Class 1 fork ratified under Reading C).** This line previously read *"Track the outcome measure … as two lines in `summary` (`arc_metrics.py`) over `ci_runs` (already on the row) — no new store"*, which is unsatisfiable as written and contradicted this unit's own `**Spec linkage.**` line above (*"outcome measure via C-HE-28 cohorts"*). Both named inputs fail at HEAD: `ci_runs` is `len(hit)` from `ci_metrics(row.merge_sha)` (`tools/arc_metrics.py:698`, `:562-574`) — runs on the MERGE COMMIT, so there is no branch-level denominator for a "share of branches burning ≥ 6 CI runs"; and `conclusion` is fetched (`:558`) but used only to filter timings (`:569`) and never persisted, so a CANCELLED share is not derivable (`ci_runs − len(ci_wall_s)` yields NON-GREEN, conflating CANCELLED with `failure` — a distinction C-HE-19 §1 makes load-bearing). Repairing either requires a new captured field, which the same sentence forbade. Resolved by reconciling this line to `:7452` and to spec C-HE-33 §4, whose own words place the two shares as "the tracked cohorts (**C-HE-28**)": the measure belongs to C-HE-28's owner, and U-HE-42 owes only the parity half (C-HE-33's Verification names exactly one witness, the parity test — built and green). Tracking row: **B-245**, re-scoped to C-HE-28 §4.
+- [x] **Step 4:** Register `Row("C-HE-32/33", "pytest:tools/test_codex_context_guard.py::test_local_ci_parity", "layer2", "CI", False)`. Commit `feat(he-lanes): U-HE-42 codex-context-check-ci parity recipe + parity test (C-HE-33)`.
 
 ---
 
 # S8 — Shadow trial, wired live
 
 ### U-HE-43: `tools/shadow_trial.py` — scoring reducer, `no_finding` markers, kill rule n=30 / < 2, OC table, HITL delivery
+
+**Unit status (as-built, ticked 2026-09-17).** Steps 1–4 ran and are merged on PR #1550 (2026-09-17; eight codex rounds, all BLOCK — 35 findings absorbed with witnesses, stopped under register-and-hold at round 8 since rounds 3–8 each found defects in the previous round's machinery — then four merge-gate rounds, the fourth all-approve at `6ae54a2c4`; 21 mutation-probe rows pinned on the final reducer; the test file carries 22 `# mutation-probe:` annotations, two of which — the round-4 mark-then-emit witnesses `test_a_failed_delivery_leaves_no_marker_and_is_retried` and `test_a_failed_request_emission_is_retried_next_run` — have no pinned row because their mutation, moving the marker append ahead of the emission, is not deletion-expressible; every manifest row marked mutation-probe is pinned, `just mutation-probe-coverage-check` → 0 unprobed). Divergences from the sketch below, each recorded in the PR body: the rule counts catch-ROUNDS (`p_kill` is a per-round binomial); the decision stays `pending` while any sampled finding is undisposed; the delivery identity is sample + rule + outcome + a sampled-evidence digest; the HITL detail is bounded at 16 KiB with an explicit elision; the loop-ledger emission runs with the gate log unlocked (decision computed under the lock via a no-append derive, marker written only if the proposal is unchanged); the lens must be a `*-shadow` producer; `finding_record.append_derived` was added for the under-lock adjudication. Three readings the spec does not state are registered rather than absorbed: B-250 (§2 denominator wording vs the per-arc `(arc_id, round_n)` key), B-251 (repeated shadow runs on one head mint distinct rounds), B-252 (a shadow round on a head where the lens's own family supplied the blocking terminal is not scored). The `HARNESS_ROUND_N=<n>` in the sketch's carrier line was not built: the wrapper mints the round under the log lock.
 
 **Scope.** The second reviewer's shadow lens runs live off the blocking path from the first Arc-7 deploy: `ship-pr` invokes it after the blocking chain (non-blocking); every scored round emits finding rows or exactly one `no_finding` marker with `producer=<second_reviewer_identity>`; `unique_catch=true` iff (a) location+finding_type absent from blocking reviewers' rows for the same `head_sha` AND (b) last disposition `accepted`; the reducer reproduces the kill/keep decision from `merge-gate-log.jsonl` alone; the pre-committed rule (n=30, kill if < 2) and its OC table are recomputed by the test from the binomial; at round n the decision fires as an escalation-kind HITL request; adjudicator identity is `disposition_actor` of neither model family.
 
@@ -7499,7 +7509,7 @@ def hitl_request(decision) -> str                                               
 
 **Depends on.** U-HE-01, U-HE-06 (the gemini wrapper is the shadow lens), U-HE-13.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 ```python
 from math import comb
 import shadow_trial as st
@@ -7585,7 +7595,7 @@ def test_adjudicator_never_placeholder_or_same_family():
         st.validate_adjudicator("gemini-review")
     st.validate_adjudicator("operator"); st.validate_adjudicator("codex-review")
 ```
-- [ ] **Step 2: RED**; **Step 3: Write `tools/shadow_trial.py`**
+- [x] **Step 2: RED**; **Step 3: Write `tools/shadow_trial.py`**
 ```python
 #!/usr/bin/env python3
 """C-HE-29 shadow trial: second-reviewer lens live, OFF the blocking path; value measured from
@@ -7712,7 +7722,7 @@ def main(argv=None) -> int:
     return 0
 ```
 `ship-pr/SKILL.md` — after the blocking chain, off-path: `HARNESS_ROUND_N=<n> HARNESS_SHADOW_LENS=1 just gemini-review || true`; the operator (or a third-party identity of neither family) disposes each shadow finding with `just shadow-trial-adjudicate <finding_id> accepted|rejected --actor <id>` — the ONLY writer of `unique_catch`; (the wrapper, under `HARNESS_SHADOW_LENS=1`, emits rows with `producer=gemini-shadow` and one `no_finding` marker when clean — add this branch to U-HE-06's `_emit`) then `uv run python tools/shadow_trial.py decide --lens gemini-shadow --hitl`. Recipes `shadow-trial-score` / `shadow-trial-decide` wrap the two.
-- [ ] **Step 4: GREEN**, probe (`--lines` = the `(b)` disposition guard) → PINNED. Register `Row("C-HE-29", "pytest:tools/test_shadow_trial.py::test_kill_rule_reproducible_from_rows_and_rejected_excluded", "measurement", "local + CI", True)` and `::test_oc_table_matches_spec_numbers`. Commit `feat(he-lanes): U-HE-43 shadow trial live off-path — reducer, kill rule n=30/<2 with OC, HITL delivery (C-HE-29)`.
+- [x] **Step 4: GREEN**, probe (`--lines` = the `(b)` disposition guard) → PINNED. Register `Row("C-HE-29", "pytest:tools/test_shadow_trial.py::test_kill_rule_reproducible_from_rows_and_rejected_excluded", "measurement", "local + CI", True)` and `::test_oc_table_matches_spec_numbers`. Commit `feat(he-lanes): U-HE-43 shadow trial live off-path — reducer, kill rule n=30/<2 with OC, HITL delivery (C-HE-29)`.
 
 ---
 
@@ -7833,7 +7843,7 @@ Every contract row has ≥ 1 unit; every unit appears in ≥ 1 row (checked at U
 | C-HE-25 | U-HE-11 |
 | C-HE-26 | U-HE-12 (§2); U-HE-17 + U-HE-21 (§1); U-HE-38 (§3 EVALUATE gate) |
 | C-HE-27 | U-HE-34 (§1–§4); U-HE-17 (`record_phase`); U-HE-19 (fold at drain) |
-| C-HE-28 | U-HE-38 (§1–§3) |
+| C-HE-28 | U-HE-38 (§1–§3); U-HE-51 (§4 lens trial); **§4 outcome-measure cohorts UNOWNED — B-245** (rev 2026-09-15: moved off U-HE-42 when the Class 1 fork on C-HE-33 §4 ratified under Reading C; needs a branch-level CI run count + per-run conclusion on the C-HE-25 row before any unit can own it) |
 | C-HE-29 | U-HE-43 (§1–§5) |
 | C-HE-30 | U-HE-14 |
 | C-HE-31 | U-HE-40 (§1–§5) |

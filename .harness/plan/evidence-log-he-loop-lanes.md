@@ -119,3 +119,292 @@ shared vendor outage still trips the identical contamination, so coalescing C-HE
 stays required). Durable record: 35 `probe-sample` rows + 1 GREEN `probe-result` row
 (`producer=reviewer_concurrency_probe`, arc u-he-35) on `.harness/merge-gate-log.jsonl`;
 `just pilot-gate-check` reads GREEN.
+
+## main-protection apply 2026-09-17T07:01:44Z
+```
+BEFORE:
+{
+  "allow_deletions": {
+    "enabled": false
+  },
+  "allow_force_pushes": {
+    "enabled": false
+  },
+  "allow_fork_syncing": {
+    "enabled": false
+  },
+  "block_creations": {
+    "enabled": false
+  },
+  "enforce_admins": {
+    "enabled": true,
+    "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/enforce_admins"
+  },
+  "lock_branch": {
+    "enabled": false
+  },
+  "required_conversation_resolution": {
+    "enabled": false
+  },
+  "required_linear_history": {
+    "enabled": false
+  },
+  "required_signatures": {
+    "enabled": false,
+    "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/required_signatures"
+  },
+  "required_status_checks": {
+    "checks": [
+      {
+        "app_id": 15368,
+        "context": "CLAUDE.md citations (I-1 resolution gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "Codex context guard (anti-rot gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "Q1 review gate (structured artifact) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "Q3 evidence + closure gate \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "arc ledger (tally gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "clearance corpus (frontmatter gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "pyright (strict) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "pytest (all axis packages) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "ruff (lint + format) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "semantic overlay (drift gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "substitution ledger (tally gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "tools/ test coverage guard + codex-loop tests \u2014 blocking"
+      }
+    ],
+    "contexts": [
+      "CLAUDE.md citations (I-1 resolution gate) \u2014 blocking",
+      "Codex context guard (anti-rot gate) \u2014 blocking",
+      "Q1 review gate (structured artifact) \u2014 blocking",
+      "Q3 evidence + closure gate \u2014 blocking",
+      "arc ledger (tally gate) \u2014 blocking",
+      "clearance corpus (frontmatter gate) \u2014 blocking",
+      "pyright (strict) \u2014 blocking",
+      "pytest (all axis packages) \u2014 blocking",
+      "ruff (lint + format) \u2014 blocking",
+      "semantic overlay (drift gate) \u2014 blocking",
+      "substitution ledger (tally gate) \u2014 blocking",
+      "tools/ test coverage guard + codex-loop tests \u2014 blocking"
+    ],
+    "contexts_url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/required_status_checks/contexts",
+    "strict": true,
+    "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/required_status_checks"
+  },
+  "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection"
+}
+AFTER:
+{
+  "allow_deletions": false,
+  "allow_force_pushes": false,
+  "enforce_admins": true,
+  "required_linear_history": false,
+  "required_pull_request_reviews": null,
+  "required_status_checks": {
+    "contexts": [
+      "CLAUDE.md citations (I-1 resolution gate) \u2014 blocking",
+      "Codex context guard (anti-rot gate) \u2014 blocking",
+      "Q1 review gate (structured artifact) \u2014 blocking",
+      "Q3 evidence + closure gate \u2014 blocking",
+      "arc ledger (tally gate) \u2014 blocking",
+      "clearance corpus (frontmatter gate) \u2014 blocking",
+      "merge-gate log consistency (C-HE-23 \u00a72 reducer) \u2014 blocking",
+      "pyright (strict) \u2014 blocking",
+      "pytest (all axis packages) \u2014 blocking",
+      "ruff (lint + format) \u2014 blocking",
+      "semantic overlay (drift gate) \u2014 blocking",
+      "split-brain ledger backstop \u2014 blocking",
+      "substitution ledger (tally gate) \u2014 blocking",
+      "tools/ test coverage guard + codex-loop tests \u2014 blocking"
+    ],
+    "strict": true
+  },
+  "restrictions": null
+}
+```
+
+## main-protection apply 2026-09-17T08:04:12Z
+
+**Outcome of this apply (agent-authored record; the tool appends only the payloads).**
+`just main-protection-apply-confirm 81cd03a786a668fa` — the SECOND confirm on this digest
+(two apply headers on 2026-09-17: 07:01:44Z and this one; two scratch tiebreaker PRs, #1552
+and #1555). The first (07:01Z above) applied provisionally and rolled back: the §4
+tiebreaker's check watch counted the NON-required `classify diff` job, which fails by
+contract on the scratch PR's empty diff (scratch PR #1552 UNSTABLE while every required
+context passed). PR #1553 (merged e73dfe48c, main run 35196617540 green) scoped the watch to
+required checks; its codex round 1 also caught, in review and before any live rollback, that
+gh's not-yet-started diagnostic changes wording under `--required`, and #1553 covers both.
+(Correction: the commit message of 58df3b057 on PR #1557 says "two rollbacks"; that count was
+written from memory and is wrong — one rollback, this record is authoritative.) This second
+confirm: applied provisionally; **tiebreaker PASS** — scratch
+PR #1555 landed under strict:true and the stale-branch PR #1556 fast-forwarded cleanly onto
+the pre-merge lineage; **protection persists**; `just main-protection-verify` → **PASS**
+(the two C-HE-08 contexts `merge-gate log consistency (C-HE-23 §2 reducer) — blocking` and
+`split-brain ledger backstop — blocking` are required on `main` alongside the twelve prior
+ones; `enforce_admins` true, force-push and deletion disabled). U-HE-27 step 5 is ticked on
+this record. Residual: the tiebreaker's own landings (#1555, #1556) ran no terminating
+refresh and left main red on ROADMAP_STATUS_DRIFT until #1558 — B-253.
+
+```
+BEFORE:
+{
+  "allow_deletions": {
+    "enabled": false
+  },
+  "allow_force_pushes": {
+    "enabled": false
+  },
+  "allow_fork_syncing": {
+    "enabled": false
+  },
+  "block_creations": {
+    "enabled": false
+  },
+  "enforce_admins": {
+    "enabled": true,
+    "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/enforce_admins"
+  },
+  "lock_branch": {
+    "enabled": false
+  },
+  "required_conversation_resolution": {
+    "enabled": false
+  },
+  "required_linear_history": {
+    "enabled": false
+  },
+  "required_signatures": {
+    "enabled": false,
+    "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/required_signatures"
+  },
+  "required_status_checks": {
+    "checks": [
+      {
+        "app_id": 15368,
+        "context": "CLAUDE.md citations (I-1 resolution gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "Codex context guard (anti-rot gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "Q1 review gate (structured artifact) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "Q3 evidence + closure gate \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "arc ledger (tally gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "clearance corpus (frontmatter gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "pyright (strict) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "pytest (all axis packages) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "ruff (lint + format) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "semantic overlay (drift gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "substitution ledger (tally gate) \u2014 blocking"
+      },
+      {
+        "app_id": 15368,
+        "context": "tools/ test coverage guard + codex-loop tests \u2014 blocking"
+      }
+    ],
+    "contexts": [
+      "CLAUDE.md citations (I-1 resolution gate) \u2014 blocking",
+      "Codex context guard (anti-rot gate) \u2014 blocking",
+      "Q1 review gate (structured artifact) \u2014 blocking",
+      "Q3 evidence + closure gate \u2014 blocking",
+      "arc ledger (tally gate) \u2014 blocking",
+      "clearance corpus (frontmatter gate) \u2014 blocking",
+      "pyright (strict) \u2014 blocking",
+      "pytest (all axis packages) \u2014 blocking",
+      "ruff (lint + format) \u2014 blocking",
+      "semantic overlay (drift gate) \u2014 blocking",
+      "substitution ledger (tally gate) \u2014 blocking",
+      "tools/ test coverage guard + codex-loop tests \u2014 blocking"
+    ],
+    "contexts_url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/required_status_checks/contexts",
+    "strict": true,
+    "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection/required_status_checks"
+  },
+  "url": "https://api.github.com/repos/thestoryportal/arhugula-harness/branches/main/protection"
+}
+AFTER:
+{
+  "allow_deletions": false,
+  "allow_force_pushes": false,
+  "enforce_admins": true,
+  "required_linear_history": false,
+  "required_pull_request_reviews": null,
+  "required_status_checks": {
+    "contexts": [
+      "CLAUDE.md citations (I-1 resolution gate) \u2014 blocking",
+      "Codex context guard (anti-rot gate) \u2014 blocking",
+      "Q1 review gate (structured artifact) \u2014 blocking",
+      "Q3 evidence + closure gate \u2014 blocking",
+      "arc ledger (tally gate) \u2014 blocking",
+      "clearance corpus (frontmatter gate) \u2014 blocking",
+      "merge-gate log consistency (C-HE-23 \u00a72 reducer) \u2014 blocking",
+      "pyright (strict) \u2014 blocking",
+      "pytest (all axis packages) \u2014 blocking",
+      "ruff (lint + format) \u2014 blocking",
+      "semantic overlay (drift gate) \u2014 blocking",
+      "split-brain ledger backstop \u2014 blocking",
+      "substitution ledger (tally gate) \u2014 blocking",
+      "tools/ test coverage guard + codex-loop tests \u2014 blocking"
+    ],
+    "strict": true
+  },
+  "restrictions": null
+}
+```

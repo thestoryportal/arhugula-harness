@@ -396,6 +396,8 @@ for c in \
   "just codex-preflight" \
   "just codex-checkpoint after-review" \
   "just codex-closeout" \
+  "just codex-context-check" \
+  "just codex-context-check-ci" \
   "just codex-autonomous-arc R-123" \
   "just codex-loop-record --phase plan --status passed --command plan --evidence grounded" \
   "just codex-loop-status" \
@@ -438,6 +440,29 @@ OUT=$(run_on "$(pl Bash "just arc-close 1503 b897542dc cp.md --arc-id b-230-task
 [ "$(dec "$OUT")" != "allow" ] && ok "arc-close with an out-of-worktree transcript → ask" || bad "out-of-worktree arc-close auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash "just merge-gate-emit --pr 1 --lens merge-gate-concurrency --verdict-json /tmp/outside.txt" '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit reading a verdict file outside the worktree → not auto-allowed" || bad "out-of-worktree merge-gate-emit auto-allowed: $OUT"
+
+# U-HE-43 (C-HE-29): the two unattended shadow-trial recipes are exact-shape allowed with
+# their own arity; a surplus token (a chained second recipe) stays at ask, and
+# `shadow-trial-adjudicate` — the operator's act, the writer of `unique_catch` — is never
+# auto-allowed in any shape (codex r2 P2).
+for cmd in \
+  "just shadow-trial-score" \
+  "just shadow-trial-score main" \
+  "HARNESS_ARC_ID=u-he-43 HARNESS_LANE_ID=lane-1 just shadow-trial-score" \
+  "just shadow-trial-decide gemini-shadow" \
+  "just shadow-trial-decide gemini-shadow --hitl"; do
+  OUT=$(run_on "$(pl Bash "$cmd" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "shadow-trial shape allowed: $cmd" || bad "shadow-trial shape NOT allowed: $cmd → $OUT"
+done
+for cmd in \
+  "just shadow-trial-score main codex-worktree-gc" \
+  "just shadow-trial-decide gemini-shadow --hitl arc-close" \
+  "just shadow-trial-adjudicate gemini-shadow:abc123:0123456789ab:1 accepted operator" \
+  "just shadow-trial-adjudicate gemini-shadow:abc123:0123456789ab:2 rejected codex-review" \
+  "HARNESS_ARC_ID=u-he-43 HARNESS_LANE_ID=lane-1 just shadow-trial-adjudicate gemini-shadow:abc123:0123456789ab:1 accepted operator"; do
+  OUT=$(run_on "$(pl Bash "$cmd" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "shadow-trial off-shape → not auto-allowed: $cmd" || bad "shadow-trial off-shape auto-allowed: $cmd"
+done
 # B-230 Task 5: emit-all rides the same alternation; one out-of-worktree verdict path
 # among the three drops the whole call to ask, exactly as the single-lens form does.
 OUT=$(run_on "$(pl Bash "just merge-gate-emit-all --pr 1 --arc-id b-230-task-5 --concurrency-json .harness/tmp/c.txt --spec-json /tmp/outside.txt --witness-json .harness/tmp/w.txt" '')")
@@ -536,27 +561,34 @@ OUT=$(run_on "$(pl Bash 'just check review-attest-bud\get 2 ok' '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "backslash-normalized budget chain → not auto-allowed" || bad "backslash budget chain auto-allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'just check review-attest-bud[g]et 2 ok' '')")
 [ "$(dec "$OUT")" != "allow" ] && ok "glob-normalized budget chain → not auto-allowed" || bad "glob budget chain auto-allowed: $OUT"
-SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
+SAFE_CODEX_CMD="env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'read lens1 prompt"$'\n'"whose reviewed text uses ; and workspace-write sandbox_mode -s'"
 OUT=$(run_on "$(pl Bash "$SAFE_CODEX_CMD" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens" || bad "read-only codex exec not allowed: $OUT"
-OUT=$(run_on "$(pl Bash "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens2-0123456789abcdef0123456789abcdef01234567.md --ephemeral --sandbox read-only -- 'read lens2 prompt'" '')")
+OUT=$(run_on "$(pl Bash "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens2-0123456789abcdef0123456789abcdef01234567.md --ephemeral --sandbox read-only -- 'read lens2 prompt'" '')")
 [ "$(dec "$OUT")" = "allow" ] && ok "fresh read-only codex exec → allow merge lens with -C first" || bad "-C-first read-only codex exec not allowed: $OUT"
 for c in \
-  "codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env OTHER=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox workspace-write -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox danger-full-access -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C /repo --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /etc/review.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
-  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens3-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'; touch /tmp/escaped" \
+  "codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env OTHER=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox workspace-write -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox danger-full-access -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C /repo --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /etc/review.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens3-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'; touch /tmp/escaped" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-6-astra\" -c model_reasoning_effort=\"medium\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"high\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" -c model=\"gpt-5.6-sol\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
+  "env HARNESS_CODEX_REVIEW_ISOLATED=1 codex exec -c model=\"gpt-5.6-sol\" -c model_reasoning_effort=\"medium\" -c sandbox_mode=\"danger-full-access\" --ephemeral --sandbox read-only -C $REPO --output-last-message /tmp/arhugula-pr-1186-lens1-0123456789abcdef0123456789abcdef01234567.md -- 'inspect'" \
   "just codex-autonomous-arc R-1; git push --force"; do
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "'$c' → not auto-allowed" || bad "'$c' auto-allowed: $OUT"
@@ -788,6 +820,9 @@ OUT=$(run_on "$(jq -nc --arg p "$REPO/src" '{"hook_event_name":"PreToolUse","too
 # 6) PermissionRequest event uses the decision.behavior schema.
 OUT=$(run_on "$(pl Bash 'git status' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allow schema" || bad "PR allow schema wrong: $OUT"
+# U-HE-42: ship-pr's pre-push step must not stall a headless lane at either hook event.
+OUT=$(run_on "$(pl Bash 'just codex-context-check-ci' '' PermissionRequest)")
+[ "$(beh "$OUT")" = "allow" ] && ok "PermissionRequest allows just codex-context-check-ci" || bad "PR codex-context-check-ci not allowed: $OUT"
 OUT=$(run_on "$(pl Bash 'rm -rf /' '' PermissionRequest)")
 [ "$(beh "$OUT")" = "deny" ] && ok "PermissionRequest deny schema" || bad "PR deny schema wrong: $OUT"
 

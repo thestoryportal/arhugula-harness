@@ -38,6 +38,7 @@ tools/test_concurrency_surface.py \
   tools/test_ci_yml_concurrency.py \
   tools/test_ci_bookkeeping_filter.py \
   tools/test_finding_record.py \
+  tools/test_refresh_classes.py \
   tools/test_lanes_verify.py \
   tools/test_lanes_pilot_gate.py \
   tools/test_main_protection.py \
@@ -48,6 +49,7 @@ tools/test_concurrency_surface.py \
   tools/test_review_wrapper.py \
   tools/test_reviewer_concurrency_probe.py \
   tools/test_reservations.py \
+  tools/test_shadow_trial.py \
   tools/test_store_audit.py \
   tools/test_closure_certification.py \
   tools/test_compose_lanes.py \

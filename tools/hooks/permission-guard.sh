@@ -378,7 +378,7 @@ _push_targets_main() {
 # The only out-of-worktree path is the exact /tmp report shape required by merge-gate.
 _safe_codex_exec_command() {
   local cmd="$1" options prompt tok value
-  local sandbox_count=0 ephemeral_count=0 cd_count=0 output_count=0
+  local sandbox_count=0 ephemeral_count=0 cd_count=0 output_count=0 model_count=0 effort_count=0
   case "$cmd" in *" -- "*) options=${cmd%% -- *}; prompt=${cmd#* -- } ;; *) return 1 ;; esac
   # The prompt may contain newlines and shell metacharacters only inside one literal
   # single-quoted argument. Reject embedded/extra quotes, which could terminate it and
@@ -419,11 +419,24 @@ _safe_codex_exec_command() {
         printf '%s' "$value" | grep -Eq '^/tmp/arhugula-pr-[0-9]+-lens[123]-[0-9a-f]{40}\.md$' || return 1
         output_count=$((output_count + 1))
         ;;
+      -c|--config)
+        # The review-model pins are the ONLY config overrides a lens may pass (operator
+        # direction 2026-09-15: gpt-5.6-sol at medium effort, never the config default).
+        # Any other -c could override the sandbox or approval policy pinned above.
+        [ "$#" -gt 0 ] || return 1
+        value="$1"; shift
+        case "$value" in
+          'model="gpt-5.6-sol"') model_count=$((model_count + 1)) ;;
+          'model_reasoning_effort="medium"') effort_count=$((effort_count + 1)) ;;
+          *) return 1 ;;
+        esac
+        ;;
       *) return 1 ;;
     esac
   done
   [ "$sandbox_count" = "1" ] && [ "$ephemeral_count" = "1" ] \
-    && [ "$cd_count" = "1" ] && [ "$output_count" = "1" ]
+    && [ "$cd_count" = "1" ] && [ "$output_count" = "1" ] \
+    && [ "$model_count" = "1" ] && [ "$effort_count" = "1" ]
 }
 
 # Emit an allow/deny decision in the schema for the firing event, then exit.
@@ -881,6 +894,17 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+lanes-pilot(-report)?[[:space:]]+[A-Za-z0-9._-]+[[:space:]]*$' \
        && _bash_args_safe "$CMD"; then
       emit_allow
+    # U-HE-43 (C-HE-29): the two shadow-trial recipes ship-pr runs unattended after the
+    # blocking chain. End-anchored with the recipe's own arity so no trailing token can chain
+    # a second recipe (the B-215 class): `score [<base>]` runs the gemini wrapper as a SHADOW
+    # (no gate admission, no reservation round, `|| true`); `decide <lens> [--hitl]` is the
+    # read-only reducer. `shadow-trial-adjudicate` is deliberately NOT here: an adjudication
+    # is the operator's (or a third party's) act and writes `unique_catch` into the trial's
+    # evidence — auto-allowing it would let a headless agent dispose findings under
+    # `--actor operator` (codex r2 P2 on u-he-43). It stays at ask.
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+shadow-trial-(score([[:space:]]+[A-Za-z0-9._/-]+)?|decide[[:space:]]+[A-Za-z0-9._-]+([[:space:]]+--hitl)?)[[:space:]]*$' \
+       && _bash_args_safe "$CMD"; then
+      emit_allow
     # B-230 Task 3: `just arc-close <pr> <sha> <checkpoint> [queue args…]` is the close-out
     # tail ship-pr runs unattended (exit report + arc-metrics queue). It rides the generic
     # `just` verb alternation below like every other allowlisted recipe: the recipe's
@@ -891,7 +915,7 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
     # is outside the token charset — pass the round-log paths explicitly; `--round-logs`
     # is nargs="+" and a literal path is a glob matching itself) and a `--transcript`
     # under `~` or any absolute path outside the worktree (omit it in a loop-mode lane).
-    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit(-all)?|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check|arc-close)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
+    elif printf '%s' "$TRIM" | grep -Eq '^(echo|printf|pwd|cd|which|command[[:space:]]+-v|bash[[:space:]]+-n|bash[[:space:]]+tools/[^[:space:]]*test_[^[:space:]]*\.sh|ruff|pytest|uv[[:space:]]+run[[:space:]]+(ruff|pytest)|uv[[:space:]]+sync|uv[[:space:]]+run[[:space:]]+python[[:space:]]+tools/reservations\.py[[:space:]]+(selectable|show|reserve|update|mint-lane-id)|just[[:space:]]+(check|test|lint|typecheck|fmt|markers|skips|overlay-check|r420-self-hosted-stack-(up|down|status)|codex-(preflight|checkpoint|closeout|autonomous-arc|loop-record|loop-status|loop-check|worktree-gc|check|context-check(-ci)?|credential-gate|review|review-uncommitted)|gemini-review|review-with-failover|merge-gate-(binding|emit(-all)?|log-check|landing-delta)|lanes-(verify|phase0-check)|mutation-probe-coverage-check|arc-close)|git[[:space:]]+(status|diff|log|show|branch|add|commit|fetch|push|pull[[:space:]]+--ff-only|stash[[:space:]]+(list|show)|rev-parse|symbolic-ref|ls-files|ls-remote|merge-tree)|git[[:space:]]+checkout[[:space:]]+-b[[:space:]]+[^[:space:]]+|gh[[:space:]]+(pr[[:space:]]+(view|list|checks|diff|status|create|ready|comment)|run[[:space:]]+(view|list|watch)|api|repo[[:space:]]+view))([[:space:]]|$)' \
        && _bash_args_safe "$CMD"; then
       emit_allow
     fi

@@ -86,6 +86,42 @@ codex-context-check:
     /usr/bin/python3 tools/codex_context_guard.py checkpoint --label local-check --include-branch-diff
     /usr/bin/python3 tools/codex_context_guard.py check --require-fresh-checkpoint --include-branch-diff
 
+# C-HE-33 §3: the guard as CI's `codex-context-guard` job runs it -- explicit committed-range
+# refs plus --allow-roadmap-drift, no checkpoint -- so a PR's guard verdict converges before
+# the push. CI's two-endpoint diff starts at the PR base; on a branch that contains
+# origin/main that base, main's tip and the merge-base are one commit, so the recipe refuses
+# any other branch rather than report a parity it cannot have (rebase onto the fresh tip).
+# origin/main is REFRESHED first (codex u-he-42 r4 P2): the tracking ref is shared by every
+# worktree and goes stale silently, and a stale one is an ancestor of a branch that the real
+# main has already moved past -- the ancestry check then passes and the guard is handed a base
+# CI would never use. The fetch runs under `set -euo pipefail`, so an unreachable remote fails
+# loudly rather than falling back to the stale ref. Both refs are then read once and the guard
+# gets the resolved SHAs, as CI passes them: HEAD can move mid-run, so a second read could
+# check one commit and diff another -- the guard DISCLOSES a HEAD that differs from
+# `--head-ref` (CHECKED_HEAD_NOT_LIVE_HEAD, info) rather than attribute the verdict silently to
+# an unevaluated commit; it never refuses on it, because CI's merge-ref checkout diverges by
+# construction on every pull_request run (codex u-he-42 r5 P1). The RECIPE then re-checks
+# HEAD after the guard returns (codex u-he-42 r6 P2): this is the Claude carrier's pre-push
+# gate (`.claude/skills/ship-pr/SKILL.md`), so a HEAD that advanced mid-run would let the push
+# publish a commit the gate never checked. Refusing is safe HERE and not in the guard: CI
+# invokes the guard directly (.github/workflows/ci.yml:642-645) and never runs this recipe, so
+# the merge-ref divergence that made a guard-side refusal a P1 cannot reach this line. What
+# still differs from the local shape above is named in
+# tools/test_codex_context_guard.py::test_local_ci_parity. The window AFTER the recipe exits
+# and before the push is outside it (merge-gate r2 concurrency P2), so on success the recipe
+# prints the sha it checked and the carrier pushes that sha by name, never HEAD.
+codex-context-check-ci:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git fetch --quiet origin main
+    base="$(git rev-parse origin/main)"
+    head="$(git rev-parse HEAD)"
+    git merge-base --is-ancestor "$base" "$head" || { echo "codex-context-check-ci: HEAD does not contain origin/main; rebase onto it first, or CI's diff will include main's newer commits" >&2; exit 1; }
+    /usr/bin/python3 tools/codex_context_guard.py check --base-ref "$base" --head-ref "$head" --allow-roadmap-drift
+    live="$(git rev-parse HEAD)"
+    [ "$live" = "$head" ] || { echo "codex-context-check-ci: HEAD moved from $head to $live while the guard ran; the verdict describes the old commit -- re-run before pushing" >&2; exit 1; }
+    echo "codex-context-check-ci: checked $head -- push this sha, not HEAD"
+
 # Log a credential-gated unit after all non-credential work is closed.
 codex-credential-gate *args:
     /usr/bin/python3 tools/codex_context_guard.py credential-gate {{args}}
@@ -757,14 +793,13 @@ _require-codex-subscription:
         exit 1; \
     fi
 
-# Reviewer model = gpt-5.6-sol (GPT-5.6 flagship tier), set as the default in
-# ~/.codex/config.toml (top-level + active profile) per operator direction
-# 2026-07-13 (upgraded from gpt-5.5 once GPT-5.6 shipped; requires codex-cli
-# >=0.144.3 — `codex update` if the model banner errors "requires a newer
-# version of Codex"). NOTE: `codex review` ignores a per-invocation `-c model=`
-# when a profile is active (the profile's model wins), so the model is
-# governed by config.toml, not pinned here. The run banner prints the
-# effective `model:` — confirm it reads `gpt-5.6-sol`.
+# Reviewer model = gpt-5.6-sol at medium reasoning effort, pinned per invocation on every
+# out-of-family review path (this recipe, tools/codex_review.py CODEX_OVERRIDES,
+# tools/hooks/resolve_lib.sh) — operator direction 2026-09-15, token cost. Not inherited from
+# ~/.codex/config.toml, whose top-level default is a different model. Probed 2026-09-15 on
+# codex-cli 0.154.0 with no profile active: both `codex exec` and `codex review` honor
+# `-c model=` and `-c model_reasoning_effort=`. The session rollout
+# (~/.codex/sessions/**/rollout-*.jsonl) records the effective `"model"` and `"reasoning_effort"`.
 
 # Out-of-family review of the committed branch HEAD vs BASE (default main), subscription auth.
 # Routed through the fail-closed wrapper (C-HE-18): schema-parsed verdict, session-artifact
@@ -779,7 +814,7 @@ codex-review base='main':
 
 # Out-of-family review of staged + unstaged + untracked changes, subscription auth.
 codex-review-uncommitted: _require-codex-subscription
-    env -u OPENAI_API_KEY codex review -c preferred_auth_method="chatgpt" --uncommitted
+    env -u OPENAI_API_KEY codex review -c model="gpt-5.6-sol" -c model_reasoning_effort="medium" -c preferred_auth_method="chatgpt" --uncommitted
 
 # Out-of-family diff review via Google Antigravity CLI (agy) — the decorrelated
 # artifact reviewer when Codex is the AUTHOR (mirror of codex-review, which
@@ -800,6 +835,35 @@ codex-review-uncommitted: _require-codex-subscription
 # exited 1 before that terminal contract could apply.
 gemini-review base='main' outcome_json='':
     uv run python tools/agy_review.py --base {{base}} {{ if outcome_json != '' { '--outcome-json ' + quote(outcome_json) } else { '' } }}
+
+# ─── C-HE-29 shadow trial (U-HE-43) — the second reviewer's lens live, OFF the blocking path ──
+# `shadow-trial-score` runs the gemini wrapper as the shadow lens: rows land under
+# `producer=gemini-shadow` (one `no_finding` marker when clean), no gate admission, no
+# reservation round, no budget spend, and its exit never blocks (`|| true`). Run it only where
+# the blocking terminal for this head came from codex (a Claude-authored change, no failover):
+# the reducer discards a shadow round on any head where `gemini_review_wrapper` recorded a
+# terminal for the arc — an execution-time reading of C-HE-29 the spec does not state,
+# registered as B-252 (codex r7 P2; merge-gate r2). The operator (or
+# a third-party identity of NEITHER family under trial) disposes each shadow finding with
+# `shadow-trial-adjudicate` — the ONE writer of `unique_catch`; `shadow-trial-decide` is the
+# read-only kill/keep reducer, `--hitl` delivering a non-pending decision as a DEFERRED-HIL row.
+shadow-trial-score base='main':
+    #!/usr/bin/env bash
+    # Never blocks ship-pr (exit 0 on every path), never silent: without a recorded rule the
+    # decision would not be reproducible from rows alone, so a failed config append SKIPS the
+    # shadow review and says so instead of scoring rounds against an unrecorded policy.
+    if ! uv run python tools/shadow_trial.py config --lens gemini-shadow --if-absent; then
+      echo "shadow-trial-score: config row not recorded; shadow review skipped this round" >&2
+      exit 0
+    fi
+    HARNESS_SHADOW_LENS=1 just gemini-review {{base}} || true
+    uv run python tools/shadow_trial.py request-adjudications --lens gemini-shadow || true
+
+shadow-trial-decide lens='gemini-shadow' *ARGS:
+    uv run python tools/shadow_trial.py decide --lens {{lens}} {{ARGS}}
+
+shadow-trial-adjudicate finding_id disposition actor:
+    uv run python tools/shadow_trial.py adjudicate {{finding_id}} --disposition {{disposition}} --actor {{actor}}
 
 _require-antigravity:
     @if ! command -v agy >/dev/null 2>&1; then \

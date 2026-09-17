@@ -30,6 +30,20 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   would refuse the landing later; C-HE-13 §5). Exit 2 → the gate could not run; surface the
   printed cause. At selection the candidate was `main`, so this is the first invocation
   with real content on the candidate side.
+- **CI-shaped guard — run it IMMEDIATELY BEFORE EVERY PUSH, on the final commit (U-HE-42;
+  C-HE-33).** Run `just codex-context-check-ci` on the committed branch — the context guard
+  with the explicit refs and `--allow-roadmap-drift` CI's guard job passes — so its verdict
+  converges locally and the branch is pushed once. **Not a one-shot pre-flight step** (codex
+  u-he-42 r7 P2): every BLOCK round below lands a fix commit, which moves HEAD past whatever
+  this gate last checked, so a gate run before the review loop says nothing about the commit
+  you actually push. Re-run it after the FINAL review-driven commit; the recipe itself refuses
+  a HEAD that moved while the guard ran, but only for the run you actually make. On success it
+  prints `checked <sha>`: push THAT sha by name (`git push origin <sha>:refs/heads/<branch>`),
+  never `HEAD` (merge-gate r2 concurrency P2) — the check-exit-to-push window is outside the
+  recipe, and a commit that lands in it cannot ride a push that names the checked sha. Same cadence
+  as `just leg-selfcheck` below, and for the same reason. `just codex-context-check` stays the
+  checkpoint-bound local gate; what the two shapes may differ on is named in
+  `tools/test_codex_context_guard.py::test_local_ci_parity`.
 - **Grounding pass (U-WT-01).** Before codex round 1: (a) re-read every `file:line` cite in
   the diff and PR body at HEAD — never from recall; (b) recompute every count/arithmetic
   claim from the actual source rather than restating it; (c) confirm every `#NNN` reference
@@ -109,6 +123,30 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   working tree pollutes + dilutes the review of the actual diff (the 2026-06-26 finding at
   `.harness/uncommitted-review-flaw-verification-arc.md`). `-uncommitted` is for genuine
   pre-commit review in a CLEAN tree only.
+- **Shadow trial, off-path (U-HE-43; C-HE-29).** After the blocking chain has reached its
+  terminal for this head, run the second reviewer's lens as a SHADOW — it never blocks and
+  never spends the arc's review budget. The shadow lens (gemini) must DIFFER from the
+  producer that supplied the blocking terminal for THIS head: codex on this Claude-authored
+  path — when the D-C failover supplied the verdict instead (`gemini-review (failover)`,
+  producer `gemini_review_wrapper` on this head), skip the shadow for this head, the lens
+  would re-review its own family's verdict; the Codex carrier, where Gemini already blocks,
+  does not run it either (codex r5/r7 P2). The reducer enforces the same premise from rows
+  alone — a shadow round on a head where `gemini_review_wrapper` recorded a terminal for the
+  arc is not a scored round and its findings never count — so a mistaken run costs a wasted
+  review, never a contaminated trial:
+  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just shadow-trial-score`
+  (rows land under `producer=gemini-shadow`, one `no_finding` marker when clean; no gate
+  admission, no reservation round). Each shadow finding is disposed by the operator or a
+  third-party identity of NEITHER family under trial (never a gemini or Claude identity):
+  `just shadow-trial-adjudicate <finding_id> accepted|rejected|suppressed <actor>` — the ONLY
+  writer of `unique_catch`, and deliberately NOT guard-allowed in loop mode (it is the
+  operator's act; a headless run must not dispose findings under `--actor operator`).
+  Then `just shadow-trial-decide gemini-shadow --hitl`: `pending`
+  until 30 scored rounds; at 30, `kill` iff fewer than 2 unique catches (OC: `just
+  shadow-trial-decide gemini-shadow` prints nothing about it — `uv run python
+  tools/shadow_trial.py oc` does). A non-pending decision lands as a `DEFERRED-HIL` row the
+  operator answers with approve-kill | reject-keep | amend-threshold; adoption into the
+  blocking chain is never self-authorizing.
 - **Phase-span edges (U-HE-34; C-HE-27).** Durable review/edit wall-clock accretes on the
   reservation as explicit `{start, end}` pairs — N6 reads ONLY these spans, never a gap
   between two records. Each command is a single literal-id invocation (guard-allowlisted
