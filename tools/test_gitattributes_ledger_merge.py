@@ -21,9 +21,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import finding_record as fr
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -109,11 +114,11 @@ def test_union_would_make_the_gate_log_merge_direction_dependent(
 
     text = (repo / GATE_LOG).read_text()
     assert "<<<<<<<" not in text, "union was expected to merge cleanly — that is the danger"
-    reduced: dict[str, dict] = {}
-    for line in text.splitlines():
-        if line.strip():
-            row = json.loads(line)
-            reduced[row["finding_id"]] = row  # reduce_last_by_finding_id, file order
+    # the PRODUCTION reducer, never a local copy of it: if reduce_last_by_finding_id ever
+    # stops treating file order as authoritative, this witness must stop passing rather
+    # than keep vouching for a rule the reader no longer follows (codex r2 P3)
+    rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+    reduced = fr.reduce_last_by_finding_id(rows)
     expected = "accepted" if direction == "accepted-last" else "rejected"
     assert reduced["f1"]["disposition"] == expected, (
         "union no longer orders unioned hunks by merge direction; re-derive whether the "
