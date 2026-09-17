@@ -46,26 +46,31 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
     assert out["a:2"] == []
 
 
-def test_drift_vocabulary_lands_in_class_2():
-    # handoff-s2 §2 B: reviewers name the prose-decay mechanism "drift"; before 2026-09-16
-    # such rows matched no class-2 term ("drifted" and "cite drift" both count, "adrift" not)
+def test_bare_drift_is_not_class_2_vocabulary():
+    # handoff-s2 §2 B proposed `\bdrift` for class 2; the corpus said no (30 of 35 "drift"
+    # rows are contract / configuration / roadmap drift or the arc-metrics drift cohort —
+    # see the LEFT OUT note above CLASSES). These shapes must stay in the intake pile.
     rows = [
         {
             "finding_id": "d:1",
-            "observed_evidence": "the docstring will drift from HEAD",
+            "observed_evidence": "the added test codifies this contract drift",
             "location": "",
         },
         {
             "finding_id": "d:2",
-            "observed_evidence": "cite drifted after the relocation",
+            "observed_evidence": "allowing configuration drift to go undetected",
             "location": "",
         },
-        {"finding_id": "d:3", "observed_evidence": "the lease is left adrift", "location": ""},
+        {
+            "finding_id": "d:3",
+            "observed_evidence": "reports a confident zero regardless of actual roadmap drift",
+            "location": "",
+        },
+        {"finding_id": "d:4", "observed_evidence": "the lease is left adrift", "location": ""},
     ]
     out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
-    assert "2 prose stale / counts / cites" in out["d:1"]
-    assert "2 prose stale / counts / cites" in out["d:2"]
-    assert "2 prose stale / counts / cites" not in out["d:3"]
+    for fid in ("d:1", "d:2", "d:3", "d:4"):
+        assert "2 prose stale / counts / cites" not in out[fid], fid
 
 
 def test_classify_reads_the_location_too():
