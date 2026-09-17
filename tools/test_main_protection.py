@@ -499,6 +499,17 @@ def test_watch_checks_green_during_partial_registration_does_not_count(monkeypat
     assert seq == []
 
 
+# mutation-probe: broaden the not-yet-started match to `checks reported` (drop "on the")
+def test_watch_checks_only_gh_not_yet_started_phrasing_retries(monkeypatch, tmp_path):
+    """The retry branch matches gh's two not-yet-started templates and nothing looser:
+    both end in "checks reported on the '<b>' branch" (`strings $(which gh)`, 2.100.0). A
+    failing watch whose text merely contains "checks reported" is a genuine red and must
+    return False on the first attempt — no retry, no sleep (merge-gate r1 witness P2)."""
+    _watch_seq(monkeypatch, [("watch", 1, "2 checks reported: 1 failing, 1 cancelled")])
+    monkeypatch.setattr(mp.time, "sleep", lambda s: pytest.fail("retried on a genuine red"))
+    assert mp._watch_checks("7", tmp_path, ["a — blocking"]) is False
+
+
 def test_watch_checks_genuine_failure_is_false(monkeypatch, tmp_path):
     _watch_seq(monkeypatch, [("watch", 1, "X ruff (lint + format) — blocking fail")])
     assert mp._watch_checks("7", tmp_path, ["a — blocking"]) is False
