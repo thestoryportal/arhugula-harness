@@ -405,14 +405,14 @@ bytes it actually read come from that binding (`git show HEAD:<path>`, `base..he
 diff), never from the tree?* If a test can make the check pass by writing a file
 without committing it, this is the class.
 
-### 16. The witness codifies the divergence (added class-16-codifying-witness; 14 rows at the 2026-09-17 corpus of 2,162, every one of them unmatched until this class)
+### 16. The witness codifies the divergence (added class-16-codifying-witness; 15 rows at the 2026-09-17 corpus of 2,163, every one of them unmatched until this class)
 
 The diff departs from a cleared contract, and the test that ships with it asserts the
 **new** behavior. The witness is green, non-vacuous, and fires — and what it now protects
 is the departure. Review reads a covered change; the breach arrives with regression
 armour. Class 4 is its sibling and not its twin: a vacuous witness proves nothing, this
 one proves the wrong thing — and the corpus agrees rather than the reasoning alone, since
-all 14 rows matched no class at all at that measurement, class 4 included.
+all 15 rows matched no class at all at that measurement, class 4 included.
 
 Recorded shapes, all the same move: *"the new merged-holder test codifies this contract
 drift while the clearance claims no spec contract changed"* (`arc_metrics.py:564`); *"the

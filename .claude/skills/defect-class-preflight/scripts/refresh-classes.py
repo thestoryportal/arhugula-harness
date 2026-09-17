@@ -137,18 +137,40 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         r"working tree|live worktree|uncommitted|mutable tree|dirty",
         r"binding|base_sha|head_sha|\bHEAD\b|committed (diff|range|bytes|base)",
     ),
-    # Measured on the 2026-09-17 corpus (2,162 findings) before landing: 29 rows carry a
-    # blessing verb and 14 matched no other class — exactly the pile this class empties.
-    # `pins the` was measured and DROPPED: its one unmatched hit read "--match-head-commit
-    # merely pins the merge", a binding claim with no witness in it. A tuple because the
-    # title names two conditions, so a future "the spec codifies the rule" is not this
-    # class ([LAW:types-are-the-program] — the strongest theorem still true of the shape).
-    # Both forms measure 29/14 on that corpus, so the conjunct costs no recall and
-    # bounds that false match. Overlap with class 4 is NOT the same defect: a vacuous witness proves
-    # nothing, one of these proves the wrong thing.
+    # Measured on the 2026-09-17 corpus (2,163 findings): 30 rows carry a blessing verb
+    # and 15 matched no other class — exactly the pile this class empties. `pins the` was
+    # measured and DROPPED: its one unmatched hit read "--match-head-commit merely pins
+    # the merge", a binding claim with no witness in it.
+    #
+    # PHRASES, not a tuple (codex r1 P2 on this arc). The first draft paired a verb
+    # conjunct with an artifact conjunct, and `matches()` reads `finding_text` — evidence
+    # PLUS location — so any finding located in a test file satisfied the artifact half
+    # for free: 263 of those 2,163 rows carry such a location, 30 of them carry the
+    # artifact term in the location alone, and "the governing spec codifies the required
+    # behavior" at `tools/test_widget.py` classified as this class. A conjunct a path can
+    # satisfy does not constrain, and a false match is the one direction the policy above
+    # forbids — it removes the row from the intake pile silently. Class 13 paid for this
+    # same lesson with `justfile`; class 12 states the remedy: each alternative carries
+    # BOTH halves on its own ([LAW:types-are-the-program] — the strongest theorem still
+    # true is one about a phrase, never two tokens that co-occur).
+    #
+    # ORDERING is what fences the location out, structurally rather than by luck: the
+    # location is appended LAST, so an artifact-BEFORE-verb phrase can never be satisfied
+    # by it (a path contains no verb, and nothing follows a path to supply one). That is
+    # why the artifact token may stay generous (`tests?[\w-]*` admits `test_happy_path`).
+    # `(?:[^.]|\.\S)` keeps the window inside ONE sentence while still crossing a file
+    # path: `.py` is a dot followed by non-space, a sentence end is a dot followed by
+    # space — so "test at tools/x.py:1301 enshrines" matches and "The test passes. The
+    # spec codifies the rule" does not. The pronoun arm's ≤2-word gap is what keeps "this
+    # witness instead blesses". Recall is unchanged at 30/15, and four false-match probes
+    # now refuse (test-file location, a `/tests/` directory, an `assert`-shaped path, and
+    # the cross-sentence co-occurrence) — see test_class_16_*.
+    #
+    # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
+    # of these proves the wrong thing.
     "16 witness codifies the divergence": (
-        r"codif|enshrin|blesses",
-        r"\btest|witness|assert|fixture|\bCI\b",
+        r"tests?[\w-]*(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
+        r"|\b(it|CI|witness|fixture|which)\s+(?:\w+\s+){0,2}(codif|enshrin|blesses)"
     ),
 }
 

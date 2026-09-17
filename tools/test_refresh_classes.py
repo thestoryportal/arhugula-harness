@@ -140,11 +140,12 @@ def test_report_counts_agree_with_classify(tmp_path: Path):
 
 
 def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
-    # Evidence quoted from the rows that were measured into this class (2026-09-17 corpus,
-    # 14 unmatched rows). The conjunct is the contract: a blessing verb with no witness in
-    # the text is NOT this class — that is the measured `--match-head-commit merely pins
-    # the merge` false match, and a spec that codifies a rule is not a test that blesses a
-    # departure ([LAW:behavior-not-structure] — the class row's behaviour, not its regex).
+    # Evidence quoted from the rows measured into this class (2026-09-17 corpus of 2,163;
+    # 15 rows matched no other class). The PHRASE is the contract: one alternative must
+    # carry both halves, so a blessing verb whose subject is no witness is NOT this class
+    # — the measured `--match-head-commit merely pins the merge` false match, and a spec
+    # that codifies a rule is not a test that blesses a departure. Asserted through the
+    # `classify` verb, never against the regex ([LAW:behavior-not-structure]).
     codifying = [
         {
             "finding_id": "c:1",
@@ -169,6 +170,23 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             " so CI codifies the admitted cohort gap instead of detecting it.",
             "location": ".agents/skills/ship-pr/SKILL.md:208",
         },
+        # the subject sits an adverb away from its verb ("witness INSTEAD blesses"), which
+        # is what the pronoun arm's <=2-word gap buys; without it this true member drops
+        {
+            "finding_id": "c:5",
+            "observed_evidence": "this witness instead blesses 4,636,541 (4.64M) and labels"
+            " the difference a correction. That changes the measurement baseline without"
+            " updating the governing plan",
+            "location": "tools/test_arc_cost.py:243",
+        },
+        # the artifact is a test NAME, so `\btest\b` would miss it: the underscore is a
+        # word character, which is why the token stays `tests?[\w-]*`
+        {
+            "finding_id": "c:6",
+            "observed_evidence": "test_happy_path_lands_holds_through_ci_and_releases"
+            " currently codifies this refresh-free path as the happy path.",
+            "location": "tools/merge_door.py:1226",
+        },
     ]
     not_codifying = [
         # a blessing verb, no witness anywhere in the text
@@ -182,6 +200,30 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         {
             "finding_id": "n:2",
             "observed_evidence": "the added failure test asserts the warning",
+            "location": "",
+        },
+        # THE production failure mode (codex r1 P2): classification reads evidence PLUS
+        # location, so a paired verb/artifact conjunct was satisfied by the location
+        # alone — every finding located in a test file became this class. An empty
+        # location cannot witness that, which is why n:1/n:2 above did not catch it.
+        {
+            "finding_id": "n:3",
+            "observed_evidence": "the governing spec codifies the required behavior,"
+            " but implementation violates it",
+            "location": "tools/test_widget.py",
+        },
+        # same hole one directory shape over: `/tests/` survives a word boundary that
+        # `test_widget` does not, so the boundary alone was never the fix — ordering is
+        {
+            "finding_id": "n:4",
+            "observed_evidence": "the spec codifies the older rule",
+            "location": "harness-cp/tests/test_foo.py",
+        },
+        # co-occurrence ACROSS a sentence break: the witness and the blessing belong to
+        # different claims, which is what the one-sentence window refuses
+        {
+            "finding_id": "n:5",
+            "observed_evidence": "The test passes cleanly. The spec codifies the older rule.",
             "location": "",
         },
     ]
