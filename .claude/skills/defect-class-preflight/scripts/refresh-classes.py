@@ -217,20 +217,32 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # new-class pile was 14 at every step. An overbuilt first draft worn down to one
     # regex — not the non-convergent hardening the step-6 arms-race rule forbids.
     #
-    # `(?:[^.]|\.\S)` keeps the window inside ONE sentence while still crossing a file
-    # path: `.py` is a dot followed by non-space, a sentence end is a dot followed by
-    # space — so "test at tools/x.py:1301 enshrines" matches and "The test passes. The
-    # spec codifies the rule" does not. Every false-match shape measured across the five
-    # rounds is pinned by its own case in test_class_16_*: a verb with no witness, a
-    # witness with no verb, a test-file location, a `/tests/` directory, an
-    # `assert`-shaped path, the cross-sentence co-occurrence, the `attestation` substring,
-    # a word merely BEGINNING with `test`, a bare pronoun, and a witness noun that is the
-    # object rather than the subject.
+    # `(?:[^.!?]|[.!?]\S)` keeps the window inside ONE sentence while still crossing a
+    # file path. A sentence ends with a terminator followed by SPACE; a path's dot is
+    # followed by non-space — so "test at tools/x.py:1301 enshrines" matches while "The
+    # test passes. The spec codifies the rule" does not. All THREE terminators count:
+    # an earlier draft listed only `.`, and "Did the test pass? The spec codifies the
+    # older rule." false-matched (merge-gate witness lens r7 P2). 13 base-corpus rows pair
+    # this class's own `test` token with `!` or `?`, so that was a live surface, not a
+    # hypothetical. n:17/n:18 pin it.
+    #
+    # The `{0,80}` bounds REPETITIONS, not characters: a repetition is one char, or a
+    # terminator plus a non-space, so the reachable character span is ≥ 80. The widest
+    # artifact→verb gap among the real members is 60 chars, which is what 80 has headroom
+    # over; n:16 pins the cap with a 117-char gap an unbounded window would admit.
+    #
+    # The false-match shapes this row refuses are enumerated ONCE, in
+    # test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it's own cases,
+    # each with the comment naming the guard it pins. A prose list here was a second
+    # authority over the same facts and drifted the moment a case was added — it claimed
+    # to be exhaustive and was falsified twice in this arc (lens r2 and r7), which is a
+    # copy that cannot be kept true rather than a wording that needs care
+    # ([LAW:one-source-of-truth]).
     #
     # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
     # of these proves the wrong thing.
     "16 witness codifies the divergence": (
-        r"\btests?(?![a-z])(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
+        r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
 }
 

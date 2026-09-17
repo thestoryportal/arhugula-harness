@@ -258,6 +258,20 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             " assumption of network latency.",
             "location": "",
         },
+        # a sentence break on `?` or `!` rather than `.` — the window's terminator set was
+        # `.` alone for six rounds, so "Did the test pass? The spec codifies the older
+        # rule." false-matched (merge-gate witness lens r7 P2). 13 base-corpus rows pair
+        # this class's `test` token with `!` or `?`, so the surface was live.
+        {
+            "finding_id": "n:17",
+            "observed_evidence": "Did the test pass? The spec codifies the older rule.",
+            "location": "",
+        },
+        {
+            "finding_id": "n:18",
+            "observed_evidence": "The test failed! The spec codifies the older rule.",
+            "location": "",
+        },
         # an artifact->verb gap WIDER than the window: the cap is 80 and this gap is 117,
         # so the sentence is refused. The widest gap among the real members is 60
         # ("test at <path>:1301 enshrines"), which is where 80 comes from -- 60 plus
