@@ -66,6 +66,15 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     ),
     "2 prose stale / counts / cites": (
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
+        # Claim-vs-code half (added 2026-09-17, handoff-s2 supersede): prose that ASSERTS a
+        # mechanism behaviour the code does not have. Distinct from the drift half above,
+        # which is prose that WAS true and decayed; these were never true. Measured at the
+        # 2,191-finding corpus by diffing this module's own `classify` against HEAD's:
+        # 40 rows out of the unmatched pile, 0 of them the
+        # "contradicting C-HE-NN" code-vs-contract cluster (that shape is class 12/16, and a
+        # bare `contradict` would have swept all of it in — the class-2 `drift` mistake).
+        r"|(claims?|claimed|states|stated|says|documented|guarantees?|asserts?)"
+        r"[^.]{0,120}\b(but|is false|does not|never|contradict|incorrectly)"
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
