@@ -1082,6 +1082,28 @@ printf 'rc=%s' \$?")
     || bad "$SH: nonzero second library was not rejected: $FAILED"
 done
 
+# ...and at a DIFFERENT refusal exit than the one above, which is the whole point. The r10
+# witness drove only the unresolvable-library-root path -- the one site that then carried the
+# fix -- so it was structurally unable to notice that the other exits did not. This case
+# refuses via index validation, which returns from far lower in the file, and asserts the same
+# contract. Both pass now because the invalidation is hoisted to a single unconditional site
+# above every exit rather than repeated at each one (merge-gate concurrency lens, r2).
+# The env var is exported on its own line, not as a prefix to `source`: a prefix assignment to
+# a special builtin is not portable here and silently yielded an empty capture, which the
+# `rc=` sentinel caught rather than passing as a clean result.
+FARQ="$ROOT/farq"; mkdir -p "$FARQ/lanes"
+for SH in $SHELLS; do
+  FAR_EXIT=$("$SH" -c "cd '$ROOT/wt'
+export ARC_METRICS_QUEUE_DIR='$FARQ'
+source '$INIT' >/dev/null 2>&1
+export HARNESS_LANE_INDEX=../escape
+source '$INIT' >/dev/null 2>&1
+printf 'rc=%s orphan=%s fn=%s' \"\$?\" \"\${_LI_ORPHAN_DIR:+set}\" \"\$(type lane_stack_allowed >/dev/null 2>&1 && echo callable || echo gone)\"")
+  [ "$FAR_EXIT" = "rc=1 orphan= fn=gone" ] \
+    && ok "$SH: a refusal at a LATER exit also invalidates the prior callable surface" \
+    || bad "$SH: later-exit refusal left the prior lane callable: '$FAR_EXIT'"
+done
+
 # A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.
 # Every refusal case above enters from a fresh shell and therefore cannot see state an earlier
 # successful source left behind: measured before the fix, `lane_stack_allowed` survived a

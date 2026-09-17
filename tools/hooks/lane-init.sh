@@ -17,14 +17,17 @@
 #   * the lane index is claimed by EXCLUSIVE CREATE of `QUEUE_DIR/lanes/<k>` and released
 #     by `safe-worktree-remove.sh` at teardown. A worktree that already holds an entry
 #     REUSES it: two entries for one path would strand whichever the release missed.
-#   * `_LI_*` is this file's OWN namespace, never caller storage. Four of its five members --
-#     `_LI_SRC`, `_LI_ROOT`, `_LI_Q`, `_LI_WT` -- are cleared unconditionally on every exit.
-#     That became true with this change and was NOT true before it: two refusal exits (the
-#     stale-repair-lock and no-free-index branches) cleared none of them. The fifth,
-#     `_LI_ORPHAN_DIR` (set at the orphan sweep), DELIBERATELY survives: `lane_stack_allowed`
-#     reads it after sourcing returns, so clearing it would break the function this file
-#     exports. It is the one documented exception, not an oversight -- pinned as a survivor
-#     by the leak tests so a future "cleanup" of it goes red (codex r9 P3). Save/restore was proposed and refused: it would make one member behave unlike
+#   * `_LI_*` is this file's OWN namespace, never caller storage, and it has two disposals.
+#     `_LI_SRC`, `_LI_ROOT`, `_LI_Q`, `_LI_WT` are cleared unconditionally at every exit --
+#     true as of this change and NOT true before it, when the stale-repair-lock and
+#     no-free-index branches cleared none of them. `_LI_ORPHAN_DIR` is different: it is the
+#     EXPORTED surface, read by `lane_stack_allowed` after sourcing returns, so it must
+#     survive a source that succeeds. It is therefore invalidated ONCE at the top of the file
+#     together with `lane_stack_allowed` itself, and re-established only by a source that runs
+#     to completion. Both dispositions fall out of position rather than bookkeeping: every
+#     refusal exit sits above the lines that define them, so a refusal leaves them absent
+#     without any exit having to remember. Doing that per-exit is what failed -- the fix
+#     reached 1 of 12 exits (codex r9 P3; merge-gate concurrency lens r2). Save/restore was proposed and refused: it would make one member behave unlike
 #     its siblings, and its caller-had-a-value arm is a two-armed restore no real caller
 #     reaches. Anything keeping state in `_LI_*` already collides with three variables.
 #   * a RAM shortfall is ENVIRONMENTAL. It is reported as a NOTIFY under a `lane-env:`
@@ -38,6 +41,18 @@
 # repo-wide `gc.auto 0` of C-HE-11 §2 was never attempted) and no `loop_log_structured` (so
 # the C-HE-11 §5 headroom-shortfall NOTIFY -- which that clause requires be attributed to an
 # environmental cause family rather than a coordination one -- could not be emitted at all).
+# The exported surface is invalidated ONCE, here, before anything can fail -- not at each
+# refusal. `lane_stack_allowed` is (re)defined near the end of this file and `_LI_ORPHAN_DIR`
+# is assigned just before it, so BOTH exist only after a source that runs to completion; every
+# one of this file's refusal exits sits above those lines and therefore leaves them absent for
+# free. Doing it per-exit is what went wrong: the fix landed at 1 of 12 exits, two of which
+# this same arc had just edited, and a 13th exit would have silently inherited the gap. A
+# prior source's definitions are the thing being invalidated -- a shell that sourced a good
+# lane and then a refusing one must not keep answering for the old one (merge-gate
+# concurrency lens, r2).
+unset -f lane_stack_allowed 2>/dev/null || true
+unset _LI_ORPHAN_DIR
+
 _LI_SRC="${BASH_SOURCE[0]:-}"
 # zsh sets no BASH_SOURCE, and its `$0` names the sourced file only while FUNCTION_ARGZERO
 # is set. That is the default, but it is an ordinary option a lane's zsh config may turn
@@ -81,8 +96,6 @@ if [ -n "$_li_fail" ]; then
   # lane A's would otherwise keep exporting it after being told the lane is not
   # initialised, and this workspace binds reservation holders by lane_id.
   unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_lib _li_fail
-  unset _LI_ORPHAN_DIR
-  unset -f lane_stack_allowed 2>/dev/null || true
   return 1
 fi
 unset _li_lib _li_fail

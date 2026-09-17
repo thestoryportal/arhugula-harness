@@ -91,9 +91,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # (tools/hooks/lib.sh:144) about a caller's `set -e` propagating INTO a sourced file --
     # the opposite direction -- for a precision of 1/2. Under this file's prefer-to-miss
     # policy a term that steals a real finding from the intake pile does not earn its place.
-    "7 env-var mutation / restore": (
-        r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"
-    ),
+    "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (
         r"fallback ledger|venue|QUEUE_DIR|path default|resolves|home default|\$HOME"
