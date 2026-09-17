@@ -28,8 +28,6 @@
 # repo-wide `gc.auto 0` of C-HE-11 §2 was never attempted) and no `loop_log_structured` (so
 # the C-HE-11 §5 headroom-shortfall NOTIFY -- which that clause requires be attributed to an
 # environmental cause family rather than a coordination one -- could not be emitted at all).
-# zsh sets `$0` to the sourced file and bash sets it to the shell, so neither is the
-# authority alone; the pair is.
 _LI_SRC="${BASH_SOURCE[0]:-}"
 # zsh sets no BASH_SOURCE, and its `$0` names the sourced file only while FUNCTION_ARGZERO
 # is set. That is the default, but it is an ordinary option a lane's zsh config may turn
@@ -53,7 +51,10 @@ for _li_lib in lib.sh loop_lib.sh; do
   if ! . "$_LI_ROOT/tools/hooks/$_li_lib"; then
     echo "lane-init: failed to load tools/hooks/$_li_lib from '$_LI_ROOT' (resolved from '$_LI_SRC')" >&2
     echo "lane-init: lane NOT initialised -- do not treat this worktree as an open lane" >&2
-    unset _li_lib
+    # Strip the identity, as every other failure path here does: a shell that already held
+    # lane A's would otherwise keep exporting it after being told the lane is not
+    # initialised, and this workspace binds reservation holders by lane_id.
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _li_lib
     return 1
   fi
 done

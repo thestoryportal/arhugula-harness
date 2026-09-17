@@ -991,6 +991,21 @@ DET_RC=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' >/dev/null 2>&1; echo \$?"
 [ "$DET_RC" != "0" ] \
   && ok "an unresolvable library root makes sourcing fail loudly (rc=$DET_RC)" \
   || bad "unresolvable library root still returned 0 -- a silently half-initialised lane"
+# A refusal must also STRIP the lane identity, which is what every other failure path in
+# lane-init.sh does. The case that matters is not a fresh shell (it has nothing to leak) but
+# one already carrying lane A's identity that then sources a broken init for lane B: if the
+# exports survive, the shell reports "not initialised" and keeps acting as lane A, and this
+# workspace binds reservations to lane_id. (codex r2 P2.)
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  STALE=$("$SH" -c "export HARNESS_LANE_ID=laneA HARNESS_LANE_INDEX=1
+source '$DETACHED' >/dev/null 2>&1
+printf '%s/%s' \"\${HARNESS_LANE_ID:-cleared}\" \"\${HARNESS_LANE_INDEX:-cleared}\"")
+  [ "$STALE" = "cleared/cleared" ] \
+    && ok "$SH: a refused init clears a prior lane's exported identity" \
+    || bad "$SH: refused init left a stale identity behind: $STALE"
+done
+
 DET_ERR=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' 2>&1 >/dev/null")
 case "$DET_ERR" in
   *"lane-init: failed to load"*lib.sh*) ok "and it names the library it could not load" ;;
