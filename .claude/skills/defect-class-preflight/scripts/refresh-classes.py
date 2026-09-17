@@ -58,8 +58,8 @@ from pathlib import Path
 # rows under any prose-adjacent form tried. A bare `\bdrift` would have moved the 30
 # out of the new-class intake pile, the wrong direction under the policy above (codex
 # r1 P2 on the class-2-drift-extension arc). The recurring "test codifies the drift"
-# shape that note pointed at is now class 16 — measured at 14 unmatched rows on
-# 2026-09-17 — and is still not a class-2 term.
+# shape that note pointed at is now class 16 — measured at 15 unmatched rows on the
+# 2026-09-17 corpus of 2,163 — and is still not a class-2 term.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
