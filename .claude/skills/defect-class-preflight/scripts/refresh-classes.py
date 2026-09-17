@@ -58,7 +58,8 @@ from pathlib import Path
 # rows under any prose-adjacent form tried. A bare `\bdrift` would have moved the 30
 # out of the new-class intake pile, the wrong direction under the policy above (codex
 # r1 P2 on the class-2-drift-extension arc). The recurring "test codifies the drift"
-# shape (7+ rows) is a new-class candidate, not a class-2 term.
+# shape that note pointed at is now class 16 — measured at 14 unmatched rows on
+# 2026-09-17 — and is still not a class-2 term.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -135,6 +136,19 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "15 bound bytes are not the executed bytes": (
         r"working tree|live worktree|uncommitted|mutable tree|dirty",
         r"binding|base_sha|head_sha|\bHEAD\b|committed (diff|range|bytes|base)",
+    ),
+    # Measured on the 2026-09-17 corpus (2,162 findings) before landing: 29 rows carry a
+    # blessing verb and 14 matched no other class — exactly the pile this class empties.
+    # `pins the` was measured and DROPPED: its one unmatched hit read "--match-head-commit
+    # merely pins the merge", a binding claim with no witness in it. A tuple because the
+    # title names two conditions, so a future "the spec codifies the rule" is not this
+    # class ([LAW:types-are-the-program] — the strongest theorem still true of the shape).
+    # Both forms measure 29/14 on that corpus, so the conjunct costs no recall and
+    # bounds that false match. Overlap with class 4 is NOT the same defect: a vacuous witness proves
+    # nothing, one of these proves the wrong thing.
+    "16 witness codifies the divergence": (
+        r"codif|enshrin|blesses",
+        r"\btest|witness|assert|fixture|\bCI\b",
     ),
 }
 

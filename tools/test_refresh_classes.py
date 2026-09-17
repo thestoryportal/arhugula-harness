@@ -139,6 +139,59 @@ def test_report_counts_agree_with_classify(tmp_path: Path):
     assert "the widget frobnicates" in proc.stdout
 
 
+def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
+    # Evidence quoted from the rows that were measured into this class (2026-09-17 corpus,
+    # 14 unmatched rows). The conjunct is the contract: a blessing verb with no witness in
+    # the text is NOT this class — that is the measured `--match-head-commit merely pins
+    # the merge` false match, and a spec that codifies a rule is not a test that blesses a
+    # departure ([LAW:behavior-not-structure] — the class row's behaviour, not its regex).
+    codifying = [
+        {
+            "finding_id": "c:1",
+            "observed_evidence": "The new merged-holder test codifies this contract drift"
+            " while the clearance claims no spec contract changed.",
+            "location": "tools/arc_metrics.py:564",
+        },
+        {
+            "finding_id": "c:2",
+            "observed_evidence": "The rewritten test now expects the sibling R-999 row,"
+            " so it blesses rather than detects this regression",
+            "location": "tools/arc_exit_report.py:600",
+        },
+        {
+            "finding_id": "c:3",
+            "observed_evidence": "the new row-order test enshrines the opposite contract",
+            "location": "tools/loop_cost_baseline.py:47",
+        },
+        {
+            "finding_id": "c:4",
+            "observed_evidence": "test_codex_workflow_parity.py even requires the omission,"
+            " so CI codifies the admitted cohort gap instead of detecting it.",
+            "location": ".agents/skills/ship-pr/SKILL.md:208",
+        },
+    ]
+    not_codifying = [
+        # a blessing verb, no witness anywhere in the text
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "--match-head-commit merely pins the merge to that"
+            " unreviewed H2, and the spec codifies the older rule.",
+            "location": "",
+        },
+        # a witness, but nothing blessing anything
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "the added failure test asserts the warning",
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(codifying + not_codifying)).stdout)
+    for r in codifying:
+        assert "16 witness codifies the divergence" in out[r["finding_id"]], r["location"]
+    for r in not_codifying:
+        assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
+
+
 def test_every_class_row_has_its_skill_section_and_vice_versa():
     # the table and the author-facing checklist are two carriers of one class list
     # (codex r1 P2 on the intake arc): a row landed in one without the other is the
