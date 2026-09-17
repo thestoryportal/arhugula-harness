@@ -823,6 +823,35 @@ codex-review-uncommitted: _require-codex-subscription
 gemini-review base='main' outcome_json='':
     uv run python tools/agy_review.py --base {{base}} {{ if outcome_json != '' { '--outcome-json ' + quote(outcome_json) } else { '' } }}
 
+# ─── C-HE-29 shadow trial (U-HE-43) — the second reviewer's lens live, OFF the blocking path ──
+# `shadow-trial-score` runs the gemini wrapper as the shadow lens: rows land under
+# `producer=gemini-shadow` (one `no_finding` marker when clean), no gate admission, no
+# reservation round, no budget spend, and its exit never blocks (`|| true`). Run it only where
+# the blocking terminal for this head came from codex (a Claude-authored change, no failover):
+# the reducer discards a shadow round on any head where `gemini_review_wrapper` recorded a
+# terminal for the arc — an execution-time reading of C-HE-29 the spec does not state,
+# registered as B-252 (codex r7 P2; merge-gate r2). The operator (or
+# a third-party identity of NEITHER family under trial) disposes each shadow finding with
+# `shadow-trial-adjudicate` — the ONE writer of `unique_catch`; `shadow-trial-decide` is the
+# read-only kill/keep reducer, `--hitl` delivering a non-pending decision as a DEFERRED-HIL row.
+shadow-trial-score base='main':
+    #!/usr/bin/env bash
+    # Never blocks ship-pr (exit 0 on every path), never silent: without a recorded rule the
+    # decision would not be reproducible from rows alone, so a failed config append SKIPS the
+    # shadow review and says so instead of scoring rounds against an unrecorded policy.
+    if ! uv run python tools/shadow_trial.py config --lens gemini-shadow --if-absent; then
+      echo "shadow-trial-score: config row not recorded; shadow review skipped this round" >&2
+      exit 0
+    fi
+    HARNESS_SHADOW_LENS=1 just gemini-review {{base}} || true
+    uv run python tools/shadow_trial.py request-adjudications --lens gemini-shadow || true
+
+shadow-trial-decide lens='gemini-shadow' *ARGS:
+    uv run python tools/shadow_trial.py decide --lens {{lens}} {{ARGS}}
+
+shadow-trial-adjudicate finding_id disposition actor:
+    uv run python tools/shadow_trial.py adjudicate {{finding_id}} --disposition {{disposition}} --actor {{actor}}
+
 _require-antigravity:
     @if ! command -v agy >/dev/null 2>&1; then \
         echo "ERROR: agy (Antigravity CLI) not found on PATH."; \
