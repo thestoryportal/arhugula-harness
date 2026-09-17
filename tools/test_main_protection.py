@@ -369,6 +369,30 @@ def test_apply_keeps_validated_fence_on_cleanup_failure(monkeypatch, tmp_path):
     assert len(_puts(calls)) == 1 and _deletes(calls) == []
 
 
+# mutation-probe: drop `--required` from the watch argv in _watch_checks
+def test_watch_checks_ignores_a_failing_non_required_check(monkeypatch, tmp_path):
+    """gh's live behavior on scratch PR #1552 (2026-09-17): `gh pr checks --watch` exits 1
+    because the NON-required classify-diff job fails on the empty scratch diff, while
+    `--watch --required` exits 0 with every required context green. The watcher must judge
+    what strict:true enforces — the required contexts — not the whole check set."""
+    required = ["ruff (lint + format) — blocking", "pytest (all axis packages) — blocking"]
+    argvs: list[list[str]] = []
+
+    def fake_run(argv, **kw):
+        argvs.append(list(argv))
+        if "--watch" in argv:
+            rc = 0 if "--required" in argv else 1  # the non-required job is red
+            return subprocess.CompletedProcess(argv, rc, stdout="", stderr="")
+        assert "--json" in argv  # the registration-complete listing
+        names = [*required, "classify diff (bookkeeping fast path)"]
+        return subprocess.CompletedProcess(argv, 0, stdout="\n".join(names) + "\n", stderr="")
+
+    monkeypatch.setattr(mp.subprocess, "run", fake_run)
+    monkeypatch.setattr(mp.time, "sleep", lambda *_: None)
+    assert mp._watch_checks("1552", tmp_path, required) is True
+    assert any("--watch" in a and "--required" in a for a in argvs)
+
+
 def test_real_tiebreaker_refuses_when_fence_not_live(monkeypatch, capsys):
     """Drives the REAL tiebreaker (no stub, codex r9 P2): with the fence not live it must
     FAIL at the precondition — before creating any scratch state (no subprocess runs)."""
