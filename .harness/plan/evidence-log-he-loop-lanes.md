@@ -5,6 +5,8 @@
 tiebreaker PASS lines and pre-change `show` output are recorded by the session that runs
 the gate (C-HE-08 §2–§5, U-HE-27 Step 5).*
 
+*Section families (U-HE-44): branch-protection show/apply/tiebreaker · reviewer-concurrency probe verdicts (U-HE-35) · pilot reports (U-HE-37) · RED-first runs of AC#2 (U-HE-20) · equivalence proofs (U-HE-41). The first two grew organically above; the last three are opened below so the units that own them append rather than invent a home.*
+
 ## U-HE-27 landing record — B-190 bounded by the C-HE-08 §2 server fence (2026-08-21)
 
 Per B-190's close-out step (2) (`.harness/post-phase-8-forward-register.md`) and the
@@ -408,3 +410,36 @@ AFTER:
   "restrictions": null
 }
 ```
+
+---
+
+## Pilot reports (U-HE-37, C-HE-13 §3)
+
+One entry per manual N-lane pilot: the run id, the roster as SPAWNED (compare it against the
+`arcs` / `lanes` the report INFERS — C-HE-13's membership is inferred from the reservations
+carrying the run id, so a lane that died before recording `pilot_run_id` is invisible to the
+report; B-234), and the `just lanes-pilot-report <run_id>` verdict.
+
+| run id | lanes spawned | arcs enrolled | report verdict | notes |
+|---|---|---|---|---|
+| `pilot-2026-09-17-a` | 3 (lane-1, lane-2, lane-3) | `class-16-codifying-witness` (lane-3, merged #1562) · `lane-init-shell-portability` (lane-2, open #1561) · `u-he-44` (lane-1) | *pending — run once every enrolled arc has landed* | Phase 0 GREEN at `74c369c6` (58 rows) in a clean checkout; the gate refused in lane-1's own worktree on venue dirt only (ambient `HARNESS_LANE_ID`/`HARNESS_LANE_INDEX` plus graft's regenerated `.claude/settings.json`). `u-he-40` deliberately NOT enrolled: it is held at budget exhaustion and cannot land, and C-HE-13 §3 clause (a) requires every member arc to land through the door. |
+
+## RED-first runs of AC#2 (U-HE-20)
+
+AC#2 requires the witness to be seen RED before the fix. One row per unit: the test, the
+commit at which it was run UNFIXED, the RED output line it produced, and the commit that
+turned it GREEN — so the claim is checkable from the log alone rather than from a PR body.
+
+| unit | test | unfixed commit | RED output line | GREEN commit |
+|---|---|---|---|---|
+| *(append on each RED-first run)* | | | | |
+
+## Equivalence proofs (U-HE-41)
+
+One row per double-run removed: the two runs claimed equivalent, the evidence they produce
+the same verdict over the same input, and the commit that removed the redundant one. A
+removal without a proof row is the thing this section exists to prevent.
+
+| claim | equivalence evidence | removal commit |
+|---|---|---|
+| *(append on each proven equivalence)* | | |
