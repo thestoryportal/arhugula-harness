@@ -826,7 +826,10 @@ gemini-review base='main' outcome_json='':
 # ─── C-HE-29 shadow trial (U-HE-43) — the second reviewer's lens live, OFF the blocking path ──
 # `shadow-trial-score` runs the gemini wrapper as the shadow lens: rows land under
 # `producer=gemini-shadow` (one `no_finding` marker when clean), no gate admission, no
-# reservation round, no budget spend, and its exit never blocks (`|| true`). The operator (or
+# reservation round, no budget spend, and its exit never blocks (`|| true`). Run it only where
+# the blocking terminal for this head came from codex (a Claude-authored change, no failover):
+# the reducer discards a shadow round on any head where `gemini_review_wrapper` recorded a
+# terminal for the arc (C-HE-29 §1 second family; codex r7 P2). The operator (or
 # a third-party identity of NEITHER family under trial) disposes each shadow finding with
 # `shadow-trial-adjudicate` — the ONE writer of `unique_catch`; `shadow-trial-decide` is the
 # read-only kill/keep reducer, `--hitl` delivering a non-pending decision as a DEFERRED-HIL row.

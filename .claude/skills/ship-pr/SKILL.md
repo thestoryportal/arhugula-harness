@@ -126,8 +126,14 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **Shadow trial, off-path (U-HE-43; C-HE-29).** After the blocking chain has reached its
   terminal for this head, run the second reviewer's lens as a SHADOW — it never blocks and
   never spends the arc's review budget. The shadow lens (gemini) must DIFFER from the
-  blocking reviewer (codex on this Claude-authored path); the Codex carrier, where Gemini
-  already blocks, does not run it (codex r5 P2):
+  producer that supplied the blocking terminal for THIS head: codex on this Claude-authored
+  path — when the D-C failover supplied the verdict instead (`gemini-review (failover)`,
+  producer `gemini_review_wrapper` on this head), skip the shadow for this head, the lens
+  would re-review its own family's verdict; the Codex carrier, where Gemini already blocks,
+  does not run it either (codex r5/r7 P2). The reducer enforces the same premise from rows
+  alone — a shadow round on a head where `gemini_review_wrapper` recorded a terminal for the
+  arc is not a scored round and its findings never count — so a mistaken run costs a wasted
+  review, never a contaminated trial:
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just shadow-trial-score`
   (rows land under `producer=gemini-shadow`, one `no_finding` marker when clean; no gate
   admission, no reservation round). Each shadow finding is disposed by the operator or a

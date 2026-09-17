@@ -155,13 +155,19 @@ def test_a_blocking_reviewer_is_never_a_lens(monkeypatch: pytest.MonkeyPatch):
     assert st.validate_lens(LENS) == LENS
     monkeypatch.setattr(st.fr, "read_rows", lambda *a, **k: pytest.fail("read before parse"))
     monkeypatch.setattr(st.fr, "append_derived", lambda *a, **k: pytest.fail("write"))
-    for lens in ("codex_review_wrapper", "merge-gate-concurrency", "", "TBD"):
+    for lens in (
+        "codex_review_wrapper",
+        "merge-gate-concurrency",
+        "",
+        "TBD",
+        "reviewer_concurrency_probe",
+    ):
         for argv in (
             ["decide", "--lens", lens, "--hitl"],
             ["config", "--lens", lens],
             ["request-adjudications", "--lens", lens],
         ):
-            with pytest.raises(ValueError, match="never a blocking reviewer"):
+            with pytest.raises(ValueError, match="must be a shadow producer"):
                 st.main(argv)
 
 
@@ -400,6 +406,66 @@ def test_decision_is_delivered_once_per_frozen_sample(
     assert st.deliver_decision(LENS, p)["delivered"] is False and len(seen) == 1
     markers = [r for r in fr.read_rows(p) if r["finding_type"] == st.DECISION_TYPE]
     assert len(markers) == 1 and "decision=kill" in markers[0]["observed_evidence"]
+
+
+# mutation-probe: drop the same-family exclusion from _scored (score every lens round)
+def test_a_shadow_round_where_its_own_family_blocked_is_not_scored():
+    """C-HE-29 §1: the lens measures a SECOND family. On a head where the gemini blocking
+    wrapper recorded the terminal (the D-C failover, or a Gemini-authored change) the shadow
+    re-reviews its own family's verdict — not a scored round, and its catch never counts
+    (codex r5/r7 P2)."""
+    g = "g" * 40  # round 5 is scored on its own head; the fixture's markers share another
+    rows = [m for m in _markers(30) if m["round_n"] != 5]
+    rows.append(_row(5, LENS, location="own-family", uc=True, head=g))
+    rows.append(_adj(5, "own-family", "accepted", head=g))
+    d = st.decide(rows, LENS)
+    assert d["scored"] == 30 and d["unique"] == 1 and d["decision"] == "kill"
+    rows.append(_row(5, "gemini_review_wrapper", kind="no_finding", location="gemini", head=g))
+    d = st.decide(rows, LENS)
+    assert d["scored"] == 29 and d["unique"] == 0 and d["decision"] == "pending"
+    rows.extend(_markers(31)[30:])  # a 31st round restores n
+    d = st.decide(rows, LENS)
+    assert d["scored"] == 30 and d["unique"] == 0 and d["decision"] == "kill"
+
+
+# mutation-probe: count catch findings instead of catch-rounds (drop unique_rounds)
+def test_two_catches_in_one_round_are_one_success():
+    """C-HE-29 §3 states P(kill | per-round unique-catch rate p) as a binomial over rounds, so
+    the rule counts rounds holding a unique catch: two accepted catches in round 5 are one
+    success and the lens is killed; a catch in a second round keeps it (codex r7 P2)."""
+    rows = _markers(30)
+    rows.append(_row(5, LENS, location="a", uc=True))
+    rows.append(_adj(5, "a", "accepted"))
+    rows.append(_row(5, LENS, location="b", uc=True, ts="2026-08-18T00:00:06Z"))
+    rows.append(_adj(5, "b", "accepted", ts="2026-08-18T00:00:07Z"))
+    d = st.decide(rows, LENS)
+    assert d["unique"] == 1 and d["unique_findings"] == 2 and d["decision"] == "kill"
+    rows.append(_row(9, LENS, location="c", uc=True))
+    rows.append(_adj(9, "c", "accepted"))
+    assert st.decide(rows, LENS)["unique"] == 2
+    assert st.decide(rows, LENS)["decision"] == "keep"
+
+
+# mutation-probe: drop the evidence component from delivery_identity
+def test_changed_evidence_is_a_new_proposal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A re-adjudication that changes the delivered evidence while the sample, rule and outcome
+    stay the same is a new proposal and is delivered again (codex r7 P2)."""
+    p = tmp_path / "g.jsonl"
+    for r in _markers(30):
+        fr.append_row(r, p)
+    fr.append_row(_row(7, LENS, location="one", uc=True), p)
+    fr.append_row(_adj(7, "one", "accepted", ts="2026-08-18T00:00:08Z"), p)
+    seen: list[tuple] = []
+    monkeypatch.setattr(st, "_emit_loop_row", lambda *a: seen.append(a))
+    assert st.deliver_decision(LENS, p)["decision"] == "kill" and len(seen) == 1
+    assert st.deliver_decision(LENS, p)["delivered"] is False and len(seen) == 1
+    # a second catch in the SAME round: still one catch-round, still kill — but new evidence
+    fr.append_row(_row(7, LENS, location="two", uc=True, ts="2026-08-18T00:00:09Z"), p)
+    fr.append_row(_adj(7, "two", "accepted", ts="2026-08-18T00:00:10Z"), p)
+    d = st.deliver_decision(LENS, p)
+    assert d["decision"] == "kill" and d["unique"] == 1 and d["delivered"] is True
+    assert len(seen) == 2 and "findings=2" in seen[1][3]
+    assert st.deliver_decision(LENS, p)["delivered"] is False and len(seen) == 2
 
 
 # mutation-probe: drop n/threshold/decision from delivery_identity (key on the sample only)

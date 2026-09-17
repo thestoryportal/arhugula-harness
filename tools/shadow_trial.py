@@ -53,6 +53,8 @@ MODEL_FAMILIES = {
     "anthropic": ("claude", "anthropic"),
 }
 PLACEHOLDERS = ("", "todo", "tbd", "placeholder", "n/a", "-")
+#: A shadow producer is named as one (agy_review.SHADOW_PRODUCER = "gemini-shadow").
+SHADOW_SUFFIX = "-shadow"
 
 
 def is_blocking_producer(producer: str) -> bool:
@@ -105,11 +107,36 @@ def rule_from_rows(rows: list[dict], lens: str) -> tuple[int, int]:
     return n, threshold
 
 
+def family_of(producer: str) -> str | None:
+    """The model family a producer name carries (MODEL_FAMILIES tokens), or None."""
+    name = producer.lower()
+    return next((fam for fam, toks in MODEL_FAMILIES.items() if any(t in name for t in toks)), None)
+
+
+def _same_family_heads(rows: list[dict], lens: str) -> set[tuple[str, str | None]]:
+    """(arc_id, head_sha) where a BLOCKING producer of the lens's own family recorded a terminal
+    — the D-C failover verdict, or a change the lens's family authored. A shadow round there
+    re-reviews its own family's verdict and measures no second family (C-HE-29 §1; codex r7
+    P2), so it is not a scored round and its findings never count."""
+    fam = family_of(lens)
+    return {
+        (r["arc_id"], r["head_sha"])
+        for r in rows
+        if r["record_kind"] in SCORED_KINDS
+        and is_blocking_producer(r["producer"])
+        and family_of(r["producer"]) == fam
+    }
+
+
 def _scored(rows: list[dict], lens: str) -> list[dict]:
+    excluded = _same_family_heads(rows, lens)
     return [
         r
         for r in rows
-        if r["producer"] == lens and r["record_kind"] in SCORED_KINDS and r["round_n"] is not None
+        if r["producer"] == lens
+        and r["record_kind"] in SCORED_KINDS
+        and r["round_n"] is not None
+        and (r["arc_id"], r["head_sha"]) not in excluded
     ]
 
 
@@ -131,6 +158,7 @@ def unique_catches(rows: list[dict], lens: str) -> list[dict]:
     (head_sha, location, finding_type) and (b) the LAST row is an accepted adjudication."""
     last = fr.reduce_last_by_finding_id(rows)
     blocking = _blocking_keys(rows)
+    excluded = _same_family_heads(rows, lens)
     return [
         r
         for r in last.values()
@@ -138,6 +166,7 @@ def unique_catches(rows: list[dict], lens: str) -> list[dict]:
         and r.get("unique_catch")
         and (r["head_sha"], r["location"], r["finding_type"]) not in blocking
         and r.get("disposition") == "accepted"  # (b): a later `rejected` never counts
+        and (r["arc_id"], r["head_sha"]) not in excluded  # no second family measured there
     ]
 
 
@@ -162,8 +191,9 @@ def decide(
 ) -> dict:
     """Reproducible from rows alone (C-HE-29 Invariants): the rule comes from the log's last
     config row (explicit `n` / `threshold` override it for evaluation), pending until n scored
-    rounds AND every sampled lens finding is disposed, then kill iff the sample holds fewer
-    than `threshold` unique catches. `catches`
+    rounds AND every sampled lens finding is disposed, then kill iff fewer than `threshold`
+    sampled rounds hold a unique catch (`unique`; `unique_findings` is the catch count the §4
+    evidence also lists). `catches`
     lists every lens finding with `unique_catch` and its last disposition, the evidence §4
     delivers to the operator."""
     logged_n, logged_threshold = rule_from_rows(rows, lens)
@@ -172,11 +202,13 @@ def decide(
     k = len(scored_rounds(rows, lens))
     sample = first_n_rounds(rows, lens, n) if k >= n else []
     in_sample = set(sample)
-    counted_ids = {
-        c["finding_id"]
-        for c in unique_catches(rows, lens)
-        if k < n or (c["arc_id"], c["round_n"]) in in_sample
-    }
+    counted = [
+        c for c in unique_catches(rows, lens) if k < n or (c["arc_id"], c["round_n"]) in in_sample
+    ]
+    counted_ids = {c["finding_id"] for c in counted}
+    # The rule counts catch-ROUNDS: p_kill (§3) is a binomial over rounds with P(a round holds
+    # a unique catch) = p, so two catches in one round are one success, not two (codex r7 P2).
+    unique_rounds = {(c["arc_id"], c["round_n"]) for c in counted}
     # EVERY lens finding, each with its last unique_catch value and disposition and WHY it
     # did or did not count — the §4 evidence is the sampled rounds' dispositions, so a
     # finding adjudicated unique_catch=false or still undisposed is presented too (codex r2
@@ -206,13 +238,14 @@ def decide(
         "scored": k,
         "catches": catches,
         "awaiting": awaiting,
-        "unique": len(counted_ids),
+        "unique": len(unique_rounds),
+        "unique_findings": len(counted_ids),
     }
     if k < n or awaiting:
         return {**base, "decision": "pending"}
     return {
         **base,
-        "decision": "kill" if len(counted_ids) < threshold else "keep",
+        "decision": "kill" if len(unique_rounds) < threshold else "keep",
         "sample": sample,
     }
 
@@ -227,15 +260,19 @@ def oc_table() -> list[tuple[float, float]]:
 
 
 def validate_lens(lens: str) -> str:
-    """The lens under trial is a shadow producer: never a placeholder and never a blocking
-    reviewer, whose rows are the loop's own verdicts (codex r6 P2: `decide <blocking> --hitl`
-    would score ordinary review rows as a trial and enqueue a HITL over them). Parsed ONCE at
-    the CLI edge ([LAW:parse-dont-validate]); the reducers take the stamped value."""
-    forbidden = lens.strip().lower() in PLACEHOLDERS or is_blocking_producer(lens)
+    """The lens under trial is a shadow producer BY NAME — the `-shadow` suffix agy_review's
+    SHADOW_PRODUCER carries (C-HE-24 §2 producer naming) — never a placeholder, a blocking
+    reviewer or an operational producer, whose rows are not a trial (codex r6 P2, r7 P2:
+    `decide <any-producer> --hitl` would score ordinary rows and enqueue a HITL over them).
+    Parsed ONCE at the CLI edge ([LAW:parse-dont-validate]); the reducers take the stamped value."""
+    name = lens.strip().lower()
+    forbidden = (
+        name in PLACEHOLDERS or is_blocking_producer(lens) or not name.endswith(SHADOW_SUFFIX)
+    )
     if forbidden:
         raise ValueError(
-            f"shadow-trial lens {lens!r} must be a shadow producer, never a blocking reviewer "
-            "or a placeholder"
+            f"shadow-trial lens {lens!r} must be a shadow producer (`*{SHADOW_SUFFIX}`), never a "
+            "blocking reviewer, an operational producer or a placeholder"
         )
     return lens
 
@@ -362,7 +399,7 @@ def hitl_request(decision: dict, lens: str) -> None:
         "shadow_trial",
         "shadow-trial-adjudicate:HITL-recoverable:kill_keep_decision",
         f"SHADOW-{lens} — n={decision['n']} scored={decision['scored']} "
-        f"unique={decision['unique']} "
+        f"unique={decision['unique']} (catch-rounds; findings={decision['unique_findings']}) "
         f"threshold={decision['threshold']} → proposed {decision['decision'].upper()}; "
         f"sample rounds: {rounds}; unique_catch dispositions: {catches}; "
         "respond approve-kill | reject-keep | amend-threshold",
@@ -375,16 +412,27 @@ def sample_digest(sample: list[tuple[str, int]]) -> str:
     return hashlib.sha1("|".join(f"{a}/{r}" for a, r in sample).encode()).hexdigest()[:12]
 
 
+def evidence_digest(catches: list[dict]) -> str:
+    import hashlib
+
+    facts = sorted(
+        f"{c['finding_id']}:{c['disposition']}:{c['unique_catch']}:{c['counted']}" for c in catches
+    )
+    return hashlib.sha1("|".join(facts).encode()).hexdigest()[:12]
+
+
 def delivery_identity(decision: dict) -> str:
-    """What makes a decision the SAME proposal: the frozen sample, the rule in force and the
-    outcome. An amended threshold (the amend-threshold response) or a changed outcome is a
-    new proposal and is delivered again (codex r4 P2)."""
+    """What makes a decision the SAME proposal: the frozen sample, the rule in force, the
+    outcome AND the evidence delivered with it (every finding's disposition and whether it
+    counted). An amended threshold, a changed outcome or a re-adjudication that changes the
+    evidence is a new proposal and is delivered again (codex r4 P2, r7 P2)."""
     digest = sample_digest([tuple(x) for x in decision["sample"]])
     parts = [
         f"sample={digest}",
         f"n={decision['n']}",
         f"threshold={decision['threshold']}",
         f"decision={decision['decision']}",
+        f"evidence={evidence_digest(decision['catches'])}",
     ]
     return " ".join(parts)
 

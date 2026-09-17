@@ -75,8 +75,12 @@ The shadow trial (U-HE-43; C-HE-29) runs ONLY where the shadow lens is a second 
 family: the Claude-authored path, where `just codex-review` blocks and Gemini shadows it. When
 Codex authored the change, Gemini is already the blocking reviewer above, so a `gemini-shadow`
 run would measure no second family — do NOT run `just shadow-trial-score` on that path, and do
-not adjudicate its findings with a Codex identity (the authoring family). On the Claude-authored
-path, after the blocking chain reaches its terminal for this head: `HARNESS_ARC_ID=<arc-id>
+not adjudicate its findings with a Codex identity (the authoring family). The same holds when
+`just codex-review`'s D-C failover supplied the blocking verdict for this head (producer
+`gemini_review_wrapper`): skip the shadow for that head. The reducer enforces the premise from
+rows alone (a shadow round on a head where `gemini_review_wrapper` recorded a terminal for the
+arc is not scored and its findings never count), so a mistaken run wastes a review, never the
+trial. On the Claude-authored path, after the blocking chain reaches its terminal for this head: `HARNESS_ARC_ID=<arc-id>
 HARNESS_LANE_ID=<lane-id> just shadow-trial-score` — rows land under `producer=gemini-shadow`
 (one `no_finding` marker when clean), no gate admission, no reservation round, no budget spend,
 and its exit never blocks. Dispose each shadow finding with `just shadow-trial-adjudicate
