@@ -529,6 +529,86 @@ def test_decision_is_computed_from_the_rows_under_the_lock(
     assert d["decision"] == "keep" and d["threshold"] == 1 and "KEEP" in seen[0][3]
 
 
+# mutation-probe: move hitl_request / _emit_loop_row back inside the append_* build
+def test_the_emission_runs_with_the_gate_log_unlocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """merge-gate r1 (concurrency P2): the loop-ledger emission is a subprocess and must never
+    run inside the gate-log flock, or a blocking reviewer's own write can starve. Witness: the
+    emitter itself appends a row — which takes the lock — under a short lock wait; held, it
+    would raise RecordError, and the delivery/request would not complete."""
+    p = tmp_path / "g.jsonl"
+    for r in _markers(30):
+        fr.append_row(r, p)
+    monkeypatch.setattr(fr, "LOCK_TIMEOUT_S", 0.5)
+    emitted: list[str] = []
+
+    def emit_taking_the_lock(kind: str, _lane: str, cause: str, detail: str) -> None:
+        fr.append_row(
+            _row(
+                31 + len(emitted), LENS, kind="no_finding", location="gemini", n=31 + len(emitted)
+            ),
+            p,
+        )
+        emitted.append(cause)
+
+    monkeypatch.setattr(st, "_emit_loop_row", emit_taking_the_lock)
+    assert st.deliver_decision(LENS, p)["delivered"] is True
+    fr.append_row(_row(3, LENS, location="x", uc=None), p)
+    assert [f["location"] for f in st.request_adjudications(LENS, p)] == ["x"]
+    assert len(emitted) == 2
+
+
+def test_a_proposal_superseded_between_emission_and_marker_is_delivered_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The marker is written only if the log still yields the SAME proposal: a row landing
+    between the emission and the marker leaves none, and the next run delivers the new
+    proposal (twice for a superseded proposal, never zero for a delivered one)."""
+    p = tmp_path / "g.jsonl"
+    for r in _markers(30):
+        fr.append_row(r, p)
+    fr.append_row(_row(7, LENS, location="one", uc=True), p)
+    fr.append_row(_adj(7, "one", "accepted", ts="2026-08-18T00:00:08Z"), p)
+    seen: list[tuple] = []
+
+    def emit_then_amend(*a):
+        seen.append(a)
+        if len(seen) == 1:  # the amendment lands after the emission, before the marker
+            fr.append_row(st.config_row(lens=LENS, rows=fr.read_rows(p), threshold=1), p)
+
+    monkeypatch.setattr(st, "_emit_loop_row", emit_then_amend)
+    d = st.deliver_decision(LENS, p)
+    assert d["decision"] == "kill" and d["delivered"] is False and len(seen) == 1
+    assert not [r for r in fr.read_rows(p) if r["finding_type"] == st.DECISION_TYPE]
+    d = st.deliver_decision(LENS, p)
+    assert d["decision"] == "keep" and d["threshold"] == 1 and d["delivered"] is True
+    assert len(seen) == 2 and "KEEP" in seen[1][3]
+
+
+def test_shadow_trial_score_recipe_threads_the_shadow_lens_off_path():
+    """merge-gate r1 (witness-adequacy P2): the unattended entry point ship-pr runs is the
+    justfile recipe, so its body is the witness surface — the config row is required first
+    (a failed append skips the review and exits 0), the review runs as the SHADOW lens, and
+    the request step follows; the two off-path steps never block (`|| true`)."""
+    justfile = (Path(__file__).resolve().parents[1] / "justfile").read_text()
+    body = justfile.split("shadow-trial-score base='main':", 1)[1].split("\n\n", 1)[0]
+    lines = [
+        ln.strip() for ln in body.splitlines() if ln.strip() and not ln.strip().startswith("#")
+    ]
+    config = next(
+        i
+        for i, ln in enumerate(lines)
+        if "shadow_trial.py config --lens gemini-shadow --if-absent" in ln
+    )
+    assert lines[config].startswith("if !") and lines[config + 2] == "exit 0"
+    review = lines.index("HARNESS_SHADOW_LENS=1 just gemini-review {{base}} || true")
+    request = lines.index(
+        "uv run python tools/shadow_trial.py request-adjudications --lens gemini-shadow || true"
+    )
+    assert config < review < request
+
+
 # mutation-probe: drop the `already` filter in request_adjudications (re-request every run)
 def test_every_undisposed_shadow_finding_is_requested_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

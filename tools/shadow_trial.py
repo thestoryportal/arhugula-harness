@@ -418,24 +418,43 @@ def decision_marker(rows: list[dict], lens: str, decision: dict) -> dict:
 
 
 def deliver_decision(lens: str, path: Path | None = None) -> dict:
-    """`decide --hitl`. The decision is computed from the rows AS THEY STAND UNDER THE LOCK
-    (a concurrent adjudication, blocking row or config amendment cannot stale the proposal),
-    the HITL request is emitted FIRST, and only a successful emission writes the marker — so
-    a failed emission leaves no "delivered" memory and the next run retries (at-least-once:
-    a crash between emission and marker re-emits, never loses; codex r4 P2 ×3). Returns the
-    decision with `delivered`."""
-    decided: dict = {}
+    """`decide --hitl`. The HITL request is emitted FIRST and the marker written only after a
+    successful emission, so a failed emission leaves no "delivered" memory and the next run
+    retries (at-least-once; codex r4 P2). The emission is a subprocess and runs with the gate
+    log UNLOCKED ([LAW:effects-at-boundaries]; merge-gate r1 concurrency P2: a write inside
+    the flock can starve a blocking reviewer's own log write past its lock wait). The marker
+    is derived under the lock and written only if the log still yields the SAME proposal
+    (identity: sample, rule, outcome); a row that landed in between leaves no marker, and the
+    next run delivers the new proposal — a superseded proposal may reach the operator twice,
+    never a delivered one zero times. Returns the decision with `delivered`."""
+    log = _rows_under_lock(path)  # the proposal describes the log as it stood under the lock
+    d = decide(log, lens)
+    identity = delivery_identity(d) if d["decision"] != "pending" else None
+    if identity is None or decision_recorded(log, lens, identity):
+        return {**d, "delivered": False}
+    hitl_request(d, lens)  # raises on failure -> nothing appended, retry re-emits
 
     def build(log: list[dict]) -> dict | None:
-        d = decide(log, lens)
-        decided.update(d)
-        if d["decision"] == "pending" or decision_recorded(log, lens, delivery_identity(d)):
+        now = decide(log, lens)
+        same = now["decision"] != "pending" and delivery_identity(now) == identity
+        if not same or decision_recorded(log, lens, identity):
             return None
-        hitl_request(d, lens)  # raises on failure -> nothing appended, retry re-emits
-        return decision_marker(log, lens, d)
+        return decision_marker(log, lens, now)
 
     written = fr.append_derived(build, path)
-    return {**decided, "delivered": written is not None}
+    return {**d, "delivered": written is not None}
+
+
+def _rows_under_lock(path: Path | None) -> list[dict]:
+    """The log as it stands under its lock: a derive that appends nothing (pure computation
+    under the lock is fine; only the emission — a subprocess — must run outside it)."""
+    seen: list[list[dict]] = []
+
+    def capture(log: list[dict]) -> None:
+        seen.append(log)
+
+    fr.append_derived(capture, path)
+    return seen[0]
 
 
 def undisposed_findings(rows: list[dict], lens: str) -> list[dict]:
@@ -464,23 +483,15 @@ def _request_row(f: dict, lens: str) -> tuple[dict, fr.Envelope]:
 def request_adjudications(lens: str, path: Path | None = None) -> list[dict]:
     """C-HE-29 §4: every shadow finding is handed to the operator as a `shadow-trial-adjudicate`
     HITL row, once — the request marker on the log is the memory (rows alone), so repeated
-    score runs never re-enqueue a finding (codex r3 P2). Each finding is its own critical
-    section: its HITL row is emitted FIRST and its marker appended before the NEXT finding is
-    attempted, so a failed emission is retried next run and a finding already delivered is
-    never re-emitted because a later one failed (codex r4 P2, r5 P3). Returns the findings
+    score runs never re-enqueue a finding (codex r3 P2). Per finding: its HITL row is emitted
+    FIRST, with the gate log UNLOCKED ([LAW:effects-at-boundaries]; merge-gate r1 concurrency
+    P2), then its marker is appended under the lock before the NEXT finding is attempted — a
+    failed emission is retried next run, and a finding already delivered is never re-emitted
+    because a later one failed (codex r4 P2, r5 P3). Two request runs racing on one log may
+    both emit a finding before either marks it (twice, never zero). Returns the findings
     requested."""
     requested: list[dict] = []
-
-    def build_next(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
-        already = {
-            r["location"]
-            for r in rows
-            if r["producer"] == CONFIG_PRODUCER and r["finding_type"] == REQUEST_TYPE
-        }
-        pending = [f for f in undisposed_findings(rows, lens) if f["finding_id"] not in already]
-        if not pending:
-            return []
-        f = pending[0]
+    while (f := _next_unrequested(fr.read_rows(path), lens)) is not None:
         _emit_loop_row(  # raises -> THIS marker unwritten; earlier ones already persisted
             "DEFERRED-HIL",
             "shadow_trial",
@@ -489,14 +500,30 @@ def request_adjudications(lens: str, path: Path | None = None) -> list[dict]:
             f"awaits an adjudicator of neither family: just shadow-trial-adjudicate "
             f"{f['finding_id']} accepted|rejected|suppressed <actor>",
         )
+        fr.append_observations(lambda rows, f=f: _marker_unless_requested(rows, f, lens), path)
         requested.append(f)
-        return [_request_row(f, lens)]
-
-    # [LAW:no-ambient-temporal-coupling] the marker's persistence is owned by the same lock
-    # that emitted it; the next finding is only attempted once the previous marker is on disk.
-    while fr.append_observations(build_next, path):
-        pass
     return requested
+
+
+def _requested_ids(rows: list[dict]) -> set[str]:
+    return {
+        r["location"]
+        for r in rows
+        if r["producer"] == CONFIG_PRODUCER and r["finding_type"] == REQUEST_TYPE
+    }
+
+
+def _next_unrequested(rows: list[dict], lens: str) -> dict | None:
+    already = _requested_ids(rows)
+    pending = [f for f in undisposed_findings(rows, lens) if f["finding_id"] not in already]
+    return pending[0] if pending else None
+
+
+def _marker_unless_requested(
+    rows: list[dict], f: dict, lens: str
+) -> list[tuple[dict, fr.Envelope]]:
+    """The marker, derived under the lock: nothing if a racing run marked this finding first."""
+    return [] if f["finding_id"] in _requested_ids(rows) else [_request_row(f, lens)]
 
 
 def main(argv: list[str] | None = None) -> int:
