@@ -10,3 +10,24 @@
 *.toml  text eol=lf
 *.yaml  text eol=lf
 *.yml   text eol=lf
+
+# --- append-only ledger merge strategy (B-255) --------------------------------------
+# These three ledgers are STRICTLY APPEND-ONLY: every writer opens them with O_APPEND /
+# mode "a" and adds whole lines; nothing edits or removes an existing row (an
+# adjudication is appended as its own `finding_adjudication` row, never an in-place
+# rewrite). For that shape a merge is a UNION, never a choice — two lanes appending
+# concurrently is the normal case, not a conflict, and resolving it by hand is both
+# pure overhead and a chance to drop a row.
+#
+# Measured 2026-09-17: one held branch's appended rows fenced a sibling lane's
+# selection gate on merge-gate-log.jsonl alone, and three such conflicts were resolved
+# by hand in a single session.
+#
+# DELIBERATELY NOT LISTED: .harness/arc-metrics.jsonl. It is whole-file rewritten
+# (`arc_metrics.relabel_arc_type_close`, temp + os.replace), so union would keep BOTH
+# the pre- and post-relabel row for one arc — and merge CLEAN while doing it, which is
+# the SPLIT_BRAIN_LEDGER state that module exists to refuse. Adding a rewritten ledger
+# here is silent corruption; tools/test_gitattributes_ledger_merge.py pins the split.
+.harness/merge-gate-log.jsonl        merge=union
+.harness/mutation-probe-log.jsonl    merge=union
+.harness/codex_credential_gates.jsonl merge=union
