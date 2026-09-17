@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `93ec01822474` |
+| `workspace_state_hash` | `117c13bb4252` |
 | `last_refreshed` | 2026-09-17T00:00:00Z |
-| `git_head` | `74c369c6` —  |
+| `git_head` | `1cc626b4` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1562).** The first manual multi-lane pilot ran at three lanes (C-HE-13 §3) and lane 3's arc `class-16-codifying-witness` landed through the door: defect class 16, "the witness codifies the divergence" — a test that asserts a departure from a cleared contract and so ships the breach with regression armour. It closes the named residual the class-2 drift note left behind, and closes handoff-s2 §2 B honestly, because grounding found that item's own `\bdrift` proposal already refused at HEAD and pinned by `test_bare_drift_is_not_class_2_vocabulary` — that §2 B text is stale and still instructs future lanes to redo refused work, so superseding it is owed as a doc-only arc. The class took eight review rounds and every absorption REMOVED something (`pins the`, a trailing `[\w-]*` measured byte-identical when deleted, the bare pronouns `it`/`which`, then the whole `CI|witness|fixture` arm once measured to add zero to the new-class pile): a two-conjunct tuple worn down to one regex, with the pile at 14 at every step against base `63e19e3ee`. Sibling lanes: PR #1561 carries the zsh `lane-init` portability fix this lane surfaced (`BASH_SOURCE` is unset under zsh, so `_LI_ROOT` resolved to `$HOME`), and #1563 landed B-255's ledger-merge guard, which refuses `merge=union` on `.harness/merge-gate-log.jsonl` because adjudications are separate rows and a union would decide a disposition by merge direction; `u-he-40` remains the held B-244 arc whose `pending` reservation still fences every other lane's selection-time disjointness gate. Two coordination findings from lane 3 owe `B-*` rows and were deliberately not bundled, because `.harness/forward-register.yaml` was concurrently written by the other lanes: the review-gate recipe family (`review-template-preflight`, `review-attest-preflight`, `review-with-failover-logged`, and their sweep twins) defaults to `base='main'`, which in a lane worktree is routinely stale and cannot be fast-forwarded because `main` is checked out in another worktree — so the default widens not just the attestation but the REVIEWED BYTES; and `arc_disjoint_check`'s exit-1 remedy ("re-derive and pick the next unit") cannot clear a refusal that is candidate-vs-sibling and therefore unit-independent. Next: register those two rows and supersede handoff-s2 §2 B in one doc-only arc, then U-HE-44.
+**Current next action (post-#1566).** U-HE-44 closed: the spec §11 and plan carry-forwards are registered as B-256..B-272 (17 rows), and the evidence log's three owed section families — pilot reports (U-HE-37), RED-first runs of AC#2 (U-HE-20), equivalence proofs (U-HE-41) — are open for the units that append to them. Grounding found none of the §11 items previously registered (six keyword hits were all false positives), three inherited cites that no longer resolve (`gh pr merge` is at `.agents/skills/ship-pr/SKILL.md:133` not `:96`; `AGENTS.md` has no invariant-#3 text), and that plan §6 item 13's owed change-note ALREADY landed at spec v1.4 X4a — B-266 stays open because the stale plan row is real remaining work a closed row would hide. `pilot-2026-09-17-a` now has all three members enrolled (`class-16-codifying-witness` merged #1562, `lane-init-shell-portability` open #1561, `u-he-44` this PR); run `just lanes-pilot-report pilot-2026-09-17-a` once lane-2 lands. U-HE-40 remains HELD at 15/15 review rounds with a round-12 P1 outstanding, and separately cannot adjudicate its own findings from the adopting lane. The roadmap wiring that registers the S1–S8 arcs and the pilot bar depends on U-HE-44 and is therefore unblocked, so the next implementable unit is `U-HE-45`.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1566 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1563 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1559 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1557 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1553 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
