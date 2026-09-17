@@ -829,7 +829,8 @@ gemini-review base='main' outcome_json='':
 # reservation round, no budget spend, and its exit never blocks (`|| true`). Run it only where
 # the blocking terminal for this head came from codex (a Claude-authored change, no failover):
 # the reducer discards a shadow round on any head where `gemini_review_wrapper` recorded a
-# terminal for the arc (C-HE-29 §1 second family; codex r7 P2). The operator (or
+# terminal for the arc — an execution-time reading of C-HE-29 the spec does not state,
+# registered as B-252 (codex r7 P2; merge-gate r2). The operator (or
 # a third-party identity of NEITHER family under trial) disposes each shadow finding with
 # `shadow-trial-adjudicate` — the ONE writer of `unique_catch`; `shadow-trial-decide` is the
 # read-only kill/keep reducer, `--hitl` delivering a non-pending decision as a DEFERRED-HIL row.

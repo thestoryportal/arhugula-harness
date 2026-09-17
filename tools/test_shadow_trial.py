@@ -724,18 +724,21 @@ def _score_recipe_script(tmp_path: Path, base: str = "main") -> Path:
 
 
 @pytest.mark.parametrize(
-    ("config_rc", "review_rc", "review_runs"),
-    [(0, 0, True), (1, 0, False), (0, 1, True)],
-    ids=["all-green", "config-append-fails", "review-fails"],
+    ("config_rc", "review_rc", "request_rc", "review_runs"),
+    [(0, 0, 0, True), (1, 0, 0, False), (0, 1, 0, True), (0, 0, 1, True)],
+    ids=["all-green", "config-append-fails", "review-fails", "request-fails"],
 )
 def test_shadow_trial_score_recipe_runs_the_shadow_off_path(
-    tmp_path: Path, config_rc: int, review_rc: int, review_runs: bool
+    tmp_path: Path, config_rc: int, review_rc: int, request_rc: int, review_runs: bool
 ):
     """merge-gate r1/r2 (witness-adequacy P2): the unattended entry point ship-pr runs is the
     justfile recipe, so the recipe is EXECUTED — directly, through its own shebang — under a
     shim `uv` and `just` that record argv and HARNESS_SHADOW_LENS. Config row first (a failed
     append skips the review, says so, exits 0); the review runs as the SHADOW lens; the request
-    step follows; nothing in it ever blocks (exit 0 on every path)."""
+    step follows; nothing in it ever blocks (exit 0 on every path) — the request line is the
+    recipe's LAST command, so its `|| true` is what keeps the exit at 0 when
+    request-adjudications raises (the `request-fails` scenario; merge-gate r3 P2); the review
+    line's `|| true` is belt-only, the recipe runs without `set -e`."""
     shim = tmp_path / "bin"
     shim.mkdir()
     calls = tmp_path / "calls.log"
@@ -744,7 +747,7 @@ def test_shadow_trial_score_recipe_runs_the_shadow_off_path(
         f'echo "uv $* lens=${{HARNESS_SHADOW_LENS:-unset}}" >> "{calls}"\n'
         'case "$*" in\n'
         '  *"config --lens gemini-shadow --if-absent"*) exit "$SHIM_CONFIG_RC" ;;\n'
-        '  *"request-adjudications --lens gemini-shadow"*) exit 0 ;;\n'
+        '  *"request-adjudications --lens gemini-shadow"*) exit "$SHIM_REQUEST_RC" ;;\n'
         '  *) echo "unexpected uv call: $*" >&2; exit 99 ;;\n'
         "esac\n"
     )
@@ -760,6 +763,7 @@ def test_shadow_trial_score_recipe_runs_the_shadow_off_path(
         PATH=f"{shim}:{os.environ['PATH']}",
         SHIM_CONFIG_RC=str(config_rc),
         SHIM_REVIEW_RC=str(review_rc),
+        SHIM_REQUEST_RC=str(request_rc),
     )
     env.pop("HARNESS_SHADOW_LENS", None)  # the recipe must set it itself, for the review only
     script = _score_recipe_script(tmp_path)
