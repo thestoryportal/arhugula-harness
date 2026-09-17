@@ -75,7 +75,7 @@ if [ -n "$_li_fail" ]; then
   # Strip the identity, as every other failure path here does: a shell that already held
   # lane A's would otherwise keep exporting it after being told the lane is not
   # initialised, and this workspace binds reservation holders by lane_id.
-  unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _li_lib _li_fail
+  unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_lib _li_fail
   return 1
 fi
 unset _li_lib _li_fail

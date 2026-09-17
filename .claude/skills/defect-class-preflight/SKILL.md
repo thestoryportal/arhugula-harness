@@ -269,6 +269,12 @@ paths?* The answer must be ALL of them — success and every failure arm — bec
 path that forgets is the one a lane actually takes. Read the file's existing cleanup sites
 first: if it already unsets its locals in thirteen places, a new local that appears in one
 is not a smaller version of the convention, it is the exception that breaks it.
+
+The vocabulary for this half deliberately names a SHELL (`caller's shell`, `interactive
+shell`). Terms like `caller state` or `caller-scoped` read just as naturally in ownership,
+aliasing and scoping findings, and stealing one of those is worse than missing it — a class
+hit is what removes a finding from the unmatched new-class pile, so an over-wide term
+silently switches the intake loop off for everything it claims.
 Any `os.environ` write: who restores it, does the restore survive a mid-test
 `monkeypatch.undo()` (use an INDEPENDENT `MonkeyPatch`), does it leak into suites that
 assert the namespace empty (`HARNESS_*` must never escape tools items), and — the P1

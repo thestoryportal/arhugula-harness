@@ -1039,6 +1039,19 @@ type hook_bounded >/dev/null 2>&1 && printf 'hook_bounded-LEAKED'")
     || bad "$SH: half-initialised after second-library failure: $HALF"
 done
 
+# The namespace contract covers every exit, so pin the REFUSAL path too, with all four
+# reserved names pre-set. The success case below enters from a freshly unset shell and so
+# cannot see a member the refusal forgets; this one can. (codex r6 P3.)
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  REFUSED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=a _LI_ROOT=b _LI_Q=c _LI_WT=d
+source '$DETACHED' >/dev/null 2>&1
+for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
+  [ -z "$REFUSED" ] \
+    && ok "$SH: a refused init clears the whole _LI_* namespace, not just what it had set" \
+    || bad "$SH: refusal left reserved names defined: $REFUSED"
+done
+
 # `_LI_*` is lane-init's OWN namespace, and a caller's value in it is CLEARED, not preserved
 # -- deliberately, and identically for the variable this arc introduced and the one that has
 # always been there. codex r4 proposed save/restore for `_LI_SRC` alone; refused, because it

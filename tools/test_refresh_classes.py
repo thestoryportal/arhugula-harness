@@ -113,11 +113,24 @@ def test_class_7_covers_a_sourced_files_caller_shell_locals_but_not_generic_clea
             "observed_evidence": "the process cleanup path leaks a file descriptor",
             "location": "",
         },
+        # Ownership/aliasing and scoping wording: reads naturally in findings that have
+        # nothing to do with environment restoration, which is why the vocabulary must name
+        # a SHELL rather than merely a caller.
+        {
+            "finding_id": "n:3",
+            "observed_evidence": "the adapter retains a live view over caller state",
+            "location": "",
+        },
+        {
+            "finding_id": "n:4",
+            "observed_evidence": "a caller-scoped timeout is reused across retries",
+            "location": "",
+        },
     ]
     out = json.loads(_run("classify", stdin=json.dumps(positives + negatives)).stdout)
     for fid in ("s:1", "s:2"):
         assert "7 env-var mutation / restore" in out[fid], (fid, out[fid])
-    for fid in ("n:1", "n:2"):
+    for fid in ("n:1", "n:2", "n:3", "n:4"):
         assert "7 env-var mutation / restore" not in out[fid], (fid, out[fid])
 
 
