@@ -405,6 +405,34 @@ bytes it actually read come from that binding (`git show HEAD:<path>`, `base..he
 diff), never from the tree?* If a test can make the check pass by writing a file
 without committing it, this is the class.
 
+### 16. The witness codifies the divergence (added class-16-codifying-witness; 14 rows at base `63e19e3ee`'s 2,162-finding log, every one of them unmatched until this class)
+
+The diff departs from a cleared contract, and the test that ships with it asserts the
+**new** behavior. The witness is green, non-vacuous, and fires — and what it now protects
+is the departure. Review reads a covered change; the breach arrives with regression
+armour. Class 4 is its sibling and not its twin: a vacuous witness proves nothing, this
+one proves the wrong thing — and the corpus agrees rather than the reasoning alone, since
+all 14 rows matched no class at all at that anchor, class 4 included.
+
+Recorded shapes, all the same move: *"the new merged-holder test codifies this contract
+drift while the clearance claims no spec contract changed"* (`arc_metrics.py:564`); *"the
+rewritten test now expects the sibling R-999 row, so it blesses rather than detects this
+regression"* (`arc_exit_report.py:600`); *"the new row-order test enshrines the opposite
+contract"* (`loop_cost_baseline.py:47`); *"the added failure test asserts the warning
+rather than failure, so it codifies the contract drift"* (`lane-init.sh:479`); and CI
+itself doing it — *"test_codex_workflow_parity.py even requires the omission, so CI
+codifies the admitted cohort gap instead of detecting it"* (`ship-pr/SKILL.md:208`).
+
+**Question:** *for every assertion I added or changed, would the cleared contract's own
+text predict this expected value?* When the expected value is what the code now does
+rather than what the contract says, this is the class.
+
+*"I updated the test to match the new behavior"* is the sentence to distrust — it is
+this defect and a legitimate contract amendment, worded identically. The discriminator is
+what else is in the diff: a real amendment carries the spec/plan change (or a filed fork)
+beside the test; this one carries only the test edit. If the contract is genuinely wrong,
+route it — do not let the witness ratify the change on the contract's behalf.
+
 ## After every review round — the class-sibling sweep (before the next invocation)
 
 A reviewer finding names an INSTANCE; the absorption owes the CLASS. Measured on the
