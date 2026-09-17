@@ -18,8 +18,9 @@
 #     by `safe-worktree-remove.sh` at teardown. A worktree that already holds an entry
 #     REUSES it: two entries for one path would strand whichever the release missed.
 #   * `_LI_*` is this file's OWN namespace, never caller storage. Every exit path clears it
-#     unconditionally -- `_LI_ROOT`/`_LI_Q`/`_LI_WT` always have, and `_LI_SRC` on the same
-#     terms. Save/restore was proposed and refused: it would make one member behave unlike
+#     unconditionally. That is true as of this change and was NOT true before it: two refusal
+#     exits (the stale-repair-lock and no-free-index branches) cleared neither `_LI_ROOT`,
+#     `_LI_Q` nor `_LI_WT`, and now clear all four alongside `_LI_SRC`. Save/restore was proposed and refused: it would make one member behave unlike
 #     its siblings, and its caller-had-a-value arm is a two-armed restore no real caller
 #     reaches. Anything keeping state in `_LI_*` already collides with three variables.
 #   * a RAM shortfall is ENVIRONMENTAL. It is reported as a NOTIFY under a `lane-env:`

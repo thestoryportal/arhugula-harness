@@ -11104,7 +11104,24 @@ items:
     two-site shape (selection + ship pre-flight + BASE_TOCTOU at landing) as C-HE-13
     §5''s meaning and close; or (b) define a declared-scope carrier (a file-set the
     lane commits at arc open) the gate can merge-tree against, which is a design
-    extension (X-AL-3) and needs its own unit. Not closeable by further review rounds.'
+    extension (X-AL-3) and needs its own unit. Not closeable by further review rounds. CONVERSE OBSERVED 2026-09-17 (lane-2 of the 3-lane pilot, PR #1561): the same root fact
+    -- at selection the candidate IS main -- has a second consequence in the opposite
+    direction from the false NEGATIVE above. Lane-2 ran arc_disjoint_check.py check
+    --candidate HEAD with a working tree byte-identical to origin/main (git diff --name-only
+    origin/main...HEAD empty) and got exit 1 with five CONFLICT rows against a sibling
+    branch. The candidate contributed no bytes, so the verdict measured sibling-vs-main
+    only: it is INDEPENDENT of the selecting lane, and the roadmap-continue recovery for
+    exit 1 (re-derive and pick the next unit) therefore cannot change it. The five paths
+    were shared append-only ledgers every arc writes (forward-register.yaml, merge-gate-
+    log.jsonl, mutation-probe-log.jsonl, post-phase-8-forward-register.md, lanes_verify.py).
+    Duration ~30 min; it SELF-CLEARED when the sibling caught up to main, so this is a
+    transient fence rather than a deadlock -- the severity is wall-clock a lane cannot
+    distinguish from real work, not a lost arc. Both consequences close on the SAME decision
+    already stated above: (a) ratifies the two-site shape and accepts both, (b) gives the
+    gate something lane-specific to measure and fixes both. No separate row is owed.
+    Counter-datum from the same pilot, recorded so (a) is not over-read: two lanes editing
+    three of the same files merge-tree''d CLEAN, so file-level overlap is a poor predictor
+    in both directions.'
   council: 'NO at registration — a contract-reading disagreement on one clause; the closure
     is a v1.8 spec decision, which may convene one if arm (b) is chosen.'
   heading: '### B-228 · selection-time disjointness gate reads committed heads — two fresh lanes on the same main always pass it *(surfaced by codex r2/r6/r7 on u-he-36, 2026-09-02; REGISTERED)*'

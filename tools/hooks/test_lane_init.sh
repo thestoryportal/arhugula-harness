@@ -300,10 +300,16 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="relative/queue" \
 # while mapping to the same Compose project — two claims, one stack.
 for bad_k in 350 999 ../escape abc " " 00 08 007; do
   OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$bad_k" \
-    bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset}\"")
-  # rc AND the identity: validation runs after the id is exported, so a refusal that leaves
-  # it set hands this lane's identity to the next worktree the shell enters.
-  [ "$OUT" = "rc=1 id=unset" ] && ok "HARNESS_LANE_INDEX='$bad_k' refused, identity cleared" \
+    bash -c "source '$INIT' >/dev/null 2>&1
+printf 'rc=%s id=%s leaked=' \"\$?\" \"\${HARNESS_LANE_ID:-unset}\"
+for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s,' \$v\"; done")
+  # rc, the identity, AND the whole `_LI_*` namespace. Validation runs after the id is
+  # exported, so a refusal that leaves it set hands this lane's identity to the next
+  # worktree the shell enters; and a refusal that leaves a `_LI_*` local behind writes it
+  # into the caller's interactive shell for good. `leaked=` is a sentinel the run must
+  # emit -- an empty capture (the source never ran) must not read as a clean refusal.
+  [ "$OUT" = "rc=1 id=unset leaked=" ] \
+    && ok "HARNESS_LANE_INDEX='$bad_k' refused, identity and _LI_* namespace cleared" \
     || bad "index '$bad_k': $OUT"
 done
 [ ! -e "$LANES/../escape" ] && ok "no claim was published outside the registry" || bad "claim escaped QUEUE_DIR/lanes"
@@ -932,12 +938,21 @@ OUT=$(
 # `loop_log_structured` (so the C-HE-11 §5 shortfall NOTIFY could not be emitted). The
 # contract asserted here is behavioural: after sourcing, the library functions lane-init
 # calls are callable.
+# Which shells this runner can verify is a VALUE, resolved once. `SHELLS_UNVERIFIED` is
+# reported beside PASS/FAIL so a run that skipped a shell can never be mistaken for one that
+# covered it -- absence of coverage and absence of defects must not print the same.
+SHELLS=""; SHELLS_UNVERIFIED=""
+for _s in bash zsh; do
+  if command -v "$_s" >/dev/null 2>&1; then SHELLS="$SHELLS $_s"
+  else SHELLS_UNVERIFIED="$SHELLS_UNVERIFIED $_s"; fi
+done
+SHELLS="${SHELLS# }"; SHELLS_UNVERIFIED="${SHELLS_UNVERIFIED# }"
+[ -n "$SHELLS" ] || { echo "FATAL: neither bash nor zsh is executable here"; exit 1; }
+[ -z "$SHELLS_UNVERIFIED" ] \
+  || echo "  NOTE: lane-init portability is UNVERIFIED for:$SHELLS_UNVERIFIED (not installed)"
+
 LIB_FNS="hook_bounded hook_git_retry loop_log_structured loop_status_ensure loop_status_path"
-for SH in bash zsh; do
-  if ! command -v "$SH" >/dev/null 2>&1; then
-    echo "  NOTE: $SH is not installed here -- lane-init portability is UNVERIFIED for it"
-    continue
-  fi
+for SH in $SHELLS; do
   PORT=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
 printf 'rc=%s ' \$?
 for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf 'nofn:%s ' \"\$f\"; done
@@ -953,7 +968,7 @@ done
 # the bare shell name and any root derived from it resolves against the caller's cwd. The
 # non-default state therefore needs its own witness -- the default-state case above passes
 # either way and cannot discriminate. (codex r1 P2.)
-if command -v zsh >/dev/null 2>&1; then
+if printf '%s\n' $SHELLS | grep -qx zsh; then
   NOFAZ=$(zsh -c "setopt NO_FUNCTION_ARGZERO; cd / && source '$INIT' >/dev/null 2>&1
 for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done")
   [ -z "$NOFAZ" ] && ok "zsh: libraries load under NO_FUNCTION_ARGZERO too" \
@@ -969,18 +984,18 @@ CDFIX="$ROOT/cdfix"; mkdir -p "$CDFIX/tools/hooks"
 cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$CDFIX/tools/hooks/" \
   || { echo "FATAL: cdfix populate"; exit 1; }
 CDTRAP="$ROOT/cdtrap"; mkdir -p "$CDTRAP/tools/hooks"
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
-  TRAPPED=$(cd "$CDFIX" && CDPATH="$CDTRAP" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1; type hook_git_retry >/dev/null 2>&1 && echo yes")
-  [ "$TRAPPED" = "yes" ] && ok "$SH: a hostile CDPATH does not relocate the library root" \
-    || bad "$SH: CDPATH relocated the root; libraries did not load"
-done
+# bash ONLY, deliberately. zsh's `cd` resolves a cwd-relative literal before it consults
+# CDPATH, so a zsh iteration here passes whether or not `CDPATH=` is present -- it cannot
+# redden under any mutation of the guard it claims to pin. A `for SH in bash zsh` shape
+# would imply dual-shell coverage while verifying one shell (merge-gate witness lens, r2).
+TRAPPED=$(cd "$CDFIX" && CDPATH="$CDTRAP" bash -c "source tools/hooks/lane-init.sh >/dev/null 2>&1; type hook_git_retry >/dev/null 2>&1 && echo yes")
+[ "$TRAPPED" = "yes" ] && ok "bash: a hostile CDPATH does not relocate the library root" \
+  || bad "bash: CDPATH relocated the root; libraries did not load"
 
 # `$0`/`BASH_SOURCE` carry the spelling the caller used, never a canonical path, so a root
 # derived from either is only as cwd-proof as this pins it. Sourcing by absolute path from
 # an unrelated cwd must still find the libraries beside the script.
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
+for SH in $SHELLS; do
   ABS=$("$SH" -c "cd / && source '$INIT' >/dev/null 2>&1; type hook_git_retry >/dev/null 2>&1 && echo yes" 2>/dev/null)
   [ "$ABS" = "yes" ] && ok "$SH: absolute-path sourcing resolves the root from an unrelated cwd" \
     || bad "$SH: absolute-path sourcing from / did not load the libraries"
@@ -991,21 +1006,26 @@ done
 # it is the cheapest way to make the root unresolvable without touching the real tree.
 DETACHED="$ROOT/detached-lane-init.sh"
 cp "$INIT" "$DETACHED" || { echo "FATAL: cp lane-init"; exit 1; }
-DET_RC=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' >/dev/null 2>&1; echo \$?")
-[ "$DET_RC" != "0" ] \
-  && ok "an unresolvable library root makes sourcing fail loudly (rc=$DET_RC)" \
-  || bad "unresolvable library root still returned 0 -- a silently half-initialised lane"
+# `rc=` prefix is a sentinel: a capture that never ran is empty, which must NOT read the
+# same as a correct refusal. Exact-match, not `!= 0` (witness lens r2 P3).
+DET_RC=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' >/dev/null 2>&1; echo rc=\$?")
+[ "$DET_RC" = "rc=1" ] \
+  && ok "an unresolvable library root makes sourcing fail loudly ($DET_RC)" \
+  || bad "unresolvable library root did not refuse cleanly: '$DET_RC' (empty = never ran)"
 # This file cleans up every `_LI_*` local on every exit path -- it is sourced, so anything
 # left defined is written into the caller's interactive shell for good. A newly introduced
 # local has to join that discipline or it is a permanent leak (and can clobber a caller's
 # own variable of the same name). Asserted on the SUCCESS path, which is the one a lane
 # actually takes. (codex r3 P3.)
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
+for SH in $SHELLS; do
+  # `ran:` is a sentinel the successful source must emit. Without it an empty capture --
+  # a source that never executed at all -- reads exactly like a clean no-leak pass
+  # (witness lens r2 P3).
   LEAKED=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+printf 'ran:'
 for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
-  [ -z "$LEAKED" ] && ok "$SH: a successful init leaves no _LI_* local in the caller's shell" \
-    || bad "$SH: init leaked into the caller's shell: $LEAKED"
+  [ "$LEAKED" = "ran:" ] && ok "$SH: a successful init leaves no _LI_* local in the caller's shell" \
+    || bad "$SH: init leaked or never ran: '$LEAKED'"
 done
 
 # ...and the refusal paths must clear it too, not just the success path. The index-exhaustion
@@ -1014,8 +1034,7 @@ done
 # the `_li_*` locals but left the whole outer `_LI_*` scope defined. (codex r4 P3.)
 EXHQ="$ROOT/exhaust-q"; mkdir -p "$EXHQ/lanes"
 _i=0; while [ "$_i" -lt 350 ]; do printf 'foreign /not/this/worktree\n' > "$EXHQ/lanes/$_i"; _i=$((_i+1)); done
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
+for SH in $SHELLS; do
   EXH=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$EXHQ" "$SH" -c "source '$INIT' >/dev/null 2>&1
 printf 'rc=%s ' \$?
 for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
@@ -1033,8 +1052,7 @@ done
 # now it holds none of them. (codex r5 P2.)
 HALFFIX="$ROOT/halfwt"; mkdir -p "$HALFFIX/tools/hooks"
 cp "$INIT" "$SCRIPT_DIR/lib.sh" "$HALFFIX/tools/hooks/" || { echo "FATAL: halfwt populate"; exit 1; }
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
+for SH in $SHELLS; do
   HALF=$(cd "$HALFFIX" && "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
 printf 'rc=%s ' \$?
 type hook_bounded >/dev/null 2>&1 && printf 'hook_bounded-LEAKED'")
@@ -1046,8 +1064,7 @@ done
 # The namespace contract covers every exit, so pin the REFUSAL path too, with all four
 # reserved names pre-set. The success case below enters from a freshly unset shell and so
 # cannot see a member the refusal forgets; this one can. (codex r6 P3.)
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
+for SH in $SHELLS; do
   REFUSED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=a _LI_ROOT=b _LI_Q=c _LI_WT=d
 source '$DETACHED' >/dev/null 2>&1
 for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
@@ -1062,8 +1079,7 @@ done
 # would make one member behave unlike its siblings and add a restore arm no real caller
 # reaches. This pins the decision so that "fixing" it later goes red instead of passing
 # silently: both variables must read `cleared` even when the caller set them.
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
+for SH in $SHELLS; do
   OWNED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=caller-value _LI_ROOT=caller-root
 source '$INIT' >/dev/null 2>&1
 printf '%s/%s' \"\${_LI_SRC:-cleared}\" \"\${_LI_ROOT:-cleared}\"")
@@ -1077,8 +1093,7 @@ done
 # one already carrying lane A's identity that then sources a broken init for lane B: if the
 # exports survive, the shell reports "not initialised" and keeps acting as lane A, and this
 # workspace binds reservations to lane_id. (codex r2 P2.)
-for SH in bash zsh; do
-  command -v "$SH" >/dev/null 2>&1 || continue
+for SH in $SHELLS; do
   STALE=$("$SH" -c "export HARNESS_LANE_ID=laneA HARNESS_LANE_INDEX=1
 source '$DETACHED' >/dev/null 2>&1
 printf '%s/%s' \"\${HARNESS_LANE_ID:-cleared}\" \"\${HARNESS_LANE_INDEX:-cleared}\"")
@@ -1098,5 +1113,7 @@ case "$DET_ERR" in
   *) bad "failure message does not state the lane is uninitialised: '$DET_ERR'" ;;
 esac
 
-echo "---"; echo "PASS=$PASS FAIL=$FAIL"
+echo "---"
+[ -z "$SHELLS_UNVERIFIED" ] && echo "PASS=$PASS FAIL=$FAIL" \
+  || echo "PASS=$PASS FAIL=$FAIL SHELLS_UNVERIFIED=$SHELLS_UNVERIFIED"
 [ "$FAIL" -eq 0 ] || exit 1

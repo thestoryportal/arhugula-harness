@@ -73,81 +73,48 @@ def test_bare_drift_is_not_class_2_vocabulary():
         assert "2 prose stale / counts / cites" not in out[fid], fid
 
 
-def test_class_7_covers_a_sourced_files_caller_shell_locals_but_not_generic_cleanup():
-    """The shell half of class 7 (added 2026-09-17, lane-init `_LI_SRC`).
+def test_class_7_does_not_claim_sourced_shell_caller_state():
+    """The shell half of class 7 was tried and withdrawn; nothing here claims it.
 
-    A sourced file mutates its caller's shell the way `os.environ` mutates a process, but
-    class 7's alphabet was Python-only, so the motivating finding matched nothing. Both
-    directions are pinned here because over-matching is the worse failure: ANY class hit
-    removes a finding from the unmatched intake pile, so a context-free term like a bare
-    `cleanup path` would silently disable the new-class loop for every resource, lock and
-    filesystem finding it stole. Deleting the added vocabulary reds the positives; widening
-    it back to context-free `cleanup path` reds the negatives.
+    A sourced file mutating its caller's shell IS class 7's concern in another substrate, but
+    no term for it survived. `caller's shell` was measured against the committed gate log and
+    matched two findings -- one of them about a caller's `set -e` propagating INTO a sourced
+    file, the opposite direction -- a precision of 1/2. Under this file's prefer-to-miss
+    policy, a term that steals a real finding from the unmatched pile does not earn its place,
+    so these shapes stay in the pile where a human reads them.
+
+    Pinned in both directions: re-adding any such term reds the first assertion, and losing
+    the Python vocabulary reds the second.
     """
-    positives = [
+    unclaimed = [
         {
-            "finding_id": "s:1",
+            "finding_id": "u:1",
             "observed_evidence": (
                 "because lane-init.sh is sourced, this assignment writes _LI_SRC into the "
                 "caller's shell, and every successful path leaves it defined"
             ),
             "location": "tools/hooks/lane-init.sh:31",
         },
-    ]
-    # Deliberately NOT a positive: a shell-leak finding that never says "caller's shell" is
-    # left to the intake pile. `interactive shell` was tried as a second trigger and removed
-    # (it also matches "tab completion hangs in the interactive shell"), and this file's
-    # policy is to prefer to miss — a missed row stays where a human sees it, a false hit
-    # does not. The real finding of this shape still reached its classes through other rows.
-    deliberately_unclaimed = [
         {
-            "finding_id": "u:1",
+            "finding_id": "u:2",
             "observed_evidence": (
-                "the local is not cleaned up on the refusal exits, which leave the sourced "
-                "script path in the interactive shell"
+                "lib.sh inherits the caller's shell options, so a caller running with set -e "
+                "exits on the first lock collision before rc=$? is captured"
             ),
-            "location": "tools/hooks/lane-init.sh:31",
+            "location": "tools/hooks/lib.sh:144",
         },
     ]
-    negatives = [
+    still_claimed = [
         {
-            "finding_id": "n:1",
-            "observed_evidence": "the cleanup path leaves temporary files behind",
-            "location": "",
-        },
-        {
-            "finding_id": "n:2",
-            "observed_evidence": "the process cleanup path leaks a file descriptor",
-            "location": "",
-        },
-        # Ownership/aliasing and scoping wording: reads naturally in findings that have
-        # nothing to do with environment restoration, which is why the vocabulary must name
-        # a SHELL rather than merely a caller.
-        {
-            "finding_id": "n:3",
-            "observed_evidence": "the adapter retains a live view over caller state",
-            "location": "",
-        },
-        {
-            "finding_id": "n:4",
-            "observed_evidence": "a caller-scoped timeout is reused across retries",
-            "location": "",
-        },
-        # A shell can be named in a finding that has nothing to do with what the shell
-        # HOLDS, which is why `interactive shell` was removed rather than sharpened.
-        {
-            "finding_id": "n:5",
-            "observed_evidence": "tab completion hangs in the interactive shell",
+            "finding_id": "k:1",
+            "observed_evidence": "the fixture writes os.environ directly and never restores it",
             "location": "",
         },
     ]
-    out = json.loads(
-        _run("classify", stdin=json.dumps(positives + negatives + deliberately_unclaimed)).stdout
-    )
-    assert "7 env-var mutation / restore" in out["s:1"], out["s:1"]
-    assert "7 env-var mutation / restore" not in out["u:1"], out["u:1"]
-    for fid in ("n:1", "n:2", "n:3", "n:4", "n:5"):
+    out = json.loads(_run("classify", stdin=json.dumps(unclaimed + still_claimed)).stdout)
+    for fid in ("u:1", "u:2"):
         assert "7 env-var mutation / restore" not in out[fid], (fid, out[fid])
+    assert "7 env-var mutation / restore" in out["k:1"], out["k:1"]
 
 
 def test_class_3_does_not_describe_the_class_table_itself():

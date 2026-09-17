@@ -84,12 +84,14 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "6 unreachable / dead branch": (
         r"unreachable|dead|never reach|no witness could|half-dead|cannot see|restore arm"
     ),
-    # A SOURCED shell file mutates its caller's shell exactly as os.environ mutates a
-    # process: same concern, different substrate, and the prior alphabet was Python-only,
-    # so the lane-init `_LI_SRC` leak (codex r3, 2026-09-17) matched no class at all.
+    # A sourced shell file mutating its caller's shell IS this class's concern in another
+    # substrate, but no vocabulary for it survives here. `caller's shell` was tried and
+    # measured against the committed gate log: it matched 2 findings, one of them
+    # (tools/hooks/lib.sh:144) about a caller's `set -e` propagating INTO a sourced file --
+    # the opposite direction -- for a precision of 1/2. Under this file's prefer-to-miss
+    # policy a term that steals a real finding from the intake pile does not earn its place.
     "7 env-var mutation / restore": (
         r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"
-        r"|caller's shell"
     ),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (
