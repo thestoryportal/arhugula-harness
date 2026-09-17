@@ -1082,6 +1082,23 @@ printf 'rc=%s' \$?")
     || bad "$SH: nonzero second library was not rejected: $FAILED"
 done
 
+# A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.
+# Every refusal case above enters from a fresh shell and therefore cannot see state an earlier
+# successful source left behind: measured before the fix, `lane_stack_allowed` survived a
+# refusal and returned 0 -- "bring the stack up" -- with the index defaulted to 0, i.e. another
+# lane's Docker project and ports. (codex r10 P2. Not destructive: `_lane_clear_orphaned_stack`
+# re-reads HARNESS_LANE_INDEX and returns early on empty, verified with a planted marker that
+# survived -- the hazard is the stale ANSWER, not a stale teardown.)
+STALEQ="$ROOT/staleq"; mkdir -p "$STALEQ/lanes"
+for SH in $SHELLS; do
+  STALE_FN=$("$SH" -c "cd '$ROOT/wt' && ARC_METRICS_QUEUE_DIR='$STALEQ' source '$INIT' >/dev/null 2>&1
+source '$DETACHED' >/dev/null 2>&1
+printf 'orphan=%s fn=%s' \"\${_LI_ORPHAN_DIR:+set}\" \"\$(type lane_stack_allowed >/dev/null 2>&1 && echo callable || echo gone)\"")
+  [ "$STALE_FN" = "orphan= fn=gone" ] \
+    && ok "$SH: a refusal invalidates the prior source's callable surface" \
+    || bad "$SH: refusal left the prior lane callable: $STALE_FN"
+done
+
 # `_LI_ORPHAN_DIR` is the fifth member of this namespace and the one documented exception:
 # `lane_stack_allowed` reads it after sourcing returns, so it MUST survive a successful init.
 # The leak cases above enumerate four names and therefore cannot see it either way -- which
