@@ -103,8 +103,16 @@ def test_class_7_covers_a_sourced_files_caller_shell_locals_but_not_generic_clea
         },
     ]
     negatives = [
-        {"finding_id": "n:1", "observed_evidence": "the cleanup path leaves temporary files behind", "location": ""},
-        {"finding_id": "n:2", "observed_evidence": "the process cleanup path leaks a file descriptor", "location": ""},
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "the cleanup path leaves temporary files behind",
+            "location": "",
+        },
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "the process cleanup path leaks a file descriptor",
+            "location": "",
+        },
     ]
     out = json.loads(_run("classify", stdin=json.dumps(positives + negatives)).stdout)
     for fid in ("s:1", "s:2"):
