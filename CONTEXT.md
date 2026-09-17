@@ -30,7 +30,7 @@ resolving pointer; the safety kernel (§1.3, §3.1/§3.2, §4.3/§4.4, §5, §8,
 
 | Pack | Root sections | Load when |
 |---|---|---|
-| `docs/governance/project-framing.md` | §1.1, §7, §9, §9.1 | axis scope table / sub-phase enumeration / bootstrap footer |
+| `docs/governance/project-framing.md` | §1.1, §9, §9.1 | axis scope table / bootstrap footer |
 | `docs/governance/stack-and-layout.md` | §3.3 | adding a workspace member; repo tree |
 | `docs/governance/substitution-and-clearance.md` | §4.1, §4.2, §4.5 | retirement event; clearance marker |
 | `docs/governance/skills-and-subphases.md` | §6, §7 | choosing a Phase 7 skill / routing a sub-phase |

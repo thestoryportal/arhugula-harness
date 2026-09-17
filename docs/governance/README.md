@@ -12,7 +12,7 @@ pointer into this directory, so `CLAUDE.md §N.M` citations keep resolving (CI-e
 
 | Pack | Root sections | Load when | Claude Code | codex |
 |---|---|---|---|---|
-| `docs/governance/project-framing.md` | §1.1, §7, §9, §9.1 | You need the axis scope table, the Phase 7 sub-phase enumeration, or the bootstrap filing footer | Read on demand | Read on demand |
+| `docs/governance/project-framing.md` | §1.1, §9, §9.1 | You need the axis scope table or the bootstrap filing footer | Read on demand | Read on demand |
 | `docs/governance/stack-and-layout.md` | §3.3 | You are adding a workspace member or need the repo tree | Read on demand | Read on demand |
 | `docs/governance/substitution-and-clearance.md` | §4.1, §4.2, §4.5 | A substitution retirement event, or authoring/verifying a `.harness/clearance/` marker | Read on demand; `phase-7-substitution-retirement` skill | Read on demand |
 | `docs/governance/skills-and-subphases.md` | §6, §7 | Choosing a Phase 7 skill or routing a sub-phase | Skill router reads it | Read on demand |
