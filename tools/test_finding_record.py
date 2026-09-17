@@ -574,17 +574,19 @@ def test_check_and_append_are_one_critical_section(tmp_path: Path, monkeypatch):
     at once, i.e. only when the check-and-append is NOT serialized."""
     p = tmp_path / "g.jsonl"
     gate = threading.Barrier(2, timeout=1.0)
-    real_read = fr.read_rows
+    real_read_fd = fr._read_rows_fd  # the read append_row makes UNDER the lock -- the one to
+    # rendezvous in; patching the unlocked read_rows left this witness vacuous once append_row
+    # moved to the locked-fd read (re-pin 2026-09-17: the lock line stayed green removed)
 
-    def read_then_rendezvous(path=None):
-        rows = real_read(path)
+    def read_then_rendezvous(fd: int, path: Path) -> list[dict]:
+        rows = real_read_fd(fd, path)
         try:
             gate.wait()  # unserialized: both arrive -> both saw an empty log -> both append
         except threading.BrokenBarrierError:
             pass  # serialized: the holder times out here, the waiter finds the barrier broken
         return rows
 
-    monkeypatch.setattr(fr, "read_rows", read_then_rendezvous)
+    monkeypatch.setattr(fr, "_read_rows_fd", read_then_rendezvous)
     errors: list[BaseException] = []
 
     def writer(evidence: str) -> None:
@@ -598,7 +600,7 @@ def test_check_and_append_are_one_critical_section(tmp_path: Path, monkeypatch):
         th.start()
     for th in threads:
         th.join(timeout=30)
-    rows = real_read(p)
+    rows = fr.read_rows(p)
     assert len(rows) == 1, rows
     assert len(errors) == 1 and "core field 'observed_evidence'" in str(errors[0])
 

@@ -8,10 +8,14 @@
 #   (1) `--glob` / `-g`  -- an rg-only flag; rtk hands the call to BSD grep, which exits 2
 #                           with "unrecognized option";
 #   (2) an unescaped `(` or `)` in a BRE pattern (no -E/-F/-P) -- a literal paren to grep, a
-#                           group to rg: "regex parse error … unclosed group", exit 2.
-#   [B]'s third shape, `\|` alternation, round-trips on 0.40.0 (rtk translates it); it fails
-#   only when combined with a paren, which shape (2) already covers -- so it is NOT guarded
-#   (a deny on a working command would be a false positive that costs the call it saves).
+#                           group to rg: "regex parse error … unclosed group", exit 2 -- on
+#                           rtk BELOW 0.49.0 only: 0.49.0 translates it (live-witnessed
+#                           2026-09-17 on four paren shapes), so the judge reads this venue's
+#                           `rtk --version` and judges the shape only while it is mangled
+#                           (RTK_PAREN_FIXED). Test section 4 pins whichever the real rtk is.
+#   [B]'s third shape, `\|` alternation, round-trips on 0.40.0 (rtk translates it) and is
+#   NOT guarded (a deny on a working command would be a false positive that costs the call
+#   it saves).
 #
 # Why a DENY and not a fix or a pass-through, stated once: the rewrite lives in rtk (not
 # workspace code); rtk's `[hooks] exclude_commands` is a command-PREFIX match (`"grep -F"`
@@ -86,7 +90,10 @@ case "$REWRITE" in *"rtk grep"*) ;; *) exit 0 ;; esac
 
 JUDGE="$(dirname "${BASH_SOURCE[0]}")/../rtk_shape_guard.py"
 [ -f "$JUDGE" ] || exit 0
-REASON=$(hook_bounded 5 /usr/bin/python3 "$JUDGE" "$CMD" "$REWRITE" 2>/dev/null) || exit 0
+# The venue's rtk version decides whether the paren shape is judged at all (0.49.0
+# translates it; see RTK_PAREN_FIXED in the judge). A failed read = no version = not judged.
+RTK_VER=$(hook_bounded 5 rtk --version 2>/dev/null | head -1) || RTK_VER=""
+REASON=$(hook_bounded 5 /usr/bin/python3 "$JUDGE" "$CMD" "$REWRITE" "$RTK_VER" 2>/dev/null) || exit 0
 [ -z "$REASON" ] && exit 0
 
 jq -nc --arg r "$REASON" \
