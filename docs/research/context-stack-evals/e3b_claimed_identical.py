@@ -5,18 +5,20 @@ E3 ranked every cross-file paragraph pair by cosine and found expected structure
 a `§`-cite or a "relocated byte-verbatim" header CLAIMS identical to another, and is not —
 and scores only those pairs. Four claim sets exist in this corpus:
 
-  A. Governance packs: "*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §…*" — tested at the
-     relocation commit (pack body vs the root body it names, at the parent commit) and
-     since (pack body at HEAD vs at relocation).
+  A. Governance packs: "*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §…*" — the § set is
+     taken from the CLAIM, not from what the pack happens to contain; a claimed § the pack
+     lacks is drift. Each present § is compared byte-exact (heading line included) and,
+     separately, whitespace-normalised; then pack § at HEAD vs at relocation.
   B. Root pointer stubs: root `CLAUDE.md` keeps one sentence per relocated subsection with
      "Body at `docs/governance/<pack>.md §N.N`". No identity is claimed; consistency is.
-     Scored by embedding cosine AND by lexical containment (stub content tokens found in
-     the section), lowest first, for a human to read.
+     Scored by embedding cosine AND by lexical containment; the agreement of the two
+     rankings is computed (Spearman rho, bottom-5 overlap), not asserted.
   C. `.harness/claude-artifact-pointers.md`: "split byte-preservingly by family" — the
-     pre-split file's paragraphs vs the union of the family files at the split commit.
-  D. Project_Workflow deltas: each `§N Sections preserved verbatim` block lists sections
-     the delta does NOT re-table, so there is no re-tabled pair to compare; recorded as a
-     claim with an empty pair set, which is itself the finding.
+     pre-split file's paragraphs vs the union of the family files at the split commit,
+     then line level for anything missing, scaffolding separated from lineage.
+  D. Project_Workflow deltas: each "Sections preserved verbatim" block (or, for a delta
+     without the block, its inline PRESERVED VERBATIM sentences) names §s the delta must
+     not re-table; a named § that the same delta re-tables as a heading is a violation.
 
 Everything but B is a normalised diff. B is the only question an embedding can answer.
 Commits are pinned (found by `git log --diff-filter=A`, 2026-09-16), read at the boundary
@@ -41,7 +43,9 @@ RELOCATION = "0f05512ca"  # U-CTX-13 / R-CTX-1 Arc 5: packs created, root bodies
 RELOCATION_PARENT = "f30eae667"
 SPLIT = "50771f16c"  # U-CTX-06 / R-CTX-1 Arc 2: artifact-pointers split by family
 PACKS = "docs/governance"
-HEADING = re.compile(r"^(#{2,4}) (\d+(?:\.\d+)*)\.? (.*)$")
+HEADING = re.compile(r"^(#{2,4}) §?(\d+(?:\.\d+)*)\.? (.*)$")
+SECNUM = re.compile(r"§(\d+(?:\.\d+)*)")
+RANGE = re.compile(r"§(\d+(?:\.\d+)*)[–-]§(\d+(?:\.\d+)*)")
 
 
 def git_show(ref: str, path: str) -> str:
@@ -54,20 +58,21 @@ def git_show(ref: str, path: str) -> str:
 
 
 def sections(text: str) -> dict[str, str]:
-    """§-number → body (heading line excluded, up to the next heading of any level)."""
+    """§-number → the section's raw text, HEADING LINE INCLUDED, up to the next heading of
+    any level. Raw so that a byte-exact comparison is a byte-exact comparison."""
     out: dict[str, str] = {}
     cur: str | None = None
     buf: list[str] = []
-    for line in text.splitlines():
+    for line in text.splitlines(keepends=True):
         m = HEADING.match(line)
         if m:
             if cur is not None:
-                out[cur] = "\n".join(buf)
-            cur, buf = m.group(2), []
+                out[cur] = "".join(buf)
+            cur, buf = m.group(2), [line]
         elif cur is not None:
             buf.append(line)
     if cur is not None:
-        out[cur] = "\n".join(buf)
+        out[cur] = "".join(buf)
     return out
 
 
@@ -89,13 +94,33 @@ def diff_stat(a: str, b: str) -> tuple[int, int]:
     return only_a, only_b
 
 
-def claim_a() -> list[str]:
+def claimed_sections(claim: str) -> list[str]:
+    """§ numbers a claim names, ranges like `§10.1–§10.9` expanded on the last component."""
+    nums: list[str] = []
+    for lo, hi in RANGE.findall(claim):
+        head_lo, last_lo = lo.rsplit(".", 1) if "." in lo else ("", lo)
+        head_hi, last_hi = hi.rsplit(".", 1) if "." in hi else ("", hi)
+        if head_lo == head_hi:
+            for k in range(int(last_lo), int(last_hi) + 1):
+                nums.append(f"{head_lo}.{k}" if head_lo else str(k))
+    nums += SECNUM.findall(RANGE.sub(" ", claim))
+    seen: list[str] = []
+    for n in nums:
+        if n not in seen:
+            seen.append(n)
+    return sorted(seen, key=lambda k: [int(x) for x in k.split(".")])
+
+
+def claim_a() -> tuple[list[str], int, int]:
+    """Returns (report lines, claimed-section count, drift count)."""
     root_then = sections(git_show(RELOCATION_PARENT, "CLAUDE.md"))
-    lines = ["## A. Packs relocated byte-verbatim (tested at the relocation, then since)", ""]
-    lines += [
-        "| pack | § | at relocation | since (lines −/+) |",
+    lines = [
+        "## A. Packs relocated byte-verbatim (the claimed § set, tested at the relocation)",
+        "",
+        "| pack | claimed § | at relocation | since (lines −/+) |",
         "|---|---|---|---|",
     ]
+    claimed = drift = 0
     for pack in sorted((REPO / PACKS).glob("*.md")):
         head = git_show(RELOCATION, f"{PACKS}/{pack.name}")
         m = re.search(r"Relocated BYTE-VERBATIM from Root `CLAUDE.md` (.+?) by U-CTX-13", head)
@@ -103,33 +128,55 @@ def claim_a() -> list[str]:
             continue
         then_secs = sections(head)
         now_secs = sections(pack.read_text())
-        for num in sorted(then_secs, key=lambda k: [int(x) for x in k.split(".")]):
-            if num not in root_then:
-                lines.append(f"| {pack.name} | §{num} | root had no §{num} | — |")
+        for num in claimed_sections(m.group(1)):
+            claimed += 1
+            if num not in then_secs:
+                drift += 1
+                lines.append(f"| {pack.name} | §{num} | **CLAIMED BUT ABSENT from the pack** | — |")
                 continue
-            if norm(root_then[num]) == norm(then_secs[num]):
-                at = "identical"
+            if num not in root_then:
+                drift += 1
+                lines.append(f"| {pack.name} | §{num} | **root had no §{num}** | — |")
+                continue
+            if root_then[num] == then_secs[num]:
+                at = "byte-identical"
+            elif norm(root_then[num]) == norm(then_secs[num]):
+                at = "identical after whitespace normalisation (NOT byte-identical)"
             else:
                 d = diff_stat(root_then[num], then_secs[num])
-                at = f"DIFFERS {d[0]}/{d[1]}"
+                drift += 1
+                at = f"**DIFFERS {d[0]}/{d[1]}**"
             since = diff_stat(then_secs[num], now_secs.get(num, ""))
             lines.append(f"| {pack.name} | §{num} | {at} | {since[0]}/{since[1]} |")
-    return [*lines, ""]
+    return [*lines, ""], claimed, drift
 
 
-def claim_b() -> list[str]:
+def spearman(x: list[float], y: list[float]) -> float:
+    def ranks(v: list[float]) -> list[float]:
+        order = sorted(range(len(v)), key=lambda i: v[i])
+        r = [0.0] * len(v)
+        for pos, i in enumerate(order):
+            r[i] = float(pos)
+        return r
+
+    rx, ry = ranks(x), ranks(y)
+    n = len(x)
+    d2 = sum((a - b) ** 2 for a, b in zip(rx, ry, strict=True))
+    return 1 - 6 * d2 / (n * (n * n - 1)) if n > 2 else float("nan")
+
+
+def claim_b() -> tuple[list[str], int, float, int]:
+    """Returns (report lines, stubs below both thresholds, rho, bottom-5 overlap)."""
     from common import embed  # the one embedding use in this evaluation
 
     root = (REPO / "CLAUDE.md").read_text()
-    pairs: list[tuple[str, str, str, str]] = []  # (stub, pack, §, section body)
+    pairs: list[tuple[str, str, str, str]] = []  # (stub, pack, §, section text)
     for line in root.splitlines():
         for pack, num in re.findall(r"`docs/governance/([a-z-]+\.md)` ?§(\d+(?:\.\d+)*)", line):
             body = sections((REPO / PACKS / pack).read_text()).get(num)
             if body is not None:
                 pairs.append((line.strip(), pack, num, body))
-    stubs = [p[0] for p in pairs]
-    bodies = [p[3] for p in pairs]
-    sv, bv = embed(stubs), embed(bodies)
+    sv, bv = embed([p[0] for p in pairs]), embed([p[3] for p in pairs])
     cos = (sv * bv).sum(axis=1)
 
     def toks(s: str) -> set[str]:
@@ -140,29 +187,35 @@ def claim_b() -> list[str]:
         st = toks(stub) - {"body", "docs", "governance", "detail", "full", "links"}
         contain = len(st & toks(body)) / max(1, len(st))
         rows.append((float(c), contain, pack, num, stub))
-    rows.sort(key=lambda r: r[0])
+    by_cos = sorted(rows, key=lambda r: r[0])
+    by_con = sorted(rows, key=lambda r: r[1])
+    rho = spearman([r[0] for r in rows], [r[1] for r in rows])
+    overlap = len({r[3] for r in by_cos[:5]} & {r[3] for r in by_con[:5]})
     lines = [
         f"## B. Root pointer stubs vs the pack section they name ({len(rows)} pairs)",
         "",
         "Lowest embedding cosine first; `contain` = share of the stub's content tokens present "
-        "in the section. Read the bottom rows.",
+        "in the section.",
         "",
         "| cosine | contain | pack | § | stub (truncated) |",
         "|---|---|---|---|---|",
     ]
-    for c, contain, pack, num, stub in rows:
+    for c, contain, pack, num, stub in by_cos:
         lines.append(f"| {c:.2f} | {contain:.2f} | {pack} | §{num} | {stub[:90]} |")
     both = sum(1 for r in rows if r[0] < 0.6 and r[1] < 0.5)
     lines += [
         "",
-        f"Rows with cosine < 0.60 AND contain < 0.50: {both}. "
-        "Where the two disagree, the lexical score names the missing nouns; the cosine does not.",
+        f"Rows with cosine < 0.60 AND contain < 0.50: {both}. Rank agreement of the two "
+        f"scores: Spearman rho = {rho:.2f}; bottom-5 sets share {overlap} of 5 rows "
+        f"(cosine bottom-5: {', '.join('§' + r[3] for r in by_cos[:5])}; containment "
+        f"bottom-5: {', '.join('§' + r[3] for r in by_con[:5])}).",
         "",
     ]
-    return lines
+    return lines, both, rho, overlap
 
 
-def claim_c() -> list[str]:
+def claim_c() -> tuple[list[str], int]:
+    """Returns (report lines, lineage lines lost)."""
     pre = git_show(f"{SPLIT}^", ".harness/claude-artifact-pointers.md")
     fam = subprocess.run(
         ["git", "-C", str(REPO), "ls-tree", "--name-only", SPLIT, ".harness/artifact-pointers/"],
@@ -178,15 +231,15 @@ def claim_c() -> list[str]:
     a, b = paras(pre), paras(post)
     missing = [p for p in a if p not in set(b)]
     extra = [p for p in b if p not in set(a)]
-    # A paragraph can be missing because the split re-cut it (a multi-row table becomes one
-    # row per family file); the claim survives if every LINE of it is somewhere in the union.
     union_lines = {norm(x) for x in post.splitlines() if norm(x)}
-    lost_lines: list[str] = []
-    for p in missing:
-        for raw in pre.splitlines():
-            if norm(raw) and norm(raw) in p and norm(raw) not in union_lines:
-                lost_lines.append(norm(raw))
-    lost_lines = sorted(set(lost_lines))
+    lost_lines = sorted(
+        {
+            norm(raw)
+            for p in missing
+            for raw in pre.splitlines()
+            if norm(raw) and norm(raw) in p and norm(raw) not in union_lines
+        }
+    )
     # The source's own scaffolding (title, section headings, its preamble paragraph) is what
     # the stub file replaced; only a lost LINEAGE line would falsify the claim.
     scaffold = {norm(x) for x in pre.splitlines() if norm(x).startswith("#")} | {
@@ -212,40 +265,69 @@ def claim_c() -> list[str]:
         lines.append(f"- LOST line: {x[:200]}")
     for p in extra[:4]:
         lines.append(f"- EXTRA: {p[:160]}")
-    return [*lines, ""]
+    return [*lines, ""], len(lost_lineage)
 
 
-def claim_d() -> list[str]:
+def claim_d() -> tuple[list[str], int]:
+    """Returns (report lines, violations = preserved §s the same delta re-tables)."""
     lines = ["## D. Project_Workflow deltas: sections preserved verbatim", ""]
+    total = 0
     for f in sorted((REPO / "design-substrate").glob("Project_Workflow_v1_*.md")):
         text = f.read_text()
-        m = re.search(r"^## §\d+ Sections preserved verbatim at (v1\.\d+)", text, re.M)
-        retabled = [
-            h
-            for h in re.findall(r"^#{2,4} (§[\d.]+ [^\n]*)$", text, re.M)
-            if not re.match(
-                r"§\d+ (Sections preserved|Adjacent|Filing|Cross-artifact|Empirical)", h
-            )
-        ]
+        block = re.search(
+            r"^## §\d+ Sections preserved verbatim.*?(?=^---|^## )", text, re.M | re.S
+        )
+        if block:
+            claim_text, source = block.group(0), "block"
+        else:
+            sentences = [s for s in re.split(r"(?<=[.;])\s", text) if "PRESERVED VERBATIM" in s]
+            claim_text, source = " ".join(sentences), f"inline ({len(sentences)} sentences)"
+        # A mention is not a claim: drop refs prefixed by a version token ("v1.13 §1" names
+        # that delta's own local section), and refs in sentences that call the § NEW or a
+        # sibling (the delta is announcing an addition, not preserving it).
+        kept = []
+        for sentence in re.split(r"(?<=[.;])\s|\n", claim_text):
+            if re.search(r"\b(NEW|sibling|authored|authoring)\b", sentence):
+                continue
+            kept.append(re.sub(r"v1\.\d+\s*§\d+(?:\.\d+)*", " ", sentence))
+        preserved = claimed_sections(" ".join(kept))
+        # A delta's own scaffolding headings reuse the baseline's numbers (its "§1 Amendment"
+        # is not the baseline's §1); only a re-tabled heading carrying a baseline body counts.
+        scaffold = re.compile(
+            r"(Amendment|NEW sub-section|Sections preserved|Adjacent observations|"
+            r"Cross-artifact|Empirical lineage|Filing footer|audit-template|sub-species|"
+            r"species|Sub-species|Amended|Retirement-tier|Self-application|catalogue is OPEN)"
+        )
+        retabled = {
+            m.group(2)
+            for m in (HEADING.match(ln) for ln in text.splitlines())
+            if m and not scaffold.search(m.group(3))
+        }
+        violations = [p for p in preserved if p in retabled]
+        total += len(violations)
+        tail = (" — " + ", ".join("§" + v for v in violations)) if violations else ""
         lines.append(
-            f"- {f.name}: preserved-verbatim block {'present' if m else 'absent'}; "
-            f"re-tabled section headings: {len(retabled)}"
+            f"- {f.name}: claim source {source}; preserved §s named: {len(preserved)}; "
+            f"re-tabled headings: {len(retabled)}; preserved-yet-re-tabled: "
+            f"**{len(violations)}**{tail}"
         )
     lines += [
         "",
-        "A preserved-verbatim block names sections the delta does not carry, so no pair exists "
-        "to diff; the claim is checkable only by the absence of a re-table, which every delta "
-        "satisfies by construction. The re-tabled headings are new sub-sections, not copies.",
+        "A preserved § the same delta re-tables as a heading contradicts its own block. "
+        "Re-tabled headings that are new sub-sections (the §1 amendment bodies) are not "
+        "preserved §s and do not count.",
         "",
     ]
-    return lines
+    return lines, total
 
 
 def main() -> None:
-    a, c, d, b = claim_a(), claim_c(), claim_d(), claim_b()
-    drift_a = sum(1 for x in a if "| DIFFERS" in x or "root had no" in x)
-    lost_c = int(re.search(r"lineage[^:]*: \*\*(\d+)\*\*", "\n".join(c)).group(1))
-    low_b = int(re.search(r"cosine < 0.60 AND contain < 0.50: (\d+)", "\n".join(b)).group(1))
+    a, claimed_a, drift_a = claim_a()
+    c, lost_c = claim_c()
+    d, viol_d = claim_d()
+    b, low_b, rho, overlap = claim_b()
+    drift_found = drift_a > 0 or lost_c > 0 or viol_d > 0
+    agree = rho >= 0.5 and overlap >= 3
     lines = [
         "# E3b — drift scored only on claimed-identical pairs",
         "",
@@ -253,16 +335,21 @@ def main() -> None:
         "",
         "## Verdict (computed)",
         "",
-        f"- A: sections not identical at relocation: **{drift_a}** of the relocated set.",
+        f"- A: claimed sections {claimed_a}; not byte-identical or absent: **{drift_a}**.",
         f"- C: lineage lines lost by the split: **{lost_c}** "
         "(the source's own title, headings and preamble were replaced by the stub, by design).",
-        "- D: re-tabled pairs to diff: **0** (the claim is an absence, satisfied by construction).",
-        f"- B: stubs below both read thresholds: **{low_b}** of the pointer set.",
+        f"- D: preserved-yet-re-tabled sections across the delta chain: **{viol_d}**.",
+        f"- B: stubs below both read thresholds: **{low_b}** of the pointer set; "
+        f"cosine vs containment rank agreement rho = {rho:.2f}, bottom-5 overlap {overlap}/5.",
         "- Drift, as defined (a claimed-identical pair that is not): "
-        + ("**none found**." if drift_a == 0 and lost_c == 0 else "**found, see above**."),
-        "- What the embedding added over the normalised diff: nothing for A, C, D (identity "
-        "questions); for B it ranks the same rows the lexical containment ranks, without "
-        "naming the missing nouns.",
+        + ("**found, see A/C/D above**." if drift_found else "**none found**."),
+        "- What the embedding added over the normalised diff: nothing for A, C, D "
+        "(identity questions). For B "
+        + (
+            "the two rankings agree, and only the lexical score names the missing words."
+            if agree
+            else "the two rankings DISAGREE (see rho/overlap); read both bottom-5 sets."
+        ),
         "",
         *a,
         *c,
