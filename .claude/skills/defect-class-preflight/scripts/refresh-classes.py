@@ -82,7 +82,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # so the lane-init `_LI_SRC` leak (codex r3, 2026-09-17) matched no class at all.
     "7 env-var mutation / restore": (
         r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"
-        r"|caller's shell|leaks? into the caller|cleanup path|sourced.*leave|left defined"
+        r"|caller's shell|caller state|caller-scoped|interactive shell|leaks? into the caller"
     ),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (

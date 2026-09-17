@@ -1022,6 +1022,23 @@ for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && p
   esac
 done
 
+# Sourcing is not transactional -- `. lib.sh` puts its functions in the caller for good -- so
+# presence of BOTH libraries is established before either is sourced. The case that proves it
+# is the asymmetric one: lib.sh present, loop_lib.sh absent. Before the two-phase load the
+# caller was left holding lib.sh's functions after being told the lane was not initialised;
+# now it holds none of them. (codex r5 P2.)
+HALFFIX="$ROOT/halfwt"; mkdir -p "$HALFFIX/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$HALFFIX/tools/hooks/" || { echo "FATAL: halfwt populate"; exit 1; }
+for SH in bash zsh; do
+  command -v "$SH" >/dev/null 2>&1 || continue
+  HALF=$(cd "$HALFFIX" && "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s ' \$?
+type hook_bounded >/dev/null 2>&1 && printf 'hook_bounded-LEAKED'")
+  [ "$HALF" = "rc=1 " ] \
+    && ok "$SH: a missing SECOND library leaves none of the first's functions in the caller" \
+    || bad "$SH: half-initialised after second-library failure: $HALF"
+done
+
 # `_LI_*` is lane-init's OWN namespace, and a caller's value in it is CLEARED, not preserved
 # -- deliberately, and identically for the variable this arc introduced and the one that has
 # always been there. codex r4 proposed save/restore for `_LI_SRC` alone; refused, because it
@@ -1055,7 +1072,8 @@ done
 
 DET_ERR=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' 2>&1 >/dev/null")
 case "$DET_ERR" in
-  *"lane-init: failed to load"*lib.sh*) ok "and it names the library it could not load" ;;
+  *"lane-init: cannot read tools/hooks/"*lib.sh*|*"lane-init: failed to load tools/hooks/"*lib.sh*)
+    ok "and it names the library it could not load" ;;
   *) bad "failure message does not name the missing library: '$DET_ERR'" ;;
 esac
 case "$DET_ERR" in

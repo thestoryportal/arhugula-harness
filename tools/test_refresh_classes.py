@@ -73,6 +73,46 @@ def test_bare_drift_is_not_class_2_vocabulary():
         assert "2 prose stale / counts / cites" not in out[fid], fid
 
 
+def test_class_7_covers_a_sourced_files_caller_shell_locals_but_not_generic_cleanup():
+    """The shell half of class 7 (added 2026-09-17, lane-init `_LI_SRC`).
+
+    A sourced file mutates its caller's shell the way `os.environ` mutates a process, but
+    class 7's alphabet was Python-only, so the motivating finding matched nothing. Both
+    directions are pinned here because over-matching is the worse failure: ANY class hit
+    removes a finding from the unmatched intake pile, so a context-free term like a bare
+    `cleanup path` would silently disable the new-class loop for every resource, lock and
+    filesystem finding it stole. Deleting the added vocabulary reds the positives; widening
+    it back to context-free `cleanup path` reds the negatives.
+    """
+    positives = [
+        {
+            "finding_id": "s:1",
+            "observed_evidence": (
+                "because lane-init.sh is sourced, this assignment writes _LI_SRC into the "
+                "caller's shell, and every successful path leaves it defined"
+            ),
+            "location": "tools/hooks/lane-init.sh:31",
+        },
+        {
+            "finding_id": "s:2",
+            "observed_evidence": (
+                "the new caller-scoped local is not cleaned up on the refusal exits, which "
+                "leave the sourced script path in the interactive shell"
+            ),
+            "location": "tools/hooks/lane-init.sh:31",
+        },
+    ]
+    negatives = [
+        {"finding_id": "n:1", "observed_evidence": "the cleanup path leaves temporary files behind", "location": ""},
+        {"finding_id": "n:2", "observed_evidence": "the process cleanup path leaks a file descriptor", "location": ""},
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(positives + negatives)).stdout)
+    for fid in ("s:1", "s:2"):
+        assert "7 env-var mutation / restore" in out[fid], (fid, out[fid])
+    for fid in ("n:1", "n:2"):
+        assert "7 env-var mutation / restore" not in out[fid], (fid, out[fid])
+
+
 def test_classify_reads_the_location_too():
     # the location carries file-shaped vocabulary the row text may lack
     rows = [{"finding_id": "b:1", "observed_evidence": "", "location": "tools/conftest.py fixture"}]

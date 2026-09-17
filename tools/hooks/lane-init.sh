@@ -51,19 +51,34 @@ _LI_ROOT="$(CDPATH= cd "$(dirname "${_LI_SRC:-$0}")/../.." && pwd)"
 # gap. Refusing here is what keeps the half-initialised lane unrepresentable: every export
 # below is reached only from a root that has already produced the functions those exports
 # call. `return`, never `exit`/`set -e` -- a sourced file must not fell its caller's shell.
+# Sourcing is not transactional: once `. lib.sh` has run, its functions are in the caller and
+# the shell offers no way to take them back. So PRESENCE of both libraries is established
+# before either is sourced, which makes the overwhelmingly common failure -- a misresolved
+# root, the bug this guard exists for -- leave the caller completely untouched rather than
+# half-populated. The per-source status check still runs afterwards and catches what presence
+# cannot: a file unlinked in the window, or one that parses badly. A PARSE failure in the
+# SECOND library is the bounded residual -- the first is loaded by then and cannot be
+# unloaded -- and it reports through the same refusal, so it is loud rather than silent.
+_li_fail=""
 for _li_lib in lib.sh loop_lib.sh; do
-  # shellcheck source=/dev/null
-  if ! . "$_LI_ROOT/tools/hooks/$_li_lib"; then
-    echo "lane-init: failed to load tools/hooks/$_li_lib from '$_LI_ROOT' (resolved from '$_LI_SRC')" >&2
-    echo "lane-init: lane NOT initialised -- do not treat this worktree as an open lane" >&2
-    # Strip the identity, as every other failure path here does: a shell that already held
-    # lane A's would otherwise keep exporting it after being told the lane is not
-    # initialised, and this workspace binds reservation holders by lane_id.
-    unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _li_lib
-    return 1
-  fi
+  [ -r "$_LI_ROOT/tools/hooks/$_li_lib" ] || { _li_fail="cannot read tools/hooks/$_li_lib"; break; }
 done
-unset _li_lib
+if [ -z "$_li_fail" ]; then
+  for _li_lib in lib.sh loop_lib.sh; do
+    # shellcheck source=/dev/null
+    . "$_LI_ROOT/tools/hooks/$_li_lib" || { _li_fail="failed to load tools/hooks/$_li_lib"; break; }
+  done
+fi
+if [ -n "$_li_fail" ]; then
+  echo "lane-init: $_li_fail under '$_LI_ROOT' (resolved from '$_LI_SRC')" >&2
+  echo "lane-init: lane NOT initialised -- do not treat this worktree as an open lane" >&2
+  # Strip the identity, as every other failure path here does: a shell that already held
+  # lane A's would otherwise keep exporting it after being told the lane is not
+  # initialised, and this workspace binds reservation holders by lane_id.
+  unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _li_lib _li_fail
+  return 1
+fi
+unset _li_lib _li_fail
 
 # Corpse repair (of a zero-byte marker or claim) must be MUTUALLY EXCLUSIVE. Atomic replace
 # alone is not enough: two repairers each minting a value, replacing in sequence, and each
