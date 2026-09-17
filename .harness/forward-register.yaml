@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 253
+  total: 254
   open: 1
   design_substrate_gated: 3
-  registered_finding: 95
+  registered_finding: 96
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: 0a0ecb90d392ae75
+  identity_digest: fd1ef0fdbc079420
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11661,3 +11661,11 @@ items:
   close_out: 'REGISTERED 2026-09-17. WHAT CLOSES THIS ROW: an arc that (1) makes the tiebreaker emit the terminating refresh for its own landings (roadmap_status_refresh.py --emit-refresh-pr-json for the stale-branch PR, merged as the door''s continuation) or lands the scratch pair off main, AND/OR (2) teaches step (vii) to distinguish a drift-only red inherited from prior un-refreshed landings (the guard''s verified-refresh-point rule) from this arc''s own failure, AND (3) adds a CLI `release` verb (C-HE-06 §6 names "the normal verb" but the door exposes none) — each with a witness; plus a change-note at C-HE-08 §4 / C-HE-06 §4(viii) stating which. Memory: tiebreaker-scratch-landings-owe-a-refresh-and-wedge-the-next-door.'
   council: 'NO -- a mechanism gap between two carriers of one protocol (§12.2 vs C-HE-08 §4); the fix is engineering, not a cross-domain tension.'
   heading: '### B-253 · tiebreaker landings skip the terminating refresh and wedge the next merge door *(surfaced 2026-09-17 on #1555–#1558; REGISTERED)*'
+- id: B-254
+  title: 'demotion windows are built from arcs that have observation rows, not from consecutive merged arcs'
+  pr: '#TBD (surfaced on u-he-40 codex round 11, 2026-09-17)'
+  status: registered_finding
+  summary: 'core.recent_windows builds the demotion window sequence from the arc_ids that carry observation rows for the check (arcs = list(dict.fromkeys(r["arc_id"] for r in observed))), then chunks that sequence by WINDOW. C-HE-31 §4(b) requires >= 2 rejected findings in each of two consecutive, non-overlapping 20-arc windows; §4(b) does not restate the unit, and §4(a) fixes it as merged arcs ("the last 20 merged arcs'' diffs"). Row-bearing arcs and merged arcs coincide only while the check runs on every merged arc: any arc the check did not observe -- an outage, a pre-promotion arc, a run that failed before emitting -- is simply absent from `observed` and drops out of the sequence, so the chunks silently span a wider stretch of history than 20 consecutive arcs. The practical effect the reviewer named is that an outage can indefinitely delay or distort demotion: the check keeps its blocking state on a window set that never completes as specified.'
+  close_out: 'REGISTERED 2026-09-17 on the u-he-40 arc (codex round 11 P2), dispositioned as a named bound rather than fixed -- the bound is stated in-code at tools/mechanized_checks/core.py above the `arcs =` line. WHAT CLOSES THIS ROW: an arc that supplies BOTH missing halves. (1) The input: recent_windows sees only gate-log rows, while the merged-arc sequence lives in git first-parent history (the same source select_replay_commits already reads), so the sequence must be passed in rather than inferred. (2) The ruling: C-HE-31 §4 does not say what an UNMEASURED merged arc contributes to a window -- zero rejections (which dilutes the rejection rate and makes demotion harder) or a hole that suspends the window until the check is re-run. Until §4 answers that, any code fix would be inventing the semantics, so this stays registered rather than half-landed.'
+  council: 'NO -- a single-axis mechanism gap plus a bounded C-HE-31 §4 wording ruling; no cross-domain tension to convene over.'
+  heading: '### B-254 · demotion windows are built from arcs that have rows, not from consecutive merged arcs *(surfaced on u-he-40 codex r11, 2026-09-17; REGISTERED)*'

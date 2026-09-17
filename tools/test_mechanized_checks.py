@@ -836,3 +836,100 @@ def test_runner_demotion_verbs_detect_then_record_a_due_demotion(tmp_path, monke
     assert isinstance(core.load_state()["stale_carry"], core.Advisory)
     assert fr.read_rows(log)[-1]["record_kind"] == "gate_demotion"
     assert runner.main(["demotion-due"]) == 0
+
+
+# --- codex round 11 absorptions (u-he-40) ------------------------------------------------
+# Each test below is the witness for one r11 P2. The `# mutation-probe:` line above each names
+# the edit that must turn it red, so the witness is deletion-expressible rather than decorative.
+
+
+# mutation-probe: tools/mechanized_checks/core.py:88-89 drop the `is_relative_to` containment arm
+def test_subject_read_refuses_a_path_that_escapes_the_subject_root(tmp_path):
+    """r11 P2: `rel` comes from CHANGED MARKDOWN, so a `..` cite must never let a
+    repo-scoped check read -- or validate a citation against -- a file outside the tree."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.py").write_text("TOKEN = 1\n")
+    repo = tmp_path / "repo"
+    (repo / "tools").mkdir(parents=True)
+    (repo / "tools" / "x.py").write_text("A = 1\n")
+
+    subject = _subject(repo)
+    assert subject.read("tools/x.py") == "A = 1\n"  # in-subject reads are unaffected
+    assert subject.read("../outside/secret.py") is None
+    assert subject.read("tools/../../outside/secret.py") is None
+
+
+# mutation-probe: tools/mechanized_checks/core.py:88-89 drop the `is_relative_to` containment arm
+def test_an_escaping_cite_is_reported_not_silently_validated(tmp_path):
+    """The end-to-end half of the containment fix: the escaping cite resolves to nothing,
+    so it surfaces as a finding instead of passing on the outside file's line count."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.py").write_text("TOKEN = 1\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "d.md").write_text("see `../outside/secret.py:1`\n")
+
+    found = cited_symbol_exists.Check().run(_subject(repo, changed=["d.md"]))
+    assert [f.location for f in found] == ["../outside/secret.py:1"]
+
+
+# mutation-probe: tools/mechanized_checks/cited_symbol_exists.py:23 make _resolves bound only end
+def test_cited_range_validates_start_and_end_independently(tmp_path):
+    """r11 P2: bounding only `end` passed `tools/x.py:999-1` against any one-line file,
+    because a reversed range puts the smaller number where the bound is read."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "x.py").write_text("only = 1\n")  # exactly one line
+    (tmp_path / "r.md").write_text(
+        "reversed `tools/x.py:999-1`, zero `tools/x.py:0`, whole `tools/x.py:1-1`\n"
+    )
+    found = {
+        f.location for f in cited_symbol_exists.Check().run(_subject(tmp_path, changed=["r.md"]))
+    }
+    assert found == {"tools/x.py:999-1", "tools/x.py:0"}  # the in-range cite stays clean
+
+
+# mutation-probe: tools/mechanized_checks/mutation_probe_reverify.py:170 drop the changed-target arm
+def test_mutation_probe_reverify_sees_a_changed_target_under_an_unchanged_test(tmp_path):
+    """r11 P2: the asymmetric case. A probed SOURCE file changes while its annotated test
+    does not, so the pin's target digest goes stale -- scanning only CHANGED test files left
+    that stale pin uninspected and let a blocking gate pass."""
+    _probe_fixture(tmp_path, logged=True)
+    (tmp_path / "tools" / "x.py").write_text("A = 1\nB = 3\n")  # the probed target moves
+
+    # the test file itself is NOT in `changed`; only its target is
+    subject = _subject(tmp_path, changed=["tools/x.py"])
+    found = mpr.Check(probe=lambda *_a: (1, "")).run(subject)
+    assert [f.location for f in found] == ["tools/test_x.py::test_t"]
+    assert "no longer pins the current bytes" in found[0].evidence
+
+
+# mutation-probe: tools/mechanized_checks/runner.py:212 drop the `with core.record_lock():` wrapper
+def test_record_lock_is_exclusive_and_times_out_loudly(tmp_path, monkeypatch):
+    """r11 P2: replay's select-then-emit is one operation. The lock that makes it one must
+    actually exclude a second holder, and say so rather than silently proceeding."""
+    monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "g.jsonl")
+    monkeypatch.setattr(fr, "LOCK_TIMEOUT_S", 0.3)
+    with core.record_lock():
+        with pytest.raises(Exception) as caught:
+            with core.record_lock():
+                pass
+    assert "lock" in str(caught.value).lower()
+
+
+# mutation-probe: tools/mechanized_checks/runner.py:291-297 drop the moved-HEAD refusal
+def test_mech_check_refuses_when_head_moves_while_gathering_the_subject(tmp_path, monkeypatch, capsys):
+    """r11 P2: HEAD is read before the subject runs its own git queries. A commit landing
+    between them would stamp findings from the NEWER diff with the older sha, so the run
+    refuses rather than emitting a mislabelled row."""
+    heads = iter(["a" * 40, "b" * 40])  # HEAD moves between the two rev-parse calls
+    monkeypatch.setattr(runner, "_git", lambda *_a, **_k: next(heads) + "\n")
+    monkeypatch.setattr(runner, "working_tree_subject", lambda *_a, **_k: _subject(tmp_path))
+    monkeypatch.setattr(runner.core, "load_state", lambda: {})
+    emitted: list[object] = []
+    monkeypatch.setattr(runner, "run_checks", lambda *a, **k: emitted.append(a) or 0)
+
+    assert runner.main(["check"]) == 2
+    assert emitted == []  # nothing was gathered under the stale sha
+    assert "HEAD moved" in capsys.readouterr().err

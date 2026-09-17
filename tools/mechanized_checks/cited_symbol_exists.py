@@ -16,6 +16,13 @@ FILE_LINE = re.compile(
 SYMBOL_IN = re.compile(rf"`(?P<name>\w+)\(\)`[^`\n]*`(?P<path>{_PATH}\.(?:py|sh))`")
 
 
+def _resolves(text: str | None, start: int, end: int) -> bool:
+    """A file:line cite resolves iff its WHOLE range lies in the file: 1 <= start <= end <=
+    len. Checking only `end` passed `tools/x.py:999-1` against any one-line file, because a
+    reversed range put the smaller number where the bound was read (codex r11 P2)."""
+    return 1 <= start <= end <= len((text or "").splitlines())
+
+
 def _defines(name: str) -> re.Pattern[str]:
     n = re.escape(name)
     return re.compile(
@@ -38,7 +45,9 @@ class Check:
             )
             for _rel, text in texts
             for m in FILE_LINE.finditer(text)
-            if len((subject.read(m["path"]) or "").splitlines()) < int(m["end"] or m["start"])
+            if not _resolves(
+                subject.read(m["path"]), int(m["start"]), int(m["end"] or m["start"])
+            )
         ]
         symbols = [
             MechFinding(

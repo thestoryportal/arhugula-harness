@@ -146,11 +146,30 @@ class Check:
         rows = [json.loads(line) for line in log.splitlines() if line.strip()]
         return [
             finding
-            for rel, text in subject.changed_texts(".py")
-            if Path(rel).name.startswith("test_")
+            for rel, text in self._subjects(subject)
             for a in annotations(rel, text)
             for finding in self._verify(subject.repo, a, logged_range(rows, a, subject.repo))
         ]
+
+    def _subjects(self, subject: Subject) -> list[tuple[str, str]]:
+        """The annotated test files this run must re-verify: every test file whose own text
+        changed, PLUS every test file an annotation of which names a changed target.
+
+        Scanning only changed tests left the asymmetric case uninspected -- a probed SOURCE
+        file changes while its annotated test does not, so the pin's target digest goes
+        stale and nothing looks at it, letting a blocking gate pass (codex r11 P2). The
+        universe scan is bounded to `test_*.py`."""
+        changed = set(subject.changed)
+        found: list[tuple[str, str]] = []
+        for rel in subject.universe:
+            if not (rel.endswith(".py") and Path(rel).name.startswith("test_")):
+                continue
+            text = subject.read(rel)
+            if text is None:
+                continue
+            if rel in changed or any(a.target in changed for a in annotations(rel, text)):
+                found.append((rel, text))
+        return found
 
     def _verify(
         self, repo: Path, a: Annotation, logged: Pinned | Stale | None

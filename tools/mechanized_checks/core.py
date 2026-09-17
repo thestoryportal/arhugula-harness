@@ -76,7 +76,17 @@ class Subject:
     pr_body: str | None  # None: gh could not produce the body -- never conflated with ""
 
     def read(self, rel: str) -> str | None:
-        path = self.repo / rel
+        """A subject file's text, or None when `rel` names no readable file IN the subject.
+
+        A path escaping the subject root is not a subject file, so it reads as None rather
+        than as the outside file's bytes -- checks parse untrusted text (changed markdown
+        cites) into `rel`, and `..` segments must never let a repo-scoped check read, or
+        validate a cite against, anything outside the tree (codex r11 P2). Resolving both
+        sides also denies an in-tree symlink pointing out."""
+        root = self.repo.resolve()
+        path = (root / rel).resolve()
+        if not path.is_relative_to(root):
+            return None
         return path.read_text(errors="replace") if path.is_file() else None
 
     def changed_texts(self, *suffixes: str) -> list[tuple[str, str]]:
@@ -223,6 +233,25 @@ def state_lock() -> Iterator[None]:
         os.close(fd)
 
 
+@contextmanager
+def record_lock() -> Iterator[None]:
+    """Serialize replay's select-then-emit against the findings record.
+
+    `replay` reads which arcs are already measured and then appends rows for the rest; read
+    and append are one decision, not two, or two concurrent `mech-replay` runs both see an
+    arc as unmeasured and each append findings for it -- breaking the once-per-arc contract
+    and minting duplicate adjudications (codex r11 P2). `state_lock`'s lock is the state
+    file's and does not cover the record, so this is its own sidecar.
+    """
+    lock = fr.GATE_LOG_JSONL.with_name(fr.GATE_LOG_JSONL.name + ".lock")
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    try:
+        fr._lock_exclusive(fd, lock)
+        yield
+    finally:
+        os.close(fd)
+
+
 # --- promotion (§4(a)) -------------------------------------------------------------------
 
 
@@ -304,6 +333,17 @@ def rejected_windows(rows: Sequence[dict], check_id: str, *, since: str) -> list
     rejected = Counter(
         last[f]["arc_id"] for f in qualifying if last[f]["disposition"] == "rejected"
     )
+    # NAMED BOUND (codex r11 P2, registered B-254): the window sequence is built from arcs
+    # that HAVE observation rows, not from consecutive merged arcs. A merged arc on which the
+    # check did not run (an outage, or a pre-promotion arc) is absent from `observed` and so
+    # drops out of the sequence, so these are not literally §4(b)'s "two consecutive,
+    # non-overlapping" 20-arc windows -- §4(a) fixes the unit as MERGED arcs ("the last 20
+    # merged arcs' diffs") and §4(b) does not restate it. An outage delays or distorts
+    # demotion. Not fixable
+    # here: this function sees only rows, and the merged-arc sequence lives in git first-parent
+    # history. Closing it needs both that input AND a §4 ruling on what an UNMEASURED merged arc
+    # contributes to a window (zero rejections, which dilutes, or a hole that suspends it) --
+    # a spec decision this arc does not own.
     arcs = list(dict.fromkeys(r["arc_id"] for r in observed))
     recent = arcs[len(arcs) % WINDOW :]
     return [sum(rejected[a] for a in recent[i : i + WINDOW]) for i in range(0, len(recent), WINDOW)]

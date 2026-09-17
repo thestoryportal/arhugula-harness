@@ -207,29 +207,32 @@ def replay(
         f"replay-{sha[:12]}-{impl}-{_body_key(body)}"
         for sha, body in zip(shas, bodies, strict=True)
     ]
-    measured = {
-        r["arc_id"]
-        for r in fr.read_rows()
-        if r.get("producer") == check.check_id and r["record_kind"] in core.OBSERVATION_KINDS
-    }
-    # an arc already replayed keeps its rows and whatever adjudications they have gathered
-    todo = [
-        (sha, body, arc_id)
-        for sha, body, arc_id in zip(shas, bodies, arc_ids, strict=True)
-        if arc_id not in measured
-    ]
-    for sha, body, arc_id in todo:
-        with commit_subject(repo, sha, body=body) as subject:
-            findings = check.run(subject)
-        core.emit(
-            check.check_id,
-            check.kind,
-            findings,
-            arc_id=arc_id,
-            lane_id=lane_id,
-            head_sha=sha,
-            lineage="replay",
-        )
+    # the measured-set read and the emissions it decides are ONE operation (core.record_lock
+    # docstring): unlocked, two concurrent replays both see an arc as unmeasured (codex r11 P2)
+    with core.record_lock():
+        measured = {
+            r["arc_id"]
+            for r in fr.read_rows()
+            if r.get("producer") == check.check_id and r["record_kind"] in core.OBSERVATION_KINDS
+        }
+        # an arc already replayed keeps its rows and whatever adjudications they have gathered
+        todo = [
+            (sha, body, arc_id)
+            for sha, body, arc_id in zip(shas, bodies, arc_ids, strict=True)
+            if arc_id not in measured
+        ]
+        for sha, body, arc_id in todo:
+            with commit_subject(repo, sha, body=body) as subject:
+                findings = check.run(subject)
+            core.emit(
+                check.check_id,
+                check.kind,
+                findings,
+                arc_id=arc_id,
+                lane_id=lane_id,
+                head_sha=sha,
+                lineage="replay",
+            )
     return core.replay_verdict(fr.read_rows(), check.check_id, arc_ids)
 
 
@@ -281,6 +284,17 @@ def main(argv: list[str] | None = None) -> int:
         case "check":
             head = _git(repo, "rev-parse", "HEAD").strip()
             subject = working_tree_subject(repo, base=args.base)
+            # HEAD is read before the subject runs its OWN git queries, so a commit landing
+            # between them would stamp findings gathered from the newer diff with the older
+            # sha -- corrupting provenance and the finding ids derived from it. Refuse loudly
+            # rather than emit a mislabelled row (codex r11 P2; [LAW:no-silent-failure]).
+            if _git(repo, "rev-parse", "HEAD").strip() != head:
+                print(
+                    f"mech-check: HEAD moved while gathering the subject (was {head[:12]}); "
+                    "nothing emitted -- re-run",
+                    file=sys.stderr,
+                )
+                return 2
             return run_checks(subject, CHECKS, state, arc_id=arc_id, lane_id=lane_id, head_sha=head)
         case "replay":
             check = next(c for c in CHECKS if c.check_id == args.check_id)
