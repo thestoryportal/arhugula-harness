@@ -938,10 +938,14 @@ for SH in bash zsh; do
     echo "  NOTE: $SH is not installed here -- lane-init portability is UNVERIFIED for it"
     continue
   fi
-  MISSING=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
-for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done")
-  [ -z "$MISSING" ] && ok "$SH: sourcing lane-init loads lib.sh + loop_lib.sh" \
-    || bad "$SH: sourced lane-init left these undefined: $MISSING"
+  PORT=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+printf 'rc=%s ' \$?
+for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf 'nofn:%s ' \"\$f\"; done
+[ -n \"\${HARNESS_LANE_ID:-}\" ] || printf 'no-id '
+[ -n \"\${HARNESS_LANE_INDEX:-}\" ] || printf 'no-index '
+[ -f \"$LANES/\${HARNESS_LANE_INDEX:--}\" ] || printf 'no-claim '")
+  [ "$PORT" = "rc=0 " ] && ok "$SH: sourcing lane-init loads both libraries AND brings the lane up" \
+    || bad "$SH: lane did not come up cleanly: $PORT"
 done
 
 # zsh names the sourced file in `$0` only while FUNCTION_ARGZERO is set. It is on by

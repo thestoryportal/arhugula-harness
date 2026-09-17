@@ -233,6 +233,12 @@ intake pile where a human sees it; over-matching hides it. Two consecutive round
 were spent narrowing a single added term (`cleanup path`, then `caller state`), which is what
 this rule exists to skip.
 
+And when narrowing does not converge, SUBTRACT. Three consecutive rounds of one arc were
+spent on terms added to this table; the terms were removed rather than sharpened again,
+because this file's own policy is to prefer to miss and its header already records that
+successive regex layers trade one imprecision for another. A shape that keeps drawing
+findings is telling you the vocabulary does not exist, not that you have not found it yet.
+
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
 load-bearing line were deleted or inverted, does this test actually red?* Traps seen

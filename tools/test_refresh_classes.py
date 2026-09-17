@@ -93,11 +93,18 @@ def test_class_7_covers_a_sourced_files_caller_shell_locals_but_not_generic_clea
             ),
             "location": "tools/hooks/lane-init.sh:31",
         },
+    ]
+    # Deliberately NOT a positive: a shell-leak finding that never says "caller's shell" is
+    # left to the intake pile. `interactive shell` was tried as a second trigger and removed
+    # (it also matches "tab completion hangs in the interactive shell"), and this file's
+    # policy is to prefer to miss — a missed row stays where a human sees it, a false hit
+    # does not. The real finding of this shape still reached its classes through other rows.
+    deliberately_unclaimed = [
         {
-            "finding_id": "s:2",
+            "finding_id": "u:1",
             "observed_evidence": (
-                "the new caller-scoped local is not cleaned up on the refusal exits, which "
-                "leave the sourced script path in the interactive shell"
+                "the local is not cleaned up on the refusal exits, which leave the sourced "
+                "script path in the interactive shell"
             ),
             "location": "tools/hooks/lane-init.sh:31",
         },
@@ -126,12 +133,45 @@ def test_class_7_covers_a_sourced_files_caller_shell_locals_but_not_generic_clea
             "observed_evidence": "a caller-scoped timeout is reused across retries",
             "location": "",
         },
+        # A shell can be named in a finding that has nothing to do with what the shell
+        # HOLDS, which is why `interactive shell` was removed rather than sharpened.
+        {
+            "finding_id": "n:5",
+            "observed_evidence": "tab completion hangs in the interactive shell",
+            "location": "",
+        },
     ]
-    out = json.loads(_run("classify", stdin=json.dumps(positives + negatives)).stdout)
-    for fid in ("s:1", "s:2"):
-        assert "7 env-var mutation / restore" in out[fid], (fid, out[fid])
-    for fid in ("n:1", "n:2", "n:3", "n:4"):
+    out = json.loads(
+        _run("classify", stdin=json.dumps(positives + negatives + deliberately_unclaimed)).stdout
+    )
+    assert "7 env-var mutation / restore" in out["s:1"], out["s:1"]
+    assert "7 env-var mutation / restore" not in out["u:1"], out["u:1"]
+    for fid in ("n:1", "n:2", "n:3", "n:4", "n:5"):
         assert "7 env-var mutation / restore" not in out[fid], (fid, out[fid])
+
+
+def test_class_3_intake_vocabulary_does_not_claim_unrelated_intake_paths():
+    """`intake path` reads naturally in findings about ingestion endpoints, so the class-3
+    suppression vocabulary names the PILE, not a path. Removed rather than sharpened: a
+    false hit here is self-defeating, since it removes the finding from the very pile the
+    term exists to protect."""
+    rows = [
+        {
+            "finding_id": "i:1",
+            "observed_evidence": (
+                "classifies unrelated findings, which removes it from the unmatched intake pile"
+            ),
+            "location": "",
+        },
+        {
+            "finding_id": "i:2",
+            "observed_evidence": "the unsigned webhook intake path accepts forged payloads",
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    assert "3 silent failure / fallback" in out["i:1"], out["i:1"]
+    assert "3 silent failure / fallback" not in out["i:2"], out["i:2"]
 
 
 def test_classify_reads_the_location_too():

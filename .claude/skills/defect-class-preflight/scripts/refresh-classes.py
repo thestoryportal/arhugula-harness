@@ -68,7 +68,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
-        r"|intake pile|intake path|classifies unrelated|removes it from the unmatched"
+        r"|intake pile|classifies unrelated|removes it from the unmatched"
     ),
     "4 vacuous witness": (
         r"witness|vacuous|stays green|cannot fail|only .*presence|never red"
@@ -83,7 +83,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # so the lane-init `_LI_SRC` leak (codex r3, 2026-09-17) matched no class at all.
     "7 env-var mutation / restore": (
         r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"
-        r"|caller's shell|interactive shell"
+        r"|caller's shell"
     ),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (
