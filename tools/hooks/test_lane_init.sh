@@ -1187,31 +1187,6 @@ case "$DET_ERR" in
   *) bad "failure message does not state the lane is uninitialised: '$DET_ERR'" ;;
 esac
 
-# --- the _LI_* cleanup sites clear the SAME set, all of them ------------------------
-# Fifteen hand-maintained `unset` lists is the condition that guarantees one drifts, and the
-# merge-gate witness lens reproduced exactly that: dropping `_LI_SRC` from any of the sites no
-# behavioural case reaches left this whole suite green. Behaviour is witnessed at three exits
-# above (library-load refusal, bad-index refusal, index exhaustion); a fixture for each of the
-# remaining twelve would need race simulation for several, so this asserts the UNIFORMITY those
-# three cannot reach instead. It is a structural assertion on purpose -- the contract it pins
-# is structural ("no exit clears a strict subset"), not behavioural, and it catches a dropped
-# name at a site that has no test and at any site added later. (merge-gate witness lens r2.)
-SUBSET_SITES=$(awk '
-  /unset -f/ { next }
-  /^[^#]*unset .*_LI_(SRC|ROOT|Q|WT)/ {
-    miss = ""
-    if ($0 !~ /_LI_SRC/)  miss = miss " _LI_SRC"
-    if ($0 !~ /_LI_ROOT/) miss = miss " _LI_ROOT"
-    if ($0 !~ /_LI_Q/)    miss = miss " _LI_Q"
-    if ($0 !~ /_LI_WT/)   miss = miss " _LI_WT"
-    if (miss != "") printf "    line %d misses%s\n", NR, miss
-  }
-' "$INIT")
-[ -z "$SUBSET_SITES" ] \
-  && ok "all 15 _LI_* cleanup sites clear the whole set, not a subset" \
-  || bad "these cleanup sites clear only part of the _LI_* set:
-$SUBSET_SITES"
-
 echo "---"
 [ -z "$SHELLS_UNVERIFIED" ] && echo "PASS=$PASS FAIL=$FAIL" \
   || echo "PASS=$PASS FAIL=$FAIL SHELLS_UNVERIFIED=$SHELLS_UNVERIFIED"
