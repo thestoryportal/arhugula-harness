@@ -241,6 +241,19 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             "observed_evidence": "the latest commit codifies a workaround instead of fixing it",
             "location": "",
         },
+        # a word that merely BEGINS with `test` (merge-gate witness lens r2). The leading
+        # \b admits these — `testament` starts at a word boundary — so the token needs the
+        # `(?![a-z])` lookahead too: it is the WORD `test`, not a prefix of a longer word.
+        {
+            "finding_id": "n:9",
+            "observed_evidence": "the last testament codifies the will's provisions",
+            "location": "",
+        },
+        {
+            "finding_id": "n:10",
+            "observed_evidence": "her testimony codifies the account",
+            "location": "",
+        },
         # an `assert`-shaped PATH: the old tuple's artifact half matched `assert` anywhere,
         # so a path alone satisfied it. Ordering refuses it now — this case existed only in
         # the arc's transient measurement until the lens noted the comment claimed a probe

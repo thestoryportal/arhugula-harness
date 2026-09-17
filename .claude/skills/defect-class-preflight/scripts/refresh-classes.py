@@ -137,17 +137,21 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         r"working tree|live worktree|uncommitted|mutable tree|dirty",
         r"binding|base_sha|head_sha|\bHEAD\b|committed (diff|range|bytes|base)",
     ),
-    # Measured on the 2026-09-17 corpus (2,163 findings): 30 rows carry a blessing verb
-    # and 15 matched no other class — exactly the pile this class empties. `pins the` was
-    # measured and DROPPED: its one unmatched hit read "--match-head-commit merely pins
-    # the merge", a binding claim with no witness in it.
+    # Every count here is anchored to the gate log AS OF base 63e19e3ee, never to "the
+    # current corpus": this class was measured against the same log its own arc's gate
+    # rows append to, so a live total is stale before it is committed (merge-gate witness
+    # lens r2, P3 — it read 2,165 where the prose said 2,163). At that base the log holds
+    # 2,162 findings, 29 carry a blessing verb, and 14 of those matched no other class —
+    # exactly the pile this class empties. `pins the` was measured and DROPPED: its one
+    # unmatched hit read "--match-head-commit merely pins the merge", a binding claim with
+    # no witness in it.
     #
     # PHRASES, not a tuple (codex r1 P2 on this arc). The first draft paired a verb
     # conjunct with an artifact conjunct, and `matches()` reads `finding_text` — evidence
     # PLUS location — so any finding located in a test file satisfied the artifact half
     # for free. Measured under THAT draft's own artifact half
     # (`\btest|witness|assert|fixture|\bCI\b`, the predicate the claim is about): 263 of
-    # the 2,163 rows carry a location satisfying it and 30 carry it in the location
+    # the base's 2,162 rows carry a location satisfying it and 30 carry it in the location
     # alone, and "the governing spec codifies the required behavior" at
     # `tools/test_widget.py` classified as this class. A conjunct a path can satisfy does
     # not constrain, and a false match is the one direction the policy above forbids — it
@@ -158,27 +162,41 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     #
     # ORDERING is what fences the location out, structurally rather than by luck: the
     # location is appended LAST, so an artifact-BEFORE-verb phrase can never be satisfied
-    # by it (a path contains no verb, and nothing follows a path to supply one). The
-    # artifact token is therefore generous on its RIGHT (`\btests?[\w-]*` admits
-    # `test_happy_path`) and strict on its LEFT. Both boundaries are load-bearing and for
-    # opposite reasons — the first draft of this fix dropped the LEADING `\b` after
-    # measuring that a TRAILING `\b` breaks `test_happy_path`, which made "at-TEST-ation"
-    # and "la-TEST" match a class about tests (merge-gate witness lens, P2). `attest` is
-    # this workspace's own vocabulary, so that was the likeliest false match of all.
+    # by it (a path contains no verb, and nothing follows a path to supply one).
+    #
+    # The artifact token took THREE reviewed revisions, all on its boundaries, and the
+    # third was subtraction rather than another layer (the step-6 arms-race rule: two
+    # consecutive rounds on a mechanism the absorption itself invented). What it is now:
+    # `\btests?(?![a-z])` — the WORD, refusing a longer word that merely starts with it.
+    # What it was, and why each failed: `\btest\b` (draft 1) rejected `test_happy_path`,
+    # since `_` is a word character; `tests?[\w-]*` (draft 2) dropped the LEADING `\b` to
+    # fix that and so matched "at-TEST-ation" and "la-TEST" — `attest` is this workspace's
+    # own vocabulary, making it the likeliest false match of all (lens r1 P2); the leading
+    # `\b` came back, but `[\w-]*` still admitted `testament`/`testimony`/`testify` (lens
+    # r2 P2). The identifier tail is carried by the window below, NOT by a trailing class
+    # — deleting `[\w-]*` was measured byte-identical on every case, so draft 2's comment
+    # credited it for work it never did (lens r2, second P2). Recall is 29 corpus / 14
+    # pile at the base anchor, IDENTICAL across all three drafts.
+    #
+    # Residual bound, named rather than chased (the same policy as class 13's
+    # co-occurrence bound above): the window still admits a test artifact and a blessing
+    # verb that co-occur in one sentence without the verb being ABOUT the artifact. Three
+    # rounds of boundary defects on one token is the evidence that further layers trade
+    # one imprecision for another; this row stops here and the bound stands documented.
     # `(?:[^.]|\.\S)` keeps the window inside ONE sentence while still crossing a file
     # path: `.py` is a dot followed by non-space, a sentence end is a dot followed by
     # space — so "test at tools/x.py:1301 enshrines" matches and "The test passes. The
     # spec codifies the rule" does not. The pronoun arm's ≤2-word gap is what keeps "this
-    # witness instead blesses". Recall is unchanged at 30/15 across every revision of this
-    # row, and each false-match shape measured along the way is pinned by its own case in
-    # test_class_16_* — a verb with no witness, a witness with no verb, a test-file
-    # location, a `/tests/` directory, an `assert`-shaped path, the cross-sentence
-    # co-occurrence, and the `attestation` substring.
+    # witness instead blesses". Each false-match shape measured across the three drafts is
+    # pinned by its own case in test_class_16_* — a verb with no witness, a witness with
+    # no verb, a test-file location, a `/tests/` directory, an `assert`-shaped path, the
+    # cross-sentence co-occurrence, the `attestation` substring, and a word that merely
+    # BEGINS with `test`.
     #
     # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
     # of these proves the wrong thing.
     "16 witness codifies the divergence": (
-        r"\btests?[\w-]*(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
+        r"\btests?(?![a-z])(?:[^.]|\.\S){0,80}(codif|enshrin|blesses)"
         r"|\b(it|CI|witness|fixture|which)\s+(?:\w+\s+){0,2}(codif|enshrin|blesses)"
     ),
 }
