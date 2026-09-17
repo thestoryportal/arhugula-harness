@@ -49,7 +49,11 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
 def test_bare_drift_is_not_class_2_vocabulary():
     # handoff-s2 §2 B proposed `\bdrift` for class 2; the corpus said no (30 of 35 "drift"
     # rows are contract / configuration / roadmap drift or the arc-metrics drift cohort —
-    # see the LEFT OUT note above CLASSES). These shapes must stay in the intake pile.
+    # see the LEFT OUT note above CLASSES). This test pins only that class 2 does not
+    # claim them. It no longer means "these stay in the intake pile": d:1 is a test
+    # codifying a drift, so class 16 claims it now — which is the whole point of that
+    # class, and is why the LEFT OUT note routes this shape there rather than to class 2
+    # (merge-gate witness lens r6 P3: this diff invalidated the older wording).
     rows = [
         {
             "finding_id": "d:1",
@@ -252,6 +256,19 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
             "finding_id": "n:12",
             "observed_evidence": "The team raised the timeout, which enshrines the"
             " assumption of network latency.",
+            "location": "",
+        },
+        # an artifact->verb gap WIDER than the window: the cap is 80 and this gap is 117,
+        # so the sentence is refused. The widest gap among the real members is 60
+        # ("test at <path>:1301 enshrines"), which is where 80 comes from -- 60 plus
+        # headroom, not a round number chosen by eye. Without this case the cap is
+        # unwitnessed and a regression to an unbounded window would pass every other
+        # test (merge-gate witness lens r6 P2).
+        {
+            "finding_id": "n:16",
+            "observed_evidence": "The test suite ran green and the deployment completed"
+            " cleanly and the release notes were filed by the operator, and the spec"
+            " codifies the older rule",
             "location": "",
         },
         # a witness noun that is the sentence's OBJECT, not the subject of the blessing

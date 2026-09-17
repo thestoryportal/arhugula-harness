@@ -197,12 +197,20 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # -match surface is not a tradeoff; the arm's own ≤2-word gap went with it.
     #
     # Residual bound — ONE now, named rather than chased (the same policy as class 13's
-    # co-occurrence bound above): within one sentence the window admits the word `test`
-    # and a blessing verb whose subject is something else. The word `test` must appear for
-    # this class to fire at all, which is what makes the bound narrow enough to keep. Two
-    # earlier wordings of this paragraph UNDERSTATED what the pattern admitted (lens r3
-    # and r5 each caught one), so state it against the shipped regex, never against the
-    # intent: a named bound that understates admission is a wrong claim with a disclaimer.
+    # co-occurrence bound above). Within one sentence the window admits the word `test`
+    # before a blessing verb in two shapes this row does not try to tell apart: the verb's
+    # subject is something else ("the test ran green and the spec codifies the older
+    # rule"), and `test` in its ordinary-English sense rather than the software one ("the
+    # A/B test codifies the winning variant" — verified live). What keeps the bound narrow
+    # enough to accept is that the word `test` must appear AT ALL for this class to fire,
+    # and the window is one sentence wide. THREE earlier wordings of this paragraph
+    # understated what the pattern admits (lens r3, r5 and r6 each caught one), so state
+    # it against the shipped regex and never against the intent: a named bound that
+    # understates admission is a wrong claim with a disclaimer.
+    #
+    # The window's `{0,80}` is derived, not chosen by eye: the widest artifact→verb gap
+    # among the real members is 60 ("test at <path>:1301 enshrines"), and 80 is that plus
+    # headroom. n:16 pins it — a 117-char gap that an unbounded window would admit.
     #
     # Every round of review on this row removed something rather than adding a layer
     # (`pins the`, then `[\w-]*`, then `it|which`, then the whole noun arm) and the
