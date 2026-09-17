@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 248
+  total: 249
   open: 1
   design_substrate_gated: 3
-  registered_finding: 90
+  registered_finding: 91
   operator_gated: 0
   held: 3
   closed: 151
-  identity_digest: a0c1d23aa6d369b4
+  identity_digest: 13ffb116a7947b78
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11638,3 +11638,37 @@ items:
   close_out: 'REGISTERED 2026-09-17. WHAT CLOSES THIS ROW: an arc that (1) makes the tiebreaker emit the terminating refresh for its own landings (roadmap_status_refresh.py --emit-refresh-pr-json for the stale-branch PR, merged as the door''s continuation) or lands the scratch pair off main, AND/OR (2) teaches step (vii) to distinguish a drift-only red inherited from prior un-refreshed landings (the guard''s verified-refresh-point rule) from this arc''s own failure, AND (3) adds a CLI `release` verb (C-HE-06 §6 names "the normal verb" but the door exposes none) — each with a witness; plus a change-note at C-HE-08 §4 / C-HE-06 §4(viii) stating which. Memory: tiebreaker-scratch-landings-owe-a-refresh-and-wedge-the-next-door.'
   council: 'NO -- a mechanism gap between two carriers of one protocol (§12.2 vs C-HE-08 §4); the fix is engineering, not a cross-domain tension.'
   heading: '### B-253 · tiebreaker landings skip the terminating refresh and wedge the next merge door *(surfaced 2026-09-17 on #1555–#1558; REGISTERED)*'
+- id: B-256
+  title: the _LI_* namespace scanner is lexical, so three shapes evade or misreport it
+  status: registered_finding
+  pr: '#1561'
+  heading: '### B-256 · the `_LI_*` namespace scanner is lexical, not a shell parser *(surfaced
+    by the merge-gate witness lens on #1561, 2026-09-17; REGISTERED)*'
+  summary: 'tools/test_lane_init_namespace.py asserts that no exit of tools/hooks/lane-init.sh
+    clears a strict subset of `_LI_SRC`/`_LI_ROOT`/`_LI_Q`/`_LI_WT`. It is a LEXICAL scanner:
+    it splits statements on `;`/`&&`/`||`/`&`, strips comments quote-aware, and excludes
+    `unset -f` by the statement''s own flags. It does not evaluate the shell, and three shapes
+    are outside it. (1) SILENT MISS: `unset $VARS` reaches its name list by variable
+    indirection, so no literal `_LI_*` token exists to match and an incomplete cleanup reads
+    as not-a-cleanup-site. (2) FAILS LOUD: a statement continued across physical lines with a
+    backslash is scored per line, so a complete cleanup is misreported as partial on the
+    first. (3) FAILS LOUD: a cleanup legitimately split across two `unset` statements is
+    scored as two partial ones. None occurs in lane-init.sh today (verified by grep for
+    trailing continuations, heredocs and indirection at the time of filing). The arc closed
+    the two evasions that WERE silent and reachable -- the `unset -f` line-skip, the trailing
+    comment, and the guarded one-liner -- each with its own regression case.'
+  council: 'NO -- a tooling-precision question (how exactly to recognise a shell statement),
+    not a cross-domain tension; the two candidate closures are both engineering calls.'
+  close_out: 'OPEN. Three attempts at mechanising this one invariant (an inline awk assertion,
+    then a lexical scanner, then its separator set) each shipped with a bypass of the same
+    class, which is the non-convergent-hardening shape: the right closure is NOT a fourth
+    regex generation. Two candidate closures, both out of scope for the arc that surfaced
+    this: (a) make the invariant unrepresentable rather than checkable -- collapse the fifteen
+    hand-maintained `unset` lists into ONE helper called at each exit, after which there is no
+    list to drift and nothing to scan (a helper was verified to unset caller-scope variables
+    in both bash and zsh, but rewriting fifteen sites in the file at the heart of lane
+    initialisation was judged disproportionate to a witness gap in already-correct code); or
+    (b) parse with a real shell grammar (e.g. bashlex) instead of a scanner, accepting a new
+    dependency against this workspace''s framework-pull discipline. Until then the bound is
+    stated in the module''s own docstring rather than implied, and shape (1) is the only
+    SILENT one -- the other two fail loud and would be noticed immediately.'
