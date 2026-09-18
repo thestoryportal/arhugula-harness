@@ -479,7 +479,6 @@ a contract phrase QUOTED into the diff with nothing discharging it. This one is 
 obligation the unit itself carried, on a surface whose whole purpose is routing — so the
 cost is misrouting, never a wrong number.
 
-||||||| 725a6c48d
 ### Vocabulary evaluated and LEFT OUT — "the validator reads a sub-span" (2026-09-17)
 
 The shape is real and recurs across arcs: a guard, parser or check examines PART of its

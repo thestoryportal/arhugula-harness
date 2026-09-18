@@ -316,8 +316,19 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         # It went unnoticed because this arc's own finding matched on `still says`
         # instead — a masked alternative in a disjunction is invisible until a row
         # arrives that needs only that arm (codex r2 P3).
-        r"still (?:says|names|points)|routes? back|(?:never|not)\s+refresh|unrefreshed"
-        r"|just completed|already (?:completed|landed)",
+        # `just completed` and `already landed` were CUT (codex r3 P2), not bounded: neither
+        # describes the pointer, so "The live pointer just completed validation successfully"
+        # and "the deployment already landed correctly" both matched while reporting no
+        # staleness at all. A false match is worse than `unmatched` — unmatched OWES an
+        # intake line, a false match silences it, so an over-broad arm actively hides new
+        # defect classes. Subtraction rather than more negative cases. Measured on ONE fixed
+        # corpus (2,224 finding rows): 9 matches with the broad arms, 8 without, so the cut
+        # drops exactly one row — and that row is the r3 finding ITSELF, which matched only
+        # because it QUOTES the counterexamples it was criticising. A self-referential match,
+        # not a member, so the cut costs zero real recall. (The first draft of this comment
+        # claimed 'no corpus row' and 'breadth unchanged at 7'; both were wrong — the 7 was
+        # measured before r3's own rows appended, so it compared two different corpora.)
+        r"still (?:says|names|points)|routes? back|(?:never|not)\s+refresh|unrefreshed",
     ),
 }
 

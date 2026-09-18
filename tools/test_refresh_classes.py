@@ -355,8 +355,7 @@ def test_class_17_needs_both_a_pointer_surface_and_a_stale_or_misroute_verb():
         # Delete the `\s+` and this case, alone, goes red.
         {
             "finding_id": "p:1",
-            "observed_evidence": "The live pointer was never refreshed after the unit"
-            " completed.",
+            "observed_evidence": "The live pointer was never refreshed after the unit completed.",
             "location": "",
         },
         # p:2 is this arc's own finding, the `still says` arm.
@@ -400,8 +399,23 @@ def test_class_17_needs_both_a_pointer_surface_and_a_stale_or_misroute_verb():
         # finding, which belongs to class 2 and must stay out of this pile.
         {
             "finding_id": "n:2",
-            "observed_evidence": "The docstring still says the breaker locks, but it"
-            " does not.",
+            "observed_evidence": "The docstring still says the breaker locks, but it does not.",
+            "location": "",
+        },
+        # n:4/n:5 — codex r3's counterexamples. `just completed` and `already landed` were
+        # ALTERNATIVES of the second conjunct until r3 showed neither describes the pointer:
+        # both of these reported no staleness whatever and still matched. The arms were CUT
+        # rather than bounded, so these two cases pin that they stay cut — restore either
+        # alternative and both go green.
+        {
+            "finding_id": "n:4",
+            "observed_evidence": "The live pointer just completed validation successfully",
+            "location": "",
+        },
+        {
+            "finding_id": "n:5",
+            "observed_evidence": "The next-action report says the deployment already landed"
+            " correctly",
             "location": "",
         },
         # n:3 — located IN the pointer file with no stale-or-misroute verb at all. Without
@@ -419,6 +433,7 @@ def test_class_17_needs_both_a_pointer_surface_and_a_stale_or_misroute_verb():
         assert name in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
     for row in not_owed:
         assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+
 
 def test_every_class_row_has_its_skill_section_and_vice_versa():
     # the table and the author-facing checklist are two carriers of one class list
