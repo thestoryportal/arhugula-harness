@@ -210,26 +210,26 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
-**The claim-vs-code half** (added 2026-09-17): the same class covers prose that ASSERTS a
-mechanism behaviour the code does not have — a skill body, docstring, close_out, register
-row or manifest row describing what a gate, guard or recipe does, where reading the code
-says otherwise. The drift half above is prose that WAS true and decayed; this half was
-never true, and the tell is that nobody ran the thing. **Question:** *for every sentence
-that says what some mechanism does, did I read that mechanism this session, or am I
-restating what an earlier document said about it?* Both mechanism claims on the arc that
-added this half were inherited verbatim from the file it was superseding, amplified, and
-never probed — one false against `DESIGN_RE` (`docs/**` is not a design surface), one
-false against `review_wrapper_common.py` (a reviewer round writes a gate-log row even when
-the three-lens gate is skipped). Measured at the 2,191-finding corpus by diffing this
-script's own `classify` against HEAD's: the added vocabulary claims 40 previously-unmatched
-rows and none of the `contradicting C-HE-NN` code-vs-contract cluster, which belongs to
-classes 12/16. (A hand-rolled re-implementation of the classifier said 19 — run the
-script, never a copy of its logic.) **Left out deliberately:** a
-bare `contradict` (it sweeps that whole cluster in — the class-2 `drift` mistake), and any
-term reaching a finding phrased with no claim-verb at all ("skipping X does not imply Y").
-One such finding was dispositioned `instance-only` on that arc rather than widen the
-pattern to reach it: a classifier widened to catch the shape that just escaped it is the
-non-convergent move this corpus has already paid for.
+**Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
+ASSERTING a mechanism behaviour the code does not have (never true), as against the drift
+half above (true once, then decayed). Pattern tried: a claim-bearing subject
+(`claims|states|says|documented|guarantees|asserts`) within 120 non-sentence characters of
+a falsity marker. At the 2,191-finding corpus it claimed 40 previously-unmatched rows and
+leaked none of the `contradicting C-HE-NN` code-vs-contract cluster — a bare `contradict`
+sweeps that whole cluster in, the same wrong direction as `drift`. **Refused anyway:** 6 of
+the 40 are operational uses of those verbs in non-prose findings (a peer that "claimed" a
+file, a lease "claim", an order "asserted only via any()"), and a class-2 false positive
+REMOVES a row from the unmatched pile — the pile where new classes are found. The
+discriminator needed here (is "claim" a sentence or a lease?) is not in the classifier's
+input: it sees evidence plus location, and neither says which. Two review rounds landed on
+this one mechanism, so it was subtracted rather than widened again. A future attempt needs
+a different INPUT — the cited file's own bytes — not a bigger vocabulary.
+
+The defect itself is real and worth catching by hand: **for every sentence you write that
+says what some mechanism does, did you read that mechanism this session, or are you
+restating what an earlier document said about it?** Both mechanism claims on the arc that
+measured this were inherited verbatim from the file it was superseding, amplified, and
+never probed — one false against `DESIGN_RE`, one false against `review_wrapper_common.py`.
 
 ### 3. Silent failure / meaning-changing fallback (114 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the

@@ -60,21 +60,29 @@ from pathlib import Path
 # r1 P2 on the class-2-drift-extension arc). The recurring "test codifies the drift"
 # shape that note pointed at is now class 16 — 14 unmatched rows in the gate log as of
 # base 63e19e3ee (2,162 findings) — and is still not a class-2 term.
+# ALSO evaluated and LEFT OUT: a claim-vs-code half for class 2 (2026-09-17, the
+# handoff-s2 supersede arc). Shape: prose ASSERTING a mechanism behaviour the code does not
+# have — never true, as opposed to the drift half, which was true and decayed. Pattern tried:
+# a claim-bearing subject (`claims|states|says|documented|guarantees|asserts`) within 120
+# non-sentence characters of a falsity marker (`but|is false|does not|never|contradict|
+# incorrectly`). At the 2,191-finding corpus it claimed 40 previously-unmatched rows and
+# leaked 0 of the `contradicting C-HE-NN` code-vs-contract cluster (a bare `contradict`
+# sweeps that whole cluster in — the same wrong direction as `drift`). It was still REFUSED,
+# on codex r2 P2: 6 of the 40 are operational uses of the same verbs in non-prose findings
+# (`arc_metrics.py:686` "a peer just claimed it, but"; `lib.sh:803` a lease claim;
+# `reservations.py:806` "asserted only via any()"), and a class-2 false positive REMOVES a
+# row from the unmatched pile, which is where new classes are discovered — the wrong
+# direction again. The discriminator this needs (is "claim" a sentence or a lease?) is not
+# in the classifier's input at all: `finding_text` is evidence plus location, and neither
+# says which. Two review rounds landed on this one mechanism, so it was subtracted rather
+# than hardened further. A future attempt needs a different INPUT (the cited file's own
+# bytes), not a wider vocabulary.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
     ),
     "2 prose stale / counts / cites": (
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
-        # Claim-vs-code half (added 2026-09-17, handoff-s2 supersede): prose that ASSERTS a
-        # mechanism behaviour the code does not have. Distinct from the drift half above,
-        # which is prose that WAS true and decayed; these were never true. Measured at the
-        # 2,191-finding corpus by diffing this module's own `classify` against HEAD's:
-        # 40 rows out of the unmatched pile, 0 of them the
-        # "contradicting C-HE-NN" code-vs-contract cluster (that shape is class 12/16, and a
-        # bare `contradict` would have swept all of it in — the class-2 `drift` mistake).
-        r"|(claims?|claimed|states|stated|says|documented|guarantees?|asserts?)"
-        r"[^.]{0,120}\b(but|is false|does not|never|contradict|incorrectly)"
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
