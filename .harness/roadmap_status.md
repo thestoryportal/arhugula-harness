@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a928c7c170e5` |
+| `workspace_state_hash` | `23a210a070be` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `0a13e41e` —  |
+| `git_head` | `92edc2f1` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1571).** The governance-pack router landed self-checking end to end at #1568, and #1571 put the merge door's own two landing-block rows on main so the C-HE-06 §9 reducers can see them. No unit is pending for this lane: the next work is four forward rows, each with a live witness from the #1568 arc, and all four need `.harness/forward-register.yaml`, which is fenced by the `lane-init-shell-portability` (#1561) and `u-he-40` reservations — `u-he-45` (#1569) has since landed, so two fences remain; take the rows when the last of those lands, or hand them to whichever lane lands last. All four are already DRAFTED as ready-to-paste YAML plus their prose twins, with every cite verified at `d88487ba9` and the block parse-checked: load the checkpoint `20260917-210511-forward-rows-b-273..b-276-drafted-awaiting-the-register-fenc` (`/context-restore <that name>`) rather than re-deriving them, re-ground the cites at the then-current HEAD, and renumber from the tail if a sibling lane files first. (1) The review-gate recipes default to `base='main'`, which in a lane worktree is a stale local ref and widens the REVIEWED bytes rather than only the attestation. (2) `arc_disjoint_check`'s exit-1 is candidate-INDEPENDENT: with the candidate at an unmodified `origin/main` and again with a commit on top it named the same four sibling-held paths, so its documented remedy of re-deriving and picking another unit cannot clear it. (3) `merge-gate-binding` binds LOCAL head while the canonical lens template fetches `gh pr diff`, which serves the PUSHED head — an unpushed branch has its lenses review stale bytes while `emit` still validates the binding values they copied verbatim. (4) `merge_door` exposes no `release` verb, so its own documented recovery (unblock, then release the returned lease) is not executable from the CLI. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
+**Current next action (post-#1581).** Three merges landed without an intervening refresh — #1561, #1575 and #1581 — and this single terminating refresh records all three per §12.2.1's multiple-PR clause. **#1581 changed how this loop is priced**: prose findings are now P3 and NON-BLOCKING by standing operator directive, wired into `.claude/skills/merge-gate/SKILL.md` (the canonical lens prompt template plus `## Gate outcome`) and noted in `.claude/skills/defect-class-preflight/SKILL.md`. A prose-only finding set is all-approve: record, adjudicate, merge — never spend a re-gate round on wording, a count, an ordinal or a drifted cite. Classify by EFFECT, not by which file the line lives in; an assertion message that makes a green test claim something false is still a witness defect and still blocks. The `lane-init-shell-portability` fence is DOWN, leaving `u-he-40` as the only reservation fencing `.harness/forward-register.yaml`. The rows drafted for that register were FILED IN-LANE during #1561 as B-289..B-293 (renumbered twice on sibling id collisions), so the drafted-rows checkpoint is SPENT — do not re-file from it. Next work, in order: (1) **B-292 doc-only PR**, owed and not yet opened — `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:6017` still carries a bash-only `${BASH_SOURCE[0]}` in a skeleton labelled for a SOURCED file; it was backed out of #1561 because `tools/codex_context_guard.py` hard-fails DESIGN_IMPL_MIX when a plan surface rides with implementation surfaces, so it must ship doc-only and FIRST. (2) **B-293**, the witness gap #1561 registered rather than closed: 9 of the file's 14 refusal exits carry `return 1 2>/dev/null || exit 1` tails no fixture drives, re-confirmed at merge-gate r13 by swapping an undriven tail for a bare `return 1` and observing a byte-identical suite; start at the read-only-`.harness` site, the one with a zero-env-var trigger and a measured rc=0. (3) **B-289/B-290/B-291** — the namespace scanner's lexical bound, the gate-log reducer's blindness to the legacy narrative row shape (B-290 names candidate (b), refusing new narrative-shape writes, as the stronger form), and the absence of a forward-id allocator, which is what produced both renumberings. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,8 +43,10 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1561 | `fix/lane-init-shell-portability` | — | — |
-| #1575 | `docs/u-he-45-plan-tick` | — | — |
+| #1578 | `ops/gate-log-rows-post-1573` | — | — |
+| #1579 | `feat/merge-door-release-verb` | — | — |
+| #1580 | `ops/roadmap-refresh-post-1561` | — | — |
+| #1582 | `ops/roadmap-refresh-post-1575` | — | — |
 
 ---
 
@@ -52,11 +54,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1581 | 2026-09-18 | durable governance: prose findings are P3 and non-blocking; wired into merge-gate + defect-class-preflight |
+| PR #1575 | 2026-09-18 | U-HE-45 as-built plan record + clearance marker (sibling lane) |
+| PR #1561 | 2026-09-18 | lane-init zsh portability: fixed a real rc=126 half-built-lane defect on a fresh empty registry and a claim-invisibility regression; 14 merge-gate rounds |
 | PR #1576 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1573 | 2026-09-18 | amended the live pointer: forward-register fence down to two reservations; named the drafted B-273..B-276 checkpoint |
-| PR #1569 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| 1571 | 2026-09-18 | landed the two merge-door rows from #1568's landing; ledger-only |
-| PR #1568 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
