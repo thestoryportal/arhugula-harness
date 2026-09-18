@@ -310,8 +310,14 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # `unmatched`: unmatched owes an intake line, a false match silences it.
     "17 owed pointer refresh never lands": (
         r"live pointer|next[- _]action|roadmap_status|pointer still|frontier",
-        r"still (?:says|names|points)|routes? back|(?:never|not |un)refreshe?|just completed"
-        r"|already (?:completed|landed)",
+        # `(?:never|not)\s+refresh` needs the SEPARATOR: an earlier draft wrote
+        # `(?:never|not |un)refreshe?`, where the `never` arm demanded "neverrefresh"
+        # and so missed the plainest wording of the defect ("was never refreshed").
+        # It went unnoticed because this arc's own finding matched on `still says`
+        # instead — a masked alternative in a disjunction is invisible until a row
+        # arrives that needs only that arm (codex r2 P3).
+        r"still (?:says|names|points)|routes? back|(?:never|not)\s+refresh|unrefreshed"
+        r"|just completed|already (?:completed|landed)",
     ),
 }
 

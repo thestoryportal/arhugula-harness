@@ -338,6 +338,88 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
 
 
+def test_class_17_needs_both_a_pointer_surface_and_a_stale_or_misroute_verb():
+    # Added U-HE-45 with the class. CONJUNCTIVE by measurement, not by taste: a single
+    # alternation carrying a bare `roadmap_status` token pulled 38 corpus rows whose
+    # sampled majority were false — safe-merge.sh findings about a MISSING CLI FLAG on
+    # roadmap_status_refresh.py, and a reservations.py crash-window leak. Naming the tool
+    # is not the defect; leaving a routing surface pointing at finished work is.
+    # Asserted through the `classify` verb, never against the regex
+    # ([LAW:behavior-not-structure]).
+    owed = [
+        # p:1 pins the SEPARATOR in `(?:never|not)\s+refresh`. The first draft wrote
+        # `(?:never|not |un)refreshe?`, whose `never` arm demanded "neverrefresh" and so
+        # missed the plainest wording of the defect. Nothing caught it because the arc's
+        # own finding matched on `still says` instead — a masked alternative in a
+        # disjunction is invisible until a row arrives needing only that arm (codex r2 P3).
+        # Delete the `\s+` and this case, alone, goes red.
+        {
+            "finding_id": "p:1",
+            "observed_evidence": "The live pointer was never refreshed after the unit"
+            " completed.",
+            "location": "",
+        },
+        # p:2 is this arc's own finding, the `still says` arm.
+        {
+            "finding_id": "p:2",
+            "observed_evidence": "its live pointer still says U-HE-45 is the next"
+            " implementable unit",
+            "location": "",
+        },
+        # p:3 is a measured corpus member: the plan declares a step executed while the
+        # surface consumers read still names the old frontier.
+        {
+            "finding_id": "p:3",
+            "observed_evidence": "This new revision declares Step 5 executed and the fence"
+            " live, but HEAD's roadmap_status.md still says the frontier is elsewhere",
+            "location": "",
+        },
+        # p:4 — the LOCATION supplies the surface conjunct, and for THIS class that is
+        # legitimate rather than the hole class 16 shipped (its n:3: every finding located
+        # in a test file became that class). The difference is what the conjunct means: a
+        # test file's path says where the finding lives, while THIS file IS the routing
+        # pointer, so a stale-verb finding located in it is evidence about the pointer by
+        # construction. n:3 below is what keeps that from degenerating.
+        {
+            "finding_id": "p:4",
+            "observed_evidence": "The paragraph still says the frontier is the unit this"
+            " diff completed.",
+            "location": ".harness/roadmap_status.md:25",
+        },
+    ]
+    not_owed = [
+        # n:1 — THE measured false match: the tool is named, nothing is stale. This is the
+        # case the conjunction exists for; drop the second pattern and it goes green.
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "The wrapper hard-codes --emit-refresh-pr-json, but"
+            " tools/roadmap_status_refresh.py at this HEAD defines no such option.",
+            "location": "",
+        },
+        # n:2 — a stale verb with no pointer surface anywhere: an ordinary prose-drift
+        # finding, which belongs to class 2 and must stay out of this pile.
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "The docstring still says the breaker locks, but it"
+            " does not.",
+            "location": "",
+        },
+        # n:3 — located IN the pointer file with no stale-or-misroute verb at all. Without
+        # this case p:4 would license the location alone to carry the class, which is
+        # exactly the degeneration class 16 paid two rounds for.
+        {
+            "finding_id": "n:3",
+            "observed_evidence": "The head section exceeds its byte cap by 400 bytes.",
+            "location": ".harness/roadmap_status.md:1",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(owed + not_owed)).stdout)
+    name = "17 owed pointer refresh never lands"
+    for row in owed:
+        assert name in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+    for row in not_owed:
+        assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+
 def test_every_class_row_has_its_skill_section_and_vice_versa():
     # the table and the author-facing checklist are two carriers of one class list
     # (codex r1 P2 on the intake arc): a row landed in one without the other is the

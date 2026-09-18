@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `c9e40d8ca865` |
-| `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `5f7729f2` —  |
+| `workspace_state_hash` | `117c13bb4252` |
+| `last_refreshed` | 2026-09-17T00:00:00Z |
+| `git_head` | `1cc626b4` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1569).** U-HE-45 closed: the Spec_HE_Loop_Lanes_v1 §6 unified build order is registered row-per-step in the forward register with structured `depends_on`, and grounding every row against landing evidence found that TEN of the eleven steps had ALREADY landed (S1–S6 and S8, each closed with its cluster commit or PR named). The unit's own scope, authored when S1–S8 were all ahead of execution, had gone stale; B-287 records that, and the instrument trap behind it — plan checkbox ticks LAG execution, so a tick evidences recording, never landing. The plan's Step 1–2 text would have pointed this paragraph at U-HE-01, which landed in cluster commit 3b9146026. S7 is the ONLY §6 step carrying forward work and it is blocked: U-HE-42 landed at #1527, **U-HE-40** is HELD at 15/15 review rounds with a round-12 P1 outstanding at `mutation_probe_reverify.py:108` (B-244) and only the operator can lift that hold, and U-HE-41 depends on it so it is not startable. Claude-actionable work NOT behind the hold: B-285 (u-he-44's arc-metrics capture stranded because the `queue` CLI cannot express a backfill) and B-286 (`extract --dry-run` does not enforce the guards its real path enforces). The pilot bar B-284 needs three fresh 3–4-lane runs reporting pass true; pilot-2026-09-17-a is permanently FAIL and counts toward none of them.
+**Current next action (post-#1566).** U-HE-44 closed: the spec §11 and plan carry-forwards are registered as B-256..B-272 (17 rows), and the evidence log's three owed section families — pilot reports (U-HE-37), RED-first runs of AC#2 (U-HE-20), equivalence proofs (U-HE-41) — are open for the units that append to them. Grounding found none of the §11 items previously registered (six keyword hits were all false positives), three inherited cites that no longer resolve (`gh pr merge` is at `.agents/skills/ship-pr/SKILL.md:133` not `:96`; `AGENTS.md` has no invariant-#3 text), and that plan §6 item 13's owed change-note ALREADY landed at spec v1.4 X4a — B-266 stays open because the stale plan row is real remaining work a closed row would hide. `pilot-2026-09-17-a` now has all three members enrolled (`class-16-codifying-witness` merged #1562, `lane-init-shell-portability` open #1561, `u-he-44` this PR); run `just lanes-pilot-report pilot-2026-09-17-a` once lane-2 lands. U-HE-40 remains HELD at 15/15 review rounds with a round-12 P1 outstanding, and separately cannot adjudicate its own findings from the adopting lane. The roadmap wiring that registers the S1–S8 arcs and the pilot bar depends on U-HE-44 and is therefore unblocked, so the next implementable unit is `U-HE-45`.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -44,8 +44,6 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1561 | `fix/lane-init-shell-portability` | — | — |
-| #1568 | `docs/context-stack-handoff-s2-supersede` | — | — |
-| #1569 | `feat/u-he-45-roadmap-s-step-rows` | — | — |
 
 ---
 
@@ -53,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| 1569 | 2026-09-18 | U-HE-45 registered the Spec §6 unified build order row-per-step with structured depends_on (B-273..B-284) plus three findings (B-285 stranded u-he-44 capture, B-286 extract dry-run guard parity, B-287 close-step scope staleness). Grounding found TEN of eleven steps had already landed; only S7 carries forward work and it is held behind U-HE-40 (B-244). |
 | PR #1566 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1563 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1559 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1557 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
