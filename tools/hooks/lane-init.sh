@@ -168,8 +168,12 @@ esac
 #      runs), while the same function called as `$(f)` lets the file continue with an empty
 #      result. The subshell contains it; the function does not.
 #      CONSEQUENCE, stated because the earlier wording implied the opposite: this helper does NOT
-#      make misuse impossible. A future scan that calls it directly, or pipes it, reintroduces
-#      the rc=126 half-built lane if the glob ever fails. The call convention is `$( )`.
+#      make misuse impossible. The call convention is `$( )`, and a scan that calls the helper
+#      DIRECTLY instead is not contained -- measured. Nothing else is claimed here: a piped call
+#      site was asserted to be hazardous in an earlier revision and is NOT (zsh runs the
+#      left-hand component in a subshell, so a pipe contains it exactly as `$( )` does, also
+#      measured). Three earlier revisions of this block each named a hazard that had not been
+#      probed, so this one names only what was.
 # `(N)` is zsh's per-pattern NULL_GLOB qualifier, reached through `eval` so bash never parses it
 # -- the same guard shape the root resolution above uses. It is deliberately NOT `setopt
 # NULL_GLOB`: this file is SOURCED, and that would change every later unmatched glob in the

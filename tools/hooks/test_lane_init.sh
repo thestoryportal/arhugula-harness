@@ -302,8 +302,17 @@ for bad_k in 350 999 ../escape abc " " 00 08 007; do
   OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$bad_k" \
     bash -c "source '$INIT' >/dev/null 2>&1
 printf 'rc=%s id=%s leaked=' \"\$?\" \"\${HARNESS_LANE_ID:-unset}\"
-for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s,' \$v\"; done")
-  # rc, the identity, AND the whole `_LI_*` namespace. Validation runs after the id is
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ','")
+  # The namespace is SCANNED, not enumerated. A hand-written list cannot support a claim about
+# "the whole `_LI_*` namespace": the four-name version silently omitted `_LI_ID`, which carries
+# the lane identity, so dropping its two cleanups leaked that identity into the caller's
+# interactive shell ON THE SUCCESS PATH, in both shells, while this suite stayed byte-identical
+# and the Python scanner reported zero violations. That is the SECOND time a hand-maintained
+# list here under-counted the namespace -- `_LI_ORPHAN_DIR` was the first -- so the list is gone
+# rather than extended. `_LI_ORPHAN_DIR` is excluded by name because it IS the exported surface,
+# which is the one documented exception. Measured identical in bash and zsh, with controls:
+# nothing set -> empty, only _LI_ORPHAN_DIR set -> empty. (merge-gate witness lens, r10.)
+# rc, the identity, AND the whole `_LI_*` namespace. Validation runs after the id is
   # exported, so a refusal that leaves it set hands this lane's identity to the next
   # worktree the shell enters; and a refusal that leaves a `_LI_*` local behind writes it
   # into the caller's interactive shell for good. `leaked=` is a sentinel the run must
@@ -1063,7 +1072,7 @@ for SH in $SHELLS; do
   # (witness lens r2 P3).
   LEAKED=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
 printf 'ran:'
-for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ' '")
   [ "$LEAKED" = "ran:" ] && ok "$SH: a successful init leaves no _LI_* local in the caller's shell" \
     || bad "$SH: init leaked or never ran: '$LEAKED'"
 done
@@ -1077,7 +1086,7 @@ _i=0; while [ "$_i" -lt 350 ]; do printf 'foreign /not/this/worktree\n' > "$EXHQ
 for SH in $SHELLS; do
   EXH=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$EXHQ" "$SH" -c "source '$INIT' >/dev/null 2>&1
 printf 'rc=%s ' \$?
-for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ' '")
   case "$EXH" in
     "rc=1 ") ok "$SH: index exhaustion refuses AND clears the whole _LI_* scope" ;;
     rc=1*)   bad "$SH: exhaustion refused but leaked: $EXH" ;;
@@ -1179,10 +1188,10 @@ done
 # drive ../escape ("must be an integer 0..349"), 00 ("must be canonical (no leading zeros)")
 # and 400 ("must be < 350") -- named by their refusal text, not by line, because this arc's own
 # insertions above them have already invalidated one set of line cites; the
-# ARC_METRICS_QUEUE_DIR case that follows drives the relative-path refusal (:141). NO CLAIM IS
+# ARC_METRICS_QUEUE_DIR case that follows drives the relative-path refusal (lane-init.sh:141). NO CLAIM IS
 # MADE HERE ABOUT COMPLETENESS. Three successive rounds each wrote a bound over this set and each
 # was falsified by execution in the next -- r6 named a fixed pair, r7 replaced that with "every
-# refusal reachable with nothing but an environment variable", and r8 falsified THAT with :141.
+# refusal reachable with nothing but an environment variable", and r8 falsified THAT with lane-init.sh:141.
 # A bound is a second copy of the list below, and second copies drift. The list is the coverage;
 # a new externally-reachable refusal is covered when it appears here, and not before.
 # The r6 absorption drove only the first index, and a bare `return 1` at either of the other two
@@ -1215,7 +1224,7 @@ done
 # ARC_METRICS_QUEUE_DIR made every claim invisible to every scan. The failure was SILENT and
 # permissive -- measured, a worktree already holding lanes/0 then sourcing with
 # HARNESS_LANE_INDEX=1 got rc=0 and the registry ended holding BOTH 0 and 1 for one worktree,
-# where the direct glob it replaced refused. That is the stranding hazard the header at :17-19
+# where the direct glob it replaced refused. That is the stranding hazard the header at lane-init.sh:17-19
 # forbids, and it was quieter than the zsh bug the helper exists to fix.
 #
 # The path carries a space AND a `*`: word-splitting and pathname expansion are two separate
@@ -1238,13 +1247,13 @@ printf 'rc2=%s' \"\$?\"")
     || bad "$SH: whitespace/glob queue path broke reuse-detection: '$WS' (want rc2=1 claims=1)"
 done
 
-# The relative-ARC_METRICS_QUEUE_DIR refusal (:141). It needs its own case rather than another
+# The relative-ARC_METRICS_QUEUE_DIR refusal (lane-init.sh:141). It needs its own case rather than another
 # index in the loop above, because it is reached through a DIFFERENT environment variable -- which
 # is exactly why the r7 bound missed it: that bound generalised over the loop's variable, not over
 # the refusals.
 #
 # This case asserts the REFUSAL COUNT, not rc, and that is the whole point. Measured: with a bare
-# `return 1` at :141 the executed run still exits 1, because a LATER refusal catches it -- so an
+# `return 1` at lane-init.sh:141 the executed run still exits 1, because a LATER refusal catches it -- so an
 # rc-only assertion passes either way and witnesses nothing. What the defect actually does is walk
 # PAST its own refusal, and that is observable: clean code emits exactly one `lane-init:` line,
 # the mutant emits two (its own, then `return: can only return from a function or sourced
@@ -1305,7 +1314,7 @@ done
 for SH in $SHELLS; do
   REFUSED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=a _LI_ROOT=b _LI_Q=c _LI_WT=d
 source '$DETACHED' >/dev/null 2>&1
-for v in _LI_SRC _LI_ROOT _LI_Q _LI_WT; do eval \"[ -n \\\"\\\${\$v-}\\\" ] && printf '%s ' \$v\"; done")
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ' '")
   [ -z "$REFUSED" ] \
     && ok "$SH: a refused init clears the whole _LI_* namespace, not just what it had set" \
     || bad "$SH: refusal left reserved names defined: $REFUSED"
