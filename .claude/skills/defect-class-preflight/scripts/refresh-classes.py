@@ -101,7 +101,8 @@ from pathlib import Path
 # decide what to do next still naming what was just finished (6-8 corpus rows: Step-5-
 # executed-but-plan-still-unticked, fence-live-but-roadmap_status-still-says, decisions-
 # ratified-but-version-summary-still-open). It is NOT a class because the vocabulary cannot
-# carry it, measured over three review rounds, each trading one imprecision for another:
+# carry it, measured over three review rounds -- r2, r3 and r5 of that arc, NOT three
+# consecutive ones (r4's findings were elsewhere) -- each trading one imprecision for another:
 #   (a) `(?:never|not |un)refreshe?` gave the `never` arm no separator, so it demanded
 #       "neverrefresh" and missed the plainest wording. It hid because the arc's own finding
 #       matched a DIFFERENT arm — a masked alternative is invisible until a row needs only it.
@@ -117,6 +118,46 @@ from pathlib import Path
 # defect this shape named on that arc is registered as B-288 instead, where prose can carry
 # the polarity a regex cannot. Note also that tools/test_governance_router.py already
 # forward-references "class 17" for the sub-span shape, so the number was spoken for.
+# ALSO evaluated and LEFT OUT: a "record field contradicts its own body" class (U-HE-45's
+# plan-record arc, 2026-09-18). The SHAPE is real and has two measured instances one arc apart:
+# `B-282` shipped `status: open` while its own summary said U-HE-40 is HELD (and OPEN_STATUSES
+# excludes `held`, so `--open` counted a blocked row as executable), and a U-HE-45 plan tick
+# marked a COMBINED step `[x]` while the paragraph beneath it said half that step was never
+# performed. Four corpus rows carry it. It is NOT a class because the vocabulary cannot
+# distinguish prose that DESCRIBES a field from prose that SETS one, and three review rounds
+# each traded one imprecision for another:
+#   (a) two independent tuple patterns matched across SENTENCES ("The status field is parsed
+#       correctly. The hook still fails even though ..."), fixed with class 16's window;
+#   (b) the same terms then matched unrelated text WITHIN one sentence ("The status field is
+#       parsed correctly even though a missing verdict file makes the unrelated hook fail") --
+#       no window can separate those;
+#   (c) `mark` without a word boundary matched inside `benchmarks` ("The benchmarks remain open
+#       even though the sample size is small").
+# (b) is the terminal one, and it is the wall the withdrawn owed-pointer class hit too: the
+# distinction is SEMANTIC, not lexical. A false match is worse than `unmatched` -- unmatched
+# OWES an intake line, a false match silences it -- so an arm that cannot tell "describes a
+# field" from "sets a field" actively hides the new classes this table exists to surface.
+# Sweep the shape BY HAND: for every status, disposition or checkbox a diff SETS, does the body
+# of that same record agree, and which consumer reads the field rather than the body?
+# ALSO evaluated and LEFT OUT: vocabulary for "a record contradicts its own evidence"
+# (U-HE-45's plan-record arc, 2026-09-18). The SHAPE is class 2's own subject and it recurred
+# twice in that arc -- a review audit stating finding counts the gate log's round_n refutes, and
+# a cleared marker naming two of the four rows `--open` emits. THREE terms were tried against it
+# and all three were withdrawn, each for the same reason one layer down:
+#   * `omits` -- measured at +84 corpus rows and rejected before shipping.
+#   * `,\s*not\s+\d` -- shipped, then removed one round later: it matches ANY numeric contrast
+#     ("The API returns 1, not 2."). The error was treating BREADTH on the current corpus (+3
+#     rows, each inspected and genuine) as PRECISION -- a corpus that happens not to contain a
+#     phrasing does not exclude it, and this table is read against findings that do not exist yet.
+#   * `identifies only` -- shipped on the claim that it is SEMANTICALLY bounded to a record's
+#     completeness, and removed the next round when that claim proved false: "The sanitizer
+#     identifies only SQL injection and therefore lets XSS through" is an implementation defect.
+#     Anything that identifies things can identify only some of them.
+# The lesson is not about these three words. A finding's prose DESCRIBING a record is lexically
+# indistinguishable from prose ABOUT the thing the record describes, which is the same wall the
+# withdrawn class-17 (polarity) and class-18 (reference) vocabularies hit. Sweep it by hand: for
+# every count, status or completeness claim a record states, which source of truth refutes it,
+# and did you read that source THIS session?
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -330,16 +371,6 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
-    # Added U-HE-45. The unit's OWN deliverable included refreshing the live
-    # next-action pointer; the diff shipped the register rows and left the pointer
-    # naming the unit it had just completed, so /roadmap-continue would route
-    # straight back to finished work. Recurs in this workspace: the owed refresh
-    # after a tiebreaker PASS, and "the refresh must be the immediate next commit".
-    # Distinct from class 2 (a stale COUNT or cite drifts over time) and from class
-    # 12 (a contract phrase QUOTED into the diff with no line behind it): here the
-    # obligation is a deliverable of the unit itself, and the surface it was owed on
-    # is one consumers READ to decide what to do next -- so the cost is misrouting,
-    # not a wrong number.
 }
 
 
