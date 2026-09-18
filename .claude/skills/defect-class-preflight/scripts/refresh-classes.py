@@ -330,7 +330,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "18 the code departs from a cleared contract": (
         r"contradict\w*\s+(?:the\s+)?(?:canonical\s+)?C-HE"
         r"|canonical C-HE-\d+[^.]{0,80}(?:still requires|says|table|statement)"
-        r"|declares the complete"
+        r"|C-HE-\d+[^.]{0,60}declares the complete"
     ),
     # Measured at the 2,247-finding corpus: 26 rows match, 14 of which matched no other
     # class, and six of those fourteen are ONE defect recurring across rounds (a holder
@@ -347,10 +347,15 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # implementation states something the cleared contract explicitly denies, whether or
     # not any prose quotes it and whether or not a test blesses it.
     #
-    # `contradict` is safe HERE precisely because it is bound to `C-HE` -- the bare verb
-    # is what class 2 rejected. The second alternative carries its own claim shape
-    # (`canonical C-HE-N ... still requires/says/table/statement`) with a bounded window,
-    # so a passing cite of a contract number cannot satisfy it.
+    # EVERY alternative is bound to a `C-HE` reference, and that is the whole precision
+    # story. `contradict` is safe HERE only because of that binding -- the bare verb is
+    # what class 2 rejected. The second alternative carries its own claim shape
+    # (`canonical C-HE-N ... still requires/says/table/statement`) in a bounded window, so
+    # a passing cite of a contract number cannot satisfy it. The third was shipped
+    # UNQUALIFIED for one round and was wrong: a bare `declares the complete` matches a
+    # benign "the schema declares the complete set" with no contract in sight and no
+    # negative polarity, silently emptying a row from the intake pile (codex r10 P2). It is
+    # now bound to a contract reference within 60 characters like its siblings.
 }
 
 

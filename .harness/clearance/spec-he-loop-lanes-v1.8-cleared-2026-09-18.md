@@ -47,15 +47,17 @@ terminating refresh that has been minted OR merely declared (`refresh`,
 `refresh.attempted`, or the `refresh.intent` fence) refuses outright, since step (viii)
 is mandatory and nothing local proves its outcome.
 
-The amendment was ratified BEFORE it was written. Five out-of-family review rounds ran on
-this arc; rounds 1–3 and 5 found real defects in the mechanism, all fixed and
-mutation-probed. Round 4 refused the verb on the contract rather than the code, and was
+The amendment was ratified BEFORE it was written. Out-of-family review ran this arc to
+convergence over many rounds — the gate log is the authority for the count, and an
+enumeration in this prose drifted every round it was stated, so it is not restated here.
+Every round but one found real defects in the mechanism, all fixed and mutation-probed. Round 4 refused the verb on the contract rather than the code, and was
 correct to: a lane may not amend a contract to dissolve a reviewer's objection to its own
 work. The arc halted there, surfaced the question with its alternatives, and resumed only
-on the operator's answer. Rounds 5 and 6 then falsified two successive drafts of
-the gate in this very note — first that a block implied a CI observation, then that the
-one CI-related block reason implied it — and the gate was rebuilt to read the run from
-ground truth rather than infer it, before anything landed. Reviewer pressure moved this
+on the operator's answer. Later rounds then falsified three successive drafts of the
+gate in this very note — that a block implied a CI observation, that the one CI-related
+block reason implied it, and that X8 needed to carve out only the merge-run clause — and
+each was corrected before anything landed: the gate now reads the run from ground truth
+rather than inferring it, and the exception covers both clauses of the invariant. Reviewer pressure moved this
 clause from a proxy to its authority; the record is kept because the proxies read as
 obviously sufficient at the time.
 

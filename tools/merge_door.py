@@ -383,9 +383,15 @@ def release_refusal(lease: dict, ground: Ground) -> str | None:
       * an unblock successor (`unblocked_from`), so an operator has adjudicated a block;
       * no outstanding CONTENT merge — either none was attempted, or the reservation
         carries step (vi)'s `merged` flip, written only after `gh pr view` confirmed it;
-      * no outstanding TERMINATING REFRESH — none of the three markers (`refresh`,
-        `refresh.attempted`, `refresh.intent`) exists, since step (viii) is mandatory and
-        nothing local proves its outcome;
+      * no TERMINATING REFRESH minted or declared — none of the three markers (`refresh`,
+        `refresh.attempted`, `refresh.intent`) exists. Their absence proves the refresh
+        was never MINTED, not that it was confirmed, and X8 carves out that case for this
+        landing only: a (vii) block never reached (viii), so the refresh cannot now be
+        produced and holding for it would make the fence permanent. The obligation moves
+        rather than lapsing — `main` is left un-refreshed, which CI's
+        `ROADMAP_STATUS_DRIFT` fails on independently, and the repair lands as its own
+        arc whose own step (viii) produces one. A refresh that WAS minted is not covered;
+        any of the three markers refuses and routes to the reconciliation verbs;
       * and the merge commit's own default-branch run, read from GROUND TRUTH, has
         completed with a non-success conclusion.
 
