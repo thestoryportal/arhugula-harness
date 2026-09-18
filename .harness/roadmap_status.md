@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `52d74ba92d4b` |
+| `workspace_state_hash` | `4f5428d5b49c` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `6f205382` —  |
+| `git_head` | `d88487ba` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1568).** The governance-pack router is now self-checking end to end: root §N's pointer, the pack it names, that pack's origin header, its actual headings, and all three venue rosters are bound by set equality, and every §-list is explicit (no ranges, no `.x`). #1566 landed the forward-register carry-forward rows and #1567 its refresh. Next: register the two forward rows this arc produced live witnesses for — the review-gate recipes defaulting to a stale local `main` (measured: local `bfbc054d8` vs `origin/main`, widening the REVIEWED bytes), and `arc_disjoint_check`'s exit-1 refusal being candidate-INDEPENDENT (observed identical four-path CONFLICT output with the candidate at unmodified `origin/main` and again with a commit on top, so its "re-derive and pick the next unit" remedy cannot clear it) — plus a third this arc found in the merge-gate itself: `merge-gate-binding` binds LOCAL head while the lens template's `gh pr diff` serves the PUSHED head, so an unpushed branch has its lenses review stale bytes while `emit` still validates the binding they copied verbatim. All three land in `.harness/forward-register.yaml`, which is fenced while `lane-init-shell-portability`, `u-he-40` and `u-he-45` hold it; take them when it clears, or hand them to whichever lane lands last. The loop-lanes pilot at 3-4 lanes stays operator-gated per C-HE-13 §3.
+**Current next action (post-#1571).** The governance-pack router landed self-checking end to end at #1568, and #1571 put the merge door's own two landing-block rows on main so the C-HE-06 §9 reducers can see them. No unit is pending for this lane: the next work is four forward rows, each with a live witness from the #1568 arc, and all four need `.harness/forward-register.yaml`, which is fenced by the `lane-init-shell-portability` (#1561), `u-he-45` (#1569) and `u-he-40` reservations — take them when the last of those lands, or hand them to whichever lane lands last. (1) The review-gate recipes default to `base='main'`, which in a lane worktree is a stale local ref and widens the REVIEWED bytes rather than only the attestation. (2) `arc_disjoint_check`'s exit-1 is candidate-INDEPENDENT: with the candidate at an unmodified `origin/main` and again with a commit on top it named the same four sibling-held paths, so its documented remedy of re-deriving and picking another unit cannot clear it. (3) `merge-gate-binding` binds LOCAL head while the canonical lens template fetches `gh pr diff`, which serves the PUSHED head — an unpushed branch has its lenses review stale bytes while `emit` still validates the binding values they copied verbatim. (4) `merge_door` exposes no `release` verb, so its own documented recovery (unblock, then release the returned lease) is not executable from the CLI. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -52,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1571 | 2026-09-18 | landed the two merge-door rows from #1568's landing; ledger-only |
 | PR #1568 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1566 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1563 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1559 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
