@@ -234,8 +234,8 @@ intake pile where a human sees it; over-matching hides it. Two consecutive round
 were spent narrowing a single added term (`cleanup path`, then `caller state`), which is what
 this rule exists to skip.
 
-And when narrowing does not converge, SUBTRACT. Three consecutive rounds of one arc were
-spent on terms added to this table; the terms were removed rather than sharpened again,
+And when narrowing does not converge, SUBTRACT. Round after round of one arc went on terms
+added to this table; the terms were removed rather than sharpened again,
 because this file's own policy is to prefer to miss and its header already records that
 successive regex layers trade one imprecision for another. A shape that keeps drawing
 findings is telling you the vocabulary does not exist, not that you have not found it yet.
@@ -294,12 +294,12 @@ first: if it already unsets its locals at every one of its exits, a new local th
 is not a smaller version of the convention, it is the exception that breaks it.
 
 This half has NO surviving vocabulary in class 7, and that is the finding, not an
-oversight. `caller's shell` was tried and measured against the committed gate log: it
-matched a REAL finding in the opposite direction — tools/hooks/lib.sh:144, about a caller's
-`set -e` propagating INTO a sourced file — so the term steals from the intake pile rather
-than filling it. (No count is quoted here on purpose: the corpus only grows, so a precision
-figure is true at one anchor and false at the next. Re-derive it with refresh-classes.py if
-you need the number.) And
+oversight. `caller's shell` was tried and WITHDRAWN: it claimed a finding this class does
+not own, and under the prefer-to-miss policy a term that steals from the unmatched pile does
+not earn its place. The evidence is deliberately not restated here — the gate log only grows,
+including with the reviewing arc's own findings, so any statement about what the term matches
+is true at one anchor and false at the next. Re-derive with `refresh-classes.py` if you need
+it. And
 `tools/test_refresh_classes.py::test_class_7_does_not_claim_sourced_shell_caller_state`
 now pins the absence. A shell-sourcing finding therefore lands UNMATCHED, which is the
 intended outcome: unmatched is where the next class comes from. The rule that removed it

@@ -88,11 +88,12 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     ),
     # A sourced shell file mutating its caller's shell IS this class's concern in another
     # substrate, but no vocabulary for it survives here. `caller's shell` was tried and
-    # measured against the committed gate log: it matched a REAL finding in the opposite
-    # (tools/hooks/lib.sh:144) about a caller's `set -e` propagating INTO a sourced file --
-    # direction, so it STEALS from the intake pile. No count is quoted: the corpus only grows,
-    # so any precision figure is true at one anchor and false at the next. Under the prefer-to-miss
-    # policy a term that steals a real finding from the intake pile does not earn its place.
+    # WITHDRAWN: it claimed a finding this class does not own, and under the prefer-to-miss
+    # policy a term that steals from the unmatched pile does not earn its place. The evidence
+    # is deliberately NOT restated here. The gate log only grows -- including with this arc's
+    # own findings -- so any statement about what the term matches is true at one anchor and
+    # false at the next; three review rounds were spent correcting exactly that. Re-derive with
+    # `classify` if you need it. Pinned absent by tools/test_refresh_classes.py.
     "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (

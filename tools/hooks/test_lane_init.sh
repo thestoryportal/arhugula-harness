@@ -1125,15 +1125,9 @@ done
 # suite stayed byte-identical. That is the same per-site drift this file already records at
 # FAR_EXIT. (merge-gate concurrency lens r5; witness-adequacy lens r6 P2.)
 #
-# COVERAGE BOUND, stated rather than implied: these are the two refusals reachable from OUTSIDE
-# the process -- one before the libraries load, one after, on opposite sides of the identity mint.
-# The remaining top-level exits need interior state (a corpse, a full registry, a rebind race) and
-# are driven in SOURCED mode elsewhere in this file. A new top-level exit is NOT automatically
-# covered here.
-#
-# The asserted triple is `rc` + `claims` only. It deliberately does NOT assert id=absent at the
-# LATE exit: the lane id is minted BEFORE index validation, so correct code there already
-# persists an identity. Re-using the early exit's triple would have asserted a falsehood.
+# The asserted pair is `rc` + `claims`. It deliberately does NOT assert id=absent at the LATE
+# exits: the lane id is minted BEFORE index validation, so correct code there already persists an
+# identity. Re-using the early exit's triple would assert a falsehood.
 EXECFIX="$ROOT/execwt"; mkdir -p "$EXECFIX/tools/hooks" "$ROOT/execq/lanes"
 cp "$INIT" "$EXECFIX/tools/hooks/" || { echo "FATAL: execwt populate"; exit 1; }
 # lib.sh / loop_lib.sh deliberately NOT copied: that is what forces the library-load refusal.
@@ -1148,19 +1142,30 @@ printf 'rc=%s claims=%s id=%s' "$?" \
     || bad "$SH: executed early-exit refusal leaked state: '$EXEC_REFUSED' (want rc=1 claims=0 id=absent)"
 done
 
-# The LATE exit: libraries present, so execution reaches the index validation at lane-init.sh:320.
+# The LATE exits: libraries present, so execution reaches the index validation. EVERY refusal
+# reachable with nothing but an environment variable is driven here -- ../escape (non-integer,
+# :320), 00 (leading zeros, :324) and 400 (>= 350 / length bound, :331). The r6 absorption drove
+# only the first and asserted in prose that it was the only one; both blocking lenses falsified
+# that by execution at r7, and a bare `return 1` at :324 or :331 left the whole suite
+# byte-identical while an executed run exited 0 and walked on toward publishing a claim. There is
+# no prose bound here now: this list IS the coverage, so it cannot disagree with itself.
 EXECLATE="$ROOT/execlate"; mkdir -p "$EXECLATE/tools/hooks" "$ROOT/execlateq/lanes"
 cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$EXECLATE/tools/hooks/" \
   || { echo "FATAL: execlate populate"; exit 1; }
 for SH in $SHELLS; do
-  rm -rf "$EXECLATE/.harness" "$ROOT/execlateq/lanes"; mkdir -p "$ROOT/execlateq/lanes"
-  EXEC_LATE=$(cd "$EXECLATE" && ARC_METRICS_QUEUE_DIR="$ROOT/execlateq" HARNESS_LANE_INDEX=../escape \
-    "$SH" tools/hooks/lane-init.sh >/dev/null 2>&1
+  for BAD_IDX in ../escape 00 400; do
+    rm -rf "$EXECLATE/.harness" "$ROOT/execlateq/lanes"; mkdir -p "$ROOT/execlateq/lanes"
+    # HARNESS_LANE_ID is cleared explicitly: a lane shell exports it, and with it set zsh dies on
+    # lane-init.sh:152's unguarded glob over the deliberately-empty registry and never REACHES the
+    # refusal -- the assertion would then pass for the wrong reason (spec lens, r7 P3).
+    EXEC_LATE=$(cd "$EXECLATE" && env -u HARNESS_LANE_ID ARC_METRICS_QUEUE_DIR="$ROOT/execlateq" \
+      HARNESS_LANE_INDEX="$BAD_IDX" "$SH" tools/hooks/lane-init.sh >/dev/null 2>&1
 printf 'rc=%s claims=%s' "$?" \
   "$([ -d "$ROOT/execlateq/lanes" ] && ls "$ROOT/execlateq/lanes" | wc -l | tr -d ' ' || echo NODIR)")
-  [ "$EXEC_LATE" = "rc=1 claims=0" ] \
-    && ok "$SH: an EXECUTED lane-init refusing AFTER the libraries load publishes no claim" \
-    || bad "$SH: executed late-exit refusal leaked state: '$EXEC_LATE' (want rc=1 claims=0)"
+    [ "$EXEC_LATE" = "rc=1 claims=0" ] \
+      && ok "$SH: an EXECUTED lane-init refusing on HARNESS_LANE_INDEX=$BAD_IDX publishes no claim" \
+      || bad "$SH: executed refusal on '$BAD_IDX' leaked state: '$EXEC_LATE' (want rc=1 claims=0)"
+  done
 done
 
 # A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.

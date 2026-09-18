@@ -26,10 +26,11 @@ cleanup legitimately split across two `unset` statements reads as two partial on
 shapes are registered as forward work rather than chased here -- none occurs in lane-init.sh
 today, and only the first is a SILENT miss; the other two fail loud.
 
-This is a deliberate static assertion, complementing rather than replacing behaviour: three
-exits (library-load refusal, bad-index refusal, index exhaustion) are witnessed behaviourally
-in tools/hooks/test_lane_init.sh and still redden independently. This covers the uniformity
-those three cannot reach, and it catches a dropped name at a site added later.
+This is a deliberate static assertion, complementing rather than replacing behaviour: the
+refusal exits reachable from outside the process are witnessed behaviourally in
+tools/hooks/test_lane_init.sh and still redden independently -- that file's own loop is the
+list, so no count is restated here to drift against it. This covers the uniformity a
+behavioural witness cannot reach, and it catches a dropped name at a site added later.
 """
 
 from __future__ import annotations
@@ -198,11 +199,11 @@ def test_unset_f_alone_is_not_a_cleanup_site():
     The first input is the discriminating one and the reason this test exists: its
     names are in the namespace, so only the flag inspection can exclude it. Delete
     that branch and this line reddens with [(1, ["_LI_SRC", "_LI_ROOT"])]. The
-    original lowercase fixture below is kept, but it cannot witness the branch --
-    the `_LI_` prefix is case-sensitive, so `lane_stack_allowed`/`_li_reset` never enter
-    `names` at all and the statement is discarded as not-a-cleanup-site before the flags are
-    ever read. (The PREFIX is what excludes them, not the character class: `:120` now ships
-    `_LI_[A-Za-z0-9_]+`, under which a lowercase SUFFIX would match.)
+    original lowercase fixture below is kept, but it cannot witness the branch: its names
+    fail the case-sensitive `_LI_` PREFIX, so even with the flag branch deleted they never
+    enter `names` and the statement is not a cleanup site either way. The PREFIX is what
+    excludes them, not the character class -- `:120` ships `_LI_[A-Za-z0-9_]+`, under which a
+    lowercase SUFFIX would match.
     """
     assert subset_violations("  unset -f _LI_Q _LI_WT") == []
     assert subset_violations("  unset -f lane_stack_allowed _li_reset") == []

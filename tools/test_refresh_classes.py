@@ -81,13 +81,11 @@ def test_class_7_does_not_claim_sourced_shell_caller_state():
     """The shell half of class 7 was tried and withdrawn; nothing here claims it.
 
     A sourced file mutating its caller's shell IS class 7's concern in another substrate, but
-    no term for it survived. `caller's shell` was measured against the committed gate log and
-    matched a REAL finding in the opposite direction -- a caller's `set -e` propagating INTO a
-    sourced file -- so the term steals from the intake pile rather than filling it. No count or
-    precision figure is quoted here: the corpus only grows, so either is true at one anchor and
-    false at the next; re-derive with refresh-classes.py if you need it. Under this file's
-    prefer-to-miss policy, a term that steals a real finding from the unmatched pile does not
-    earn its place, so these shapes stay in the pile where a human reads them.
+    no term for it survived. `caller's shell` was tried and WITHDRAWN: it claimed a finding
+    this class does not own, and under the prefer-to-miss policy a term that steals from the
+    unmatched pile does not earn its place. The evidence is deliberately not restated here --
+    the gate log only grows, so any statement about what the term matches is true at one anchor
+    and false at the next. These shapes stay in the pile where a human reads them.
 
     Pinned in both directions: re-adding any such term reds the first assertion, and losing
     the Python vocabulary reds the second.
@@ -176,8 +174,8 @@ def test_class_3_does_not_describe_the_class_table_itself():
 
     Every phrasing tried ("intake path", "intake pile", "classifies unrelated") also reads
     naturally in findings about ingestion endpoints and queue growth, and narrowing never
-    converged: four consecutive review rounds, each correct, each attacking the phrase the
-    last added. A classifier cannot be widened to catch the complaint that it is too wide.
+    converged -- round after round, each correct, each attacking the phrase the last one
+    added. A classifier cannot be widened to catch the complaint that it is too wide.
     Findings about the table stay unmatched, which is where a human reads them.
     """
     rows = [

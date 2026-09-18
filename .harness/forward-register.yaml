@@ -11805,10 +11805,13 @@ items:
     closed on #1561) -- each with its own regression case.'
   council: 'NO -- a tooling-precision question (how exactly to recognise a shell statement),
     not a cross-domain tension; the two candidate closures are both engineering calls.'
-  close_out: 'FILED IN-LANE AS B-256 and renumbered on merge: u-he-44 (PR #1566) minted B-256..B-272 concurrently. The merge-gate rows for #1561 name it by its filing id. See B-275. OPEN. Successive attempts at mechanising this one invariant -- an inline awk assertion, a lexical scanner, its separator set, and (on #1561) its name-extraction class (an inline awk assertion,
-    then a lexical scanner, then its separator set) each shipped with a bypass of the same
-    class, which is the non-convergent-hardening shape: the right closure is NOT another
-    generation of the SEPARATOR set. (RECONCILED 2026-09-17 on #1561: a fourth change DID ship, but to the NAME-EXTRACTION class only -- `_LI_[A-Z_]+` -> `_LI_[A-Za-z0-9_]+`, because the old class stopped at the first digit so `_LI_ROOT2` extracted as `_LI_ROOT` and a typo''d cleanup read as complete. That is a different axis from the separator set and is closed BY CONSTRUCTION: `[A-Za-z0-9_]+` is the complete shell-identifier grammar for the `_LI_` prefix, so it admits no fifth generation. The merge-gate spec-conformance lens tested that distinction at r6 and upheld it on the merits. The SEPARATOR axis -- the open-ended one every prior round attacked -- remains untouched and remains what this row refuses.) Two candidate closures, both out of scope for the arc that surfaced
+  close_out: 'FILED IN-LANE AS B-256 and renumbered on merge: u-he-44 (PR #1566) minted B-256..B-272 concurrently. The merge-gate rows for #1561 name it by its filing id. See B-275. OPEN. Every mechanised generation of the SEPARATOR recognition -- the axis this row
+    is about -- shipped with a bypass of the same class, which is the non-convergent-hardening
+    shape, so the right closure is NOT another generation of it. (The NAME-EXTRACTION class was
+    changed on #1561 to the complete shell-identifier grammar for the `_LI_` prefix, because the
+    old class stopped at the first digit and a typo''d cleanup read as complete. That is a
+    different axis, closed by construction -- it admits no successor -- and the merge-gate
+    spec-conformance lens tested and upheld the distinction. It is NOT a member of this series.) (RECONCILED 2026-09-17 on #1561: a fourth change DID ship, but to the NAME-EXTRACTION class only -- `_LI_[A-Z_]+` -> `_LI_[A-Za-z0-9_]+`, because the old class stopped at the first digit so `_LI_ROOT2` extracted as `_LI_ROOT` and a typo''d cleanup read as complete. That is a different axis from the separator set and is closed BY CONSTRUCTION: `[A-Za-z0-9_]+` is the complete shell-identifier grammar for the `_LI_` prefix, so it admits no fifth generation. The merge-gate spec-conformance lens tested that distinction at r6 and upheld it on the merits. The SEPARATOR axis -- the open-ended one every prior round attacked -- remains untouched and remains what this row refuses.) Two candidate closures, both out of scope for the arc that surfaced
     this: (a) make the invariant unrepresentable rather than checkable -- collapse the fifteen
     hand-maintained `unset` lists into ONE helper called at each exit, after which there is no
     list to drift and nothing to scan (a helper was verified to unset caller-scope variables
