@@ -30,13 +30,13 @@ resolving pointer; the safety kernel (§1.3, §3.1/§3.2, §4.3/§4.4, §5, §8,
 
 | Pack | Root sections | Load when |
 |---|---|---|
-| `docs/governance/project-framing.md` | §1.1, §7, §9, §9.1 | axis scope table / sub-phase enumeration / bootstrap footer |
+| `docs/governance/project-framing.md` | §1.1, §9, §9.1 | axis scope table / bootstrap footer |
 | `docs/governance/stack-and-layout.md` | §3.3 | adding a workspace member; repo tree |
 | `docs/governance/substitution-and-clearance.md` | §4.1, §4.2, §4.5 | retirement event; clearance marker |
 | `docs/governance/skills-and-subphases.md` | §6, §7 | choosing a Phase 7 skill / routing a sub-phase |
-| `docs/governance/design-phase-principles.md` | §10, §10.1–§10.9 | **design-phase posture only** |
-| `docs/governance/roadmap-protocol.md` | §12, §12.1–§12.3, §12.5.x | hand-running the audit / post-merge refresh / drift reconcile |
-| `docs/governance/orchestration.md` | §13.2–§13.5 | choosing solo / transcript-brief review / codex-review / council / fan-out |
+| `docs/governance/design-phase-principles.md` | §10, §10.1, §10.2, §10.3, §10.4, §10.5, §10.6, §10.7, §10.8, §10.9 | **design-phase posture only** |
+| `docs/governance/roadmap-protocol.md` | §12, §12.1, §12.2, §12.3, §12.5, §12.5.1, §12.5.2, §12.5.3, §12.5.4 | hand-running the audit / post-merge refresh / drift reconcile |
+| `docs/governance/orchestration.md` | §13.2, §13.3, §13.4, §13.5 | choosing solo / transcript-brief review / codex-review / council / fan-out |
 
 ## Pointers
 

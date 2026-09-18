@@ -1,6 +1,6 @@
 # Governance pack — project framing + bootstrap state
 
-*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §1.1, §7, §9, §9.1 by U-CTX-13 (R-CTX-1 Arc 5, 2026-08-11).*
+*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §1.1, §9, §9.1 by U-CTX-13 (R-CTX-1 Arc 5, 2026-08-11).*
 *The root file keeps every heading with its number and position, plus a resolving
 pointer to this file. Query this pack for the detail; do not preload it.*
 
