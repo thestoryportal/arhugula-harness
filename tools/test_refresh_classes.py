@@ -474,6 +474,44 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
 
 
+def test_owed_pointer_refresh_is_not_class_vocabulary():
+    # U-HE-45 shipped this shape as class 17 and SUBTRACTED it three rounds later; see the
+    # ALSO-evaluated-and-LEFT-OUT note above CLASSES for the measurements. This test pins the
+    # subtraction, so the row cannot creep back without a decision: no class may claim these
+    # rows on pointer vocabulary alone.
+    #
+    # p:1/p:2 are genuine members of the SHAPE — a surface consumers read still naming what was
+    # just finished — and they stay in the intake pile, which is the correct place for a shape
+    # whose vocabulary was measured unable to carry it.
+    #
+    # p:3 is codex r5's counterexample and the reason the last regex died: `still points` with
+    # POSITIVE polarity. A pattern keyed on "still says/names/points" reads a FRESH pointer as a
+    # stale one, and polarity is not regex-expressible — so if anyone re-adds the row, this case
+    # is what goes red. It must never be claimed by any class.
+    rows = [
+        {
+            "finding_id": "p:1",
+            "observed_evidence": "its live pointer still says U-HE-45 is the next implementable"
+            " unit",
+            "location": "",
+        },
+        {
+            "finding_id": "p:2",
+            "observed_evidence": "The live pointer was never refreshed after the unit completed.",
+            "location": "",
+        },
+        {
+            "finding_id": "p:3",
+            "observed_evidence": "The live pointer is fresh and still points to the intended next"
+            " unit after the refresh",
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    for row in rows:
+        assert out[row["finding_id"]] == [], (row["finding_id"], out[row["finding_id"]])
+
+
 def test_every_class_row_has_its_skill_section_and_vice_versa():
     # the table and the author-facing checklist are two carriers of one class list
     # (codex r1 P2 on the intake arc): a row landed in one without the other is the

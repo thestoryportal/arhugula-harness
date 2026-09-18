@@ -2874,6 +2874,120 @@ same spec leg.
 - **Council.** NO -- a defect-class candidate; the decision is whether it mechanizes.
 
 
+### B-273 · S1 of the §6 unified build order (U-HE-02..04, U-HE-06..09) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S1 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-15, 16, 17, 18, 19, 20; units U-HE-02..04, U-HE-06..09. Gates lane safety: yes (live at N=1). Gates measurement: —. §6 Depends on: — (root). LANDED: cluster commit 3b3e3a107 (U-HE-03/02/04/06/07/08/09 — verdict schemas, fail-closed review).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: cluster commit 3b3e3a107 (U-HE-03/02/04/06/07/08/09 — verdict schemas, fail-closed review). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-274 · S2 of the §6 unified build order (U-HE-01, U-HE-05, U-HE-10..13) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S2 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-23, 24, 25, 26, 05; units U-HE-01, U-HE-05, U-HE-10..13. Gates lane safety: partly (C-HE-05 is a prerequisite of AC#2(a)). Gates measurement: yes. §6 Depends on: — (root). LANDED: cluster commit 3b9146026 (U-HE-10/11/12/05/13 — arc_metrics env overrides + C-HE-25 fields — and U-HE-01, the finding record).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: cluster commit 3b9146026 (U-HE-10/11/12/05/13 — arc_metrics env overrides + C-HE-25 fields — and U-HE-01, the finding record). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-275 · S3 of the §6 unified build order (U-HE-14) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S3 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-30; units U-HE-14. Gates lane safety: yes (before S4b/S4d) — observable via the C-HE-30 phase0 row. Gates measurement: —. §6 Depends on: B-274. LANDED: 47d4428ff (durable store audit one-pager + phase0 witness).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: 47d4428ff (durable store audit one-pager + phase0 witness). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-276 · S4a of the §6 unified build order (U-HE-15, U-HE-16) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S4a of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-02, 04; units U-HE-15, U-HE-16. Gates lane safety: yes. Gates measurement: —. §6 Depends on: B-274. LANDED: f0e64f217 (U-HE-15 drain fault isolation + U-HE-16 C-HE-02 witnesses).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: f0e64f217 (U-HE-15 drain fault isolation + U-HE-16 C-HE-02 witnesses). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-277 · S4b of the §6 unified build order (U-HE-17..21) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S4b of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-03; units U-HE-17..21. Gates lane safety: yes. Gates measurement: —. §6 Depends on: B-275, B-276. LANDED: 7834cf47e (U-HE-17 generation-CAS reservation), 8638f2e75 (U-HE-18 ground-truth reconcile), 80c94811a (U-HE-20 AC#2 subprocess harness), PRs #1409 (U-HE-19) and #1412 (U-HE-21, reservation state merged). U-HE-17..20 carry no reservation record because this step BUILT the reservation primitive.
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: 7834cf47e (U-HE-17 generation-CAS reservation), 8638f2e75 (U-HE-18 ground-truth reconcile), 80c94811a (U-HE-20 AC#2 subprocess harness), PRs #1409 (U-HE-19) and #1412 (U-HE-21, reservation state merged). U-HE-17..20 carry no reservation record because this step BUILT the reservation primitive. Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-278 · S4c of the §6 unified build order (U-HE-22..28) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S4c of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-06, 07, 08; units U-HE-22..28. Gates lane safety: yes. Gates measurement: —. §6 Depends on: B-277. LANDED: all seven units' reservations are state=merged (PRs #1413, #1414, #1415, #1416, #1417, #1418, #1424).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: all seven units' reservations are state=merged (PRs #1413, #1414, #1415, #1416, #1417, #1418, #1424). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-279 · S4d of the §6 unified build order (U-HE-29..33) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S4d of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-09, 10, 11, 12; units U-HE-29..33. Gates lane safety: yes. Gates measurement: C-HE-12 also measurement. §6 Depends on: B-274. LANDED: all five units' reservations are state=merged (PRs #1426, #1430, #1434, #1438, #1454).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: all five units' reservations are state=merged (PRs #1426, #1430, #1434, #1438, #1454). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-280 · S5 of the §6 unified build order (U-HE-34) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S5 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-27; units U-HE-34. Gates lane safety: —. Gates measurement: yes. §6 Depends on: B-274. LANDED: U-HE-34 reservation state=merged (PR #1458).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: U-HE-34 reservation state=merged (PR #1458). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-281 · S6 of the §6 unified build order (U-HE-35..39) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S6 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-22, 13, C-HE-06 §10, 28; units U-HE-35..39. Gates lane safety: — (pilots do not gate N). Gates measurement: yes (AC#10 baseline). §6 Depends on: B-273, B-274, B-275, B-276, B-277, B-278, B-279, B-280. LANDED: all five units' reservations are state=merged (PRs #1460, #1497, #1517, #1523, #1525). The mechanical pilot gate this step builds is what B-284 reads.
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: all five units' reservations are state=merged (PRs #1460, #1497, #1517, #1523, #1525). The mechanical pilot gate this step builds is what B-284 reads. Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-283 · S8 of the §6 unified build order (U-HE-43) *(registered by U-HE-45, 2026-09-18; CLOSED)*
+
+- **What it is.** S8 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-29; units U-HE-43. Gates lane safety: —. Gates measurement: consumes S2. §6 Depends on: B-273, B-274. LANDED: U-HE-43 reservation state=merged (PR #1550).
+- **Current state.** CLOSED 2026-09-18 by U-HE-45.
+- **What closes this row.** CLOSED 2026-09-18 by U-HE-45: LANDED: U-HE-43 reservation state=merged (PR #1550). Registered as a closed row rather than omitted, so the §6 order is complete in the register and a later reader can see WHERE each step landed rather than inferring it from absence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-282 · S7 of the §6 unified build order (U-HE-40..42) — the only INCOMPLETE step *(registered by U-HE-45, 2026-09-18; REGISTERED)*
+
+- **What it is.** S7 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-31, 32, 33; units U-HE-40..42. Gates lane safety: —. Gates measurement: consumes S2/S5. §6 Depends on: B-274, B-280. U-HE-42 LANDED (PR #1527). U-HE-40 is pending and HELD at 15/15 review rounds with a round-12 P1 outstanding at mutation_probe_reverify.py:108 (B-244); its branch was merged forward at 96a14900f to clear the C-HE-13 §4 selection fence, which changed nothing about the hold. U-HE-41 (equivalence-proof rows + removal of proven double-runs) has neither a reservation nor a commit and depends on U-HE-40, so it is not startable while the hold stands.
+- **Current state.** HELD 2026-09-18 by U-HE-45 — blocked behind U-HE-40's hold (B-244); `held` rather than `open` so forward_register.py --open stops counting it as executable work.
+- **What closes this row.** REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: U-HE-40's hold lifted with its round-12 P1 resolved and its branch landed, then U-HE-41 landed. This is the ONLY §6 step with forward work: S1-S6 and S8 are closed rows above, each naming its landing evidence.
+- **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
+
+### B-284 · Pilot bar — >= 3 pilots at 3-4 lanes before follow-on orchestration *(registered by U-HE-45, 2026-09-18; REGISTERED)*
+
+- **What it is.** C-HE-13 §3's success clause across the three stores. This bar gates FOLLOW-ON ORCHESTRATION ONLY and never the lane count N. §6 Depends on: B-281 (S6 builds the mechanical pilot gate). Measured 2026-09-17 on run pilot-2026-09-17-a: that run is permanently FAIL, because `pass` keys on whether a coordination HITL escalation OCCURRED, not on whether one remains outstanding, and the DEFERRED-HIL row is durable in an append-only ledger. A run needing one operator recovery is therefore spent, so the >= 3 must be reached with fresh runs.
+- **Current state.** REGISTERED 2026-09-18 by U-HE-45; open.
+- **What closes this row.** REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: at least THREE DISTINCT pilot run_ids, each at 3-4 lanes, each reporting `pass: true` from `just lanes-pilot-report <run_id>` (exit 0). Explicitly NOT closed by units landing: this row's unit set is empty, and an earlier draft of it inherited a generic "every unit landed" close condition that was therefore VACUOUS -- closable without a single passing pilot, on the row whose whole purpose is to gate on passing pilots. pilot-2026-09-17-a counts toward NONE of the three.
+- **Council.** NO -- the bar is ratified at C-HE-13 §3; only the count is outstanding.
+
+### B-285 · u-he-44's arc-metrics capture is stranded: `queue` cannot express a backfill *(registered by U-HE-45, 2026-09-18; REGISTERED)*
+
+- **What it is.** The interrupted landing of #1566 never ran the closure capture, so C-HE-04 reports "u-he-44 has neither a queue entry nor a committed row; its capture is unaccounted for". Every recovery path is closed by design, established by running each: `extract` refuses an arc that HAS a reservation ("capture it through queue + drain ... extract-backfill is for reservation-less history"); `queue` requires --decisions, the declared judgement queue_capture's docstring says "only the session which ran the arc can supply"; that session is gone. The storage format and `drain` both tolerate an undeclared count (drain reads entry.get("decisions")), so the mandate exists only at the `queue` CLI entrance -- right for a live closure, unsatisfiable for a backfill.
+- **Current state.** REGISTERED 2026-09-18 by U-HE-45; open.
+- **What closes this row.** REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: a backfill path on `queue` accepting an undeclared decision count and recording provenance "unmapped:unclassified" (the value `extract` already writes for a null), after which u-he-44 can be queued and drained and the C-HE-04 violation clears. Fabricating a --decisions integer is NOT a close: it would enter the cohort marked "declared" and skew every median reading it.
+- **Council.** NO -- a bounded tooling gap with one obvious shape.
+
+### B-286 · `arc_metrics extract --dry-run` does not enforce guards the real run enforces *(registered by U-HE-45, 2026-09-18; REGISTERED)*
+
+- **What it is.** A --dry-run of `extract --arc-id u-he-44 --arc-type-declared-at open` returned exit 0 and printed a well-formed row; the identical non-dry-run aborted exit 2 ("historical backfill declares at close"). The same call then hit two further guards the preview had also passed: lane-holder identity, then the reservation-exists refusal. A preview that clears where the real call aborts is worse than no preview -- it is the instrument you reach for precisely to avoid the abort.
+- **Current state.** REGISTERED 2026-09-18 by U-HE-45; open.
+- **What closes this row.** REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: --dry-run runs the same precondition guards as the real path and differs only in whether it writes, witnessed by a test asserting that a dry-run of a call the real path refuses also refuses, with the same exit code and message.
+- **Council.** NO -- a preview/real-path parity defect; the fix shape is not contested.
+
+### B-287 · U-HE-45's own scope went stale: it registers as forward work steps that had landed *(registered by U-HE-45, 2026-09-18; REGISTERED)*
+
+- **What it is.** The unit's scope says to register one row per S-step so /roadmap-continue derives them, written when S1-S8 were all ahead of execution. By the time the close-step ran, TEN of the eleven steps had landed (S1-S6 and S8), leaving S7 as the only forward step -- itself blocked behind U-HE-40's hold. Round 1 of this arc followed the scope literally and registered all eleven as `open`, which inflated the actionable queue by ten rows and presented finished implementation as unstarted work; out-of-family review caught ONE instance (S8/U-HE-43, merged #1550) and grounding every row found the other nine. The general shape: a close-step's scope describes the world at authoring time, and a plan long enough to execute over weeks will have moved.
+- **Current state.** REGISTERED 2026-09-18 by U-HE-45; open.
+- **What closes this row.** REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: a close-step convention that re-derives its own scope against landing evidence before executing it -- and the narrower mechanical form, a check that refuses a register row whose status contradicts its cited landing evidence. Note the instrument trap found here: plan checkbox ticks LAG execution, so a tick is evidence of recording and never of landing; status must come from merged PRs or commits.
+- **Council.** NO -- a process/authoring defect; the corrective shape is not contested.
+
+
+### B-288 · hook_roadmap_next cannot name a B-row frontier, so a correct next-action pointer is unrepresentable when the actionable work is a register row *(registered by U-HE-45, 2026-09-18; REGISTERED)*
+
+- **What it is.** tools/hooks/lib.sh:286-292 accepts exactly five carriers, and every one of them names a UNIT (`U-*`/`R-*`) or a plan document; the id pattern is `[UR]-...` and range tokens containing `..` are filtered out. When the actionable forward work is a `B-*` register row, NO carrier can name it. Measured on this arc rather than reasoned: out-of-family review raised the pointer on four CONSECUTIVE rounds, and each rewording only moved WHICH BLOCKED THING it named — first U-HE-45, which the arc had just completed; then bold **U-HE-40**, which is HELD at 15/15 rounds with a round-12 P1 (B-244); then the plan doc, whose only remaining S7 work is that same held unit. The consumer test (tools/test_roadmap_status_consumers.py:222) accepts any U/R/plan token present on the line and never asks whether the selected token is ACTIONABLE, so the shape is green either way. This is a representability gap in the pointer vocabulary, not a wording defect, which is why it is registered here instead of rewritten a fifth time.
+- **Current state.** REGISTERED 2026-09-18 by U-HE-45; not fixed.
+- **What closes this row.** REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: either a carrier that can name a `B-*` row, or an explicit 'no actionable unit — see B-NNN' form that hook_roadmap_next resolves and the consumer test accepts, plus an actionability check so a pointer naming a held unit cannot pass as the frontier. Until one of those exists, the least-wrong pointer names the next unit in the §6 order and says in prose that it is held and who can clear it — and the prose is the only place that can carry it, which is the defect.
+- **Council.** NO -- a bounded tooling gap in one parser; the fix shape is not contested.
+
+
 ### B-289 · the `_LI_*` namespace scanner is lexical, not a shell parser *(surfaced by the merge-gate witness lens on #1561, 2026-09-17; REGISTERED)*
 
 - **What it is.** `tools/test_lane_init_namespace.py` asserts that no exit of `tools/hooks/lane-init.sh` clears a strict subset of `_LI_SRC`/`_LI_ROOT`/`_LI_Q`/`_LI_WT`. It is a LEXICAL scanner — it splits statements on `;`/`&&`/`||`/`&`, strips comments quote-aware, and excludes `unset -f` by the statement's own flags — and it does not evaluate the shell. Three shapes fall outside it: (1) SILENT MISS — `unset $VARS` reaches its name list by variable indirection, so no literal `_LI_*` token exists to match and an incomplete cleanup reads as not-a-cleanup-site; (2) FAILS LOUD — a backslash continuation is scored per physical line, so a complete cleanup is misreported as partial on the first; (3) FAILS LOUD — a cleanup legitimately split across two `unset` statements is scored as two partial ones.
