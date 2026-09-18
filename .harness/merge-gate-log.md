@@ -1212,3 +1212,10 @@ delegated `laws:prompt` author.
 | 2026-09-18T07:44:09Z | #1579 | 6b9e410558f1 | merge-gate-concurrency | APPROVE | 0 finding(s) | r4 |
 | 2026-09-18T07:44:09Z | #1579 | 6b9e410558f1 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r4 |
 | 2026-09-18T07:44:09Z | #1579 | 6b9e410558f1 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r4 |
+| 2026-09-18T08:22:00Z | #1579 | 396fe8c16ce2 | merge-gate-concurrency | APPROVE | 0 finding(s) | r5 |
+| 2026-09-18T08:22:00Z | #1579 | 396fe8c16ce2 | merge-gate-spec-conformance | REVIEWER_UNAVAILABLE | 0 finding(s) | r5 |
+| 2026-09-18T08:22:00Z | #1579 | 396fe8c16ce2 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r5 |
+| 2026-09-18T08:22:21Z | #1579 | 396fe8c16ce2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r6 |
+| 2026-09-18T08:41:44Z | #1579 | 3ae9f701697a | merge-gate-concurrency | APPROVE | 0 finding(s) | r6 |
+| 2026-09-18T08:41:44Z | #1579 | 3ae9f701697a | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r7 |
+| 2026-09-18T08:41:44Z | #1579 | 3ae9f701697a | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r6 |
