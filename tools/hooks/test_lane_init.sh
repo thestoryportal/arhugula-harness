@@ -974,10 +974,14 @@ done
 # non-default state therefore needs its own witness -- the default-state case above passes
 # either way and cannot discriminate. (codex r1 P2.)
 if printf '%s\n' $SHELLS | grep -qx zsh; then
+  # The trailing `ran:` is the sentinel every other case in this file carries: without it an
+  # empty capture -- a zsh that died before the loop -- reads identically to "nothing was
+  # undefined", so absence of a run and absence of a defect print the same (witness lens r6 P3).
   NOFAZ=$(zsh -c "setopt NO_FUNCTION_ARGZERO; cd / && source '$INIT' >/dev/null 2>&1
-for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done")
-  [ -z "$NOFAZ" ] && ok "zsh: libraries load under NO_FUNCTION_ARGZERO too" \
-    || bad "zsh NO_FUNCTION_ARGZERO left these undefined: $NOFAZ"
+for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done
+printf 'ran:'")
+  [ "$NOFAZ" = "ran:" ] && ok "zsh: libraries load under NO_FUNCTION_ARGZERO too" \
+    || bad "zsh NO_FUNCTION_ARGZERO: expected 'ran:', got '$NOFAZ'"
 fi
 
 # CDPATH is consulted only for an operand that does not begin with / ./ or ../ -- so this
@@ -1112,9 +1116,24 @@ done
 # shared registry, and exits 0 -- a slot nothing ever reclaims, since release matches a removed
 # worktree path, and no caller notices because the status is 0. The file is mode 755, so the
 # executed entry point is reachable even though every call site sources today.
-# This pins the CONTRACT (a refusal leaves no claim and no identity), not the shape of the exit
-# line, so it cannot be evaded by rewriting the exit -- the lexical-scanner trap this arc
-# already paid for once. (merge-gate concurrency lens, r5 @6812163ce.)
+# This pins the CONTRACT (a refusal publishes no claim), not the shape of the exit line, so it
+# cannot be evaded by rewriting the exit -- the lexical-scanner trap this arc already paid for.
+# TWO exits are driven, deliberately, because the tail is hand-repeated per site and CANNOT be
+# hoisted: the r5 witness drove only the library-load refusal -- the site the defect was found at
+# -- and was therefore structurally unable to notice a bare `return` at any other exit. Measured:
+# a bare `return 1` at the non-integer-index refusal made an executed run exit 0 while the whole
+# suite stayed byte-identical. That is the same per-site drift this file already records at
+# FAR_EXIT. (merge-gate concurrency lens r5; witness-adequacy lens r6 P2.)
+#
+# COVERAGE BOUND, stated rather than implied: these are the two refusals reachable from OUTSIDE
+# the process -- one before the libraries load, one after, on opposite sides of the identity mint.
+# The remaining top-level exits need interior state (a corpse, a full registry, a rebind race) and
+# are driven in SOURCED mode elsewhere in this file. A new top-level exit is NOT automatically
+# covered here.
+#
+# The asserted triple is `rc` + `claims` only. It deliberately does NOT assert id=absent at the
+# LATE exit: the lane id is minted BEFORE index validation, so correct code there already
+# persists an identity. Re-using the early exit's triple would have asserted a falsehood.
 EXECFIX="$ROOT/execwt"; mkdir -p "$EXECFIX/tools/hooks" "$ROOT/execq/lanes"
 cp "$INIT" "$EXECFIX/tools/hooks/" || { echo "FATAL: execwt populate"; exit 1; }
 # lib.sh / loop_lib.sh deliberately NOT copied: that is what forces the library-load refusal.
@@ -1125,8 +1144,23 @@ printf 'rc=%s claims=%s id=%s' "$?" \
   "$([ -d "$ROOT/execq/lanes" ] && ls "$ROOT/execq/lanes" | wc -l | tr -d ' ' || echo NODIR)" \
   "$([ -f "$EXECFIX/.harness/.lane-id" ] && echo persisted || echo absent)")
   [ "$EXEC_REFUSED" = "rc=1 claims=0 id=absent" ] \
-    && ok "$SH: an EXECUTED lane-init that refuses publishes no claim and persists no identity" \
-    || bad "$SH: executed refusal leaked state: '$EXEC_REFUSED' (want rc=1 claims=0 id=absent)"
+    && ok "$SH: an EXECUTED lane-init refusing BEFORE the libraries load publishes no claim" \
+    || bad "$SH: executed early-exit refusal leaked state: '$EXEC_REFUSED' (want rc=1 claims=0 id=absent)"
+done
+
+# The LATE exit: libraries present, so execution reaches the index validation at lane-init.sh:320.
+EXECLATE="$ROOT/execlate"; mkdir -p "$EXECLATE/tools/hooks" "$ROOT/execlateq/lanes"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$EXECLATE/tools/hooks/" \
+  || { echo "FATAL: execlate populate"; exit 1; }
+for SH in $SHELLS; do
+  rm -rf "$EXECLATE/.harness" "$ROOT/execlateq/lanes"; mkdir -p "$ROOT/execlateq/lanes"
+  EXEC_LATE=$(cd "$EXECLATE" && ARC_METRICS_QUEUE_DIR="$ROOT/execlateq" HARNESS_LANE_INDEX=../escape \
+    "$SH" tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s claims=%s' "$?" \
+  "$([ -d "$ROOT/execlateq/lanes" ] && ls "$ROOT/execlateq/lanes" | wc -l | tr -d ' ' || echo NODIR)")
+  [ "$EXEC_LATE" = "rc=1 claims=0" ] \
+    && ok "$SH: an EXECUTED lane-init refusing AFTER the libraries load publishes no claim" \
+    || bad "$SH: executed late-exit refusal leaked state: '$EXEC_LATE' (want rc=1 claims=0)"
 done
 
 # A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.

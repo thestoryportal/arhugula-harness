@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 269
+  total: 270
   open: 1
   design_substrate_gated: 3
-  registered_finding: 110
+  registered_finding: 111
   operator_gated: 0
   held: 3
   closed: 152
-  identity_digest: 244f115926aac2d9
+  identity_digest: e445a329ba80bdd5
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11800,14 +11800,15 @@ items:
     first. (3) FAILS LOUD: a cleanup legitimately split across two `unset` statements is
     scored as two partial ones. None occurs in lane-init.sh today (verified by grep for
     trailing continuations, heredocs and indirection at the time of filing). The arc closed
-    the three evasions that WERE silent and reachable -- the `unset -f` line-skip, the trailing
-    comment, and the guarded one-liner -- each with its own regression case.'
+    the four evasions that WERE silent and reachable -- the `unset -f` line-skip, the trailing
+    comment, the guarded one-liner, and the near-miss name (`_LI_ROOT2` read as `_LI_ROOT`,
+    closed on #1561) -- each with its own regression case.'
   council: 'NO -- a tooling-precision question (how exactly to recognise a shell statement),
     not a cross-domain tension; the two candidate closures are both engineering calls.'
-  close_out: 'FILED IN-LANE AS B-256 and renumbered on merge: u-he-44 (PR #1566) minted B-256..B-272 concurrently. The merge-gate rows for #1561 name it by its filing id. See B-275. OPEN. Three attempts at mechanising this one invariant (an inline awk assertion,
+  close_out: 'FILED IN-LANE AS B-256 and renumbered on merge: u-he-44 (PR #1566) minted B-256..B-272 concurrently. The merge-gate rows for #1561 name it by its filing id. See B-275. OPEN. Successive attempts at mechanising this one invariant -- an inline awk assertion, a lexical scanner, its separator set, and (on #1561) its name-extraction class (an inline awk assertion,
     then a lexical scanner, then its separator set) each shipped with a bypass of the same
-    class, which is the non-convergent-hardening shape: the right closure is NOT a fourth
-    regex generation. Two candidate closures, both out of scope for the arc that surfaced
+    class, which is the non-convergent-hardening shape: the right closure is NOT another
+    generation of the SEPARATOR set. (RECONCILED 2026-09-17 on #1561: a fourth change DID ship, but to the NAME-EXTRACTION class only -- `_LI_[A-Z_]+` -> `_LI_[A-Za-z0-9_]+`, because the old class stopped at the first digit so `_LI_ROOT2` extracted as `_LI_ROOT` and a typo''d cleanup read as complete. That is a different axis from the separator set and is closed BY CONSTRUCTION: `[A-Za-z0-9_]+` is the complete shell-identifier grammar for the `_LI_` prefix, so it admits no fifth generation. The merge-gate spec-conformance lens tested that distinction at r6 and upheld it on the merits. The SEPARATOR axis -- the open-ended one every prior round attacked -- remains untouched and remains what this row refuses.) Two candidate closures, both out of scope for the arc that surfaced
     this: (a) make the invariant unrepresentable rather than checkable -- collapse the fifteen
     hand-maintained `unset` lists into ONE helper called at each exit, after which there is no
     list to drift and nothing to scan (a helper was verified to unset caller-scope variables
@@ -11833,3 +11834,11 @@ items:
   summary: 'A new forward-register row takes the next free B-NNN by READING .harness/forward-register.yaml at author time. Under the C-HE-01 lane model that read is stale the moment another lane appends, and nothing reserves the id. NOT a silent-corruption finding — tools/forward_register.py::validate DOES catch it: a duplicated id yields `duplicate id B-NNN` plus a heading-collision violation, MEASURED by duplicating a row in memory, re-pinning the snapshot the way an author would, and re-running validate (it objected). The gap is WHEN, not WHETHER. Detection lands at merge time, after both lanes have already written the id into a heading, a prose block, a close_out, commit messages, and append-only gate-log rows. MEASURED 2026-09-17: #1561 minted B-256 and B-257 while u-he-44 (#1566) minted B-256..B-272; the merge produced 268 items against 266 unique ids, and unwinding it meant renumbering to B-273/B-274 across 8 references in 2 carriers, adding a provenance note to each row so the gate-log rows naming the filing ids stay traceable, and appending a correction row to a log that cannot be edited in place.'
   close_out: 'OPEN 2026-09-17. The cost is paid per collision and grows with lane count; with three lanes live it already fired once in a single day. WHAT CLOSES THIS ROW, in increasing strength: (a) a `just register-next-id` helper that reads origin/main rather than the local working copy — cheap, shrinks the stale window, does not close it; (b) an allocator that reserves an id RANGE per lane at arc open, which the reservation store at tools/reservations.py is already the natural home for, since it already holds per-lane arc state; or (c) lane-scoped ids that cannot collide by construction, which makes the illegal state unrepresentable instead of detected, at the cost of a less readable id. Any closure owes a witness that two lanes minting concurrently do NOT produce a duplicate. Note the ordering argument: (c) is the form this workspace prefers, but it changes every existing id, so (b) is the likely landing point.'
   council: 'NO — one mechanism question (where an id is allocated); the three closures differ in cost and strength, not in domain.'
+- id: B-276
+  title: 'the U-HE-31 as-built plan skeleton still carries the bash-only root resolution this arc fixed'
+  status: registered_finding
+  pr: '#1561'
+  heading: '### B-276 · the U-HE-31 as-built plan skeleton still carries the bash-only root resolution *(split out of #1561 by the DESIGN_IMPL_MIX guard, 2026-09-17; REGISTERED)*'
+  summary: '.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:6017 sketches tools/hooks/lane-init.sh — a file the same block labels "(sourced)" — with `_LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"`. BASH_SOURCE is bash-only, and under zsh that resolved against the cwd, so sourcing returned rc=0 with ZERO of five library functions loaded: gc.auto 0 (C-HE-11 §2, spec:433) never attempted and the headroom NOTIFY (§5, spec:436) unemittable. #1561 fixed the production file; a repo-wide sweep confirms this skeleton is the only surviving BASH_SOURCE in a SOURCED file''s contract (every other hit is an executed `#!/usr/bin/env bash` script, where the idiom is correct). The correction WAS written and then deliberately backed out, because tools/codex_context_guard.py hard-fails DESIGN_IMPL_MIX when a plan surface rides with implementation surfaces — reproduced both ways: the HARD finding is present with the plan file in the diff and absent without it.'
+  close_out: 'OPEN 2026-09-17. This row exists because the merge-gate spec-conformance lens (r6 P3) observed that the obligation was tracked ONLY as prose in an append-only gate log no checker reads, while the same PR minted three B-NNN rows for lesser residuals — the named-residual-with-no-carrier shape. WHAT CLOSES IT: a DOC-ONLY PR touching .harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md alone, replacing the skeleton line with the resolution ladder (or a pointer to tools/hooks/lane-init.sh:56-66, which is authoritative — the skeleton is indicative and has already diverged far from the 700-line production file across prior merged arcs). Doc-only is the shape the guard requires and skips the merge gate under the lean protocol. COUNTER-EVIDENCE recorded rather than suppressed, as the filing lens recorded it: the skeleton''s long-standing divergence means it may be indicative-only, in which case the closure is to say so IN the plan rather than to sync the line — either way the silent bash-only idiom does not survive in a block labelled (sourced).'
+  council: 'NO — one mechanical question (sync the skeleton or mark it indicative); no cross-domain tension, and the guard constraint that split it out is already settled.'

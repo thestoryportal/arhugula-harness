@@ -240,7 +240,7 @@ because this file's own policy is to prefer to miss and its header already recor
 successive regex layers trade one imprecision for another. A shape that keeps drawing
 findings is telling you the vocabulary does not exist, not that you have not found it yet.
 
-That is what happened to the term added for THIS rule: four consecutive rounds, each finding
+That is what happened to the term added for THIS rule: round after round, each finding
 correct, each attacking the phrase the last one added, because every way of naming the
 classifier's own machinery also names ordinary ingestion and queue findings. No matcher
 vocabulary for it exists in the table now. Findings about the class table stay in the
@@ -295,8 +295,11 @@ is not a smaller version of the convention, it is the exception that breaks it.
 
 This half has NO surviving vocabulary in class 7, and that is the finding, not an
 oversight. `caller's shell` was tried and measured against the committed gate log: it
-matched 2 findings, one of them (tools/hooks/lib.sh:144) about a caller's `set -e`
-propagating INTO a sourced file -- the opposite direction -- for a precision of 1/2, and
+matched a REAL finding in the opposite direction — tools/hooks/lib.sh:144, about a caller's
+`set -e` propagating INTO a sourced file — so the term steals from the intake pile rather
+than filling it. (No count is quoted here on purpose: the corpus only grows, so a precision
+figure is true at one anchor and false at the next. Re-derive it with refresh-classes.py if
+you need the number.) And
 `tools/test_refresh_classes.py::test_class_7_does_not_claim_sourced_shell_caller_state`
 now pins the absence. A shell-sourcing finding therefore lands UNMATCHED, which is the
 intended outcome: unmatched is where the next class comes from. The rule that removed it

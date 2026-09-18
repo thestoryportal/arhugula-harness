@@ -82,10 +82,12 @@ def test_class_7_does_not_claim_sourced_shell_caller_state():
 
     A sourced file mutating its caller's shell IS class 7's concern in another substrate, but
     no term for it survived. `caller's shell` was measured against the committed gate log and
-    matched two findings -- one of them about a caller's `set -e` propagating INTO a sourced
-    file, the opposite direction -- a precision of 1/2. Under this file's prefer-to-miss
-    policy, a term that steals a real finding from the unmatched pile does not earn its place,
-    so these shapes stay in the pile where a human reads them.
+    matched a REAL finding in the opposite direction -- a caller's `set -e` propagating INTO a
+    sourced file -- so the term steals from the intake pile rather than filling it. No count or
+    precision figure is quoted here: the corpus only grows, so either is true at one anchor and
+    false at the next; re-derive with refresh-classes.py if you need it. Under this file's
+    prefer-to-miss policy, a term that steals a real finding from the unmatched pile does not
+    earn its place, so these shapes stay in the pile where a human reads them.
 
     Pinned in both directions: re-adding any such term reds the first assertion, and losing
     the Python vocabulary reds the second.
@@ -124,7 +126,7 @@ def test_class_7_does_not_claim_sourced_shell_caller_state():
 def test_class_4_claims_the_leaves_this_test_green_idiom():
     """The canonical vacuous-witness phrasing, adopted on MEASURED evidence.
 
-    Run against the committed corpus this alternative newly matched 24 rows and all 24 were
+    Run against the committed corpus this alternative newly matched rows that were each
     audited individually: every one is "removing/reverting/deleting X leaves this test
     green", which is class 4 exactly. Three sibling candidates were measured in the same
     pass and rejected for mixing in races, spec findings and lock ordering -- `cannot

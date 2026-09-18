@@ -199,8 +199,10 @@ def test_unset_f_alone_is_not_a_cleanup_site():
     names are in the namespace, so only the flag inspection can exclude it. Delete
     that branch and this line reddens with [(1, ["_LI_SRC", "_LI_ROOT"])]. The
     original lowercase fixture below is kept, but it cannot witness the branch --
-    `_LI_[A-Z_]+` never matches a lowercase name, so it is discarded as
-    not-a-cleanup-site before the flags are ever read.
+    the `_LI_` prefix is case-sensitive, so `lane_stack_allowed`/`_li_reset` never enter
+    `names` at all and the statement is discarded as not-a-cleanup-site before the flags are
+    ever read. (The PREFIX is what excludes them, not the character class: `:120` now ships
+    `_LI_[A-Za-z0-9_]+`, under which a lowercase SUFFIX would match.)
     """
     assert subset_violations("  unset -f _LI_Q _LI_WT") == []
     assert subset_violations("  unset -f lane_stack_allowed _li_reset") == []

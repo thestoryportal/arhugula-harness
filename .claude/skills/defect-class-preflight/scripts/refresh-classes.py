@@ -70,7 +70,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # No term here describes THIS TABLE, deliberately. Every phrasing tried for it
     # ("intake path", "intake pile", "classifies unrelated") reads just as naturally in
     # findings about ingestion endpoints and queue growth, and the narrowing never converged:
-    # four consecutive review rounds of one arc, each finding correct, each attacking the
+    # successive review rounds of one arc, each finding correct, each attacking the
     # phrase the last one added. A classifier cannot be widened to catch the complaint that
     # it is too wide. Findings ABOUT this table stay in the unmatched pile, where a human
     # reads them -- the prefer-to-miss policy stated above, applied to the table itself.
@@ -88,9 +88,10 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     ),
     # A sourced shell file mutating its caller's shell IS this class's concern in another
     # substrate, but no vocabulary for it survives here. `caller's shell` was tried and
-    # measured against the committed gate log: it matched 2 findings, one of them
+    # measured against the committed gate log: it matched a REAL finding in the opposite
     # (tools/hooks/lib.sh:144) about a caller's `set -e` propagating INTO a sourced file --
-    # the opposite direction -- for a precision of 1/2. Under this file's prefer-to-miss
+    # direction, so it STEALS from the intake pile. No count is quoted: the corpus only grows,
+    # so any precision figure is true at one anchor and false at the next. Under the prefer-to-miss
     # policy a term that steals a real finding from the intake pile does not earn its place.
     "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
