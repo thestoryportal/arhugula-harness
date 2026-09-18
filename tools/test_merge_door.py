@@ -2377,6 +2377,23 @@ def test_release_verb_refuses_a_lease_no_operator_has_adjudicated(door, monkeypa
     assert md.read_lease()["lease_token"] == lease["lease_token"]  # door still fenced
 
 
+# mutation-probe: delete the missing-merge_sha clause, or invert it to admit an empty sha
+# (merge-gate r2 witness lens: every other release test reaches this point via _step_vi,
+# which always sets merge_sha, so the clause had zero witness). Largely defensive in
+# production -- merge_sha is written at `gh pr view` confirmation, before any post-merge
+# block reason exists -- but it is a cited branch of the release gate's contract, and an
+# unwitnessed branch can be flipped permissive silently.
+def test_release_verb_refuses_when_the_reservation_records_no_merge_sha(door, monkeypatch):
+    fresh = _unblocked_successor()
+    _release_ground(monkeypatch)
+    # the §4(vi) flip WITHOUT the merge_sha it normally records alongside
+    rs.transition("pr-1", "merged", lane_id="A")
+    assert rs.current("pr-1")[1].get("merge_sha") is None
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]  # door still fenced
+
+
 # mutation-probe: drop the content-merge reconciliation (codex r1 P1 — a holder that dies
 # between mark_attempted and the merge returning reads as dead while the request is still
 # in flight, so freeing the door admits a SECOND concurrent merge)

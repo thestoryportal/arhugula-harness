@@ -1142,3 +1142,12 @@ handling; the item is void, not failed.
 Deviation recorded, unchanged from the previous round: the three lens prompts instantiate the
 skill-canonical templates inline with per-PR scrutiny lists rather than routing through a
 delegated `laws:prompt` author.
+| 2026-09-18T07:17:40Z | #1579 | 7fc00d36aa5b | merge-gate-concurrency | REVIEWER_UNAVAILABLE | 0 finding(s) | r1 |
+| 2026-09-18T07:17:40Z | #1579 | 7fc00d36aa5b | merge-gate-spec-conformance | REVIEWER_UNAVAILABLE | 0 finding(s) | r1 |
+| 2026-09-18T07:17:41Z | #1579 | 7fc00d36aa5b | merge-gate-witness-adequacy | REVIEWER_UNAVAILABLE | 0 finding(s) | r1 |
+| 2026-09-18T07:37:47Z | #1579 | 7fc00d36aa5b | merge-gate-concurrency | REVIEWER_UNAVAILABLE | 0 finding(s) | r2 |
+| 2026-09-18T07:37:47Z | #1579 | 7fc00d36aa5b | merge-gate-spec-conformance | REVIEWER_UNAVAILABLE | 0 finding(s) | r2 |
+| 2026-09-18T07:37:48Z | #1579 | 7fc00d36aa5b | merge-gate-witness-adequacy | REVIEWER_UNAVAILABLE | 0 finding(s) | r2 |
+| 2026-09-18T07:38:42Z | #1579 | 7fc00d36aa5b | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-09-18T07:38:42Z | #1579 | 7fc00d36aa5b | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-09-18T07:38:42Z | #1579 | 7fc00d36aa5b | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r3 |
