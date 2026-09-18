@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `dda87c237d3e` |
+| `workspace_state_hash` | `62e4d7670717` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `d84ba9fc` —  |
+| `git_head` | `cf8293e8` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1579).** The merge door's C-HE-06 §6 release is now reachable from the CLI (`merge_door.py release` / `just merge-door-release`), and C-HE-06 v1.8 X8 carves out the operator-confirmed release it needs: a landing whose own merge commit reds `main` previously had no exit, because step (vii) polls that merge SHA's own immutable run, `unblock` mints a successor rather than opening the door, and `gc` skips live leases. The gate admits only an unblock successor with neither of a landing's two merges outstanding and the merge commit's own default-branch run confirmed from ground truth as COMPLETED with a conclusion in C-HE-19 §1's `{FAILURE, CANCELLED}`; pending, absent, unreadable and green all refuse. The same arc swept the run-selection class to its live sibling: `wait_post_merge_ci` (step (vii), every landing) had taken `done[0]` with no branch filter, which `wait_pr_head_checks` had already been fixed for and never swept — both now read the shared `authoritative_runs`/`runs_are_settled`. THIS CLOSES ONLY PART (3) OF `B-253`: parts (1) the tiebreaker emitting a terminating refresh for its own landings and (2) step (vii) distinguishing a drift-only inherited red from this arc's own failure remain OPEN, and this session watched (2) wedge the door live on #1575. Next work, in order: file B-253's remaining parts against the now-unfenced `.harness/forward-register.yaml`; wire the operator's prose-findings-are-P3 directive into `merge-gate/SKILL.md`, which carries no mention of it despite a memory index claiming it does; and fix the C-HE-23 gate schema, which cannot express APPROVE-with-a-non-blocking-observation and so drops every prose finding from the structured record.
+**Current next action (post-#1583).** #1583 is the incident record for three landings made with bare `gh pr merge` instead of the C-HE-06 §4 door; it reddened `main` at `ba7f609b2` with `HARD ROADMAP_STATUS_DRIFT` (surfaced twice — the guard job and `test_codex_stop_gate.py::test_stop_gate_emits_valid_stop_hook_json`) and left two residues that are still open at this head. It was itself landed THROUGH the door, so its own reservation carries a real `merge_sha`. The named residue, verified at this head rather than carried from the filing: (1) reservation `lane-init-shell-portability` still reads `state: pending`, `merge_sha: null` at generation 123 against merged `d20190c807e0948bf4d3f24708668637cc44389e`, because the bypass skipped door step (vi) — flip it through the reservation CLI, never by hand-editing the shared store; (2) the `recently_completed` row for #1561 asserts it *"landed through the merge door"*, which is false, and the mechanical refresh does not rewrite prior rows, so the correction is an explicit edit; (3) **B-293**, the witness gap #1561 registered rather than closed — 9 of `tools/hooks/lane-init.sh`'s 14 refusal exits carry `return 1 2>/dev/null || exit 1` tails no fixture drives, and the read-only-`.harness` site is the one with a measured zero-env-var trigger; (4) **B-289/B-290/B-291** — the namespace scanner's lexical bound, the gate-log reducer's blindness to the legacy narrative row shape, and the absent forward-id allocator that caused two renumberings. One row is newly owed and not yet filed: **B-292 closed at #1585**, but its replacement skeleton line at `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md` references `_LI_SRC`, which the skeleton never assigns, so `${_LI_SRC:-$0}` always takes the `$0` arm and reproduces the cwd-relative resolution under a zsh without `FUNCTION_ARGZERO` — the same defect B-292 removed, in a new spelling; register it and close it doc-only, then B-293.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -44,7 +44,6 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1578 | `ops/gate-log-rows-post-1573` | — | — |
-| #1583 | `docs/merge-door-bypass-incident` | — | — |
 
 ---
 
@@ -52,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1583 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1579 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1585 | 2026-09-18 | #1585 closed B-292 (doc-only, verified on main). Generated AT the content merge tip 12143ce9 so the recorded git_head equals this refresh's own future merge parent. |
 | 1586 | 2026-09-18 | #1586 landed the post-#1584 refresh but recorded git_head=8795402f (its own first refresh commit) instead of f4c8f653 (the merge commit's parent), because the content was regenerated on the refresh branch after an amend rather than at the content merge tip. The PR went green and main's own run hard-failed ROADMAP_STATUS_DRIFT. This re-anchors at b2a4c9d2. |
 | 1584 | 2026-09-18 | #1584 landed the carved-out merge-door block row; the refresh lands as the IMMEDIATE next commit so the following content merge still has a verified refresh point as its parent. |
-| PR #1581 | 2026-09-18 | durable governance: prose findings are P3 and non-blocking; wired into merge-gate + defect-class-preflight |
 
 ---
 
