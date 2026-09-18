@@ -27,6 +27,8 @@ Mutation-reasoning table — each mutation and the test that MUST go red for it:
        fullmatches the WHOLE field against the canonical shape)
   16 a pack invents a § root never numbered     -> test_pack_sections_match_origin_header
        (claimed sections must be a subset of `root_sections()`)
+  17 root §N's pointer names the wrong pack      -> test_every_root_pointer_lands_on_the
+       _pack_that_owns_the_section — the original §7 defect reached from root's side
 
 Rows 11-12 were added 2026-09-17. Until then every assertion above compared pack FILENAMES,
 so `project-framing.md` could advertise a relocation of root §7 into a pack that has never
@@ -310,6 +312,47 @@ def test_venues_advertise_pack_section_list() -> None:
         assert claimed, f"{pack}: origin header claims nothing"
         for venue, advertised in venue_advertised_sections(pack).items():
             assert advertised == claimed, f"{venue} vs {pack}: {advertised} != {claimed}"
+
+
+def root_pointer_pairs() -> list[tuple[str, str]]:
+    """`(root section, pack it points at)` for every resolving pointer in root `CLAUDE.md`.
+
+    Root keeps each relocated section's heading and puts a pointer to the pack in its body,
+    so the pointer is the path a runner actually walks to reach the text.
+    """
+    body_by_section = re.findall(
+        r"^#{2,4} (\d+(?:\.\d+)*)\.? [^\n]*\n(.*?)(?=^#{2,4} \d|\Z)",
+        _read(ROOT_CLAUDE),
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    return [
+        (section, pack)
+        for section, body in body_by_section
+        for pack in sorted(set(PACK_RE.findall(body)))
+        if pack != "README.md"
+    ]
+
+
+def test_every_root_pointer_lands_on_the_pack_that_owns_the_section() -> None:
+    """Root §N's pointer must name the pack whose header claims §N.
+
+    The checks above bind pack-to-headings and venue-to-pack; this binds ROOT to pack, and
+    without it the original defect is still reachable from the other side. Repointing root
+    §7 from `skills-and-subphases.md` to `project-framing.md` left all thirteen other tests
+    green — both pack files exist, both headers stay self-consistent, all three venues stay
+    consistent — while an agent following root's own pointer lands on a pack with no §7
+    (codex r8).
+    """
+    pairs = root_pointer_pairs()
+    # Non-vacuity: a parse that silently matched nothing would pass an empty loop, which is
+    # the shape every other guard in this module carries an explicit floor against.
+    assert len(pairs) >= 20, f"root pointer parse found only {len(pairs)} pairs"
+    for section, pack in pairs:
+        claimed = pack_claimed_sections(pack)
+        assert section in claimed, (
+            f"root §{section} points at {pack}, which claims {sorted(claimed)} — a runner "
+            f"following that pointer lands on a pack without §{section}"
+        )
 
 
 def test_packs_declare_their_origin() -> None:
