@@ -1370,6 +1370,17 @@ _CLASS_WITNESSES = [
         "11 authority-bearing command surface",
         "the permission guard auto-allow admits every argument shape for this verb",
     ),
+    # class 17 — codex r6, test_governance_router.py:194 (the motivating row)
+    (
+        "17 validator reads a sub-span, accepts the rest unseen",
+        "The token regex validates only the character immediately after the numeric ID,"
+        " while _section_tokens never validates text following the final match",
+    ),
+    # class 17 — u-he-27, main_protection.py:211 (a different arc, different wording)
+    (
+        "17 validator reads a sub-span, accepts the rest unseen",
+        "Automatic rollback does not validate the DELETE result",
+    ),
 ]
 
 
@@ -1454,6 +1465,37 @@ _NEAR_MISSES = [
         " replaced with return 1",
     ),
 ]
+
+
+# Class 17 is a DISJUNCTION, so it has no conjuncts to balance — what it needs instead is
+# proof that the terms dropped on codex r7 stay dropped. Each row below matched the class
+# under the bare `only the first` / `unanchored` alternatives and is a different defect:
+# reading too MUCH rather than too little, and quadratic backtracking rather than coverage.
+_CLASS_17_REFUSED = [
+    # rtk_shape_guard.py:256 — over-reading an adjacent command, the opposite direction.
+    # Quoted far enough to INCLUDE the "only the first" clause that used to match: a
+    # shorter quote would not contain the dropped term and the case would pass whether the
+    # term was re-added or not, which is a vacuous witness (caught by probing this file).
+    "rewritten_at() treats any rtk grep word pair as a rewrite, even when it is merely"
+    " data in another segment. For grep foo file; printf %s rtk grep 'f(', only the first"
+    " command is rewritten, but judge() inspects the printf arguments",
+    # refresh-classes.py:73 — a performance finding, not a validation-coverage one
+    "The unanchored lookaheads are used with re.search, so every non-match retries both"
+    " whole-suffix scans at every character",
+]
+
+
+@pytest.mark.parametrize("evidence", _CLASS_17_REFUSED)
+def test_class_17_refuses_the_terms_dropped_for_precision(evidence: str):
+    """Re-adding `only the first` or `unanchored` to class 17 must red here.
+
+    Both alternatives were measured and dropped (codex r7): they classified defects of a
+    different kind, and a class-17 false positive REMOVES a row from the unmatched pile
+    that new classes are discovered in. Without this, reverting the narrowing is silent.
+    """
+    mod = _preflight_module()
+    cls = "17 validator reads a sub-span, accepts the rest unseen"
+    assert not mod.matches(mod.CLASSES[cls], evidence), evidence
 
 
 def test_near_miss_cases_each_satisfy_exactly_one_conjunct():

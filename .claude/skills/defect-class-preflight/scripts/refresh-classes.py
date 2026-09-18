@@ -269,10 +269,19 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     #
     # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
     # of these proves the wrong thing.
+    # LEFT OUT here, measured (codex r7): bare `only the first` and bare `unanchored`.
+    # Both matched defects of a different kind — `rtk_shape_guard.py:256` reads too MUCH
+    # (words from an adjacent command), and the `refresh-classes.py:73` row is quadratic
+    # backtracking, not validation coverage. Every term below names the validator/coverage
+    # relationship itself, so it cannot pick those up. Dropping the two costs one genuine
+    # row (`rtk_shape_guard.py:188`, "Only the first -e/--regexp value is examined") and
+    # that trade is deliberate: a false positive REMOVES a row from the unmatched pile
+    # where new classes are found, while a false negative leaves it sitting there. The
+    # failure modes are asymmetric, so precision wins.
     "17 validator reads a sub-span, accepts the rest unseen": (
-        r"only the first|ignores the (remainder|rest|trailing)"
+        r"ignores the (remainder|rest|trailing)"
         r"|after the (final|last) (token|match|element|entry)"
-        r"|unanchored|never validates|does not validate|validates only"
+        r"|never validates|does not validate|validates only"
     ),
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
