@@ -150,12 +150,20 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         # that named two of the FOUR rows `--open` actually emits. Both are checkable facts in
         # durable prose that were wrong — class 2's subject exactly; only its vocabulary missed
         # the phrasing, which is the "unfired" repair, not a new class.
-        # MEASURED: these two terms add 5 rows and no more (adding `omits` would have added 84).
-        # Sampled, the 5 are homogeneous — a recipe that cannot record what its surrounding text
-        # claims, a PR body whose header contradicts its next sentence, a findings column reading
-        # "1 P3" where the row describes two, and the arc's own two.
+        # ONLY `identifies only` survives, and it is SEMANTICALLY BOUNDED: "identifies only X"
+        # is inherently a claim about a RECORD's completeness. Its 3 added rows are all that
+        # shape (a recipe that cannot record what its surrounding text claims; the marker and
+        # the plan each naming two of the four actionable rows).
+        #
+        # `,\s*not\s+\d` was added beside it and REMOVED one round later (codex r5). Its 3
+        # corpus rows were genuine, but the term matches ANY numeric contrast — "The API returns
+        # 1, not 2." classified as class 2 under it. The mistake was treating BREADTH on the
+        # current corpus as PRECISION: a corpus that happens not to contain a phrasing does not
+        # exclude it, and this table is read against findings that do not exist yet. `omits` was
+        # measured and rejected the same round at +84. n:1 of the class-2 witness pins the
+        # removal.
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
-        r"|identifies only|,\s*not\s+\d"
+        r"|identifies only"
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"

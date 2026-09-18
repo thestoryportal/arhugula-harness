@@ -212,12 +212,19 @@ skill.)
 
 The class also covers a record that **contradicts its own evidence**: a review audit stating
 finding counts the gate log's own `round_n` refutes, or a cleared marker naming two of the four
-rows `--open` actually emits (both U-HE-45, 2026-09-18). Both went UNMATCHED until `identifies
-only` and `, not <digits>` were added — the class already owned the shape and only its vocabulary
-missed the phrasing, which is the "unfired" repair rather than a new class. The added terms are
-deliberately narrow: +5 corpus rows, where `omits` was measured and rejected at +84, because a
-class that claims a third of the corpus stops discriminating and a false match silences the
-intake line an unmatched finding owes.
+rows `--open` actually emits (both U-HE-45, 2026-09-18). The frontier one went UNMATCHED until `identifies only` was
+added — the class already owned the shape and only its vocabulary missed the phrasing, which is
+the "unfired" repair rather than a new class. That term is SEMANTICALLY BOUNDED: "identifies only
+X" is inherently a claim about a record's completeness.
+
+A second term, `, not <digits>`, was added beside it and **removed one round later**. Its corpus
+rows were genuine, but it matches any numeric contrast — "The API returns 1, not 2." classified as
+class 2 under it. The mistake is worth naming because it is subtle: I measured BREADTH on the
+current corpus (+3 rows, all good) and treated that as PRECISION. A corpus that happens not to
+contain a phrasing does not exclude it, and this table is read against findings that do not exist
+yet. `omits` was measured and rejected the same round at +84. The count-conflict shape it was
+meant to catch therefore stays in the intake pile, which is the right place for a shape whose
+vocabulary is unbounded.
 
 **Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
 ASSERTING a mechanism behaviour the code does not have (never true), as against the drift

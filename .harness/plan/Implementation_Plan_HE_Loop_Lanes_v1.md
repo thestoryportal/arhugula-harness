@@ -7782,8 +7782,10 @@ deliberate:
   so ticking a combined step whose second half is undone would record a required deliverable as
   complete (out-of-family review caught exactly that in this record's first draft). `B-288`
   records why: `hook_roadmap_next` (`tools/hooks/lib.sh:286-292`) accepts five carriers and every
-  one names a unit (`U-*`/`R-*`) or a plan doc, while this arc's actionable frontier is `B-285`/
-  `B-286` — `B-*` rows the parser cannot express. Out-of-family review raised the pointer on FOUR
+  one names a unit (`U-*`/`R-*`) or a plan doc, while this arc's actionable frontier is FOUR
+  register rows — `B-285`, `B-286`, `B-287` and `B-288`, each `registered_finding` with empty
+  `depends_on`, so `OPEN_STATUSES` admits all four and `--open` emits all four — `B-*` rows the
+  parser cannot see.
   consecutive rounds and each rewording only moved which BLOCKED thing was named (U-HE-45 just
   completed → held U-HE-40 → the plan doc whose only remaining S7 work is that same held unit).
   Registered rather than reworded a fifth time, and `roadmap_status.md` landed byte-identical to

@@ -57,24 +57,29 @@ def test_class_2_claims_a_record_contradicts_its_own_evidence():
     # discriminating, and a false match silences the intake line an unmatched finding owes.
     rows = [
         {
-            "finding_id": "c:1",
-            "observed_evidence": "The review audit conflicts with the durable gate log: rounds"
-            " 1-5 contain 2/3/3/2/1 findings (11 total), not 2/2/3/2/1 (10 total).",
-            "location": ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:7793",
-        },
-        {
             "finding_id": "c:2",
             "observed_evidence": "This identifies only B-285/B-286 as the actionable frontier,"
             " but B-287 and B-288 also have status registered_finding and empty dependencies.",
             "location": ".harness/clearance/x-cleared-2026-09-18.md:46",
         },
     ]
-    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    # n:1 is codex r5's counterexample and the reason `,\s*not\s+\d` was REMOVED after one
+    # round: an ordinary numeric contrast is not a prose-drift finding, and a false match
+    # silences the intake line an unmatched finding owes. Re-add that alternative and this
+    # case goes green.
+    not_prose = [
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "The API returns 1, not 2.",
+            "location": "harness-cp/src/harness_cp/x.py:10",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows + not_prose)).stdout)
+    name = "2 prose stale / counts / cites"
     for row in rows:
-        assert "2 prose stale / counts / cites" in out[row["finding_id"]], (
-            row["finding_id"],
-            out[row["finding_id"]],
-        )
+        assert name in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+    for row in not_prose:
+        assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
 
 
 def test_bare_drift_is_not_class_2_vocabulary():
