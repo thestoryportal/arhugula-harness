@@ -17,7 +17,7 @@
 #   * the lane index is claimed by EXCLUSIVE CREATE of `QUEUE_DIR/lanes/<k>` and released
 #     by `safe-worktree-remove.sh` at teardown. A worktree that already holds an entry
 #     REUSES it: two entries for one path would strand whichever the release missed.
-#   * `_LI_*` is this file's OWN namespace, never caller storage, and it has two disposals.
+#   * `_LI_*` is this file's OWN namespace, never caller storage, and it has three disposals.
 #     `_LI_SRC`, `_LI_ROOT`, `_LI_Q`, `_LI_WT` are cleared unconditionally at every exit --
 #     true as of this change and NOT true before it, when the stale-repair-lock and
 #     no-free-index branches cleared none of them. `_LI_ORPHAN_DIR` is different: it is the
@@ -27,7 +27,17 @@
 #     to completion. Both dispositions fall out of position rather than bookkeeping: every
 #     refusal exit sits above the lines that define them, so a refusal leaves them absent
 #     without any exit having to remember. Doing that per-exit is what failed -- the fix
-#     reached 1 of 12 exits (codex r9 P3; merge-gate concurrency lens r2). Save/restore was proposed and refused: it would make one member behave unlike
+#     reached 1 of 12 exits (codex r9 P3; merge-gate concurrency lens r2).
+#     `_LI_ID` is the third, and it is LIFETIME-SCOPED rather than unconditional: it exists
+#     only between its assignment and the two lines that clear it (both arms of the one
+#     statement that sets it), so every exit above that point has nothing to clear and clears
+#     nothing. The consequence, measured in both shells and stated because the absolute above
+#     would otherwise read as covering it: a caller that had `_LI_ID` set before sourcing
+#     still has it after a refusal that exits early. That is a narrower guarantee than the
+#     other four carry, and it is deliberate -- widening it would mean adding the name to
+#     every exit, which is the hand-maintained list this file's static checker exists to
+#     refuse. Callers do not read `_LI_ID`; `HARNESS_LANE_ID` is the exported surface
+#     (merge-gate spec-conformance lens r11 P2/P3). Save/restore was proposed and refused: it would make one member behave unlike
 #     its siblings, and its caller-had-a-value arm is a two-armed restore no real caller
 #     reaches. Anything keeping state in `_LI_*` already collides with three variables.
 #   * a RAM shortfall is ENVIRONMENTAL. It is reported as a NOTIFY under a `lane-env:`
@@ -172,8 +182,10 @@ esac
 #      DIRECTLY instead is not contained -- measured. Nothing else is claimed here: a piped call
 #      site was asserted to be hazardous in an earlier revision and is NOT (zsh runs the
 #      left-hand component in a subshell, so a pipe contains it exactly as `$( )` does, also
-#      measured). Three earlier revisions of this block each named a hazard that had not been
-#      probed, so this one names only what was.
+#      measured). Every earlier revision of this block named a hazard that had not been probed,
+#      so this one names only what was -- and no count of them is given here, because the
+#      first count written into this sentence was itself unverified and disagreed with the
+#      paragraph above it (merge-gate spec-conformance lens r11 P3).
 # `(N)` is zsh's per-pattern NULL_GLOB qualifier, reached through `eval` so bash never parses it
 # -- the same guard shape the root resolution above uses. It is deliberately NOT `setopt
 # NULL_GLOB`: this file is SOURCED, and that would change every later unmatched glob in the

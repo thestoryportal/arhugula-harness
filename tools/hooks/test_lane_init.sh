@@ -1188,10 +1188,10 @@ done
 # drive ../escape ("must be an integer 0..349"), 00 ("must be canonical (no leading zeros)")
 # and 400 ("must be < 350") -- named by their refusal text, not by line, because this arc's own
 # insertions above them have already invalidated one set of line cites; the
-# ARC_METRICS_QUEUE_DIR case that follows drives the relative-path refusal (lane-init.sh:141). NO CLAIM IS
+# ARC_METRICS_QUEUE_DIR case that follows drives the relative-path refusal (lane-init.sh:151). NO CLAIM IS
 # MADE HERE ABOUT COMPLETENESS. Three successive rounds each wrote a bound over this set and each
 # was falsified by execution in the next -- r6 named a fixed pair, r7 replaced that with "every
-# refusal reachable with nothing but an environment variable", and r8 falsified THAT with lane-init.sh:141.
+# refusal reachable with nothing but an environment variable", and r8 falsified THAT with lane-init.sh:151.
 # A bound is a second copy of the list below, and second copies drift. The list is the coverage;
 # a new externally-reachable refusal is covered when it appears here, and not before.
 # The r6 absorption drove only the first index, and a bare `return 1` at either of the other two
@@ -1247,13 +1247,13 @@ printf 'rc2=%s' \"\$?\"")
     || bad "$SH: whitespace/glob queue path broke reuse-detection: '$WS' (want rc2=1 claims=1)"
 done
 
-# The relative-ARC_METRICS_QUEUE_DIR refusal (lane-init.sh:141). It needs its own case rather than another
+# The relative-ARC_METRICS_QUEUE_DIR refusal (lane-init.sh:151). It needs its own case rather than another
 # index in the loop above, because it is reached through a DIFFERENT environment variable -- which
 # is exactly why the r7 bound missed it: that bound generalised over the loop's variable, not over
 # the refusals.
 #
 # This case asserts the REFUSAL COUNT, not rc, and that is the whole point. Measured: with a bare
-# `return 1` at lane-init.sh:141 the executed run still exits 1, because a LATER refusal catches it -- so an
+# `return 1` at lane-init.sh:151 the executed run still exits 1, because a LATER refusal catches it -- so an
 # rc-only assertion passes either way and witnesses nothing. What the defect actually does is walk
 # PAST its own refusal, and that is observable: clean code emits exactly one `lane-init:` line,
 # the mutant emits two (its own, then `return: can only return from a function or sourced
@@ -1294,12 +1294,14 @@ printf 'orphan=%s fn=%s' \"\${_LI_ORPHAN_DIR:+set}\" \"\$(type lane_stack_allowe
     || bad "$SH: refusal left the prior lane callable: $STALE_FN"
 done
 
-# `_LI_ORPHAN_DIR` is the fifth member of this namespace and the one documented exception:
+# `_LI_ORPHAN_DIR` is the one documented exception in this namespace:
 # `lane_stack_allowed` reads it after sourcing returns, so it MUST survive a successful init.
-# The leak cases above enumerate four names and therefore cannot see it either way -- which
-# is exactly how the header came to claim that all of `_LI_*` is cleared. Pinned in both
-# directions here: it must survive success, and it must not be the reason a refusal looks
-# clean. (codex r9 P3.)
+# The leak cases above no longer enumerate names -- they scan the namespace and subtract this
+# one by an anchored `grep -v`, so it is invisible to them BY EXCLUSION, where it used to be
+# invisible by omission from a four-name list. That is a better reason but the same blind
+# spot, so the exception is pinned in both directions here: it must survive success, and it
+# must not be the reason a refusal looks clean. (codex r9 P3; merge-gate spec-conformance
+# lens r11 P3.)
 for SH in $SHELLS; do
   ORPH=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
 printf 'rc=%s orphan=%s' \"\$?\" \"\${_LI_ORPHAN_DIR:+set}\"")
@@ -1308,15 +1310,26 @@ printf 'rc=%s orphan=%s' \"\$?\" \"\${_LI_ORPHAN_DIR:+set}\"")
     || bad "$SH: _LI_ORPHAN_DIR disposition wrong: '$ORPH' (lane_stack_allowed would break)"
 done
 
-# The namespace contract covers every exit, so pin the REFUSAL path too, with all four
-# reserved names pre-set. The success case below enters from a freshly unset shell and so
-# cannot see a member the refusal forgets; this one can. (codex r6 P3.)
+# The unconditional half of the namespace contract covers every exit, so pin the REFUSAL path
+# too, with those names pre-set. The success case below enters from a freshly unset shell and
+# so cannot see a member the refusal forgets; this one can. (codex r6 P3.)
+#
+# `_LI_ID` is deliberately NOT among them, and the omission is the contract rather than an
+# oversight: it is the lifetime-scoped disposal described in lane-init.sh's header, cleared
+# only on the two arms of the statement that sets it, so a refusal exiting above that point
+# leaves a caller's pre-existing value standing. Measured against unmutated code at this head:
+# adding `_LI_ID=e` to the fixture below yields PASS=160 FAIL=2, reddening in BOTH shells.
+# The observation is a scan, so it would see the name; what bounds this case is what it
+# SEEDS. Widening the seed means widening the code to clear the name at every exit -- the
+# hand-maintained list tools/test_lane_init_namespace.py exists to refuse -- so the narrower
+# guarantee is stated here and in the header instead of being asserted away.
+# (merge-gate spec-conformance lens r11 P2.)
 for SH in $SHELLS; do
   REFUSED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=a _LI_ROOT=b _LI_Q=c _LI_WT=d
 source '$DETACHED' >/dev/null 2>&1
 set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ' '")
   [ -z "$REFUSED" ] \
-    && ok "$SH: a refused init clears the whole _LI_* namespace, not just what it had set" \
+    && ok "$SH: a refused init clears every unconditional _LI_* name, not just what it set" \
     || bad "$SH: refusal left reserved names defined: $REFUSED"
 done
 
