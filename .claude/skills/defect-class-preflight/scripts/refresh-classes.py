@@ -101,7 +101,8 @@ from pathlib import Path
 # decide what to do next still naming what was just finished (6-8 corpus rows: Step-5-
 # executed-but-plan-still-unticked, fence-live-but-roadmap_status-still-says, decisions-
 # ratified-but-version-summary-still-open). It is NOT a class because the vocabulary cannot
-# carry it, measured over three review rounds, each trading one imprecision for another:
+# carry it, measured over three review rounds -- r2, r3 and r5 of that arc, NOT three
+# consecutive ones (r4's findings were elsewhere) -- each trading one imprecision for another:
 #   (a) `(?:never|not |un)refreshe?` gave the `never` arm no separator, so it demanded
 #       "neverrefresh" and missed the plainest wording. It hid because the arc's own finding
 #       matched a DIFFERENT arm — a masked alternative is invisible until a row needs only it.

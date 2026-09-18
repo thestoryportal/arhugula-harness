@@ -7790,12 +7790,17 @@ deliberate:
   main. Note the sketch's own suggested paragraph carries NONE of the five carriers and would
   itself have returned empty.
 
-**Review.** codex rounds r1–r6 (r1–r5 BLOCK with 2/2/3/2/1 findings, r6 APPROVE) plus one
-fresh-context witness lens (APPROVE) — 10 findings, all accepted and adjudicated on the gate
-log. Round 5's finding was resolved by SUBTRACTION rather than the constraint proposed: preflight
-class 17, added during this arc's own r2 absorption, was removed at r5 (net −55 lines) once three
-consecutive rounds had landed on it, and the shape is recorded as an evaluated-and-LEFT-OUT
-vocabulary in both carriers. Residual: `phases` were never recorded on this arc's reservation, so
+**Review.** codex rounds r1–r6 (r1–r5 BLOCK with **2/3/3/2/1** findings, r6 APPROVE) plus one
+fresh-context witness lens (APPROVE) — **11** findings, all accepted and adjudicated on the gate
+log; the counts here are read from the gate log's own `round_n` field, an earlier draft of this
+line having claimed 2/2/3/2/1 and 10 from memory. Round 5's finding was resolved by SUBTRACTION
+rather than the constraint proposed: preflight class 17, added during this arc's own r2
+absorption, was removed at r5 (net −55 lines). Its findings fell in rounds **2, 3 and 5 — three
+rounds, NOT three consecutive ones**: r4's two findings were the roadmap pointer and the `#TBD`
+closure citations. So the two-consecutive-rounds trigger actually fired at **r3**, where the row
+was fixed instead of withdrawn, and r5 is where the accumulated evidence was finally acted on —
+the subtraction was overdue rather than premature. The shape is recorded as an
+evaluated-and-LEFT-OUT vocabulary in both carriers. Residual: `phases` were never recorded on this arc's reservation, so
 its C-HE-27 timing spans do not exist.
 
 - [ ] **Step 1–2:** add rows; run `uv run python tools/roadmap_status_refresh.py --next-action "<one paragraph: 'Execute Implementation_Plan_HE_Loop_Lanes_v1 §2 in topological order starting at U-HE-01 (finding record) — S1/S2 roots; Phase 0 = U-HE-01..33 gates N ≥ 2.'>"` as part of the doc-only PR's terminating refresh (CLAUDE.md §12.2.1).

@@ -494,8 +494,9 @@ operator decisions ratified, but the same plan's current version summary at line
 they are open"*.
 
 **It is not a class, because the vocabulary cannot carry it.** It shipped as class 17 on the
-U-HE-45 arc and was subtracted three review rounds later, each round having traded one
-imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
+U-HE-45 arc and was subtracted at that arc's round 5. Its findings fell in rounds 2, 3 and 5 —
+three rounds, not three consecutive ones — so the two-consecutive trigger fired at r3, where it
+was fixed rather than withdrawn; each round traded one imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
 missed the plainest wording, hiding behind a different arm the arc's own finding happened to
 match; `just completed` / `already landed` need not describe the pointer, so *"The live pointer
 just completed validation successfully"* matched while reporting no staleness; and

@@ -339,9 +339,15 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
 
 
 def test_record_field_vs_body_is_not_class_vocabulary():
-    # U-HE-45's plan-record arc shipped this shape as class 18 and SUBTRACTED it after three
-    # rounds; the ALSO-evaluated-and-LEFT-OUT note above CLASSES carries the measurements. This
-    # pins the subtraction so the row cannot creep back without a decision.
+    # U-HE-45's plan-record arc shipped this shape as class 18 and SUBTRACTED it after two
+    # consecutive rounds landed on it (that arc's r2 and r3); the ALSO-evaluated-and-LEFT-OUT
+    # note above CLASSES carries the measurements.
+    #
+    # WHAT THIS TEST IS AND IS NOT (codex r4 P3): the bound diff adds class 18 and removes it
+    # again, so `CLASSES` is behaviourally IDENTICAL to base and this test passes with the
+    # classifier edits reverted. It therefore does NOT witness a delta in this diff — it is
+    # coverage of pre-existing behaviour whose job is to make a FUTURE re-addition go red.
+    # Calling it a subtraction witness would be the overclaim class 4 is about.
     #
     # p:1/p:2 are the genuine members and they STAY in the intake pile, which is the right place
     # for a shape whose vocabulary was measured unable to carry it. n:1/n:2 are the two false
