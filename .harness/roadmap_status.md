@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d11654c65115` |
+| `workspace_state_hash` | `403555919559` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `8795402f` —  |
+| `git_head` | `b2a4c9d2` — re-anchored: #1586 recorded its own first refresh commit, not the content merge tip |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -47,7 +47,6 @@
 | #1579 | `feat/merge-door-release-verb` | — | — |
 | #1583 | `docs/merge-door-bypass-incident` | — | — |
 | #1585 | `fix/b-292-plan-skeleton-sourced-root` | — | — |
-| #1586 | `ops/roadmap-refresh-post-1584` | — | — |
 
 ---
 
@@ -55,11 +54,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1586 | 2026-09-18 | #1586 landed the post-#1584 refresh but recorded git_head=8795402f (its own first refresh commit) instead of f4c8f653 (the merge commit's parent), because the content was regenerated on the refresh branch after an amend rather than at the content merge tip. The PR went green and main's own run hard-failed ROADMAP_STATUS_DRIFT. This re-anchors at b2a4c9d2. |
 | 1584 | 2026-09-18 | #1584 landed the carved-out merge-door block row; the refresh lands as the IMMEDIATE next commit so the following content merge still has a verified refresh point as its parent. |
 | PR #1581 | 2026-09-18 | durable governance: prose findings are P3 and non-blocking; wired into merge-gate + defect-class-preflight |
 | PR #1575 | 2026-09-18 | U-HE-45 as-built plan record + clearance marker (sibling lane) |
 | PR #1561 | 2026-09-18 | lane-init zsh portability: fixed a real rc=126 half-built-lane defect on a fresh empty registry and a claim-invisibility regression; 14 merge-gate rounds |
-| PR #1576 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
