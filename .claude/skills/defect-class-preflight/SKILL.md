@@ -454,45 +454,33 @@ what else is in the diff: a real amendment carries the spec/plan change (or a fi
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
 
-### 18. A record's field contradicts its own body (added U-HE-45's plan-record arc; 4 rows at the 2,230-finding log)
+### Vocabulary evaluated and LEFT OUT — "a record's field contradicts its own body" (2026-09-18)
 
-*(The number 17 is retired, not skipped: it carried the "owed pointer refresh" class on this
-same arc and was withdrawn three rounds later — the LEFT OUT note below records why, and
-three durable records already cite "class 17" meaning that shape.)*
+The shape is real and has **two measured instances one arc apart**. `B-282` shipped
+`status: open` while its own summary said U-HE-40 is HELD — and `OPEN_STATUSES` includes `open`
+and excludes `held`, so `--open` counted a row its author had described as blocked. One arc later
+a U-HE-45 plan tick marked a **combined** step `[x]` while the paragraph beneath it said half that
+step was never performed, against a convention defining a checked box as "carried out". Four
+corpus rows carry it. Re-reading the prose catches neither: both are visible only by asking *what
+does the consumer do with this field?*
 
-The prose and the machine-read field of one record disagree, and **the consumer trusts the
-field.** `B-282` shipped as `status: open` while its own summary said U-HE-40 is HELD and
-U-HE-41 not startable — and `forward_register.py`'s `OPEN_STATUSES` includes `open` and excludes
-`held`, so `--open` counted a row its author had described as blocked. One arc later the same
-shape appeared one surface over: a U-HE-45 plan tick marked a **combined** step `[x]` while the
-paragraph directly beneath it said half that step was never performed, against a convention that
-defines a checked box as "the step was carried out".
+**It is not a class, because the vocabulary cannot tell prose that DESCRIBES a field from prose
+that SETS one.** Three review rounds, each trading one imprecision for another: two independent
+tuple patterns matched across *sentences*, fixed with class 16's window; the same terms then
+matched unrelated text *within* one sentence ("The status field is parsed correctly even though a
+missing verdict file makes the unrelated hook fail"), which no window can separate; and `mark`
+without a word boundary matched inside `benchmarks`. The middle one is terminal — the same wall
+the owed-pointer vocabulary hit, one floor down: the distinction is **semantic**, not lexical.
 
-Re-reading the prose catches neither. Both are visible only by asking *what does the consumer do
-with this field?* — which is why this is its own class and not an instance of class 2: a stale
-count DRIFTS from a fact over time, while this is a record that was internally inconsistent the
-moment it was written.
+The asymmetry that decides it, as ever: a false match is worse than `unmatched`, because
+unmatched OWES an intake line while a match silences it. An arm that cannot separate those two
+readings actively hides the new classes this table exists to surface.
 
-**Question:** *for every status, disposition or checkbox this diff sets — does the body of that
-same record agree with it, and which consumer reads the field rather than the body?* Name the
-consumer. `--open`, a tick-count derivation and a reducer all read fields; none read paragraphs.
-
-The measurement is the point, and it took two passes. A lone `even though|contradicts`
-alternation took **130 of 2,230** corpus rows, nearly all ordinary contradictions with no record
-field in them. Requiring a status/marker term as well took it to four — but as two INDEPENDENT
-patterns those terms matched across *different sentences*, so "The status field is parsed
-correctly. The hook still fails even though …" classified as this class while describing nothing
-of the kind (out-of-family review, round 2). The row is therefore ONE pattern with class 16's
-same-sentence window, and the field arm matches the field-SETTING phrase ("marks X complete"),
-not an incidental mention: fixing that arm collapsed every member to a gap of 1–2 characters in
-one direction, which is what makes a tight window possible. The `{0,24}` cap is derived — widest
-real gap 2, and 24 excludes the 43-char gap of the review finding that matches only by quoting
-the vocabulary it criticises. Four rows, homogeneous. A false match is worse than `unmatched`,
-because unmatched OWES an intake line and a match silences it.
-
-*"The prose explains the nuance"* is the sentence to distrust. It may well explain it to a human;
-the field is what the tooling acts on, so a record whose field overclaims is wrong regardless of
-how careful the paragraph under it is. Fix the field, or leave it unset and say why.
+**Sweep it by hand, because the question is still worth asking:** *for every status, disposition
+or checkbox this diff SETS — does the body of that same record agree with it, and which consumer
+reads the field rather than the body?* Name the consumer. `--open`, a tick-count derivation and a
+reducer all read fields; none read paragraphs. *"The prose explains the nuance"* is the sentence
+to distrust: it may explain it to a human, but the field is what the tooling acts on.
 
 ### Vocabulary evaluated and LEFT OUT — "the owed pointer refresh" (2026-09-18)
 

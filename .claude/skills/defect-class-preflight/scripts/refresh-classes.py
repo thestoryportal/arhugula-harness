@@ -117,6 +117,27 @@ from pathlib import Path
 # defect this shape named on that arc is registered as B-288 instead, where prose can carry
 # the polarity a regex cannot. Note also that tools/test_governance_router.py already
 # forward-references "class 17" for the sub-span shape, so the number was spoken for.
+# ALSO evaluated and LEFT OUT: a "record field contradicts its own body" class (U-HE-45's
+# plan-record arc, 2026-09-18). The SHAPE is real and has two measured instances one arc apart:
+# `B-282` shipped `status: open` while its own summary said U-HE-40 is HELD (and OPEN_STATUSES
+# excludes `held`, so `--open` counted a blocked row as executable), and a U-HE-45 plan tick
+# marked a COMBINED step `[x]` while the paragraph beneath it said half that step was never
+# performed. Four corpus rows carry it. It is NOT a class because the vocabulary cannot
+# distinguish prose that DESCRIBES a field from prose that SETS one, and three review rounds
+# each traded one imprecision for another:
+#   (a) two independent tuple patterns matched across SENTENCES ("The status field is parsed
+#       correctly. The hook still fails even though ..."), fixed with class 16's window;
+#   (b) the same terms then matched unrelated text WITHIN one sentence ("The status field is
+#       parsed correctly even though a missing verdict file makes the unrelated hook fail") --
+#       no window can separate those;
+#   (c) `mark` without a word boundary matched inside `benchmarks` ("The benchmarks remain open
+#       even though the sample size is small").
+# (b) is the terminal one, and it is the wall the withdrawn owed-pointer class hit too: the
+# distinction is SEMANTIC, not lexical. A false match is worse than `unmatched` -- unmatched
+# OWES an intake line, a false match silences it -- so an arm that cannot tell "describes a
+# field" from "sets a field" actively hides the new classes this table exists to surface.
+# Sweep the shape BY HAND: for every status, disposition or checkbox a diff SETS, does the body
+# of that same record agree, and which consumer reads the field rather than the body?
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -311,50 +332,6 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # of these proves the wrong thing.
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
-    ),
-    # Added U-HE-45's plan-record arc. A record's MACHINE-READ field contradicts its own
-    # prose, and the consumer trusts the field. `B-282` was `status: open` while its own
-    # summary said U-HE-40 is HELD, so `--open` counted it as executable work; the U-HE-45
-    # plan tick marked a COMBINED step `[x]` while the paragraph beneath it said half that
-    # step was never performed, and the plan's convention defines a checked box as "carried
-    # out". Re-reading the prose catches NEITHER: both are visible only by asking what the
-    # CONSUMER does with the field.
-    #
-    # CONJUNCTIVE, and measured BEFORE proposing (the lesson of the class that used to sit
-    # at this number): a lone `even though|contradicts` alternation took 130 of 2,230 corpus
-    # rows, nearly all ordinary contradictions with no record field in sight. Requiring a
-    # status/marker term AND a contradiction term takes it to FOUR, homogeneous — B-201 and
-    # B-266 "marked closed even though ...", B-282 "marked `open` even though ...", and the
-    # plan tick. A false match is worse than `unmatched`: unmatched OWES an intake line.
-    # NOTE: the number 17 is RETIRED, not free. It carried the "owed pointer refresh" class
-    # on this same arc and was withdrawn three rounds later (see the ALSO-evaluated-and-
-    # LEFT-OUT note above), and three durable records — this arc's clearance marker, the
-    # plan's as-built paragraph, and test_owed_pointer_refresh_is_not_class_vocabulary —
-    # already say "class 17" meaning THAT shape. Reusing the number would make all three
-    # cite the wrong concept, so this class takes 18. The parity test compares SETS of
-    # numbers, so the gap is legal.
-    "18 record field contradicts its own body": (
-        # ONE pattern, not a tuple of two: codex r2 showed independent conjuncts match across
-        # SENTENCES, so "The status field is parsed correctly. The hook still fails even though
-        # ..." classified as this class while describing no field/body contradiction at all.
-        # Same window technique class 16 uses and for the same reason — `(?:[^.!?]|[.!?]\S)`
-        # stays inside one sentence while still crossing a `B-282.` style token, because a
-        # sentence end is a terminator followed by SPACE.
-        #
-        # The FIELD arm matches the field-SETTING phrase, including "marks X complete": the
-        # first draft's `marked?\s+` could not cross the "s" of "marks", so the plan-tick row
-        # matched only via an incidental `checked box` mention 136 chars away in the reverse
-        # direction. Fixing the arm collapsed every genuine member to gap 1-2 in ONE direction,
-        # which is what makes a tight window possible at all.
-        #
-        # The {0,24} cap is DERIVED, not eyeballed: the widest gap among the four measured
-        # members is 2, and 24 leaves room for ordinary phrasing ("is marked as closed, even
-        # though") while excluding the 43-char gap of codex's own r2 finding, which matches only
-        # because it QUOTES the vocabulary it criticises — self-referential, not a member.
-        r"(?:mark(?:s|ed)?\s+(?:the\s+)?[^.!?]{0,40}?\b(?:open|closed|held|complete)\b"
-        r"|checked box|status field|\[x\])"
-        r"(?:[^.!?]|[.!?]\S){0,24}"
-        r"(?:even though|contradicts|while (?:its|the)\s+(?:own\s+)?(?:summary|status|body))"
     ),
 }
 

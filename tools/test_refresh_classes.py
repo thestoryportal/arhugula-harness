@@ -338,16 +338,17 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
 
 
-def test_class_18_needs_both_a_record_field_and_a_contradiction():
-    # Added U-HE-45's plan-record arc. The defect: a record's MACHINE-READ field contradicts
-    # its own prose and the consumer trusts the field. Asserted through the `classify` verb
-    # ([LAW:behavior-not-structure]).
+def test_record_field_vs_body_is_not_class_vocabulary():
+    # U-HE-45's plan-record arc shipped this shape as class 18 and SUBTRACTED it after three
+    # rounds; the ALSO-evaluated-and-LEFT-OUT note above CLASSES carries the measurements. This
+    # pins the subtraction so the row cannot creep back without a decision.
     #
-    # CONJUNCTIVE by measurement, not taste. A lone `even though|contradicts` alternation took
-    # 130 of 2,230 corpus rows — n:1 and n:2 are two of those, and they are what the second
-    # conjunct exists to refuse. Drop either pattern and this test goes red on them.
-    contradicting = [
-        # p:1/p:2/p:3 are the measured members, quoted from their corpus rows.
+    # p:1/p:2 are the genuine members and they STAY in the intake pile, which is the right place
+    # for a shape whose vocabulary was measured unable to carry it. n:1/n:2 are the two false
+    # positives that killed it: both keep a field term and a contradiction term in ONE sentence
+    # while describing nothing of the kind, so no window separates them — and n:2 additionally
+    # shows `mark` matching inside `benchmarks`. If anyone re-adds the row, these are what go red.
+    rows = [
         {
             "finding_id": "p:1",
             "observed_evidence": "B-282 is marked `open` even though its own summary says"
@@ -356,54 +357,25 @@ def test_class_18_needs_both_a_record_field_and_a_contradiction():
         },
         {
             "finding_id": "p:2",
-            "observed_evidence": "B-201 is marked closed even though exhausted retries and"
-            " unwritable configuration still make lanes unsafe.",
-            "location": ".harness/forward-register.yaml:10322",
-        },
-        # p:3 fires on `checked box`, NOT on "marks ... complete" — `marked?\s+` cannot cross
-        # the "s" of "marks". The quote must therefore keep the convention clause; an earlier
-        # paraphrase of this row dropped it and the case failed while the real row passed,
-        # which is why the evidence here is the stored text rather than a summary of it.
-        {
-            "finding_id": "p:3",
             "observed_evidence": "This marks the combined Step 1-2 complete even though the"
-            " status says its required --next-action half was NOT performed, while lines"
-            " 7758-7759 define a checked box as meaning the step was carried out.",
+            " status says its required half was NOT performed.",
             "location": ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:7798",
         },
-    ]
-    not_contradicting = [
-        # n:1 — an ordinary contradiction with no record field in sight: one of the 130.
         {
             "finding_id": "n:1",
-            "observed_evidence": "The emit protocol catches only GateLogError even though a"
-            " missing verdict file also fails the binding command.",
+            "observed_evidence": "The status field is parsed correctly even though a missing"
+            " verdict file makes the unrelated hook fail.",
             "location": "tools/merge_gate_log.py:347",
         },
-        # n:3 — codex r2's counterexample, and the reason this row is ONE pattern with a
-        # same-sentence window rather than two independent conjuncts: the field term and the
-        # contradiction term sit in DIFFERENT sentences and describe unrelated things. Replace
-        # the window with a plain tuple of two patterns and this case goes green.
-        {
-            "finding_id": "n:3",
-            "observed_evidence": "The status field is parsed correctly. The hook still fails"
-            " even though a missing verdict file is recoverable.",
-            "location": "tools/merge_gate_log.py:347",
-        },
-        # n:2 — a record field with NO contradiction: the field and the body agree.
         {
             "finding_id": "n:2",
-            "observed_evidence": "B-282 is marked open and its summary agrees the row is"
-            " actionable today.",
-            "location": ".harness/forward-register.yaml:11947",
+            "observed_evidence": "The benchmarks remain open even though the sample size is small.",
+            "location": "tools/arc_cost.py:1",
         },
     ]
-    out = json.loads(_run("classify", stdin=json.dumps(contradicting + not_contradicting)).stdout)
-    name = "18 record field contradicts its own body"
-    for row in contradicting:
-        assert name in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
-    for row in not_contradicting:
-        assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    for row in rows:
+        assert out[row["finding_id"]] == [], (row["finding_id"], out[row["finding_id"]])
 
 
 def test_owed_pointer_refresh_is_not_class_vocabulary():
