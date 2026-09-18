@@ -296,10 +296,13 @@ is not a smaller version of the convention, it is the exception that breaks it.
 This half has NO surviving vocabulary in class 7, and that is the finding, not an
 oversight. `caller's shell` was tried and WITHDRAWN: it claimed a finding this class does
 not own, and under the prefer-to-miss policy a term that steals from the unmatched pile does
-not earn its place. The evidence is deliberately not restated here — the gate log only grows,
-including with the reviewing arc's own findings, so any statement about what the term matches
-is true at one anchor and false at the next. Re-derive with `refresh-classes.py` if you need
-it. And
+not earn its place. That claim is EXISTENTIAL — one such finding exists — and an existential
+claim survives a growing corpus, because a later row cannot unmake an earlier one. What is NOT
+restated here is any CATEGORICAL or PRECISION claim (how many it matched, what share were
+wrong): the gate log only grows, including with the reviewing arc's own findings, so those are
+true at one anchor and false at the next. That is the whole distinction, and it is why the
+decision below rests on policy rather than on a measurement. Re-derive with
+`refresh-classes.py` if you want the current numbers. And
 `tools/test_refresh_classes.py::test_class_7_does_not_claim_sourced_shell_caller_state`
 now pins the absence. A shell-sourcing finding therefore lands UNMATCHED, which is the
 intended outcome: unmatched is where the next class comes from. The rule that removed it

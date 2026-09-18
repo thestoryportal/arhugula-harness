@@ -28,9 +28,10 @@ today, and only the first is a SILENT miss; the other two fail loud.
 
 This is a deliberate static assertion, complementing rather than replacing behaviour: the
 refusal exits reachable from outside the process are witnessed behaviourally in
-tools/hooks/test_lane_init.sh and still redden independently -- that file's own loop is the
-list, so no count is restated here to drift against it. This covers the uniformity a
-behavioural witness cannot reach, and it catches a dropped name at a site added later.
+tools/hooks/test_lane_init.sh -- in its EXECFIX, EXECLATE and EXECREL blocks, not one loop --
+and still redden independently. No count is restated here to drift against them. This covers
+the uniformity a behavioural witness cannot reach, and it catches a dropped name at a site
+added later.
 """
 
 from __future__ import annotations
@@ -48,10 +49,13 @@ NAMESPACE = ("_LI_SRC", "_LI_ROOT", "_LI_Q", "_LI_WT")
 _UNSET = re.compile(r"^\s*unset\b(?P<args>.*)$")
 
 #: Shell statement separators. `;` alone missed the one-line-guard form
-#: (`[ cond ] && unset ...`), which is the dominant idiom in the file being checked -- 44
-#: occurrences in tools/hooks/lane-init.sh -- so a cleanup site refactored into that shape
-#: was invisible. `&` is included so a backgrounded statement cannot hide one either; the
-#: alternation is ordered longest-first so `&&` is never split as two `&`.
+#: (`[ cond ] && unset ...`). No cleanup site uses that shape today -- every one of them is a
+#: bare `unset` -- but the guard form is ordinary throughout the file, so a cleanup refactored
+#: into it would have been invisible. (Measured, not asserted: `&& unset`/`|| unset` occurs
+#: zero times in that file. An earlier note here gave a count and called the form dominant;
+#: neither reproduced under any measurement, so no count is restated.) `&` is included so a
+#: backgrounded statement cannot hide one either; the alternation is ordered longest-first so
+#: `&&` is never split as two `&`.
 _SEPARATORS = re.compile(r"&&|\|\||;|&")
 
 
@@ -166,9 +170,9 @@ def test_a_guarded_one_line_unset_is_not_invisible():
     """The third evasion of the same class (merge-gate witness lens, round 4).
 
     Splitting only on `;` and requiring each segment to START with `unset` made a cleanup
-    written as a one-line guard silently invisible -- and that guard form occurs 44 times in
-    the file this module checks, so it was a likelier future shape than either evasion the
-    module was originally written for.
+    written as a one-line guard silently invisible. No cleanup site uses that shape today, but
+    the guard form is ordinary elsewhere in the file, so it was a plausible future shape -- which
+    is the whole reason to pin it before one appears.
     """
     for sep in ("&&", "||", "&"):
         text = f'  [ -n "$x" ] {sep} unset _LI_ROOT _LI_Q _LI_WT'
@@ -202,7 +206,8 @@ def test_unset_f_alone_is_not_a_cleanup_site():
     original lowercase fixture below is kept, but it cannot witness the branch: its names
     fail the case-sensitive `_LI_` PREFIX, so even with the flag branch deleted they never
     enter `names` and the statement is not a cleanup site either way. The PREFIX is what
-    excludes them, not the character class -- `:120` ships `_LI_[A-Za-z0-9_]+`, under which a
+    excludes them, not the character class -- the extractor in `subset_violations` below ships
+    `_LI_[A-Za-z0-9_]+`, under which a
     lowercase SUFFIX would match.
     """
     assert subset_violations("  unset -f _LI_Q _LI_WT") == []

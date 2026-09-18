@@ -92,7 +92,7 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # policy a term that steals from the unmatched pile does not earn its place. The evidence
     # is deliberately NOT restated here. The gate log only grows -- including with this arc's
     # own findings -- so any statement about what the term matches is true at one anchor and
-    # false at the next; three review rounds were spent correcting exactly that. Re-derive with
+    # false at the next -- which review rounds of this arc kept proving. Re-derive with
     # `classify` if you need it. Pinned absent by tools/test_refresh_classes.py.
     "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),

@@ -146,10 +146,50 @@ esac
 # in the environment belongs to a different lane. One shell that sources in lane A, cd's to
 # lane B and sources again would otherwise hand B the identity of A, and B would never get
 # a marker of its own: two worktrees, one reservation identity.
+# zsh's default NO_NULL_GLOB makes an UNMATCHED glob a FATAL error, where bash passes the
+# literal through for the `[ -f ]` guards below to reject. An empty `lanes/` is the ordinary
+# first-lane-on-a-machine state -- and the state after the last claim is released -- so under zsh
+# the scans below hit `no matches found` before their guards could run. MEASURED, both halves:
+# sourcing under zsh over an empty registry exited rc=126 with HARNESS_LANE_ID exported, no index
+# and no claim -- the half-built lane this file exists to refuse, and not even the contractual
+# rc=1; a scan reached from inside a function instead aborts that function and prints the same
+# error into the lane shell. Every scan site shared the defect and now shares this one mechanism,
+# so a new scan cannot reintroduce it by copying a guard wrong.
+#
+# TWO mechanisms, doing two different jobs -- each measured, not assumed:
+#   1. The FUNCTION BOUNDARY is what stops the fatal failure. In zsh a failed glob inside a
+#      function aborts only that function, so the caller resumes with an empty result instead of
+#      the whole sourced file dying. Measured: the identical glob at top level kills zsh
+#      (rc=126); inside a function it returns empty and the script survives, with or without
+#      `set -e`.
+#   2. The `(N)` qualifier is what keeps stderr CLEAN. Without it zsh still prints
+#      `no matches found` on every first-lane init -- noise from a sourced file into an
+#      interactive shell. Measured: stderr is empty with the arm and carries that line without.
+# `(N)` is zsh's per-pattern NULL_GLOB qualifier, reached through `eval` so bash never parses it
+# -- the same guard shape the root resolution above uses. It is deliberately NOT `setopt
+# NULL_GLOB`: this file is SOURCED, and that would change every later unmatched glob in the
+# CALLER's shell, which is the exact class of side effect this file exists to avoid. The
+# qualifier cannot come from a variable either -- `*$NG` expands to the literal `*(N)` without
+# GLOB_SUBST, measured -- so the branch is on the syntax, not on a value. `set --` is
+# FUNCTION-local, so the caller's positional parameters are untouched. The unquoted expansion at
+# each call site cannot word-split: a claim's filename is HARNESS_LANE_INDEX, which the `case`
+# below admits only as digits with no leading zeros and below 350.
+_li_lane_files() {
+  [ -d "$_LI_Q/lanes" ] || return 0
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    eval 'set -- "$_LI_Q"/lanes/*(N)'
+  else
+    set -- "$_LI_Q"/lanes/*
+    [ -e "$1" ] || set --
+  fi
+  [ "$#" -eq 0 ] && return 0
+  printf '%s\n' "$@"
+}
+
 _lane_id_bound_elsewhere() {
   local want="$1" f id path
   [ -d "$_LI_Q/lanes" ] || return 1
-  for f in "$_LI_Q"/lanes/*; do
+  for f in $(_li_lane_files); do
     [ -f "$f" ] || continue
     IFS=' ' read -r id path < "$f"
     { [ "${id:-}" = "$want" ] && [ "${path:-}" != "$_LI_WT" ]; } && return 0
@@ -335,7 +375,7 @@ fi
 mkdir -p "$_LI_Q/lanes" 2>/dev/null
 # What this worktree already holds, resolved ONCE and used by both paths below.
 _li_have=""
-for _li_f in "$_LI_Q"/lanes/*; do
+for _li_f in $(_li_lane_files); do
   [ -f "$_li_f" ] || continue
   IFS=' ' read -r _li_id _li_path < "$_li_f"
   if [ "${_li_path:-}" = "$_LI_WT" ]; then
@@ -420,7 +460,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   # hold. Comparing against the minimum is correct for ANY number of racing sources, because
   # exactly one of them can be the minimum.
   _li_min=""
-  for _li_f in "$_LI_Q"/lanes/*; do
+  for _li_f in $(_li_lane_files); do
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     [ "${_li_path:-}" = "$_LI_WT" ] || continue
@@ -553,7 +593,7 @@ else
   # hold. Comparing against the minimum is correct for ANY number of racing sources, because
   # exactly one of them can be the minimum.
   _li_min=""
-  for _li_f in "$_LI_Q"/lanes/*; do
+  for _li_f in $(_li_lane_files); do
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     [ "${_li_path:-}" = "$_LI_WT" ] || continue

@@ -968,6 +968,37 @@ for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf 'nofn:%s ' \"\$f\";
     || bad "$SH: lane did not come up cleanly: $PORT"
 done
 
+# ...and the SAME contract over a FRESHLY EMPTY registry, which the case above structurally
+# cannot reach: it runs against $LANES, which earlier cases have already populated. An empty
+# lanes/ is the first-lane-on-a-machine state -- and the state after the last claim is released
+# -- and under zsh's default NO_NULL_GLOB an unmatched glob is FATAL. Measured before the fix:
+# zsh died at the registry scan with rc=126, HARNESS_LANE_ID EXPORTED, no index and no claim,
+# i.e. exactly the half-built lane the refusal paths exist to forbid, and not even the
+# contractual rc=1; bash on the identical fixture came up clean. The whole suite stayed 156/0
+# throughout, which is why this case exists. (merge-gate witness-adequacy lens, r8.)
+FRESHWT="$ROOT/freshwt"; mkdir -p "$FRESHWT/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$FRESHWT/tools/hooks/" \
+  || { echo "FATAL: freshwt populate"; exit 1; }
+for SH in $SHELLS; do
+  rm -rf "$FRESHWT/.harness" "$ROOT/freshq"; mkdir -p "$ROOT/freshq"
+  # stderr is captured SEPARATELY and checked for the GLOB error specifically, not for blanket
+  # cleanliness: this fixture is not a git repo, so lane-init correctly reports that it could not
+  # set gc.auto, and an "stderr must be empty" assertion would fail on that fixture artifact in
+  # BOTH shells (measured). The narrow needle is what pins the second mechanism: the function
+  # boundary stops the FATAL failure, but only the `(N)` arm keeps zsh from printing
+  # `no matches found` into the lane shell on every first init.
+  FRESH=$(cd "$FRESHWT" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR="$ROOT/freshq" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>/tmp/li-fresh-err.$$
+printf 'rc=%s idx=%s' \"\$?\" \"\${HARNESS_LANE_INDEX:-unset}\"")
+  FRESH="$FRESH globerr=$(grep -qF 'no matches found' "/tmp/li-fresh-err.$$" && echo YES || echo no)"
+  rm -f "/tmp/li-fresh-err.$$"
+  # claims counted OUTSIDE the subshell: NODIR keeps "registry vanished" distinct from "no claim".
+  FRESH="$FRESH claims=$([ -d "$ROOT/freshq/lanes" ] && ls "$ROOT/freshq/lanes" | wc -l | tr -d ' ' || echo NODIR)"
+  [ "$FRESH" = "rc=0 idx=0 globerr=no claims=1" ] \
+    && ok "$SH: a lane comes up over a FRESHLY EMPTY registry" \
+    || bad "$SH: lane did not come up over an empty registry: '$FRESH' (want rc=0 idx=0 globerr=no claims=1)"
+done
+
 # zsh names the sourced file in `$0` only while FUNCTION_ARGZERO is set. It is on by
 # default, but it is an ordinary option a lane's zsh config may turn off, and then `$0` is
 # the bare shell name and any root derived from it resolves against the caller's cwd. The
@@ -1118,9 +1149,11 @@ done
 # executed entry point is reachable even though every call site sources today.
 # This pins the CONTRACT (a refusal publishes no claim), not the shape of the exit line, so it
 # cannot be evaded by rewriting the exit -- the lexical-scanner trap this arc already paid for.
-# TWO exits are driven, deliberately, because the tail is hand-repeated per site and CANNOT be
-# hoisted: the r5 witness drove only the library-load refusal -- the site the defect was found at
-# -- and was therefore structurally unable to notice a bare `return` at any other exit. Measured:
+# Several exits are driven, deliberately, because the tail is hand-repeated per site and CANNOT
+# be hoisted: the r5 witness drove only the library-load refusal -- the site the defect was found
+# at -- and was therefore structurally unable to notice a bare `return` at any other exit. The
+# cases below are the list; no count is restated here, because every count written into this
+# block so far has been falsified by the next round that added a case. Measured:
 # a bare `return 1` at the non-integer-index refusal made an executed run exit 0 while the whole
 # suite stayed byte-identical. That is the same per-site drift this file already records at
 # FAR_EXIT. (merge-gate concurrency lens r5; witness-adequacy lens r6 P2.)
@@ -1142,11 +1175,16 @@ printf 'rc=%s claims=%s id=%s' "$?" \
     || bad "$SH: executed early-exit refusal leaked state: '$EXEC_REFUSED' (want rc=1 claims=0 id=absent)"
 done
 
-# The LATE exits: libraries present, so execution reaches the index validation. EVERY refusal
-# reachable with nothing but an environment variable is driven here -- ../escape (non-integer,
-# :320), 00 (leading zeros, :324) and 400 (>= 350 / length bound, :331). The r6 absorption drove
-# only the first and asserted in prose that it was the only one; both blocking lenses falsified
-# that by execution at r7, and a bare `return 1` at :324 or :331 left the whole suite
+# The LATE exits: libraries present, so execution reaches the index validation. The indices below
+# drive ../escape (non-integer, :320), 00 (leading zeros, :324) and 400 (>= 350, :331); the
+# ARC_METRICS_QUEUE_DIR case that follows drives the relative-path refusal (:141). NO CLAIM IS
+# MADE HERE ABOUT COMPLETENESS. Three successive rounds each wrote a bound over this set and each
+# was falsified by execution in the next -- r6 named a fixed pair, r7 replaced that with "every
+# refusal reachable with nothing but an environment variable", and r8 falsified THAT with :141.
+# A bound is a second copy of the list below, and second copies drift. The list is the coverage;
+# a new externally-reachable refusal is covered when it appears here, and not before.
+# The r6 absorption drove only the first index, and a bare `return 1` at :324 or :331 left the
+# whole suite
 # byte-identical while an executed run exited 0 and walked on toward publishing a claim. There is
 # no prose bound here now: this list IS the coverage, so it cannot disagree with itself.
 EXECLATE="$ROOT/execlate"; mkdir -p "$EXECLATE/tools/hooks" "$ROOT/execlateq/lanes"
@@ -1166,6 +1204,36 @@ printf 'rc=%s claims=%s' "$?" \
       && ok "$SH: an EXECUTED lane-init refusing on HARNESS_LANE_INDEX=$BAD_IDX publishes no claim" \
       || bad "$SH: executed refusal on '$BAD_IDX' leaked state: '$EXEC_LATE' (want rc=1 claims=0)"
   done
+done
+
+# The relative-ARC_METRICS_QUEUE_DIR refusal (:141). It needs its own case rather than another
+# index in the loop above, because it is reached through a DIFFERENT environment variable -- which
+# is exactly why the r7 bound missed it: that bound generalised over the loop's variable, not over
+# the refusals.
+#
+# This case asserts the REFUSAL COUNT, not rc, and that is the whole point. Measured: with a bare
+# `return 1` at :141 the executed run still exits 1, because a LATER refusal catches it -- so an
+# rc-only assertion passes either way and witnesses nothing. What the defect actually does is walk
+# PAST its own refusal, and that is observable: clean code emits exactly one `lane-init:` line,
+# the mutant emits two (its own, then `return: can only return from a function or sourced
+# script`, then a second refusal). The contract here is that a refusal is TERMINAL; rc is a proxy
+# that something downstream can satisfy on the defect's behalf. The r7 witness lens was right to
+# decline pressing this site on rc grounds; the refusal count is what makes it witnessable.
+# (merge-gate spec-conformance and witness-adequacy lenses, r8.)
+EXECREL="$ROOT/execrel"; mkdir -p "$EXECREL/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$EXECREL/tools/hooks/" \
+  || { echo "FATAL: execrel populate"; exit 1; }
+for SH in $SHELLS; do
+  rm -rf "$EXECREL/.harness" "$EXECREL/relq"
+  EXEC_REL=$(cd "$EXECREL" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR=relq "$SH" tools/hooks/lane-init.sh >/dev/null 2>"/tmp/li-rel-err.$$"
+printf 'rc=%s' "$?")
+  EXEC_REL="$EXEC_REL refusals=$(grep -c '^lane-init:' "/tmp/li-rel-err.$$")"
+  EXEC_REL="$EXEC_REL claims=$([ -d "$EXECREL/relq/lanes" ] && ls "$EXECREL/relq/lanes" | wc -l | tr -d ' ' || echo NODIR)"
+  rm -f "/tmp/li-rel-err.$$"
+  [ "$EXEC_REL" = "rc=1 refusals=1 claims=NODIR" ] \
+    && ok "$SH: an EXECUTED refusal of a relative queue dir is TERMINAL and publishes no claim" \
+    || bad "$SH: executed relative-queue refusal was not terminal: '$EXEC_REL' (want rc=1 refusals=1 claims=NODIR)"
 done
 
 # A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.
