@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `41d966bce853` |
+| `workspace_state_hash` | `dda87c237d3e` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `12143ce9` —  |
+| `git_head` | `d84ba9fc` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1585).** #1585 closed B-292: the lane-init plan skeleton no longer sketches a bash-only `${BASH_SOURCE[0]}` inside a block its own label calls `(sourced)`, and the block is now marked indicative and points at the shipped `tools/hooks/lane-init.sh` ladder as authoritative. Verified on main: the idiom is absent and the marker is present. The pointer route was taken over syncing the line because the sketch has diverged far beyond it and a copied ladder would mint a second authority free to drift. Next work, in order: (1) **B-293**, the witness gap #1561 registered rather than closed — `lane-init.sh` carries the `return 1 2>/dev/null || exit 1` tail at 14 refusal exits and only five are driven at the EXECUTED entry point, so substituting a bare `return 1` at any of the other nine leaves the suite byte-identical. Take closure (a): drive the externally-reachable refusals, starting at the read-only-`.harness/` site, which has a zero-env-var trigger and a measured rc=1. The row defers the stronger form (refuse execution outright so every `return` is guaranteed sourced) to its own arc, because sourced-vs-executed detection is shell-divergent and is the minefield #1561 spent nine gate rounds in. Either closure OWES a mutation-probe witness that a bare `return 1` at the chosen site REDS the suite; today none of the undriven sites does, so the probe is the acceptance criterion, not a formality. (2) **B-289/B-290/B-291** — the `_LI_*` namespace scanner's lexical bound, the gate-log reducer's blindness to the legacy narrative row shape, and the missing forward-id allocator that produced both of this arc's renumberings. (3) A registered-but-unfiled finding from this arc: a merge-door block row can never be adjudicated (`adjudicate` exits 2 once the reservation is terminal, and a block only clears after the merge), so all 23 door rows carry `disposition: null`; and `roadmap_status_refresh --refresh` stamps its anchor from the worktree HEAD, so regenerating on the refresh branch silently records the wrong parent and reds main while the PR stays green — both are B-285-family and both are owed register rows once the `u-he-40` fence lifts. That reservation is `pending` and HELD at B-244, a standing operator DEFER, so `.harness/forward-register.yaml` stays untouched and B-292's own row is not yet marked closed. This pointer names no unit id: the frontier is register rows, which no `hook_roadmap_next` carrier can express (B-288), and one incidental unit mention reds the consumer suite. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
+**Current next action (post-#1579).** The merge door's C-HE-06 §6 release is now reachable from the CLI (`merge_door.py release` / `just merge-door-release`), and C-HE-06 v1.8 X8 carves out the operator-confirmed release it needs: a landing whose own merge commit reds `main` previously had no exit, because step (vii) polls that merge SHA's own immutable run, `unblock` mints a successor rather than opening the door, and `gc` skips live leases. The gate admits only an unblock successor with neither of a landing's two merges outstanding and the merge commit's own default-branch run confirmed from ground truth as COMPLETED with a conclusion in C-HE-19 §1's `{FAILURE, CANCELLED}`; pending, absent, unreadable and green all refuse. The same arc swept the run-selection class to its live sibling: `wait_post_merge_ci` (step (vii), every landing) had taken `done[0]` with no branch filter, which `wait_pr_head_checks` had already been fixed for and never swept — both now read the shared `authoritative_runs`/`runs_are_settled`. THIS CLOSES ONLY PART (3) OF `B-253`: parts (1) the tiebreaker emitting a terminating refresh for its own landings and (2) step (vii) distinguishing a drift-only inherited red from this arc's own failure remain OPEN, and this session watched (2) wedge the door live on #1575. Next work, in order: file B-253's remaining parts against the now-unfenced `.harness/forward-register.yaml`; wire the operator's prose-findings-are-P3 directive into `merge-gate/SKILL.md`, which carries no mention of it despite a memory index claiming it does; and fix the C-HE-23 gate schema, which cannot express APPROVE-with-a-non-blocking-observation and so drops every prose finding from the structured record.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -44,7 +44,6 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1578 | `ops/gate-log-rows-post-1573` | — | — |
-| #1579 | `feat/merge-door-release-verb` | — | — |
 | #1583 | `docs/merge-door-bypass-incident` | — | — |
 
 ---
@@ -53,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1579 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1585 | 2026-09-18 | #1585 closed B-292 (doc-only, verified on main). Generated AT the content merge tip 12143ce9 so the recorded git_head equals this refresh's own future merge parent. |
 | 1586 | 2026-09-18 | #1586 landed the post-#1584 refresh but recorded git_head=8795402f (its own first refresh commit) instead of f4c8f653 (the merge commit's parent), because the content was regenerated on the refresh branch after an amend rather than at the content merge tip. The PR went green and main's own run hard-failed ROADMAP_STATUS_DRIFT. This re-anchors at b2a4c9d2. |
 | 1584 | 2026-09-18 | #1584 landed the carved-out merge-door block row; the refresh lands as the IMMEDIATE next commit so the following content merge still has a verified refresh point as its parent. |
 | PR #1581 | 2026-09-18 | durable governance: prose findings are P3 and non-blocking; wired into merge-gate + defect-class-preflight |
-| PR #1575 | 2026-09-18 | U-HE-45 as-built plan record + clearance marker (sibling lane) |
 
 ---
 
