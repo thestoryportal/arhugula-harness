@@ -314,45 +314,74 @@ def test_venues_advertise_pack_section_list() -> None:
             assert advertised == claimed, f"{venue} vs {pack}: {advertised} != {claimed}"
 
 
-def root_pointer_pairs() -> list[tuple[str, str]]:
-    """`(root section, pack it points at)` for every resolving pointer in root `CLAUDE.md`.
+# A resolving pointer cites the pack AND the section: "… at `docs/governance/X.md` §N."
+# Matching only the path is how codex r9 could change §7's pointer to `§6` and keep every
+# ownership assertion green — the same sub-span shape class 17 names, in the test written
+# one round earlier to close the pointer hop.
+ROOT_POINTER_RE = re.compile(r"`docs/governance/([a-z0-9-]+\.md)`\s*§(\d+(?:\.\d+)*)")
 
-    Root keeps each relocated section's heading and puts a pointer to the pack in its body,
-    so the pointer is the path a runner actually walks to reach the text.
-    """
-    body_by_section = re.findall(
-        r"^#{2,4} (\d+(?:\.\d+)*)\.? [^\n]*\n(.*?)(?=^#{2,4} \d|\Z)",
-        _read(ROOT_CLAUDE),
-        flags=re.MULTILINE | re.DOTALL,
-    )
-    return [
-        (section, pack)
-        for section, body in body_by_section
-        for pack in sorted(set(PACK_RE.findall(body)))
-        if pack != "README.md"
-    ]
+
+def root_section_bodies() -> dict[str, str]:
+    """Each numbered root section's body text, keyed by section id."""
+    return {
+        section: body
+        for section, body in re.findall(
+            r"^#{2,4} (\d+(?:\.\d+)*)\.? [^\n]*\n(.*?)(?=^#{2,4} \d|\Z)",
+            _read(ROOT_CLAUDE),
+            flags=re.MULTILINE | re.DOTALL,
+        )
+    }
+
+
+def owned_pairs() -> set[tuple[str, str]]:
+    """`(pack, section)` for every section a pack's origin header claims."""
+    return {
+        (pack, section) for pack in filesystem_packs() for section in pack_claimed_sections(pack)
+    }
 
 
 def test_every_root_pointer_lands_on_the_pack_that_owns_the_section() -> None:
-    """Root §N's pointer must name the pack whose header claims §N.
+    """Both directions, because either alone leaves the §7 defect reachable.
 
-    The checks above bind pack-to-headings and venue-to-pack; this binds ROOT to pack, and
-    without it the original defect is still reachable from the other side. Repointing root
-    §7 from `skills-and-subphases.md` to `project-framing.md` left all thirteen other tests
-    green — both pack files exist, both headers stay self-consistent, all three venues stay
-    consistent — while an agent following root's own pointer lands on a pack with no §7
-    (codex r8).
+    CORRECTNESS — a `§`-citing pointer inside root §N must cite §N AND name a pack that
+    owns §N. Checking only that the cited pair is owned somewhere is not enough: §6 and §7
+    live in the same pack, so repointing root §7 at `… skills-and-subphases.md §6` stays
+    "owned" while sending the reader to the wrong section (codex r9). Measured before
+    asserting: all 30 §-citing pointers cite their own containing section today, so the
+    rule has no exception to carve out.
+
+    COMPLETENESS — every owned pair must have a root section that names its pack. Without
+    it, deleting a pointer entirely just shrinks the pair list and passes; the section then
+    resolves nowhere (codex r9). Note this direction accepts the umbrella form too: root §10
+    and §12 name their pack in prose without an adjacent `§N`, which is a pointer a reader
+    can follow just as well.
     """
-    pairs = root_pointer_pairs()
-    # Non-vacuity: a parse that silently matched nothing would pass an empty loop, which is
-    # the shape every other guard in this module carries an explicit floor against.
-    assert len(pairs) >= 20, f"root pointer parse found only {len(pairs)} pairs"
-    for section, pack in pairs:
-        claimed = pack_claimed_sections(pack)
-        assert section in claimed, (
-            f"root §{section} points at {pack}, which claims {sorted(claimed)} — a runner "
-            f"following that pointer lands on a pack without §{section}"
-        )
+    owned = owned_pairs()
+    assert len(owned) >= 20, f"only {len(owned)} owned (pack, section) pairs — parse broke"
+
+    bodies = root_section_bodies()
+    cited = [
+        (section, pack, target)
+        for section, body in bodies.items()
+        for pack, target in ROOT_POINTER_RE.findall(body)
+    ]
+    assert len(cited) >= 20, f"only {len(cited)} §-citing root pointers — parse broke"
+    misdirected = sorted(
+        (section, pack, target)
+        for section, pack, target in cited
+        if target != section or (pack, section) not in owned
+    )
+    assert not misdirected, (
+        "root pointers that do not resolve to their own section's pack — each entry is "
+        f"(root section, pack named, section cited): {misdirected}"
+    )
+
+    unreachable = sorted(
+        (pack, section) for pack, section in owned if pack not in bodies.get(section, "")
+    )
+    assert not unreachable, (
+        f"sections no root pointer reaches — root §N must name the pack carrying it: {unreachable}"
+    )
 
 
 def test_packs_declare_their_origin() -> None:
