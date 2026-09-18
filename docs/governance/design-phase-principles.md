@@ -1,6 +1,6 @@
 # Governance pack — design-phase operating principles
 
-*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §10 and §10.1–§10.9 by U-CTX-13 (R-CTX-1 Arc 5, 2026-08-11).*
+*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §10, §10.1, §10.2, §10.3, §10.4, §10.5, §10.6, §10.7, §10.8, §10.9 by U-CTX-13 (R-CTX-1 Arc 5, 2026-08-11).*
 *The root file keeps every heading with its number and position, plus a resolving
 pointer to this file. Query this pack for the detail; do not preload it.*
 
