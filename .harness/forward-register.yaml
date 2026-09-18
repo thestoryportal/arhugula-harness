@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 281
+  total: 282
   open: 2
   design_substrate_gated: 3
-  registered_finding: 110
+  registered_finding: 111
   operator_gated: 0
   held: 4
   closed: 162
-  identity_digest: 7d9293bb26498764
+  identity_digest: 559bd443e8377641
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11768,7 +11768,7 @@ items:
   heading: '### B-272 · residual defect class (f) invariant statements that hold at one time but not across a window *(registered by U-HE-44, 2026-09-17; REGISTERED)*'
 - id: B-273
   title: S1 of the §6 unified build order (U-HE-02..04, U-HE-06..09)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: 3b3e3a107
   status: closed
   depends_on: []
   summary: 'S1 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes
@@ -11784,7 +11784,7 @@ items:
     2026-09-18; CLOSED)*'
 - id: B-274
   title: S2 of the §6 unified build order (U-HE-01, U-HE-05, U-HE-10..13)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: 3b9146026
   status: closed
   depends_on: []
   summary: 'S2 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes
@@ -11801,7 +11801,7 @@ items:
     by U-HE-45, 2026-09-18; CLOSED)*'
 - id: B-275
   title: S3 of the §6 unified build order (U-HE-14)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: 47d4428ff
   status: closed
   depends_on:
   - B-274
@@ -11817,7 +11817,7 @@ items:
     CLOSED)*'
 - id: B-276
   title: S4a of the §6 unified build order (U-HE-15, U-HE-16)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: f0e64f217
   status: closed
   depends_on:
   - B-274
@@ -11832,7 +11832,7 @@ items:
     2026-09-18; CLOSED)*'
 - id: B-277
   title: S4b of the §6 unified build order (U-HE-17..21)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: '#1409, #1412 + 7834cf47e, 8638f2e75, 80c94811a'
   status: closed
   depends_on:
   - B-275
@@ -11853,7 +11853,7 @@ items:
     CLOSED)*'
 - id: B-278
   title: S4c of the §6 unified build order (U-HE-22..28)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: '#1413, #1414, #1415, #1416, #1417, #1418, #1424'
   status: closed
   depends_on:
   - B-277
@@ -11870,7 +11870,7 @@ items:
     CLOSED)*'
 - id: B-279
   title: S4d of the §6 unified build order (U-HE-29..33)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: '#1426, #1430, #1434, #1438, #1454'
   status: closed
   depends_on:
   - B-274
@@ -11887,7 +11887,7 @@ items:
     CLOSED)*'
 - id: B-280
   title: S5 of the §6 unified build order (U-HE-34)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: '#1458'
   status: closed
   depends_on:
   - B-274
@@ -11902,7 +11902,7 @@ items:
     CLOSED)*'
 - id: B-281
   title: S6 of the §6 unified build order (U-HE-35..39)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: '#1460, #1497, #1517, #1523, #1525'
   status: closed
   depends_on:
   - B-273
@@ -11927,7 +11927,7 @@ items:
     CLOSED)*'
 - id: B-283
   title: S8 of the §6 unified build order (U-HE-43)
-  pr: '#TBD (U-HE-45, 2026-09-18)'
+  pr: '#1550'
   status: closed
   depends_on:
   - B-273
@@ -12040,3 +12040,29 @@ items:
   council: NO -- a process/authoring defect; the corrective shape is not contested.
   heading: '### B-287 · U-HE-45''s own scope went stale: it registers as forward work steps that had landed
     *(registered by U-HE-45, 2026-09-18; REGISTERED)*'
+- id: B-288
+  title: hook_roadmap_next cannot name a B-row frontier, so a correct next-action pointer is unrepresentable
+    when the actionable work is a register row
+  pr: '#TBD (U-HE-45, 2026-09-18)'
+  status: registered_finding
+  depends_on: []
+  summary: 'tools/hooks/lib.sh:286-292 accepts exactly five carriers, and every one of them names a UNIT
+    (`U-*`/`R-*`) or a plan document; the id pattern is `[UR]-...` and range tokens containing `..` are
+    filtered out. When the actionable forward work is a `B-*` register row, NO carrier can name it. Measured
+    on this arc rather than reasoned: out-of-family review raised the pointer on four CONSECUTIVE rounds,
+    and each rewording only moved WHICH BLOCKED THING it named — first U-HE-45, which the arc had just
+    completed; then bold **U-HE-40**, which is HELD at 15/15 rounds with a round-12 P1 (B-244); then the
+    plan doc, whose only remaining S7 work is that same held unit. The consumer test (tools/test_roadmap_status_consumers.py:222)
+    accepts any U/R/plan token present on the line and never asks whether the selected token is ACTIONABLE,
+    so the shape is green either way. This is a representability gap in the pointer vocabulary, not a
+    wording defect, which is why it is registered here instead of rewritten a fifth time.'
+  close_out: 'REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: either a carrier that can name a
+    `B-*` row, or an explicit ''no actionable unit — see B-NNN'' form that hook_roadmap_next resolves
+    and the consumer test accepts, plus an actionability check so a pointer naming a held unit cannot
+    pass as the frontier. Until one of those exists, the least-wrong pointer names the next unit in the
+    §6 order and says in prose that it is held and who can clear it — and the prose is the only place
+    that can carry it, which is the defect.'
+  council: NO -- a bounded tooling gap in one parser; the fix shape is not contested.
+  heading: '### B-288 · hook_roadmap_next cannot name a B-row frontier, so a correct next-action pointer
+    is unrepresentable when the actionable work is a register row *(registered by U-HE-45, 2026-09-18;
+    REGISTERED)*'
