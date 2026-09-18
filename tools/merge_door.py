@@ -37,15 +37,17 @@ from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish
 # polls, the base a terminating refresh must carry, and the branch whose run is the
 # authoritative post-merge result (a same-commit run from another branch is not it).
 DEFAULT_BRANCH = "main"
-# Conclusions that constitute an OBSERVED TERMINAL NON-SUCCESS for C-HE-06 v1.8 X8. This
-# is not the complement of `ci_is_green`: that helper answers "may I treat this as green",
-# so it maps null/pending/unknown to False, which X8 must NOT read as a witnessed failure.
-# X8 needs the positive fact that the run finished badly, so the set is explicit and
-# anything outside it -- a null conclusion, a schema-drifted value, `neutral`, `skipped`,
-# `stale` -- fails closed. `CANCELLED` is in, per C-HE-19 §2's refusal to treat it as green.
-TERMINAL_NOT_GREEN = frozenset(
-    {"FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
-)
+# Conclusions that constitute an OBSERVED TERMINAL NON-SUCCESS for C-HE-06 v1.8 X8, drawn
+# from C-HE-19 §1's declared domain -- "CI outcomes are exactly {SUCCESS, FAILURE,
+# CANCELLED}" -- minus SUCCESS. Nothing outside that domain is admitted: v1.8's own scope
+# says no terminal-state contract changes, so a gate that honoured `TIMED_OUT` or
+# `STARTUP_FAILURE` would widen C-HE-19 on this arc's authority. They fail closed instead.
+# This is deliberately NOT the complement of `ci_is_green`: that helper answers "may I
+# treat this as green" and so maps null/pending/unknown to False, which X8 must NOT read
+# as a witnessed failure. X8 needs the positive fact that the run finished badly, so the
+# set is explicit and anything outside it -- a null conclusion, a schema-drifted value --
+# refuses. CANCELLED is in, per C-HE-19 §1's "CANCELLED is INCOMPLETE, never green".
+TERMINAL_NOT_GREEN = frozenset({"FAILURE", "CANCELLED"})
 DOOR = QUEUE_DIR / "merge-door"
 LEASE = DOOR / "LEASE"
 RATE_K = 5
@@ -416,8 +418,13 @@ def release_refusal(lease: dict, ground: Ground) -> str | None:
         )
 
     tok = lease["lease_token"]
+    # os.path.lexists, never Path.exists(): the latter follows the link and reports a
+    # DANGLING symlink as absent, so a planted or corrupted sidecar link would read as
+    # "no refresh outstanding" and free the door -- the exact inversion of the repository's
+    # fail-closed sidecar containment policy. Any entry at the path, of any kind, fences.
     if any(
-        _sidecar(tok, name).exists() for name in ("refresh", "refresh.attempted", "refresh.intent")
+        os.path.lexists(_sidecar(tok, name))
+        for name in ("refresh", "refresh.attempted", "refresh.intent")
     ):
         return (
             "a terminating refresh has been minted or declared for this landing and "

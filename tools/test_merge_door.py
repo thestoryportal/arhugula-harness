@@ -2380,6 +2380,22 @@ def test_release_verb_fails_closed_when_ground_truth_is_unreadable(door, monkeyp
     assert md.read_lease()["lease_token"] == fresh["lease_token"]
 
 
+# mutation-probe: use Path.exists() for the refresh fence (codex r9 P2 — it FOLLOWS the
+# link, so a dangling or planted sidecar symlink reports absent and the door is freed with
+# a terminating refresh outstanding, inverting the fail-closed containment policy)
+@pytest.mark.parametrize("marker", ["refresh", "refresh.attempted", "refresh.intent"])
+def test_release_verb_refuses_a_dangling_refresh_sidecar_symlink(door, monkeypatch, marker):
+    fresh = _unblocked_successor()
+    _step_vi()
+    _release_ground(monkeypatch)
+    side = md._sidecar(fresh["lease_token"], marker)
+    side.symlink_to(md.DOOR / "nonexistent-target")  # dangling: exists() False, lexists True
+    assert not side.exists() and side.is_symlink()  # the discriminating shape
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
 # mutation-probe: allow a MISSING event/headBranch through the authoritative-run filter
 # (codex r8 P2 — `in (None, "push")` admits a partial or schema-drifted record as proof of
 # something it never carried)
@@ -2408,7 +2424,22 @@ def test_release_verb_refuses_a_run_record_missing_its_provenance(door, monkeypa
 # mutation-probe: ask `not ci_is_green(...)` instead of the positive terminal set (codex r8
 # P2 — ci_is_green maps null/unknown to False, so that question silently promotes every
 # unreadable conclusion to "witnessed failure", which is the opposite of fail-closed)
-@pytest.mark.parametrize("conclusion", [None, "", "neutral", "skipped", "stale", "weird_new"])
+@pytest.mark.parametrize(
+    "conclusion",
+    [
+        None,
+        "",
+        "neutral",
+        "skipped",
+        "stale",
+        "weird_new",
+        # outside C-HE-19 §1's declared {SUCCESS, FAILURE, CANCELLED} domain: honouring
+        # these would widen a terminal-state contract on this arc's authority (codex r9)
+        "timed_out",
+        "startup_failure",
+        "action_required",
+    ],
+)
 def test_release_verb_refuses_a_conclusion_that_is_not_a_witnessed_failure(
     door, monkeypatch, conclusion
 ):
@@ -2420,11 +2451,10 @@ def test_release_verb_refuses_a_conclusion_that_is_not_a_witnessed_failure(
     assert md.read_lease()["lease_token"] == fresh["lease_token"]
 
 
-@pytest.mark.parametrize(
-    "conclusion", ["failure", "cancelled", "timed_out", "startup_failure", "action_required"]
-)
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
 def test_release_verb_admits_every_witnessed_terminal_failure(door, monkeypatch, conclusion):
-    """The admit arm, swept across the whole set so the fix is bounded on both sides."""
+    """The admit arm, swept across C-HE-19 §1's whole non-SUCCESS domain, so the fix is
+    bounded on both sides rather than only tightened."""
     _unblocked_successor()
     _step_vi()
     _release_ground(monkeypatch, ci=conclusion)

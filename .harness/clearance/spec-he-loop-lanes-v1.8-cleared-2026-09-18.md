@@ -37,8 +37,11 @@ the block's reason (`land` persists `post_merge_ci_not_green` on a 45-minute TIM
 too, where the run was equally unobserved). The release path now reads the merge SHA's
 own `main` run and admits ONLY a COMPLETED, non-success conclusion; pending, absent,
 unreadable and green all refuse, the last routing the operator back to `land`.
-`unblocked_from` remains required as the operator-confirmation half and names the sha to
-query. A landing that merely crashed mid-flight carries no block at all. Both of a landing's
+The sha queried is the RESERVATION's `merge_sha` from step (vi), never
+`blocked_at_sha`/`unblocked_from`, which names the merge commit on only two of the ten
+block paths; `unblocked_from` remains required as the operator-confirmation half. The
+admitted conclusions are C-HE-19 §1's domain minus SUCCESS, so no terminal-state
+contract is widened. A landing that merely crashed mid-flight carries no block at all. Both of a landing's
 outstanding effects stay fenced independently: the content merge must be settled, and a
 terminating refresh that has been minted OR merely declared (`refresh`,
 `refresh.attempted`, or the `refresh.intent` fence) refuses outright, since step (viii)
