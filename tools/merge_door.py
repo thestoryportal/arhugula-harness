@@ -451,23 +451,13 @@ def release_refusal(lease: dict, ground: Ground) -> str | None:
             "merge whose run could be consulted. Reconcile by ground truth (C-HE-06 §5)."
         )
     try:
-        runs = [
-            r
-            for r in ground.gh_runs_for_sha(sha)
-            # `event` alone does not prove the DEFAULT-BRANCH run: the same commit can
-            # carry a run from another branch, whose verdict is not the authoritative one.
-            # EXACT equality, never `in (None, ...)`: a partial or schema-drifted record
-            # missing either field would otherwise be admitted as proof it never carried.
-            if r.get("event") == "push" and r.get("headBranch") == DEFAULT_BRANCH
-        ]
+        runs = authoritative_runs(sha, ground)
     except Exception as exc:  # any ground-truth failure fails CLOSED
         return (
             f"could not read the merge SHA's own run from ground truth ({exc}). The "
             "invariant fences an UNCONFIRMED run, and an unreadable one is unconfirmed."
         )
-    # EVERY run, not merely the first: an older completed failure beside a newer
-    # in-progress run is still a pending outcome, and the invariant fences pending.
-    if not runs or any(r.get("status") != "completed" for r in runs):
+    if not runs_are_settled(runs):
         return (
             f"the merge SHA {sha[:12]}'s own `{DEFAULT_BRANCH}` run has not completed "
             f"(pending, or never appeared; the block was recorded as "
@@ -1249,19 +1239,48 @@ def verify_head_base(lease: dict, ground: Ground) -> dict:
     return v
 
 
+def authoritative_runs(sha: str, ground: Ground) -> list[dict]:
+    """The merge commit's own DEFAULT-BRANCH push runs — the only runs whose conclusion is
+    the post-merge verdict for `sha`. A same-commit run from another branch, or a non-push
+    event, answers a different question and must not stand in for this one.
+
+    NOT for a PRE-merge PR head: `wait_pr_head_checks` deliberately applies no event filter,
+    because a head's completed run registers as `pull_request` or `push` depending on which
+    triggers fired.
+    """
+    return [
+        r
+        for r in ground.gh_runs_for_sha(sha)
+        if r.get("event") == "push" and r.get("headBranch") == DEFAULT_BRANCH
+    ]
+
+
+def runs_are_settled(runs: list[dict]) -> bool:
+    """True when `runs` is non-empty and NONE of them is still pending.
+
+    While ANY run for a sha is in progress, an older completed run must never be read as
+    the verdict — a rerun or an edited event reuses the SHA. `wait_pr_head_checks` learned
+    this first (U-HE-28 codex r5 P2) and `wait_post_merge_ci` did not, so step (vii) could
+    declare `success` off a stale green while a newer run was still running; the rule now
+    has ONE home and all three consumers read it from here.
+    """
+    return bool(runs) and not any(r.get("status") != "completed" for r in runs)
+
+
 def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
     """Poll the merge SHA's OWN main run until completed. success → 'success'; anything
     else → 'blocked:<why>' (CANCELLED blocks the door — C-HE-19 §2's ci_is_green)."""
     deadline = ground.clock() + bound_s
     notified = False
     while ground.clock() < deadline:
-        runs = [r for r in ground.gh_runs_for_sha(sha) if r.get("event") in (None, "push")]
-        done = [r for r in runs if r.get("status") == "completed"]
-        if done:
-            concl = done[0].get("conclusion")
-            if not ci_is_green(concl):
+        runs = authoritative_runs(sha, ground)
+        if runs_are_settled(runs):
+            # EVERY run must be green, not merely the first completed one: a sha carrying
+            # one green and one red run has not passed (merge-gate spec lens P1).
+            bad = [r for r in runs if not ci_is_green(r.get("conclusion"))]
+            if bad:
                 # CANCELLED/failure blocks the door (C-HE-19 §2) — never read as green
-                return f"blocked:post_merge_ci_not_green:{concl}"
+                return f"blocked:post_merge_ci_not_green:{bad[0].get('conclusion')}"
             return "success"
         if not notified and ground.gh_main_runs_in_progress() > 2:
             _notify(
@@ -1285,17 +1304,15 @@ def wait_pr_head_checks(sha: str, ground: Ground, *, bound_s: float, lane_id: st
     head's completed run may register as pull_request or push depending on triggers)."""
     deadline = ground.clock() + bound_s
     while ground.clock() < deadline:
+        # No event filter here, deliberately (see authoritative_runs): a PRE-merge head's
+        # completed run registers as pull_request or push depending on triggers. The
+        # settled rule is shared; this call site is where it was first learned.
         runs = ground.gh_runs_for_sha(sha)
-        # A rerun/edited event reuses the SHA (codex r5 P2): while ANY run is still in
-        # progress, an older completed run must not be read as the verdict — wait until
-        # the SHA has no pending runs, then judge the completed set.
-        if not any(r.get("status") != "completed" for r in runs):
-            done = [r for r in runs if r.get("status") == "completed"]
-            if done:
-                concl = done[0].get("conclusion")
-                if not ci_is_green(concl):
-                    return f"blocked:refresh_pr_ci_not_green:{concl}"
-                return "success"
+        if runs_are_settled(runs):
+            bad = [r for r in runs if not ci_is_green(r.get("conclusion"))]
+            if bad:
+                return f"blocked:refresh_pr_ci_not_green:{bad[0].get('conclusion')}"
+            return "success"
         ground.sleep(30)
     return "blocked:refresh_pr_ci_not_green:timeout"
 

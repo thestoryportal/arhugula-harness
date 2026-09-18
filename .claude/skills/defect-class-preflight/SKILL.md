@@ -489,7 +489,9 @@ not complete without it. The temptation sounds like protocol — *"the refresh i
 bundling. On the arc that surfaced this, the substantive defect is registered as `B-288`, where
 prose carries the polarity a pattern could not.
 
-### 18. The code departs from a cleared contract (added merge-door-release-verb; 23 rows at the 2,247-finding corpus, 14 of them previously unmatched)
+### 18. The code departs from a cleared contract (added merge-door-release-verb; at the
+2,247-finding corpus the pattern matched 26 rows and the class CLAIMED 23 of them —
+earlier classes take the other 3 — and 14 had matched no class at all)
 
 The implementation states something a cleared `C-HE-*` contract explicitly denies. Not a
 stale count, not an undischarged quote, not a test blessing the change — the code itself

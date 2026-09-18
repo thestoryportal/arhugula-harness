@@ -332,7 +332,9 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         r"|canonical C-HE-\d+[^.]{0,80}(?:still requires|says|table|statement)"
         r"|C-HE-\d+[^.]{0,60}declares the complete"
     ),
-    # Measured at the 2,247-finding corpus: 26 rows match, 14 of which matched no other
+    # Measured at the 2,247-finding corpus: the pattern MATCHES 26 rows and this class
+    # CLAIMS 23 (earlier classes take the other three — it is appended last), 14 of which
+    # matched no other
     # class, and six of those fourteen are ONE defect recurring across rounds (a holder
     # gate admitting a terminal `merged` reservation against C-HE-03 §6). The cluster was
     # already NOTICED by class 2's own note, which refused a bare `contradict` because it
