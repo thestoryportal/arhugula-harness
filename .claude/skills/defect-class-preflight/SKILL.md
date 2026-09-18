@@ -225,6 +225,27 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
+**Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
+ASSERTING a mechanism behaviour the code does not have (never true), as against the drift
+half above (true once, then decayed). Pattern tried: a claim-bearing subject
+(`claims|states|says|documented|guarantees|asserts`) within 120 non-sentence characters of
+a falsity marker. At the 2,191-finding corpus it claimed 40 previously-unmatched rows and
+leaked none of the `contradicting C-HE-NN` code-vs-contract cluster — a bare `contradict`
+sweeps that whole cluster in, the same wrong direction as `drift`. **Refused anyway:** 6 of
+the 40 are operational uses of those verbs in non-prose findings (a peer that "claimed" a
+file, a lease "claim", an order "asserted only via any()"), and a class-2 false positive
+REMOVES a row from the unmatched pile — the pile where new classes are found. The
+discriminator needed here (is "claim" a sentence or a lease?) is not in the classifier's
+input: it sees evidence plus location, and neither says which. Two review rounds landed on
+this one mechanism, so it was subtracted rather than widened again. A future attempt needs
+a different INPUT — the cited file's own bytes — not a bigger vocabulary.
+
+The defect itself is real and worth catching by hand: **for every sentence you write that
+says what some mechanism does, did you read that mechanism this session, or are you
+restating what an earlier document said about it?** Both mechanism claims on the arc that
+measured this were inherited verbatim from the file it was superseding, amplified, and
+never probed — one false against `DESIGN_RE`, one false against `review_wrapper_common.py`.
+
 ### 3. Silent failure / meaning-changing fallback (114 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the
 primary path fails, an empty result indistinguishable from "could not look". Ask of
@@ -500,6 +521,78 @@ this defect and a legitimate contract amendment, worded identically. The discrim
 what else is in the diff: a real amendment carries the spec/plan change (or a filed fork)
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
+
+### Vocabulary evaluated and LEFT OUT — "the owed pointer refresh" (2026-09-18)
+
+The shape is real and recurs: a diff finishes the work and leaves a surface *consumers read
+to decide what to do next* still naming what was just finished. Nothing is wrong in the code;
+the ROUTING is wrong, so the next reader — or the next `/roadmap-continue` — is sent back into
+completed work. Recorded instances: *"declares Step 5 executed and the fence live, but HEAD's
+`.harness/roadmap_status.md:25` still says the frontier is …"*; *"declares the operator gate
+complete … but the canonical implementation plan still leaves Step 5 unticked"*; *"marks both
+operator decisions ratified, but the same plan's current version summary at line 38 still says
+they are open"*.
+
+**It is not a class, because the vocabulary cannot carry it.** It shipped as class 17 on the
+U-HE-45 arc and was subtracted three review rounds later, each round having traded one
+imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
+missed the plainest wording, hiding behind a different arm the arc's own finding happened to
+match; `just completed` / `already landed` need not describe the pointer, so *"The live pointer
+just completed validation successfully"* matched while reporting no staleness; and
+`still (?:says|names|points)` has **no polarity**, so *"The live pointer is fresh and still
+points to the intended next unit"* matched — a CORRECT pointer read as a stale one. Polarity is
+the part a regex cannot express, and each fix bought exactly one more round in which to find
+the next false surface.
+
+The asymmetry that decides it: a false match is worse than `unmatched`, because unmatched OWES
+an intake line while a false match silences it — so an over-broad row actively hides the new
+classes this table exists to surface. Subtracted per the rule that an adversarial-hardening
+loop does not converge by adding layers.
+
+**Still sweep for the shape by hand.** The question is worth asking even with no row to fire
+it: *does this diff complete something a live pointer names — and does the diff move that
+pointer?* If the unit's own scope lists a pointer refresh among its deliverables, the diff is
+not complete without it. The temptation sounds like protocol — *"the refresh is its own PR by
+§12.2.1"* — and §12.2.1 forbids only the reserved TITLE PREFIX on a bundled PR, not the
+bundling. On the arc that surfaced this, the substantive defect is registered as `B-288`, where
+prose carries the polarity a pattern could not.
+
+### Vocabulary evaluated and LEFT OUT — "the validator reads a sub-span" (2026-09-17)
+
+The shape is real and recurs across arcs: a guard, parser or check examines PART of its
+input — one element, one cell, one field, a prefix — and treats the remainder as if it had
+been inspected. Not an error swallowed (class 3's shape) but an input never looked at.
+Recorded instances: *"Only the first `-e/--regexp` value is examined"*; *"Self-resume
+validates only lane_id and PR"*; *"`_valid_head` validates only that arc_id and state are
+strings — a head with state `opne` is accepted"*; *"`read_pairs` validates only that one
+denominator header exists"*.
+
+**It is not a class, because the vocabulary cannot carry it.** Three attempts were measured
+against the live corpus and all three failed the precision bar: `only the first|unanchored`
+took 10 rows across 9 arcs but two were different defects, one of them reading too MUCH;
+`validates only|never validates|does not validate` took 7 across 7, but the last two
+alternatives match TOTAL absence of validation, which is a different defect — the class's
+own witness row inspected no part of its input; `checks only|requires only|examines only`
+reached 21 rows at about 71% precision. The discriminator needed is a conjunction — an
+inspected portion AND an uninspected remainder — and a finding's free text does not reliably
+carry both halves. Since a false positive REMOVES a row from the unmatched pile where new
+classes are found, precision-first governs, and nothing met it.
+
+**Catch it by hand instead. Question:** *does this check consume its WHOLE input, or does it
+match a span and let the rest through?* An anchored `fullmatch`, an all-elements loop, or a
+parse into a typed model consumes everything; a `search`, a `[0]`, a "contains" test, or a
+regex without `^…$` does not — and what it does not read, it silently accepts.
+
+The trap is that each part-check looks complete while you are writing it, and the gap names
+itself one reviewer round at a time. The arc that recorded this watched one validator take
+four rounds that way — a suffix inside a token, a duplicate entry, the text between tokens,
+a range after the final token — each fix guarding the span the last one had just made safe.
+Then the *fix* for that repeated the shape twice more: a tightened boundary that made a
+malformed pointer stop matching, and so dropped it from the checked set instead of failing
+on it. The sentence to distrust is *"that case can't appear here"*: it is a claim about
+input you have chosen not to inspect. When a fourth guard is going onto one validator, the
+answer is almost never a fifth — it is one anchored, total check.
+
 
 ## After every review round — the class-sibling sweep (before the next invocation)
 

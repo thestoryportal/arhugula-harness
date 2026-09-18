@@ -60,6 +60,63 @@ from pathlib import Path
 # r1 P2 on the class-2-drift-extension arc). The recurring "test codifies the drift"
 # shape that note pointed at is now class 16 — 14 unmatched rows in the gate log as of
 # base 63e19e3ee (2,162 findings) — and is still not a class-2 term.
+# ALSO evaluated and LEFT OUT: a claim-vs-code half for class 2 (2026-09-17, the
+# handoff-s2 supersede arc). Shape: prose ASSERTING a mechanism behaviour the code does not
+# have — never true, as opposed to the drift half, which was true and decayed. Pattern tried:
+# a claim-bearing subject (`claims|states|says|documented|guarantees|asserts`) within 120
+# non-sentence characters of a falsity marker (`but|is false|does not|never|contradict|
+# incorrectly`). At the 2,191-finding corpus it claimed 40 previously-unmatched rows and
+# leaked 0 of the `contradicting C-HE-NN` code-vs-contract cluster (a bare `contradict`
+# sweeps that whole cluster in — the same wrong direction as `drift`). It was still REFUSED,
+# on codex r2 P2: 6 of the 40 are operational uses of the same verbs in non-prose findings
+# (`arc_metrics.py:686` "a peer just claimed it, but"; `lib.sh:803` a lease claim;
+# `reservations.py:806` "asserted only via any()"), and a class-2 false positive REMOVES a
+# row from the unmatched pile, which is where new classes are discovered — the wrong
+# direction again. The discriminator this needs (is "claim" a sentence or a lease?) is not
+# in the classifier's input at all: `finding_text` is evidence plus location, and neither
+# says which. Two review rounds landed on this one mechanism, so it was subtracted rather
+# than hardened further. A future attempt needs a different INPUT (the cited file's own
+# bytes), not a wider vocabulary.
+# ALSO evaluated and LEFT OUT: a "validator reads a sub-span, accepts the rest unseen" class
+# (2026-09-17, the handoff-s2 supersede arc). The SHAPE is real and recurs across arcs — a
+# guard examines one element, one cell, one field, and treats the remainder as inspected.
+# The vocabulary is what fails. Three measured attempts: bare `only the first|unanchored`
+# claimed 10 rows across 9 arcs but two were different defects entirely, one reading too MUCH
+# (codex r7); narrowing to `validates only|never validates|does not validate` gave 7 rows
+# across 7 arcs but `never validates` / `does not validate` match TOTAL absence of validation,
+# which is not this shape at all — the class's own witness row, "Automatic rollback does not
+# validate the DELETE result", inspects no part of the result (codex r10); widening instead to
+# `checks only|requires only|examines only` reached 21 rows but ~6 were unrelated (a symlink
+# TOCTOU, a migration, two skill-doc findings), so precision fell to about 71%.
+# The discriminator the class needs is a CONJUNCTION — evidence of an inspected portion AND an
+# uninspected remainder — and a finding's free text does not reliably carry both halves. A
+# class-17 false positive REMOVES a row from the unmatched pile where new classes are found,
+# so precision-first is the stated policy and no variant met it. Same wall as the claim-vs-code
+# extension above, reached from a different direction. The shape is worth catching BY HAND —
+# "does this check consume its whole input, or match a span and let the rest through?" — and
+# that question lives in SKILL.md; a future attempt needs a different INPUT, not a wider
+# vocabulary.
+# ALSO evaluated and LEFT OUT: an "owed pointer refresh" class (U-HE-45, 2026-09-18). The
+# SHAPE is real and recurs — a diff finishes work and leaves a surface consumers read to
+# decide what to do next still naming what was just finished (6-8 corpus rows: Step-5-
+# executed-but-plan-still-unticked, fence-live-but-roadmap_status-still-says, decisions-
+# ratified-but-version-summary-still-open). It is NOT a class because the vocabulary cannot
+# carry it, measured over three review rounds, each trading one imprecision for another:
+#   (a) `(?:never|not |un)refreshe?` gave the `never` arm no separator, so it demanded
+#       "neverrefresh" and missed the plainest wording. It hid because the arc's own finding
+#       matched a DIFFERENT arm — a masked alternative is invisible until a row needs only it.
+#   (b) `just completed` / `already landed` need not describe the pointer at all: "The live
+#       pointer just completed validation successfully" matched while reporting no staleness.
+#   (c) `still (?:says|names|points)` has NO POLARITY, and polarity is not regex-expressible:
+#       "The live pointer is fresh and still points to the intended next unit" matches, so a
+#       CORRECT pointer reads as a stale one.
+# Each round's fix bought exactly one more round in which to find the next false surface, and
+# a false match is worse than `unmatched` — unmatched OWES an intake line, a false match
+# silences it, so an over-broad row actively hides new classes. Subtracted per the recorded
+# rule that an adversarial-hardening loop does not converge by adding layers. The substantive
+# defect this shape named on that arc is registered as B-288 instead, where prose can carry
+# the polarity a regex cannot. Note also that tools/test_governance_router.py already
+# forward-references "class 17" for the sub-span shape, so the number was spoken for.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -255,6 +312,16 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
+    # Added U-HE-45. The unit's OWN deliverable included refreshing the live
+    # next-action pointer; the diff shipped the register rows and left the pointer
+    # naming the unit it had just completed, so /roadmap-continue would route
+    # straight back to finished work. Recurs in this workspace: the owed refresh
+    # after a tiebreaker PASS, and "the refresh must be the immediate next commit".
+    # Distinct from class 2 (a stale COUNT or cite drifts over time) and from class
+    # 12 (a contract phrase QUOTED into the diff with no line behind it): here the
+    # obligation is a deliverable of the unit itself, and the surface it was owed on
+    # is one consumers READ to decide what to do next -- so the cost is misrouting,
+    # not a wrong number.
 }
 
 
