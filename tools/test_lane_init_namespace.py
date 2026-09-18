@@ -111,7 +111,13 @@ def subset_violations(text: str) -> list[tuple[int, list[str]]]:
     out = []
     for n, line in enumerate(text.splitlines(), start=1):
         for args in unset_statements(line):
-            names = set(re.findall(r"_LI_[A-Z_]+", args))
+            # The WHOLE identifier, then membership -- not a hand-narrowed class.
+            # `[A-Z_]+` stops at the first digit, so `_LI_ROOT2` was extracted as
+            # `_LI_ROOT` and a typo'd cleanup read as complete while the real
+            # `_LI_ROOT` survived in the caller (codex r11 P3). A shell identifier is
+            # [A-Za-z0-9_]+; extracting it whole lets NAMESPACE membership below do the
+            # deciding, which is one rule fewer, not one more.
+            names = set(re.findall(r"_LI_[A-Za-z0-9_]+", args))
             touched = names & set(NAMESPACE)
             if not touched:
                 continue
@@ -170,6 +176,20 @@ def test_a_guarded_one_line_unset_is_not_invisible():
 
 def test_a_complete_guarded_unset_is_not_falsely_flagged():
     assert subset_violations('  [ -n "$x" ] && unset _LI_SRC _LI_ROOT _LI_Q _LI_WT') == []
+
+
+def test_a_near_miss_name_does_not_count_as_clearing_the_real_one():
+    """A cleanup typo must not read as complete (codex r11 P3).
+
+    `_LI_ROOT2` is a different variable from `_LI_ROOT`. Extracting names with
+    `_LI_[A-Z_]+` stopped at the digit and yielded `_LI_ROOT`, so this statement
+    looked like it cleared the whole namespace while the real `_LI_ROOT` stayed set
+    in the caller -- silent, and exactly the bypass class the awk predecessor died of.
+    Widen the character class back and this reddens.
+    """
+    assert subset_violations("  unset _LI_SRC _LI_ROOT2 _LI_Q _LI_WT") == [(1, ["_LI_ROOT"])]
+    # ...and the honest spelling still passes, so the fix did not just break everything.
+    assert subset_violations("  unset _LI_SRC _LI_ROOT _LI_Q _LI_WT") == []
 
 
 def test_unset_f_alone_is_not_a_cleanup_site():
