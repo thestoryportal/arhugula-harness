@@ -418,9 +418,10 @@ def release_refusal(lease: dict, ground: Ground) -> str | None:
         )
 
     # The CONTENT MERGE's own sha, from the reservation that recorded it at step (vi) --
-    # never `unblocked_from`, which is the generic `blocked_at_sha`: only two of the ten
-    # block paths store the merge commit there, five store the PR head and two a refresh
-    # sha, so a failed run for an unrelated commit could otherwise authorize the release.
+    # never `unblocked_from`, which is the generic `blocked_at_sha`: of the ten block
+    # paths only two store the merge commit there, six store the PR head and two a
+    # refresh sha, so a failed run for an unrelated commit could otherwise authorize the
+    # release.
     sha = (res[1].get("merge_sha") or "") if res is not None else ""
     if not sha:
         return (
