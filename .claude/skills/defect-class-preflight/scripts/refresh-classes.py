@@ -124,8 +124,10 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     ),
     # A sourced shell file mutating its caller's shell IS this class's concern in another
     # substrate, but no vocabulary for it survives here. `caller's shell` was tried and
-    # WITHDRAWN: it claimed a finding this class does not own, and under the prefer-to-miss
-    # policy a term that steals from the unmatched pile does not earn its place. The evidence
+    # WITHDRAWN: it claimed a finding this class does not own -- an EXISTENTIAL claim, which
+    # survives a growing corpus because a later row cannot unmake an earlier one. Under the
+    # prefer-to-miss policy a term that steals from the unmatched pile does not earn its place.
+    # What is NOT restated is any COUNT or PRECISION figure; that evidence
     # is deliberately NOT restated here. The gate log only grows -- including with this arc's
     # own findings -- so any statement about what the term matches is true at one anchor and
     # false at the next -- which review rounds of this arc kept proving. Re-derive with

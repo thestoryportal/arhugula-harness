@@ -156,15 +156,20 @@ esac
 # error into the lane shell. Every scan site shared the defect and now shares this one mechanism,
 # so a new scan cannot reintroduce it by copying a guard wrong.
 #
-# TWO mechanisms, doing two different jobs -- each measured, not assumed:
-#   1. The FUNCTION BOUNDARY is what stops the fatal failure. In zsh a failed glob inside a
-#      function aborts only that function, so the caller resumes with an empty result instead of
-#      the whole sourced file dying. Measured: the identical glob at top level kills zsh
-#      (rc=126); inside a function it returns empty and the script survives, with or without
-#      `set -e`.
-#   2. The `(N)` qualifier is what keeps stderr CLEAN. Without it zsh still prints
-#      `no matches found` on every first-lane init -- noise from a sourced file into an
-#      interactive shell. Measured: stderr is empty with the arm and carries that line without.
+# What actually protects what, corrected twice before it was right -- the first two attributions
+# here were wrong, and the probes that "confirmed" them changed two variables at once:
+#   1. `(N)` is the PRIMARY guard. Under zsh it makes the glob not fail at all, so in shipped
+#      code the fatal path is never entered and stderr stays clean. Measured: without the arm,
+#      zsh prints `no matches found` on every first-lane init -- noise from a sourced file into
+#      an interactive shell -- and the pre-fix top-level form died rc=126 with a half-built lane.
+#   2. The `$( )` AT EACH CALL SITE is the containment if a glob ever does fail. It is NOT the
+#      function boundary: measured A/B on a sourced file under zsh 5.9, a failing glob in a
+#      function called DIRECTLY kills the whole sourced file at rc=126 (the next statement never
+#      runs), while the same function called as `$(f)` lets the file continue with an empty
+#      result. The subshell contains it; the function does not.
+#      CONSEQUENCE, stated because the earlier wording implied the opposite: this helper does NOT
+#      make misuse impossible. A future scan that calls it directly, or pipes it, reintroduces
+#      the rc=126 half-built lane if the glob ever fails. The call convention is `$( )`.
 # `(N)` is zsh's per-pattern NULL_GLOB qualifier, reached through `eval` so bash never parses it
 # -- the same guard shape the root resolution above uses. It is deliberately NOT `setopt
 # NULL_GLOB`: this file is SOURCED, and that would change every later unmatched glob in the
@@ -183,13 +188,23 @@ _li_lane_files() {
     [ -e "$1" ] || set --
   fi
   [ "$#" -eq 0 ] && return 0
-  printf '%s\n' "$@"
+  # Emit BASENAMES, never full paths, and let each caller re-form the path QUOTED. The word
+  # split at the call sites is safe for a basename -- a claim's filename is HARNESS_LANE_INDEX,
+  # which the `case` below admits only as digits -- and is NOT safe for a full path, whose
+  # prefix is $_LI_Q: an externally supplied value which the `case` below validates only as
+  # absolute, never as space-free. Measured
+  # on the full-path form: with one space in ARC_METRICS_QUEUE_DIR every claim became invisible
+  # to every scan, and a worktree already holding lanes/0 then sourcing with
+  # HARNESS_LANE_INDEX=1 got rc=0 with BOTH 0 and 1 claimed, where the direct glob it replaced
+  # refused. Shifting positional parameters keeps this loop free of a named variable.
+  while [ "$#" -gt 0 ]; do printf '%s\n' "${1##*/}"; shift; done
 }
 
 _lane_id_bound_elsewhere() {
   local want="$1" f id path
   [ -d "$_LI_Q/lanes" ] || return 1
   for f in $(_li_lane_files); do
+    f="$_LI_Q/lanes/$f"
     [ -f "$f" ] || continue
     IFS=' ' read -r id path < "$f"
     { [ "${id:-}" = "$want" ] && [ "${path:-}" != "$_LI_WT" ]; } && return 0
@@ -376,6 +391,7 @@ mkdir -p "$_LI_Q/lanes" 2>/dev/null
 # What this worktree already holds, resolved ONCE and used by both paths below.
 _li_have=""
 for _li_f in $(_li_lane_files); do
+  _li_f="$_LI_Q/lanes/$_li_f"
   [ -f "$_li_f" ] || continue
   IFS=' ' read -r _li_id _li_path < "$_li_f"
   if [ "${_li_path:-}" = "$_LI_WT" ]; then
@@ -461,6 +477,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   # exactly one of them can be the minimum.
   _li_min=""
   for _li_f in $(_li_lane_files); do
+    _li_f="$_LI_Q/lanes/$_li_f"
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     [ "${_li_path:-}" = "$_LI_WT" ] || continue
@@ -594,6 +611,7 @@ else
   # exactly one of them can be the minimum.
   _li_min=""
   for _li_f in $(_li_lane_files); do
+    _li_f="$_LI_Q/lanes/$_li_f"
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     [ "${_li_path:-}" = "$_LI_WT" ] || continue

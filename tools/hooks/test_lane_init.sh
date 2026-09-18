@@ -1176,14 +1176,17 @@ printf 'rc=%s claims=%s id=%s' "$?" \
 done
 
 # The LATE exits: libraries present, so execution reaches the index validation. The indices below
-# drive ../escape (non-integer, :320), 00 (leading zeros, :324) and 400 (>= 350, :331); the
+# drive ../escape ("must be an integer 0..349"), 00 ("must be canonical (no leading zeros)")
+# and 400 ("must be < 350") -- named by their refusal text, not by line, because this arc's own
+# insertions above them have already invalidated one set of line cites; the
 # ARC_METRICS_QUEUE_DIR case that follows drives the relative-path refusal (:141). NO CLAIM IS
 # MADE HERE ABOUT COMPLETENESS. Three successive rounds each wrote a bound over this set and each
 # was falsified by execution in the next -- r6 named a fixed pair, r7 replaced that with "every
 # refusal reachable with nothing but an environment variable", and r8 falsified THAT with :141.
 # A bound is a second copy of the list below, and second copies drift. The list is the coverage;
 # a new externally-reachable refusal is covered when it appears here, and not before.
-# The r6 absorption drove only the first index, and a bare `return 1` at :324 or :331 left the
+# The r6 absorption drove only the first index, and a bare `return 1` at either of the other two
+# left the
 # whole suite
 # byte-identical while an executed run exited 0 and walked on toward publishing a claim. There is
 # no prose bound here now: this list IS the coverage, so it cannot disagree with itself.
@@ -1194,7 +1197,7 @@ for SH in $SHELLS; do
   for BAD_IDX in ../escape 00 400; do
     rm -rf "$EXECLATE/.harness" "$ROOT/execlateq/lanes"; mkdir -p "$ROOT/execlateq/lanes"
     # HARNESS_LANE_ID is cleared explicitly: a lane shell exports it, and with it set zsh dies on
-    # lane-init.sh:152's unguarded glob over the deliberately-empty registry and never REACHES the
+    # the pre-fix unguarded registry glob over the deliberately-empty registry and never REACHES the
     # refusal -- the assertion would then pass for the wrong reason (spec lens, r7 P3).
     EXEC_LATE=$(cd "$EXECLATE" && env -u HARNESS_LANE_ID ARC_METRICS_QUEUE_DIR="$ROOT/execlateq" \
       HARNESS_LANE_INDEX="$BAD_IDX" "$SH" tools/hooks/lane-init.sh >/dev/null 2>&1
@@ -1204,6 +1207,35 @@ printf 'rc=%s claims=%s' "$?" \
       && ok "$SH: an EXECUTED lane-init refusing on HARNESS_LANE_INDEX=$BAD_IDX publishes no claim" \
       || bad "$SH: executed refusal on '$BAD_IDX' leaked state: '$EXEC_LATE' (want rc=1 claims=0)"
   done
+done
+
+# A queue path containing WHITESPACE or a GLOB METACHARACTER. Every other case in this file
+# uses a whitespace-free path, which is why the suite stayed green over a real regression: the
+# scan helper briefly emitted FULL PATHS that each call site word-split, so one space in
+# ARC_METRICS_QUEUE_DIR made every claim invisible to every scan. The failure was SILENT and
+# permissive -- measured, a worktree already holding lanes/0 then sourcing with
+# HARNESS_LANE_INDEX=1 got rc=0 and the registry ended holding BOTH 0 and 1 for one worktree,
+# where the direct glob it replaced refused. That is the stranding hazard the header at :17-19
+# forbids, and it was quieter than the zsh bug the helper exists to fix.
+#
+# The path carries a space AND a `*`: word-splitting and pathname expansion are two separate
+# triggers on a command substitution, and the helper's contract has to survive both.
+# (merge-gate concurrency lens, r9.)
+WSQ="$ROOT/q W*S"; WSWT="$ROOT/wswt"; mkdir -p "$WSWT/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$WSWT/tools/hooks/" \
+  || { echo "FATAL: wswt populate"; exit 1; }
+for SH in $SHELLS; do
+  rm -rf "$WSWT/.harness" "$WSQ"; mkdir -p "$WSQ/lanes"
+  WS=$(cd "$WSWT" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR="$WSQ" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+export HARNESS_LANE_INDEX=1
+source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc2=%s' \"\$?\"")
+  WS="$WS claims=$([ -d "$WSQ/lanes" ] && ls "$WSQ/lanes" | wc -l | tr -d ' ' || echo NODIR)"
+  # rc2=1 AND one claim: the second source must REFUSE to add a second entry for one worktree.
+  [ "$WS" = "rc2=1 claims=1" ] \
+    && ok "$SH: a queue path with a space and a glob char still refuses a second claim" \
+    || bad "$SH: whitespace/glob queue path broke reuse-detection: '$WS' (want rc2=1 claims=1)"
 done
 
 # The relative-ARC_METRICS_QUEUE_DIR refusal (:141). It needs its own case rather than another
@@ -1237,7 +1269,7 @@ printf 'rc=%s' "$?")
 done
 
 # A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.
-# Every refusal case above enters from a fresh shell and therefore cannot see state an earlier
+# The refusal cases above mostly enter from a fresh shell and so cannot see state an earlier
 # successful source left behind: measured before the fix, `lane_stack_allowed` survived a
 # refusal and returned 0 -- "bring the stack up" -- with the index defaulted to 0, i.e. another
 # lane's Docker project and ports. (codex r10 P2. Not destructive: `_lane_clear_orphaned_stack`
