@@ -489,6 +489,48 @@ not complete without it. The temptation sounds like protocol — *"the refresh i
 bundling. On the arc that surfaced this, the substantive defect is registered as `B-288`, where
 prose carries the polarity a pattern could not.
 
+### 18. The code departs from a cleared contract (added merge-door-release-verb; 23 rows at the 2,247-finding corpus, 14 of them previously unmatched)
+
+The implementation states something a cleared `C-HE-*` contract explicitly denies. Not a
+stale count, not an undischarged quote, not a test blessing the change — the code itself
+asserts the opposite of the contract, and usually because the contract was never re-read
+while the code was being narrowed.
+
+Recorded shapes: a holder gate admitting a terminal `merged` reservation against C-HE-03
+§6's explicit prohibition (the SAME defect across six rounds, which is what makes this a
+class rather than an incident); an audit declaring a canonical C-HE-30 statement false
+while saying no spec edit is owed; a conflict rate reported as an interval where canonical
+C-HE-13 §4 still requires the real rate; and this arc's own `TERMINAL_NOT_GREEN`, which
+honoured `TIMED_OUT`/`STARTUP_FAILURE`/`ACTION_REQUIRED` although C-HE-19 §1 declares the
+CI outcome domain to be exactly `{SUCCESS, FAILURE, CANCELLED}` — widening a
+terminal-state contract on a lane's own authority while that lane's spec amendment
+explicitly promised not to.
+
+**Question:** *for every constant, enum, allowlist or predicate this diff adds, does a
+cleared contract already declare that domain — and did I re-read it, or infer it from
+what the code around me happened to accept?* An enumerated set is the high-risk shape:
+it looks like a local implementation detail and is frequently a contract's domain
+restated from memory.
+
+Two exits, as class 12: discharge it (cite the contract text that admits your value) or
+route it (a domain change is the contract owner's call). What is never an exit is
+widening quietly because the wider set "seems safer" — a larger admissible set on a gate
+is strictly less safe, and it is the contract's job to say how much less.
+
+*Distinct from its neighbours, which is why it is its own class.* Class 12 is a contract
+phrase QUOTED into the diff with nothing discharging it — the words present, the line
+missing. Class 16 is the WITNESS asserting the departed behaviour, so review reads a
+covered change. This is the CODE half, whether or not any prose quotes it and whether or
+not a test blesses it. The cluster was already visible to class 2's note, which refused a
+bare `contradict` because it "sweeps that whole cluster in, the same wrong direction as
+`drift`" — correct for class 2, and the reason these rows sat unmatched: they needed
+their own home. The pattern binds `contradict` to `C-HE` for exactly that reason.
+
+*(Class 1 also gained `symlink` in the same pass: its containment rider already described
+the O_NOFOLLOW idiom, but the vocabulary did not carry the word, leaving 10 containment
+findings — a dangling link read as absent, a link followed without containment —
+unmatched at the same corpus.)*
+
 ### Vocabulary evaluated and LEFT OUT — "the guidance prescribes what the contract forbids" (2026-09-18)
 
 Class 12 catches prose that QUOTES a contract and discharges nothing. This is its inverse:

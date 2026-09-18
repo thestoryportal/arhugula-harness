@@ -119,7 +119,12 @@ from pathlib import Path
 # forward-references "class 17" for the sub-span shape, so the number was spoken for.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
-        r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
+        # `symlink` belongs to this class by its own containment rider (the O_NOFOLLOW +
+        # post-open fstat idiom), which the vocabulary did not carry. Measured at the
+        # 2,247-finding corpus: 72 rows mention it, 10 of them matched NO class, and all
+        # ten are containment defects -- a planted or dangling link read as
+        # absent, or followed without containment.
+        r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive|symlink"
     ),
     "2 prose stale / counts / cites": (
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
@@ -322,6 +327,30 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # obligation is a deliverable of the unit itself, and the surface it was owed on
     # is one consumers READ to decide what to do next -- so the cost is misrouting,
     # not a wrong number.
+    "18 the code departs from a cleared contract": (
+        r"contradict\w*\s+(?:the\s+)?(?:canonical\s+)?C-HE"
+        r"|canonical C-HE-\d+[^.]{0,80}(?:still requires|says|table|statement)"
+        r"|declares the complete"
+    ),
+    # Measured at the 2,247-finding corpus: 26 rows match, 14 of which matched no other
+    # class, and six of those fourteen are ONE defect recurring across rounds (a holder
+    # gate admitting a terminal `merged` reservation against C-HE-03 §6). The cluster was
+    # already NOTICED by class 2's own note, which refused a bare `contradict` because it
+    # "sweeps that whole cluster in, the same wrong direction as `drift`" -- correct for
+    # class 2, and the reason the rows sat unmatched: they needed their own home, not a
+    # prose-drift class. Placed LAST so it can never steal a row an earlier class claims.
+    #
+    # Distinct from its two neighbours, which is why it is not an extension of either.
+    # Class 12 is a contract phrase QUOTED into the diff with nothing discharging it --
+    # the words are present and the line is missing. Class 16 is the WITNESS asserting the
+    # departed behaviour, so review reads a covered change. This is the CODE half: the
+    # implementation states something the cleared contract explicitly denies, whether or
+    # not any prose quotes it and whether or not a test blesses it.
+    #
+    # `contradict` is safe HERE precisely because it is bound to `C-HE` -- the bare verb
+    # is what class 2 rejected. The second alternative carries its own claim shape
+    # (`canonical C-HE-N ... still requires/says/table/statement`) with a bounded window,
+    # so a passing cite of a contract number cannot satisfy it.
 }
 
 
