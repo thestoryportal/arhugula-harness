@@ -318,7 +318,18 @@ def test_venues_advertise_pack_section_list() -> None:
 # Matching only the path is how codex r9 could change §7's pointer to `§6` and keep every
 # ownership assertion green — the same sub-span shape class 17 names, in the test written
 # one round earlier to close the pointer hop.
-ROOT_POINTER_RE = re.compile(r"`docs/governance/([a-z0-9-]+\.md)`\s*§(\d+(?:\.\d+)*)")
+# Without a boundary, `§10.3.y` captures `10.3` and a bad pointer reads as a good one
+# (codex r10) — the same hole `SECTION_TOKEN_RE` closed four rounds earlier, on a regex
+# this one was written beside and did not inherit it from. The boundary differs from the
+# sibling's by one case, and the difference is load-bearing: a pointer ENDS A SENTENCE, so
+# `§7.` is correct and `(?![\w.])` would reject every real pointer in root. Reject only a
+# continuation — a word character, or a dot that is itself followed by one.
+ROOT_POINTER_RE = re.compile(r"`docs/governance/([a-z0-9-]+\.md)`\s*§(\d+(?:\.\d+)*)(?!\w)(?!\.\w)")
+# Every place a pack path is immediately followed by a `§`, well-formed or not. Tightening
+# the boundary above only makes a malformed pointer stop MATCHING, which drops it from the
+# checked set instead of failing on it — the same sub-span shape, one level up, found by
+# probing the fix for it. Comparing the two counts turns a dropped pointer into a red test.
+ROOT_POINTER_SITE_RE = re.compile(r"`docs/governance/[a-z0-9-]+\.md`\s*§")
 
 
 def root_section_bodies() -> dict[str, str]:
@@ -366,6 +377,11 @@ def test_every_root_pointer_lands_on_the_pack_that_owns_the_section() -> None:
         for pack, target in ROOT_POINTER_RE.findall(body)
     ]
     assert len(cited) >= 20, f"only {len(cited)} §-citing root pointers — parse broke"
+    sites = len(ROOT_POINTER_SITE_RE.findall(_read(ROOT_CLAUDE)))
+    assert sites == len(cited), (
+        f"{sites} pack paths in root are followed by a §, but only {len(cited)} parse as a "
+        f"section id — a malformed pointer such as `§10.3.y` is dropped, not checked"
+    )
     misdirected = sorted(
         (section, pack, target)
         for section, pack, target in cited

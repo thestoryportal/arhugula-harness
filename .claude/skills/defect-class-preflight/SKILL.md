@@ -454,43 +454,41 @@ what else is in the diff: a real amendment carries the spec/plan change (or a fi
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
 
-### 17. The validator reads a sub-span and accepts the rest unseen (added context-stack-handoff-s2-supersede; 7 rows across 7 arcs at the 2,204-finding corpus)
+### Vocabulary evaluated and LEFT OUT — "the validator reads a sub-span" (2026-09-17)
 
-A guard, parser, or check examines PART of its input and treats the remainder as if it had
-been inspected. Not an error swallowed — class 3's shape — but an input never looked at:
-the code returns success having read a prefix, one element, one cell, or one field.
+The shape is real and recurs across arcs: a guard, parser or check examines PART of its
+input — one element, one cell, one field, a prefix — and treats the remainder as if it had
+been inspected. Not an error swallowed (class 3's shape) but an input never looked at.
+Recorded instances: *"Only the first `-e/--regexp` value is examined"*; *"Self-resume
+validates only lane_id and PR"*; *"`_valid_head` validates only that arc_id and state are
+strings — a head with state `opne` is accepted"*; *"`read_pairs` validates only that one
+denominator header exists"*.
 
-Recorded shapes, all the same move: *"Self-resume validates only lane_id and PR, not that
-`live['reservation_id']` equals `--arc-id`"* (`merge_door.py:1295`); *"`_valid_head`
-validates only that arc_id and state are strings — a head with state `opne` is accepted"*
-(`codex_context_guard.py:1053`); *"the authority check only requires three non-empty cells,
-never validates each cell against the contract"* (`test_store_audit.py:151`); *"automatic
-rollback does not validate the DELETE result"* (`main_protection.py:211`); *"`read_pairs`
-validates only that one denominator header exists"* (`arc_disjoint_check.py:438`).
+**It is not a class, because the vocabulary cannot carry it.** Three attempts were measured
+against the live corpus and all three failed the precision bar: `only the first|unanchored`
+took 10 rows across 9 arcs but two were different defects, one of them reading too MUCH;
+`validates only|never validates|does not validate` took 7 across 7, but the last two
+alternatives match TOTAL absence of validation, which is a different defect — the class's
+own witness row inspected no part of its input; `checks only|requires only|examines only`
+reached 21 rows at about 71% precision. The discriminator needed is a conjunction — an
+inspected portion AND an uninspected remainder — and a finding's free text does not reliably
+carry both halves. Since a false positive REMOVES a row from the unmatched pile where new
+classes are found, precision-first governs, and nothing met it.
 
-**Question:** *does this check consume its WHOLE input, or does it match a span and let the
-rest through?* An anchored `fullmatch`, an all-elements loop, or a parse-into-a-typed-model
-consumes everything; a `search`, a `[0]`, a "contains" test, or a regex without `^…$` does
-not — and what it does not read, it silently accepts.
+**Catch it by hand instead. Question:** *does this check consume its WHOLE input, or does it
+match a span and let the rest through?* An anchored `fullmatch`, an all-elements loop, or a
+parse into a typed model consumes everything; a `search`, a `[0]`, a "contains" test, or a
+regex without `^…$` does not — and what it does not read, it silently accepts.
 
-The trap is that each part-check looks complete while you are writing it, and the gap only
-names itself one reviewer round at a time. The arc that added this class watched the same
-validator take four rounds that way: a suffix inside a token, then a duplicate entry, then
-the text between tokens, then a range after the final token — four fixes, each guarding the
-span the last one had just made safe, none of them asking what else was in the string. The
-sentence to distrust is *"that case can't appear here"*: it is a claim about input you have
-chosen not to inspect. Prefer one anchored, total check over a growing family of guards —
-when the fourth guard is being added to one validator, the answer is almost never a fifth.
-
-**Vocabulary measured and LEFT OUT** (codex r7): bare `only the first` and bare
-`unanchored`. Each matched a defect of a different kind — one row reads too MUCH (words
-from an adjacent command), another is quadratic backtracking rather than validation
-coverage — and a class-17 false positive REMOVES a row from the unmatched pile where new
-classes are found. Dropping them costs one genuine row (`rtk_shape_guard.py:188`, "Only the
-first `-e/--regexp` value is examined"); that trade is deliberate, because the failure modes
-are asymmetric — a false negative just leaves a row in the pile. Both rejections are pinned
-by `tools/test_review_loop_gate.py::test_class_17_refuses_the_terms_dropped_for_precision`,
-so re-adding either term reds.
+The trap is that each part-check looks complete while you are writing it, and the gap names
+itself one reviewer round at a time. The arc that recorded this watched one validator take
+four rounds that way — a suffix inside a token, a duplicate entry, the text between tokens,
+a range after the final token — each fix guarding the span the last one had just made safe.
+Then the *fix* for that repeated the shape twice more: a tightened boundary that made a
+malformed pointer stop matching, and so dropped it from the checked set instead of failing
+on it. The sentence to distrust is *"that case can't appear here"*: it is a claim about
+input you have chosen not to inspect. When a fourth guard is going onto one validator, the
+answer is almost never a fifth — it is one anchored, total check.
 
 
 ## After every review round — the class-sibling sweep (before the next invocation)

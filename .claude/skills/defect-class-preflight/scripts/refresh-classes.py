@@ -77,6 +77,25 @@ from pathlib import Path
 # says which. Two review rounds landed on this one mechanism, so it was subtracted rather
 # than hardened further. A future attempt needs a different INPUT (the cited file's own
 # bytes), not a wider vocabulary.
+# ALSO evaluated and LEFT OUT: a "validator reads a sub-span, accepts the rest unseen" class
+# (2026-09-17, the handoff-s2 supersede arc). The SHAPE is real and recurs across arcs — a
+# guard examines one element, one cell, one field, and treats the remainder as inspected.
+# The vocabulary is what fails. Three measured attempts: bare `only the first|unanchored`
+# claimed 10 rows across 9 arcs but two were different defects entirely, one reading too MUCH
+# (codex r7); narrowing to `validates only|never validates|does not validate` gave 7 rows
+# across 7 arcs but `never validates` / `does not validate` match TOTAL absence of validation,
+# which is not this shape at all — the class's own witness row, "Automatic rollback does not
+# validate the DELETE result", inspects no part of the result (codex r10); widening instead to
+# `checks only|requires only|examines only` reached 21 rows but ~6 were unrelated (a symlink
+# TOCTOU, a migration, two skill-doc findings), so precision fell to about 71%.
+# The discriminator the class needs is a CONJUNCTION — evidence of an inspected portion AND an
+# uninspected remainder — and a finding's free text does not reliably carry both halves. A
+# class-17 false positive REMOVES a row from the unmatched pile where new classes are found,
+# so precision-first is the stated policy and no variant met it. Same wall as the claim-vs-code
+# extension above, reached from a different direction. The shape is worth catching BY HAND —
+# "does this check consume its whole input, or match a span and let the rest through?" — and
+# that question lives in SKILL.md; a future attempt needs a different INPUT, not a wider
+# vocabulary.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -269,20 +288,6 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     #
     # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
     # of these proves the wrong thing.
-    # LEFT OUT here, measured (codex r7): bare `only the first` and bare `unanchored`.
-    # Both matched defects of a different kind — `rtk_shape_guard.py:256` reads too MUCH
-    # (words from an adjacent command), and the `refresh-classes.py:73` row is quadratic
-    # backtracking, not validation coverage. Every term below names the validator/coverage
-    # relationship itself, so it cannot pick those up. Dropping the two costs one genuine
-    # row (`rtk_shape_guard.py:188`, "Only the first -e/--regexp value is examined") and
-    # that trade is deliberate: a false positive REMOVES a row from the unmatched pile
-    # where new classes are found, while a false negative leaves it sitting there. The
-    # failure modes are asymmetric, so precision wins.
-    "17 validator reads a sub-span, accepts the rest unseen": (
-        r"ignores the (remainder|rest|trailing)"
-        r"|after the (final|last) (token|match|element|entry)"
-        r"|never validates|does not validate|validates only"
-    ),
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
