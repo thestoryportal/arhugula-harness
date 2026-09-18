@@ -1,5 +1,10 @@
 # Context-stack program — session-2 handoff (2026-09-16, evening)
 
+> **Status, 2026-09-17: closed. Nothing in this file is owed.** Every item of §2 landed or
+> was deliberately refused — PRs #1540, #1542, #1544, #1546, #1548, and U-HE-43 merged. §2
+> now records what each came to; §3 is still live guidance for any arc in this workspace.
+> Item §2 B was closed by *refusal* and is pinned by a test — read it before re-proposing it.
+
 Read this first; it supersedes §4 of `context-stack-handoff-2026-09-16.md` for ordering, and
 that file's §5 records the grounding this session did. Everything below is bound to
 `main` at `5785338cd` (refresh #1539) unless a sha says otherwise.
@@ -14,7 +19,7 @@ that file's §5 records the grounding this session did. Everything below is boun
 | Untracked in the root checkout | `docs/research/` (this program's whole record), `docs/diagrams/code-loop/visual-check/` (pre-existing, not ours) |
 | Checkpoints | `~/.gstack/projects/arhugula-v2/checkpoints/20260916-165858-preflight-finding-intake-landed-1538.md` (arc close) and the one written after this file |
 | Memory touched | `context-stack-program-state-2026-09-16`, `prose-obligation-needs-an-enforcing-venue` (new), `in-place-bg-job-venue-traps`, `bash-concurrency-and-parsing-gotchas` |
-| Branch hygiene owed | `feat/preflight-finding-intake` (#1538) and `roadmap-refresh-post-1538` (#1539) — deferred row filed; run `just branch-hygiene-pending` in an interactive session |
+| Branch hygiene owed | `feat/preflight-finding-intake` (#1538) and `roadmap-refresh-post-1538` (#1539) — **closed 2026-09-17**; neither branch remains on `origin` |
 
 What #1538 is, in one paragraph, so you can reason about it without reading the diff:
 `refresh-classes.py classify` is a pure verb (JSON findings in, `{finding_id: [class names]}`
@@ -26,90 +31,127 @@ table does not show, and records `instance-only` ids on the attestation. Class 1
 bytes are not the executed bytes" was opened by this mechanism on its own codex round.
 The end-to-end witness is `tools/test_review_loop_gate.py::test_one_finding_flows_into_the_class_table_end_to_end`.
 
-## 2. Remaining work, in order
+## 2. That work, and what it came to
 
-### A. Doc-only PR committing `docs/research/` — do this first
+**All six items are closed; nothing below is owed.** Session 3 (2026-09-16) ran A–E as
+five arcs and F merged separately. This section is kept as the record of what was decided
+and why — read it before proposing any of it again. Item B was closed by *refusal*, and is
+the one most likely to be re-proposed by someone skimming. The live results record is
+`context-stack-evals/README.md`, rows E1–E8.
 
-Why first: it is the durable record of the whole program and is one accidental `git clean`
-from gone; and every later item edits files inside it.
+### A. Commit `docs/research/` — done, PR #1540
 
-Constraints, each learned the hard way this session:
-- **Doc-only. Never bundle with code.** The stop-gate classifies `docs/**` as a design
-  surface; untracked docs beside a code diff already tripped `DESIGN_IMPL_MIX` in the
-  in-place parity lane. A doc-only PR skips the merge-gate; codex one round (lean protocol).
-- **Fix the scripts' absolute paths before committing them, or exclude the scripts.**
-  `e1_duplicate_findings.py:20`, `e3_cross_spec_drift.py:19`, `e4_session_history_index.py:24`,
-  `e5_duckdb_ledgers.py:19`, `e7_preload_brief.sh:10,12` hard-code `/Users/robertrhu/…`.
-  Resolve from `Path(__file__)` / `git rev-parse --show-toplevel`; the E7 scratch path
-  points into a job tmp dir that no longer exists.
-- **Interpreter is not the workspace's.** `common.py` imports `sentence_transformers` on MPS;
-  the README says scripts run under `~/.local/share/uv/tools/pixeltable/bin/python` and E5
-  under `uv run --with duckdb --with pyyaml`. Say so in the README (it does) and do not add
-  these deps to the workspace `pyproject.toml` (torch-free rule for the workspace).
-- **Large binaries.** `E2/` carries two PR diffs (135 K, 158 K) and four ~140–160 K prompt
-  files; `E6-vault/` is 619 notes. Decide per directory: commit `E*-results.md`, the README,
-  the audit, both handoffs, and the small scripts; consider leaving `E2/prompt_*.txt` and
-  `E6-vault/` out (state the exclusion in the README).
-- Recommended commit set: `context-stack-audit-2026-09-16.md`, both handoffs,
-  `context-stack-evals/README.md`, `E1/E3/E4/E5/E7/E8` results, `common.py`, the five
-  scripts (paths fixed), `E2/reviewer_prompt.txt` + `E2/result_*.md` + the two `*.blast.md`.
+`docs/research/` is tracked, 49 files. The oversized and regenerable run inputs were left
+out, and the exclusion is now enforced rather than remembered:
+`context-stack-evals/.gitignore` carries `E2/*.diff`, `E2/prompt_*.txt`, the two `E2b/`
+twins, `E6-vault/`, `*.log` and `E7/*.err`, and the README says what each excluded set
+was. The scripts' hard-coded `/Users/robertrhu/…` paths were resolved before commit; none
+remain.
 
-Acceptance: PR merged; `git status` clean of `docs/research/`; README's run instructions
-execute from a fresh clone path.
+### B. Class 2 `drift` extension — measured and REFUSED, PR #1542
 
-### B. Class 2 `drift` extension (data-only, ~10 minutes)
+**Do not re-propose this.** At the 2026-09-16 corpus of 2,103 findings, 35 rows said
+"drift" and 30 matched no class-2 term — which is what made the extension look like ten
+minutes of free coverage. Read them, though, and they are contract drift, configuration
+drift, roadmap drift and the arc-metrics `drift` cohort. Prose decay in the class-2 sense was at most 2
+rows under any prose-adjacent form tried, so a bare `\bdrift` would have pulled 30 rows
+*out* of the new-class intake pile: the wrong direction under the intake policy.
 
-At the 2026-09-16 corpus, 30 finding rows carry the word `drift` and match no class-2
-vocabulary (`stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition`).
-Add `\bdrift` to class 2's row in
-`.claude/skills/defect-class-preflight/scripts/refresh-classes.py` and a sentence to
-SKILL.md §2; measure before/after with the no-verb report (`python3 <script>`), and name the
-new class-2 count bound to the corpus date. The table↔SKILL parity test
-(`tools/test_refresh_classes.py::test_every_class_row_has_its_skill_section_and_vice_versa`)
-will pass unchanged (no new number). Run the sweep attestation on your own arc — this is a
-tooling PR, so one codex round, no lens.
+The refusal is pinned in three places, so it holds without this file:
+- the LEFT OUT note at `.claude/skills/defect-class-preflight/scripts/refresh-classes.py:53-62`;
+- `tools/test_refresh_classes.py::test_bare_drift_is_not_class_2_vocabulary`, which fails
+  if class 2 ever claims those rows;
+- class 16, "witness codifies the divergence", which claims the recurring "test codifies
+  the drift" shape this item was really pointing at.
 
-Also cheap, same PR: the witness lens's P3 — `test_report_counts_agree_with_classify` should
-feed one input through both the `classify` verb and the report and compare.
+The item's cheap second half did land in the same PR: the witness lens's P3 is now
+`tools/test_refresh_classes.py::test_report_counts_agree_with_classify`.
 
-### C. E4 with real questions (handoff-1 §4 A)
+### C. E4 with real questions — done as E4b, PR #1544. Verdict: AUGMENT.
 
-Reuse `e4_session_history_index.py` (index: 15,214 chunks / 243 sessions, ~100 s to embed).
-Replace the 30 one-line memory descriptions with 20 operator-shaped questions, ground truth
-= session id **and turn**, taken from `~/.claude/projects/-Users-robertrhu-Projects-arhugula-v2/*.jsonl`.
-Add hit@1 on the turn. Two example questions from handoff-1: "when did we decide Floor B was
-terminal and why", "what did codex say about the merge_door re-adoption check". Verdict
-threshold to write down before running: what hit@1 would justify memory entries becoming
-pointers.
+Twenty operator-shaped questions, ground truth session id and turn, threshold written
+before the run. Session hit@1 9/20, session hit@5 12/20, turn hit@1 7/20, turn hit@5 8/20 —
+short of the POINTERS bar. Memory stays the authority; the index answers "where did that
+come from". Full run at `context-stack-evals/E4b-results.md`.
 
-### D. E2 on code with callers (handoff-1 §4 B)
+### D. E2 on code with callers — done as E2b, PR #1546. Verdict: precision, not recall.
 
-Pick two merged PRs touching `harness-*/src` whose `graft blast` at depth 2 is non-empty
-(the two tried, #1527/#1528, had zero dependents, which is why E2 was "not supported").
-Same four-reviewer design (`E2/reviewer_prompt.txt`), verify every finding, report pack vs
-no-pack. Then one `just codex-review` trial with the pack (subscription, $0 metered) —
-Codex is the production transcript-less reviewer.
+Two PRs whose depth-2 blast radius was non-empty, same four-reviewer design, every finding
+verified by reading the cited file at the reviewed commit: 6 reported, 4 verified in full,
+2 verified with a qualification, 0 refuted. Supported for precision, not recall, at n=2.
+The operating lesson: attach the ~3 KB blast markdown to the out-of-family prompt and judge
+by citation accuracy. The run opened two register rows — B-248 (B-162's AST site counter
+sees 3 of 11) and B-249 (B-71's token population is wider than CP v1.119's wording, filed
+as a fork). Full run at `context-stack-evals/E2b-results.md`.
 
-### E. E3 reconfiguration (handoff-1 §4 C)
+### E. E3 reconfiguration — done as E3b, PR #1548. Verdict: embeddings add nothing.
 
-Define drift as a passage a `§`-cite or "relocated byte-verbatim" header claims identical
-to another and is not. Exclude version-token-only deltas and relocation headers. Compare
-governance-pack paragraphs against the root guide's pointer text and
-`claude-artifact-pointers.md`; each `Project_Workflow` delta body against its predecessor's
-same-numbered section. Score only claimed-identical pairs; then ask whether embeddings add
-anything over a normalised diff.
+Scoring only claimed-identical pairs turned up exactly one real drift out of the whole
+governance pack: `docs/governance/project-framing.md:3` claimed a byte-verbatim relocation
+of root `CLAUDE.md` §7 into a pack that has never carried a §7
+(`context-stack-evals/E3b-results.md:33`). §7 was relocated to
+`docs/governance/skills-and-subphases.md`, whose own header correctly claims it. Every
+other claimed-identical pair was byte-identical. A normalised diff finds all of it;
+embeddings add nothing where the claim is identity.
 
-### F. Then U-HE-43 per the roadmap pointer.
+**Fixed with this supersede — and the fix was four carriers, not one.** E3b scanned
+relocation *headers*, so it saw the one at `project-framing.md:3`. The same wrong claim
+had been copied into the three pack-routing tables that tell an agent which file to load:
+`CONTEXT.md:33`, `docs/governance/README.md:15` and `AGENTS.md:8` all listed §7 — and two
+of them described it as "the Phase 7 sub-phase enumeration" — under `project-framing.md`,
+so an agent that needed §7 would have loaded a pack that does not contain it. Treat the
+E3b count as a floor: it measures headers, not the routing tables that quote them.
+
+Nothing witnessed this until now. `tools/test_governance_router.py` compared pack
+FILENAMES across the three venues, never the §-lists beside them, so reinstating the wrong
+claim in `project-framing.md:3` and `CONTEXT.md:33` left the module green at 10 passed.
+Rows 11 and 12 of that module's mutation table now close it:
+`test_pack_sections_match_origin_header` reads each pack's origin header and requires set
+equality against the pack's own headings, and `test_venues_advertise_pack_section_list`
+requires each of README.md, CONTEXT.md and AGENTS.md to advertise exactly that set, exactly
+once. Both go red on every defect shape below, each verified by mutation probe.
+
+Every `§`-list is now EXPLICIT — one `§N` per section, no `§A–§B` ranges, no `§N.x` family
+shorthand — in the pack headers and all three venues alike. That is the load-bearing part
+and it was reached by subtraction, not design. The first version resolved abbreviations
+against the pack's own headings, which made every range self-satisfying, and three review
+rounds then found five distinct holes in that little grammar: an endpoint naming nothing
+(`§12.5.1–§99`), a span covering sections the pack lacks (`§1.1–§9.1`), a suffix the token
+regex silently dropped (`§12.5.y` reading as `§12.5`), a reversed range resolving to the
+empty set, and a second venue row for the same pack going unread. Each fix revealed the
+next. Dropping the grammar removed the INTERPRETATION; what still had to be enforced was
+the shape itself, and the round after the subtraction proved that the hard way. Writing
+`§1.1–§9` where `§1.1, §9` belongs yields the identical token set AND the identical `§`
+count, so an earlier version of this paragraph — which claimed the five shapes were now
+"unrepresentable" — was itself the claim-vs-code defect this file is about. The module now
+checks the separator between consecutive tokens directly, requires every `§` to produce a
+well-formed token, requires each venue to name a pack exactly once, and requires every
+claimed section to be one root `CLAUDE.md` actually numbers (without that last one, a
+fabricated `§99` advertised consistently in the pack and all three venues satisfies every
+equality).
+
+The new witness found two older drifts on its way there: `AGENTS.md` advertised
+`roadmap-protocol.md` without the `§12` the pack carries, and both `AGENTS.md` and
+`CONTEXT.md` abbreviated it as `§12.1–§12.3`, which sweeps in `§12.2.1` — safety-kernel
+text that stays in root and is not in the pack at all. Both fixed here.
+
+### F. U-HE-43 — merged.
 
 ## 3. Mechanics a fresh session will hit
 
 - **Venue.** If the session is an in-place background job, `just codex-check` reds exactly
   `tools/test_codex_stop_gate.py::test_stop_gate_emits_valid_stop_hook_json`
-  (`ROOT_CHECKOUT_EDIT`, plus `DESIGN_IMPL_MIX` while `docs/research/` is untracked). CI's own
+  (`ROOT_CHECKOUT_EDIT`). CI's own
   checkout passes; state it in the PR body. `just codex-context-check-ci` on the committed
   range is the authority.
 - **Local pyright.** Run `uv sync --all-packages` once; before it `uv run pyright` reported
   11,699 errors from unsynced members (CI shape is 0).
+- **`arc_disjoint_check` exit 1 is often not about your arc.** It `git merge-tree`s each
+  sibling head against your candidate, so a sibling that is merely STALE against `main`
+  reports CONFLICT on the files `main` moved — with your candidate set to an unmodified
+  `origin/main`, and again with this arc's commit on top, it named the same four
+  `.harness/` paths, none of which either candidate touched. Read the paths before
+  re-deriving: if none is yours, the refusal is inherited and no unit choice clears it.
 - **Arc ceremony that worked, in order:** `arc_disjoint_check.py check --candidate HEAD` →
   `reservations.py reserve` → commit → `review-template-preflight` / fill / `review-attest-preflight`
   → `review-with-failover-logged .harness/tmp/<arc>-rounds/r1.log` (background, 600 s timeout
@@ -124,9 +166,22 @@ anything over a normalised diff.
   attested_merge_tree` → `transition --to open` → `.harness/.next-action-draft` →
   `safe-merge.sh <pr>` (background; it merged, waited main, opened and merged the refresh) →
   `/context-save-lean` → `just arc-close …` → `defer.sh` branch-hygiene row.
-- **Lean protocol for tooling arcs** (memory `feedback-b230-lean-protocol-one-codex-round`):
+- **`DESIGN_IMPL_MIX` does not fire on `docs/**`** — §2 A of this file used to say it did,
+  and that was never checked. `DESIGN_RE` at `tools/codex_context_guard.py:25-28` matches
+  `design-substrate/`, `.harness/class_[123]_`, `.harness/architect_recommendation_`,
+  `Spec_*_v<n>`, `Implementation_Plan_*_v<n>` and `ADR-[FD]<n>` — nothing under `docs/`.
+  Bundling `docs/**` with code is a review-scope judgement, not a gate refusal.
+- **Doc-only does NOT keep an arc off the gate ledgers.** Skipping the three-lens merge-gate
+  is not the same as writing no gate rows: the mandatory codex round publishes a
+  `no_finding` / `finding` / `reviewer_unavailable` row through
+  `tools/review_wrapper_common.py:454-496` into `.harness/merge-gate-log.jsonl`. This arc
+  proved it — it opened believing a doc-only PR could not collide with a sibling lane on
+  the ledgers, and its own round-1 row landed in the file two sibling lanes were holding.
+  Plan for a hand-resolved ledger conflict on any arc that runs a reviewer at all; never
+  `merge=union` on the append-only ledgers (B-255).
+- **Lean protocol for tooling and doc arcs** (memory `feedback-b230-lean-protocol-one-codex-round`):
   one codex round, absorb P1/contract findings, single witness lens only when gate mechanics
-  change, no round 2. Items B–E above are all tooling/doc arcs.
+  change, no round 2.
 - **Do not run `graft build` in the shared checkout**; it regenerates four tracked files
   (memory `graft-build-regenerates-tracked-files`).
 - **Operator rules in force:** no metered API calls (subscription and local only); no
@@ -135,6 +190,8 @@ anything over a normalised diff.
 
 ## 4. Open questions only the operator can answer
 
-- Whether `E6-vault/` and the ~600 K of E2 prompt files belong in git at all (item A).
+- ~~Whether `E6-vault/` and the ~600 K of E2 prompt files belong in git at all (item A).~~
+  **Answered by #1540:** they stay out, enforced by `context-stack-evals/.gitignore`, with
+  the README recording what each excluded set was.
 - Whether `instance-only` intakes should carry a cap or a review trigger; today the rate is
   recorded on the attestation and nothing acts on it.

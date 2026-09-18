@@ -1,6 +1,6 @@
 # Governance pack — roadmap + drift-detection protocol
 
-*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §12, §12.1, §12.2, §12.3, §12.5, §12.5.1–§12.5.4 by U-CTX-13 (R-CTX-1 Arc 5, 2026-08-11).*
+*Relocated BYTE-VERBATIM from Root `CLAUDE.md` §12, §12.1, §12.2, §12.3, §12.5, §12.5.1, §12.5.2, §12.5.3, §12.5.4 by U-CTX-13 (R-CTX-1 Arc 5, 2026-08-11).*
 *The root file keeps every heading with its number and position, plus a resolving
 pointer to this file. Query this pack for the detail; do not preload it.*
 
