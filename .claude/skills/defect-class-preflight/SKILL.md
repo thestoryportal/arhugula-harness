@@ -542,6 +542,16 @@ match a span and let the rest through?* An anchored `fullmatch`, an all-elements
 parse into a typed model consumes everything; a `search`, a `[0]`, a "contains" test, or a
 regex without `^…$` does not — and what it does not read, it silently accepts.
 
+**The highest-risk site is a read you introduced THIS round to satisfy a different
+finding.** When an absorption replaces an inference with an authoritative read — a ledger
+query, an API call, a ground-truth lookup — the sweep's attention is on whether the new
+source is the right one, and nobody re-asks the sub-span question of the brand-new parsing
+code. That is where it lands: a 2026-09-18 arc swapped a proxy for a real CI query and, in
+the same commit, took `done[0]` from the run list (ignoring a second run still pending) and
+filtered it on `event` alone (ignoring which branch the run belonged to) — two instances of
+this exact shape, both in three lines written to close a different defect, both found by the
+next reviewer round. A new read is new input; parse all of it.
+
 The trap is that each part-check looks complete while you are writing it, and the gap names
 itself one reviewer round at a time. The arc that recorded this watched one validator take
 four rounds that way — a suffix inside a token, a duplicate entry, the text between tokens,
