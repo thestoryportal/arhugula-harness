@@ -46,6 +46,37 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
     assert out["a:2"] == []
 
 
+def test_class_2_claims_a_record_contradicts_its_own_evidence():
+    # Added U-HE-45's plan-record arc r4 as an "unfired" repair: class 2 already OWNS the shape
+    # (a checkable fact in durable prose that is wrong), but its vocabulary missed these two
+    # phrasings and both findings went to the unmatched intake pile. Revert either added
+    # alternative and the matching row here goes red.
+    #
+    # The added terms are deliberately narrow: they add FIVE corpus rows and no more. `omits`
+    # was measured and rejected at +84 — a class-2 that claims a third of the corpus stops
+    # discriminating, and a false match silences the intake line an unmatched finding owes.
+    rows = [
+        {
+            "finding_id": "c:1",
+            "observed_evidence": "The review audit conflicts with the durable gate log: rounds"
+            " 1-5 contain 2/3/3/2/1 findings (11 total), not 2/2/3/2/1 (10 total).",
+            "location": ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:7793",
+        },
+        {
+            "finding_id": "c:2",
+            "observed_evidence": "This identifies only B-285/B-286 as the actionable frontier,"
+            " but B-287 and B-288 also have status registered_finding and empty dependencies.",
+            "location": ".harness/clearance/x-cleared-2026-09-18.md:46",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    for row in rows:
+        assert "2 prose stale / counts / cites" in out[row["finding_id"]], (
+            row["finding_id"],
+            out[row["finding_id"]],
+        )
+
+
 def test_bare_drift_is_not_class_2_vocabulary():
     # handoff-s2 §2 B proposed `\bdrift` for class 2; the corpus said no (30 of 35 "drift"
     # rows are contract / configuration / roadmap drift or the arc-metrics drift cohort —

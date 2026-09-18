@@ -144,7 +144,18 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
     ),
     "2 prose stale / counts / cites": (
+        # `identifies only` and `, not <digits>` added U-HE-45's plan-record arc r4, where TWO
+        # class-2-shaped findings went UNMATCHED: a review audit that stated 2/2/3/2/1 and "10
+        # total" where the gate log's own round_n says 2/3/3/2/1 and 11, and a cleared marker
+        # that named two of the FOUR rows `--open` actually emits. Both are checkable facts in
+        # durable prose that were wrong — class 2's subject exactly; only its vocabulary missed
+        # the phrasing, which is the "unfired" repair, not a new class.
+        # MEASURED: these two terms add 5 rows and no more (adding `omits` would have added 84).
+        # Sampled, the 5 are homogeneous — a recipe that cannot record what its surrounding text
+        # claims, a PR body whose header contradicts its next sentence, a findings column reading
+        # "1 P3" where the row describes two, and the arc's own two.
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
+        r"|identifies only|,\s*not\s+\d"
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"

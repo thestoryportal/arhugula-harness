@@ -210,6 +210,15 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
+The class also covers a record that **contradicts its own evidence**: a review audit stating
+finding counts the gate log's own `round_n` refutes, or a cleared marker naming two of the four
+rows `--open` actually emits (both U-HE-45, 2026-09-18). Both went UNMATCHED until `identifies
+only` and `, not <digits>` were added — the class already owned the shape and only its vocabulary
+missed the phrasing, which is the "unfired" repair rather than a new class. The added terms are
+deliberately narrow: +5 corpus rows, where `omits` was measured and rejected at +84, because a
+class that claims a third of the corpus stops discriminating and a false match silences the
+intake line an unmatched finding owes.
+
 **Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
 ASSERTING a mechanism behaviour the code does not have (never true), as against the drift
 half above (true once, then decayed). Pattern tried: a claim-bearing subject
