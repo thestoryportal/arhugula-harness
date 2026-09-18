@@ -182,10 +182,12 @@ esac
 #      DIRECTLY instead is not contained -- measured. Nothing else is claimed here: a piped call
 #      site was asserted to be hazardous in an earlier revision and is NOT (zsh runs the
 #      left-hand component in a subshell, so a pipe contains it exactly as `$( )` does, also
-#      measured). Every earlier revision of this block named a hazard that had not been probed,
-#      so this one names only what was -- and no count of them is given here, because the
-#      first count written into this sentence was itself unverified and disagreed with the
-#      paragraph above it (merge-gate spec-conformance lens r11 P3).
+#      measured). The two wrong attributions named above each asserted a hazard that had not been
+#      probed, so this one names only what was. No wider claim is made about this block's other
+#      revisions: the first sentence written here counted them and was wrong, the second
+#      quantified over them and was also wrong -- the scope that survives measurement is the one
+#      already stated at the head of this paragraph (merge-gate spec-conformance lens r11 P3,
+#      r12 P3).
 # `(N)` is zsh's per-pattern NULL_GLOB qualifier, reached through `eval` so bash never parses it
 # -- the same guard shape the root resolution above uses. It is deliberately NOT `setopt
 # NULL_GLOB`: this file is SOURCED, and that would change every later unmatched glob in the

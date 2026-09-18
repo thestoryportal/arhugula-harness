@@ -1008,6 +1008,34 @@ printf 'rc=%s idx=%s' \"\$?\" \"\${HARNESS_LANE_INDEX:-unset}\"")
     || bad "$SH: lane did not come up over an empty registry: '$FRESH' (want rc=0 idx=0 globerr=no claims=1)"
 done
 
+# `_LI_ID` is cleared on BOTH arms of the one statement that sets it. The SUCCESS arm is
+# witnessed -- dropping its `unset` reddens this suite loudly. The FAILURE arm was not:
+# deleting the `_LI_ID` token from its cleanup left this suite green AND
+# tools/test_lane_init_namespace.py green, while the mutant leaked a SET `_LI_ID` into the
+# sourcing shell under both shells. The static checker cannot reach it -- its NAMESPACE is the
+# four unconditional names, and `_LI_ID` cannot join them without flagging every
+# unconditional exit as a subset violation -- so the arm needs a behavioural case, and this
+# is it. Mutation-probed both ways: with the token removed this case reports
+# `leaked=_LI_ID` in bash and zsh; restored, `leaked=` in both.
+#
+# The trigger is a PERSISTED marker in the legacy pre-sanitisation form, which
+# `_lane_init_id` refuses deliberately rather than resolving either way. It is pure file
+# CONTENT, so the case is hermetic -- no permission games, nothing that behaves differently
+# for root or on a different filesystem. (merge-gate witness-adequacy lens r12 P3.)
+for SH in $SHELLS; do
+  rm -rf "$FRESHWT/.harness" "$ROOT/mintfailq"; mkdir -p "$FRESHWT/.harness" "$ROOT/mintfailq"
+  printf '%s\n' 'host-with space-abc' > "$FRESHWT/.harness/.lane-id"
+  # `${_LI_ID+_LI_ID}` tests DEFINEDNESS, not emptiness: a leak of the empty string is still a
+  # name left in the caller's shell, and `${_LI_ID:-}` would report it as absent.
+  MINTFAIL=$(cd "$FRESHWT" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR="$ROOT/mintfailq" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s leaked=%s' \"\$?\" \"\${_LI_ID+_LI_ID}\"")
+  [ "$MINTFAIL" = "rc=1 leaked=" ] \
+    && ok "$SH: a failed id mint refuses and leaves no _LI_ID in the caller's shell" \
+    || bad "$SH: id-mint failure arm wrong: '$MINTFAIL' (want rc=1 leaked=)"
+done
+rm -rf "$FRESHWT/.harness" "$ROOT/mintfailq"
+
 # zsh names the sourced file in `$0` only while FUNCTION_ARGZERO is set. It is on by
 # default, but it is an ordinary option a lane's zsh config may turn off, and then `$0` is
 # the bare shell name and any root derived from it resolves against the caller's cwd. The
@@ -1317,8 +1345,9 @@ done
 # `_LI_ID` is deliberately NOT among them, and the omission is the contract rather than an
 # oversight: it is the lifetime-scoped disposal described in lane-init.sh's header, cleared
 # only on the two arms of the statement that sets it, so a refusal exiting above that point
-# leaves a caller's pre-existing value standing. Measured against unmutated code at this head:
-# adding `_LI_ID=e` to the fixture below yields PASS=160 FAIL=2, reddening in BOTH shells.
+# leaves a caller's pre-existing value standing. Measured against unmutated code: adding
+# `_LI_ID=e` to the fixture below reddens this case in BOTH shells -- no suite total is quoted,
+# because a later case added anywhere in this file moves it while the shape stays true.
 # The observation is a scan, so it would see the name; what bounds this case is what it
 # SEEDS. Widening the seed means widening the code to clear the name at every exit -- the
 # hand-maintained list tools/test_lane_init_namespace.py exists to refuse -- so the narrower
