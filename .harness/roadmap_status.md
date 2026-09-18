@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `bd0c6c39ba14` |
+| `workspace_state_hash` | `a928c7c170e5` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `dc68fd8c` —  |
+| `git_head` | `0a13e41e` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -44,7 +44,7 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1561 | `fix/lane-init-shell-portability` | — | — |
-| #1573 | `ops/refresh-pointer-draft-ref` | — | — |
+| #1575 | `docs/u-he-45-plan-tick` | — | — |
 
 ---
 
@@ -52,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1576 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| 1573 | 2026-09-18 | amended the live pointer: forward-register fence down to two reservations; named the drafted B-273..B-276 checkpoint |
 | PR #1569 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1571 | 2026-09-18 | landed the two merge-door rows from #1568's landing; ledger-only |
 | PR #1568 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1566 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
