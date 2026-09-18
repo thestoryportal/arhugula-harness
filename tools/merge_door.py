@@ -37,6 +37,15 @@ from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish
 # polls, the base a terminating refresh must carry, and the branch whose run is the
 # authoritative post-merge result (a same-commit run from another branch is not it).
 DEFAULT_BRANCH = "main"
+# Conclusions that constitute an OBSERVED TERMINAL NON-SUCCESS for C-HE-06 v1.8 X8. This
+# is not the complement of `ci_is_green`: that helper answers "may I treat this as green",
+# so it maps null/pending/unknown to False, which X8 must NOT read as a witnessed failure.
+# X8 needs the positive fact that the run finished badly, so the set is explicit and
+# anything outside it -- a null conclusion, a schema-drifted value, `neutral`, `skipped`,
+# `stale` -- fails closed. `CANCELLED` is in, per C-HE-19 §2's refusal to treat it as green.
+TERMINAL_NOT_GREEN = frozenset(
+    {"FAILURE", "CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
+)
 DOOR = QUEUE_DIR / "merge-door"
 LEASE = DOOR / "LEASE"
 RATE_K = 5
@@ -434,7 +443,9 @@ def release_refusal(lease: dict, ground: Ground) -> str | None:
             for r in ground.gh_runs_for_sha(sha)
             # `event` alone does not prove the DEFAULT-BRANCH run: the same commit can
             # carry a run from another branch, whose verdict is not the authoritative one.
-            if r.get("event") in (None, "push") and r.get("headBranch") in (None, DEFAULT_BRANCH)
+            # EXACT equality, never `in (None, ...)`: a partial or schema-drifted record
+            # missing either field would otherwise be admitted as proof it never carried.
+            if r.get("event") == "push" and r.get("headBranch") == DEFAULT_BRANCH
         ]
     except Exception as exc:  # any ground-truth failure fails CLOSED
         return (
@@ -456,6 +467,18 @@ def release_refusal(lease: dict, ground: Ground) -> str | None:
             f"the merge SHA {sha[:12]}'s own `{DEFAULT_BRANCH}` run is GREEN. There is "
             "nothing to recover: resume the landing with `land` so it completes step "
             "(viii) and releases at step (ix), rather than freeing the door here."
+        )
+    # A completed run whose conclusion is null, absent or unrecognized is not an OBSERVED
+    # terminal non-success -- it is an unreadable one, which X8 fences exactly as it
+    # fences a pending run. Asking `not ci_is_green(...)` here would silently promote
+    # every such record to "failed", so the positive set is required instead.
+    unwitnessed = [r for r in runs if (r.get("conclusion") or "").upper() not in TERMINAL_NOT_GREEN]
+    if unwitnessed:
+        return (
+            f"the merge SHA {sha[:12]}'s own `{DEFAULT_BRANCH}` run completed with "
+            f"conclusion {unwitnessed[0].get('conclusion')!r}, which is not an observed "
+            f"terminal non-success ({'/'.join(sorted(TERMINAL_NOT_GREEN))}). X8 admits "
+            "only a witnessed failure; an unreadable conclusion is unconfirmed."
         )
     return None
 

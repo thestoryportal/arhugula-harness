@@ -2205,7 +2205,9 @@ def _release_ground(monkeypatch, ci="failure", status="completed"):
     """Inject the merge SHA's own run for the release gate, which reads it from ground
     truth rather than inferring it from the block reason (codex r6)."""
     g = FakeGround(ci=ci)
-    g.gh_runs_for_sha = lambda sha: [{"status": status, "conclusion": ci, "event": "push"}]
+    g.gh_runs_for_sha = lambda sha: [
+        {"status": status, "conclusion": ci, "event": "push", "headBranch": md.DEFAULT_BRANCH}
+    ]
     monkeypatch.setattr(md, "default_ground", lambda: g)
     return g
 
@@ -2378,6 +2380,59 @@ def test_release_verb_fails_closed_when_ground_truth_is_unreadable(door, monkeyp
     assert md.read_lease()["lease_token"] == fresh["lease_token"]
 
 
+# mutation-probe: allow a MISSING event/headBranch through the authoritative-run filter
+# (codex r8 P2 — `in (None, "push")` admits a partial or schema-drifted record as proof of
+# something it never carried)
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"status": "completed", "conclusion": "failure"},  # neither field
+        {"status": "completed", "conclusion": "failure", "event": "push"},  # no branch
+        {  # no event
+            "status": "completed",
+            "conclusion": "failure",
+            "headBranch": "main",
+        },
+    ],
+)
+def test_release_verb_refuses_a_run_record_missing_its_provenance(door, monkeypatch, record):
+    fresh = _unblocked_successor()
+    _step_vi()
+    g = _release_ground(monkeypatch)
+    g.gh_runs_for_sha = lambda sha: [dict(record)]
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: ask `not ci_is_green(...)` instead of the positive terminal set (codex r8
+# P2 — ci_is_green maps null/unknown to False, so that question silently promotes every
+# unreadable conclusion to "witnessed failure", which is the opposite of fail-closed)
+@pytest.mark.parametrize("conclusion", [None, "", "neutral", "skipped", "stale", "weird_new"])
+def test_release_verb_refuses_a_conclusion_that_is_not_a_witnessed_failure(
+    door, monkeypatch, conclusion
+):
+    fresh = _unblocked_successor()
+    _step_vi()
+    _release_ground(monkeypatch, ci=conclusion)
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+@pytest.mark.parametrize(
+    "conclusion", ["failure", "cancelled", "timed_out", "startup_failure", "action_required"]
+)
+def test_release_verb_admits_every_witnessed_terminal_failure(door, monkeypatch, conclusion):
+    """The admit arm, swept across the whole set so the fix is bounded on both sides."""
+    _unblocked_successor()
+    _step_vi()
+    _release_ground(monkeypatch, ci=conclusion)
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert md.read_lease() is None
+
+
 # mutation-probe: key the run query off `unblocked_from` instead of the reservation's
 # merge_sha (codex r7 P1 — only 2 of the 10 block paths store the merge commit there; five
 # store the PR head, so a red run for an UNRELATED commit would authorize the release)
@@ -2390,7 +2445,14 @@ def test_release_verb_consults_the_merge_sha_not_the_blocked_sha(door, monkeypat
     def runs(sha):
         seen.append(sha)
         # the merge commit's run is red; the blocked sha's would be green if consulted
-        return [{"status": "completed", "conclusion": "failure", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "failure",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
@@ -2406,8 +2468,18 @@ def test_release_verb_refuses_when_any_run_for_the_sha_is_still_pending(door, mo
     _step_vi()
     g = _release_ground(monkeypatch)
     g.gh_runs_for_sha = lambda sha: [
-        {"status": "completed", "conclusion": "failure", "event": "push"},
-        {"status": "in_progress", "conclusion": None, "event": "push"},
+        {
+            "status": "completed",
+            "conclusion": "failure",
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+        {
+            "status": "in_progress",
+            "conclusion": None,
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
     ]
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
     assert md.main(["release", "--lane-id", "A"]) == 4
