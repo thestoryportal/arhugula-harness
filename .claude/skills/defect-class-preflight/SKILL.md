@@ -489,6 +489,33 @@ not complete without it. The temptation sounds like protocol — *"the refresh i
 bundling. On the arc that surfaced this, the substantive defect is registered as `B-288`, where
 prose carries the polarity a pattern could not.
 
+### Vocabulary evaluated and LEFT OUT — "the guidance prescribes what the contract forbids" (2026-09-18)
+
+Class 12 catches prose that QUOTES a contract and discharges nothing. This is its inverse:
+prose that PRESCRIBES an action a cleared contract forbids. Recorded instance — a ship-pr
+recovery section told operators to unblock, release the merge-door lease, and land a repair
+when post-merge CI reds on the landed commit's own bytes, while C-HE-06 states the lease is
+never released until that run is confirmed and defines no repair-PR exception. It is the
+more dangerous direction: an undischarged quote is inert, whereas a prescription is executed,
+and in this workspace guidance prose is read by agents that do what it says — so the defect
+launders a contract breach into documented practice.
+
+**Not a class, on measurement.** Against the live 3,288-row corpus, `instructed to violate`,
+`without amending`, and `violate[s] the committed` each matched exactly ONE row — this
+finding's own. The nearest neighbour (`the committed plan instructs operators to run
+merge-door-unblock with that refresh PR, so the documented recovery command always fails`)
+is a DIFFERENT failure: documented guidance that fails loudly, not guidance that succeeds
+and breaks an invariant. Cardinality 1 with no discriminating vocabulary is precisely the
+shape the two subtractions above were subtracted for, and a false match costs more than an
+unmatched row because it silences the intake line.
+
+**Sweep it by hand. Question:** *does any prose in this diff tell a reader to DO something
+— a command, a recovery, an order of operations — that a cleared contract forbids?* The
+exits are class 12's: discharge it (cite the contract text that permits it) or route it (a
+spec amendment or carve-out is the contract owner's call). Deleting the contract's name
+while keeping the instruction is the worst of the three, and the most tempting, because the
+prose then reads clean. Promote this to a real class at a second instance.
+
 ### Vocabulary evaluated and LEFT OUT — "the validator reads a sub-span" (2026-09-17)
 
 The shape is real and recurs across arcs: a guard, parser or check examines PART of its
