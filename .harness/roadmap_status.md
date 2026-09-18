@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `4f5428d5b49c` |
+| `workspace_state_hash` | `bd0c6c39ba14` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `d88487ba` —  |
+| `git_head` | `dc68fd8c` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -44,7 +44,7 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1561 | `fix/lane-init-shell-portability` | — | — |
-| #1569 | `feat/u-he-45-roadmap-s-step-rows` | — | — |
+| #1573 | `ops/refresh-pointer-draft-ref` | — | — |
 
 ---
 
@@ -52,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1569 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1571 | 2026-09-18 | landed the two merge-door rows from #1568's landing; ledger-only |
 | PR #1568 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1566 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1563 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
