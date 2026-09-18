@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `403555919559` |
+| `workspace_state_hash` | `41d966bce853` |
 | `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `b2a4c9d2` — re-anchored: #1586 recorded its own first refresh commit, not the content merge tip |
+| `git_head` | `12143ce9` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1584).** #1584 landed the merge-door block row carved out of #1575's refresh, and closed that arc's door state: the lease was unblocked from `ba7f609b2` and its successor released, so the door is free. The row is filed with `disposition: null` PERMANENTLY — `adjudicate` refuses with exit 2 once an arc's reservation is terminal, and a door block is only ever cleared after the PR merges, so the disposition window never overlaps the resolution window; at this HEAD the log holds 23 door rows and 844 adjudications with an intersection of 0. That is the B-285 family (a tool precondition that makes a required record unreachable once the arc closes) and is owed a register row when the `u-he-40` fence lifts — that reservation is `pending` and HELD at B-244, a standing operator DEFER, so `.harness/forward-register.yaml` stays untouched. Next work, in order: (1) **#1585 is OPEN and closes B-292** — the lane-init plan skeleton sketched a bash-only `${BASH_SOURCE[0]}` inside a block its own label calls `(sourced)`; it took the pointer route (mark the sketch indicative, point at the shipped `tools/hooks/lane-init.sh` ladder) rather than syncing the line, because the sketch has diverged far beyond it and a copied ladder would mint a second authority free to drift. Merge it before opening new work. (2) **B-293**, the witness gap #1561 registered rather than closed: 9 of `lane-init.sh`'s 14 refusal exits carry `return 1 2>/dev/null || exit 1` tails no fixture drives, so substituting a bare `return 1` at any of them leaves the suite byte-identical; start at the read-only-`.harness/` site, the one with a zero-env-var trigger and a measured rc=1, and note the row defers the stronger refuse-execution-outright form to its own arc. (3) **B-289/B-290/B-291** — the `_LI_*` namespace scanner's lexical bound, the gate-log reducer's blindness to the legacy narrative row shape, and the missing forward-id allocator that produced both of this arc's renumberings. This pointer deliberately names no unit id: the frontier is register rows, which no `hook_roadmap_next` carrier can express (B-288), and a single incidental unit mention reds the consumer suite. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
+**Current next action (post-#1585).** #1585 closed B-292: the lane-init plan skeleton no longer sketches a bash-only `${BASH_SOURCE[0]}` inside a block its own label calls `(sourced)`, and the block is now marked indicative and points at the shipped `tools/hooks/lane-init.sh` ladder as authoritative. Verified on main: the idiom is absent and the marker is present. The pointer route was taken over syncing the line because the sketch has diverged far beyond it and a copied ladder would mint a second authority free to drift. Next work, in order: (1) **B-293**, the witness gap #1561 registered rather than closed — `lane-init.sh` carries the `return 1 2>/dev/null || exit 1` tail at 14 refusal exits and only five are driven at the EXECUTED entry point, so substituting a bare `return 1` at any of the other nine leaves the suite byte-identical. Take closure (a): drive the externally-reachable refusals, starting at the read-only-`.harness/` site, which has a zero-env-var trigger and a measured rc=1. The row defers the stronger form (refuse execution outright so every `return` is guaranteed sourced) to its own arc, because sourced-vs-executed detection is shell-divergent and is the minefield #1561 spent nine gate rounds in. Either closure OWES a mutation-probe witness that a bare `return 1` at the chosen site REDS the suite; today none of the undriven sites does, so the probe is the acceptance criterion, not a formality. (2) **B-289/B-290/B-291** — the `_LI_*` namespace scanner's lexical bound, the gate-log reducer's blindness to the legacy narrative row shape, and the missing forward-id allocator that produced both of this arc's renumberings. (3) A registered-but-unfiled finding from this arc: a merge-door block row can never be adjudicated (`adjudicate` exits 2 once the reservation is terminal, and a block only clears after the merge), so all 23 door rows carry `disposition: null`; and `roadmap_status_refresh --refresh` stamps its anchor from the worktree HEAD, so regenerating on the refresh branch silently records the wrong parent and reds main while the PR stays green — both are B-285-family and both are owed register rows once the `u-he-40` fence lifts. That reservation is `pending` and HELD at B-244, a standing operator DEFER, so `.harness/forward-register.yaml` stays untouched and B-292's own row is not yet marked closed. This pointer names no unit id: the frontier is register rows, which no `hook_roadmap_next` carrier can express (B-288), and one incidental unit mention reds the consumer suite. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -46,7 +46,6 @@
 | #1578 | `ops/gate-log-rows-post-1573` | — | — |
 | #1579 | `feat/merge-door-release-verb` | — | — |
 | #1583 | `docs/merge-door-bypass-incident` | — | — |
-| #1585 | `fix/b-292-plan-skeleton-sourced-root` | — | — |
 
 ---
 
@@ -54,11 +53,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1585 | 2026-09-18 | #1585 closed B-292 (doc-only, verified on main). Generated AT the content merge tip 12143ce9 so the recorded git_head equals this refresh's own future merge parent. |
 | 1586 | 2026-09-18 | #1586 landed the post-#1584 refresh but recorded git_head=8795402f (its own first refresh commit) instead of f4c8f653 (the merge commit's parent), because the content was regenerated on the refresh branch after an amend rather than at the content merge tip. The PR went green and main's own run hard-failed ROADMAP_STATUS_DRIFT. This re-anchors at b2a4c9d2. |
 | 1584 | 2026-09-18 | #1584 landed the carved-out merge-door block row; the refresh lands as the IMMEDIATE next commit so the following content merge still has a verified refresh point as its parent. |
 | PR #1581 | 2026-09-18 | durable governance: prose findings are P3 and non-blocking; wired into merge-gate + defect-class-preflight |
 | PR #1575 | 2026-09-18 | U-HE-45 as-built plan record + clearance marker (sibling lane) |
-| PR #1561 | 2026-09-18 | lane-init zsh portability: fixed a real rc=126 half-built-lane defect on a fresh empty registry and a claim-invisibility regression; 14 merge-gate rounds |
 
 ---
 
