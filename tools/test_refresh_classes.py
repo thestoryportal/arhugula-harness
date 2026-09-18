@@ -46,6 +46,47 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
     assert out["a:2"] == []
 
 
+def test_record_contradicts_its_evidence_is_not_class_2_vocabulary():
+    # U-HE-45's plan-record arc tried THREE terms for this shape and withdrew all three; the
+    # ALSO-evaluated-and-LEFT-OUT note above CLASSES carries the measurements. This pins the
+    # withdrawal so none of them creeps back.
+    #
+    # p:1/p:2 are the genuine members and they STAY in the intake pile — the shape is class 2's
+    # subject, but no bounded vocabulary reaches it. n:1/n:2 are the counterexamples that killed
+    # the last two terms: an ordinary numeric contrast, and an "identifies only" that is about a
+    # sanitizer rather than a record. Re-add `,\s*not\s+\d` and n:1 goes red; re-add
+    # `identifies only` and n:2 goes red.
+    rows = [
+        {
+            "finding_id": "p:1",
+            "observed_evidence": "The review audit conflicts with the durable gate log: rounds"
+            " 1-5 contain 2/3/3/2/1 findings (11 total), not 2/2/3/2/1 (10 total).",
+            "location": ".harness/plan/x.md:7793",
+        },
+        {
+            "finding_id": "p:2",
+            "observed_evidence": "This identifies only B-285/B-286 as the actionable frontier,"
+            " but B-287 and B-288 also qualify.",
+            "location": ".harness/clearance/x-cleared-2026-09-18.md:46",
+        },
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "The API returns 1, not 2.",
+            "location": "harness-cp/src/harness_cp/x.py:10",
+        },
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "The sanitizer identifies only SQL injection and therefore lets"
+            " XSS through.",
+            "location": "harness-as/src/harness_as/y.py:22",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    name = "2 prose stale / counts / cites"
+    for row in rows:
+        assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+
+
 def test_bare_drift_is_not_class_2_vocabulary():
     # handoff-s2 §2 B proposed `\bdrift` for class 2; the corpus said no (30 of 35 "drift"
     # rows are contract / configuration / roadmap drift or the arc-metrics drift cohort —
@@ -472,6 +513,52 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         assert "16 witness codifies the divergence" in out[r["finding_id"]], r["location"]
     for r in not_codifying:
         assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
+
+
+def test_record_field_vs_body_is_not_class_vocabulary():
+    # U-HE-45's plan-record arc shipped this shape as class 18 and SUBTRACTED it after two
+    # consecutive rounds landed on it (that arc's r2 and r3); the ALSO-evaluated-and-LEFT-OUT
+    # note above CLASSES carries the measurements.
+    #
+    # WHAT THIS TEST IS AND IS NOT (codex r4 P3): the bound diff adds class 18 and removes it
+    # again, so `CLASSES` is behaviourally IDENTICAL to base and this test passes with the
+    # classifier edits reverted. It therefore does NOT witness a delta in this diff — it is
+    # coverage of pre-existing behaviour whose job is to make a FUTURE re-addition go red.
+    # Calling it a subtraction witness would be the overclaim class 4 is about.
+    #
+    # p:1/p:2 are the genuine members and they STAY in the intake pile, which is the right place
+    # for a shape whose vocabulary was measured unable to carry it. n:1/n:2 are the two false
+    # positives that killed it: both keep a field term and a contradiction term in ONE sentence
+    # while describing nothing of the kind, so no window separates them — and n:2 additionally
+    # shows `mark` matching inside `benchmarks`. If anyone re-adds the row, these are what go red.
+    rows = [
+        {
+            "finding_id": "p:1",
+            "observed_evidence": "B-282 is marked `open` even though its own summary says"
+            " U-HE-40 is HELD and U-HE-41 is not startable.",
+            "location": ".harness/forward-register.yaml:11947",
+        },
+        {
+            "finding_id": "p:2",
+            "observed_evidence": "This marks the combined Step 1-2 complete even though the"
+            " status says its required half was NOT performed.",
+            "location": ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:7798",
+        },
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "The status field is parsed correctly even though a missing"
+            " verdict file makes the unrelated hook fail.",
+            "location": "tools/merge_gate_log.py:347",
+        },
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "The benchmarks remain open even though the sample size is small.",
+            "location": "tools/arc_cost.py:1",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    for row in rows:
+        assert out[row["finding_id"]] == [], (row["finding_id"], out[row["finding_id"]])
 
 
 def test_class_18_needs_a_contract_reference_on_every_alternative():

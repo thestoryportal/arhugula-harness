@@ -7752,8 +7752,62 @@ def main(argv=None) -> int:
 
 **Depends on.** U-HE-44.
 
+**Unit status (as-built, 2026-09-18).** Step 3 ran and is merged; Step 1–2 is HALF done and stays UNTICKED for that reason — see the `--next-action` bullet below. The row-registration half landed on PR #1569
+(`dc68fd8c4779db6d78860ef4e4130668ce72f0c0`, door-merged; main's own post-merge CI green).
+Step 3's terminating refresh is #1574 (`96e1739c5`) — issued by the merge door itself rather
+than a hand-authored PR, which is the production continuation's behaviour. A tick here means
+the step was carried out, never that the sketch below is what shipped. Divergences, each
+deliberate:
+
+- **The registered statuses are NOT all forward work.** The scope was authored when S1–S8 were
+  all ahead of execution; grounding every row against landing evidence found that TEN of the
+  eleven steps had ALREADY landed. S1–S6 and S8 are `closed` rows naming their cluster commits
+  or PRs in the canonical `pr` field; only **S7** carries forward work and it is `held`, not
+  `open`, because U-HE-40 is held at 15/15 review rounds (B-244) and U-HE-41 depends on it.
+  `B-287` registers the general defect: a close-step's scope describes the world at authoring
+  time, and a plan long enough to execute over weeks will have moved.
+- **U-HE-01 is filed under S2, not S1**, per §6's own rationale (the finding record and
+  `lane_id` are what make S4d's detections emit). The §3 map labels it `S2-root` while omitting
+  it from S2's list, which is what made this worth stating.
+- **`depends_on` is carried as a structured list of B-ids**, not prose, so the topology is
+  machine-derivable — `--open` emits file order and would otherwise admit S1 before S2's root.
+- **The pilot-bar row carries a bespoke close condition.** The generic "every unit in ‹units›
+  landed" template was VACUOUS on a row whose unit set is empty: it was closable without a
+  single passing pilot, on the row whose whole purpose is to gate on passing pilots. It now
+  requires three distinct run_ids at 3–4 lanes each reporting `pass: true`, and records that
+  `pilot-2026-09-17-a` counts toward none of them (that run is permanently FAIL — `pass` keys on
+  whether a coordination HITL escalation OCCURRED, and the DEFERRED-HIL row is durable).
+- **Step 1–2's `--next-action` half was NOT performed, and cannot be as written — which is why
+  its box stays UNCHECKED.** § the convention above: a checked box means the step was carried out,
+  so ticking a combined step whose second half is undone would record a required deliverable as
+  complete (out-of-family review caught exactly that in this record's first draft). `B-288`
+  records why: `hook_roadmap_next` (`tools/hooks/lib.sh:286-292`) accepts five carriers and every
+  one names a unit (`U-*`/`R-*`) or a plan doc, while this arc's actionable frontier is FIVE
+  register rows — `B-284`, `B-285`, `B-286`, `B-287` and `B-288`. Four are `registered_finding`
+  with empty `depends_on`; `B-284` is `open` with its sole dependency `B-281` already `closed`,
+  and `--open` applies NO dependency filtering, so all five are emitted — `B-*` rows the parser
+  cannot see. Out-of-family review raised the pointer on FOUR
+  consecutive rounds and each rewording only moved which BLOCKED thing was named (U-HE-45 just
+  completed → held U-HE-40 → the plan doc whose only remaining S7 work is that same held unit).
+  Registered rather than reworded a fifth time, and `roadmap_status.md` landed byte-identical to
+  main. Note the sketch's own suggested paragraph carries NONE of the five carriers and would
+  itself have returned empty.
+
+**Review.** codex rounds r1–r6 (r1–r5 BLOCK with **2/3/3/2/1** findings, r6 APPROVE) plus one
+fresh-context witness lens (APPROVE) — **11** findings, all accepted and adjudicated on the gate
+log; the counts here are read from the gate log's own `round_n` field, an earlier draft of this
+line having claimed 2/2/3/2/1 and 10 from memory. Round 5's finding was resolved by SUBTRACTION
+rather than the constraint proposed: preflight class 17, added during this arc's own r2
+absorption, was removed at r5 (net −55 lines). Its findings fell in rounds **2, 3 and 5 — three
+rounds, NOT three consecutive ones**: r4's two findings were the roadmap pointer and the `#TBD`
+closure citations. So the two-consecutive-rounds trigger actually fired at **r3**, where the row
+was fixed instead of withdrawn, and r5 is where the accumulated evidence was finally acted on —
+the subtraction was overdue rather than premature. The shape is recorded as an
+evaluated-and-LEFT-OUT vocabulary in both carriers. Residual: `phases` were never recorded on this arc's reservation, so
+its C-HE-27 timing spans do not exist.
+
 - [ ] **Step 1–2:** add rows; run `uv run python tools/roadmap_status_refresh.py --next-action "<one paragraph: 'Execute Implementation_Plan_HE_Loop_Lanes_v1 §2 in topological order starting at U-HE-01 (finding record) — S1/S2 roots; Phase 0 = U-HE-01..33 gates N ≥ 2.'>"` as part of the doc-only PR's terminating refresh (CLAUDE.md §12.2.1).
-- [ ] **Step 3:** Commit `ops: roadmap status refresh post-#<PR>` (the terminating refresh, roadmap_status.md only) — after the doc-only PR that carries the spec + ADRs + council ledger + this plan merges.
+- [x] **Step 3:** Commit `ops: roadmap status refresh post-#<PR>` (the terminating refresh, roadmap_status.md only) — after the doc-only PR that carries the spec + ADRs + council ledger + this plan merges.
 
 ---
 ## §3 Dependency graph
