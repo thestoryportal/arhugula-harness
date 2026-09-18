@@ -269,6 +269,11 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     #
     # Overlap with class 4 is NOT the same defect: a vacuous witness proves nothing, one
     # of these proves the wrong thing.
+    "17 validator reads a sub-span, accepts the rest unseen": (
+        r"only the first|ignores the (remainder|rest|trailing)"
+        r"|after the (final|last) (token|match|element|entry)"
+        r"|unanchored|never validates|does not validate|validates only"
+    ),
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
