@@ -1808,6 +1808,15 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--lane-id", required=True)
     ci = sub.add_parser("clear-refresh-intent")
     ci.add_argument("--lane-id", required=True)
+    # C-HE-06 §6 governs release, reclaim and unblock through one transition marker, and
+    # §4 step (ix) ends every landing with "release via §6" -- but only `unblock` had a
+    # CLI verb. §6 makes unblock a RECLAIM ("an operator-confirmed reclaim through this
+    # same marker CAS"), and a reclaim mints a fresh LEASE with a new token, so clearing a
+    # block does not open the door: it hands back a successor lease. With no `release`
+    # verb a door whose landing reddened `main` had nothing able to free it -- `land`
+    # re-blocks on the merge sha's own (immutable) run, and `gc` skips live leases.
+    rel = sub.add_parser("release")
+    rel.add_argument("--lane-id", required=True)
     sub.add_parser("status")
     sub.add_parser("gc")
     args = p.parse_args(argv)
@@ -1925,7 +1934,7 @@ def main(argv: list[str] | None = None) -> int:
             unblock(pr=args.pr, blocked_at_sha=args.blocked_at_sha, lane_id=args.lane_id)
             print("unblocked; successor lease held by this lane")
             return 0
-        elif args.cmd in ("record-refresh", "clear-refresh-intent"):
+        elif args.cmd in ("record-refresh", "clear-refresh-intent", "release"):
             live = read_lease()
             if live is None or live.get("lane_id") != args.lane_id:
                 raise LeaseError("no live lease held by this lane")
@@ -1948,6 +1957,26 @@ def main(argv: list[str] | None = None) -> int:
                     "the lease holder is alive and unblocked -- recovery verbs operate "
                     "on a blocked door or a dead holder only"
                 )
+            if args.cmd == "release":
+                # [LAW:single-enforcer] release() owns the token match, the blocked-state
+                # refusal that routes the caller to `unblock`, and the transition-marker
+                # CAS C-HE-06's invariant demands ("No release, reclaim, unblock, or
+                # self-resume touches LEASE without first winning transition.<token>").
+                # The shared guard above adds the two things release() does NOT carry:
+                # lane ownership and holder liveness. Neither is re-checked here.
+                #
+                # C-HE-06's other release invariant -- "the lease is never released while
+                # the merge SHA's own main run or the terminating refresh is unconfirmed"
+                # -- is discharged for the case it protects by the live-holder refusal
+                # above: a landing still in flight has a live driver and is refused here.
+                # The residual it does NOT cover is a DEAD landing whose merge left main
+                # un-refreshed, which is the state this verb exists to recover and which
+                # CI's ROADMAP_STATUS_DRIFT independently catches. The invariant does not
+                # contemplate a merge SHA whose own run can never go green; that gap is
+                # filed as a contract question, not decided here.
+                release(live)
+                print("lease released; the door is free")
+                return 0
             intent = _sidecar(live["lease_token"], "refresh.intent")
             if args.cmd == "record-refresh":
                 if not intent.exists() or _sidecar(live["lease_token"], "refresh").exists():

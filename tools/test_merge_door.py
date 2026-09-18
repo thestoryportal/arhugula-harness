@@ -2191,6 +2191,58 @@ def test_recovery_verbs_refuse_a_live_unblocked_holder(door):
     assert md._sidecar(lease["lease_token"], "refresh.intent").exists()  # fence intact
 
 
+# mutation-probe: drop the `release` CLI verb (C-HE-06 §6's recovery loses its second half)
+def test_release_verb_frees_the_door_from_the_cli(door, monkeypatch):
+    """The wedge this verb exists for: a lease held (not blocked) whose driver is gone,
+    which no other verb can free — `land` re-blocks on the merge sha's immutable run and
+    `gc` skips live leases."""
+    lease = _acq()
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)  # the driver is gone
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert md.read_lease() is None
+    assert (md.DOOR / f"released.{lease['lease_token']}").exists()  # moved, never unlinked
+
+
+# mutation-probe: route `release` past release()'s blocked refusal (silently frees a
+# blocked door, bypassing the operator-keyed unblock)
+def test_release_verb_refuses_a_blocked_lease(door, monkeypatch):
+    lease = _acq()
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 3  # DoorBlocked -> use unblock
+    assert md.read_lease()["state"] == "blocked"  # fence intact
+
+
+# mutation-probe: drop the shared holder-invariant guard for `release` (any lane frees
+# any other lane's door)
+def test_release_verb_refuses_another_lanes_lease(door, monkeypatch):
+    lease = _acq()
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "B"]) == 4
+    assert md.read_lease()["lease_token"] == lease["lease_token"]
+
+
+# mutation-probe: drop the live-holder refusal for `release` (the door is yanked out from
+# under a lane that is actively driving a landing)
+def test_release_verb_refuses_a_live_unblocked_holder(door):
+    lease = _acq()  # the fixture calls a lease alive iff its pid is this very process
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == lease["lease_token"]
+
+
+def test_unblock_then_release_frees_a_wedged_door_from_the_cli(door, monkeypatch):
+    """C-HE-06 §6's recovery END TO END — the half that was unreachable. `unblock` clears
+    the BLOCK but mints a successor lease, so the door is still shut afterwards; without
+    `release` a landing whose own commit reddened `main` stayed wedged for every lane."""
+    lease = _acq()
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
+    assert md.main(["unblock", "1", "c" * 40, "--lane-id", "A"]) == 0
+    assert md.read_lease()["state"] == "held"  # unblocked, and STILL not open
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert md.read_lease() is None
+
+
 # mutation-probe: drop the reconciled-cycle counter reset (nonconsecutive cleans silence)
 def test_tier_counter_resets_on_a_reconciled_cycle(door):
     """§10: three CONSECUTIVE clean cycles — a reconciled cycle resets the count (r6 P2)."""

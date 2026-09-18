@@ -317,6 +317,17 @@ then releases. Exit 0 = landed + refreshed; 3 = door blocked (a `DEFERRED-HIL` r
 exhausted (HITL). `just merge-door-status` prints the live lease. Never issue
 `gh pr merge` yourself; the guard denies the raw verb in loop mode (C-HE-07).
 
+**Unblock is half the recovery; `just merge-door-release` is the other half.** Unblock
+clears the BLOCK and mints a *successor lease still held by this lane* — the door is not
+open afterwards, and `merge-door-status` still prints a lease. Release frees it. Which
+half you need turns on WHY post-merge CI went red: a flaky or environmental red heals on
+a re-drive, so unblock and re-run `safe-merge.sh`; a red caused by the landed content
+itself can never heal, because step (vii) polls that merge SHA's own run and the commit's
+bytes are immutable — `land` will re-block forever and `gc` skips live leases. For that
+case, unblock, then release, then land the repair PR as its OWN reserved arc. Both verbs
+are operator-confirmed reclaims (C-HE-06 §6): neither is guard-allowlisted, so both
+surface to the operator by design — do not add an allow to make them headless.
+
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 
 **The mechanical half now rides the merge door.** The door's §4(viii) continuation above
