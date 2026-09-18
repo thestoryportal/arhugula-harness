@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `da152252db1b` |
+| `workspace_state_hash` | `117c13bb4252` |
 | `last_refreshed` | 2026-09-17T00:00:00Z |
-| `git_head` | `4ad00c3a` —  |
+| `git_head` | `1cc626b4` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1563).** Ledger merge strategy is settled: B-255 closed as WONT-FIX-BY-UNION. `merge=union` is unsound for the append-only gate log because `finding_record.reduce_last_by_finding_id` makes physical file order authoritative for a finding's disposition, so merge direction would silently decide `accepted` vs `rejected` — witnessed in a scratch repo, and legal at every row, since C-HE-24 §5 permits adjudications to follow adjudications. A guard now refuses any union-merged tracked `.jsonl` and an executable witness carries the measurement, so cross-lane ledger conflicts stay hand-resolved by design; the forward option (a semantic merge driver that re-validates and deterministically orders same-id lineages) is recorded on B-255 with its `git config` distribution caveat. U-HE-40 remains HELD at 15/15 review rounds with a round-12 P1 outstanding (B-244), and is separately blocked by the adopted-arc adjudication gap — `merge_gate_log.adjudicate` reads the persisted `.harness/.lane-id` and ignores `HARNESS_LANE_ID`, so an adopted arc cannot dispose its own findings. Next: the first manual pilot at 3-4 lanes (`just lanes-pilot <run_id>`, operator-driven per C-HE-13 §3; mind B-234's report bounds and the C-HE-01 residual before a Codex lane), then U-HE-44.
+**Current next action (post-#1566).** U-HE-44 closed: the spec §11 and plan carry-forwards are registered as B-256..B-272 (17 rows), and the evidence log's three owed section families — pilot reports (U-HE-37), RED-first runs of AC#2 (U-HE-20), equivalence proofs (U-HE-41) — are open for the units that append to them. Grounding found none of the §11 items previously registered (six keyword hits were all false positives), three inherited cites that no longer resolve (`gh pr merge` is at `.agents/skills/ship-pr/SKILL.md:133` not `:96`; `AGENTS.md` has no invariant-#3 text), and that plan §6 item 13's owed change-note ALREADY landed at spec v1.4 X4a — B-266 stays open because the stale plan row is real remaining work a closed row would hide. `pilot-2026-09-17-a` now has all three members enrolled (`class-16-codifying-witness` merged #1562, `lane-init-shell-portability` open #1561, `u-he-44` this PR); run `just lanes-pilot-report pilot-2026-09-17-a` once lane-2 lands. U-HE-40 remains HELD at 15/15 review rounds with a round-12 P1 outstanding, and separately cannot adjudicate its own findings from the adopting lane. The roadmap wiring that registers the S1–S8 arcs and the pilot bar depends on U-HE-44 and is therefore unblocked, so the next implementable unit is `U-HE-45`.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -44,7 +44,6 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1561 | `fix/lane-init-shell-portability` | — | — |
-| #1562 | `feat/class-16-codifying-witness` | — | — |
 
 ---
 
@@ -52,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1566 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1563 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1559 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1557 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1553 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1550 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
