@@ -1091,3 +1091,54 @@ Deviation recorded: the three lens prompts instantiated the skill-canonical temp
 with per-PR scrutiny lists rather than routing through a delegated `laws:prompt` author. Every
 template clause was kept verbatim; the additions only add grounding (claims to re-derive, and
 for the witness lens the nine real defects this PR fixed, to judge revert-detection against).
+| 2026-09-18T02:18:19Z | #1568 | ca4f4dbfe119 | merge-gate-concurrency | APPROVE | 0 finding(s) | r4 |
+| 2026-09-18T02:18:20Z | #1568 | ca4f4dbfe119 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r4 |
+| 2026-09-18T02:18:20Z | #1568 | ca4f4dbfe119 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r4 |
+
+### PR #1568 — 2026-09-18 — re-gate at `ca4f4db` after the branch was updated from main
+
+| lens | verdict |
+|---|---|
+| merge-gate-concurrency | APPROVE (0 findings) |
+| merge-gate-spec-conformance | APPROVE (0 findings) |
+| merge-gate-witness-adequacy | APPROVE (0 findings, 2 non-blocking P3) |
+
+Outcome: **all-approve** at head `ca4f4db`, base `725a6c48d`. CI green at the same head,
+22/22 jobs `success` + `completed`. blast-radius unchanged from the `31713e140` gate.
+
+**Why a re-gate was owed.** Branch protection on `main` is `strict: true` with
+`enforce_admins: true`, so the door's `gh pr merge` was refused with `mergeStateStatus: BEHIND`
+and blocked the lease rather than leaving an ambiguous merge state (C-HE-06 §5). Updating the
+branch brought `.harness/roadmap_status.md` from `#1567`, and `merge-gate-landing-delta`
+reported `UNREVIEWED .harness/roadmap_status.md` — approvals did NOT transfer. The gate was
+re-run rather than argued past: the file was reviewed on its own PR, but the transfer rule is
+mechanical and reinterpreting a gate to save a cycle is how a gate stops meaning anything.
+
+**Structural consequence worth registering:** with `strict: true` and concurrent lanes, any
+arc that gates and is then forced to update its branch loses its approvals and must re-gate.
+Under enough lane pressure that does not terminate. Mitigation used here: hold the merge-door
+lease across the re-gate, since releasing it invites the next lane to move `main` again.
+
+All three lens prompts this round carried the bound shas and instructed the lens to derive the
+diff with `git diff <base> <head>` and check `shasum -a 256` against `diff_digest` before
+reviewing — the fix for the previous round's stale-`gh pr diff` defect. All three verified it.
+
+Non-blocking P3s, recorded not fixed (fixing post-gate would break the landing delta):
+- `_SECTION_END` rejects a section id followed immediately by `;`, `:`, `(`, `[`, a backtick or
+  an em dash. A legitimate pointer written `§7;` would red the router test. Confirmed by probe
+  to be a LOUD false positive in every case, never a silent false negative — when a real
+  citation is dropped, either `sites != cited` or the `unreachable` check fires.
+- `test_pack_sections_match_origin_header` alone passes a coordinated single-file lie (a
+  fabricated heading plus a matching origin-header claim); sibling tests in the same module
+  catch it, which is how CI runs them.
+
+**Prompt defect, mine:** the witness lens was told the diff removes a class row from
+`tools/test_review_loop_gate.py`. It does not — class 17 was added at `6608a0e5f` and
+subtracted at `e1a894c91`, so against this base the file is untouched. The instruction was
+carried over from the `31713e140` round without re-checking it against the new bound bytes.
+The lens refused to verify a claim the bytes did not support and said so, which is the correct
+handling; the item is void, not failed.
+
+Deviation recorded, unchanged from the previous round: the three lens prompts instantiate the
+skill-canonical templates inline with per-PR scrutiny lists rather than routing through a
+delegated `laws:prompt` author.
