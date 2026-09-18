@@ -72,13 +72,13 @@
 
 snapshot:
   total: 281
-  open: 3
+  open: 2
   design_substrate_gated: 3
   registered_finding: 110
   operator_gated: 0
-  held: 3
+  held: 4
   closed: 162
-  identity_digest: a9c422086fb82c4d
+  identity_digest: 7d9293bb26498764
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -11944,7 +11944,7 @@ items:
 - id: B-282
   title: S7 of the §6 unified build order (U-HE-40..42) — the only INCOMPLETE step
   pr: '#TBD (U-HE-45, 2026-09-18)'
-  status: open
+  status: held
   depends_on:
   - B-274
   - B-280

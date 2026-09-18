@@ -2947,7 +2947,7 @@ same spec leg.
 ### B-282 · S7 of the §6 unified build order (U-HE-40..42) — the only INCOMPLETE step *(registered by U-HE-45, 2026-09-18; REGISTERED)*
 
 - **What it is.** S7 of the Spec_HE_Loop_Lanes_v1 §6 unified build order — the single order the plan decomposes from. Contracts C-HE-31, 32, 33; units U-HE-40..42. Gates lane safety: —. Gates measurement: consumes S2/S5. §6 Depends on: B-274, B-280. U-HE-42 LANDED (PR #1527). U-HE-40 is pending and HELD at 15/15 review rounds with a round-12 P1 outstanding at mutation_probe_reverify.py:108 (B-244); its branch was merged forward at 96a14900f to clear the C-HE-13 §4 selection fence, which changed nothing about the hold. U-HE-41 (equivalence-proof rows + removal of proven double-runs) has neither a reservation nor a commit and depends on U-HE-40, so it is not startable while the hold stands.
-- **Current state.** REGISTERED 2026-09-18 by U-HE-45; open.
+- **Current state.** HELD 2026-09-18 by U-HE-45 — blocked behind U-HE-40's hold (B-244); `held` rather than `open` so forward_register.py --open stops counting it as executable work.
 - **What closes this row.** REGISTERED 2026-09-18 by U-HE-45. WHAT CLOSES THIS ROW: U-HE-40's hold lifted with its round-12 P1 resolved and its branch landed, then U-HE-41 landed. This is the ONLY §6 step with forward work: S1-S6 and S8 are closed rows above, each naming its landing evidence.
 - **Council.** NO -- execution order ratified at spec §6; this row tracks it, it does not re-decide it.
 
