@@ -7752,7 +7752,7 @@ def main(argv=None) -> int:
 
 **Depends on.** U-HE-44.
 
-**Unit status (as-built, ticked 2026-09-18).** Steps 1–3 ran and are merged on PR #1569
+**Unit status (as-built, 2026-09-18).** Step 3 ran and is merged; Step 1–2 is HALF done and stays UNTICKED for that reason — see the `--next-action` bullet below. The row-registration half landed on PR #1569
 (`dc68fd8c4779db6d78860ef4e4130668ce72f0c0`, door-merged; main's own post-merge CI green).
 Step 3's terminating refresh is #1574 (`96e1739c5`) — issued by the merge door itself rather
 than a hand-authored PR, which is the production continuation's behaviour. A tick here means
@@ -7777,7 +7777,10 @@ deliberate:
   requires three distinct run_ids at 3–4 lanes each reporting `pass: true`, and records that
   `pilot-2026-09-17-a` counts toward none of them (that run is permanently FAIL — `pass` keys on
   whether a coordination HITL escalation OCCURRED, and the DEFERRED-HIL row is durable).
-- **Step 1–2's `--next-action` half was NOT performed, and cannot be as written.** `B-288`
+- **Step 1–2's `--next-action` half was NOT performed, and cannot be as written — which is why
+  its box stays UNCHECKED.** § the convention above: a checked box means the step was carried out,
+  so ticking a combined step whose second half is undone would record a required deliverable as
+  complete (out-of-family review caught exactly that in this record's first draft). `B-288`
   records why: `hook_roadmap_next` (`tools/hooks/lib.sh:286-292`) accepts five carriers and every
   one names a unit (`U-*`/`R-*`) or a plan doc, while this arc's actionable frontier is `B-285`/
   `B-286` — `B-*` rows the parser cannot express. Out-of-family review raised the pointer on FOUR
@@ -7795,7 +7798,7 @@ consecutive rounds had landed on it, and the shape is recorded as an evaluated-a
 vocabulary in both carriers. Residual: `phases` were never recorded on this arc's reservation, so
 its C-HE-27 timing spans do not exist.
 
-- [x] **Step 1–2:** add rows; run `uv run python tools/roadmap_status_refresh.py --next-action "<one paragraph: 'Execute Implementation_Plan_HE_Loop_Lanes_v1 §2 in topological order starting at U-HE-01 (finding record) — S1/S2 roots; Phase 0 = U-HE-01..33 gates N ≥ 2.'>"` as part of the doc-only PR's terminating refresh (CLAUDE.md §12.2.1).
+- [ ] **Step 1–2:** add rows; run `uv run python tools/roadmap_status_refresh.py --next-action "<one paragraph: 'Execute Implementation_Plan_HE_Loop_Lanes_v1 §2 in topological order starting at U-HE-01 (finding record) — S1/S2 roots; Phase 0 = U-HE-01..33 gates N ≥ 2.'>"` as part of the doc-only PR's terminating refresh (CLAUDE.md §12.2.1).
 - [x] **Step 3:** Commit `ops: roadmap status refresh post-#<PR>` (the terminating refresh, roadmap_status.md only) — after the doc-only PR that carries the spec + ADRs + council ledger + this plan merges.
 
 ---

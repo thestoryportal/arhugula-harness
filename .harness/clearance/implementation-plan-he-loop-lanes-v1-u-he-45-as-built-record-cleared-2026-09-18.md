@@ -1,10 +1,10 @@
 ---
 artifact: .harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md
-version: v1.0 + rev 2026-09-18 (U-HE-45 as-built plan record — Unit-status paragraph plus Steps 1–2 and 3 ticks; no step text, scope sentence, contract number, row label or ordering changes)
+version: v1.0 + rev 2026-09-18 (U-HE-45 as-built plan record — Unit-status paragraph plus the Step 3 tick ONLY; Step 1–2 stays unticked because its --next-action half was not performed; no step text, scope sentence, contract number, row label or ordering changes)
 cleared_at: 2026-09-18T04:15:00Z
 clearance_type: execution-correction-H_E-tooling
 back_reference:
-  - ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md (U-HE-45 section: dated Unit-status paragraph above the steps in the #1519/#1550 shape, then Steps 1–2 and 3 ticked; the step sketches themselves are byte-unchanged)"
+  - ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md (U-HE-45 section: dated Unit-status paragraph above the steps in the #1519/#1550 shape, then Step 3 ticked and Step 1–2 deliberately LEFT UNTICKED; the step sketches themselves are byte-unchanged)"
   - "PR #1569 (U-HE-45 merged 2026-09-18, dc68fd8c4779db6d78860ef4e4130668ce72f0c0 — door-merged; main's own post-merge CI success), PR #1574 (96e1739c5 — Step 3's terminating refresh, issued by the merge door's own continuation rather than a hand-authored PR)"
   - ".harness/forward-register.yaml B-273..B-284 (the §6 build order registered row-per-step with structured depends_on) and B-285, B-286, B-287, B-288 (the four findings this arc surfaced, registered rather than absorbed)"
   - ".harness/spec/Spec_HE_Loop_Lanes_v1.md §6 (the unified build order, its two gate columns and its Depends-on column — the contract text is UNCHANGED by this rev; the rows quote it, they do not amend it)"
@@ -14,7 +14,11 @@ back_reference:
 
 What changed and why it is a record, not an extension:
 
-The U-HE-45 section gains a dated Unit-status paragraph and its two step lines are ticked.
+The U-HE-45 section gains a dated Unit-status paragraph and its Step 3 line is ticked. Step 1–2
+is deliberately LEFT UNTICKED: the plan's own convention is that a checked box means the step was
+carried out, and that combined step's second half (`--next-action`) was not performed, so ticking
+it would record a required deliverable as complete. Out-of-family review caught exactly that in
+this record's first draft.
 No step text, scope sentence, contract number, row label or ordering changes; the sketches
 are byte-unchanged, including the one the record explicitly says was not carried out as
 written. `Spec_HE_Loop_Lanes_v1` §6 is quoted by the registered rows and is untouched.
