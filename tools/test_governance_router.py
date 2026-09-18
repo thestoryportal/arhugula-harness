@@ -23,8 +23,8 @@ Mutation-reasoning table — each mutation and the test that MUST go red for it:
   12 a venue advertises a different § list      -> test_venues_advertise_pack_section_list
   13 a pack with zero headings passes vacuously -> both of rows 11-12 (per-pack non-empty)
   14 a venue lists the same pack twice          -> both of rows 11-12 (exactly-one entry)
-  15 a range or `.x` written into a §-list      -> both of rows 11-12 (marker count +
-       canonical `, ` separator in `_section_tokens`)
+  15 a range or `.x` anywhere in a §-list       -> both of rows 11-12 (`_section_tokens`
+       fullmatches the WHOLE field against the canonical shape)
   16 a pack invents a § root never numbered     -> test_pack_sections_match_origin_header
        (claimed sections must be a subset of `root_sections()`)
 
@@ -37,9 +37,10 @@ router to a pack without it, which is the failure these two rows forbid.
 
 from __future__ import annotations
 
-import itertools
 import pathlib
 import re
+
+import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GOVERNANCE = REPO / "docs" / "governance"
@@ -191,37 +192,33 @@ def test_agents_roadmap_cite_is_preserved() -> None:
 # matches nothing rather than silently reading as `§12.5`. `_section_tokens` then requires
 # every `§` in the text to have produced a token, which is what turns "matched nothing"
 # into a failure instead of a silent omission.
-SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)(?![\w.])")
+SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)")
+# The whole field, anchored. Part-checks are what kept failing: the token regex guarded the
+# character after each id, the marker count guarded omissions, the gap check guarded the
+# text BETWEEN tokens — and codex r6 then wrote `§9.1–9.2`, whose range sits after the
+# final token where nothing looked. A `fullmatch` has no remainder to leave unchecked.
+CANONICAL_LIST_RE = re.compile(r"§\d+(?:\.\d+)*(?:, §\d+(?:\.\d+)*)*")
 # Located by its text, not by a line number: `test_packs_declare_their_origin` only
 # requires this sentence to be PRESENT, so pinning it to a line index would invent a
 # stricter contract than the module already enforces.
 PACK_ORIGIN_MARKER = "Relocated BYTE-VERBATIM from Root `CLAUDE.md`"
 
 
-def _section_tokens(text: str, where: str) -> set[str]:
-    """Every `§N` in `text`, refusing the list unless it is written in the canonical shape.
+def _section_tokens(field: str, where: str) -> set[str]:
+    """The sections named by `field`, which must BE a canonical §-list and nothing else.
 
-    Two things set equality cannot see on its own:
-      * a malformed token — `§12.5.y` appended to a list already containing `§12.5` changes
-        no set member (codex r4), so the MARKER COUNT is what catches it;
-      * a range — `§1.1–§9` matches as the two separate tokens `1.1` and `9`, leaving both
-        the token set and the marker count identical to `§1.1, §9` (codex r5), so the
-        SEPARATOR is what catches it. An earlier version of this module claimed ranges were
-        unrepresentable once the lists went explicit. They were not: nothing had ever
-        rejected the separator itself.
+    `field` is the whole thing — a table cell, a parenthetical, the run of text between the
+    origin sentence and its `by U-CTX-…` suffix — and `CANONICAL_LIST_RE.fullmatch` accepts
+    or rejects all of it at once. Four rounds of part-checks each left a different sliver
+    unvalidated (a `.y` suffix inside a token, a `–§` separator between tokens, a `–9.2`
+    range after the last token, a second venue row entirely); anchoring the whole field is
+    what makes "somewhere else in the string" stop being a place to hide.
     """
-    matches = list(SECTION_TOKEN_RE.finditer(text))
-    assert text.count("§") == len(matches), (
-        f"{where}: {text.count('§')} § markers but {len(matches)} well-formed tokens — "
-        f"a malformed section id (a `.x`/`.y` suffix) is not allowed here: {text!r}"
+    assert CANONICAL_LIST_RE.fullmatch(field), (
+        f"{where}: not a canonical section list — expected '§N, §N, …' exactly, with no "
+        f"ranges, no `.x` shorthand and nothing else in the field, got {field!r}"
     )
-    for earlier, later in itertools.pairwise(matches):
-        gap = text[earlier.end() : later.start()]
-        assert gap == ", ", (
-            f"{where}: sections must be listed explicitly, separated by ', ' — found "
-            f"{gap!r} between §{earlier.group(1)} and §{later.group(1)} in {text!r}"
-        )
-    return {m.group(1) for m in matches}
+    return set(SECTION_TOKEN_RE.findall(field))
 
 
 def pack_headings(pack: str) -> set[str]:
@@ -233,7 +230,9 @@ def pack_claimed_sections(pack: str) -> set[str]:
     """The sections a pack's own origin header says were relocated into it."""
     lines = [ln for ln in _read(GOVERNANCE / pack).splitlines() if PACK_ORIGIN_MARKER in ln]
     assert len(lines) == 1, f"{pack}: expected exactly one origin header, found {len(lines)}"
-    return _section_tokens(lines[0], f"{pack} origin header")
+    field = re.search(rf"{re.escape(PACK_ORIGIN_MARKER)} (.*?) by U-CTX", lines[0])
+    assert field, f"{pack}: origin header is not '<marker> <§-list> by U-CTX-…': {lines[0]!r}"
+    return _section_tokens(field.group(1), f"{pack} origin header")
 
 
 def venue_advertised_sections(pack: str) -> dict[str, set[str]]:
@@ -256,8 +255,35 @@ def venue_advertised_sections(pack: str) -> dict[str, set[str]]:
     ):
         matches = pattern.findall(text)
         assert len(matches) == 1, f"{venue}: {len(matches)} entries for {pack}, expected 1"
-        found[venue] = _section_tokens(matches[0], f"{venue} entry for {pack}")
+        found[venue] = _section_tokens(matches[0].strip(), f"{venue} entry for {pack}")
     return found
+
+
+def test_section_list_field_accepts_only_the_canonical_shape() -> None:
+    """The rejected shapes are the corpus of everything six review rounds found.
+
+    Each row is a real finding's shape, not an invented one, and the last four are shapes
+    nobody had to find because `fullmatch` closes them by construction. Weakening
+    `CANONICAL_LIST_RE` reds here first, before any pack or venue has to drift to show it.
+    """
+    assert _section_tokens("§1.1, §9, §9.1", "probe") == {"1.1", "9", "9.1"}
+    rejected = (
+        "§1.1, §9, §9.1–9.2",  # codex r6: a range after the FINAL token
+        "§1.1–§9, §9.1",  # codex r5: `–§` between two tokens
+        "§1.1, §9, §9.1.y",  # codex r4: a suffix the token regex dropped
+        "§9.1–§1.1",  # codex r4: a reversed range, previously the empty set
+        "§12.5.1–§99",  # merge-gate round 2: an endpoint naming nothing
+        "§1.1–§9.1",  # codex r2: a span covering sections the pack lacks
+        "§12.5.x",  # the family shorthand the venues used to carry
+        "x §1.1, §9",  # anything at all before the list
+        "§1.1, §9 and more",  # anything at all after it
+        "§1.1; §9",  # a separator that is not ", "
+        "§1.1,§9",  # the canonical separator, mis-spaced
+        "",  # an empty field is not a list of nothing
+    )
+    for field in rejected:
+        with pytest.raises(AssertionError):
+            _section_tokens(field, "probe")
 
 
 def test_pack_sections_match_origin_header() -> None:
