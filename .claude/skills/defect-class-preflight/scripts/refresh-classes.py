@@ -334,8 +334,27 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # cite the wrong concept, so this class takes 18. The parity test compares SETS of
     # numbers, so the gap is legal.
     "18 record field contradicts its own body": (
-        r"marked?\s+`?(open|closed|held|complete)|checked box|status field|\[x\]",
-        r"even though|contradicts|while (its|the)\s+(own\s+)?(summary|status|body)",
+        # ONE pattern, not a tuple of two: codex r2 showed independent conjuncts match across
+        # SENTENCES, so "The status field is parsed correctly. The hook still fails even though
+        # ..." classified as this class while describing no field/body contradiction at all.
+        # Same window technique class 16 uses and for the same reason — `(?:[^.!?]|[.!?]\S)`
+        # stays inside one sentence while still crossing a `B-282.` style token, because a
+        # sentence end is a terminator followed by SPACE.
+        #
+        # The FIELD arm matches the field-SETTING phrase, including "marks X complete": the
+        # first draft's `marked?\s+` could not cross the "s" of "marks", so the plan-tick row
+        # matched only via an incidental `checked box` mention 136 chars away in the reverse
+        # direction. Fixing the arm collapsed every genuine member to gap 1-2 in ONE direction,
+        # which is what makes a tight window possible at all.
+        #
+        # The {0,24} cap is DERIVED, not eyeballed: the widest gap among the four measured
+        # members is 2, and 24 leaves room for ordinary phrasing ("is marked as closed, even
+        # though") while excluding the 43-char gap of codex's own r2 finding, which matches only
+        # because it QUOTES the vocabulary it criticises — self-referential, not a member.
+        r"(?:mark(?:s|ed)?\s+(?:the\s+)?[^.!?]{0,40}?\b(?:open|closed|held|complete)\b"
+        r"|checked box|status field|\[x\])"
+        r"(?:[^.!?]|[.!?]\S){0,24}"
+        r"(?:even though|contradicts|while (?:its|the)\s+(?:own\s+)?(?:summary|status|body))"
     ),
 }
 

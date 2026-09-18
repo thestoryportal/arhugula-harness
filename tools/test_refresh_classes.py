@@ -380,6 +380,16 @@ def test_class_18_needs_both_a_record_field_and_a_contradiction():
             " missing verdict file also fails the binding command.",
             "location": "tools/merge_gate_log.py:347",
         },
+        # n:3 — codex r2's counterexample, and the reason this row is ONE pattern with a
+        # same-sentence window rather than two independent conjuncts: the field term and the
+        # contradiction term sit in DIFFERENT sentences and describe unrelated things. Replace
+        # the window with a plain tuple of two patterns and this case goes green.
+        {
+            "finding_id": "n:3",
+            "observed_evidence": "The status field is parsed correctly. The hook still fails"
+            " even though a missing verdict file is recoverable.",
+            "location": "tools/merge_gate_log.py:347",
+        },
         # n:2 — a record field with NO contradiction: the field and the body agree.
         {
             "finding_id": "n:2",

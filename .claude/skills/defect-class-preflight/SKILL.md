@@ -477,11 +477,17 @@ moment it was written.
 same record agree with it, and which consumer reads the field rather than the body?* Name the
 consumer. `--open`, a tick-count derivation and a reducer all read fields; none read paragraphs.
 
-The measured shape is conjunctive, and the measurement is the point: a lone
-`even though|contradicts` alternation took **130 of 2,230** corpus rows, nearly all ordinary
-contradictions with no record field in them. Requiring a status/marker term **and** a
-contradiction term takes it to four — `B-201` and `B-266` "marked closed even though …", `B-282`
-"marked `open` even though …", and the plan tick. A false match is worse than `unmatched`,
+The measurement is the point, and it took two passes. A lone `even though|contradicts`
+alternation took **130 of 2,230** corpus rows, nearly all ordinary contradictions with no record
+field in them. Requiring a status/marker term as well took it to four — but as two INDEPENDENT
+patterns those terms matched across *different sentences*, so "The status field is parsed
+correctly. The hook still fails even though …" classified as this class while describing nothing
+of the kind (out-of-family review, round 2). The row is therefore ONE pattern with class 16's
+same-sentence window, and the field arm matches the field-SETTING phrase ("marks X complete"),
+not an incidental mention: fixing that arm collapsed every member to a gap of 1–2 characters in
+one direction, which is what makes a tight window possible. The `{0,24}` cap is derived — widest
+real gap 2, and 24 excludes the 43-char gap of the review finding that matches only by quoting
+the vocabulary it criticises. Four rows, homogeneous. A false match is worse than `unmatched`,
 because unmatched OWES an intake line and a match silences it.
 
 *"The prose explains the nuance"* is the sentence to distrust. It may well explain it to a human;
