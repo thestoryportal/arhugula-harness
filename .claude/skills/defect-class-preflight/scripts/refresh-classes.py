@@ -255,6 +255,28 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
+    # Added U-HE-45. The unit's OWN deliverable included refreshing the live
+    # next-action pointer; the diff shipped the register rows and left the pointer
+    # naming the unit it had just completed, so /roadmap-continue would route
+    # straight back to finished work. Recurs in this workspace: the owed refresh
+    # after a tiebreaker PASS, and "the refresh must be the immediate next commit".
+    # Distinct from class 2 (a stale COUNT or cite drifts over time) and from class
+    # 12 (a contract phrase QUOTED into the diff with no line behind it): here the
+    # obligation is a deliverable of the unit itself, and the surface it was owed on
+    # is one consumers READ to decide what to do next -- so the cost is misrouting,
+    # not a wrong number.
+    # CONJUNCTIVE, and that is load-bearing: a single-token form on `roadmap_status`
+    # pulled 38 rows of which the sampled majority were false -- three safe-merge.sh
+    # findings about a MISSING CLI FLAG on roadmap_status_refresh.py and a
+    # reservations.py crash-window leak. Naming the tool is not the defect; leaving a
+    # surface consumers READ pointing at finished work is. So a match needs BOTH a
+    # pointer surface AND a stale-or-misroute verb. A wrong class is worse than
+    # `unmatched`: unmatched owes an intake line, a false match silences it.
+    "17 owed pointer refresh never lands": (
+        r"live pointer|next[- _]action|roadmap_status|pointer still|frontier",
+        r"still (?:says|names|points)|routes? back|(?:never|not |un)refreshe?|just completed"
+        r"|already (?:completed|landed)",
+    ),
 }
 
 

@@ -433,6 +433,31 @@ what else is in the diff: a real amendment carries the spec/plan change (or a fi
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
 
+### 17. The owed pointer refresh that never lands (added U-HE-45; 6 rows at the 2,191-finding log)
+
+The diff finishes the work and leaves a surface *consumers read to decide what to do next*
+still pointing at what was just finished. Nothing is wrong in the code; the routing is
+wrong, so the next reader — or the next `/roadmap-continue` — is sent back into completed
+work. The recorded shapes are all one move: *"declares Step 5 executed and the fence live,
+but HEAD's `.harness/roadmap_status.md:25` still says the frontier is …"*; *"declares the
+operator gate complete … but the canonical implementation plan still leaves Step 5
+unticked"*; *"marks both operator decisions ratified, but the same plan's current version
+summary at line 38 still says they are open"*.
+
+**Question:** *does this diff complete something a live pointer names — and does the diff
+move that pointer?* If the unit's own scope lists a pointer refresh among its
+deliverables, the diff is not complete without it. The temptation is real and sounds like
+protocol: *"the refresh is its own PR by §12.2.1."* Check that reading before resting on
+it — §12.2.1 forbids the reserved TITLE PREFIX on a bundled PR, not the bundling, and it
+says in terms that a follow-on refresh is still owed. Deferring a pointer your own unit
+owes leaves a window in which every consumer routes wrong, and the window is invisible
+from inside the diff.
+
+Sibling classes, kept apart: class 2 is a count or cite that DRIFTS over time; class 12 is
+a contract phrase QUOTED into the diff with nothing discharging it. This one is an
+obligation the unit itself carried, on a surface whose whole purpose is routing — so the
+cost is misrouting, never a wrong number.
+
 ## After every review round — the class-sibling sweep (before the next invocation)
 
 A reviewer finding names an INSTANCE; the absorption owes the CLASS. Measured on the
