@@ -210,26 +210,16 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
-**Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
-ASSERTING a mechanism behaviour the code does not have (never true), as against the drift
-half above (true once, then decayed). Pattern tried: a claim-bearing subject
-(`claims|states|says|documented|guarantees|asserts`) within 120 non-sentence characters of
-a falsity marker. At the 2,191-finding corpus it claimed 40 previously-unmatched rows and
-leaked none of the `contradicting C-HE-NN` code-vs-contract cluster — a bare `contradict`
-sweeps that whole cluster in, the same wrong direction as `drift`. **Refused anyway:** 6 of
-the 40 are operational uses of those verbs in non-prose findings (a peer that "claimed" a
-file, a lease "claim", an order "asserted only via any()"), and a class-2 false positive
-REMOVES a row from the unmatched pile — the pile where new classes are found. The
-discriminator needed here (is "claim" a sentence or a lease?) is not in the classifier's
-input: it sees evidence plus location, and neither says which. Two review rounds landed on
-this one mechanism, so it was subtracted rather than widened again. A future attempt needs
-a different INPUT — the cited file's own bytes — not a bigger vocabulary.
-
-The defect itself is real and worth catching by hand: **for every sentence you write that
-says what some mechanism does, did you read that mechanism this session, or are you
-restating what an earlier document said about it?** Both mechanism claims on the arc that
-measured this were inherited verbatim from the file it was superseding, amplified, and
-never probed — one false against `DESIGN_RE`, one false against `review_wrapper_common.py`.
+*Vocabulary evaluated and LEFT OUT for this class (2026-09-18):* a record that **contradicts its
+own evidence** — a review audit stating counts the gate log's `round_n` refutes, a cleared marker
+naming two of the four rows `--open` emits. The shape is class 2's subject and recurred twice in
+one arc, but three terms were tried and all three withdrawn: `omits` (+84 rows, rejected before
+shipping), `, not <digits>` (matches any numeric contrast — "The API returns 1, not 2."), and
+`identifies only` (shipped on a claim of semantic boundedness that proved false — "The sanitizer
+identifies only SQL injection…"). Prose DESCRIBING a record is lexically indistinguishable from
+prose about the thing the record describes. Sweep it by hand: for every count, status or
+completeness claim a record states, which source of truth refutes it, and did you read that
+source THIS session?
 
 ### 3. Silent failure / meaning-changing fallback (114 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the
@@ -504,6 +494,34 @@ what else is in the diff: a real amendment carries the spec/plan change (or a fi
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
 
+### Vocabulary evaluated and LEFT OUT — "a record's field contradicts its own body" (2026-09-18)
+
+The shape is real and has **two measured instances one arc apart**. `B-282` shipped
+`status: open` while its own summary said U-HE-40 is HELD — and `OPEN_STATUSES` includes `open`
+and excludes `held`, so `--open` counted a row its author had described as blocked. One arc later
+a U-HE-45 plan tick marked a **combined** step `[x]` while the paragraph beneath it said half that
+step was never performed, against a convention defining a checked box as "carried out". Four
+corpus rows carry it. Re-reading the prose catches neither: both are visible only by asking *what
+does the consumer do with this field?*
+
+**It is not a class, because the vocabulary cannot tell prose that DESCRIBES a field from prose
+that SETS one.** Three review rounds, each trading one imprecision for another: two independent
+tuple patterns matched across *sentences*, fixed with class 16's window; the same terms then
+matched unrelated text *within* one sentence ("The status field is parsed correctly even though a
+missing verdict file makes the unrelated hook fail"), which no window can separate; and `mark`
+without a word boundary matched inside `benchmarks`. The middle one is terminal — the same wall
+the owed-pointer vocabulary hit, one floor down: the distinction is **semantic**, not lexical.
+
+The asymmetry that decides it, as ever: a false match is worse than `unmatched`, because
+unmatched OWES an intake line while a match silences it. An arm that cannot separate those two
+readings actively hides the new classes this table exists to surface.
+
+**Sweep it by hand, because the question is still worth asking:** *for every status, disposition
+or checkbox this diff SETS — does the body of that same record agree with it, and which consumer
+reads the field rather than the body?* Name the consumer. `--open`, a tick-count derivation and a
+reducer all read fields; none read paragraphs. *"The prose explains the nuance"* is the sentence
+to distrust: it may explain it to a human, but the field is what the tooling acts on.
+
 ### Vocabulary evaluated and LEFT OUT — "the owed pointer refresh" (2026-09-18)
 
 The shape is real and recurs: a diff finishes the work and leaves a surface *consumers read
@@ -516,8 +534,9 @@ operator decisions ratified, but the same plan's current version summary at line
 they are open"*.
 
 **It is not a class, because the vocabulary cannot carry it.** It shipped as class 17 on the
-U-HE-45 arc and was subtracted three review rounds later, each round having traded one
-imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
+U-HE-45 arc and was subtracted at that arc's round 5. Its findings fell in rounds 2, 3 and 5 —
+three rounds, not three consecutive ones — so the two-consecutive trigger fired at r3, where it
+was fixed rather than withdrawn; each round traded one imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
 missed the plainest wording, hiding behind a different arm the arc's own finding happened to
 match; `just completed` / `already landed` need not describe the pointer, so *"The live pointer
 just completed validation successfully"* matched while reporting no staleness; and
