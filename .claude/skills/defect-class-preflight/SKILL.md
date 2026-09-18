@@ -454,6 +454,41 @@ what else is in the diff: a real amendment carries the spec/plan change (or a fi
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
 
+### Vocabulary evaluated and LEFT OUT — "the owed pointer refresh" (2026-09-18)
+
+The shape is real and recurs: a diff finishes the work and leaves a surface *consumers read
+to decide what to do next* still naming what was just finished. Nothing is wrong in the code;
+the ROUTING is wrong, so the next reader — or the next `/roadmap-continue` — is sent back into
+completed work. Recorded instances: *"declares Step 5 executed and the fence live, but HEAD's
+`.harness/roadmap_status.md:25` still says the frontier is …"*; *"declares the operator gate
+complete … but the canonical implementation plan still leaves Step 5 unticked"*; *"marks both
+operator decisions ratified, but the same plan's current version summary at line 38 still says
+they are open"*.
+
+**It is not a class, because the vocabulary cannot carry it.** It shipped as class 17 on the
+U-HE-45 arc and was subtracted three review rounds later, each round having traded one
+imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
+missed the plainest wording, hiding behind a different arm the arc's own finding happened to
+match; `just completed` / `already landed` need not describe the pointer, so *"The live pointer
+just completed validation successfully"* matched while reporting no staleness; and
+`still (?:says|names|points)` has **no polarity**, so *"The live pointer is fresh and still
+points to the intended next unit"* matched — a CORRECT pointer read as a stale one. Polarity is
+the part a regex cannot express, and each fix bought exactly one more round in which to find
+the next false surface.
+
+The asymmetry that decides it: a false match is worse than `unmatched`, because unmatched OWES
+an intake line while a false match silences it — so an over-broad row actively hides the new
+classes this table exists to surface. Subtracted per the rule that an adversarial-hardening
+loop does not converge by adding layers.
+
+**Still sweep for the shape by hand.** The question is worth asking even with no row to fire
+it: *does this diff complete something a live pointer names — and does the diff move that
+pointer?* If the unit's own scope lists a pointer refresh among its deliverables, the diff is
+not complete without it. The temptation sounds like protocol — *"the refresh is its own PR by
+§12.2.1"* — and §12.2.1 forbids only the reserved TITLE PREFIX on a bundled PR, not the
+bundling. On the arc that surfaced this, the substantive defect is registered as `B-288`, where
+prose carries the polarity a pattern could not.
+
 ### Vocabulary evaluated and LEFT OUT — "the validator reads a sub-span" (2026-09-17)
 
 The shape is real and recurs across arcs: a guard, parser or check examines PART of its

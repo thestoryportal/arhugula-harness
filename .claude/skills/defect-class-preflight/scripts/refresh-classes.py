@@ -96,6 +96,27 @@ from pathlib import Path
 # "does this check consume its whole input, or match a span and let the rest through?" — and
 # that question lives in SKILL.md; a future attempt needs a different INPUT, not a wider
 # vocabulary.
+# ALSO evaluated and LEFT OUT: an "owed pointer refresh" class (U-HE-45, 2026-09-18). The
+# SHAPE is real and recurs — a diff finishes work and leaves a surface consumers read to
+# decide what to do next still naming what was just finished (6-8 corpus rows: Step-5-
+# executed-but-plan-still-unticked, fence-live-but-roadmap_status-still-says, decisions-
+# ratified-but-version-summary-still-open). It is NOT a class because the vocabulary cannot
+# carry it, measured over three review rounds, each trading one imprecision for another:
+#   (a) `(?:never|not |un)refreshe?` gave the `never` arm no separator, so it demanded
+#       "neverrefresh" and missed the plainest wording. It hid because the arc's own finding
+#       matched a DIFFERENT arm — a masked alternative is invisible until a row needs only it.
+#   (b) `just completed` / `already landed` need not describe the pointer at all: "The live
+#       pointer just completed validation successfully" matched while reporting no staleness.
+#   (c) `still (?:says|names|points)` has NO POLARITY, and polarity is not regex-expressible:
+#       "The live pointer is fresh and still points to the intended next unit" matches, so a
+#       CORRECT pointer reads as a stale one.
+# Each round's fix bought exactly one more round in which to find the next false surface, and
+# a false match is worse than `unmatched` — unmatched OWES an intake line, a false match
+# silences it, so an over-broad row actively hides new classes. Subtracted per the recorded
+# rule that an adversarial-hardening loop does not converge by adding layers. The substantive
+# defect this shape named on that arc is registered as B-288 instead, where prose can carry
+# the polarity a regex cannot. Note also that tools/test_governance_router.py already
+# forward-references "class 17" for the sub-span shape, so the number was spoken for.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -291,6 +312,16 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
+    # Added U-HE-45. The unit's OWN deliverable included refreshing the live
+    # next-action pointer; the diff shipped the register rows and left the pointer
+    # naming the unit it had just completed, so /roadmap-continue would route
+    # straight back to finished work. Recurs in this workspace: the owed refresh
+    # after a tiebreaker PASS, and "the refresh must be the immediate next commit".
+    # Distinct from class 2 (a stale COUNT or cite drifts over time) and from class
+    # 12 (a contract phrase QUOTED into the diff with no line behind it): here the
+    # obligation is a deliverable of the unit itself, and the surface it was owed on
+    # is one consumers READ to decide what to do next -- so the cost is misrouting,
+    # not a wrong number.
 }
 
 
