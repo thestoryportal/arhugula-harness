@@ -165,17 +165,35 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "2 prose stale / counts / cites": (
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
     ),
+    # No term here describes THIS TABLE, deliberately. Every phrasing tried for it
+    # ("intake path", "intake pile", "classifies unrelated") reads just as naturally in
+    # findings about ingestion endpoints and queue growth, and the narrowing never converged:
+    # successive review rounds of one arc, each finding correct, each attacking the
+    # phrase the last one added. A classifier cannot be widened to catch the complaint that
+    # it is too wide. Findings ABOUT this table stay in the unmatched pile, where a human
+    # reads them -- the prefer-to-miss policy stated above, applied to the table itself.
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
     ),
     "4 vacuous witness": (
         r"witness|vacuous|stays green|cannot fail|only .*presence|never red"
         r"|does not red|remains green|unexercised"
+        r"|leaves? (this|the) (test|suite) green"
     ),
     "5 timeout / retry / budget": r"timeout|retry|budget|backoff|deadline",
     "6 unreachable / dead branch": (
         r"unreachable|dead|never reach|no witness could|half-dead|cannot see|restore arm"
     ),
+    # A sourced shell file mutating its caller's shell IS this class's concern in another
+    # substrate, but no vocabulary for it survives here. `caller's shell` was tried and
+    # WITHDRAWN: it claimed a finding this class does not own -- an EXISTENTIAL claim, which
+    # survives a growing corpus because a later row cannot unmake an earlier one. Under the
+    # prefer-to-miss policy a term that steals from the unmatched pile does not earn its place.
+    # What is NOT restated is any COUNT or PRECISION figure; that evidence
+    # is deliberately NOT restated here. The gate log only grows -- including with this arc's
+    # own findings -- so any statement about what the term matches is true at one anchor and
+    # false at the next -- which review rounds of this arc kept proving. Re-derive with
+    # `classify` if you need it. Pinned absent by tools/test_refresh_classes.py.
     "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (

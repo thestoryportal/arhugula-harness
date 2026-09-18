@@ -17,15 +17,98 @@
 #   * the lane index is claimed by EXCLUSIVE CREATE of `QUEUE_DIR/lanes/<k>` and released
 #     by `safe-worktree-remove.sh` at teardown. A worktree that already holds an entry
 #     REUSES it: two entries for one path would strand whichever the release missed.
+#   * `_LI_*` is this file's OWN namespace, never caller storage, and it has three disposals.
+#     `_LI_SRC`, `_LI_ROOT`, `_LI_Q`, `_LI_WT` are cleared unconditionally at every exit --
+#     true as of this change and NOT true before it, when the stale-repair-lock and
+#     no-free-index branches cleared none of them. `_LI_ORPHAN_DIR` is different: it is the
+#     EXPORTED surface, read by `lane_stack_allowed` after sourcing returns, so it must
+#     survive a source that succeeds. It is therefore invalidated ONCE at the top of the file
+#     together with `lane_stack_allowed` itself, and re-established only by a source that runs
+#     to completion. Both dispositions fall out of position rather than bookkeeping: every
+#     refusal exit sits above the lines that define them, so a refusal leaves them absent
+#     without any exit having to remember. Doing that per-exit is what failed -- the fix
+#     reached 1 of 12 exits (codex r9 P3; merge-gate concurrency lens r2).
+#     `_LI_ID` is the third, and it is LIFETIME-SCOPED rather than unconditional: it exists
+#     only between its assignment and the two lines that clear it (both arms of the one
+#     statement that sets it), so every exit above that point has nothing to clear and clears
+#     nothing. The consequence, measured in both shells and stated because the absolute above
+#     would otherwise read as covering it: a caller that had `_LI_ID` set before sourcing
+#     still has it after a refusal that exits early. That is a narrower guarantee than the
+#     other four carry, and it is deliberate -- widening it would mean adding the name to
+#     every exit, which is the hand-maintained list this file's static checker exists to
+#     refuse. Callers do not read `_LI_ID`; `HARNESS_LANE_ID` is the exported surface
+#     (merge-gate spec-conformance lens r11 P2/P3). Save/restore was proposed and refused: it would make one member behave unlike
+#     its siblings, and its caller-had-a-value arm is a two-armed restore no real caller
+#     reaches. Anything keeping state in `_LI_*` already collides with three variables.
 #   * a RAM shortfall is ENVIRONMENTAL. It is reported as a NOTIFY under a `lane-env:`
 #     cause family, never a coordination one (C-HE-13 §3), and it skips the stack rather
 #     than letting `docker compose up` fail opaquely mid-pilot (C-HE-11 §5).
 
-_LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# shellcheck source=lib.sh
-. "$_LI_ROOT/tools/hooks/lib.sh"
-# shellcheck source=loop_lib.sh
-. "$_LI_ROOT/tools/hooks/loop_lib.sh"
+# `BASH_SOURCE` is bash-only, and this file is SOURCED by whatever shell the lane opens in --
+# zsh in this workspace's interactive venue. Under zsh the array expanded empty, `dirname`
+# returned `.`, `_LI_ROOT` landed two levels above $HOME, BOTH library loads below failed,
+# and sourcing still returned 0. The caller got a lane with no `hook_git_retry` (so the
+# repo-wide `gc.auto 0` of C-HE-11 §2 was never attempted) and no `loop_log_structured` (so
+# the C-HE-11 §5 headroom-shortfall NOTIFY -- which that clause requires be attributed to an
+# environmental cause family rather than a coordination one -- could not be emitted at all).
+# The exported surface is invalidated ONCE, here, before anything can fail -- not at each
+# refusal. `lane_stack_allowed` is (re)defined near the end of this file and `_LI_ORPHAN_DIR`
+# is assigned just before it, so BOTH exist only after a source that runs to completion; every
+# one of this file's refusal exits sits above those lines and therefore leaves them absent for
+# free. Doing it per-exit is what went wrong: the fix landed at 1 of 12 exits, two of which
+# this same arc had just edited, and a 13th exit would have silently inherited the gap. A
+# prior source's definitions are the thing being invalidated -- a shell that sourced a good
+# lane and then a refusing one must not keep answering for the old one (merge-gate
+# concurrency lens, r2).
+unset -f lane_stack_allowed 2>/dev/null || true
+unset _LI_ORPHAN_DIR
+
+_LI_SRC="${BASH_SOURCE[0]:-}"
+# zsh sets no BASH_SOURCE, and its `$0` names the sourced file only while FUNCTION_ARGZERO
+# is set. That is the default, but it is an ordinary option a lane's zsh config may turn
+# off -- and then `$0` is the bare shell name and the root resolves against the caller's
+# cwd. `%x` is zsh's own authority for "the file whose source is executing" and is immune
+# to that option (`%N` is NOT: under `eval` it reports the eval, not the file). It reaches
+# us through `eval` so that bash, which cannot parse the expansion, never sees it.
+if [ -z "$_LI_SRC" ] && [ -n "${ZSH_VERSION:-}" ]; then
+  _LI_SRC="$(eval 'printf %s "${(%):-%x}"')"
+fi
+_LI_ROOT="$(CDPATH= cd "$(dirname "${_LI_SRC:-$0}")/../.." && pwd)"
+
+# A root that does not yield both libraries is not a root, so the load is CHECKED rather
+# than assumed. Testing readability first and sourcing after would leave a window (and would
+# still miss a library that parses badly); taking the status of the `.` itself has neither
+# gap. Refusing here is what keeps the half-initialised lane unrepresentable: every export
+# below is reached only from a root that has already produced the functions those exports
+# call. `return`, never `exit`/`set -e` -- a sourced file must not fell its caller's shell.
+# Sourcing is not transactional: once `. lib.sh` has run, its functions are in the caller and
+# the shell offers no way to take them back. So PRESENCE of both libraries is established
+# before either is sourced, which makes the overwhelmingly common failure -- a misresolved
+# root, the bug this guard exists for -- leave the caller completely untouched rather than
+# half-populated. The per-source status check still runs afterwards and catches what presence
+# cannot: a file unlinked in the window, or one that parses badly. A PARSE failure in the
+# SECOND library is the bounded residual -- the first is loaded by then and cannot be
+# unloaded -- and it reports through the same refusal, so it is loud rather than silent.
+_li_fail=""
+for _li_lib in lib.sh loop_lib.sh; do
+  [ -r "$_LI_ROOT/tools/hooks/$_li_lib" ] || { _li_fail="cannot read tools/hooks/$_li_lib"; break; }
+done
+if [ -z "$_li_fail" ]; then
+  for _li_lib in lib.sh loop_lib.sh; do
+    # shellcheck source=/dev/null
+    . "$_LI_ROOT/tools/hooks/$_li_lib" || { _li_fail="failed to load tools/hooks/$_li_lib"; break; }
+  done
+fi
+if [ -n "$_li_fail" ]; then
+  echo "lane-init: $_li_fail under '$_LI_ROOT' (resolved from '$_LI_SRC')" >&2
+  echo "lane-init: lane NOT initialised -- do not treat this worktree as an open lane" >&2
+  # Strip the identity, as every other failure path here does: a shell that already held
+  # lane A's would otherwise keep exporting it after being told the lane is not
+  # initialised, and this workspace binds reservation holders by lane_id.
+  unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_lib _li_fail
+  return 1 2>/dev/null || exit 1
+fi
+unset _li_lib _li_fail
 
 # Corpse repair (of a zero-byte marker or claim) must be MUTUALLY EXCLUSIVE. Atomic replace
 # alone is not enough: two repairers each minting a value, replacing in sequence, and each
@@ -64,7 +147,7 @@ case "$_LI_Q" in
   /*) ;;
   *) echo "lane-init: ARC_METRICS_QUEUE_DIR must be an absolute path, got '$_LI_Q'" >&2
      unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-     unset _LI_ROOT _LI_Q _LI_WT
+     unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
      return 1 2>/dev/null || exit 1 ;;
 esac
 
@@ -73,10 +156,78 @@ esac
 # in the environment belongs to a different lane. One shell that sources in lane A, cd's to
 # lane B and sources again would otherwise hand B the identity of A, and B would never get
 # a marker of its own: two worktrees, one reservation identity.
+# zsh's default NO_NULL_GLOB makes an UNMATCHED glob a FATAL error, where bash passes the
+# literal through for the `[ -f ]` guards below to reject. An empty `lanes/` is the ordinary
+# first-lane-on-a-machine state -- and the state after the last claim is released -- so under zsh
+# the scans below hit `no matches found` before their guards could run. MEASURED, both halves:
+# sourcing under zsh over an empty registry exited rc=126 with HARNESS_LANE_ID exported, no index
+# and no claim -- the half-built lane this file exists to refuse, and not even the contractual
+# rc=1; a scan reached from inside a function instead aborts that function and prints the same
+# error into the lane shell. Every scan site shared the defect and now shares this one mechanism,
+# so a new scan cannot reintroduce it by copying a guard wrong.
+#
+# What actually protects what, corrected twice before it was right -- the first two attributions
+# here were wrong, and the probes that "confirmed" them changed two variables at once:
+#   1. `(N)` is the PRIMARY guard. Under zsh it makes the glob not fail at all, so in shipped
+#      code the fatal path is never entered and stderr stays clean. Measured: without the arm,
+#      zsh prints `no matches found` on every first-lane init -- noise from a sourced file into
+#      an interactive shell -- and the pre-fix top-level form died rc=126 with a half-built lane.
+#   2. The `$( )` AT EACH CALL SITE is the containment if a glob ever does fail. It is NOT the
+#      function boundary: measured A/B on a sourced file under zsh 5.9, a failing glob in a
+#      function called DIRECTLY kills the whole sourced file at rc=126 (the next statement never
+#      runs), while the same function called as `$(f)` lets the file continue with an empty
+#      result. The subshell contains it; the function does not.
+#      CONSEQUENCE, stated because the earlier wording implied the opposite: this helper does NOT
+#      make misuse impossible. The call convention is `$( )`, and a scan that calls the helper
+#      DIRECTLY instead is not contained -- measured. Nothing else is claimed here: a piped call
+#      site was asserted to be hazardous in an earlier revision and is NOT (zsh runs the
+#      left-hand component in a subshell, so a pipe contains it exactly as `$( )` does, also
+#      measured).
+#
+#      A sentence summarising this block's own error history stood here and is deleted. Each
+#      attempt to write it shipped a false claim and was replaced by the next: a count, then a
+#      quantifier over the same unenumerated set, then a predicate contradicting both the head
+#      of this paragraph and the revision it described -- which had probed its two attributions,
+#      confoundedly, and said so. Every version was written to absorb the previous one's finding.
+#      It is deleted rather than narrowed again: the paragraph head already names what was wrong
+#      and `Nothing else is claimed here` already carries the discipline, so the sentence was
+#      adding a falsifiable claim and no fact.
+#      (merge-gate spec-conformance lens r11 P3, r12 P3, r13 P3.)
+# `(N)` is zsh's per-pattern NULL_GLOB qualifier, reached through `eval` so bash never parses it
+# -- the same guard shape the root resolution above uses. It is deliberately NOT `setopt
+# NULL_GLOB`: this file is SOURCED, and that would change every later unmatched glob in the
+# CALLER's shell, which is the exact class of side effect this file exists to avoid. The
+# qualifier cannot come from a variable either -- `*$NG` expands to the literal `*(N)` without
+# GLOB_SUBST, measured -- so the branch is on the syntax, not on a value. `set --` is
+# FUNCTION-local, so the caller's positional parameters are untouched. The unquoted expansion at
+# each call site cannot word-split: a claim's filename is HARNESS_LANE_INDEX, which the `case`
+# below admits only as digits with no leading zeros and below 350.
+_li_lane_files() {
+  [ -d "$_LI_Q/lanes" ] || return 0
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    eval 'set -- "$_LI_Q"/lanes/*(N)'
+  else
+    set -- "$_LI_Q"/lanes/*
+    [ -e "$1" ] || set --
+  fi
+  [ "$#" -eq 0 ] && return 0
+  # Emit BASENAMES, never full paths, and let each caller re-form the path QUOTED. The word
+  # split at the call sites is safe for a basename -- a claim's filename is HARNESS_LANE_INDEX,
+  # which the `case` below admits only as digits -- and is NOT safe for a full path, whose
+  # prefix is $_LI_Q: an externally supplied value which the `case` below validates only as
+  # absolute, never as space-free. Measured
+  # on the full-path form: with one space in ARC_METRICS_QUEUE_DIR every claim became invisible
+  # to every scan, and a worktree already holding lanes/0 then sourcing with
+  # HARNESS_LANE_INDEX=1 got rc=0 with BOTH 0 and 1 claimed, where the direct glob it replaced
+  # refused. Shifting positional parameters keeps this loop free of a named variable.
+  while [ "$#" -gt 0 ]; do printf '%s\n' "${1##*/}"; shift; done
+}
+
 _lane_id_bound_elsewhere() {
   local want="$1" f id path
   [ -d "$_LI_Q/lanes" ] || return 1
-  for f in "$_LI_Q"/lanes/*; do
+  for f in $(_li_lane_files); do
+    f="$_LI_Q/lanes/$f"
     [ -f "$f" ] || continue
     IFS=' ' read -r id path < "$f"
     { [ "${id:-}" = "$want" ] && [ "${path:-}" != "$_LI_WT" ]; } && return 0
@@ -215,7 +366,7 @@ _lane_init_id() {
 }
 if ! _LI_ID="$(_lane_init_id)"; then
   unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-  unset _LI_ROOT _LI_Q _LI_WT _LI_ID
+  unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _LI_ID
   unset -f _lane_init_id
   return 1 2>/dev/null || exit 1
 fi
@@ -244,25 +395,26 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   case "$HARNESS_LANE_INDEX" in
     ''|*[!0-9]*)
       echo "lane-init: HARNESS_LANE_INDEX must be an integer 0..349, got '$HARNESS_LANE_INDEX'" >&2
-      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
     0) ;;
     0*)
       echo "lane-init: HARNESS_LANE_INDEX must be canonical (no leading zeros), got '$HARNESS_LANE_INDEX'" >&2
-      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
+      unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1 ;;
   esac
   # Bound the LENGTH before the comparison: a digit string too large for the shell's integer
   # type makes `test -ge` exit 2, which `if` reads as false — and a 30-digit index would then
   # be published as a claim filename. Every valid index is at most three digits.
   if [ "${#HARNESS_LANE_INDEX}" -gt 3 ] || [ "$HARNESS_LANE_INDEX" -ge 350 ]; then
     echo "lane-init: HARNESS_LANE_INDEX must be < 350 (no port block exists above it), got '$HARNESS_LANE_INDEX'" >&2
-    unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
+    unset HARNESS_LANE_ID HARNESS_LANE_INDEX _LI_SRC _LI_ROOT _LI_Q _LI_WT; return 1 2>/dev/null || exit 1
   fi
 fi
 
 mkdir -p "$_LI_Q/lanes" 2>/dev/null
 # What this worktree already holds, resolved ONCE and used by both paths below.
 _li_have=""
-for _li_f in "$_LI_Q"/lanes/*; do
+for _li_f in $(_li_lane_files); do
+  _li_f="$_LI_Q/lanes/$_li_f"
   [ -f "$_li_f" ] || continue
   IFS=' ' read -r _li_id _li_path < "$_li_f"
   if [ "${_li_path:-}" = "$_LI_WT" ]; then
@@ -279,7 +431,7 @@ for _li_f in "$_LI_Q"/lanes/*; do
            > "$_LI_Q/lanes/.orphaned-$_li_have" 2>/dev/null; then
         echo "lane-init: cannot fence inherited lane index $_li_have (marker unwritable) — refusing to adopt a stack this lane cannot account for" >&2
         unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-        unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
+        unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path
         return 1 2>/dev/null || exit 1
       fi
       # ATOMIC rebind, and checked. Truncating the authoritative claim in place opens a
@@ -291,7 +443,7 @@ for _li_f in "$_LI_Q"/lanes/*; do
         rm -f "${_li_tmp:-}" 2>/dev/null
         echo "lane-init: could not rebind inherited lane index $_li_have to this lane — refusing rather than running on a claim that names someone else" >&2
         unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-        unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_tmp
+        unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_tmp
         return 1 2>/dev/null || exit 1
       fi
       unset _li_tmp
@@ -306,7 +458,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   if [ -n "$_li_have" ] && [ "$_li_have" != "$HARNESS_LANE_INDEX" ]; then
     echo "lane-init: this worktree already holds lane index $_li_have — refusing to also take $HARNESS_LANE_INDEX" >&2
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have; return 1 2>/dev/null || exit 1
   fi
   _li_published=""
   if [ -z "$_li_have" ]; then
@@ -331,7 +483,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   if [ -z "$_li_ok" ]; then
     echo "lane-init: HARNESS_LANE_INDEX=$HARNESS_LANE_INDEX could not be claimed for this worktree (claim: [$(cat "$_LI_Q/lanes/$HARNESS_LANE_INDEX" 2>/dev/null)]) — refusing to run on a project this lane does not own" >&2
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_id _li_path _li_ok
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_id _li_path _li_ok
     return 1 2>/dev/null || exit 1
   fi
   unset _li_id _li_path _li_ok
@@ -347,7 +499,8 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
   # hold. Comparing against the minimum is correct for ANY number of racing sources, because
   # exactly one of them can be the minimum.
   _li_min=""
-  for _li_f in "$_LI_Q"/lanes/*; do
+  for _li_f in $(_li_lane_files); do
+    _li_f="$_LI_Q/lanes/$_li_f"
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     [ "${_li_path:-}" = "$_LI_WT" ] || continue
@@ -388,7 +541,7 @@ if [ -n "${HARNESS_LANE_INDEX:-}" ]; then
       echo "lane-init: raced a concurrent init of this worktree holding lane index $_li_min; this claim on $HARNESS_LANE_INDEX is the lowest and stands — the other sources withdraw" >&2
     fi
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_published _li_min _li_n
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_f _li_id _li_path _li_published _li_min _li_n
     return 1 2>/dev/null || exit 1
   fi
   unset _li_f _li_id _li_path _li_published _li_min _li_n
@@ -450,6 +603,7 @@ else
           echo "lane-init: a stale repair lock blocks $_LI_Q/lanes/$_li_k.repair — remove it and re-open the lane" >&2
           unset HARNESS_LANE_ID HARNESS_LANE_INDEX
           unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
+          unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
           return 1 2>/dev/null || exit 1
         fi
       fi
@@ -463,6 +617,7 @@ else
       echo "lane-init: no free lane index < 350 in $_LI_Q/lanes — refusing to continue" >&2
       unset HARNESS_LANE_ID HARNESS_LANE_INDEX
       unset _li_k _li_id _li_path _li_tmp _li_retried _li_have
+      unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
       return 1 2>/dev/null || exit 1
     fi
   done
@@ -478,7 +633,8 @@ else
   # hold. Comparing against the minimum is correct for ANY number of racing sources, because
   # exactly one of them can be the minimum.
   _li_min=""
-  for _li_f in "$_LI_Q"/lanes/*; do
+  for _li_f in $(_li_lane_files); do
+    _li_f="$_LI_Q/lanes/$_li_f"
     [ -f "$_li_f" ] || continue
     IFS=' ' read -r _li_id _li_path < "$_li_f"
     [ "${_li_path:-}" = "$_LI_WT" ] || continue
@@ -519,7 +675,7 @@ else
       echo "lane-init: raced a concurrent init of this worktree holding lane index $_li_min; this claim on $_li_k is the lowest and stands — the other sources withdraw" >&2
     fi
     unset HARNESS_LANE_ID HARNESS_LANE_INDEX
-    unset _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_tmp _li_retried _li_f _li_id _li_path _li_published _li_min _li_n
+    unset _LI_SRC _LI_ROOT _LI_Q _LI_WT _li_have _li_k _li_tmp _li_retried _li_f _li_id _li_path _li_published _li_min _li_n
     return 1 2>/dev/null || exit 1
   fi
   export HARNESS_LANE_INDEX="$_li_k"
@@ -674,5 +830,5 @@ lane_stack_allowed() {
   return 1
 }
 
-unset _LI_ROOT _LI_Q _LI_WT
+unset _LI_SRC _LI_ROOT _LI_Q _LI_WT
 unset -f _lane_init_id _li_sanitize

@@ -140,6 +140,13 @@ jobs:
       - name: Pytest (excludes e2e)
         run: uv run pytest -m "not e2e"
 
+      # tools/hooks/test_lane_init.sh (run by codex-parity-check.sh below) pins a zsh-ONLY
+      # regression: lane-init.sh is sourced, and ${BASH_SOURCE[0]} is bash-only. That suite
+      # now FAILS when a required shell is absent rather than skipping it, because a skipped
+      # shell reports the same exit status as a covered one. ubuntu-latest ships no zsh.
+      - name: Install zsh (required by the lane-init portability suite)
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
       - name: Codex compatibility regressions — blocking
         run: bash tools/codex-parity-check.sh
 

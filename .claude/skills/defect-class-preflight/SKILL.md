@@ -235,6 +235,29 @@ set, an exemption list, an allowlist, a dedupe key) is itself attack surface —
 sweep it for forgeability and containment (symlinked dirs/files, schema-shaped
 forged entries) before trusting it to mute anything.
 
+**The classifier's own terms are a suppression input too (added 2026-09-17, and the
+rule below is all that survived of it).** A class pattern
+that matches too widely removes findings from the unmatched-intake pile with no signal that
+anything was dropped — `|| true` aimed at the review machinery rather than at code. So a new
+class term is judged on its FALSE POSITIVES first: name the unrelated findings it would
+claim, and pin them as negatives in the same commit. Under-matching leaves a finding in the
+intake pile where a human sees it; over-matching hides it. Two consecutive rounds of one arc
+were spent narrowing a single added term (`cleanup path`, then `caller state`), which is what
+this rule exists to skip.
+
+And when narrowing does not converge, SUBTRACT. Round after round of one arc went on terms
+added to this table; the terms were removed rather than sharpened again,
+because this file's own policy is to prefer to miss and its header already records that
+successive regex layers trade one imprecision for another. A shape that keeps drawing
+findings is telling you the vocabulary does not exist, not that you have not found it yet.
+
+That is what happened to the term added for THIS rule: round after round, each finding
+correct, each attacking the phrase the last one added, because every way of naming the
+classifier's own machinery also names ordinary ingestion and queue findings. No matcher
+vocabulary for it exists in the table now. Findings about the class table stay in the
+unmatched pile and get an `instance-only` disposition, which is the honest record: they are
+artifacts of editing the table, not a defect class in the product.
+
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
 load-bearing line were deleted or inverted, does this test actually red?* Traps seen
@@ -271,6 +294,33 @@ mechanism that owns both modes (`MonkeyPatch`, a context manager) — delete the
 rather than contriving a witness for it.
 
 ### 7. Env-var mutation and restore (73 findings)
+
+**Shell half (added 2026-09-17, lane-init `_LI_SRC`).** A SOURCED file mutates its caller's
+shell the way `os.environ` mutates a process — the variable outlives the call, for the life
+of that interactive shell, and can clobber a caller's own name. So every variable a sourced
+file introduces owes the same question as an `os.environ` write: *who unsets it, on which
+paths?* The answer must be ALL of them — success and every failure arm — because the one
+path that forgets is the one a lane actually takes. Read the file's existing cleanup sites
+first: if it already unsets its locals at every one of its exits, a new local that appears at one
+is not a smaller version of the convention, it is the exception that breaks it.
+
+This half has NO surviving vocabulary in class 7, and that is the finding, not an
+oversight. `caller's shell` was tried and WITHDRAWN: it claimed a finding this class does
+not own, and under the prefer-to-miss policy a term that steals from the unmatched pile does
+not earn its place. That claim is EXISTENTIAL — one such finding exists — and an existential
+claim survives a growing corpus, because a later row cannot unmake an earlier one. What is NOT
+restated here is any CATEGORICAL or PRECISION claim (how many it matched, what share were
+wrong): the gate log only grows, including with the reviewing arc's own findings, so those are
+true at one anchor and false at the next. That is the whole distinction, and it is why the
+decision below rests on policy rather than on a measurement. Re-derive with
+`refresh-classes.py` if you want the current numbers. And
+`tools/test_refresh_classes.py::test_class_7_does_not_claim_sourced_shell_caller_state`
+now pins the absence. A shell-sourcing finding therefore lands UNMATCHED, which is the
+intended outcome: unmatched is where the next class comes from. The rule that removed it
+still stands, and is why it went -- terms like `caller state` or `caller-scoped` read just as naturally in ownership,
+aliasing and scoping findings, and stealing one of those is worse than missing it — a class
+hit is what removes a finding from the unmatched new-class pile, so an over-wide term
+silently switches the intake loop off for everything it claims.
 Any `os.environ` write: who restores it, does the restore survive a mid-test
 `monkeypatch.undo()` (use an INDEPENDENT `MonkeyPatch`), does it leak into suites that
 assert the namespace empty (`HARNESS_*` must never escape tools items), and — the P1
