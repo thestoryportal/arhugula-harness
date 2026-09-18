@@ -43,10 +43,13 @@ own suggested paragraph carries none of the five carriers `hook_roadmap_next` ac
 (`tools/hooks/lib.sh:286-292`) and would have returned empty with `U-*` tokens visible, which
 `tools/test_roadmap_status_consumers.py:222` refuses — the exact shape that reddened U-HE-44's
 refresh PR. Deeper than the wording: the parser's five carriers each name a unit or a plan doc,
-while this arc's actionable frontier is FOUR register rows — `B-285`, `B-286`, `B-287` and
-`B-288`, each `registered_finding` with empty `depends_on`, so `OPEN_STATUSES` admits all
-four and `--open` emits all four — and a `B-*` id is unnameable by any carrier. An earlier
-draft of this line named only the first two, which would have stranded the other two. Review
+while this arc's actionable frontier is FIVE register rows — `B-284`, `B-285`, `B-286`,
+`B-287` and `B-288` — and a `B-*` id is unnameable by any carrier. Four are
+`registered_finding` with empty `depends_on`; `B-284` is `open` with its sole dependency
+`B-281` already `closed`, and `--open` applies NO dependency filtering. This line was wrong
+TWICE before: it first named two rows, then four, each time corrected to a number taken from
+recall rather than from running `--open` and counting. The five above are derived
+programmatically from the register. Review
 raised the pointer on FOUR consecutive rounds, and each rewrite only moved which BLOCKED thing
 was named — U-HE-45 (just completed), then held U-HE-40, then the plan doc whose only remaining
 S7 work is that same held unit. Registered as `B-288` rather than reworded a fifth time, with
