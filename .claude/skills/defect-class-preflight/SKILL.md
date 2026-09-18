@@ -210,42 +210,16 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
-The class also covers a record that **contradicts its own evidence**: a review audit stating
-finding counts the gate log's own `round_n` refutes, or a cleared marker naming two of the four
-rows `--open` actually emits (both U-HE-45, 2026-09-18). The frontier one went UNMATCHED until `identifies only` was
-added — the class already owned the shape and only its vocabulary missed the phrasing, which is
-the "unfired" repair rather than a new class. That term is SEMANTICALLY BOUNDED: "identifies only
-X" is inherently a claim about a record's completeness.
-
-A second term, `, not <digits>`, was added beside it and **removed one round later**. Its corpus
-rows were genuine, but it matches any numeric contrast — "The API returns 1, not 2." classified as
-class 2 under it. The mistake is worth naming because it is subtle: I measured BREADTH on the
-current corpus (+3 rows, all good) and treated that as PRECISION. A corpus that happens not to
-contain a phrasing does not exclude it, and this table is read against findings that do not exist
-yet. `omits` was measured and rejected the same round at +84. The count-conflict shape it was
-meant to catch therefore stays in the intake pile, which is the right place for a shape whose
-vocabulary is unbounded.
-
-**Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
-ASSERTING a mechanism behaviour the code does not have (never true), as against the drift
-half above (true once, then decayed). Pattern tried: a claim-bearing subject
-(`claims|states|says|documented|guarantees|asserts`) within 120 non-sentence characters of
-a falsity marker. At the 2,191-finding corpus it claimed 40 previously-unmatched rows and
-leaked none of the `contradicting C-HE-NN` code-vs-contract cluster — a bare `contradict`
-sweeps that whole cluster in, the same wrong direction as `drift`. **Refused anyway:** 6 of
-the 40 are operational uses of those verbs in non-prose findings (a peer that "claimed" a
-file, a lease "claim", an order "asserted only via any()"), and a class-2 false positive
-REMOVES a row from the unmatched pile — the pile where new classes are found. The
-discriminator needed here (is "claim" a sentence or a lease?) is not in the classifier's
-input: it sees evidence plus location, and neither says which. Two review rounds landed on
-this one mechanism, so it was subtracted rather than widened again. A future attempt needs
-a different INPUT — the cited file's own bytes — not a bigger vocabulary.
-
-The defect itself is real and worth catching by hand: **for every sentence you write that
-says what some mechanism does, did you read that mechanism this session, or are you
-restating what an earlier document said about it?** Both mechanism claims on the arc that
-measured this were inherited verbatim from the file it was superseding, amplified, and
-never probed — one false against `DESIGN_RE`, one false against `review_wrapper_common.py`.
+*Vocabulary evaluated and LEFT OUT for this class (2026-09-18):* a record that **contradicts its
+own evidence** — a review audit stating counts the gate log's `round_n` refutes, a cleared marker
+naming two of the four rows `--open` emits. The shape is class 2's subject and recurred twice in
+one arc, but three terms were tried and all three withdrawn: `omits` (+84 rows, rejected before
+shipping), `, not <digits>` (matches any numeric contrast — "The API returns 1, not 2."), and
+`identifies only` (shipped on a claim of semantic boundedness that proved false — "The sanitizer
+identifies only SQL injection…"). Prose DESCRIBING a record is lexically indistinguishable from
+prose about the thing the record describes. Sweep it by hand: for every count, status or
+completeness claim a record states, which source of truth refutes it, and did you read that
+source THIS session?
 
 ### 3. Silent failure / meaning-changing fallback (114 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the

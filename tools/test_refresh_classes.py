@@ -46,39 +46,44 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
     assert out["a:2"] == []
 
 
-def test_class_2_claims_a_record_contradicts_its_own_evidence():
-    # Added U-HE-45's plan-record arc r4 as an "unfired" repair: class 2 already OWNS the shape
-    # (a checkable fact in durable prose that is wrong), but its vocabulary missed these two
-    # phrasings and both findings went to the unmatched intake pile. Revert either added
-    # alternative and the matching row here goes red.
+def test_record_contradicts_its_evidence_is_not_class_2_vocabulary():
+    # U-HE-45's plan-record arc tried THREE terms for this shape and withdrew all three; the
+    # ALSO-evaluated-and-LEFT-OUT note above CLASSES carries the measurements. This pins the
+    # withdrawal so none of them creeps back.
     #
-    # The added terms are deliberately narrow: they add FIVE corpus rows and no more. `omits`
-    # was measured and rejected at +84 — a class-2 that claims a third of the corpus stops
-    # discriminating, and a false match silences the intake line an unmatched finding owes.
+    # p:1/p:2 are the genuine members and they STAY in the intake pile — the shape is class 2's
+    # subject, but no bounded vocabulary reaches it. n:1/n:2 are the counterexamples that killed
+    # the last two terms: an ordinary numeric contrast, and an "identifies only" that is about a
+    # sanitizer rather than a record. Re-add `,\s*not\s+\d` and n:1 goes red; re-add
+    # `identifies only` and n:2 goes red.
     rows = [
         {
-            "finding_id": "c:2",
+            "finding_id": "p:1",
+            "observed_evidence": "The review audit conflicts with the durable gate log: rounds"
+            " 1-5 contain 2/3/3/2/1 findings (11 total), not 2/2/3/2/1 (10 total).",
+            "location": ".harness/plan/x.md:7793",
+        },
+        {
+            "finding_id": "p:2",
             "observed_evidence": "This identifies only B-285/B-286 as the actionable frontier,"
-            " but B-287 and B-288 also have status registered_finding and empty dependencies.",
+            " but B-287 and B-288 also qualify.",
             "location": ".harness/clearance/x-cleared-2026-09-18.md:46",
         },
-    ]
-    # n:1 is codex r5's counterexample and the reason `,\s*not\s+\d` was REMOVED after one
-    # round: an ordinary numeric contrast is not a prose-drift finding, and a false match
-    # silences the intake line an unmatched finding owes. Re-add that alternative and this
-    # case goes green.
-    not_prose = [
         {
             "finding_id": "n:1",
             "observed_evidence": "The API returns 1, not 2.",
             "location": "harness-cp/src/harness_cp/x.py:10",
         },
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "The sanitizer identifies only SQL injection and therefore lets"
+            " XSS through.",
+            "location": "harness-as/src/harness_as/y.py:22",
+        },
     ]
-    out = json.loads(_run("classify", stdin=json.dumps(rows + not_prose)).stdout)
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
     name = "2 prose stale / counts / cites"
     for row in rows:
-        assert name in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
-    for row in not_prose:
         assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
 
 

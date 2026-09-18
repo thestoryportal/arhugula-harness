@@ -139,31 +139,31 @@ from pathlib import Path
 # field" from "sets a field" actively hides the new classes this table exists to surface.
 # Sweep the shape BY HAND: for every status, disposition or checkbox a diff SETS, does the body
 # of that same record agree, and which consumer reads the field rather than the body?
+# ALSO evaluated and LEFT OUT: vocabulary for "a record contradicts its own evidence"
+# (U-HE-45's plan-record arc, 2026-09-18). The SHAPE is class 2's own subject and it recurred
+# twice in that arc -- a review audit stating finding counts the gate log's round_n refutes, and
+# a cleared marker naming two of the four rows `--open` emits. THREE terms were tried against it
+# and all three were withdrawn, each for the same reason one layer down:
+#   * `omits` -- measured at +84 corpus rows and rejected before shipping.
+#   * `,\s*not\s+\d` -- shipped, then removed one round later: it matches ANY numeric contrast
+#     ("The API returns 1, not 2."). The error was treating BREADTH on the current corpus (+3
+#     rows, each inspected and genuine) as PRECISION -- a corpus that happens not to contain a
+#     phrasing does not exclude it, and this table is read against findings that do not exist yet.
+#   * `identifies only` -- shipped on the claim that it is SEMANTICALLY bounded to a record's
+#     completeness, and removed the next round when that claim proved false: "The sanitizer
+#     identifies only SQL injection and therefore lets XSS through" is an implementation defect.
+#     Anything that identifies things can identify only some of them.
+# The lesson is not about these three words. A finding's prose DESCRIBING a record is lexically
+# indistinguishable from prose ABOUT the thing the record describes, which is the same wall the
+# withdrawn class-17 (polarity) and class-18 (reference) vocabularies hit. Sweep it by hand: for
+# every count, status or completeness claim a record states, which source of truth refutes it,
+# and did you read that source THIS session?
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
     ),
     "2 prose stale / counts / cites": (
-        # `identifies only` and `, not <digits>` added U-HE-45's plan-record arc r4, where TWO
-        # class-2-shaped findings went UNMATCHED: a review audit that stated 2/2/3/2/1 and "10
-        # total" where the gate log's own round_n says 2/3/3/2/1 and 11, and a cleared marker
-        # that named two of the FOUR rows `--open` actually emits. Both are checkable facts in
-        # durable prose that were wrong — class 2's subject exactly; only its vocabulary missed
-        # the phrasing, which is the "unfired" repair, not a new class.
-        # ONLY `identifies only` survives, and it is SEMANTICALLY BOUNDED: "identifies only X"
-        # is inherently a claim about a RECORD's completeness. Its 3 added rows are all that
-        # shape (a recipe that cannot record what its surrounding text claims; the marker and
-        # the plan each naming two of the four actionable rows).
-        #
-        # `,\s*not\s+\d` was added beside it and REMOVED one round later (codex r5). Its 3
-        # corpus rows were genuine, but the term matches ANY numeric contrast — "The API returns
-        # 1, not 2." classified as class 2 under it. The mistake was treating BREADTH on the
-        # current corpus as PRECISION: a corpus that happens not to contain a phrasing does not
-        # exclude it, and this table is read against findings that do not exist yet. `omits` was
-        # measured and rejected the same round at +84. n:1 of the class-2 witness pins the
-        # removal.
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
-        r"|identifies only"
     ),
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
