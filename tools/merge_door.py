@@ -353,7 +353,7 @@ def win_marker(token: str, target_action: str, *, extra: dict | None = None) -> 
         return None
 
 
-def release_refusal(lease: dict) -> str | None:
+def release_refusal(lease: dict, ground: Ground) -> str | None:
     """The CLI recovery path's own refusal for `lease`, or None if it has none.
 
     None means THIS check raises no objection, not that the release will succeed:
@@ -389,21 +389,36 @@ def release_refusal(lease: dict) -> str | None:
             "block an operator has confirmed via `unblock`. If the landing crashed, "
             "reconcile by ground truth (C-HE-06 §5) by re-running it."
         )
-    # The REASON, not merely the fact, of the block. Ten reasons reach mark_blocked and
-    # only this one means "the merge SHA's own run was observed and is terminally not
-    # green", which is the single condition X8 carves out. `base_toctou_*`,
-    # `containment_refusal:*`, `door_failed_after_attempt:*`, `unreconcilable_at_resume:*`,
-    # `refresh_skipped_without_optin` and `refresh_intent_unresolved` all block without
-    # ever observing that run, so an `unblocked_from` alone would read as an attestation
-    # nobody made (codex r5 P1). The refresh-CI reasons are terminal too, but they imply a
-    # minted refresh and are refused below on that ground instead.
-    if lease.get("unblocked_reason") != "post_merge_ci_not_green":
+    # X8's condition read from its OWN authority, not inferred from a proxy. Four review
+    # rounds were spent narrowing proxies for "the merge SHA's run was observed and is
+    # terminally not green" -- the block's existence, then its reason -- and each proxy
+    # admitted a state it should not: ten reasons reach mark_blocked and only one concerns
+    # that run (codex r5), and even that one is persisted for a 45-minute TIMEOUT, where
+    # the run was never observed at all (codex r6, `wait_post_merge_ci` line ~1218 vs
+    # `land` line ~1440). The run itself is the authority, so ask it. `unblocked_from` is
+    # the sha the operator keyed the unblock to, which for a step-(vii) block IS the merge
+    # commit; step-(viii) blocks carry refresh markers and are refused below before this.
+    sha = lease["unblocked_from"]
+    try:
+        runs = [r for r in ground.gh_runs_for_sha(sha) if r.get("event") in (None, "push")]
+    except Exception as exc:  # any ground-truth failure fails CLOSED
         return (
-            f"the block was {lease.get('unblocked_reason')!r}, not "
-            "'post_merge_ci_not_green'. C-HE-06 v1.8 X8 admits a release only where the "
-            "merge SHA's OWN run was observed and reached a terminal non-success; every "
-            "other block reason leaves that run unobserved, which the invariant still "
-            "fences. Reconcile by ground truth (C-HE-06 §5) by re-running the landing."
+            f"could not read the merge SHA's own run from ground truth ({exc}). The "
+            "invariant fences an UNCONFIRMED run, and an unreadable one is unconfirmed."
+        )
+    done = [r for r in runs if r.get("status") == "completed"]
+    if not done:
+        return (
+            f"the merge SHA {sha[:12]}'s own `main` run has not completed (pending, or "
+            f"never appeared; the block was recorded as {lease.get('unblocked_reason')!r}, "
+            "which `land` also writes on a 45-minute timeout). That run is UNCONFIRMED, "
+            "which the invariant fences; X8 admits only an OBSERVED terminal non-success."
+        )
+    if ci_is_green(done[0].get("conclusion")):
+        return (
+            f"the merge SHA {sha[:12]}'s own `main` run is GREEN. There is nothing to "
+            "recover: resume the landing with `land` so it completes step (viii) and "
+            "releases at step (ix), rather than freeing the door here."
         )
     res = rs.current(lease.get("reservation_id") or "")
     if lease.get("merge_attempted_at") and not (res is not None and res[1]["state"] == "merged"):
@@ -2070,7 +2085,7 @@ def main(argv: list[str] | None = None) -> int:
                 # The admissible state is exactly an operator-confirmed unblock successor
                 # with neither merge outstanding; everything else routes to §5's
                 # ground-truth reconciliation, which is `land`'s job, not this verb's.
-                refusal = release_refusal(live)
+                refusal = release_refusal(live, default_ground())
                 if refusal is not None:
                     raise LeaseError(f"pr #{live['pr']}: {refusal}")
                 # What remains is an operator-adjudicated block whose merges are both

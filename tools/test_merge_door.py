@@ -2191,6 +2191,15 @@ def test_recovery_verbs_refuse_a_live_unblocked_holder(door):
     assert md._sidecar(lease["lease_token"], "refresh.intent").exists()  # fence intact
 
 
+def _release_ground(monkeypatch, ci="failure", status="completed"):
+    """Inject the merge SHA's own run for the release gate, which reads it from ground
+    truth rather than inferring it from the block reason (codex r6)."""
+    g = FakeGround(ci=ci)
+    g.gh_runs_for_sha = lambda sha: [{"status": status, "conclusion": ci, "event": "push"}]
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    return g
+
+
 def _unblocked_successor(lane="A", pr=1, sha="c" * 40, reason="post_merge_ci_not_green"):
     """The only state the CLI release path admits: a landing whose merge SHA's OWN run was
     observed and went terminally red, then cleared by the operator-confirmed unblock, which
@@ -2206,6 +2215,7 @@ def test_release_verb_frees_the_door_from_the_cli(door, monkeypatch):
     """The wedge this verb exists for: an operator-adjudicated block whose merges are
     settled, which no other verb can free — `land` re-blocks on the merge sha's immutable
     run and `gc` skips live leases."""
+    _release_ground(monkeypatch)
     fresh = _unblocked_successor()
     rs.transition("pr-1", "merged", lane_id="A")  # §4(vi) confirmed MERGED on ground truth
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)  # the driver is gone
@@ -2218,6 +2228,7 @@ def test_release_verb_frees_the_door_from_the_cli(door, monkeypatch):
 # crash right after step (vi), before (vii) ever observes the merge SHA's CI, would let
 # the fence be freed and a second PR land on an unconfirmed main)
 def test_release_verb_refuses_a_lease_no_operator_has_adjudicated(door, monkeypatch):
+    _release_ground(monkeypatch)
     lease = _acq()
     rs.transition("pr-1", "merged", lane_id="A")  # (vi) done; (vii) never ran
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
@@ -2229,6 +2240,7 @@ def test_release_verb_refuses_a_lease_no_operator_has_adjudicated(door, monkeypa
 # between mark_attempted and the merge returning reads as dead while the request is still
 # in flight, so freeing the door admits a SECOND concurrent merge)
 def test_release_verb_refuses_an_unreconciled_in_flight_merge(door, monkeypatch):
+    _release_ground(monkeypatch)
     fresh = _unblocked_successor()
     md.mark_attempted(fresh)  # the content merge request left the process...
     # ...and step (vi) never flipped the reservation on confirmed ground truth
@@ -2242,6 +2254,7 @@ def test_release_verb_refuses_an_unreconciled_in_flight_merge(door, monkeypatch)
 # CONTENT reservation is merged, a holder dying after sending the step-(viii) refresh
 # merge would otherwise pass every other check)
 def test_release_verb_refuses_an_in_flight_refresh_merge(door, monkeypatch):
+    _release_ground(monkeypatch)
     fresh = _unblocked_successor()
     rs.transition("pr-1", "merged", lane_id="A")  # the content merge IS settled
     md.mark_attempted(fresh, suffix="refresh")  # ...but the refresh merge is outstanding
@@ -2255,6 +2268,7 @@ def test_release_verb_refuses_an_in_flight_refresh_merge(door, monkeypatch):
 # refresh PR with no attempted marker; an attempt-only test frees the door with a
 # mandatory terminating refresh still unmerged)
 def test_release_verb_refuses_a_recorded_but_unattempted_refresh(door, monkeypatch):
+    _release_ground(monkeypatch)
     fresh = _unblocked_successor()
     rs.transition("pr-1", "merged", lane_id="A")  # the content merge IS settled
     # the door minted the refresh PR, then blocked on ITS head CI — before any attempt
@@ -2273,6 +2287,7 @@ def test_release_verb_refuses_a_recorded_but_unattempted_refresh(door, monkeypat
 # mutation-probe: route `release` past release()'s blocked refusal (silently frees a
 # blocked door, bypassing the operator-keyed unblock)
 def test_release_verb_refuses_a_blocked_lease(door, monkeypatch):
+    _release_ground(monkeypatch)
     lease = _acq()
     md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
@@ -2283,6 +2298,7 @@ def test_release_verb_refuses_a_blocked_lease(door, monkeypatch):
 # mutation-probe: drop the shared holder-invariant guard for `release` (any lane frees
 # any other lane's door)
 def test_release_verb_refuses_another_lanes_lease(door, monkeypatch):
+    _release_ground(monkeypatch)
     fresh = _unblocked_successor()
     rs.transition("pr-1", "merged", lane_id="A")
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
@@ -2292,32 +2308,64 @@ def test_release_verb_refuses_another_lanes_lease(door, monkeypatch):
 
 # mutation-probe: drop the live-holder refusal for `release` (the door is yanked out from
 # under a lane that is actively driving a landing)
-def test_release_verb_refuses_a_live_unblocked_holder(door):
+def test_release_verb_refuses_a_live_unblocked_holder(door, monkeypatch):
+    # injected although the live-holder guard fires first: under the mutation this test
+    # exists to kill, execution reaches the ground-truth read, which must stay hermetic
+    _release_ground(monkeypatch)
     fresh = _unblocked_successor()  # the fixture calls a lease alive iff its pid is ours
     rs.transition("pr-1", "merged", lane_id="A")
     assert md.main(["release", "--lane-id", "A"]) == 4
     assert md.read_lease()["lease_token"] == fresh["lease_token"]
 
 
-# mutation-probe: gate on `unblocked_from` alone (codex r5 P1 — ten reasons reach
-# mark_blocked and only post_merge_ci_not_green proves the merge SHA's own run was
-# OBSERVED; a BASE_TOCTOU or containment block never looked at it)
-@pytest.mark.parametrize(
-    "reason",
-    [
-        "base_toctou_first_parent_mismatch",
-        "refresh_skipped_without_optin",
-        "door_failed_after_attempt:boom",
-        "containment_refusal:boom",
-        "unreconcilable_at_resume:boom",
-    ],
-)
-def test_release_verb_refuses_a_block_that_never_observed_the_merge_run(door, monkeypatch, reason):
-    fresh = _unblocked_successor(reason=reason)
+# mutation-probe: infer the CI result from the block reason instead of reading the run
+# (codex r5 P1 — ten reasons reach mark_blocked and most never observe that run; codex r6
+# P1 — even `post_merge_ci_not_green` is persisted for a 45-minute TIMEOUT, where it was
+# never observed either). The run itself is the authority, so these pin the run, not the
+# reason.
+def test_release_verb_refuses_while_the_merge_run_is_still_pending(door, monkeypatch):
+    """The r6 timeout case: `land` writes `post_merge_ci_not_green` after 45 minutes of a
+    run that never completed, so the reason claims a terminal result nobody saw."""
+    fresh = _unblocked_successor()
     rs.transition("pr-1", "merged", lane_id="A")
+    _release_ground(monkeypatch, ci=None, status="in_progress")
     monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
     assert md.main(["release", "--lane-id", "A"]) == 4
     assert md.read_lease()["lease_token"] == fresh["lease_token"]  # door still fenced
+
+
+def test_release_verb_refuses_when_no_run_exists_for_the_merge_sha(door, monkeypatch):
+    fresh = _unblocked_successor()
+    rs.transition("pr-1", "merged", lane_id="A")
+    g = _release_ground(monkeypatch)
+    g.gh_runs_for_sha = lambda sha: []  # never appeared — unobserved, not terminal
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+def test_release_verb_refuses_a_green_run_and_routes_to_resume(door, monkeypatch):
+    """Nothing to recover: the landing should finish through `land`, not be freed here."""
+    fresh = _unblocked_successor()
+    rs.transition("pr-1", "merged", lane_id="A")
+    _release_ground(monkeypatch, ci="success")
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+def test_release_verb_fails_closed_when_ground_truth_is_unreadable(door, monkeypatch):
+    fresh = _unblocked_successor()
+    rs.transition("pr-1", "merged", lane_id="A")
+    g = _release_ground(monkeypatch)
+
+    def boom(sha):
+        raise RuntimeError("gh unavailable")
+
+    g.gh_runs_for_sha = boom
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4  # unreadable == unconfirmed
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
 
 
 # mutation-probe: ignore the `refresh.intent` sidecar (codex r5 P1 — it means refresh
@@ -2325,6 +2373,7 @@ def test_release_verb_refuses_a_block_that_never_observed_the_merge_run(door, mo
 # where neither other refresh sidecar exists, and it is what record-refresh /
 # clear-refresh-intent exist to resolve)
 def test_release_verb_refuses_an_unresolved_refresh_intent(door, monkeypatch):
+    _release_ground(monkeypatch)
     fresh = _unblocked_successor()
     rs.transition("pr-1", "merged", lane_id="A")
     from arc_metrics import publish_exclusive
@@ -2341,6 +2390,7 @@ def test_unblock_then_release_frees_a_wedged_door_from_the_cli(door, monkeypatch
     """C-HE-06 §6's recovery END TO END — the half that was unreachable. `unblock` clears
     the BLOCK but mints a successor lease, so the door is still shut afterwards; without
     `release` a landing whose own commit reddened `main` stayed wedged for every lane."""
+    _release_ground(monkeypatch)
     lease = _acq()
     md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
     assert md.main(["unblock", "1", "c" * 40, "--lane-id", "A"]) == 0
