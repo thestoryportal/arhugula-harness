@@ -2191,11 +2191,13 @@ def test_recovery_verbs_refuse_a_live_unblocked_holder(door):
     assert md._sidecar(lease["lease_token"], "refresh.intent").exists()  # fence intact
 
 
-def _unblocked_successor(lane="A", pr=1, sha="c" * 40):
-    """The only state the CLI release path admits: a landing blocked at (vii)/(viii) and
-    then cleared by the operator-confirmed unblock, which mints a successor lease."""
+def _unblocked_successor(lane="A", pr=1, sha="c" * 40, reason="post_merge_ci_not_green"):
+    """The only state the CLI release path admits: a landing whose merge SHA's OWN run was
+    observed and went terminally red, then cleared by the operator-confirmed unblock, which
+    mints a successor lease. `reason` is parameterised because only this one of the ten
+    mark_blocked reasons proves that observation (C-HE-06 v1.8 X8)."""
     lease = _acq(lane=lane, pr=pr)
-    md.mark_blocked(lease, sha=sha, reason="post_merge_ci_not_green")
+    md.mark_blocked(lease, sha=sha, reason=reason)
     return md.unblock(pr=pr, blocked_at_sha=sha, lane_id=lane)
 
 
@@ -2293,6 +2295,44 @@ def test_release_verb_refuses_another_lanes_lease(door, monkeypatch):
 def test_release_verb_refuses_a_live_unblocked_holder(door):
     fresh = _unblocked_successor()  # the fixture calls a lease alive iff its pid is ours
     rs.transition("pr-1", "merged", lane_id="A")
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: gate on `unblocked_from` alone (codex r5 P1 — ten reasons reach
+# mark_blocked and only post_merge_ci_not_green proves the merge SHA's own run was
+# OBSERVED; a BASE_TOCTOU or containment block never looked at it)
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "base_toctou_first_parent_mismatch",
+        "refresh_skipped_without_optin",
+        "door_failed_after_attempt:boom",
+        "containment_refusal:boom",
+        "unreconcilable_at_resume:boom",
+    ],
+)
+def test_release_verb_refuses_a_block_that_never_observed_the_merge_run(door, monkeypatch, reason):
+    fresh = _unblocked_successor(reason=reason)
+    rs.transition("pr-1", "merged", lane_id="A")
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]  # door still fenced
+
+
+# mutation-probe: ignore the `refresh.intent` sidecar (codex r5 P1 — it means refresh
+# creation may have SUCCEEDED without its PR identity recorded, which is exactly the state
+# where neither other refresh sidecar exists, and it is what record-refresh /
+# clear-refresh-intent exist to resolve)
+def test_release_verb_refuses_an_unresolved_refresh_intent(door, monkeypatch):
+    fresh = _unblocked_successor()
+    rs.transition("pr-1", "merged", lane_id="A")
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(fresh["lease_token"], "refresh.intent"), "{}")
+    assert not md._sidecar(fresh["lease_token"], "refresh").exists()
+    assert not md._sidecar(fresh["lease_token"], "refresh.attempted").exists()
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
     assert md.main(["release", "--lane-id", "A"]) == 4
     assert md.read_lease()["lease_token"] == fresh["lease_token"]
 

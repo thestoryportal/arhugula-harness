@@ -389,6 +389,22 @@ def release_refusal(lease: dict) -> str | None:
             "block an operator has confirmed via `unblock`. If the landing crashed, "
             "reconcile by ground truth (C-HE-06 §5) by re-running it."
         )
+    # The REASON, not merely the fact, of the block. Ten reasons reach mark_blocked and
+    # only this one means "the merge SHA's own run was observed and is terminally not
+    # green", which is the single condition X8 carves out. `base_toctou_*`,
+    # `containment_refusal:*`, `door_failed_after_attempt:*`, `unreconcilable_at_resume:*`,
+    # `refresh_skipped_without_optin` and `refresh_intent_unresolved` all block without
+    # ever observing that run, so an `unblocked_from` alone would read as an attestation
+    # nobody made (codex r5 P1). The refresh-CI reasons are terminal too, but they imply a
+    # minted refresh and are refused below on that ground instead.
+    if lease.get("unblocked_reason") != "post_merge_ci_not_green":
+        return (
+            f"the block was {lease.get('unblocked_reason')!r}, not "
+            "'post_merge_ci_not_green'. C-HE-06 v1.8 X8 admits a release only where the "
+            "merge SHA's OWN run was observed and reached a terminal non-success; every "
+            "other block reason leaves that run unobserved, which the invariant still "
+            "fences. Reconcile by ground truth (C-HE-06 §5) by re-running the landing."
+        )
     res = rs.current(lease.get("reservation_id") or "")
     if lease.get("merge_attempted_at") and not (res is not None and res[1]["state"] == "merged"):
         return (
@@ -408,12 +424,19 @@ def release_refusal(lease: dict) -> str | None:
     # view, which materializes only when the `.refresh` sidecar exists and so cannot see
     # an attempted-but-unrecorded refresh at all. Both survive the token change across a
     # reclaim (`_publish_refresh_sidecars`).
+    # THREE markers, not two. `refresh.intent` is the declared-intent fence: it means
+    # refresh creation may have SUCCEEDED without its PR identity being durably recorded,
+    # which is precisely the state where neither other sidecar exists (codex r5 P1). It
+    # survives the token change, and it is what `record-refresh` / `clear-refresh-intent`
+    # exist to resolve — freeing the door past it bypasses that fence entirely.
     tok = lease["lease_token"]
-    if _sidecar(tok, "refresh").exists() or _sidecar(tok, "refresh.attempted").exists():
+    if any(
+        _sidecar(tok, name).exists() for name in ("refresh", "refresh.attempted", "refresh.intent")
+    ):
         return (
-            "a terminating refresh has been minted for this landing and nothing local "
-            "proves it merged, so it may still be outstanding (C-HE-06 §4 step (viii), "
-            "which is MANDATORY). Reconcile it through `record-refresh` / "
+            "a terminating refresh has been minted or declared for this landing and "
+            "nothing local proves it merged, so it may still be outstanding (C-HE-06 §4 "
+            "step (viii), which is MANDATORY). Reconcile it through `record-refresh` / "
             "`clear-refresh-intent` and re-run the landing rather than freeing the door."
         )
     return None
@@ -687,6 +710,13 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
         # keyed to (codex r3 P1): without this, a BASE_TOCTOU block re-fires on every
         # resume and the door is permanently wedged
         "unblocked_from": blocked_at_sha,
+        # WHY it was blocked, carried for the same reason the sha is: ten distinct reasons
+        # reach mark_blocked and only `post_merge_ci_not_green` proves the merge SHA's own
+        # run was observed and terminal, which is the sole condition C-HE-06 v1.8 X8 carves
+        # out. `blocked_reason` is nulled on the successor, so without this the fact is
+        # unrecoverable and `unblocked_from` alone would read as proof of a CI observation
+        # that a BASE_TOCTOU or containment block never made (codex r5 P1).
+        "unblocked_reason": lease.get("blocked_reason"),
     }
     fresh.pop("blocked_at", None)
     if win_marker(lease["lease_token"], "unblock", extra={"fresh_lease": fresh}) is None:
