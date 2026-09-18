@@ -77,6 +77,142 @@ def test_bare_drift_is_not_class_2_vocabulary():
         assert "2 prose stale / counts / cites" not in out[fid], fid
 
 
+def test_class_7_does_not_claim_sourced_shell_caller_state():
+    """The shell half of class 7 was tried and withdrawn; nothing here claims it.
+
+    A sourced file mutating its caller's shell IS class 7's concern in another substrate, but
+    no term for it survived. `caller's shell` was tried and WITHDRAWN: it claimed a finding
+    this class does not own, and under the prefer-to-miss policy a term that steals from the
+    unmatched pile does not earn its place. That claim is EXISTENTIAL and so survives a growing
+    corpus; what is not restated is any COUNT or PRECISION figure, which a growing gate log
+    makes true at one anchor and false at the next. These shapes stay in the pile where a human
+    reads them.
+
+    Pinned in both directions: re-adding any such term reds the first assertion, and losing
+    the Python vocabulary reds the second.
+    """
+    unclaimed = [
+        {
+            "finding_id": "u:1",
+            "observed_evidence": (
+                "because lane-init.sh is sourced, this assignment writes _LI_SRC into the "
+                "caller's shell, and every successful path leaves it defined"
+            ),
+            "location": "tools/hooks/lane-init.sh:31",
+        },
+        {
+            "finding_id": "u:2",
+            "observed_evidence": (
+                "lib.sh inherits the caller's shell options, so a caller running with set -e "
+                "exits on the first lock collision before rc=$? is captured"
+            ),
+            "location": "tools/hooks/lib.sh:144",
+        },
+    ]
+    still_claimed = [
+        {
+            "finding_id": "k:1",
+            "observed_evidence": "the fixture writes os.environ directly and never restores it",
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(unclaimed + still_claimed)).stdout)
+    for fid in ("u:1", "u:2"):
+        assert "7 env-var mutation / restore" not in out[fid], (fid, out[fid])
+    assert "7 env-var mutation / restore" in out["k:1"], out["k:1"]
+
+
+def test_class_4_claims_the_leaves_this_test_green_idiom():
+    """The canonical vacuous-witness phrasing, adopted on MEASURED evidence.
+
+    Run against the committed corpus this alternative newly matched rows that were each
+    audited individually: every one is "removing/reverting/deleting X leaves this test
+    green", which is class 4 exactly. Three sibling candidates were measured in the same
+    pass and rejected for mixing in races, spec findings and lock ordering -- `cannot
+    detect`, `never (exercis|reach)`, `claim ... is false`. Measuring first is the whole
+    difference between this term and the ones this arc withdrew.
+    """
+    positives = [
+        {
+            "finding_id": "g:1",
+            "observed_evidence": (
+                "the test exercises only the readability preflight and never the new "
+                "per-source status check; removing the guard would leave this test green"
+            ),
+            "location": "tools/hooks/test_lane_init.sh:1053",
+        },
+        {
+            "finding_id": "g:2",
+            "observed_evidence": (
+                "deleting the production _kill_after call would leave the suite green"
+            ),
+            "location": "",
+        },
+    ]
+    negatives = [
+        {
+            "finding_id": "g:n1",
+            "observed_evidence": "a peer can claim the file between glob and read",
+            "location": "",
+        },
+        {
+            "finding_id": "g:n2",
+            "observed_evidence": (
+                "the holder gate admits a terminal merged reservation, contradicting C-HE-03 §6"
+            ),
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(positives + negatives)).stdout)
+    for fid in ("g:1", "g:2"):
+        assert "4 vacuous witness" in out[fid], (fid, out[fid])
+    for fid in ("g:n1", "g:n2"):
+        assert "4 vacuous witness" not in out[fid], (fid, out[fid])
+
+
+def test_class_3_does_not_describe_the_class_table_itself():
+    """No class term names this table's own machinery, deliberately.
+
+    Every phrasing tried ("intake path", "intake pile", "classifies unrelated") also reads
+    naturally in findings about ingestion endpoints and queue growth, and narrowing never
+    converged -- round after round, each correct, each attacking the phrase the last one
+    added. A classifier cannot be widened to catch the complaint that it is too wide.
+    Findings about the table stay unmatched, which is where a human reads them.
+    """
+    rows = [
+        {
+            "finding_id": "m:1",
+            "observed_evidence": (
+                "classifies unrelated ownership findings, which removes it from the "
+                "unmatched intake pile"
+            ),
+            "location": "",
+        },
+        {
+            "finding_id": "m:2",
+            "observed_evidence": (
+                "the webhook intake pile grows without bound and exhausts memory under burst"
+            ),
+            "location": "",
+        },
+        {
+            "finding_id": "m:3",
+            "observed_evidence": "the unsigned webhook intake path accepts forged payloads",
+            "location": "",
+        },
+        # ...while genuine class-3 vocabulary is untouched by the removal.
+        {
+            "finding_id": "m:4",
+            "observed_evidence": "the except arm swallows the error and returns an empty list",
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    for fid in ("m:1", "m:2", "m:3"):
+        assert "3 silent failure / fallback" not in out[fid], (fid, out[fid])
+    assert "3 silent failure / fallback" in out["m:4"], out["m:4"]
+
+
 def test_classify_reads_the_location_too():
     # the location carries file-shaped vocabulary the row text may lack
     rows = [{"finding_id": "b:1", "observed_evidence": "", "location": "tools/conftest.py fixture"}]
