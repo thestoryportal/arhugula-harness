@@ -194,7 +194,12 @@ def test_agents_roadmap_cite_is_preserved() -> None:
 # matches nothing rather than silently reading as `§12.5`. `_section_tokens` then requires
 # every `§` in the text to have produced a token, which is what turns "matched nothing"
 # into a failure instead of a silent omission.
-SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)")
+# A section id ends at a real terminator, optionally across ONE sentence period — `§7.`
+# closes a sentence and is correct, while `§10.3.y` and `§10.3..9` are malformed ids that
+# a partial boundary kept reading as `§10.3` (codex r10, r11). Naming the terminators is
+# what makes this total: anything not in the set ends the match instead of being ignored.
+_SECTION_END = r"(?=\.?(?:[\s,)\]]|$))"
+SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)" + _SECTION_END)
 # The whole field, anchored. Part-checks are what kept failing: the token regex guarded the
 # character after each id, the marker count guarded omissions, the gap check guarded the
 # text BETWEEN tokens — and codex r6 then wrote `§9.1–9.2`, whose range sits after the
@@ -220,7 +225,12 @@ def _section_tokens(field: str, where: str) -> set[str]:
         f"{where}: not a canonical section list — expected '§N, §N, …' exactly, with no "
         f"ranges, no `.x` shorthand and nothing else in the field, got {field!r}"
     )
-    return set(SECTION_TOKEN_RE.findall(field))
+    tokens = SECTION_TOKEN_RE.findall(field)
+    # One token per section: `set()` erases a repeat and every equality still passes, so the
+    # duplicate has to be caught before the collapse (codex r11).
+    duplicates = sorted({tok for tok in tokens if tokens.count(tok) > 1})
+    assert not duplicates, f"{where}: section listed more than once: {duplicates}"
+    return set(tokens)
 
 
 def pack_headings(pack: str) -> set[str]:
@@ -324,7 +334,9 @@ def test_venues_advertise_pack_section_list() -> None:
 # sibling's by one case, and the difference is load-bearing: a pointer ENDS A SENTENCE, so
 # `§7.` is correct and `(?![\w.])` would reject every real pointer in root. Reject only a
 # continuation — a word character, or a dot that is itself followed by one.
-ROOT_POINTER_RE = re.compile(r"`docs/governance/([a-z0-9-]+\.md)`\s*§(\d+(?:\.\d+)*)(?!\w)(?!\.\w)")
+ROOT_POINTER_RE = re.compile(
+    r"`docs/governance/([a-z0-9-]+\.md)`\s*§(\d+(?:\.\d+)*)" + _SECTION_END
+)
 # Every place a pack path is immediately followed by a `§`, well-formed or not. Tightening
 # the boundary above only makes a malformed pointer stop MATCHING, which drops it from the
 # checked set instead of failing on it — the same sub-span shape, one level up, found by
@@ -392,8 +404,12 @@ def test_every_root_pointer_lands_on_the_pack_that_owns_the_section() -> None:
         f"(root section, pack named, section cited): {misdirected}"
     )
 
+    # PACK_RE, not a substring: `…/design-phase-principles.md.bak` CONTAINS the real pack
+    # name, so `in` accepts a link that resolves to nothing (codex r11). The backtick-
+    # delimited match rejects it.
+    packs_named = {section: set(PACK_RE.findall(body)) for section, body in bodies.items()}
     unreachable = sorted(
-        (pack, section) for pack, section in owned if pack not in bodies.get(section, "")
+        (pack, section) for pack, section in owned if pack not in packs_named.get(section, set())
     )
     assert not unreachable, (
         f"sections no root pointer reaches — root §N must name the pack carrying it: {unreachable}"
