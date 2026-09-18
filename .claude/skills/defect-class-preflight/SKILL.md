@@ -574,6 +574,77 @@ not complete without it. The temptation sounds like protocol — *"the refresh i
 bundling. On the arc that surfaced this, the substantive defect is registered as `B-288`, where
 prose carries the polarity a pattern could not.
 
+### 18. The code departs from a cleared contract (added merge-door-release-verb; at the
+2,247-finding corpus the pattern matched 26 rows and the class CLAIMED 23 of them —
+earlier classes take the other 3 — and 14 had matched no class at all)
+
+The implementation states something a cleared `C-HE-*` contract explicitly denies. Not a
+stale count, not an undischarged quote, not a test blessing the change — the code itself
+asserts the opposite of the contract, and usually because the contract was never re-read
+while the code was being narrowed.
+
+Recorded shapes: a holder gate admitting a terminal `merged` reservation against C-HE-03
+§6's explicit prohibition (the SAME defect across six rounds, which is what makes this a
+class rather than an incident); an audit declaring a canonical C-HE-30 statement false
+while saying no spec edit is owed; a conflict rate reported as an interval where canonical
+C-HE-13 §4 still requires the real rate; and this arc's own `TERMINAL_NOT_GREEN`, which
+honoured `TIMED_OUT`/`STARTUP_FAILURE`/`ACTION_REQUIRED` although C-HE-19 §1 declares the
+CI outcome domain to be exactly `{SUCCESS, FAILURE, CANCELLED}` — widening a
+terminal-state contract on a lane's own authority while that lane's spec amendment
+explicitly promised not to.
+
+**Question:** *for every constant, enum, allowlist or predicate this diff adds, does a
+cleared contract already declare that domain — and did I re-read it, or infer it from
+what the code around me happened to accept?* An enumerated set is the high-risk shape:
+it looks like a local implementation detail and is frequently a contract's domain
+restated from memory.
+
+Two exits, as class 12: discharge it (cite the contract text that admits your value) or
+route it (a domain change is the contract owner's call). What is never an exit is
+widening quietly because the wider set "seems safer" — a larger admissible set on a gate
+is strictly less safe, and it is the contract's job to say how much less.
+
+*Distinct from its neighbours, which is why it is its own class.* Class 12 is a contract
+phrase QUOTED into the diff with nothing discharging it — the words present, the line
+missing. Class 16 is the WITNESS asserting the departed behaviour, so review reads a
+covered change. This is the CODE half, whether or not any prose quotes it and whether or
+not a test blesses it. The cluster was already visible to class 2's note, which refused a
+bare `contradict` because it "sweeps that whole cluster in, the same wrong direction as
+`drift`" — correct for class 2, and the reason these rows sat unmatched: they needed
+their own home. The pattern binds `contradict` to `C-HE` for exactly that reason.
+
+*(Class 1 also gained `symlink` in the same pass: its containment rider already described
+the O_NOFOLLOW idiom, but the vocabulary did not carry the word, leaving 10 containment
+findings — a dangling link read as absent, a link followed without containment —
+unmatched at the same corpus.)*
+
+### Vocabulary evaluated and LEFT OUT — "the guidance prescribes what the contract forbids" (2026-09-18)
+
+Class 12 catches prose that QUOTES a contract and discharges nothing. This is its inverse:
+prose that PRESCRIBES an action a cleared contract forbids. Recorded instance — a ship-pr
+recovery section told operators to unblock, release the merge-door lease, and land a repair
+when post-merge CI reds on the landed commit's own bytes, while C-HE-06 states the lease is
+never released until that run is confirmed and defines no repair-PR exception. It is the
+more dangerous direction: an undischarged quote is inert, whereas a prescription is executed,
+and in this workspace guidance prose is read by agents that do what it says — so the defect
+launders a contract breach into documented practice.
+
+**Not a class, on measurement.** Against the live 3,288-row corpus, `instructed to violate`,
+`without amending`, and `violate[s] the committed` each matched exactly ONE row — this
+finding's own. The nearest neighbour (`the committed plan instructs operators to run
+merge-door-unblock with that refresh PR, so the documented recovery command always fails`)
+is a DIFFERENT failure: documented guidance that fails loudly, not guidance that succeeds
+and breaks an invariant. Cardinality 1 with no discriminating vocabulary is precisely the
+shape the two subtractions above were subtracted for, and a false match costs more than an
+unmatched row because it silences the intake line.
+
+**Sweep it by hand. Question:** *does any prose in this diff tell a reader to DO something
+— a command, a recovery, an order of operations — that a cleared contract forbids?* The
+exits are class 12's: discharge it (cite the contract text that permits it) or route it (a
+spec amendment or carve-out is the contract owner's call). Deleting the contract's name
+while keeping the instruction is the worst of the three, and the most tempting, because the
+prose then reads clean. Promote this to a real class at a second instance.
+
 ### Vocabulary evaluated and LEFT OUT — "the validator reads a sub-span" (2026-09-17)
 
 The shape is real and recurs across arcs: a guard, parser or check examines PART of its
@@ -599,6 +670,16 @@ classes are found, precision-first governs, and nothing met it.
 match a span and let the rest through?* An anchored `fullmatch`, an all-elements loop, or a
 parse into a typed model consumes everything; a `search`, a `[0]`, a "contains" test, or a
 regex without `^…$` does not — and what it does not read, it silently accepts.
+
+**The highest-risk site is a read you introduced THIS round to satisfy a different
+finding.** When an absorption replaces an inference with an authoritative read — a ledger
+query, an API call, a ground-truth lookup — the sweep's attention is on whether the new
+source is the right one, and nobody re-asks the sub-span question of the brand-new parsing
+code. That is where it lands: a 2026-09-18 arc swapped a proxy for a real CI query and, in
+the same commit, took `done[0]` from the run list (ignoring a second run still pending) and
+filtered it on `event` alone (ignoring which branch the run belonged to) — two instances of
+this exact shape, both in three lines written to close a different defect, both found by the
+next reviewer round. A new read is new input; parse all of it.
 
 The trap is that each part-check looks complete while you are writing it, and the gap names
 itself one reviewer round at a time. The arc that recorded this watched one validator take

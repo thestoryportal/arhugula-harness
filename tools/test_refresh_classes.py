@@ -561,6 +561,68 @@ def test_record_field_vs_body_is_not_class_vocabulary():
         assert out[row["finding_id"]] == [], (row["finding_id"], out[row["finding_id"]])
 
 
+def test_class_18_needs_a_contract_reference_on_every_alternative():
+    """Rows measured into class 18 at the 2,247-finding corpus, plus the false positives
+    each alternative must refuse. The contract is that EVERY alternative binds to a
+    `C-HE` reference: a bare contradiction verb is what class 2 rejected, and an
+    unqualified `declares the complete` matched a benign schema sentence for one round
+    (codex r10 P2). Asserted through `classify`, never against the regex
+    ([LAW:behavior-not-structure])."""
+    departures = [
+        {
+            "finding_id": "d:1",
+            "observed_evidence": "The holder gate now permits appending against a terminal"
+            " `merged` reservation, contradicting C-HE-03 §6's explicit prohibition.",
+            "location": "tools/arc_metrics.py:555",
+        },
+        {
+            "finding_id": "d:2",
+            "observed_evidence": "Masked pairs are omitted from the numerator, but"
+            " canonical C-HE-13 §4 still requires the real textual-conflict rate.",
+            "location": "tools/arc_disjoint_check.py:374",
+        },
+        {
+            "finding_id": "d:3",
+            "observed_evidence": "TERMINAL_NOT_GREEN admits TIMED_OUT even though C-HE-19"
+            " declares the complete CI outcome domain to be exactly SUCCESS, FAILURE,"
+            " and CANCELLED.",
+            "location": "tools/merge_door.py:47",
+        },
+    ]
+
+    refused = [
+        {
+            "finding_id": "x:1",
+            # a benign completeness claim with no contract in sight: the exact false
+            # positive the unqualified third alternative produced
+            "observed_evidence": "The schema declares the complete set of accepted"
+            " fields, so the extra key is ignored.",
+            "location": "tools/forward_register.py:417",
+        },
+        {
+            "finding_id": "x:2",
+            # a bare contradiction verb, unbound to any contract -- class 2's rejection
+            "observed_evidence": "The comment contradicts the code it sits above.",
+            "location": "tools/merge_door.py:900",
+        },
+        {
+            "finding_id": "x:3",
+            # a passing cite of a contract number, making no claim about departing from it
+            "observed_evidence": "Implements the C-HE-06 §4 landing steps in order.",
+            "location": "tools/merge_door.py:1200",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(departures + refused)).stdout)
+    for row in departures:
+        assert "18 the code departs from a cleared contract" in out[row["finding_id"]], row[
+            "finding_id"
+        ]
+    for row in refused:
+        assert "18 the code departs from a cleared contract" not in out[row["finding_id"]], row[
+            "finding_id"
+        ]
+
+
 def test_owed_pointer_refresh_is_not_class_vocabulary():
     # U-HE-45 shipped this shape as class 17 and SUBTRACTED it three rounds later; see the
     # ALSO-evaluated-and-LEFT-OUT note above CLASSES for the measurements. This test pins the

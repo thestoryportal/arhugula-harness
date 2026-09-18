@@ -6009,12 +6009,16 @@ def ports(k: int) -> dict[str, int]:
 def project(k: int) -> str:
     return "arhugula-r420-self-hosted-local" + (f"-lane{k}" if k else "")
 ```
-`tools/hooks/lane-init.sh` (sourced):
+`tools/hooks/lane-init.sh` (sourced) — **indicative skeleton only; the shipped file is authoritative and has diverged well beyond this sketch**:
 ```bash
 #!/usr/bin/env bash
 # Lane initialisation (C-HE-11). Source at worktree start: exports HARNESS_LANE_ID, HARNESS_LANE_INDEX,
 # sets gc.auto 0 ONCE (repo-wide, idempotent), and defines lane_stack_allowed for the Docker stack.
-_LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Root resolution is NOT this one-liner. `BASH_SOURCE` is bash-only and this file is SOURCED, so
+# under zsh it resolved against the caller's cwd: sourcing returned rc=0 with ZERO of five library
+# functions loaded. The shipped bash+zsh ladder (zsh `%x` via eval) is tools/hooks/lane-init.sh:66-76
+# and is authoritative; do not reintroduce a ${BASH_SOURCE[0]} form in a block labelled (sourced).
+_LI_ROOT="$(CDPATH= cd "$(dirname "${_LI_SRC:-$0}")/../.." && pwd)"  # _LI_SRC per that ladder
 source "$_LI_ROOT/tools/hooks/lib.sh"; source "$_LI_ROOT/tools/hooks/loop_lib.sh"
 _LI_Q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
 [ -n "${HARNESS_LANE_ID:-}" ] || export HARNESS_LANE_ID="$(uv run --quiet python "$_LI_ROOT/tools/reservations.py" mint-lane-id --worktree "$PWD" 2>/dev/null || printf '%s-%s-%s' "$(hostname -s)" "$(basename "$PWD")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')")"
