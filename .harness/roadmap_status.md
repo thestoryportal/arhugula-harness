@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `117c13bb4252` |
-| `last_refreshed` | 2026-09-17T00:00:00Z |
-| `git_head` | `1cc626b4` —  |
+| `workspace_state_hash` | `4f5428d5b49c` |
+| `last_refreshed` | 2026-09-18T00:00:00Z |
+| `git_head` | `d88487ba` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1569).** U-HE-45 closed: the Spec_HE_Loop_Lanes_v1 §6 unified build order is registered row-per-step in the forward register with structured `depends_on` (B-273..B-284), plus B-285/B-286/B-287. Grounding every row against landing evidence found TEN of the eleven steps had ALREADY landed (S1–S6 and S8, each closed with its cluster commit or PR named) — the unit's own scope was authored when S1–S8 were all ahead of execution and had gone stale, which B-287 records along with the instrument trap behind it: plan checkbox ticks LAG execution, so a tick evidences recording and never landing. S7 is the ONLY §6 step carrying forward work and it is HELD, not open: U-HE-42 landed at #1527, U-HE-40 sits at 15/15 review rounds with a round-12 P1 outstanding (B-244) that only the operator can clear, and U-HE-41 depends on it. The frontier is therefore the remaining work in `.harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md`, whose S7 units are the only ones left; the Claude-actionable rows NOT behind that hold are B-285 (u-he-44's arc-metrics capture stranded because the `queue` CLI cannot express a backfill) and B-286 (`extract --dry-run` does not enforce the guards its real path enforces). The pilot bar B-284 needs three fresh 3–4-lane runs reporting pass true; pilot-2026-09-17-a is permanently FAIL and counts toward none.
+**Current next action (post-#1571).** The governance-pack router landed self-checking end to end at #1568, and #1571 put the merge door's own two landing-block rows on main so the C-HE-06 §9 reducers can see them. No unit is pending for this lane: the next work is four forward rows, each with a live witness from the #1568 arc, and all four need `.harness/forward-register.yaml`, which is fenced by the `lane-init-shell-portability` (#1561), `u-he-45` (#1569) and `u-he-40` reservations — take them when the last of those lands, or hand them to whichever lane lands last. (1) The review-gate recipes default to `base='main'`, which in a lane worktree is a stale local ref and widens the REVIEWED bytes rather than only the attestation. (2) `arc_disjoint_check`'s exit-1 is candidate-INDEPENDENT: with the candidate at an unmodified `origin/main` and again with a commit on top it named the same four sibling-held paths, so its documented remedy of re-deriving and picking another unit cannot clear it. (3) `merge-gate-binding` binds LOCAL head while the canonical lens template fetches `gh pr diff`, which serves the PUSHED head — an unpushed branch has its lenses review stale bytes while `emit` still validates the binding values they copied verbatim. (4) `merge_door` exposes no `release` verb, so its own documented recovery (unblock, then release the returned lease) is not executable from the CLI. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -44,6 +44,7 @@
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
 | #1561 | `fix/lane-init-shell-portability` | — | — |
+| #1569 | `feat/u-he-45-roadmap-s-step-rows` | — | — |
 
 ---
 
@@ -51,11 +52,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| 1571 | 2026-09-18 | landed the two merge-door rows from #1568's landing; ledger-only |
+| PR #1568 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1566 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1562 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1563 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1559 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1557 | 2026-09-17 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
