@@ -23,9 +23,10 @@ Mutation-reasoning table — each mutation and the test that MUST go red for it:
   12 a venue advertises a different § list      -> test_venues_advertise_pack_section_list
   13 a pack with zero headings passes vacuously -> both of rows 11-12 (per-pack non-empty)
   14 a venue lists the same pack twice          -> both of rows 11-12 (exactly-one entry)
-  15 any range/`.x` abbreviation defect         -> UNREPRESENTABLE: every §-list is explicit
-       (see the note above SECTION_TOKEN_RE — five holes in three rounds bought the
-       subtraction; there is no grammar left to get wrong)
+  15 a range or `.x` written into a §-list      -> both of rows 11-12 (marker count +
+       canonical `, ` separator in `_section_tokens`)
+  16 a pack invents a § root never numbered     -> test_pack_sections_match_origin_header
+       (claimed sections must be a subset of `root_sections()`)
 
 Rows 11-12 were added 2026-09-17. Until then every assertion above compared pack FILENAMES,
 so `project-framing.md` could advertise a relocation of root §7 into a pack that has never
@@ -36,6 +37,7 @@ router to a pack without it, which is the failure these two rows forbid.
 
 from __future__ import annotations
 
+import itertools
 import pathlib
 import re
 
@@ -174,15 +176,17 @@ def test_agents_roadmap_cite_is_preserved() -> None:
 
 
 # Every §-list — the packs' origin headers and all three venues — is EXPLICIT: one `§N`
-# token per section, no ranges, no `.x` family shorthand. That is a deliberate subtraction,
-# not a style preference. An abbreviation grammar has to be INTERPRETED, and interpreting
-# it here produced five distinct holes in three review rounds: a range endpoint naming
-# nothing (`§12.5.1–§99`), a range spanning sections the pack lacks (`§1.1–§9.1`), a
-# suffix the token regex silently dropped (`§12.5.y` re-matching `§12.5`), a reversed
-# range resolving to the empty set, and a second venue row for the same pack going
-# unread. Each fix revealed the next, which is the signature of a surface that does not
-# converge. With explicit lists there is nothing to interpret: the check is set equality
-# over the `§N` tokens, and none of those five shapes can be expressed.
+# token per section, separated by `, `, with no ranges and no `.x` family shorthand. That
+# is a deliberate subtraction, not a style preference. An abbreviation grammar has to be
+# INTERPRETED, and interpreting it here produced five distinct holes in three review
+# rounds: a range endpoint naming nothing (`§12.5.1–§99`), a range spanning sections the
+# pack lacks (`§1.1–§9.1`), a suffix the token regex silently dropped (`§12.5.y`
+# re-matching `§12.5`), a reversed range resolving to the empty set, and a second venue row
+# for the same pack going unread. Each fix revealed the next, which is the signature of a
+# surface that does not converge. Dropping the grammar removed the interpretation; what
+# still has to be ENFORCED is the shape itself, in `_section_tokens` below — writing
+# `§1.1–§9` where `§1.1, §9` belongs produces the identical token set and marker count, so
+# the separator is checked directly rather than assumed away.
 # Maximal: a trailing `.` or word character means the token is malformed, so `§12.5.y`
 # matches nothing rather than silently reading as `§12.5`. `_section_tokens` then requires
 # every `§` in the text to have produced a token, which is what turns "matched nothing"
@@ -195,17 +199,29 @@ PACK_ORIGIN_MARKER = "Relocated BYTE-VERBATIM from Root `CLAUDE.md`"
 
 
 def _section_tokens(text: str, where: str) -> set[str]:
-    """Every `§N` in `text`, refusing the list if any `§` failed to produce one.
+    """Every `§N` in `text`, refusing the list unless it is written in the canonical shape.
 
-    Set equality alone cannot see a malformed token: `§12.5.y` appended to a list that
-    already contains `§12.5` changes no set member (codex r4). Counting is what catches it.
+    Two things set equality cannot see on its own:
+      * a malformed token — `§12.5.y` appended to a list already containing `§12.5` changes
+        no set member (codex r4), so the MARKER COUNT is what catches it;
+      * a range — `§1.1–§9` matches as the two separate tokens `1.1` and `9`, leaving both
+        the token set and the marker count identical to `§1.1, §9` (codex r5), so the
+        SEPARATOR is what catches it. An earlier version of this module claimed ranges were
+        unrepresentable once the lists went explicit. They were not: nothing had ever
+        rejected the separator itself.
     """
-    tokens = SECTION_TOKEN_RE.findall(text)
-    assert text.count("§") == len(tokens), (
-        f"{where}: {text.count('§')} § markers but {len(tokens)} well-formed tokens — "
-        f"a malformed section id (a range, a `.x`/`.y` suffix) is not allowed here: {text!r}"
+    matches = list(SECTION_TOKEN_RE.finditer(text))
+    assert text.count("§") == len(matches), (
+        f"{where}: {text.count('§')} § markers but {len(matches)} well-formed tokens — "
+        f"a malformed section id (a `.x`/`.y` suffix) is not allowed here: {text!r}"
     )
-    return set(tokens)
+    for earlier, later in itertools.pairwise(matches):
+        gap = text[earlier.end() : later.start()]
+        assert gap == ", ", (
+            f"{where}: sections must be listed explicitly, separated by ', ' — found "
+            f"{gap!r} between §{earlier.group(1)} and §{later.group(1)} in {text!r}"
+        )
+    return {m.group(1) for m in matches}
 
 
 def pack_headings(pack: str) -> set[str]:
@@ -252,7 +268,14 @@ def test_pack_sections_match_origin_header() -> None:
         # Non-vacuity, per pack: the aggregate roster guard above says nothing about
         # whether THIS pack has any headings, and `set() == set()` would pass.
         assert headings, f"{pack}: no numbered section headings"
-        assert pack_claimed_sections(pack) == headings, pack
+        claimed = pack_claimed_sections(pack)
+        assert claimed == headings, pack
+        # The header's own sentence is "Relocated BYTE-VERBATIM from Root `CLAUDE.md` §…",
+        # so a section root does not number was never relocated from it. Without this, a
+        # fabricated §99 heading advertised consistently in the pack and all three venues
+        # satisfies every equality above (codex r5).
+        unknown = claimed - root_sections()
+        assert not unknown, f"{pack}: claims sections root CLAUDE.md does not number: {unknown}"
 
 
 def test_venues_advertise_pack_section_list() -> None:

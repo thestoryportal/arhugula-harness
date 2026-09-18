@@ -119,9 +119,16 @@ rounds then found five distinct holes in that little grammar: an endpoint naming
 (`§12.5.1–§99`), a span covering sections the pack lacks (`§1.1–§9.1`), a suffix the token
 regex silently dropped (`§12.5.y` reading as `§12.5`), a reversed range resolving to the
 empty set, and a second venue row for the same pack going unread. Each fix revealed the
-next. With explicit lists there is nothing to interpret: the check is set equality over
-`§N` tokens, every `§` must produce a well-formed token, and each venue must name the pack
-exactly once — so all five shapes became unrepresentable rather than guarded against.
+next. Dropping the grammar removed the INTERPRETATION; what still had to be enforced was
+the shape itself, and the round after the subtraction proved that the hard way. Writing
+`§1.1–§9` where `§1.1, §9` belongs yields the identical token set AND the identical `§`
+count, so an earlier version of this paragraph — which claimed the five shapes were now
+"unrepresentable" — was itself the claim-vs-code defect this file is about. The module now
+checks the separator between consecutive tokens directly, requires every `§` to produce a
+well-formed token, requires each venue to name a pack exactly once, and requires every
+claimed section to be one root `CLAUDE.md` actually numbers (without that last one, a
+fabricated `§99` advertised consistently in the pack and all three venues satisfies every
+equality).
 
 The new witness found two older drifts on its way there: `AGENTS.md` advertised
 `roadmap-protocol.md` without the `§12` the pack carries, and both `AGENTS.md` and
