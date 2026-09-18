@@ -397,15 +397,24 @@ def release_refusal(lease: dict) -> str | None:
             "so the request may still be in flight. Reconcile by ground truth "
             "(C-HE-06 §5) by re-running the landing."
         )
-    # The SIDECAR, not read_lease()'s `lease["refresh"]` view: that view is populated
-    # only when the `refresh` sidecar (the recorded {pr, head_sha} pair) also exists, so
-    # an attempted refresh merge with no recorded pair would be invisible through it.
-    # The marker is the durable fact and survives the token change across a reclaim.
-    if _sidecar(lease["lease_token"], "refresh.attempted").exists():
+    # MINTED, not merely attempted. `refresh_pr_ci_not_green` blocks the door BEFORE
+    # `mark_attempted(..., suffix="refresh")`, so a step-(viii) block routinely leaves a
+    # recorded refresh PR with no attempted marker — the `.refresh` sidecar is the first
+    # durable trace, and an attempt-only test reads that state as "nothing outstanding"
+    # while a MANDATORY terminating refresh sits unmerged. Nothing local proves either
+    # sidecar's outcome, so both keep the door fenced; a step-(viii) block is reconciled
+    # through `record-refresh` / `clear-refresh-intent` + `land`, not freed here.
+    # Both are read as SIDECARS rather than through read_lease()'s `lease["refresh"]`
+    # view, which materializes only when the `.refresh` sidecar exists and so cannot see
+    # an attempted-but-unrecorded refresh at all. Both survive the token change across a
+    # reclaim (`_publish_refresh_sidecars`).
+    tok = lease["lease_token"]
+    if _sidecar(tok, "refresh").exists() or _sidecar(tok, "refresh.attempted").exists():
         return (
-            "the terminating-refresh merge was attempted and nothing local records its "
-            "outcome, so it may still be in flight (C-HE-06 §4 step (viii)). Reconcile "
-            "by ground truth before freeing the door."
+            "a terminating refresh has been minted for this landing and nothing local "
+            "proves it merged, so it may still be outstanding (C-HE-06 §4 step (viii), "
+            "which is MANDATORY). Reconcile it through `record-refresh` / "
+            "`clear-refresh-intent` and re-run the landing rather than freeing the door."
         )
     return None
 

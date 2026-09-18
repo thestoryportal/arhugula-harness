@@ -317,23 +317,33 @@ then releases. Exit 0 = landed + refreshed; 3 = door blocked (a `DEFERRED-HIL` r
 exhausted (HITL). `just merge-door-status` prints the live lease. Never issue
 `gh pr merge` yourself; the guard denies the raw verb in loop mode (C-HE-07).
 
-**Unblock is half the recovery; `just merge-door-release` is the other half.** Unblock
+**Unblock is half of C-HE-06 §6; `just merge-door-release` is the other half.** Unblock
 clears the BLOCK and mints a *successor lease still held by this lane* — the door is not
-open afterwards, and `merge-door-status` still prints a lease. Release frees it. Which
-half you need turns on WHY post-merge CI went red: a flaky or environmental red heals on
-a re-drive, so unblock and re-run `safe-merge.sh`; a red caused by the landed content
-itself can never heal, because step (vii) polls that merge SHA's own run and the commit's
-bytes are immutable — `land` will re-block forever and `gc` skips live leases. For that
-case, unblock, then release, then land the repair PR as its OWN reserved arc. Both verbs
-are operator-confirmed reclaims (C-HE-06 §6): neither is guard-allowlisted, so both
-surface to the operator by design — do not add an allow to make them headless.
+open afterwards, and `merge-door-status` still prints a lease. Step (ix) ends every
+landing with "release via §6", and this is that verb. Both are operator-confirmed
+reclaims: neither is guard-allowlisted, so both surface to the operator by design — do
+not add an allow to make them headless.
 
-Release REFUSES (exit 4) while the lease's `merge_attempted_at` is set and its
-reservation has not flipped to `merged`: the merge request may still be in flight
-server-side, and freeing the door there would admit a second concurrent merge. That is
-C-HE-06 §5's ground-truth reconciliation case and belongs to `land`, which queries `gh`
-and either continues from step (vi) or re-issues once — re-run the landing first, then
-release once the reservation records the confirmed merge.
+The normal recovery is unaffected by it: a flaky or environmental post-merge red heals on
+a re-drive, so unblock and re-run `safe-merge.sh`.
+
+Release fails closed, and the refusals are the point — it frees only an unblock successor
+(`unblocked_from` set) with **neither** of a landing's two merges outstanding. It refuses
+(exit 4) when the content merge was attempted and the reservation has not flipped to
+`merged` (C-HE-06 §5's ground-truth case — re-run the landing, which queries `gh`), when
+a terminating refresh has been minted and nothing local proves it merged (step (viii) is
+mandatory — reconcile via `record-refresh` / `clear-refresh-intent` and re-run), and
+(exit 3) on a still-blocked lease, which routes back to `unblock`.
+
+**Open contract question — do not treat release as the sanctioned answer to a
+content-caused red.** When post-merge CI is red because of the landed commit's own bytes,
+step (vii) can never pass: it polls that merge SHA's own run and the commit is immutable,
+so `land` re-blocks forever and `gc` skips live leases. C-HE-06 nonetheless states that
+"the lease is never released while the merge SHA's own `main` run or the terminating
+refresh is unconfirmed", and the contract defines no repair-PR exception. This skill will
+not instruct you past a committed invariant: that gap needs a spec amendment or an
+explicit carve-out, which is an operator decision, not a lane's. Surface it rather than
+improvising.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 

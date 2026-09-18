@@ -2248,6 +2248,26 @@ def test_release_verb_refuses_an_in_flight_refresh_merge(door, monkeypatch):
     assert md.read_lease()["lease_token"] == fresh["lease_token"]
 
 
+# mutation-probe: test only `refresh.attempted` (codex r3 P1 — `refresh_pr_ci_not_green`
+# blocks BEFORE mark_attempted, so a step-(viii) block routinely leaves a RECORDED
+# refresh PR with no attempted marker; an attempt-only test frees the door with a
+# mandatory terminating refresh still unmerged)
+def test_release_verb_refuses_a_recorded_but_unattempted_refresh(door, monkeypatch):
+    fresh = _unblocked_successor()
+    rs.transition("pr-1", "merged", lane_id="A")  # the content merge IS settled
+    # the door minted the refresh PR, then blocked on ITS head CI — before any attempt
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(
+        md._sidecar(fresh["lease_token"], "refresh"),
+        json.dumps({"pr": 99, "head_sha": "f" * 40}),
+    )
+    assert not md._sidecar(fresh["lease_token"], "refresh.attempted").exists()
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
 # mutation-probe: route `release` past release()'s blocked refusal (silently frees a
 # blocked door, bypassing the operator-keyed unblock)
 def test_release_verb_refuses_a_blocked_lease(door, monkeypatch):
