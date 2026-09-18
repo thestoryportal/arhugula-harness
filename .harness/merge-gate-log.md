@@ -1050,3 +1050,44 @@ content-addressed files; `emit` accepted both against its own recomputation (exi
 | 2026-09-17T23:52:08Z | #1568 | b9fdc124712a | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
 | 2026-09-17T23:52:08Z | #1568 | b9fdc124712a | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | 2026-09-17T23:52:08Z | #1568 | b9fdc124712a | merge-gate-witness-adequacy | BLOCK | 4 finding(s) | r2 |
+| 2026-09-18T01:51:06Z | #1568 | 31713e1409f4 | merge-gate-concurrency | APPROVE | 0 finding(s) | r3 |
+| 2026-09-18T01:51:06Z | #1568 | 31713e1409f4 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
+| 2026-09-18T01:51:06Z | #1568 | 31713e1409f4 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r3 |
+
+### PR #1568 — 2026-09-17 — `docs/context-stack-handoff-s2-supersede`
+
+| lens | verdict |
+|---|---|
+| merge-gate-concurrency | APPROVE (0 findings) |
+| merge-gate-spec-conformance | APPROVE (0 findings) |
+| merge-gate-witness-adequacy | APPROVE (0 findings, 2 non-blocking P3 observations) |
+
+Outcome: **all-approve** at head `31713e140`, base `1cc626b49`. blast-radius: 8 consumers
+(`review_loop_gate.py`, `test_refresh_classes.py`, `test_review_loop_gate.py`,
+`preflight-grep.sh`, `defect-class-preflight/SKILL.md`, `codex-parity-check.sh:41`,
+`ci.yml:382`, plus every `docs/governance/*.md` + `CLAUDE.md`/`CONTEXT.md`/`AGENTS.md` as data
+dependencies of the router tests). Static call edges only — a floor, not a ceiling.
+
+Gate round 2 (head `b9fdc124`) recorded 2 APPROVE / 1 BLOCK with 4 findings, all adjudicated;
+codex ran 12 rounds (11 BLOCK, r12 APPROVE), 30 findings, all adjudicated.
+
+**Orchestration defect found BY the lenses, recorded here because nothing downstream catches
+it.** The branch had 21 unpushed commits, so `merge-gate-binding` bound local HEAD while the
+lens template's `gh pr diff <n>` served the pushed head — a 462-line/9-file diff instead of
+the bound 875-line/13-file one, omitting three of the seven pack headers the spec lens was
+told to verify. A lens copies the six binding values verbatim as instructed, so `emit` would
+have validated them and recorded an APPROVE for a head the lens never read. All three lenses
+detected the divergence unaided; the spec lens verified `shasum -a 256` of its re-derived diff
+against `diff_digest` before reviewing, and that digest was re-checked independently by the
+orchestrator. Branch pushed before this emit. Discipline: push BEFORE binding.
+
+Two P3 observations, non-blocking, not fixed post-gate so the approvals transfer:
+`_SECTION_END` rejects a `;`-terminated citation (fail-safe precision gap; the corpus has no
+semicolon citation adjacent to a pack-path backtick), and `test_pack_sections_match_origin_header`
+has a narrow blind spot for a coordinated heading+header rename to a section another pack owns
+— empirically caught by two sibling tests in the same module, which is how CI runs it.
+
+Deviation recorded: the three lens prompts instantiated the skill-canonical templates inline
+with per-PR scrutiny lists rather than routing through a delegated `laws:prompt` author. Every
+template clause was kept verbatim; the additions only add grounding (claims to re-derive, and
+for the witness lens the nine real defects this PR fixed, to judge revert-detection against).
