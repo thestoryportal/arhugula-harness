@@ -312,16 +312,31 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
-    # Added U-HE-45. The unit's OWN deliverable included refreshing the live
-    # next-action pointer; the diff shipped the register rows and left the pointer
-    # naming the unit it had just completed, so /roadmap-continue would route
-    # straight back to finished work. Recurs in this workspace: the owed refresh
-    # after a tiebreaker PASS, and "the refresh must be the immediate next commit".
-    # Distinct from class 2 (a stale COUNT or cite drifts over time) and from class
-    # 12 (a contract phrase QUOTED into the diff with no line behind it): here the
-    # obligation is a deliverable of the unit itself, and the surface it was owed on
-    # is one consumers READ to decide what to do next -- so the cost is misrouting,
-    # not a wrong number.
+    # Added U-HE-45's plan-record arc. A record's MACHINE-READ field contradicts its own
+    # prose, and the consumer trusts the field. `B-282` was `status: open` while its own
+    # summary said U-HE-40 is HELD, so `--open` counted it as executable work; the U-HE-45
+    # plan tick marked a COMBINED step `[x]` while the paragraph beneath it said half that
+    # step was never performed, and the plan's convention defines a checked box as "carried
+    # out". Re-reading the prose catches NEITHER: both are visible only by asking what the
+    # CONSUMER does with the field.
+    #
+    # CONJUNCTIVE, and measured BEFORE proposing (the lesson of the class that used to sit
+    # at this number): a lone `even though|contradicts` alternation took 130 of 2,230 corpus
+    # rows, nearly all ordinary contradictions with no record field in sight. Requiring a
+    # status/marker term AND a contradiction term takes it to FOUR, homogeneous — B-201 and
+    # B-266 "marked closed even though ...", B-282 "marked `open` even though ...", and the
+    # plan tick. A false match is worse than `unmatched`: unmatched OWES an intake line.
+    # NOTE: the number 17 is RETIRED, not free. It carried the "owed pointer refresh" class
+    # on this same arc and was withdrawn three rounds later (see the ALSO-evaluated-and-
+    # LEFT-OUT note above), and three durable records — this arc's clearance marker, the
+    # plan's as-built paragraph, and test_owed_pointer_refresh_is_not_class_vocabulary —
+    # already say "class 17" meaning THAT shape. Reusing the number would make all three
+    # cite the wrong concept, so this class takes 18. The parity test compares SETS of
+    # numbers, so the gap is legal.
+    "18 record field contradicts its own body": (
+        r"marked?\s+`?(open|closed|held|complete)|checked box|status field|\[x\]",
+        r"even though|contradicts|while (its|the)\s+(own\s+)?(summary|status|body)",
+    ),
 }
 
 

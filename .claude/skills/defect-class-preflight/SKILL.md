@@ -454,6 +454,40 @@ what else is in the diff: a real amendment carries the spec/plan change (or a fi
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
 
+### 18. A record's field contradicts its own body (added U-HE-45's plan-record arc; 4 rows at the 2,230-finding log)
+
+*(The number 17 is retired, not skipped: it carried the "owed pointer refresh" class on this
+same arc and was withdrawn three rounds later — the LEFT OUT note below records why, and
+three durable records already cite "class 17" meaning that shape.)*
+
+The prose and the machine-read field of one record disagree, and **the consumer trusts the
+field.** `B-282` shipped as `status: open` while its own summary said U-HE-40 is HELD and
+U-HE-41 not startable — and `forward_register.py`'s `OPEN_STATUSES` includes `open` and excludes
+`held`, so `--open` counted a row its author had described as blocked. One arc later the same
+shape appeared one surface over: a U-HE-45 plan tick marked a **combined** step `[x]` while the
+paragraph directly beneath it said half that step was never performed, against a convention that
+defines a checked box as "the step was carried out".
+
+Re-reading the prose catches neither. Both are visible only by asking *what does the consumer do
+with this field?* — which is why this is its own class and not an instance of class 2: a stale
+count DRIFTS from a fact over time, while this is a record that was internally inconsistent the
+moment it was written.
+
+**Question:** *for every status, disposition or checkbox this diff sets — does the body of that
+same record agree with it, and which consumer reads the field rather than the body?* Name the
+consumer. `--open`, a tick-count derivation and a reducer all read fields; none read paragraphs.
+
+The measured shape is conjunctive, and the measurement is the point: a lone
+`even though|contradicts` alternation took **130 of 2,230** corpus rows, nearly all ordinary
+contradictions with no record field in them. Requiring a status/marker term **and** a
+contradiction term takes it to four — `B-201` and `B-266` "marked closed even though …", `B-282`
+"marked `open` even though …", and the plan tick. A false match is worse than `unmatched`,
+because unmatched OWES an intake line and a match silences it.
+
+*"The prose explains the nuance"* is the sentence to distrust. It may well explain it to a human;
+the field is what the tooling acts on, so a record whose field overclaims is wrong regardless of
+how careful the paragraph under it is. Fix the field, or leave it unset and say why.
+
 ### Vocabulary evaluated and LEFT OUT — "the owed pointer refresh" (2026-09-18)
 
 The shape is real and recurs: a diff finishes the work and leaves a surface *consumers read

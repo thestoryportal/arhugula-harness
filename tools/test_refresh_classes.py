@@ -338,6 +338,64 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
 
 
+def test_class_18_needs_both_a_record_field_and_a_contradiction():
+    # Added U-HE-45's plan-record arc. The defect: a record's MACHINE-READ field contradicts
+    # its own prose and the consumer trusts the field. Asserted through the `classify` verb
+    # ([LAW:behavior-not-structure]).
+    #
+    # CONJUNCTIVE by measurement, not taste. A lone `even though|contradicts` alternation took
+    # 130 of 2,230 corpus rows — n:1 and n:2 are two of those, and they are what the second
+    # conjunct exists to refuse. Drop either pattern and this test goes red on them.
+    contradicting = [
+        # p:1/p:2/p:3 are the measured members, quoted from their corpus rows.
+        {
+            "finding_id": "p:1",
+            "observed_evidence": "B-282 is marked `open` even though its own summary says"
+            " U-HE-40 is HELD and U-HE-41 is not startable.",
+            "location": ".harness/forward-register.yaml:11947",
+        },
+        {
+            "finding_id": "p:2",
+            "observed_evidence": "B-201 is marked closed even though exhausted retries and"
+            " unwritable configuration still make lanes unsafe.",
+            "location": ".harness/forward-register.yaml:10322",
+        },
+        # p:3 fires on `checked box`, NOT on "marks ... complete" — `marked?\s+` cannot cross
+        # the "s" of "marks". The quote must therefore keep the convention clause; an earlier
+        # paraphrase of this row dropped it and the case failed while the real row passed,
+        # which is why the evidence here is the stored text rather than a summary of it.
+        {
+            "finding_id": "p:3",
+            "observed_evidence": "This marks the combined Step 1-2 complete even though the"
+            " status says its required --next-action half was NOT performed, while lines"
+            " 7758-7759 define a checked box as meaning the step was carried out.",
+            "location": ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:7798",
+        },
+    ]
+    not_contradicting = [
+        # n:1 — an ordinary contradiction with no record field in sight: one of the 130.
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "The emit protocol catches only GateLogError even though a"
+            " missing verdict file also fails the binding command.",
+            "location": "tools/merge_gate_log.py:347",
+        },
+        # n:2 — a record field with NO contradiction: the field and the body agree.
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "B-282 is marked open and its summary agrees the row is"
+            " actionable today.",
+            "location": ".harness/forward-register.yaml:11947",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(contradicting + not_contradicting)).stdout)
+    name = "18 record field contradicts its own body"
+    for row in contradicting:
+        assert name in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+    for row in not_contradicting:
+        assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+
+
 def test_owed_pointer_refresh_is_not_class_vocabulary():
     # U-HE-45 shipped this shape as class 17 and SUBTRACTED it three rounds later; see the
     # ALSO-evaluated-and-LEFT-OUT note above CLASSES for the measurements. This test pins the
