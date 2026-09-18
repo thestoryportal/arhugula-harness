@@ -21,9 +21,11 @@ Mutation-reasoning table — each mutation and the test that MUST go red for it:
        this module pins the ROUTER, not the relocation)
   11 a pack header claims a § the pack lacks    -> test_pack_sections_match_origin_header
   12 a venue advertises a different § list      -> test_venues_advertise_pack_section_list
-  13 a range endpoint names no real section     -> both of rows 11-12 (unresolvable set)
-  14 a pack with zero headings passes vacuously -> both of rows 11-12 (per-pack non-empty)
-  15 a range spans sections the pack lacks      -> both of rows 11-12 (root-universe basis)
+  13 a pack with zero headings passes vacuously -> both of rows 11-12 (per-pack non-empty)
+  14 a venue lists the same pack twice          -> both of rows 11-12 (exactly-one entry)
+  15 any range/`.x` abbreviation defect         -> UNREPRESENTABLE: every §-list is explicit
+       (see the note above SECTION_TOKEN_RE — five holes in three rounds bought the
+       subtraction; there is no grammar left to get wrong)
 
 Rows 11-12 were added 2026-09-17. Until then every assertion above compared pack FILENAMES,
 so `project-framing.md` could advertise a relocation of root §7 into a pack that has never
@@ -171,53 +173,39 @@ def test_agents_roadmap_cite_is_preserved() -> None:
     assert re.search(r"^### 12\.2 ", _read(ROOT_CLAUDE), flags=re.MULTILINE)
 
 
-# A venue names a pack's sections as `§N`, an inclusive range `§A–§B` (en dash, as the
-# packs write it) or the `§N.x` family shorthand CONTEXT.md and AGENTS.md use.
-#
-# Expansion is against ROOT `CLAUDE.md`'s section universe, never the pack's own headings,
-# and that basis is the whole guarantee. Resolving against the pack makes every range
-# self-satisfying, because a range can only ever yield sections the pack already has:
-# `§12.5.1–§99` and `§1.1–§9.1` both filter down to exactly the pack's true set, so set
-# equality cannot see either one. Two review rounds landed on that basis — the merge-gate
-# witness lens caught the bad ENDPOINT (`§99`) and codex r2 caught the over-broad SPAN
-# (`§1.1–§9.1`, which also advertises §2..§8, sections that live in other packs). Checking
-# endpoints was a patch for the first and left the second; expanding against root fixes
-# both at once, because a claim's meaning is what root numbers, not what the pack happens
-# to contain. `unresolvable` then reports any token naming no root section at all.
-SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)(?:\s*[–-]\s*§(\d+(?:\.\d+)*)|(\.x))?")
+# Every §-list — the packs' origin headers and all three venues — is EXPLICIT: one `§N`
+# token per section, no ranges, no `.x` family shorthand. That is a deliberate subtraction,
+# not a style preference. An abbreviation grammar has to be INTERPRETED, and interpreting
+# it here produced five distinct holes in three review rounds: a range endpoint naming
+# nothing (`§12.5.1–§99`), a range spanning sections the pack lacks (`§1.1–§9.1`), a
+# suffix the token regex silently dropped (`§12.5.y` re-matching `§12.5`), a reversed
+# range resolving to the empty set, and a second venue row for the same pack going
+# unread. Each fix revealed the next, which is the signature of a surface that does not
+# converge. With explicit lists there is nothing to interpret: the check is set equality
+# over the `§N` tokens, and none of those five shapes can be expressed.
+# Maximal: a trailing `.` or word character means the token is malformed, so `§12.5.y`
+# matches nothing rather than silently reading as `§12.5`. `_section_tokens` then requires
+# every `§` in the text to have produced a token, which is what turns "matched nothing"
+# into a failure instead of a silent omission.
+SECTION_TOKEN_RE = re.compile(r"§(\d+(?:\.\d+)*)(?![\w.])")
 # Located by its text, not by a line number: `test_packs_declare_their_origin` only
 # requires this sentence to be PRESENT, so pinning it to a line index would invent a
 # stricter contract than the module already enforces.
 PACK_ORIGIN_MARKER = "Relocated BYTE-VERBATIM from Root `CLAUDE.md`"
 
 
-def _section_key(section: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in section.split("."))
+def _section_tokens(text: str, where: str) -> set[str]:
+    """Every `§N` in `text`, refusing the list if any `§` failed to produce one.
 
-
-def _expand_sections(spec: str, universe: set[str]) -> tuple[set[str], set[str]]:
-    """`(sections this spec claims, tokens naming nothing in `universe`)`.
-
-    `universe` is root's section set, so the returned set is what the spec MEANS, which
-    the caller then compares against what the pack actually carries.
+    Set equality alone cannot see a malformed token: `§12.5.y` appended to a list that
+    already contains `§12.5` changes no set member (codex r4). Counting is what catches it.
     """
-    resolved: set[str] = set()
-    unresolvable: set[str] = set()
-    for start, end, dot_x in SECTION_TOKEN_RE.findall(spec):
-        if end:
-            lo, hi = _section_key(start), _section_key(end)
-            resolved |= {sec for sec in universe if lo <= _section_key(sec) <= hi}
-            unresolvable |= {bound for bound in (start, end) if bound not in universe}
-        elif dot_x:
-            family = {sec for sec in universe if sec == start or sec.startswith(f"{start}.")}
-            resolved |= family
-            if not family:
-                unresolvable.add(f"{start}.x")
-        else:
-            resolved.add(start)
-            if start not in universe:
-                unresolvable.add(start)
-    return resolved, unresolvable
+    tokens = SECTION_TOKEN_RE.findall(text)
+    assert text.count("§") == len(tokens), (
+        f"{where}: {text.count('§')} § markers but {len(tokens)} well-formed tokens — "
+        f"a malformed section id (a range, a `.x`/`.y` suffix) is not allowed here: {text!r}"
+    )
+    return set(tokens)
 
 
 def pack_headings(pack: str) -> set[str]:
@@ -225,32 +213,34 @@ def pack_headings(pack: str) -> set[str]:
     return set(re.findall(r"^#{2,4} (\d+(?:\.\d+)*)\.? ", body, flags=re.MULTILINE))
 
 
-def pack_claimed_sections(pack: str) -> tuple[set[str], set[str]]:
+def pack_claimed_sections(pack: str) -> set[str]:
     """The sections a pack's own origin header says were relocated into it."""
     lines = [ln for ln in _read(GOVERNANCE / pack).splitlines() if PACK_ORIGIN_MARKER in ln]
     assert len(lines) == 1, f"{pack}: expected exactly one origin header, found {len(lines)}"
-    return _expand_sections(lines[0], root_sections())
+    return _section_tokens(lines[0], f"{pack} origin header")
 
 
-def venue_advertised_sections(pack: str) -> dict[str, tuple[set[str], set[str]]]:
+def venue_advertised_sections(pack: str) -> dict[str, set[str]]:
     """Per venue, the sections that venue tells a runner to expect inside `pack`.
 
     README.md and CONTEXT.md carry a table row whose second cell is the section list;
-    AGENTS.md is a single prose line with a parenthetical after each pack path.
+    AGENTS.md is a single prose line with a parenthetical after each pack path. Each venue
+    must name the pack EXACTLY once — a second row can advertise a stale list while the
+    first one reads correctly, and the roster checks above collapse both into one set
+    member, so only a count catches it.
     """
-    universe = root_sections()
     quoted = re.escape(pack)
     row = re.compile(rf"^\|\s*`docs/governance/{quoted}`\s*\|([^|]*)\|", re.MULTILINE)
     paren = re.compile(rf"`docs/governance/{quoted}`\s*\(([^)]*)\)")
-    found: dict[str, tuple[set[str], set[str]]] = {}
+    found: dict[str, set[str]] = {}
     for venue, text, pattern in (
         ("README.md", _read(README), row),
         ("CONTEXT.md", _read(CONTEXT), row),
         ("AGENTS.md", _read(AGENTS), paren),
     ):
-        match = pattern.search(text)
-        assert match, f"{venue} advertises no section list for {pack}"
-        found[venue] = _expand_sections(match.group(1), universe)
+        matches = pattern.findall(text)
+        assert len(matches) == 1, f"{venue}: {len(matches)} entries for {pack}, expected 1"
+        found[venue] = _section_tokens(matches[0], f"{venue} entry for {pack}")
     return found
 
 
@@ -262,17 +252,14 @@ def test_pack_sections_match_origin_header() -> None:
         # Non-vacuity, per pack: the aggregate roster guard above says nothing about
         # whether THIS pack has any headings, and `set() == set()` would pass.
         assert headings, f"{pack}: no numbered section headings"
-        claimed, unresolvable = pack_claimed_sections(pack)
-        assert not unresolvable, f"{pack}: origin header names no-such-section {unresolvable}"
-        assert claimed == headings, pack
+        assert pack_claimed_sections(pack) == headings, pack
 
 
 def test_venues_advertise_pack_section_list() -> None:
     for pack in sorted(filesystem_packs()):
-        claimed, _ = pack_claimed_sections(pack)
+        claimed = pack_claimed_sections(pack)
         assert claimed, f"{pack}: origin header claims nothing"
-        for venue, (advertised, unresolvable) in venue_advertised_sections(pack).items():
-            assert not unresolvable, f"{venue} vs {pack}: no-such-section {unresolvable}"
+        for venue, advertised in venue_advertised_sections(pack).items():
             assert advertised == claimed, f"{venue} vs {pack}: {advertised} != {claimed}"
 
 

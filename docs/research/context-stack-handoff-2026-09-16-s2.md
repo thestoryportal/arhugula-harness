@@ -107,14 +107,26 @@ FILENAMES across the three venues, never the §-lists beside them, so reinstatin
 claim in `project-framing.md:3` and `CONTEXT.md:33` left the module green at 10 passed.
 Rows 11 and 12 of that module's mutation table now close it:
 `test_pack_sections_match_origin_header` reads each pack's origin header and requires set
-equality against the pack's own headings, and
-`test_venues_advertise_pack_section_list` requires each of README.md,
-CONTEXT.md and AGENTS.md to advertise that same set (resolving `§A–§B` and the `§N.x`
-shorthand against the pack's headings, so a venue may abbreviate but not misstate). Both
-go red on each of the three defect shapes, verified by mutation probe. The new witness
-immediately found a second, older drift: `AGENTS.md` advertised `roadmap-protocol.md` as
-`§12.1–§12.3, §12.5.x`, omitting the `§12` the pack carries and both other venues list.
-Fixed here too.
+equality against the pack's own headings, and `test_venues_advertise_pack_section_list`
+requires each of README.md, CONTEXT.md and AGENTS.md to advertise exactly that set, exactly
+once. Both go red on every defect shape below, each verified by mutation probe.
+
+Every `§`-list is now EXPLICIT — one `§N` per section, no `§A–§B` ranges, no `§N.x` family
+shorthand — in the pack headers and all three venues alike. That is the load-bearing part
+and it was reached by subtraction, not design. The first version resolved abbreviations
+against the pack's own headings, which made every range self-satisfying, and three review
+rounds then found five distinct holes in that little grammar: an endpoint naming nothing
+(`§12.5.1–§99`), a span covering sections the pack lacks (`§1.1–§9.1`), a suffix the token
+regex silently dropped (`§12.5.y` reading as `§12.5`), a reversed range resolving to the
+empty set, and a second venue row for the same pack going unread. Each fix revealed the
+next. With explicit lists there is nothing to interpret: the check is set equality over
+`§N` tokens, every `§` must produce a well-formed token, and each venue must name the pack
+exactly once — so all five shapes became unrepresentable rather than guarded against.
+
+The new witness found two older drifts on its way there: `AGENTS.md` advertised
+`roadmap-protocol.md` without the `§12` the pack carries, and both `AGENTS.md` and
+`CONTEXT.md` abbreviated it as `§12.1–§12.3`, which sweeps in `§12.2.1` — safety-kernel
+text that stays in root and is not in the pack at all. Both fixed here.
 
 ### F. U-HE-43 — merged.
 
