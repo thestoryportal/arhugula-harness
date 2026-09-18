@@ -2382,7 +2382,7 @@ def test_release_verb_fails_closed_when_ground_truth_is_unreadable(door, monkeyp
 # merge_sha (codex r7 P1 — only 2 of the 10 block paths store the merge commit there; five
 # store the PR head, so a red run for an UNRELATED commit would authorize the release)
 def test_release_verb_consults_the_merge_sha_not_the_blocked_sha(door, monkeypatch):
-    fresh = _unblocked_successor(sha="d" * 40)  # blocked_at_sha is NOT the merge commit
+    _unblocked_successor(sha="d" * 40)  # blocked_at_sha is NOT the merge commit
     _step_vi()
     g = _release_ground(monkeypatch)
     seen = []
