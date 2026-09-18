@@ -335,15 +335,15 @@ a terminating refresh has been minted and nothing local proves it merged (step (
 mandatory — reconcile via `record-refresh` / `clear-refresh-intent` and re-run), and
 (exit 3) on a still-blocked lease, which routes back to `unblock`.
 
-**Open contract question — do not treat release as the sanctioned answer to a
-content-caused red.** When post-merge CI is red because of the landed commit's own bytes,
-step (vii) can never pass: it polls that merge SHA's own run and the commit is immutable,
-so `land` re-blocks forever and `gc` skips live leases. C-HE-06 nonetheless states that
-"the lease is never released while the merge SHA's own `main` run or the terminating
-refresh is unconfirmed", and the contract defines no repair-PR exception. This skill will
-not instruct you past a committed invariant: that gap needs a spec amendment or an
-explicit carve-out, which is an operator decision, not a lane's. Surface it rather than
-improvising.
+**The content-caused red — sanctioned since C-HE-06 v1.8 (X8), and not before.** When
+post-merge CI is red because of the landed commit's own bytes, step (vii) can never pass:
+it polls that merge SHA's own run and the commit is immutable, so `land` re-blocks forever
+and `gc` skips live leases. X8 carves this out: "unconfirmed" in the invariant means *not
+yet observed*, and a run that reached a terminal non-success an operator has adjudicated is
+confirmed. So `unblock`, then `release`, then land the repair PR as its OWN reserved arc.
+The carve-out is narrow by construction — the `unblocked_from` gate is reachable only
+through a real block — so do not generalize it to a landing that merely crashed, which
+carries no block and is refused.
 
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 
