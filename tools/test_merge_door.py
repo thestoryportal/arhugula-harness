@@ -2230,6 +2230,32 @@ def test_release_verb_refuses_a_live_unblocked_holder(door):
     assert md.read_lease()["lease_token"] == lease["lease_token"]
 
 
+# mutation-probe: drop the merge_outcome_is_reconciled refusal (codex r1 P1 — a holder
+# that dies between mark_attempted and the merge returning reads as a dead holder while
+# the request is still in flight, so freeing the door admits a SECOND concurrent merge)
+def test_release_verb_refuses_an_unreconciled_in_flight_merge(door, monkeypatch):
+    lease = _acq()
+    md.mark_attempted(lease)  # the merge request left the process...
+    # ...and the holder died before step (vi) could flip the reservation on ground truth
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert rs.current("pr-1")[1]["state"] == "open"  # the flip never happened
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == lease["lease_token"]  # door still fenced
+
+
+def test_release_verb_allows_a_merge_whose_outcome_is_settled(door, monkeypatch):
+    """The recovery this verb exists for: the merge IS confirmed (step (vi) flipped the
+    reservation) and the landing then died holding the door — a red post-merge run, say.
+    The in-flight refusal above must not swallow this case too."""
+    lease = _acq()
+    md.mark_attempted(lease)
+    rs.transition("pr-1", "merged", lane_id="A")  # §4(vi): ground truth said MERGED
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert md.read_lease() is None
+    assert (md.DOOR / f"released.{lease['lease_token']}").exists()
+
+
 def test_unblock_then_release_frees_a_wedged_door_from_the_cli(door, monkeypatch):
     """C-HE-06 §6's recovery END TO END — the half that was unreachable. `unblock` clears
     the BLOCK but mints a successor lease, so the door is still shut afterwards; without

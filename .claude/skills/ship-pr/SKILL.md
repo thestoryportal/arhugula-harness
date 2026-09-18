@@ -328,6 +328,13 @@ case, unblock, then release, then land the repair PR as its OWN reserved arc. Bo
 are operator-confirmed reclaims (C-HE-06 §6): neither is guard-allowlisted, so both
 surface to the operator by design — do not add an allow to make them headless.
 
+Release REFUSES (exit 4) while the lease's `merge_attempted_at` is set and its
+reservation has not flipped to `merged`: the merge request may still be in flight
+server-side, and freeing the door there would admit a second concurrent merge. That is
+C-HE-06 §5's ground-truth reconciliation case and belongs to `land`, which queries `gh`
+and either continues from step (vi) or re-issues once — re-run the landing first, then
+release once the reservation records the confirmed merge.
+
 ## Post-merge fixed-point refresh — CLAUDE.md §12.2 + §12.2.1
 
 **The mechanical half now rides the merge door.** The door's §4(viii) continuation above

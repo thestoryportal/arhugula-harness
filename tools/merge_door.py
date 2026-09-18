@@ -353,6 +353,22 @@ def win_marker(token: str, target_action: str, *, extra: dict | None = None) -> 
         return None
 
 
+def merge_outcome_is_reconciled(lease: dict) -> bool:
+    """True when no merge request is outstanding behind `lease`.
+
+    Two states qualify, and nothing else: the lease never sent a merge
+    (`merge_attempted_at` unset), or its reservation carries C-HE-06 step (vi)'s
+    `merged` flip, which is written only after `gh pr view` confirmed MERGED. A lease
+    whose merge was ATTEMPTED but whose reservation has not flipped is the §5
+    reconciliation case — the request may be in flight server-side right now — and the
+    door must stay fenced until ground truth resolves it.
+    """
+    if not lease.get("merge_attempted_at"):
+        return True
+    res = rs.current(lease.get("reservation_id") or "")
+    return res is not None and res[1]["state"] == "merged"
+
+
 def mark_attempted(lease: dict, *, suffix: str = "") -> None:
     """Payload CAS: temp + os.link onto a token-named sidecar BEFORE the merge request leaves
     the process."""
@@ -1966,14 +1982,29 @@ def main(argv: list[str] | None = None) -> int:
                 # lane ownership and holder liveness. Neither is re-checked here.
                 #
                 # C-HE-06's other release invariant -- "the lease is never released while
-                # the merge SHA's own main run or the terminating refresh is unconfirmed"
-                # -- is discharged for the case it protects by the live-holder refusal
-                # above: a landing still in flight has a live driver and is refused here.
-                # The residual it does NOT cover is a DEAD landing whose merge left main
-                # un-refreshed, which is the state this verb exists to recover and which
-                # CI's ROADMAP_STATUS_DRIFT independently catches. The invariant does not
-                # contemplate a merge SHA whose own run can never go green; that gap is
-                # filed as a contract question, not decided here.
+                # the merge SHA's own main run or the terminating refresh is unconfirmed".
+                # The live-holder refusal above is NOT sufficient for it (codex r1 P1): a
+                # holder can DIE between `mark_attempted` and the merge returning, which
+                # reads here as a dead holder while the request is still in flight
+                # server-side -- freeing the door then admits a SECOND concurrent merge.
+                # So the outstanding-merge case is refused outright and routed to §5's
+                # ground-truth reconciliation, which is `land`'s job, not this verb's.
+                if not merge_outcome_is_reconciled(live):
+                    raise LeaseError(
+                        f"pr #{live['pr']}: merge_attempted_at is set and reservation "
+                        f"{live.get('reservation_id')!r} has not flipped to `merged` -- "
+                        "the merge's outcome is unreconciled and freeing the door could "
+                        "admit a second concurrent merge. Reconcile by ground truth "
+                        "first (C-HE-06 §5) by re-running the landing; release once the "
+                        "reservation records the confirmed merge."
+                    )
+                # What remains is a merge whose outcome IS settled, left holding the door
+                # because its post-merge run or terminating refresh never went green --
+                # the state this verb exists to recover, and the one the invariant does
+                # not contemplate (a merge SHA whose own run can never go green). An
+                # un-refreshed `main` is independently caught by CI's
+                # ROADMAP_STATUS_DRIFT. That gap is filed as a contract question
+                # owing an amendment or carve-out, not decided here.
                 release(live)
                 print("lease released; the door is free")
                 return 0
