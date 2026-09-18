@@ -210,6 +210,22 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
+**Priority, and why this class keeps its rank here anyway** (operator directive, 2026-09-18,
+durable). A prose finding at REVIEW time is **P3 and non-blocking** — it never stops a merge
+and never buys a re-gate round (see `merge-gate`'s prose-finding rule). Its rank in this table
+is by historical finding COUNT, which is now a measure of how much this class used to cost,
+not of how much it should. That does NOT demote the sweep: this pass runs at AUTHORING time,
+where the fix is free, and the cheapest prose finding is the one never written. The failure
+this ordering must not cause is spending an authoring pass polishing a comment while a class-1
+race or a class-4 vacuous witness goes unswept — **when time is short, sweep 1, 3, 4 and 12
+first and let this one go.** The single highest-value move here remains subtractive: if a
+sentence carries a checkable claim it does not need, DELETE the claim rather than verifying
+it — a deleted count cannot drift, and a "corrected" one has a measured habit of drawing the
+next finding (PR #1561: one sentence drew a finding in three consecutive rounds, each
+falsifying the construct the previous fix introduced). The sentence you are reading was itself
+caught mid-authoring asserting an unverifiable attribution about that arc; the gate log
+falsified it on a positive-controlled query. Sweep your own prose edit before shipping it.
+
 **Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
 ASSERTING a mechanism behaviour the code does not have (never true), as against the drift
 half above (true once, then decayed). Pattern tried: a claim-bearing subject

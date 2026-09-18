@@ -122,6 +122,19 @@ three prompts below, naming the **binding-file path** the recipe printed for tha
 instructing the lens to read the six values from it; the values themselves never appear in
 the prompt you write.
 
+**Every prompt also carries the PROSE-FINDING RULE below, verbatim** — it is what stops a lens
+from spending a merge on a wording nit, and a lens that has not been told it will BLOCK on one:
+
+> **Prose findings are P3 and NON-BLOCKING.** A prose finding is one whose whole effect is on
+> text a human reads: a count, an ordinal, a superlative or absolute, a wording or
+> characterisation, a `file:line`/§ cite that has drifted, a stale comment, a claim about the
+> work's own history. Report them — briefly, at the END of your report, under a
+> `### Non-blocking prose notes` heading — but they MUST NOT make your verdict `BLOCK`, and a
+> report whose findings are ALL prose MUST end `VERDICT: APPROVE`. Put them in the JSON
+> `findings` array with `severity: P3` so they are recorded. If a defect changes what the CODE
+> DOES, or what a TEST actually witnesses, it is not a prose finding — classify by EFFECT, not
+> by which file it lives in, and when genuinely unsure treat it as substantive.
+
 **Reviewer 1 — concurrency / race conditions:**
 > Review this diff for concurrency defects only — do not do a general code review. Diff:
 > `gh pr diff <PR#>` on branch `<branch>`. Look specifically for: race conditions on shared
@@ -210,7 +223,19 @@ A raw `Agent` fan-out cannot enforce an output schema (that's what the `Workflow
 - **All three `APPROVE`** → proceed to merge without HIL (consistent with the standing
   `[[feedback-merge-without-hil-once-ci-green]]` directive — CI-green is a precondition, this
   gate is now an additional one for code-touching PRs).
-- **Any `BLOCK`, or a split verdict** → do **not** merge. If the block names a concrete,
+- **Prose-only findings never stop a merge and never buy a re-gate round** (operator
+  directive, 2026-09-18, durable). If every open finding is prose per the rule above, the gate
+  outcome is **all-approve**: record the rows, adjudicate them, and merge. Fix them only where
+  the fix is trivially co-located with work already in the diff, or carry them to
+  `.harness/forward-register.yaml`; either way they ride on the NEXT substantive PR, never
+  their own round. This is the standing calibration, not a per-arc judgement call. What priced it: on
+  PR #1561 the gate recorded ~90 findings across thirteen rounds, the great majority
+  prose-class, while the arc's two real code defects were found during absorption and
+  self-probing and were never gate findings at all — so the rounds that cost the most bought
+  the least. Re-derive that shape before citing it; the point is the ORDERING, not a count. A lens
+  that returns `BLOCK` on a prose-only finding set has mis-applied the rule — record the
+  finding, treat the verdict as APPROVE for gating, and say so in the narrative row.
+- **Any `BLOCK` naming a substantive finding, or a split verdict** → do **not** merge. If the block names a concrete,
   narrow, fixable defect: fix it, then re-run the logged review invocation (`just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` -- the U-HE-34 canonical form; the bare recipe produces no round log) to convergence and re-run
   this gate. **Absorption adjudication (C-HE-24 §5, U-HE-47):** when a gate `finding` row's
   fix is absorbed (or the finding is refuted), append its disposition —
