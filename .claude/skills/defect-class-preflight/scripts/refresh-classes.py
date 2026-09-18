@@ -96,6 +96,27 @@ from pathlib import Path
 # "does this check consume its whole input, or match a span and let the rest through?" — and
 # that question lives in SKILL.md; a future attempt needs a different INPUT, not a wider
 # vocabulary.
+# ALSO evaluated and LEFT OUT: an "owed pointer refresh" class (U-HE-45, 2026-09-18). The
+# SHAPE is real and recurs — a diff finishes work and leaves a surface consumers read to
+# decide what to do next still naming what was just finished (6-8 corpus rows: Step-5-
+# executed-but-plan-still-unticked, fence-live-but-roadmap_status-still-says, decisions-
+# ratified-but-version-summary-still-open). It is NOT a class because the vocabulary cannot
+# carry it, measured over three review rounds, each trading one imprecision for another:
+#   (a) `(?:never|not |un)refreshe?` gave the `never` arm no separator, so it demanded
+#       "neverrefresh" and missed the plainest wording. It hid because the arc's own finding
+#       matched a DIFFERENT arm — a masked alternative is invisible until a row needs only it.
+#   (b) `just completed` / `already landed` need not describe the pointer at all: "The live
+#       pointer just completed validation successfully" matched while reporting no staleness.
+#   (c) `still (?:says|names|points)` has NO POLARITY, and polarity is not regex-expressible:
+#       "The live pointer is fresh and still points to the intended next unit" matches, so a
+#       CORRECT pointer reads as a stale one.
+# Each round's fix bought exactly one more round in which to find the next false surface, and
+# a false match is worse than `unmatched` — unmatched OWES an intake line, a false match
+# silences it, so an over-broad row actively hides new classes. Subtracted per the recorded
+# rule that an adversarial-hardening loop does not converge by adding layers. The substantive
+# defect this shape named on that arc is registered as B-288 instead, where prose can carry
+# the polarity a regex cannot. Note also that tools/test_governance_router.py already
+# forward-references "class 17" for the sub-span shape, so the number was spoken for.
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
         r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
@@ -301,35 +322,6 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     # obligation is a deliverable of the unit itself, and the surface it was owed on
     # is one consumers READ to decide what to do next -- so the cost is misrouting,
     # not a wrong number.
-    # CONJUNCTIVE, and that is load-bearing: a single-token form on `roadmap_status`
-    # pulled 38 rows of which the sampled majority were false -- three safe-merge.sh
-    # findings about a MISSING CLI FLAG on roadmap_status_refresh.py and a
-    # reservations.py crash-window leak. Naming the tool is not the defect; leaving a
-    # surface consumers READ pointing at finished work is. So a match needs BOTH a
-    # pointer surface AND a stale-or-misroute verb. A wrong class is worse than
-    # `unmatched`: unmatched owes an intake line, a false match silences it.
-    "17 owed pointer refresh never lands": (
-        r"live pointer|next[- _]action|roadmap_status|pointer still|frontier",
-        # `(?:never|not)\s+refresh` needs the SEPARATOR: an earlier draft wrote
-        # `(?:never|not |un)refreshe?`, where the `never` arm demanded "neverrefresh"
-        # and so missed the plainest wording of the defect ("was never refreshed").
-        # It went unnoticed because this arc's own finding matched on `still says`
-        # instead — a masked alternative in a disjunction is invisible until a row
-        # arrives that needs only that arm (codex r2 P3).
-        # `just completed` and `already landed` were CUT (codex r3 P2), not bounded: neither
-        # describes the pointer, so "The live pointer just completed validation successfully"
-        # and "the deployment already landed correctly" both matched while reporting no
-        # staleness at all. A false match is worse than `unmatched` — unmatched OWES an
-        # intake line, a false match silences it, so an over-broad arm actively hides new
-        # defect classes. Subtraction rather than more negative cases. Measured on ONE fixed
-        # corpus (2,224 finding rows): 9 matches with the broad arms, 8 without, so the cut
-        # drops exactly one row — and that row is the r3 finding ITSELF, which matched only
-        # because it QUOTES the counterexamples it was criticising. A self-referential match,
-        # not a member, so the cut costs zero real recall. (The first draft of this comment
-        # claimed 'no corpus row' and 'breadth unchanged at 7'; both were wrong — the 7 was
-        # measured before r3's own rows appended, so it compared two different corpora.)
-        r"still (?:says|names|points)|routes? back|(?:never|not)\s+refresh|unrefreshed",
-    ),
 }
 
 
