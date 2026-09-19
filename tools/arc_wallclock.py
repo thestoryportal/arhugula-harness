@@ -6,7 +6,7 @@ in parallel lanes. X9h replaces C-HE-28 §2's correlation with this measure, cor
 against `concurrent_lanes_at_open`. It reads the stores the loop already writes:
 
 - the reservation (C-HE-03), through `reservations.current`: reserved_at, PR, merge sha
-  and the `concurrent_lanes_at_open` cohort key;
+  and the `concurrent_lanes_at_open` sensor, read as lanes by `arc_metrics.lanes_at_open`;
 - the gate log (C-HE-24): the first and last review row for the arc;
 - git: when the merge commit landed on main;
 - the merge door (C-HE-06): the `released.<token>` record, whose mtime `_move_lease`
@@ -22,8 +22,7 @@ Phases, in minutes:
 
 A phase whose endpoint the stores never recorded is None and is left out of that phase's
 statistics; `total` is never computed from a substitute endpoint. The summary is reported
-over all arcs and per `concurrent_lanes_at_open` cohort (`unrecorded` for reservations
-older than the sensor).
+over all arcs and per lanes-at-open cohort (`unknown` where the sensor recorded nothing).
 
 The merge instant comes from the reservation's merge_sha; when an older reservation
 lacks one, it is resolved from the squash commit on main whose subject ends `(#<pr>)`,
@@ -48,6 +47,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import arc_metrics  # [LAW:one-source-of-truth] lanes_at_open is the one cohort-key conversion
 import merge_door  # [LAW:one-source-of-truth] DOOR is the door's own path
 import reservations  # [LAW:one-source-of-truth] the fenced reader of the reservation store
 
@@ -75,8 +75,9 @@ class Timeline:
     last_review: datetime | None
     merged: datetime
     released: datetime | None
-    #: the C-HE-28 cohort key; None for reservations older than the sensor
-    concurrent_lanes_at_open: int | None
+    #: the C-HE-28 cohort key in LANES (`arc_metrics.lanes_at_open`: stored siblings + 1,
+    #: 1 for a reservation older than the sensor); None when the sensor recorded nothing
+    lanes: int | None
     #: where `merged` came from: the reservation's merge_sha, or the squash commit on
     #: main whose subject names the PR (landings older than the door's merge_sha record)
     merged_source: str = "reservation"
@@ -121,14 +122,15 @@ def summarize(timelines: list[Timeline]) -> dict[str, dict[str, float | int | No
     return out
 
 
-def cohort_key(t: Timeline) -> str:
-    return "unrecorded" if t.concurrent_lanes_at_open is None else str(t.concurrent_lanes_at_open)
+def by_cohort(timelines: list[Timeline]) -> dict[int | None, dict[str, float | int | None]]:
+    """The total-phase summary per lanes-at-open cohort (C-HE-28 §2, X9h), ascending by
+    lanes, with the unknown cohort (None) last."""
+    keys = sorted({t.lanes for t in timelines}, key=lambda k: (k is None, k or 0))
+    return {k: summarize([t for t in timelines if t.lanes == k])["total"] for k in keys}
 
 
-def by_cohort(timelines: list[Timeline]) -> dict[str, dict[str, float | int | None]]:
-    """The total-phase summary per `concurrent_lanes_at_open` cohort (C-HE-28 §2, X9h)."""
-    keys = sorted({cohort_key(t) for t in timelines}, key=lambda k: (not k.isdigit(), k.zfill(4)))
-    return {k: summarize([t for t in timelines if cohort_key(t) == k])["total"] for k in keys}
+def cohort_label(lanes: int | None) -> str:
+    return "unknown" if lanes is None else str(lanes)
 
 
 def latest(timelines: list[Timeline], n: int) -> list[Timeline]:
@@ -163,7 +165,13 @@ def _review_bounds(rows: list[dict]) -> dict[str, tuple[datetime, datetime]]:
 def _releases(door_dir: Path) -> dict[str, datetime]:
     """Release instant per reservation: the mtime `_move_lease` stamps on `released.<T>`."""
     out: dict[str, datetime] = {}
+    if door_dir.is_symlink():
+        raise StoreError(f"merge-door directory {door_dir} is a symlink -- refused")
     for released in door_dir.glob("released.*"):
+        if released.is_symlink():
+            # the door refuses symlinked history (merge_door.py gc); a planted link would
+            # inject a forged release instant into the measure
+            raise StoreError(f"release record {released} is a symlink -- refused")
         try:
             at = datetime.fromtimestamp(released.stat().st_mtime, UTC)
             arc = json.loads(released.read_text())["reservation_id"]
@@ -181,11 +189,12 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
 
 
-def _squash_commits(repo: Path) -> dict[int, str]:
-    """PR number -> squash commit on origin/main, from subjects ending `(#<pr>)`."""
+def _squash_commits(repo: Path) -> dict[int, str] | str:
+    """PR number -> squash commit on origin/main, from subjects ending `(#<pr>)`; or the
+    reason origin/main is unreadable, which only the arcs lacking a merge_sha inherit."""
     proc = _git(repo, "log", "--first-parent", "--format=%H %s", "origin/main")
     if proc.returncode != 0:
-        raise StoreError(f"git cannot read origin/main: {proc.stderr.strip()}")
+        return f"no merge_sha and git cannot read origin/main: {proc.stderr.strip()}"
     out: dict[int, str] = {}
     for line in proc.stdout.splitlines():
         sha, _, subject = line.partition(" ")
@@ -203,6 +212,22 @@ def _commit_time(repo: Path, sha: str) -> datetime | str:
     return _ts(proc.stdout.strip())
 
 
+def _merge_instant(
+    repo: Path, head: dict, squash: dict[int, str] | str
+) -> tuple[datetime, str] | str:
+    """(merge instant, its source) for one arc, or the reason it cannot be resolved."""
+    if head.get("merge_sha"):
+        sha, source = head["merge_sha"], "reservation"
+    elif isinstance(squash, str):
+        return squash
+    else:
+        sha, source = squash.get(head.get("pr")), "git-subject"
+    if not sha:
+        return "merged with no merge_sha and no squash commit naming its PR"
+    at = _commit_time(repo, sha)
+    return at if isinstance(at, str) else (at, source)
+
+
 def _merged_heads() -> list[tuple[str, dict]]:
     """(arc_id, head) for every merged reservation, through the canonical reader."""
     try:
@@ -216,9 +241,7 @@ def _merged_heads() -> list[tuple[str, dict]]:
     return [(arc, h[1]) for arc, h in heads if h is not None and h[1].get("state") == "merged"]
 
 
-def load(
-    gate_log: Path = GATE_LOG, repo: Path = REPO, door_dir: Path = merge_door.DOOR
-) -> tuple[list[Timeline], list[Unmeasured]]:
+def load(gate_log: Path, repo: Path, door_dir: Path) -> tuple[list[Timeline], list[Unmeasured]]:
     """Every merged reservation as a Timeline, or as Unmeasured with the reason."""
     heads = _merged_heads()
     try:
@@ -231,17 +254,11 @@ def load(
     timelines: list[Timeline] = []
     unmeasured: list[Unmeasured] = []
     for arc, head in heads:
-        sha, source = head.get("merge_sha"), "reservation"
-        if not sha:
-            sha, source = squash.get(head.get("pr")), "git-subject"
-        merged = (
-            _commit_time(repo, sha)
-            if sha
-            else "merged with no merge_sha and no squash commit naming its PR"
-        )
-        if isinstance(merged, str):
-            unmeasured.append(Unmeasured(arc, merged))
+        resolved = _merge_instant(repo, head, squash)
+        if isinstance(resolved, str):
+            unmeasured.append(Unmeasured(arc, resolved))
             continue
+        merged, source = resolved
         first_last = review.get(arc)
         timelines.append(
             Timeline(
@@ -252,7 +269,7 @@ def load(
                 last_review=first_last[1] if first_last else None,
                 merged=merged,
                 released=releases.get(arc),
-                concurrent_lanes_at_open=head.get("concurrent_lanes_at_open"),
+                lanes=arc_metrics.lanes_at_open(head),
                 merged_source=source,
             )
         )
@@ -267,11 +284,11 @@ def _fmt(v: float | int | None) -> str:
 
 
 def render(timelines: list[Timeline], unmeasured: list[Unmeasured]) -> str:
-    lines = [f"{'arc':<40} {'pr':>5} {'lanes':>5} " + " ".join(f"{p:>8}" for p in PHASES)]
+    lines = [f"{'arc':<40} {'pr':>5} {'lanes':>7} " + " ".join(f"{p:>8}" for p in PHASES)]
     for t in timelines:
         ph = phases(t)
         lines.append(
-            f"{t.arc_id:<40} {t.pr or '-':>5} {cohort_key(t)[:5]:>5} "
+            f"{t.arc_id:<40} {t.pr or '-':>5} {cohort_label(t.lanes):>7} "
             + " ".join(f"{_fmt(ph[p]):>8}" for p in PHASES)
         )
     s = summarize(timelines)
@@ -280,9 +297,10 @@ def render(timelines: list[Timeline], unmeasured: list[Unmeasured]) -> str:
     for stat in ("mean", "median", "n"):
         lines.append(f"{stat:<12} " + " ".join(f"{_fmt(s[p][stat]):>8}" for p in PHASES))
     lines.append("")
-    lines.append("total by concurrent_lanes_at_open    n     mean   median")
+    lines.append("total by lanes at open    n     mean   median")
     for key, c in by_cohort(timelines).items():
-        lines.append(f"  {key:<32} {_fmt(c['n']):>4} {_fmt(c['mean']):>8} {_fmt(c['median']):>8}")
+        stats = f"{_fmt(c['n']):>4} {_fmt(c['mean']):>8} {_fmt(c['median']):>8}"
+        lines.append(f"  {cohort_label(key):<20} {stats}")
     lines.append(
         f"goal: mean total <= {GOAL_MEAN_MINUTES:.0f} min -> {goal_verdict(s['total']['mean'])}"
     )
@@ -307,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="emit the phases and summary as JSON")
     args = ap.parse_args(argv)
     try:
-        timelines, unmeasured = load()
+        timelines, unmeasured = load(GATE_LOG, REPO, merge_door.DOOR)
     except StoreError as exc:
         print(f"arc_wallclock: {exc}", file=sys.stderr)
         return 2
@@ -320,13 +338,13 @@ def main(argv: list[str] | None = None) -> int:
                         {
                             "arc_id": t.arc_id,
                             "pr": t.pr,
-                            "concurrent_lanes_at_open": t.concurrent_lanes_at_open,
+                            "lanes": t.lanes,
                             **phases(t),
                         }
                         for t in window
                     ],
                     "summary": summarize(window),
-                    "by_cohort": by_cohort(window),
+                    "by_lanes": {cohort_label(k): v for k, v in by_cohort(window).items()},
                     "goal": goal_verdict(summarize(window)["total"]["mean"]),
                     "unmeasured": [u.__dict__ for u in unmeasured],
                 },

@@ -32,7 +32,7 @@ def _timeline(arc="a", *, review=(10, 40), merged=50, released=60, lanes=None) -
         last_review=_t(last) if last is not None else None,
         merged=_t(merged),
         released=_t(released) if released is not None else None,
-        concurrent_lanes_at_open=lanes,
+        lanes=lanes,
     )
 
 
@@ -61,17 +61,18 @@ def test_summary_counts_only_arcs_that_recorded_the_phase():
     assert s["total"]["n"] == 1 and s["to_merge"]["n"] == 2
 
 
-def test_cohorts_split_the_total_by_concurrent_lanes_at_open():
+def test_cohorts_split_the_total_by_lanes_in_numeric_order_unknown_last():
     tl = [
-        _timeline("a", released=30, lanes=0),
-        _timeline("b", released=50, lanes=0),
-        _timeline("c", released=120, lanes=2),
+        _timeline("a", released=30, lanes=1),
+        _timeline("b", released=50, lanes=1),
+        _timeline("c", released=120, lanes=10),
         _timeline("d", released=90, lanes=None),
+        _timeline("e", released=70, lanes=2),
     ]
     c = aw.by_cohort(tl)
-    assert list(c) == ["0", "2", "unrecorded"]
-    assert c["0"] == {"n": 2, "mean": 40, "median": 40}
-    assert c["2"]["mean"] == 120 and c["unrecorded"]["mean"] == 90
+    assert list(c) == [1, 2, 10, None]
+    assert c[1] == {"n": 2, "mean": 40, "median": 40}
+    assert c[10]["mean"] == 120 and c[None]["mean"] == 90
 
 
 def test_latest_keeps_the_most_recently_merged_arcs():
@@ -138,7 +139,7 @@ def _release(queue: Path, token: str, arc: str, at: datetime) -> None:
 def test_load_reads_the_stores_and_names_unmeasurable_arcs(stores):
     queue, repo, log, sha = stores
     _reserve(queue, "with-sha", merge_sha=sha, pr=7, concurrent_lanes_at_open=2)
-    _reserve(queue, "by-subject", merge_sha=None, pr=7)
+    _reserve(queue, "by-subject", merge_sha=None, pr=7, concurrent_lanes_at_open=None)
     _reserve(queue, "bypassed", merge_sha=None, pr=None)
     _reserve(queue, "lost-sha", merge_sha="0" * 40, pr=8)
     _reserve(queue, "open", state="open")
@@ -150,7 +151,9 @@ def test_load_reads_the_stores_and_names_unmeasurable_arcs(stores):
     assert set(by_arc) == {"with-sha", "by-subject"}
     assert by_arc["with-sha"].released == _t(75)  # the released record's mtime
     assert by_arc["with-sha"].first_review == _t(10)
-    assert by_arc["with-sha"].concurrent_lanes_at_open == 2
+    # the sensor stores siblings; the cohort key is lanes (arc_metrics.lanes_at_open)
+    assert by_arc["with-sha"].lanes == 3
+    assert by_arc["by-subject"].lanes is None  # an explicit null is unknown
     assert by_arc["by-subject"].merged_source == "git-subject"
     assert by_arc["by-subject"].released is None
     # one arc git cannot resolve is unmeasured; the rest of the report stands
@@ -205,3 +208,55 @@ def test_last_must_be_positive(capsys):
             aw.main(["--last", bad])
         assert exc.value.code == 2
     assert "must be >= 1" in capsys.readouterr().err
+
+
+def test_a_reservation_older_than_the_sensor_is_the_one_lane_baseline(stores):
+    queue, repo, log, sha = stores
+    _reserve(queue, "legacy", merge_sha=sha, pr=7)  # no concurrent_lanes_at_open key
+    timelines, _ = aw.load(log, repo, queue / "merge-door")
+    assert [t.lanes for t in timelines] == [1]
+
+
+def test_an_unreadable_origin_main_only_unmeasures_arcs_that_need_it(stores):
+    queue, repo, log, sha = stores
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/main")
+    _reserve(queue, "with-sha", merge_sha=sha, pr=7)
+    _reserve(queue, "by-subject", merge_sha=None, pr=7)
+    timelines, unmeasured = aw.load(log, repo, queue / "merge-door")
+    assert [t.arc_id for t in timelines] == ["with-sha"]
+    assert [u.arc_id for u in unmeasured] == ["by-subject"]
+    assert "origin/main" in unmeasured[0].reason
+
+
+def test_a_symlinked_release_record_is_refused(stores, tmp_path):
+    queue, *_ = stores
+    forged = tmp_path / "forged"
+    forged.write_text(json.dumps({"reservation_id": "a"}))
+    (queue / "merge-door" / "released.tok").symlink_to(forged)
+    with pytest.raises(aw.StoreError, match="symlink"):
+        aw._releases(queue / "merge-door")
+
+
+def test_a_symlinked_door_directory_is_refused(tmp_path):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "door").symlink_to(tmp_path / "real")
+    with pytest.raises(aw.StoreError, match="symlink"):
+        aw._releases(tmp_path / "door")
+
+
+def test_the_cli_publishes_lanes_cohorts_and_the_goal(stores, monkeypatch, capsys):
+    queue, repo, log, sha = stores
+    _reserve(queue, "solo", merge_sha=sha, pr=7, concurrent_lanes_at_open=0)
+    _release(queue, "tok", "solo", _t(45))
+    monkeypatch.setattr(aw, "GATE_LOG", log)
+    monkeypatch.setattr(aw, "REPO", repo)
+    monkeypatch.setattr(aw.merge_door, "DOOR", queue / "merge-door")
+    assert aw.main(["--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["arcs"][0]["lanes"] == 1 and out["arcs"][0]["total"] == 45
+    assert out["by_lanes"] == {"1": {"n": 1, "mean": 45, "median": 45}}
+    assert out["goal"] == "MET"
+    assert aw.main([]) == 0
+    text = capsys.readouterr().out
+    assert "  1                       1       45       45" in text
+    assert "-> MET" in text
