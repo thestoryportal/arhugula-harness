@@ -797,3 +797,53 @@ def test_append_row_reads_through_the_fd_not_the_pathname(tmp_path: Path, monkey
     fr.append_row(row, p)
     monkeypatch.undo()
     assert len(fr.read_rows(p)) == 1
+
+
+def test_cycle_pass_is_immutable_across_a_finding_lineage(tmp_path: Path):
+    p = tmp_path / "g.jsonl"
+    fr.append_row(fr.make_row(_core(), _env(cycle_pass="1")), p)
+    moved = _env(
+        ts="2026-08-18T00:00:01Z",
+        record_kind="finding_adjudication",
+        disposition="accepted",
+        disposition_actor="operator",
+        cycle_pass="3",
+    )
+    with pytest.raises(fr.RecordError, match="core field 'cycle_pass'"):
+        fr.append_row(fr.make_row(_core(), moved), p)
+
+
+def test_a_row_written_before_cycle_pass_existed_can_still_be_adjudicated(tmp_path: Path):
+    # the live gate log holds rows with no cycle_pass key at all: absent reads as null
+    p = tmp_path / "g.jsonl"
+    legacy = fr.make_row(_core(), _env())
+    del legacy["cycle_pass"]
+    fr.append_row(legacy, p)
+    adj = {
+        **legacy,
+        "record_kind": "finding_adjudication",
+        "ts": "2026-08-18T00:00:01Z",
+        "disposition": "accepted",
+        "disposition_actor": "operator",
+    }
+    fr.append_row(adj, p)
+    assert fr.read_rows(p)[-1]["disposition"] == "accepted"
+
+
+def test_a_legacy_row_missing_a_required_core_field_still_fails_closed(tmp_path: Path):
+    # only cycle_pass reads absent as null; a row missing base_sha is corrupt and an
+    # adjudication against it must not pass as if it had carried an explicit null
+    p = tmp_path / "g.jsonl"
+    broken = fr.make_row(_core(), _env(base_sha=None))
+    del broken["base_sha"]
+    p.write_text(json.dumps(broken) + "\n")
+    adj = {
+        **broken,
+        "base_sha": None,
+        "record_kind": "finding_adjudication",
+        "ts": "2026-08-18T00:00:01Z",
+        "disposition": "accepted",
+        "disposition_actor": "operator",
+    }
+    with pytest.raises(KeyError):
+        fr.append_row(adj, p)

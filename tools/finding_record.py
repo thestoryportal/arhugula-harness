@@ -44,6 +44,10 @@ SCHEMA: dict[str, Any] = json.loads(SCHEMA_PATH.read_text())
 RECORD_KINDS = tuple(SCHEMA["properties"]["record_kind"]["enum"])
 DISPOSITIONS = tuple(SCHEMA["properties"]["disposition"]["enum"])
 SEVERITIES = tuple(SCHEMA["properties"]["severity"]["enum"])
+# [LAW:one-source-of-truth] the bounded review cycle's passes (spec v1.9 X9a/X9c) are the
+# schema's enum; the env var is the one channel that carries the running pass to every emitter.
+CYCLE_PASSES = tuple(p for p in SCHEMA["properties"]["cycle_pass"]["enum"] if p is not None)
+CYCLE_PASS_ENV = "HARNESS_CYCLE_PASS"
 
 #: C-HE-24 §4 ``finding_id`` shape: ``<producer>:<head_sha>:<location-hash>:<n>``.
 _FINDING_ID_RE = re.compile(
@@ -87,6 +91,24 @@ class Envelope:
     disposition: str | None = None
     disposition_actor: str | None = None
     unique_catch: bool | None = None
+    cycle_pass: str | None = None
+
+
+def cycle_pass_from_env(env: dict[str, str] | None = None) -> str | None:
+    """The running pass of the bounded review cycle, parsed at the one boundary it crosses.
+
+    Unset or empty means no cycle is running (a legacy round, or a non-review emitter) and
+    reads as None. Any other value outside CYCLE_PASSES is refused loudly: a typo would
+    otherwise record rows the gate cannot place in the cycle."""
+    # [LAW:parse-dont-validate] callers receive a member of CYCLE_PASSES or None, never raw text
+    raw = (os.environ if env is None else env).get(CYCLE_PASS_ENV, "")
+    if raw == "":
+        return None
+    if raw not in CYCLE_PASSES:
+        raise RecordError(
+            f"{CYCLE_PASS_ENV}={raw!r} is not a cycle pass (expected one of {CYCLE_PASSES})"
+        )
+    return raw
 
 
 def now_iso() -> str:
@@ -222,6 +244,7 @@ _CORE_IMMUTABLE = (
     "diff_digest",
     "round_n",
     "cause_attribution",
+    "cycle_pass",
 )
 
 
@@ -271,10 +294,11 @@ def _check_against_prior_rows(row: dict, rows: list[dict]) -> None:
             "finding_adjudication may)"
         )
     for k in _CORE_IMMUTABLE:
-        if row[k] != orig[k]:
-            raise RecordError(
-                f"adjudication may not change core field {k!r} ({orig[k]!r} -> {row[k]!r})"
-            )
+        # cycle_pass alone is optional: rows written before it existed carry no key, and
+        # absent reads as its null default; every other core field must be present
+        was, now = (orig.get(k), row.get(k)) if k == "cycle_pass" else (orig[k], row[k])
+        if now != was:
+            raise RecordError(f"adjudication may not change core field {k!r} ({was!r} -> {now!r})")
     if row["record_kind"] == "finding_adjudication":
         latest_ts = max(r["ts"] for r in prior)
         if row["ts"] <= latest_ts:

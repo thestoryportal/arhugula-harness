@@ -225,26 +225,32 @@ false partition). Fix at authoring: delete the count, bind the claim, or verify 
 cite by reading the cited section *now*. (Full discipline: the `register-pr-prose`
 skill.)
 
-**Vocabulary evaluated and LEFT OUT — the claim-vs-code half** (2026-09-17). Shape: prose
-ASSERTING a mechanism behaviour the code does not have (never true), as against the drift
-half above (true once, then decayed). Pattern tried: a claim-bearing subject
-(`claims|states|says|documented|guarantees|asserts`) within 120 non-sentence characters of
-a falsity marker. At the 2,191-finding corpus it claimed 40 previously-unmatched rows and
-leaked none of the `contradicting C-HE-NN` code-vs-contract cluster — a bare `contradict`
-sweeps that whole cluster in, the same wrong direction as `drift`. **Refused anyway:** 6 of
-the 40 are operational uses of those verbs in non-prose findings (a peer that "claimed" a
-file, a lease "claim", an order "asserted only via any()"), and a class-2 false positive
-REMOVES a row from the unmatched pile — the pile where new classes are found. The
-discriminator needed here (is "claim" a sentence or a lease?) is not in the classifier's
-input: it sees evidence plus location, and neither says which. Two review rounds landed on
-this one mechanism, so it was subtracted rather than widened again. A future attempt needs
-a different INPUT — the cited file's own bytes — not a bigger vocabulary.
+**Priority, and why this class keeps its rank here anyway** (operator directive, 2026-09-18,
+durable). A prose finding at REVIEW time is **P3 and non-blocking** — it never stops a merge
+and never buys a re-gate round (see `merge-gate`'s prose-finding rule). Its rank in this table
+is by historical finding COUNT, which is now a measure of how much this class used to cost,
+not of how much it should. That does NOT demote the sweep: this pass runs at AUTHORING time,
+where the fix is free, and the cheapest prose finding is the one never written. The failure
+this ordering must not cause is spending an authoring pass polishing a comment while a class-1
+race or a class-4 vacuous witness goes unswept — **when time is short, sweep 1, 3, 4 and 12
+first and let this one go.** The single highest-value move here remains subtractive: if a
+sentence carries a checkable claim it does not need, DELETE the claim rather than verifying
+it — a deleted count cannot drift, and a "corrected" one has a measured habit of drawing the
+next finding (PR #1561: one sentence drew a finding in three consecutive rounds, each
+falsifying the construct the previous fix introduced). The sentence you are reading was itself
+caught mid-authoring asserting an unverifiable attribution about that arc; the gate log
+falsified it on a positive-controlled query. Sweep your own prose edit before shipping it.
 
-The defect itself is real and worth catching by hand: **for every sentence you write that
-says what some mechanism does, did you read that mechanism this session, or are you
-restating what an earlier document said about it?** Both mechanism claims on the arc that
-measured this were inherited verbatim from the file it was superseding, amplified, and
-never probed — one false against `DESIGN_RE`, one false against `review_wrapper_common.py`.
+*Vocabulary evaluated and LEFT OUT for this class (2026-09-18):* a record that **contradicts its
+own evidence** — a review audit stating counts the gate log's `round_n` refutes, a cleared marker
+naming two of the four rows `--open` emits. The shape is class 2's subject and recurred twice in
+one arc, but three terms were tried and all three withdrawn: `omits` (+84 rows, rejected before
+shipping), `, not <digits>` (matches any numeric contrast — "The API returns 1, not 2."), and
+`identifies only` (shipped on a claim of semantic boundedness that proved false — "The sanitizer
+identifies only SQL injection…"). Prose DESCRIBING a record is lexically indistinguishable from
+prose about the thing the record describes. Sweep it by hand: for every count, status or
+completeness claim a record states, which source of truth refutes it, and did you read that
+source THIS session?
 
 ### 3. Silent failure / meaning-changing fallback (114 findings)
 `2>/dev/null`, `|| true`, `except: pass`, a default that changes meaning when the
@@ -284,6 +290,29 @@ while a SIGKILL (a negative returncode, or 137 through a shell) still became an 
 "indeterminate" warning — and the probe tool documents that SIGKILL leaves the file mutated.
 Every exit outside the documented verdict set aborts.
 
+**The classifier's own terms are a suppression input too (added 2026-09-17, and the
+rule below is all that survived of it).** A class pattern
+that matches too widely removes findings from the unmatched-intake pile with no signal that
+anything was dropped — `|| true` aimed at the review machinery rather than at code. So a new
+class term is judged on its FALSE POSITIVES first: name the unrelated findings it would
+claim, and pin them as negatives in the same commit. Under-matching leaves a finding in the
+intake pile where a human sees it; over-matching hides it. Two consecutive rounds of one arc
+were spent narrowing a single added term (`cleanup path`, then `caller state`), which is what
+this rule exists to skip.
+
+And when narrowing does not converge, SUBTRACT. Round after round of one arc went on terms
+added to this table; the terms were removed rather than sharpened again,
+because this file's own policy is to prefer to miss and its header already records that
+successive regex layers trade one imprecision for another. A shape that keeps drawing
+findings is telling you the vocabulary does not exist, not that you have not found it yet.
+
+That is what happened to the term added for THIS rule: round after round, each finding
+correct, each attacking the phrase the last one added, because every way of naming the
+classifier's own machinery also names ordinary ingestion and queue findings. No matcher
+vocabulary for it exists in the table now. Findings about the class table stay in the
+unmatched pile and get an `instance-only` disposition, which is the honest record: they are
+artifacts of editing the table, not a defect class in the product.
+
 ### 4. Vacuous witness (107 findings)
 For every new/changed test, reason the mutation through before committing: *if the
 load-bearing line were deleted or inverted, does this test actually red?* Traps seen
@@ -320,6 +349,33 @@ mechanism that owns both modes (`MonkeyPatch`, a context manager) — delete the
 rather than contriving a witness for it.
 
 ### 7. Env-var mutation and restore (73 findings)
+
+**Shell half (added 2026-09-17, lane-init `_LI_SRC`).** A SOURCED file mutates its caller's
+shell the way `os.environ` mutates a process — the variable outlives the call, for the life
+of that interactive shell, and can clobber a caller's own name. So every variable a sourced
+file introduces owes the same question as an `os.environ` write: *who unsets it, on which
+paths?* The answer must be ALL of them — success and every failure arm — because the one
+path that forgets is the one a lane actually takes. Read the file's existing cleanup sites
+first: if it already unsets its locals at every one of its exits, a new local that appears at one
+is not a smaller version of the convention, it is the exception that breaks it.
+
+This half has NO surviving vocabulary in class 7, and that is the finding, not an
+oversight. `caller's shell` was tried and WITHDRAWN: it claimed a finding this class does
+not own, and under the prefer-to-miss policy a term that steals from the unmatched pile does
+not earn its place. That claim is EXISTENTIAL — one such finding exists — and an existential
+claim survives a growing corpus, because a later row cannot unmake an earlier one. What is NOT
+restated here is any CATEGORICAL or PRECISION claim (how many it matched, what share were
+wrong): the gate log only grows, including with the reviewing arc's own findings, so those are
+true at one anchor and false at the next. That is the whole distinction, and it is why the
+decision below rests on policy rather than on a measurement. Re-derive with
+`refresh-classes.py` if you want the current numbers. And
+`tools/test_refresh_classes.py::test_class_7_does_not_claim_sourced_shell_caller_state`
+now pins the absence. A shell-sourcing finding therefore lands UNMATCHED, which is the
+intended outcome: unmatched is where the next class comes from. The rule that removed it
+still stands, and is why it went -- terms like `caller state` or `caller-scoped` read just as naturally in ownership,
+aliasing and scoping findings, and stealing one of those is worse than missing it — a class
+hit is what removes a finding from the unmatched new-class pile, so an over-wide term
+silently switches the intake loop off for everything it claims.
 Any `os.environ` write: who restores it, does the restore survive a mid-test
 `monkeypatch.undo()` (use an INDEPENDENT `MonkeyPatch`), does it leak into suites that
 assert the namespace empty (`HARNESS_*` must never escape tools items), and — the P1
@@ -522,6 +578,34 @@ what else is in the diff: a real amendment carries the spec/plan change (or a fi
 beside the test; this one carries only the test edit. If the contract is genuinely wrong,
 route it — do not let the witness ratify the change on the contract's behalf.
 
+### Vocabulary evaluated and LEFT OUT — "a record's field contradicts its own body" (2026-09-18)
+
+The shape is real and has **two measured instances one arc apart**. `B-282` shipped
+`status: open` while its own summary said U-HE-40 is HELD — and `OPEN_STATUSES` includes `open`
+and excludes `held`, so `--open` counted a row its author had described as blocked. One arc later
+a U-HE-45 plan tick marked a **combined** step `[x]` while the paragraph beneath it said half that
+step was never performed, against a convention defining a checked box as "carried out". Four
+corpus rows carry it. Re-reading the prose catches neither: both are visible only by asking *what
+does the consumer do with this field?*
+
+**It is not a class, because the vocabulary cannot tell prose that DESCRIBES a field from prose
+that SETS one.** Three review rounds, each trading one imprecision for another: two independent
+tuple patterns matched across *sentences*, fixed with class 16's window; the same terms then
+matched unrelated text *within* one sentence ("The status field is parsed correctly even though a
+missing verdict file makes the unrelated hook fail"), which no window can separate; and `mark`
+without a word boundary matched inside `benchmarks`. The middle one is terminal — the same wall
+the owed-pointer vocabulary hit, one floor down: the distinction is **semantic**, not lexical.
+
+The asymmetry that decides it, as ever: a false match is worse than `unmatched`, because
+unmatched OWES an intake line while a match silences it. An arm that cannot separate those two
+readings actively hides the new classes this table exists to surface.
+
+**Sweep it by hand, because the question is still worth asking:** *for every status, disposition
+or checkbox this diff SETS — does the body of that same record agree with it, and which consumer
+reads the field rather than the body?* Name the consumer. `--open`, a tick-count derivation and a
+reducer all read fields; none read paragraphs. *"The prose explains the nuance"* is the sentence
+to distrust: it may explain it to a human, but the field is what the tooling acts on.
+
 ### Vocabulary evaluated and LEFT OUT — "the owed pointer refresh" (2026-09-18)
 
 The shape is real and recurs: a diff finishes the work and leaves a surface *consumers read
@@ -534,8 +618,9 @@ operator decisions ratified, but the same plan's current version summary at line
 they are open"*.
 
 **It is not a class, because the vocabulary cannot carry it.** It shipped as class 17 on the
-U-HE-45 arc and was subtracted three review rounds later, each round having traded one
-imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
+U-HE-45 arc and was subtracted at that arc's round 5. Its findings fell in rounds 2, 3 and 5 —
+three rounds, not three consecutive ones — so the two-consecutive trigger fired at r3, where it
+was fixed rather than withdrawn; each round traded one imprecision for another: `(?:never|not |un)refreshe?` gave the `never` arm no separator and so
 missed the plainest wording, hiding behind a different arm the arc's own finding happened to
 match; `just completed` / `already landed` need not describe the pointer, so *"The live pointer
 just completed validation successfully"* matched while reporting no staleness; and
@@ -556,6 +641,77 @@ not complete without it. The temptation sounds like protocol — *"the refresh i
 §12.2.1"* — and §12.2.1 forbids only the reserved TITLE PREFIX on a bundled PR, not the
 bundling. On the arc that surfaced this, the substantive defect is registered as `B-288`, where
 prose carries the polarity a pattern could not.
+
+### 18. The code departs from a cleared contract (added merge-door-release-verb; at the
+2,247-finding corpus the pattern matched 26 rows and the class CLAIMED 23 of them —
+earlier classes take the other 3 — and 14 had matched no class at all)
+
+The implementation states something a cleared `C-HE-*` contract explicitly denies. Not a
+stale count, not an undischarged quote, not a test blessing the change — the code itself
+asserts the opposite of the contract, and usually because the contract was never re-read
+while the code was being narrowed.
+
+Recorded shapes: a holder gate admitting a terminal `merged` reservation against C-HE-03
+§6's explicit prohibition (the SAME defect across six rounds, which is what makes this a
+class rather than an incident); an audit declaring a canonical C-HE-30 statement false
+while saying no spec edit is owed; a conflict rate reported as an interval where canonical
+C-HE-13 §4 still requires the real rate; and this arc's own `TERMINAL_NOT_GREEN`, which
+honoured `TIMED_OUT`/`STARTUP_FAILURE`/`ACTION_REQUIRED` although C-HE-19 §1 declares the
+CI outcome domain to be exactly `{SUCCESS, FAILURE, CANCELLED}` — widening a
+terminal-state contract on a lane's own authority while that lane's spec amendment
+explicitly promised not to.
+
+**Question:** *for every constant, enum, allowlist or predicate this diff adds, does a
+cleared contract already declare that domain — and did I re-read it, or infer it from
+what the code around me happened to accept?* An enumerated set is the high-risk shape:
+it looks like a local implementation detail and is frequently a contract's domain
+restated from memory.
+
+Two exits, as class 12: discharge it (cite the contract text that admits your value) or
+route it (a domain change is the contract owner's call). What is never an exit is
+widening quietly because the wider set "seems safer" — a larger admissible set on a gate
+is strictly less safe, and it is the contract's job to say how much less.
+
+*Distinct from its neighbours, which is why it is its own class.* Class 12 is a contract
+phrase QUOTED into the diff with nothing discharging it — the words present, the line
+missing. Class 16 is the WITNESS asserting the departed behaviour, so review reads a
+covered change. This is the CODE half, whether or not any prose quotes it and whether or
+not a test blesses it. The cluster was already visible to class 2's note, which refused a
+bare `contradict` because it "sweeps that whole cluster in, the same wrong direction as
+`drift`" — correct for class 2, and the reason these rows sat unmatched: they needed
+their own home. The pattern binds `contradict` to `C-HE` for exactly that reason.
+
+*(Class 1 also gained `symlink` in the same pass: its containment rider already described
+the O_NOFOLLOW idiom, but the vocabulary did not carry the word, leaving 10 containment
+findings — a dangling link read as absent, a link followed without containment —
+unmatched at the same corpus.)*
+
+### Vocabulary evaluated and LEFT OUT — "the guidance prescribes what the contract forbids" (2026-09-18)
+
+Class 12 catches prose that QUOTES a contract and discharges nothing. This is its inverse:
+prose that PRESCRIBES an action a cleared contract forbids. Recorded instance — a ship-pr
+recovery section told operators to unblock, release the merge-door lease, and land a repair
+when post-merge CI reds on the landed commit's own bytes, while C-HE-06 states the lease is
+never released until that run is confirmed and defines no repair-PR exception. It is the
+more dangerous direction: an undischarged quote is inert, whereas a prescription is executed,
+and in this workspace guidance prose is read by agents that do what it says — so the defect
+launders a contract breach into documented practice.
+
+**Not a class, on measurement.** Against the live 3,288-row corpus, `instructed to violate`,
+`without amending`, and `violate[s] the committed` each matched exactly ONE row — this
+finding's own. The nearest neighbour (`the committed plan instructs operators to run
+merge-door-unblock with that refresh PR, so the documented recovery command always fails`)
+is a DIFFERENT failure: documented guidance that fails loudly, not guidance that succeeds
+and breaks an invariant. Cardinality 1 with no discriminating vocabulary is precisely the
+shape the two subtractions above were subtracted for, and a false match costs more than an
+unmatched row because it silences the intake line.
+
+**Sweep it by hand. Question:** *does any prose in this diff tell a reader to DO something
+— a command, a recovery, an order of operations — that a cleared contract forbids?* The
+exits are class 12's: discharge it (cite the contract text that permits it) or route it (a
+spec amendment or carve-out is the contract owner's call). Deleting the contract's name
+while keeping the instruction is the worst of the three, and the most tempting, because the
+prose then reads clean. Promote this to a real class at a second instance.
 
 ### Vocabulary evaluated and LEFT OUT — "the validator reads a sub-span" (2026-09-17)
 
@@ -582,6 +738,16 @@ classes are found, precision-first governs, and nothing met it.
 match a span and let the rest through?* An anchored `fullmatch`, an all-elements loop, or a
 parse into a typed model consumes everything; a `search`, a `[0]`, a "contains" test, or a
 regex without `^…$` does not — and what it does not read, it silently accepts.
+
+**The highest-risk site is a read you introduced THIS round to satisfy a different
+finding.** When an absorption replaces an inference with an authoritative read — a ledger
+query, an API call, a ground-truth lookup — the sweep's attention is on whether the new
+source is the right one, and nobody re-asks the sub-span question of the brand-new parsing
+code. That is where it lands: a 2026-09-18 arc swapped a proxy for a real CI query and, in
+the same commit, took `done[0]` from the run list (ignoring a second run still pending) and
+filtered it on `event` alone (ignoring which branch the run belonged to) — two instances of
+this exact shape, both in three lines written to close a different defect, both found by the
+next reviewer round. A new read is new input; parse all of it.
 
 The trap is that each part-check looks complete while you are writing it, and the gap names
 itself one reviewer round at a time. The arc that recorded this watched one validator take

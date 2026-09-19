@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `a928c7c170e5` |
-| `last_refreshed` | 2026-09-18T00:00:00Z |
-| `git_head` | `0a13e41e` —  |
+| `workspace_state_hash` | `7ae78631233c` |
+| `last_refreshed` | 2026-09-19T00:00:00Z |
+| `git_head` | `fc2706a1` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1571).** The governance-pack router landed self-checking end to end at #1568, and #1571 put the merge door's own two landing-block rows on main so the C-HE-06 §9 reducers can see them. No unit is pending for this lane: the next work is four forward rows, each with a live witness from the #1568 arc, and all four need `.harness/forward-register.yaml`, which is fenced by the `lane-init-shell-portability` (#1561) and `u-he-40` reservations — `u-he-45` (#1569) has since landed, so two fences remain; take the rows when the last of those lands, or hand them to whichever lane lands last. All four are already DRAFTED as ready-to-paste YAML plus their prose twins, with every cite verified at `d88487ba9` and the block parse-checked: load the checkpoint `20260917-210511-forward-rows-b-273..b-276-drafted-awaiting-the-register-fenc` (`/context-restore <that name>`) rather than re-deriving them, re-ground the cites at the then-current HEAD, and renumber from the tail if a sibling lane files first. (1) The review-gate recipes default to `base='main'`, which in a lane worktree is a stale local ref and widens the REVIEWED bytes rather than only the attestation. (2) `arc_disjoint_check`'s exit-1 is candidate-INDEPENDENT: with the candidate at an unmodified `origin/main` and again with a commit on top it named the same four sibling-held paths, so its documented remedy of re-deriving and picking another unit cannot clear it. (3) `merge-gate-binding` binds LOCAL head while the canonical lens template fetches `gh pr diff`, which serves the PUSHED head — an unpushed branch has its lenses review stale bytes while `emit` still validates the binding values they copied verbatim. (4) `merge_door` exposes no `release` verb, so its own documented recovery (unblock, then release the returned lease) is not executable from the CLI. The 3-4 lane loop-lanes pilot remains operator-gated per C-HE-13 §3.
+**Current next action (post-#1593).** U-HE-53 landed the gate half of the bounded review cycle: the cycle_pass field on every gate-log row, pass runs keyed by the reviewed binding, the replay under current dispositions, and the fail-closed refusal of pass-tagged lens verdicts. The cycle is not usable yet: its lens half (lens admission, the per-pass base, unattended lens emission, whole-verdict delivery and the launcher) is registered as B-294 by operator decision. Operator decision 2026-09-19: build B-294 next, ahead of U-HE-57, and until the skills move onto the cycle every arc runs the cleared X9a cycle by hand (pass 1 codex plus the witness lens, one fix round, pass 2 codex on the fix delta, escalation at most once on an accepted P1, pass 3 one lens; touched suites per round, the full suite once before landing, one push per round). Next is the B-294 lens half, the prerequisite of **U-HE-54**, then U-HE-57.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,8 +43,7 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1561 | `fix/lane-init-shell-portability` | — | — |
-| #1575 | `docs/u-he-45-plan-tick` | — | — |
+| #1578 | `ops/gate-log-rows-post-1573` | — | — |
 
 ---
 
@@ -52,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
-| PR #1576 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| 1573 | 2026-09-18 | amended the live pointer: forward-register fence down to two reservations; named the drafted B-273..B-276 checkpoint |
-| PR #1569 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| 1571 | 2026-09-18 | landed the two merge-door rows from #1568's landing; ledger-only |
-| PR #1568 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1593 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1591 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1583 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| PR #1579 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
+| 1585 | 2026-09-18 | #1585 closed B-292 (doc-only, verified on main). Generated AT the content merge tip 12143ce9 so the recorded git_head equals this refresh's own future merge parent. |
 
 ---
 

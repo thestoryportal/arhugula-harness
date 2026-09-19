@@ -350,7 +350,7 @@ def test_completion_allowed_during_merged_continuation(door):
     would let another lane acquire mid-continuation (r2 P1)."""
     lease = _acq(lane="A")
     m = _crashed_reclaim_marker(lease)
-    rs.transition("pr-1", "merged", lane_id="A")  # the §4(vi) flip happened
+    _step_vi()  # the §4(vi) flip happened
     assert md.complete_dead_marker(m) is True
     assert md.read_lease()["lease_token"] == "f" * 32  # continuation restored
 
@@ -393,7 +393,7 @@ def test_unblock_resumes_continuation(door):
     lease = _acq(lane="A")
     md.mark_attempted(lease)
     md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
-    rs.transition("pr-1", "merged", lane_id="A")  # the §4(vi) flip already happened
+    _step_vi()  # the §4(vi) flip already happened
     fresh = md.unblock(pr=1, blocked_at_sha="c" * 40, lane_id="A")
     view = md.read_lease()
     assert view["lease_token"] == fresh["lease_token"]
@@ -893,7 +893,14 @@ class FakeGround:
         return subprocess.CompletedProcess([], 0, "", "")
 
     def gh_runs_for_sha(self, sha):
-        return [{"status": "completed", "conclusion": self.ci, "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": self.ci,
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     def gh_main_runs_in_progress(self):
         return 1
@@ -1052,6 +1059,72 @@ def test_post_merge_ci_blocked_and_unblock(door):
     assert md.read_lease() is not None  # unblock mints the continuation successor (r3 P1)
 
 
+# mutation-probe: revert wait_post_merge_ci to `done[0]` (merge-gate spec+concurrency lenses:
+# step (vii) is the LIVE gate for every landing, and it read a stale completed run as the
+# verdict while a newer one was still in progress -- the defect wait_pr_head_checks had
+# already been fixed for, never swept to its sibling in the same file)
+def test_post_merge_ci_never_judges_a_stale_green_while_a_run_is_pending(door):
+    g = FakeGround()
+    g.gh_runs_for_sha = lambda sha: [
+        {  # an OLDER green run for the same sha...
+            "status": "completed",
+            "conclusion": "success",
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+        {  # ...while a newer one is still running: the outcome is NOT yet decided
+            "status": "in_progress",
+            "conclusion": None,
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+    ]
+    # bound_s > 0 so the poll body actually RUNS: at 0.0 the while-guard is false on entry
+    # and the helper returns timeout without ever calling gh -- a witness that passes for
+    # the wrong reason, which is the very defect this test exists to prevent.
+    assert md.wait_post_merge_ci("c" * 40, g, bound_s=1.0) == (
+        "blocked:post_merge_ci_not_green:timeout"
+    )
+
+
+# mutation-probe: drop the headBranch conjunct from authoritative_runs (a same-commit run
+# from another branch is not the post-merge verdict for main)
+def test_post_merge_ci_ignores_a_same_commit_run_from_another_branch(door):
+    g = FakeGround()
+    g.gh_runs_for_sha = lambda sha: [
+        {"status": "completed", "conclusion": "success", "event": "push", "headBranch": "topic"}
+    ]
+    # the only run is off-branch, so the default-branch run is ABSENT -- never "success"
+    # bound_s > 0 so the poll body actually RUNS: at 0.0 the while-guard is false on entry
+    # and the helper returns timeout without ever calling gh -- a witness that passes for
+    # the wrong reason, which is the very defect this test exists to prevent.
+    assert md.wait_post_merge_ci("c" * 40, g, bound_s=1.0) == (
+        "blocked:post_merge_ci_not_green:timeout"
+    )
+
+
+# mutation-probe: judge on done[0] instead of every run (one green beside one red is not a pass)
+def test_post_merge_ci_blocks_when_any_authoritative_run_is_not_green(door):
+    g = FakeGround()
+    g.gh_runs_for_sha = lambda sha: [
+        {
+            "status": "completed",
+            "conclusion": "success",
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+        {
+            "status": "completed",
+            "conclusion": "failure",
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+    ]
+    assert md.wait_post_merge_ci("c" * 40, g, bound_s=1.0) == (
+        "blocked:post_merge_ci_not_green:failure"
+    )
+
+
 # mutation-probe: drop the mark_blocked/raise after the first-parent mismatch (emit-only)
 def test_base_toctou_blocks_door(door):
     g = FakeGround()
@@ -1079,7 +1152,14 @@ def test_refresh_ci_failure_emits_hitl_and_blocks(door, monkeypatch):
         calls["n"] += 1
         # main run green, refresh post-merge run red
         concl = "success" if calls["n"] == 1 else "failure"
-        return [{"status": "completed", "conclusion": concl, "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": concl,
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
@@ -1104,7 +1184,14 @@ def test_refresh_pr_pending_checks_waited_before_merge(door):
             if polls["n"] < 3:
                 return []  # checks not yet registered/completed
             return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
-        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
@@ -1124,7 +1211,14 @@ def test_refresh_pr_red_checks_block_before_any_merge(door, monkeypatch):
     def runs(sha):
         if sha == "r" * 40:
             return [{"status": "completed", "conclusion": "failure", "event": "pull_request"}]
-        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     rs.update_payload("pr-1", {"attested_merge_tree": "d" * 40})
@@ -1198,7 +1292,14 @@ def test_resume_readopts_moved_refresh_head_after_fix_commit(door, monkeypatch):
     def runs(sha):
         if sha == "r" * 40:  # the dead recorded head — red forever
             return [{"status": "completed", "conclusion": "failure", "event": "pull_request"}]
-        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     lease = md.read_lease()
@@ -1252,7 +1353,14 @@ def test_pr_head_wait_ignores_stale_completed_run_while_rerun_pending(door):
                     {"status": "in_progress", "conclusion": None, "event": "pull_request"},
                 ]
             return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
-        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=g.add_refresh_pr) == "released"
@@ -1315,7 +1423,14 @@ def test_refresh_identity_mutated_during_wait_blocks_without_merge(door, monkeyp
             # the retarget lands while we were waiting; head unchanged
             g.states[2]["baseRefName"] = "release-x"
             return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
-        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
@@ -1418,7 +1533,14 @@ def test_refresh_head_moved_during_wait_blocks_without_merge(door, monkeypatch):
                 return []
             g.states[2]["headRefOid"] = "z" * 40  # head moved mid-wait
             return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
-        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
@@ -1446,7 +1568,14 @@ def test_refresh_files_mutated_during_wait_blocks_without_merge(door, monkeypatc
                 {"path": "x.py"},
             ]
             return [{"status": "completed", "conclusion": "success", "event": "pull_request"}]
-        return [{"status": "completed", "conclusion": "success", "event": "push"}]
+        return [
+            {
+                "status": "completed",
+                "conclusion": "success",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
 
     g.gh_runs_for_sha = runs
     with pytest.raises(md.DoorBlocked):
@@ -1590,7 +1719,7 @@ json.dump(s, open(p, "w"))
 PY2
   ;;
   *"run list"*"--commit"*)
-    echo '[{{"status":"completed","conclusion":"success","event":"push"}}]' ;;
+    echo '[{{"status":"completed","conclusion":"success","event":"push","headBranch":"main"}}]' ;;
   *"run list"*) echo '[]' ;;
   *) echo "fake gh: unhandled $*" >&2; exit 1 ;;
 esac
@@ -1680,7 +1809,7 @@ json.dump(s, open(p, "w"))
 PY2
   ;;
   *"run list"*"--commit"*)
-    echo '[{{"status":"completed","conclusion":"success","event":"push"}}]' ;;
+    echo '[{{"status":"completed","conclusion":"success","event":"push","headBranch":"main"}}]' ;;
   *"run list"*) echo '[]' ;;
   *) echo "fake gh: unhandled $*" >&2; exit 1 ;;
 esac
@@ -1906,7 +2035,7 @@ def test_resumed_refresh_already_merged_never_reissued(door):
         json.dumps({"pr": 2, "head_sha": "r" * 40}),
     )
     md.mark_attempted(lease, suffix="refresh")
-    rs.transition("pr-1", "merged", lane_id="A")
+    _step_vi()
     resumed = md.read_lease()
     assert md.land(1, lane_id="A", arc_id="pr-1", ground=g, refresh=None, lease=resumed) == (
         "released"
@@ -2189,6 +2318,442 @@ def test_recovery_verbs_refuse_a_live_unblocked_holder(door):
     publish_exclusive(md._sidecar(lease["lease_token"], "refresh.intent"), "{}")
     assert md.main(["clear-refresh-intent", "--lane-id", "A"]) == 4  # holder alive
     assert md._sidecar(lease["lease_token"], "refresh.intent").exists()  # fence intact
+
+
+MERGE_SHA = "e" * 40
+
+
+def _step_vi(arc="pr-1", lane="A", sha=MERGE_SHA):
+    """C-HE-06 step (vi): the confirmed-merge flip records the merge commit alongside the
+    `merged` state. The release gate consults THAT sha's own run, never `blocked_at_sha`."""
+    rs.update_payload(arc, {"merge_sha": sha})
+    rs.transition(arc, "merged", lane_id=lane)
+
+
+def _release_ground(monkeypatch, ci="failure", status="completed"):
+    """Inject the merge SHA's own run for the release gate, which reads it from ground
+    truth rather than inferring it from the block reason (codex r6)."""
+    g = FakeGround(ci=ci)
+    g.gh_runs_for_sha = lambda sha: [
+        {"status": status, "conclusion": ci, "event": "push", "headBranch": md.DEFAULT_BRANCH}
+    ]
+    monkeypatch.setattr(md, "default_ground", lambda: g)
+    return g
+
+
+def _unblocked_successor(lane="A", pr=1, sha="c" * 40, reason="post_merge_ci_not_green"):
+    """The only state the CLI release path admits: a landing whose merge SHA's OWN run was
+    observed and went terminally red, then cleared by the operator-confirmed unblock, which
+    mints a successor lease. `reason` is parameterised because only this one of the ten
+    mark_blocked reasons proves that observation (C-HE-06 v1.8 X8)."""
+    lease = _acq(lane=lane, pr=pr)
+    md.mark_blocked(lease, sha=sha, reason=reason)
+    return md.unblock(pr=pr, blocked_at_sha=sha, lane_id=lane)
+
+
+# mutation-probe: drop the `release` CLI verb (C-HE-06 §6's recovery loses its second half)
+def test_release_verb_frees_the_door_from_the_cli(door, monkeypatch):
+    """The wedge this verb exists for: an operator-adjudicated block whose merges are
+    settled, which no other verb can free — `land` re-blocks on the merge sha's immutable
+    run and `gc` skips live leases."""
+    _release_ground(monkeypatch)
+    fresh = _unblocked_successor()
+    _step_vi()  # §4(vi) confirmed MERGED on ground truth
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)  # the driver is gone
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert md.read_lease() is None
+    assert (md.DOOR / f"released.{fresh['lease_token']}").exists()  # moved, never unlinked
+
+
+# mutation-probe: drop release_refusal()'s unblocked_from precondition (codex r2 P1 — a
+# crash right after step (vi), before (vii) ever observes the merge SHA's CI, would let
+# the fence be freed and a second PR land on an unconfirmed main)
+def test_release_verb_refuses_a_lease_no_operator_has_adjudicated(door, monkeypatch):
+    _release_ground(monkeypatch)
+    lease = _acq()
+    _step_vi()  # (vi) done; (vii) never ran
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == lease["lease_token"]  # door still fenced
+
+
+# mutation-probe: delete the missing-merge_sha clause, or invert it to admit an empty sha
+# (merge-gate r2 witness lens: every other release test reaches this point via _step_vi,
+# which always sets merge_sha, so the clause had zero witness). Largely defensive in
+# production -- merge_sha is written at `gh pr view` confirmation, before any post-merge
+# block reason exists -- but it is a cited branch of the release gate's contract, and an
+# unwitnessed branch can be flipped permissive silently.
+def test_release_verb_refuses_when_the_reservation_records_no_merge_sha(door, monkeypatch):
+    fresh = _unblocked_successor()
+    _release_ground(monkeypatch)
+    # the §4(vi) flip WITHOUT the merge_sha it normally records alongside
+    rs.transition("pr-1", "merged", lane_id="A")
+    assert rs.current("pr-1")[1].get("merge_sha") is None
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]  # door still fenced
+
+
+# mutation-probe: drop the content-merge reconciliation (codex r1 P1 — a holder that dies
+# between mark_attempted and the merge returning reads as dead while the request is still
+# in flight, so freeing the door admits a SECOND concurrent merge)
+def test_release_verb_refuses_an_unreconciled_in_flight_merge(door, monkeypatch):
+    _release_ground(monkeypatch)
+    fresh = _unblocked_successor()
+    md.mark_attempted(fresh)  # the content merge request left the process...
+    # ...and step (vi) never flipped the reservation on confirmed ground truth.
+    # merge_sha is recorded WITHOUT the flip so the later sha-missing clause passes and
+    # this clause is the sole gate: without it the test still went red, but on the wrong
+    # refusal (merge-gate witness lens).
+    rs.update_payload("pr-1", {"merge_sha": MERGE_SHA})
+    assert rs.current("pr-1")[1]["state"] == "open"
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: ignore lease["refresh"]["merge_attempted_at"] (codex r2 P1 — once the
+# CONTENT reservation is merged, a holder dying after sending the step-(viii) refresh
+# merge would otherwise pass every other check)
+def test_release_verb_refuses_an_in_flight_refresh_merge(door, monkeypatch):
+    _release_ground(monkeypatch)
+    fresh = _unblocked_successor()
+    _step_vi()  # the content merge IS settled
+    md.mark_attempted(fresh, suffix="refresh")  # ...but the refresh merge is outstanding
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: test only `refresh.attempted` (codex r3 P1 — `refresh_pr_ci_not_green`
+# blocks BEFORE mark_attempted, so a step-(viii) block routinely leaves a RECORDED
+# refresh PR with no attempted marker; an attempt-only test frees the door with a
+# mandatory terminating refresh still unmerged)
+def test_release_verb_refuses_a_recorded_but_unattempted_refresh(door, monkeypatch):
+    _release_ground(monkeypatch)
+    fresh = _unblocked_successor()
+    _step_vi()  # the content merge IS settled
+    # the door minted the refresh PR, then blocked on ITS head CI — before any attempt
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(
+        md._sidecar(fresh["lease_token"], "refresh"),
+        json.dumps({"pr": 99, "head_sha": "f" * 40}),
+    )
+    assert not md._sidecar(fresh["lease_token"], "refresh.attempted").exists()
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: route `release` past release()'s blocked refusal (silently frees a
+# blocked door, bypassing the operator-keyed unblock)
+def test_release_verb_refuses_a_blocked_lease(door, monkeypatch):
+    _release_ground(monkeypatch)
+    lease = _acq()
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 3  # DoorBlocked -> use unblock
+    assert md.read_lease()["state"] == "blocked"  # fence intact
+
+
+# mutation-probe: drop the shared holder-invariant guard for `release` (any lane frees
+# any other lane's door)
+def test_release_verb_refuses_another_lanes_lease(door, monkeypatch):
+    _release_ground(monkeypatch)
+    fresh = _unblocked_successor()
+    _step_vi()
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "B"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: drop the live-holder refusal for `release` (the door is yanked out from
+# under a lane that is actively driving a landing)
+def test_release_verb_refuses_a_live_unblocked_holder(door, monkeypatch):
+    # injected although the live-holder guard fires first: under the mutation this test
+    # exists to kill, execution reaches the ground-truth read, which must stay hermetic
+    _release_ground(monkeypatch)
+    fresh = _unblocked_successor()  # the fixture calls a lease alive iff its pid is ours
+    _step_vi()
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: infer the CI result from the block reason instead of reading the run
+# (codex r5 P1 — ten reasons reach mark_blocked and most never observe that run; codex r6
+# P1 — even `post_merge_ci_not_green` is persisted for a 45-minute TIMEOUT, where it was
+# never observed either). The run itself is the authority, so these pin the run, not the
+# reason.
+def test_release_verb_refuses_while_the_merge_run_is_still_pending(door, monkeypatch):
+    """The r6 timeout case: `land` writes `post_merge_ci_not_green` after 45 minutes of a
+    run that never completed, so the reason claims a terminal result nobody saw."""
+    fresh = _unblocked_successor()
+    _step_vi()
+    g = _release_ground(monkeypatch)
+    # Constructed to ISOLATE the settled check: both conclusions are terminal, so the
+    # later unwitnessed-conclusion clause cannot fire and only `runs_are_settled` can
+    # refuse. A real in-progress run carries no conclusion, which is why the natural
+    # fixture shadowed this branch (merge-gate witness lens).
+    g.gh_runs_for_sha = lambda sha: [
+        {
+            "status": "completed",
+            "conclusion": "failure",
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+        {
+            "status": "in_progress",
+            "conclusion": "failure",
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+    ]
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]  # door still fenced
+
+
+def test_release_verb_refuses_when_no_run_exists_for_the_merge_sha(door, monkeypatch):
+    fresh = _unblocked_successor()
+    _step_vi()
+    g = _release_ground(monkeypatch)
+    g.gh_runs_for_sha = lambda sha: []  # never appeared — unobserved, not terminal
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+def test_release_verb_refuses_a_green_run_and_routes_to_resume(door, monkeypatch, capsys):
+    """Nothing to recover: the landing should finish through `land`, not be freed here.
+
+    The MESSAGE is the assertion, not the exit code. SUCCESS is outside TERMINAL_NOT_GREEN,
+    so the later unwitnessed-conclusion clause refuses a green run too and the exit code
+    alone cannot tell the two apart -- deleting this clause would be invisible to a
+    code-only witness (merge-gate witness lens). What this clause uniquely provides is the
+    routing an operator needs, so that is what is pinned.
+    """
+    fresh = _unblocked_successor()
+    _step_vi()
+    _release_ground(monkeypatch, ci="success")
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert "is GREEN" in capsys.readouterr().err
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+def test_release_verb_fails_closed_when_ground_truth_is_unreadable(door, monkeypatch):
+    fresh = _unblocked_successor()
+    _step_vi()
+    g = _release_ground(monkeypatch)
+
+    def boom(sha):
+        raise RuntimeError("gh unavailable")
+
+    g.gh_runs_for_sha = boom
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4  # unreadable == unconfirmed
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: use Path.exists() for the refresh fence (codex r9 P2 — it FOLLOWS the
+# link, so a dangling or planted sidecar symlink reports absent and the door is freed with
+# a terminating refresh outstanding, inverting the fail-closed containment policy)
+@pytest.mark.parametrize("marker", ["refresh", "refresh.attempted", "refresh.intent"])
+def test_release_verb_refuses_a_dangling_refresh_sidecar_symlink(door, monkeypatch, marker):
+    fresh = _unblocked_successor()
+    _step_vi()
+    _release_ground(monkeypatch)
+    side = md._sidecar(fresh["lease_token"], marker)
+    side.symlink_to(md.DOOR / "nonexistent-target")  # dangling: exists() False, lexists True
+    assert not side.exists() and side.is_symlink()  # the discriminating shape
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: allow a MISSING event/headBranch through the authoritative-run filter
+# (codex r8 P2 — `in (None, "push")` admits a partial or schema-drifted record as proof of
+# something it never carried)
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"status": "completed", "conclusion": "failure"},  # neither field
+        # NO headBranch -- the whole point of this case; a blanket fixture-alignment pass
+        # added the field here once and silently destroyed the premise (merge-gate r1).
+        {"status": "completed", "conclusion": "failure", "event": "push"},  # no branch
+        {  # no event
+            "status": "completed",
+            "conclusion": "failure",
+            "headBranch": "main",
+        },
+    ],
+)
+def test_release_verb_refuses_a_run_record_missing_its_provenance(door, monkeypatch, record):
+    fresh = _unblocked_successor()
+    _step_vi()
+    g = _release_ground(monkeypatch)
+    g.gh_runs_for_sha = lambda sha: [dict(record)]
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: ask `not ci_is_green(...)` instead of the positive terminal set (codex r8
+# P2 — ci_is_green maps null/unknown to False, so that question silently promotes every
+# unreadable conclusion to "witnessed failure", which is the opposite of fail-closed)
+@pytest.mark.parametrize(
+    "conclusion",
+    [
+        None,
+        "",
+        "neutral",
+        "skipped",
+        "stale",
+        "weird_new",
+        # outside C-HE-19 §1's declared {SUCCESS, FAILURE, CANCELLED} domain: honouring
+        # these would widen a terminal-state contract on this arc's authority (codex r9)
+        "timed_out",
+        "startup_failure",
+        "action_required",
+    ],
+)
+def test_release_verb_refuses_a_conclusion_that_is_not_a_witnessed_failure(
+    door, monkeypatch, conclusion
+):
+    fresh = _unblocked_successor()
+    _step_vi()
+    _release_ground(monkeypatch, ci=conclusion)
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled"])
+def test_release_verb_admits_every_witnessed_terminal_failure(door, monkeypatch, conclusion):
+    """The admit arm, swept across C-HE-19 §1's whole non-SUCCESS domain, so the fix is
+    bounded on both sides rather than only tightened."""
+    _unblocked_successor()
+    _step_vi()
+    _release_ground(monkeypatch, ci=conclusion)
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert md.read_lease() is None
+
+
+# mutation-probe: key the run query off `unblocked_from` instead of the reservation's
+# merge_sha (codex r7 P1 — only 2 of the 10 block paths store the merge commit there; five
+# store the PR head, so a red run for an UNRELATED commit would authorize the release)
+def test_release_verb_consults_the_merge_sha_not_the_blocked_sha(door, monkeypatch):
+    _unblocked_successor(sha="d" * 40)  # blocked_at_sha is NOT the merge commit
+    _step_vi()
+    g = _release_ground(monkeypatch)
+    seen = []
+
+    def runs(sha):
+        seen.append(sha)
+        # the merge commit's run is red; the blocked sha's would be green if consulted
+        return [
+            {
+                "status": "completed",
+                "conclusion": "failure",
+                "event": "push",
+                "headBranch": md.DEFAULT_BRANCH,
+            }
+        ]
+
+    g.gh_runs_for_sha = runs
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert seen == [MERGE_SHA], f"queried {seen}, not the reservation's merge_sha"
+
+
+# mutation-probe: accept done[0] while another run for the same sha is still pending
+# (codex r7 P1 — an older completed failure beside a newer in-progress run is a PENDING
+# outcome, and the invariant fences pending)
+def test_release_verb_refuses_when_any_run_for_the_sha_is_still_pending(door, monkeypatch):
+    fresh = _unblocked_successor()
+    _step_vi()
+    g = _release_ground(monkeypatch)
+    g.gh_runs_for_sha = lambda sha: [
+        {
+            "status": "completed",
+            "conclusion": "failure",
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+        {
+            "status": "in_progress",
+            "conclusion": None,
+            "event": "push",
+            "headBranch": md.DEFAULT_BRANCH,
+        },
+    ]
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: filter on `event` alone (codex r7 P2 — a completed failed run for the
+# same commit pushed to ANOTHER branch is not the authoritative default-branch result)
+def test_release_verb_ignores_a_same_commit_run_from_another_branch(door, monkeypatch):
+    fresh = _unblocked_successor()
+    _step_vi()
+    g = _release_ground(monkeypatch)
+    g.gh_runs_for_sha = lambda sha: [
+        {"status": "completed", "conclusion": "failure", "event": "push", "headBranch": "topic"}
+    ]
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    # the only run is off-branch, so the default-branch run is ABSENT, not terminal
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+# mutation-probe: drop headBranch from default_ground's gh_runs_for_sha --json field list
+# (without it the consumer above cannot tell a main run from a topic-branch one)
+def test_default_ground_gh_runs_requests_head_branch(monkeypatch):
+    seen = {}
+
+    def fake(*args, timeout):
+        seen["args"] = args
+        return subprocess.CompletedProcess([], 0, "[]", "")
+
+    monkeypatch.setattr(md, "_gh", fake)
+    md.default_ground().gh_runs_for_sha("a" * 40)
+    assert "headBranch" in seen["args"][seen["args"].index("--json") + 1]
+
+
+# mutation-probe: ignore the `refresh.intent` sidecar (codex r5 P1 — it means refresh
+# creation may have SUCCEEDED without its PR identity recorded, which is exactly the state
+# where neither other refresh sidecar exists, and it is what record-refresh /
+# clear-refresh-intent exist to resolve)
+def test_release_verb_refuses_an_unresolved_refresh_intent(door, monkeypatch):
+    _release_ground(monkeypatch)
+    fresh = _unblocked_successor()
+    _step_vi()
+    from arc_metrics import publish_exclusive
+
+    publish_exclusive(md._sidecar(fresh["lease_token"], "refresh.intent"), "{}")
+    assert not md._sidecar(fresh["lease_token"], "refresh").exists()
+    assert not md._sidecar(fresh["lease_token"], "refresh.attempted").exists()
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 4
+    assert md.read_lease()["lease_token"] == fresh["lease_token"]
+
+
+def test_unblock_then_release_frees_a_wedged_door_from_the_cli(door, monkeypatch):
+    """C-HE-06 §6's recovery END TO END — the half that was unreachable. `unblock` clears
+    the BLOCK but mints a successor lease, so the door is still shut afterwards; without
+    `release` a landing whose own commit reddened `main` stayed wedged for every lane."""
+    _release_ground(monkeypatch)
+    lease = _acq()
+    _step_vi()  # the merge landed and was confirmed; its own main run then went red
+    md.mark_blocked(lease, sha="c" * 40, reason="post_merge_ci_not_green")
+    assert md.main(["unblock", "1", "c" * 40, "--lane-id", "A"]) == 0
+    assert md.read_lease()["state"] == "held"  # unblocked, and STILL not open
+    monkeypatch.setattr(md, "_process_is_alive", lambda pid: False)
+    assert md.main(["release", "--lane-id", "A"]) == 0
+    assert md.read_lease() is None
 
 
 # mutation-probe: drop the reconciled-cycle counter reset (nonconsecutive cleans silence)

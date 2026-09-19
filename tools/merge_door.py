@@ -33,6 +33,21 @@ from pathlib import Path
 import reservations as rs
 from arc_metrics import QUEUE_DIR, REPO, _process_is_alive, ci_is_green, publish_exclusive
 
+# The default branch every landing targets: the branch `gh_main_runs_in_progress`
+# polls, the base a terminating refresh must carry, and the branch whose run is the
+# authoritative post-merge result (a same-commit run from another branch is not it).
+DEFAULT_BRANCH = "main"
+# Conclusions that constitute an OBSERVED TERMINAL NON-SUCCESS for C-HE-06 v1.8 X8, drawn
+# from C-HE-19 §1's declared domain -- "CI outcomes are exactly {SUCCESS, FAILURE,
+# CANCELLED}" -- minus SUCCESS. Nothing outside that domain is admitted: v1.8's own scope
+# says no terminal-state contract changes, so a gate that honoured `TIMED_OUT` or
+# `STARTUP_FAILURE` would widen C-HE-19 on this arc's authority. They fail closed instead.
+# This is deliberately NOT the complement of `ci_is_green`: that helper answers "may I
+# treat this as green" and so maps null/pending/unknown to False, which X8 must NOT read
+# as a witnessed failure. X8 needs the positive fact that the run finished badly, so the
+# set is explicit and anything outside it -- a null conclusion, a schema-drifted value --
+# refuses. CANCELLED is in, per C-HE-19 §1's "CANCELLED is INCOMPLETE, never green".
+TERMINAL_NOT_GREEN = frozenset({"FAILURE", "CANCELLED"})
 DOOR = QUEUE_DIR / "merge-door"
 LEASE = DOOR / "LEASE"
 RATE_K = 5
@@ -353,6 +368,124 @@ def win_marker(token: str, target_action: str, *, extra: dict | None = None) -> 
         return None
 
 
+def release_refusal(lease: dict, ground: Ground) -> str | None:
+    """The CLI recovery path's own refusal for `lease`, or None if it has none.
+
+    None means THIS check raises no objection, not that the release will succeed:
+    release() applies its own refusals afterwards (stale token, and the blocked-state
+    refusal that routes the caller to `unblock`), and those keep their own messages and
+    exit codes rather than being restated here.
+
+    C-HE-06 §6 makes this path the second half of an operator-confirmed unblock — the
+    landing driver releases its OWN lease in-process at step (ix) — and v1.8's X8 carve-out
+    admits exactly one state, every clause of which is checked below:
+
+      * an unblock successor (`unblocked_from`), so an operator has adjudicated a block;
+      * no outstanding CONTENT merge — either none was attempted, or the reservation
+        carries step (vi)'s `merged` flip, written only after `gh pr view` confirmed it;
+      * no TERMINATING REFRESH minted or declared — none of the three markers (`refresh`,
+        `refresh.attempted`, `refresh.intent`) exists. Their absence proves the refresh
+        was never MINTED, not that it was confirmed, and X8 carves out that case for this
+        landing only: a (vii) block never reached (viii), so the refresh cannot now be
+        produced and holding for it would make the fence permanent. The obligation moves
+        rather than lapsing — `main` is left un-refreshed, which CI's
+        `ROADMAP_STATUS_DRIFT` fails on independently, and the repair lands as its own
+        arc whose own step (viii) produces one. A refresh that WAS minted is not covered;
+        any of the three markers refuses and routes to the reconciliation verbs;
+      * and the merge commit's own default-branch run, read from GROUND TRUTH, has
+        completed with a non-success conclusion.
+
+    That last clause is read rather than inferred on purpose. Proxies for it were tried
+    and each admitted a state it should not: the existence of a block (most of the ten
+    `mark_blocked` reasons never poll that run), then the block's reason (`land` persists
+    `post_merge_ci_not_green` on a 45-minute timeout too). Pending, absent, unreadable and
+    green all refuse — unreadable is unconfirmed, and green means resume, not release.
+    """
+    if lease.get("state") == "blocked":
+        # release() owns this one (DoorBlocked -> "use unblock, not release", exit 3).
+        # Answering it here too would be a second enforcer with worse guidance.
+        return None
+    if not lease.get("unblocked_from"):
+        return (
+            "not an unblock successor (`unblocked_from` unset). The landing driver "
+            "releases its own lease at step (ix); this path frees only a lease whose "
+            "block an operator has confirmed via `unblock`. If the landing crashed, "
+            "reconcile by ground truth (C-HE-06 §5) by re-running it."
+        )
+
+    res = rs.current(lease.get("reservation_id") or "")
+    merged = res is not None and res[1]["state"] == "merged"
+    if lease.get("merge_attempted_at") and not merged:
+        return (
+            f"the content merge is unreconciled: `merge_attempted_at` is set and "
+            f"reservation {lease.get('reservation_id')!r} has not flipped to `merged`, "
+            "so the request may still be in flight. Reconcile by ground truth "
+            "(C-HE-06 §5) by re-running the landing."
+        )
+
+    tok = lease["lease_token"]
+    # os.path.lexists, never Path.exists(): the latter follows the link and reports a
+    # DANGLING symlink as absent, so a planted or corrupted sidecar link would read as
+    # "no refresh outstanding" and free the door -- the exact inversion of the repository's
+    # fail-closed sidecar containment policy. Any entry at the path, of any kind, fences.
+    if any(
+        os.path.lexists(_sidecar(tok, name))
+        for name in ("refresh", "refresh.attempted", "refresh.intent")
+    ):
+        return (
+            "a terminating refresh has been minted or declared for this landing and "
+            "nothing local proves it merged, so it may still be outstanding (C-HE-06 §4 "
+            "step (viii), which is MANDATORY). Reconcile it through `record-refresh` / "
+            "`clear-refresh-intent` and re-run the landing rather than freeing the door."
+        )
+
+    # The CONTENT MERGE's own sha, from the reservation that recorded it at step (vi) --
+    # never `unblocked_from`, which is the generic `blocked_at_sha`: of the ten block
+    # paths only two store the merge commit there, six store the PR head and two a
+    # refresh sha, so a failed run for an unrelated commit could otherwise authorize the
+    # release.
+    sha = (res[1].get("merge_sha") or "") if res is not None else ""
+    if not sha:
+        return (
+            "the reservation records no `merge_sha`, so there is no confirmed content "
+            "merge whose run could be consulted. Reconcile by ground truth (C-HE-06 §5)."
+        )
+    try:
+        runs = authoritative_runs(sha, ground)
+    except Exception as exc:  # any ground-truth failure fails CLOSED
+        return (
+            f"could not read the merge SHA's own run from ground truth ({exc}). The "
+            "invariant fences an UNCONFIRMED run, and an unreadable one is unconfirmed."
+        )
+    if not runs_are_settled(runs):
+        return (
+            f"the merge SHA {sha[:12]}'s own `{DEFAULT_BRANCH}` run has not completed "
+            f"(pending, or never appeared; the block was recorded as "
+            f"{lease.get('unblocked_reason')!r}, which `land` also writes on a 45-minute "
+            "timeout). That run is UNCONFIRMED, which the invariant fences; X8 admits "
+            "only an OBSERVED terminal non-success."
+        )
+    if any(ci_is_green(r.get("conclusion")) for r in runs):
+        return (
+            f"the merge SHA {sha[:12]}'s own `{DEFAULT_BRANCH}` run is GREEN. There is "
+            "nothing to recover: resume the landing with `land` so it completes step "
+            "(viii) and releases at step (ix), rather than freeing the door here."
+        )
+    # A completed run whose conclusion is null, absent or unrecognized is not an OBSERVED
+    # terminal non-success -- it is an unreadable one, which X8 fences exactly as it
+    # fences a pending run. Asking `not ci_is_green(...)` here would silently promote
+    # every such record to "failed", so the positive set is required instead.
+    unwitnessed = [r for r in runs if (r.get("conclusion") or "").upper() not in TERMINAL_NOT_GREEN]
+    if unwitnessed:
+        return (
+            f"the merge SHA {sha[:12]}'s own `{DEFAULT_BRANCH}` run completed with "
+            f"conclusion {unwitnessed[0].get('conclusion')!r}, which is not an observed "
+            f"terminal non-success ({'/'.join(sorted(TERMINAL_NOT_GREEN))}). X8 admits "
+            "only a witnessed failure; an unreadable conclusion is unconfirmed."
+        )
+    return None
+
+
 def mark_attempted(lease: dict, *, suffix: str = "") -> None:
     """Payload CAS: temp + os.link onto a token-named sidecar BEFORE the merge request leaves
     the process."""
@@ -621,6 +754,13 @@ def unblock(*, pr: int, blocked_at_sha: str, lane_id: str) -> dict:
         # keyed to (codex r3 P1): without this, a BASE_TOCTOU block re-fires on every
         # resume and the door is permanently wedged
         "unblocked_from": blocked_at_sha,
+        # WHY it was blocked, carried for the same reason the sha is: ten distinct reasons
+        # reach mark_blocked and only `post_merge_ci_not_green` proves the merge SHA's own
+        # run was observed and terminal, which is the sole condition C-HE-06 v1.8 X8 carves
+        # out. `blocked_reason` is nulled on the successor, so without this the fact is
+        # unrecoverable and `unblocked_from` alone would read as proof of a CI observation
+        # that a BASE_TOCTOU or containment block never made (codex r5 P1).
+        "unblocked_reason": lease.get("blocked_reason"),
     }
     fresh.pop("blocked_at", None)
     if win_marker(lease["lease_token"], "unblock", extra={"fresh_lease": fresh}) is None:
@@ -904,7 +1044,10 @@ def default_ground() -> Ground:
             "--workflow",
             "CI",
             "--json",
-            "status,conclusion,event",
+            # headBranch so a consumer can prove a run is the DEFAULT-BRANCH run and not a
+            # same-commit run from another branch (codex r7 P2); additive — `event` and the
+            # rest are unchanged, and existing consumers ignore the extra key.
+            "status,conclusion,event,headBranch",
             "--limit",
             "20",
             timeout=30,
@@ -916,7 +1059,7 @@ def default_ground() -> Ground:
             "run",
             "list",
             "--branch",
-            "main",
+            DEFAULT_BRANCH,
             "--event",
             "push",
             "--status",
@@ -1096,19 +1239,48 @@ def verify_head_base(lease: dict, ground: Ground) -> dict:
     return v
 
 
+def authoritative_runs(sha: str, ground: Ground) -> list[dict]:
+    """The merge commit's own DEFAULT-BRANCH push runs — the only runs whose conclusion is
+    the post-merge verdict for `sha`. A same-commit run from another branch, or a non-push
+    event, answers a different question and must not stand in for this one.
+
+    NOT for a PRE-merge PR head: `wait_pr_head_checks` deliberately applies no event filter,
+    because a head's completed run registers as `pull_request` or `push` depending on which
+    triggers fired.
+    """
+    return [
+        r
+        for r in ground.gh_runs_for_sha(sha)
+        if r.get("event") == "push" and r.get("headBranch") == DEFAULT_BRANCH
+    ]
+
+
+def runs_are_settled(runs: list[dict]) -> bool:
+    """True when `runs` is non-empty and NONE of them is still pending.
+
+    While ANY run for a sha is in progress, an older completed run must never be read as
+    the verdict — a rerun or an edited event reuses the SHA. `wait_pr_head_checks` learned
+    this first (U-HE-28 codex r5 P2) and `wait_post_merge_ci` did not, so step (vii) could
+    declare `success` off a stale green while a newer run was still running; the rule now
+    has ONE home and all three consumers read it from here.
+    """
+    return bool(runs) and not any(r.get("status") != "completed" for r in runs)
+
+
 def wait_post_merge_ci(sha: str, ground: Ground, *, bound_s: float, lane_id: str = "") -> str:
     """Poll the merge SHA's OWN main run until completed. success → 'success'; anything
     else → 'blocked:<why>' (CANCELLED blocks the door — C-HE-19 §2's ci_is_green)."""
     deadline = ground.clock() + bound_s
     notified = False
     while ground.clock() < deadline:
-        runs = [r for r in ground.gh_runs_for_sha(sha) if r.get("event") in (None, "push")]
-        done = [r for r in runs if r.get("status") == "completed"]
-        if done:
-            concl = done[0].get("conclusion")
-            if not ci_is_green(concl):
+        runs = authoritative_runs(sha, ground)
+        if runs_are_settled(runs):
+            # EVERY run must be green, not merely the first completed one: a sha carrying
+            # one green and one red run has not passed (merge-gate spec lens P1).
+            bad = [r for r in runs if not ci_is_green(r.get("conclusion"))]
+            if bad:
                 # CANCELLED/failure blocks the door (C-HE-19 §2) — never read as green
-                return f"blocked:post_merge_ci_not_green:{concl}"
+                return f"blocked:post_merge_ci_not_green:{bad[0].get('conclusion')}"
             return "success"
         if not notified and ground.gh_main_runs_in_progress() > 2:
             _notify(
@@ -1132,17 +1304,15 @@ def wait_pr_head_checks(sha: str, ground: Ground, *, bound_s: float, lane_id: st
     head's completed run may register as pull_request or push depending on triggers)."""
     deadline = ground.clock() + bound_s
     while ground.clock() < deadline:
+        # No event filter here, deliberately (see authoritative_runs): a PRE-merge head's
+        # completed run registers as pull_request or push depending on triggers. The
+        # settled rule is shared; this call site is where it was first learned.
         runs = ground.gh_runs_for_sha(sha)
-        # A rerun/edited event reuses the SHA (codex r5 P2): while ANY run is still in
-        # progress, an older completed run must not be read as the verdict — wait until
-        # the SHA has no pending runs, then judge the completed set.
-        if not any(r.get("status") != "completed" for r in runs):
-            done = [r for r in runs if r.get("status") == "completed"]
-            if done:
-                concl = done[0].get("conclusion")
-                if not ci_is_green(concl):
-                    return f"blocked:refresh_pr_ci_not_green:{concl}"
-                return "success"
+        if runs_are_settled(runs):
+            bad = [r for r in runs if not ci_is_green(r.get("conclusion"))]
+            if bad:
+                return f"blocked:refresh_pr_ci_not_green:{bad[0].get('conclusion')}"
+            return "success"
         ground.sleep(30)
     return "blocked:refresh_pr_ci_not_green:timeout"
 
@@ -1460,7 +1630,7 @@ def land(
                         and not title1[len(bound_title) :][:1].isdigit()
                     )
                     if (
-                        rv1.get("baseRefName") != "main"
+                        rv1.get("baseRefName") != DEFAULT_BRANCH
                         or not title_bound
                         or rfiles1 != [REFRESH_ONLY_FILE]
                     ):
@@ -1808,6 +1978,15 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--lane-id", required=True)
     ci = sub.add_parser("clear-refresh-intent")
     ci.add_argument("--lane-id", required=True)
+    # C-HE-06 §6 governs release, reclaim and unblock through one transition marker, and
+    # §4 step (ix) ends every landing with "release via §6" -- but only `unblock` had a
+    # CLI verb. §6 makes unblock a RECLAIM ("an operator-confirmed reclaim through this
+    # same marker CAS"), and a reclaim mints a fresh LEASE with a new token, so clearing a
+    # block does not open the door: it hands back a successor lease. With no `release`
+    # verb a door whose landing reddened `main` had nothing able to free it -- `land`
+    # re-blocks on the merge sha's own (immutable) run, and `gc` skips live leases.
+    rel = sub.add_parser("release")
+    rel.add_argument("--lane-id", required=True)
     sub.add_parser("status")
     sub.add_parser("gc")
     args = p.parse_args(argv)
@@ -1925,7 +2104,7 @@ def main(argv: list[str] | None = None) -> int:
             unblock(pr=args.pr, blocked_at_sha=args.blocked_at_sha, lane_id=args.lane_id)
             print("unblocked; successor lease held by this lane")
             return 0
-        elif args.cmd in ("record-refresh", "clear-refresh-intent"):
+        elif args.cmd in ("record-refresh", "clear-refresh-intent", "release"):
             live = read_lease()
             if live is None or live.get("lane_id") != args.lane_id:
                 raise LeaseError("no live lease held by this lane")
@@ -1948,6 +2127,34 @@ def main(argv: list[str] | None = None) -> int:
                     "the lease holder is alive and unblocked -- recovery verbs operate "
                     "on a blocked door or a dead holder only"
                 )
+            if args.cmd == "release":
+                # [LAW:single-enforcer] release() owns the token match, the blocked-state
+                # refusal that routes the caller to `unblock`, and the transition-marker
+                # CAS C-HE-06's invariant demands ("No release, reclaim, unblock, or
+                # self-resume touches LEASE without first winning transition.<token>").
+                # The shared guard above adds the two things release() does NOT carry:
+                # lane ownership and holder liveness. Neither is re-checked here.
+                #
+                # C-HE-06's other release invariant -- "the lease is never released while
+                # the merge SHA's own main run or the terminating refresh is unconfirmed"
+                # -- is enforced by release_refusal(), NOT by the live-holder refusal
+                # above, which two review rounds showed is insufficient: a holder can die
+                # between either `mark_attempted` and its merge returning, and that reads
+                # here as a dead holder while a request is still in flight server-side.
+                # The admissible state is exactly an operator-confirmed unblock successor
+                # with neither merge outstanding; everything else routes to §5's
+                # ground-truth reconciliation, which is `land`'s job, not this verb's.
+                refusal = release_refusal(live, default_ground())
+                if refusal is not None:
+                    raise LeaseError(f"pr #{live['pr']}: {refusal}")
+                # What remains is an operator-adjudicated block whose merges are both
+                # settled, still holding the door because the post-merge run or the
+                # refresh never went green -- the state this verb exists to recover. An
+                # un-refreshed `main` is independently caught by CI's
+                # ROADMAP_STATUS_DRIFT.
+                release(live)
+                print("lease released; the door is free")
+                return 0
             intent = _sidecar(live["lease_token"], "refresh.intent")
             if args.cmd == "record-refresh":
                 if not intent.exists() or _sidecar(live["lease_token"], "refresh").exists():

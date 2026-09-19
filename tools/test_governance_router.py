@@ -326,8 +326,9 @@ def test_venues_advertise_pack_section_list() -> None:
 
 # A resolving pointer cites the pack AND the section: "… at `docs/governance/X.md` §N."
 # Matching only the path is how codex r9 could change §7's pointer to `§6` and keep every
-# ownership assertion green — the same sub-span shape class 17 names, in the test written
-# one round earlier to close the pointer hop.
+# ownership assertion green — the same sub-span shape the preflight table's LEFT OUT note
+# names (deliberately not a class: the vocabulary was measured unable to carry it), in the
+# test written one round earlier to close the pointer hop.
 # Without a boundary, `§10.3.y` captures `10.3` and a bad pointer reads as a good one
 # (codex r10) — the same hole `SECTION_TOKEN_RE` closed four rounds earlier, on a regex
 # this one was written beside and did not inherit it from. The boundary differs from the

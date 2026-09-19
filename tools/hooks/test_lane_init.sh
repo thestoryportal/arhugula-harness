@@ -300,10 +300,25 @@ OUT=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="relative/queue" \
 # while mapping to the same Compose project — two claims, one stack.
 for bad_k in 350 999 ../escape abc " " 00 08 007; do
   OUT=$(cd "$ROOT/wt" && HARNESS_LANE_INDEX="$bad_k" \
-    bash -c "source '$INIT' >/dev/null 2>&1; echo \"rc=\$? id=\${HARNESS_LANE_ID:-unset}\"")
-  # rc AND the identity: validation runs after the id is exported, so a refusal that leaves
-  # it set hands this lane's identity to the next worktree the shell enters.
-  [ "$OUT" = "rc=1 id=unset" ] && ok "HARNESS_LANE_INDEX='$bad_k' refused, identity cleared" \
+    bash -c "source '$INIT' >/dev/null 2>&1
+printf 'rc=%s id=%s leaked=' \"\$?\" \"\${HARNESS_LANE_ID:-unset}\"
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ','")
+  # The namespace is SCANNED, not enumerated. A hand-written list cannot support a claim about
+# "the whole `_LI_*` namespace": the four-name version silently omitted `_LI_ID`, which carries
+# the lane identity, so dropping its two cleanups leaked that identity into the caller's
+# interactive shell ON THE SUCCESS PATH, in both shells, while this suite stayed byte-identical
+# and the Python scanner reported zero violations. That is the SECOND time a hand-maintained
+# list here under-counted the namespace -- `_LI_ORPHAN_DIR` was the first -- so the list is gone
+# rather than extended. `_LI_ORPHAN_DIR` is excluded by name because it IS the exported surface,
+# which is the one documented exception. Measured identical in bash and zsh, with controls:
+# nothing set -> empty, only _LI_ORPHAN_DIR set -> empty. (merge-gate witness lens, r10.)
+# rc, the identity, AND the whole `_LI_*` namespace. Validation runs after the id is
+  # exported, so a refusal that leaves it set hands this lane's identity to the next
+  # worktree the shell enters; and a refusal that leaves a `_LI_*` local behind writes it
+  # into the caller's interactive shell for good. `leaked=` is a sentinel the run must
+  # emit -- an empty capture (the source never ran) must not read as a clean refusal.
+  [ "$OUT" = "rc=1 id=unset leaked=" ] \
+    && ok "HARNESS_LANE_INDEX='$bad_k' refused, identity and _LI_* namespace cleared" \
     || bad "index '$bad_k': $OUT"
 done
 [ ! -e "$LANES/../escape" ] && ok "no claim was published outside the registry" || bad "claim escaped QUEUE_DIR/lanes"
@@ -923,5 +938,471 @@ OUT=$(
 [ -f "$THREEQ2/lanes/1" ] && ok "the minimum of three keeps its claim — exactly one survivor" \
   || bad "the minimum withdrew too; the worktree would hold no claim"
 
-echo "---"; echo "PASS=$PASS FAIL=$FAIL"
+# --- the sourced script must load its libraries in EVERY shell a lane may use -------
+# Regression (2026-09-17): `_LI_ROOT` was resolved from `${BASH_SOURCE[0]}` alone, which
+# only bash sets. Sourced from zsh -- this workspace's interactive venue -- it expanded
+# empty, `dirname` gave `.`, the root landed two levels above $HOME, BOTH library loads
+# failed, and `source` still returned 0. The caller walked away with a lane holding no
+# `hook_git_retry` (so the repo-wide `gc.auto 0` of C-HE-11 §2 was never attempted) and no
+# `loop_log_structured` (so the C-HE-11 §5 shortfall NOTIFY could not be emitted). The
+# contract asserted here is behavioural: after sourcing, the library functions lane-init
+# calls are callable.
+# Which shells this runner can verify is a VALUE, resolved once. `SHELLS_UNVERIFIED` is
+# reported beside PASS/FAIL so a run that skipped a shell can never be mistaken for one that
+# covered it -- absence of coverage and absence of defects must not print the same.
+# Both shells are REQUIRED, not opportunistic. The defect this file exists to pin is
+# zsh-only, so a runner without zsh would gate green on a reverted fix -- and CI gates on the
+# exit status, which a printed NOTE never reaches. Absence is therefore a counted FAILURE,
+# and CI installs zsh for the job that runs this suite (codex r9 P2).
+SHELLS=""; SHELLS_UNVERIFIED=""
+for _s in bash zsh; do
+  if command -v "$_s" >/dev/null 2>&1; then SHELLS="$SHELLS $_s"
+  else SHELLS_UNVERIFIED="$SHELLS_UNVERIFIED $_s"; fi
+done
+SHELLS="${SHELLS# }"; SHELLS_UNVERIFIED="${SHELLS_UNVERIFIED# }"
+[ -n "$SHELLS" ] || { echo "FATAL: neither bash nor zsh is executable here"; exit 1; }
+for _s in $SHELLS_UNVERIFIED; do
+  bad "$_s is not installed -- lane-init portability is UNVERIFIED for it, and the defect this suite pins is zsh-only"
+done
+
+LIB_FNS="hook_bounded hook_git_retry loop_log_structured loop_status_ensure loop_status_path"
+for SH in $SHELLS; do
+  PORT=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+printf 'rc=%s ' \$?
+for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf 'nofn:%s ' \"\$f\"; done
+[ -n \"\${HARNESS_LANE_ID:-}\" ] || printf 'no-id '
+[ -n \"\${HARNESS_LANE_INDEX:-}\" ] || printf 'no-index '
+[ -f \"$LANES/\${HARNESS_LANE_INDEX:--}\" ] || printf 'no-claim '")
+  [ "$PORT" = "rc=0 " ] && ok "$SH: sourcing lane-init loads both libraries AND brings the lane up" \
+    || bad "$SH: lane did not come up cleanly: $PORT"
+done
+
+# ...and the SAME contract over a FRESHLY EMPTY registry, which the case above structurally
+# cannot reach: it runs against $LANES, which earlier cases have already populated. An empty
+# lanes/ is the first-lane-on-a-machine state -- and the state after the last claim is released
+# -- and under zsh's default NO_NULL_GLOB an unmatched glob is FATAL. Measured before the fix:
+# zsh died at the registry scan with rc=126, HARNESS_LANE_ID EXPORTED, no index and no claim,
+# i.e. exactly the half-built lane the refusal paths exist to forbid, and not even the
+# contractual rc=1; bash on the identical fixture came up clean. The whole suite stayed 156/0
+# throughout, which is why this case exists. (merge-gate witness-adequacy lens, r8.)
+FRESHWT="$ROOT/freshwt"; mkdir -p "$FRESHWT/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$FRESHWT/tools/hooks/" \
+  || { echo "FATAL: freshwt populate"; exit 1; }
+for SH in $SHELLS; do
+  rm -rf "$FRESHWT/.harness" "$ROOT/freshq"; mkdir -p "$ROOT/freshq"
+  # stderr is captured SEPARATELY and checked for the GLOB error specifically, not for blanket
+  # cleanliness: this fixture is not a git repo, so lane-init correctly reports that it could not
+  # set gc.auto, and an "stderr must be empty" assertion would fail on that fixture artifact in
+  # BOTH shells (measured). The narrow needle is what pins the second mechanism: the function
+  # boundary stops the FATAL failure, but only the `(N)` arm keeps zsh from printing
+  # `no matches found` into the lane shell on every first init.
+  FRESH=$(cd "$FRESHWT" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR="$ROOT/freshq" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>/tmp/li-fresh-err.$$
+printf 'rc=%s idx=%s' \"\$?\" \"\${HARNESS_LANE_INDEX:-unset}\"")
+  FRESH="$FRESH globerr=$(grep -qF 'no matches found' "/tmp/li-fresh-err.$$" && echo YES || echo no)"
+  rm -f "/tmp/li-fresh-err.$$"
+  # claims counted OUTSIDE the subshell: NODIR keeps "registry vanished" distinct from "no claim".
+  FRESH="$FRESH claims=$([ -d "$ROOT/freshq/lanes" ] && ls "$ROOT/freshq/lanes" | wc -l | tr -d ' ' || echo NODIR)"
+  [ "$FRESH" = "rc=0 idx=0 globerr=no claims=1" ] \
+    && ok "$SH: a lane comes up over a FRESHLY EMPTY registry" \
+    || bad "$SH: lane did not come up over an empty registry: '$FRESH' (want rc=0 idx=0 globerr=no claims=1)"
+done
+
+# `_LI_ID` is cleared on BOTH arms of the one statement that sets it. The SUCCESS arm is
+# witnessed -- dropping its `unset` reddens this suite loudly. The FAILURE arm was not:
+# deleting the `_LI_ID` token from its cleanup left this suite green AND
+# tools/test_lane_init_namespace.py green, while the mutant leaked a SET `_LI_ID` into the
+# sourcing shell under both shells. The static checker cannot reach it -- its NAMESPACE is the
+# four unconditional names, and `_LI_ID` cannot join them without flagging every
+# unconditional exit as a subset violation -- so the arm needs a behavioural case, and this
+# is it. Mutation-probed both ways: with the token removed this case reports
+# `leaked=_LI_ID` in bash and zsh; restored, `leaked=` in both.
+#
+# The trigger is a PERSISTED marker in the legacy pre-sanitisation form, which
+# `_lane_init_id` refuses deliberately rather than resolving either way. It is pure file
+# CONTENT, so the case is hermetic -- no permission games, nothing that behaves differently
+# for root or on a different filesystem. (merge-gate witness-adequacy lens r12 P3.)
+for SH in $SHELLS; do
+  rm -rf "$FRESHWT/.harness" "$ROOT/mintfailq"; mkdir -p "$FRESHWT/.harness" "$ROOT/mintfailq"
+  printf '%s\n' 'host-with space-abc' > "$FRESHWT/.harness/.lane-id"
+  # `${_LI_ID+_LI_ID}` tests DEFINEDNESS, not emptiness: a leak of the empty string is still a
+  # name left in the caller's shell, and `${_LI_ID:-}` would report it as absent.
+  MINTFAIL=$(cd "$FRESHWT" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR="$ROOT/mintfailq" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s leaked=%s' \"\$?\" \"\${_LI_ID+_LI_ID}\"")
+  [ "$MINTFAIL" = "rc=1 leaked=" ] \
+    && ok "$SH: a failed id mint refuses and leaves no _LI_ID in the caller's shell" \
+    || bad "$SH: id-mint failure arm wrong: '$MINTFAIL' (want rc=1 leaked=)"
+done
+rm -rf "$FRESHWT/.harness" "$ROOT/mintfailq"
+
+# zsh names the sourced file in `$0` only while FUNCTION_ARGZERO is set. It is on by
+# default, but it is an ordinary option a lane's zsh config may turn off, and then `$0` is
+# the bare shell name and any root derived from it resolves against the caller's cwd. The
+# non-default state therefore needs its own witness -- the default-state case above passes
+# either way and cannot discriminate. (codex r1 P2.)
+if printf '%s\n' $SHELLS | grep -qx zsh; then
+  # The trailing `ran:` is the sentinel every other case in this file carries: without it an
+  # empty capture -- a zsh that died before the loop -- reads identically to "nothing was
+  # undefined", so absence of a run and absence of a defect print the same (witness lens r6 P3).
+  NOFAZ=$(zsh -c "setopt NO_FUNCTION_ARGZERO; cd / && source '$INIT' >/dev/null 2>&1
+for f in $LIB_FNS; do type \"\$f\" >/dev/null 2>&1 || printf '%s ' \"\$f\"; done
+printf 'ran:'")
+  [ "$NOFAZ" = "ran:" ] && ok "zsh: libraries load under NO_FUNCTION_ARGZERO too" \
+    || bad "zsh NO_FUNCTION_ARGZERO: expected 'ran:', got '$NOFAZ'"
+fi
+
+# CDPATH is consulted only for an operand that does not begin with / ./ or ../ -- so this
+# hazard exists ONLY when the root is reached by a relative spelling, which is exactly how
+# the loop skill types it (`source tools/hooks/lane-init.sh`). The absolute `$INIT` used
+# elsewhere in this file cannot reach the mechanism, so this case builds its own tree and
+# sources it relatively, with a decoy `tools/hooks` on CDPATH for `cd` to prefer.
+CDFIX="$ROOT/cdfix"; mkdir -p "$CDFIX/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$CDFIX/tools/hooks/" \
+  || { echo "FATAL: cdfix populate"; exit 1; }
+CDTRAP="$ROOT/cdtrap"; mkdir -p "$CDTRAP/tools/hooks"
+# bash ONLY, deliberately. zsh's `cd` resolves a cwd-relative literal before it consults
+# CDPATH, so a zsh iteration here passes whether or not `CDPATH=` is present -- it cannot
+# redden under any mutation of the guard it claims to pin. A `for SH in bash zsh` shape
+# would imply dual-shell coverage while verifying one shell (merge-gate witness lens, r2).
+TRAPPED=$(cd "$CDFIX" && CDPATH="$CDTRAP" bash -c "source tools/hooks/lane-init.sh >/dev/null 2>&1; type hook_git_retry >/dev/null 2>&1 && echo yes")
+[ "$TRAPPED" = "yes" ] && ok "bash: a hostile CDPATH does not relocate the library root" \
+  || bad "bash: CDPATH relocated the root; libraries did not load"
+
+# `$0`/`BASH_SOURCE` carry the spelling the caller used, never a canonical path, so a root
+# derived from either is only as cwd-proof as this pins it. Sourcing by absolute path from
+# an unrelated cwd must still find the libraries beside the script.
+for SH in $SHELLS; do
+  ABS=$("$SH" -c "cd / && source '$INIT' >/dev/null 2>&1; type hook_git_retry >/dev/null 2>&1 && echo yes" 2>/dev/null)
+  [ "$ABS" = "yes" ] && ok "$SH: absolute-path sourcing resolves the root from an unrelated cwd" \
+    || bad "$SH: absolute-path sourcing from / did not load the libraries"
+done
+
+# ...and when the libraries genuinely cannot be resolved, sourcing must say so and refuse,
+# never hand back a half-built lane at rc=0. A copy with no `tools/hooks` siblings beside
+# it is the cheapest way to make the root unresolvable without touching the real tree.
+DETACHED="$ROOT/detached-lane-init.sh"
+cp "$INIT" "$DETACHED" || { echo "FATAL: cp lane-init"; exit 1; }
+# `rc=` prefix is a sentinel: a capture that never ran is empty, which must NOT read the
+# same as a correct refusal. Exact-match, not `!= 0` (witness lens r2 P3).
+DET_RC=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' >/dev/null 2>&1; echo rc=\$?")
+[ "$DET_RC" = "rc=1" ] \
+  && ok "an unresolvable library root makes sourcing fail loudly ($DET_RC)" \
+  || bad "unresolvable library root did not refuse cleanly: '$DET_RC' (empty = never ran)"
+# This file cleans up every `_LI_*` local on every exit path -- it is sourced, so anything
+# left defined is written into the caller's interactive shell for good. A newly introduced
+# local has to join that discipline or it is a permanent leak (and can clobber a caller's
+# own variable of the same name). Asserted on the SUCCESS path, which is the one a lane
+# actually takes. (codex r3 P3.)
+for SH in $SHELLS; do
+  # `ran:` is a sentinel the successful source must emit. Without it an empty capture --
+  # a source that never executed at all -- reads exactly like a clean no-leak pass
+  # (witness lens r2 P3).
+  LEAKED=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+printf 'ran:'
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ' '")
+  [ "$LEAKED" = "ran:" ] && ok "$SH: a successful init leaves no _LI_* local in the caller's shell" \
+    || bad "$SH: init leaked or never ran: '$LEAKED'"
+done
+
+# ...and the refusal paths must clear it too, not just the success path. The index-exhaustion
+# refusal is the reachable one to drive: fill every lane slot < 350 with a FOREIGN worktree's
+# claim and this lane can allocate nothing. Before this arc that exit cleared HARNESS_* and
+# the `_li_*` locals but left the whole outer `_LI_*` scope defined. (codex r4 P3.)
+EXHQ="$ROOT/exhaust-q"; mkdir -p "$EXHQ/lanes"
+_i=0; while [ "$_i" -lt 350 ]; do printf 'foreign /not/this/worktree\n' > "$EXHQ/lanes/$_i"; _i=$((_i+1)); done
+for SH in $SHELLS; do
+  EXH=$(cd "$ROOT/wt" && ARC_METRICS_QUEUE_DIR="$EXHQ" "$SH" -c "source '$INIT' >/dev/null 2>&1
+printf 'rc=%s ' \$?
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ' '")
+  case "$EXH" in
+    "rc=1 ") ok "$SH: index exhaustion refuses AND clears the whole _LI_* scope" ;;
+    rc=1*)   bad "$SH: exhaustion refused but leaked: $EXH" ;;
+    *)       bad "$SH: exhaustion did not refuse: $EXH" ;;
+  esac
+done
+
+# Sourcing is not transactional -- `. lib.sh` puts its functions in the caller for good -- so
+# presence of BOTH libraries is established before either is sourced. The case that proves it
+# is the asymmetric one: lib.sh present, loop_lib.sh absent. Before the two-phase load the
+# caller was left holding lib.sh's functions after being told the lane was not initialised;
+# now it holds none of them. (codex r5 P2.)
+HALFFIX="$ROOT/halfwt"; mkdir -p "$HALFFIX/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$HALFFIX/tools/hooks/" || { echo "FATAL: halfwt populate"; exit 1; }
+for SH in $SHELLS; do
+  HALF=$(cd "$HALFFIX" && "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s ' \$?
+type hook_bounded >/dev/null 2>&1 && printf 'hook_bounded-LEAKED'")
+  [ "$HALF" = "rc=1 " ] \
+    && ok "$SH: a missing SECOND library leaves none of the first's functions in the caller" \
+    || bad "$SH: half-initialised after second-library failure: $HALF"
+done
+
+# ...and the OTHER arm of the two-phase load. The case above deletes loop_lib.sh, so the
+# PRESENCE preflight rejects it and the per-source status check is never reached -- removing
+# that check's `|| { _li_fail=...; break; }` would leave the case above green. This one
+# supplies a loop_lib.sh that is readable (passing the preflight) and RETURNS NONZERO, which
+# only the status check can catch (codex r9 P3).
+FAILFIX="$ROOT/failwt"; mkdir -p "$FAILFIX/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$FAILFIX/tools/hooks/" || { echo "FATAL: failwt populate"; exit 1; }
+printf 'hook_from_failing_lib() { :; }\nreturn 3\n' > "$FAILFIX/tools/hooks/loop_lib.sh"
+for SH in $SHELLS; do
+  FAILED=$(cd "$FAILFIX" && "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s' \$?")
+  [ "$FAILED" = "rc=1" ] \
+    && ok "$SH: a readable SECOND library that returns nonzero is rejected by the status check" \
+    || bad "$SH: nonzero second library was not rejected: $FAILED"
+done
+
+# ...and at a DIFFERENT refusal exit than the one above, which is the whole point. The r10
+# witness drove only the unresolvable-library-root path -- the one site that then carried the
+# fix -- so it was structurally unable to notice that the other exits did not. This case
+# refuses via index validation, which returns from far lower in the file, and asserts the same
+# contract. Both pass now because the invalidation is hoisted to a single unconditional site
+# above every exit rather than repeated at each one (merge-gate concurrency lens, r2).
+# The env var is exported on its own line, not as a prefix to `source`: a prefix assignment to
+# a special builtin is not portable here and silently yielded an empty capture, which the
+# `rc=` sentinel caught rather than passing as a clean result.
+FARQ="$ROOT/farq"; mkdir -p "$FARQ/lanes"
+for SH in $SHELLS; do
+  FAR_EXIT=$("$SH" -c "cd '$ROOT/wt'
+export ARC_METRICS_QUEUE_DIR='$FARQ'
+source '$INIT' >/dev/null 2>&1
+export HARNESS_LANE_INDEX=../escape
+source '$INIT' >/dev/null 2>&1
+printf 'rc=%s orphan=%s fn=%s' \"\$?\" \"\${_LI_ORPHAN_DIR:+set}\" \"\$(type lane_stack_allowed >/dev/null 2>&1 && echo callable || echo gone)\"")
+  [ "$FAR_EXIT" = "rc=1 orphan= fn=gone" ] \
+    && ok "$SH: a refusal at a LATER exit also invalidates the prior callable surface" \
+    || bad "$SH: later-exit refusal left the prior lane callable: '$FAR_EXIT'"
+done
+
+# A refused init must publish NO CLAIM -- asserted behaviourally, at the EXECUTED entry point.
+# `return` at the top level of a non-sourced script is an error in bash that does NOT stop
+# execution, so the library-load refusal needs the `2>/dev/null || exit 1` tail that every
+# other top-level exit in the file carries. Without it the run announces "lane NOT initialised", then walks the whole
+# protocol with neither library loaded, persists a lane id, takes an EXCLUSIVE claim in the
+# shared registry, and exits 0 -- a slot nothing ever reclaims, since release matches a removed
+# worktree path, and no caller notices because the status is 0. The file is mode 755, so the
+# executed entry point is reachable even though every call site sources today.
+# This pins the CONTRACT (a refusal publishes no claim), not the shape of the exit line, so it
+# cannot be evaded by rewriting the exit -- the lexical-scanner trap this arc already paid for.
+# Several exits are driven, deliberately, because the tail is hand-repeated per site and CANNOT
+# be hoisted: the r5 witness drove only the library-load refusal -- the site the defect was found
+# at -- and was therefore structurally unable to notice a bare `return` at any other exit. The
+# cases below are the list; no count is restated here, because every count written into this
+# block so far has been falsified by the next round that added a case. Measured:
+# a bare `return 1` at the non-integer-index refusal made an executed run exit 0 while the whole
+# suite stayed byte-identical. That is the same per-site drift this file already records at
+# FAR_EXIT. (merge-gate concurrency lens r5; witness-adequacy lens r6 P2.)
+#
+# The asserted pair is `rc` + `claims`. It deliberately does NOT assert id=absent at the LATE
+# exits: the lane id is minted BEFORE index validation, so correct code there already persists an
+# identity. Re-using the early exit's triple would assert a falsehood.
+EXECFIX="$ROOT/execwt"; mkdir -p "$EXECFIX/tools/hooks" "$ROOT/execq/lanes"
+cp "$INIT" "$EXECFIX/tools/hooks/" || { echo "FATAL: execwt populate"; exit 1; }
+# lib.sh / loop_lib.sh deliberately NOT copied: that is what forces the library-load refusal.
+for SH in $SHELLS; do
+  rm -rf "$EXECFIX/.harness" "$ROOT/execq/lanes"; mkdir -p "$ROOT/execq/lanes"
+  EXEC_REFUSED=$(cd "$EXECFIX" && ARC_METRICS_QUEUE_DIR="$ROOT/execq" "$SH" tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s claims=%s id=%s' "$?" \
+  "$([ -d "$ROOT/execq/lanes" ] && ls "$ROOT/execq/lanes" | wc -l | tr -d ' ' || echo NODIR)" \
+  "$([ -f "$EXECFIX/.harness/.lane-id" ] && echo persisted || echo absent)")
+  [ "$EXEC_REFUSED" = "rc=1 claims=0 id=absent" ] \
+    && ok "$SH: an EXECUTED lane-init refusing BEFORE the libraries load publishes no claim" \
+    || bad "$SH: executed early-exit refusal leaked state: '$EXEC_REFUSED' (want rc=1 claims=0 id=absent)"
+done
+
+# The LATE exits: libraries present, so execution reaches the index validation. The indices below
+# drive ../escape ("must be an integer 0..349"), 00 ("must be canonical (no leading zeros)")
+# and 400 ("must be < 350") -- named by their refusal text, not by line, because this arc's own
+# insertions above them have already invalidated one set of line cites; the
+# ARC_METRICS_QUEUE_DIR case that follows drives the relative-path refusal (lane-init.sh:151). NO CLAIM IS
+# MADE HERE ABOUT COMPLETENESS. Three successive rounds each wrote a bound over this set and each
+# was falsified by execution in the next -- r6 named a fixed pair, r7 replaced that with "every
+# refusal reachable with nothing but an environment variable", and r8 falsified THAT with lane-init.sh:151.
+# A bound is a second copy of the list below, and second copies drift. The list is the coverage;
+# a new externally-reachable refusal is covered when it appears here, and not before.
+# The r6 absorption drove only the first index, and a bare `return 1` at either of the other two
+# left the
+# whole suite
+# byte-identical while an executed run exited 0 and walked on toward publishing a claim. There is
+# no prose bound here now: this list IS the coverage, so it cannot disagree with itself.
+EXECLATE="$ROOT/execlate"; mkdir -p "$EXECLATE/tools/hooks" "$ROOT/execlateq/lanes"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$EXECLATE/tools/hooks/" \
+  || { echo "FATAL: execlate populate"; exit 1; }
+for SH in $SHELLS; do
+  for BAD_IDX in ../escape 00 400; do
+    rm -rf "$EXECLATE/.harness" "$ROOT/execlateq/lanes"; mkdir -p "$ROOT/execlateq/lanes"
+    # HARNESS_LANE_ID is cleared explicitly: a lane shell exports it, and with it set zsh dies on
+    # the pre-fix unguarded registry glob over the deliberately-empty registry and never REACHES the
+    # refusal -- the assertion would then pass for the wrong reason (spec lens, r7 P3).
+    EXEC_LATE=$(cd "$EXECLATE" && env -u HARNESS_LANE_ID ARC_METRICS_QUEUE_DIR="$ROOT/execlateq" \
+      HARNESS_LANE_INDEX="$BAD_IDX" "$SH" tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc=%s claims=%s' "$?" \
+  "$([ -d "$ROOT/execlateq/lanes" ] && ls "$ROOT/execlateq/lanes" | wc -l | tr -d ' ' || echo NODIR)")
+    [ "$EXEC_LATE" = "rc=1 claims=0" ] \
+      && ok "$SH: an EXECUTED lane-init refusing on HARNESS_LANE_INDEX=$BAD_IDX publishes no claim" \
+      || bad "$SH: executed refusal on '$BAD_IDX' leaked state: '$EXEC_LATE' (want rc=1 claims=0)"
+  done
+done
+
+# A queue path containing WHITESPACE or a GLOB METACHARACTER. Every other case in this file
+# uses a whitespace-free path, which is why the suite stayed green over a real regression: the
+# scan helper briefly emitted FULL PATHS that each call site word-split, so one space in
+# ARC_METRICS_QUEUE_DIR made every claim invisible to every scan. The failure was SILENT and
+# permissive -- measured, a worktree already holding lanes/0 then sourcing with
+# HARNESS_LANE_INDEX=1 got rc=0 and the registry ended holding BOTH 0 and 1 for one worktree,
+# where the direct glob it replaced refused. That is the stranding hazard the header at lane-init.sh:17-19
+# forbids, and it was quieter than the zsh bug the helper exists to fix.
+#
+# The path carries a space AND a `*`: word-splitting and pathname expansion are two separate
+# triggers on a command substitution, and the helper's contract has to survive both.
+# (merge-gate concurrency lens, r9.)
+WSQ="$ROOT/q W*S"; WSWT="$ROOT/wswt"; mkdir -p "$WSWT/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$WSWT/tools/hooks/" \
+  || { echo "FATAL: wswt populate"; exit 1; }
+for SH in $SHELLS; do
+  rm -rf "$WSWT/.harness" "$WSQ"; mkdir -p "$WSQ/lanes"
+  WS=$(cd "$WSWT" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR="$WSQ" "$SH" -c "source tools/hooks/lane-init.sh >/dev/null 2>&1
+export HARNESS_LANE_INDEX=1
+source tools/hooks/lane-init.sh >/dev/null 2>&1
+printf 'rc2=%s' \"\$?\"")
+  WS="$WS claims=$([ -d "$WSQ/lanes" ] && ls "$WSQ/lanes" | wc -l | tr -d ' ' || echo NODIR)"
+  # rc2=1 AND one claim: the second source must REFUSE to add a second entry for one worktree.
+  [ "$WS" = "rc2=1 claims=1" ] \
+    && ok "$SH: a queue path with a space and a glob char still refuses a second claim" \
+    || bad "$SH: whitespace/glob queue path broke reuse-detection: '$WS' (want rc2=1 claims=1)"
+done
+
+# The relative-ARC_METRICS_QUEUE_DIR refusal (lane-init.sh:151). It needs its own case rather than another
+# index in the loop above, because it is reached through a DIFFERENT environment variable -- which
+# is exactly why the r7 bound missed it: that bound generalised over the loop's variable, not over
+# the refusals.
+#
+# This case asserts the REFUSAL COUNT, not rc, and that is the whole point. Measured: with a bare
+# `return 1` at lane-init.sh:151 the executed run still exits 1, because a LATER refusal catches it -- so an
+# rc-only assertion passes either way and witnesses nothing. What the defect actually does is walk
+# PAST its own refusal, and that is observable: clean code emits exactly one `lane-init:` line,
+# the mutant emits two (its own, then `return: can only return from a function or sourced
+# script`, then a second refusal). The contract here is that a refusal is TERMINAL; rc is a proxy
+# that something downstream can satisfy on the defect's behalf. The r7 witness lens was right to
+# decline pressing this site on rc grounds; the refusal count is what makes it witnessable.
+# (merge-gate spec-conformance and witness-adequacy lenses, r8.)
+EXECREL="$ROOT/execrel"; mkdir -p "$EXECREL/tools/hooks"
+cp "$INIT" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$EXECREL/tools/hooks/" \
+  || { echo "FATAL: execrel populate"; exit 1; }
+for SH in $SHELLS; do
+  rm -rf "$EXECREL/.harness" "$EXECREL/relq"
+  EXEC_REL=$(cd "$EXECREL" && env -u HARNESS_LANE_ID -u HARNESS_LANE_INDEX \
+    ARC_METRICS_QUEUE_DIR=relq "$SH" tools/hooks/lane-init.sh >/dev/null 2>"/tmp/li-rel-err.$$"
+printf 'rc=%s' "$?")
+  EXEC_REL="$EXEC_REL refusals=$(grep -c '^lane-init:' "/tmp/li-rel-err.$$")"
+  EXEC_REL="$EXEC_REL claims=$([ -d "$EXECREL/relq/lanes" ] && ls "$EXECREL/relq/lanes" | wc -l | tr -d ' ' || echo NODIR)"
+  rm -f "/tmp/li-rel-err.$$"
+  [ "$EXEC_REL" = "rc=1 refusals=1 claims=NODIR" ] \
+    && ok "$SH: an EXECUTED refusal of a relative queue dir is TERMINAL and publishes no claim" \
+    || bad "$SH: executed relative-queue refusal was not terminal: '$EXEC_REL' (want rc=1 refusals=1 claims=NODIR)"
+done
+
+# A refusal must invalidate the PREVIOUS source's surface, not just this source's variables.
+# The refusal cases above mostly enter from a fresh shell and so cannot see state an earlier
+# successful source left behind: measured before the fix, `lane_stack_allowed` survived a
+# refusal and returned 0 -- "bring the stack up" -- with the index defaulted to 0, i.e. another
+# lane's Docker project and ports. (codex r10 P2. Not destructive: `_lane_clear_orphaned_stack`
+# re-reads HARNESS_LANE_INDEX and returns early on empty, verified with a planted marker that
+# survived -- the hazard is the stale ANSWER, not a stale teardown.)
+STALEQ="$ROOT/staleq"; mkdir -p "$STALEQ/lanes"
+for SH in $SHELLS; do
+  STALE_FN=$("$SH" -c "cd '$ROOT/wt' && ARC_METRICS_QUEUE_DIR='$STALEQ' source '$INIT' >/dev/null 2>&1
+source '$DETACHED' >/dev/null 2>&1
+printf 'orphan=%s fn=%s' \"\${_LI_ORPHAN_DIR:+set}\" \"\$(type lane_stack_allowed >/dev/null 2>&1 && echo callable || echo gone)\"")
+  [ "$STALE_FN" = "orphan= fn=gone" ] \
+    && ok "$SH: a refusal invalidates the prior source's callable surface" \
+    || bad "$SH: refusal left the prior lane callable: $STALE_FN"
+done
+
+# `_LI_ORPHAN_DIR` is the one documented exception in this namespace:
+# `lane_stack_allowed` reads it after sourcing returns, so it MUST survive a successful init.
+# The leak cases above no longer enumerate names -- they scan the namespace and subtract this
+# one by an anchored `grep -v`, so it is invisible to them BY EXCLUSION, where it used to be
+# invisible by omission from a four-name list. That is a better reason but the same blind
+# spot, so the exception is pinned in both directions here: it must survive success, and it
+# must not be the reason a refusal looks clean. (codex r9 P3; merge-gate spec-conformance
+# lens r11 P3.)
+for SH in $SHELLS; do
+  ORPH=$("$SH" -c "cd '$ROOT/wt' && source '$INIT' >/dev/null 2>&1
+printf 'rc=%s orphan=%s' \"\$?\" \"\${_LI_ORPHAN_DIR:+set}\"")
+  [ "$ORPH" = "rc=0 orphan=set" ] \
+    && ok "$SH: _LI_ORPHAN_DIR survives a successful init (lane_stack_allowed reads it)" \
+    || bad "$SH: _LI_ORPHAN_DIR disposition wrong: '$ORPH' (lane_stack_allowed would break)"
+done
+
+# The unconditional half of the namespace contract covers every exit, so pin the REFUSAL path
+# too, with those names pre-set. The success case below enters from a freshly unset shell and
+# so cannot see a member the refusal forgets; this one can. (codex r6 P3.)
+#
+# `_LI_ID` is deliberately NOT among them, and the omission is the contract rather than an
+# oversight: it is the lifetime-scoped disposal described in lane-init.sh's header, cleared
+# only on the two arms of the statement that sets it, so a refusal exiting above that point
+# leaves a caller's pre-existing value standing. Measured against unmutated code: adding
+# `_LI_ID=e` to the fixture below reddens this case in BOTH shells -- no suite total is quoted,
+# because a later case added anywhere in this file moves it while the shape stays true.
+# The observation is a scan, so it would see the name; what bounds this case is what it
+# SEEDS. Widening the seed means widening the code to clear the name at every exit -- the
+# hand-maintained list tools/test_lane_init_namespace.py exists to refuse -- so the narrower
+# guarantee is stated here and in the header instead of being asserted away.
+# (merge-gate spec-conformance lens r11 P2.)
+for SH in $SHELLS; do
+  REFUSED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=a _LI_ROOT=b _LI_Q=c _LI_WT=d
+source '$DETACHED' >/dev/null 2>&1
+set | sed -n 's/^\(_LI_[A-Za-z0-9_]*\)=.*/\1/p' | grep -v '^_LI_ORPHAN_DIR\$' | sort | tr '\n' ' '")
+  [ -z "$REFUSED" ] \
+    && ok "$SH: a refused init clears every unconditional _LI_* name, not just what it set" \
+    || bad "$SH: refusal left reserved names defined: $REFUSED"
+done
+
+# `_LI_*` is lane-init's OWN namespace, and a caller's value in it is CLEARED, not preserved
+# -- deliberately, and identically for the variable this arc introduced and the one that has
+# always been there. codex r4 proposed save/restore for `_LI_SRC` alone; refused, because it
+# would make one member behave unlike its siblings and add a restore arm no real caller
+# reaches. This pins the decision so that "fixing" it later goes red instead of passing
+# silently: both variables must read `cleared` even when the caller set them.
+for SH in $SHELLS; do
+  OWNED=$("$SH" -c "cd '$ROOT/wt' && _LI_SRC=caller-value _LI_ROOT=caller-root
+source '$INIT' >/dev/null 2>&1
+printf '%s/%s' \"\${_LI_SRC:-cleared}\" \"\${_LI_ROOT:-cleared}\"")
+  [ "$OWNED" = "cleared/cleared" ] \
+    && ok "$SH: _LI_* is lane-init's namespace — a caller's value is cleared, as for _LI_ROOT" \
+    || bad "$SH: _LI_* not uniformly owned (_LI_SRC/_LI_ROOT): $OWNED"
+done
+
+# A refusal must also STRIP the lane identity, which is what every other failure path in
+# lane-init.sh does. The case that matters is not a fresh shell (it has nothing to leak) but
+# one already carrying lane A's identity that then sources a broken init for lane B: if the
+# exports survive, the shell reports "not initialised" and keeps acting as lane A, and this
+# workspace binds reservations to lane_id. (codex r2 P2.)
+for SH in $SHELLS; do
+  STALE=$("$SH" -c "export HARNESS_LANE_ID=laneA HARNESS_LANE_INDEX=1
+source '$DETACHED' >/dev/null 2>&1
+printf '%s/%s' \"\${HARNESS_LANE_ID:-cleared}\" \"\${HARNESS_LANE_INDEX:-cleared}\"")
+  [ "$STALE" = "cleared/cleared" ] \
+    && ok "$SH: a refused init clears a prior lane's exported identity" \
+    || bad "$SH: refused init left a stale identity behind: $STALE"
+done
+
+DET_ERR=$(cd "$ROOT/wt" && bash -c "source '$DETACHED' 2>&1 >/dev/null")
+case "$DET_ERR" in
+  *"lane-init: cannot read tools/hooks/"*lib.sh*|*"lane-init: failed to load tools/hooks/"*lib.sh*)
+    ok "and it names the library it could not load" ;;
+  *) bad "failure message does not name the missing library: '$DET_ERR'" ;;
+esac
+case "$DET_ERR" in
+  *"lane NOT initialised"*) ok "and it says the lane is not initialised" ;;
+  *) bad "failure message does not state the lane is uninitialised: '$DET_ERR'" ;;
+esac
+
+echo "---"
+[ -z "$SHELLS_UNVERIFIED" ] && echo "PASS=$PASS FAIL=$FAIL" \
+  || echo "PASS=$PASS FAIL=$FAIL SHELLS_UNVERIFIED=$SHELLS_UNVERIFIED"
 [ "$FAIL" -eq 0 ] || exit 1

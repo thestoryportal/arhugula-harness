@@ -332,6 +332,85 @@ def test_admit_unreserved_is_inactive_in_every_mode(repo: Path, monkeypatch: pyt
     assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)
 
 
+def _commit_on_branch(repo: Path, name: str, text: str) -> None:
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "switch", "-qc", "feat"], check=True)
+    (repo / name).write_text(text)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-qm", "c2"], check=True)
+
+
+@pytest.mark.parametrize(
+    ("path", "admitted"),
+    [("g.py", "1"), ("docs/review notes.md", "3")],  # the space exercises the NUL split
+)
+def test_admit_routes_a_named_pass_through_the_cycle(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, path: str, admitted: str
+):
+    # the real wrapper entry point: the env names the pass, and the git-backed doc-only
+    # check picks where an empty cycle starts
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    _commit_on_branch(repo, path, "x\n")
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "2")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "PASS_OUT_OF_ORDER"
+    assert f"run pass {admitted}" in d.recipe
+
+
+def test_a_failing_doc_only_read_degrades_like_the_binding_read(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # a concurrent gc or reset between the two git reads must not crash the wrapper
+    def broken(*_a, **_k):
+        raise subprocess.CalledProcessError(128, ["git", "diff"])
+
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setattr(rlg, "_doc_only", broken)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)
+
+
+def test_a_bad_pass_refuses_before_an_unreserved_review_runs(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # the wrapper stamps rows for unreserved arcs too, so the value is refused before
+    # the review, not when its verdict is recorded
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "4")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "STATE_UNREADABLE"
+
+
+def test_a_code_file_renamed_to_markdown_is_not_doc_only(repo: Path):
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "switch", "-qc", "feat"], check=True)
+    subprocess.run([*git, "mv", "f.txt", "f.md"], check=True)
+    subprocess.run([*git, "commit", "-qm", "rename"], check=True)
+    binding = rw.code_binding(repo, "main")
+    assert rlg._doc_only(repo, binding) is False
+
+
+def test_a_path_the_locale_cannot_decode_does_not_crash_doc_only(repo: Path):
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "switch", "-qc", "feat"], check=True)
+    # the index takes the raw bytes directly (a filesystem may refuse such a name)
+    blob = subprocess.run(
+        [*git, "hash-object", "-w", "--stdin"], input=b"x\n", capture_output=True, check=True
+    ).stdout.strip()
+    cacheinfo = b"100644," + blob + b",notes-\xff.md"
+    subprocess.run([*git, "update-index", "--add", "--cacheinfo", cacheinfo], check=True)
+    subprocess.run([*git, "commit", "-qm", "odd path"], check=True)
+    binding = rw.code_binding(repo, "main")
+    assert rlg._doc_only(repo, binding) is True
+
+
+def test_admit_refuses_an_unparseable_pass(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "4")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "STATE_UNREADABLE"
+
+
 # ── edges: attest CLI ────────────────────────────────────────────────────────
 
 SCRIPT_REL = Path(".claude/skills/defect-class-preflight/scripts/preflight-grep.sh")
@@ -3258,3 +3337,335 @@ def test_preflight_carries_the_u_sr_04_mechanism_precedent_rule():
     assert "adopt its shape or import it outright" in section
     assert ".harness/merge-gate-log.jsonl" in section
     assert "plan skeleton as UNREVIEWED input" in section
+
+
+# ── the bounded review cycle (U-HE-53; spec v1.9 X9a/X9c) ────────────────────
+
+
+LENSES = ("merge-gate-concurrency", "merge-gate-spec-conformance", "merge-gate-witness-adequacy")
+WITNESS = "merge-gate-witness-adequacy"
+H1, H2, H3, H4 = ("1" * 40, "2" * 40, "3" * 40, "4" * 40)
+#: X9a's reviewer set per pass (pass 3 is one lens, any of the three)
+REVIEWERS = {
+    "1": (LOOP_PRODUCER, *LENSES),
+    "2": (LOOP_PRODUCER, WITNESS),
+    "esc": (LOOP_PRODUCER, *LENSES),
+    "3": ("merge-gate-spec-conformance",),
+}
+
+
+def _crow(
+    cycle_pass: str, round_n: int, *, head: str = HEAD, digest=DIGEST, fid=None, sev="P2", **over
+):
+    """One reviewer's verdict row: a finding when `fid` is given, else `no_finding`."""
+    kind = "finding" if fid else "no_finding"
+    return _row(
+        round_n,
+        kind,
+        fid,
+        cycle_pass=cycle_pass,
+        head_sha=head,
+        diff_digest=digest,
+        severity=sev,
+        ts="t",
+        **over,
+    )
+
+
+def _pass(cycle_pass: str, round_n: int, *, head: str = HEAD, fid=None, sev="P2") -> list[dict]:
+    """A complete pass: every reviewer X9a names for it delivers a verdict; the first one
+    (codex, or the pass-3 lens) raises `fid` when given."""
+    by = REVIEWERS[cycle_pass]
+    first = _crow(cycle_pass, round_n, head=head, fid=fid, sev=sev, producer=by[0])
+    return [first, *(_crow(cycle_pass, round_n, head=head, producer=p) for p in by[1:])]
+
+
+def _adj(fid: str, disposition: str) -> dict:
+    return dict(
+        arc_id=ARC,
+        finding_id=fid,
+        record_kind="finding_adjudication",
+        disposition=disposition,
+        ts="t",
+    )
+
+
+def _next(rows, head=HEAD, doc_only=False, digest=DIGEST):
+    return rlg.next_pass(rows, ARC, doc_only=doc_only, head_sha=head, diff_digest=digest)
+
+
+def _dcycle(rows, cycle_pass, *, head=HEAD, state=None, **over):
+    state = state or _state(preflights=(_pf(),))
+    return _decide(state, rows, cycle_pass=cycle_pass, head_sha=head, **over)
+
+
+def test_cycle_order_without_escalation():
+    assert _next([]) == "1"
+    rows = _pass("1", 1)
+    assert _next(rows) == "2"
+    rows += _pass("2", 2)
+    assert _next(rows) == "3"
+    rows += _pass("3", 1)
+    assert _next(rows) is None  # a clean pass 3 completes the cycle at this head
+    assert _next(rows, head=H4) == "3"  # a later commit gets one pass sized to the change
+    assert _next(rows, digest="e" * 64) == "3"  # same head, different reviewed bytes
+
+
+def test_a_clean_pass_3_is_not_admitted_again_at_the_same_head():
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1)]
+    d = _dcycle(rows, "esc")
+    assert isinstance(d, rlg.Refused) and d.code == "CYCLE_COMPLETE"
+
+
+def test_doc_only_arc_starts_at_pass_3_which_has_no_codex_half():
+    assert _next([], doc_only=True) == "3"
+    d = _dcycle([], "3", doc_only=True)
+    assert isinstance(d, rlg.Refused) and d.code == "PASS_HAS_NO_CODEX_HALF"
+
+
+def test_a_pass_completes_only_when_its_whole_reviewer_set_delivered():
+    codex_only = [_crow("1", 1)]
+    assert _next(codex_only) == "1"
+    assert _next([*codex_only, _crow("1", 1, producer=LENSES[0])]) == "1"
+    assert _next(_pass("1", 1)) == "2"
+    pass2_without_witness = [*_pass("1", 1), _crow("2", 2)]
+    assert _next(pass2_without_witness) == "2"
+    # the escalation repeats pass 1, so it too needs all three lenses beside codex
+    escalation = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    escalation += [_adj("f2", "accepted"), _crow("esc", 3, head=H2)]
+    escalation += [_crow("esc", 3, head=H2, producer=lens) for lens in LENSES[:2]]
+    assert _next(escalation, head=H2) == "esc"
+    escalation.append(_crow("esc", 3, head=H2, producer=LENSES[2]))
+    assert _next(escalation, head=H2) == "3"
+
+
+def test_reviewers_that_read_different_bytes_do_not_complete_one_pass():
+    # codex against origin/main and a lens against a stale local main at the same head
+    rows = [_crow("1", 1), *(_crow("1", 1, producer=lens, digest="e" * 64) for lens in LENSES)]
+    assert _next(rows) == "1"
+
+
+def test_a_retry_of_a_partially_recorded_pass_is_admitted():
+    # rows append one at a time, so a crash can leave part of a codex verdict before any
+    # lens has delivered; the retry is admitted. The case where the lenses already
+    # delivered is B-294 (d), unreachable while pass-tagged lens verdicts are refused
+    partial = [_crow("1", 1, fid="f1")]
+    assert isinstance(_dcycle(partial, "1"), rlg.Refused)  # f1 still owes a disposition
+    partial.append(_adj("f1", "accepted"))
+    assert isinstance(_dcycle(partial, "1"), rlg.Allowed)
+
+
+def test_accepted_p1_in_pass_2_escalates_once():
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H2, fid="f2", sev="P1")]
+    rows.append(_adj("f2", "accepted"))
+    assert _next(rows, head=H3) == "esc"
+    rows += _pass("esc", 3, head=H3)
+    assert _next(rows, head=H3) == "3"
+
+
+def test_rejected_or_p2_in_pass_2_does_not_escalate():
+    base = _pass("1", 1, head=H1)
+    rejected = [*base, *_pass("2", 2, head=H2, fid="f2", sev="P1"), _adj("f2", "rejected")]
+    assert _next(rejected, head=H2) == "3"
+    p2 = [*base, *_pass("2", 2, head=H2, fid="f2", sev="P2"), _adj("f2", "accepted")]
+    assert _next(p2, head=H3) == "3"
+
+
+def test_pass_3_re_runs_only_after_its_own_accepted_p1():
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1)]
+    rows += [*_pass("3", 1, head=H1, fid="f3", sev="P1"), _adj("f3", "accepted")]
+    assert _next(rows, head=H2) == "3"
+
+
+def test_a_p1_still_unfixed_after_the_pass_3_re_run_stops_the_arc():
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1)]
+    rows += [*_pass("3", 1, head=H1, fid="f3", sev="P1"), _adj("f3", "accepted")]
+    first_rerun = _dcycle(rows, "3", head=H2)
+    assert not (isinstance(first_rerun, rlg.Refused) and first_rerun.code == "BUDGET_EXHAUSTED")
+    rows += [*_pass("3", 2, head=H2, fid="g3", sev="P1"), _adj("g3", "accepted")]
+    stopped = _dcycle(rows, "3", head=H3)
+    assert isinstance(stopped, rlg.Refused) and stopped.code == "BUDGET_EXHAUSTED"
+    ext = rlg.BudgetExtension(arc_id=ARC, extra_rounds=1, reason="operator", ts="t")
+    extended = _dcycle(rows, "3", head=H3, state=_state(preflights=(_pf(),), extensions=(ext,)))
+    assert not (isinstance(extended, rlg.Refused) and extended.code == "BUDGET_EXHAUSTED")
+
+
+def test_a_disposition_reversed_after_later_passes_re_opens_the_escalation():
+    # a pass-2 P1 rejected, a clean pass 3, then the rejection reversed: the P1 now demands
+    # the escalation that never ran, so the cycle is not complete
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    rows += [_adj("f2", "rejected"), *_pass("3", 1, head=H1)]
+    assert _next(rows, head=H1) is None
+    rows.append(_adj("f2", "accepted"))
+    assert _next(rows, head=H2) == "esc"
+    assert rlg.completing_run(rows, ARC) is None
+
+
+def test_a_reversed_finding_on_an_earlier_run_still_needs_a_new_head():
+    # the escalation the reversal re-opens must not run on the head the P1 was found at
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    rows += [_adj("f2", "rejected"), *_pass("3", 1, head=H1), _adj("f2", "accepted")]
+    same = _dcycle(rows, "esc", head=H1)
+    assert isinstance(same, rlg.Refused) and same.code == "FIX_NOT_COMMITTED"
+    assert isinstance(_dcycle(rows, "esc", head=H2), rlg.Allowed)
+
+
+def test_the_escalation_a_reversal_re_opens_can_run_and_complete_the_cycle():
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    rows += [_adj("f2", "rejected"), *_pass("3", 1, head=H1), _adj("f2", "accepted")]
+    rows += _pass("esc", 3, head=H2)  # the superseded pass 3 stays in the log
+    assert _next(rows, head=H2) == "3"
+    rows += _pass("3", 2, head=H2)
+    assert _next(rows, head=H2) is None
+    assert rlg.completing_run(rows, ARC) is not None
+
+
+def test_a_cycle_keeps_the_shape_its_history_started_with():
+    # a completed doc-only cycle that gains a code commit gets one pass 3, not a new pass 1
+    doc_cycle = _pass("3", 1, head=H1)
+    assert _next(doc_cycle, head=H2, doc_only=False) == "3"
+    # and a code cycle in progress keeps going when the diff turns doc-only
+    code_cycle = _pass("1", 1, head=H1)
+    assert _next(code_cycle, head=H1, doc_only=True) == "2"
+
+
+def test_an_operator_suppressed_p1_lets_pass_3_complete():
+    # suppressed is C-HE-24 §5's logged operator override; it closes a finding as
+    # rejected does, so the cycle must not stall at pass 3
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
+    rows.append(_adj("f3", "suppressed"))
+    assert rlg.completing_run(rows, ARC) is not None
+    assert _next(rows) is None
+
+
+def test_deterministic_check_rows_are_not_cycle_findings():
+    # a hard/warn/info row shares the record shape but is not a reviewer's finding
+    rows = [*_pass("1", 1, fid="h1", sev="hard")]
+    assert isinstance(_dcycle(rows, "2", head=H2), rlg.Allowed)
+
+
+def test_pass_3_does_not_complete_while_a_p1_it_raised_is_undisposed():
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
+    assert rlg.completing_run(rows, ARC) is None
+    rows.append(_adj("f3", "rejected"))
+    assert rlg.completing_run(rows, ARC) is not None
+
+
+def test_out_of_order_pass_is_refused_with_the_admitted_one():
+    d = _dcycle([], "2")
+    assert isinstance(d, rlg.Refused) and d.code == "PASS_OUT_OF_ORDER"
+    assert "run pass 1" in d.recipe
+
+
+def test_pass_1_requires_the_authoring_preflight():
+    d = _dcycle([], "1", state=_state())
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert isinstance(_dcycle([], "1"), rlg.Allowed)
+
+
+def test_later_passes_need_no_re_attestation_after_the_tree_moves():
+    moved = _dcycle(_pass("1", 1, head=H1), "2", head=H2)
+    assert isinstance(moved, rlg.Allowed) and moved.round_n == 2
+
+
+def test_an_accepted_p1_or_p2_needs_a_new_head_before_the_next_pass():
+    rows = [*_pass("1", 1, head=H1, fid="f1", sev="P2"), _adj("f1", "accepted")]
+    same = _dcycle(rows, "2", head=H1)
+    assert isinstance(same, rlg.Refused) and same.code == "FIX_NOT_COMMITTED"
+    assert isinstance(_dcycle(rows, "2", head=H2), rlg.Allowed)
+    rejected = [*_pass("1", 1, head=H1, fid="f1", sev="P1"), _adj("f1", "rejected")]
+    assert isinstance(_dcycle(rejected, "2", head=H1), rlg.Allowed)
+
+
+def test_an_undisposed_finding_blocks_the_next_pass():
+    rows = _pass("1", 1, head=H1, fid="f1")
+    d = _dcycle(rows, "2", head=H2)
+    assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING" and "f1" in d.detail
+    rows.append(_adj("f1", "accepted"))
+    assert isinstance(_dcycle(rows, "2", head=H2), rlg.Allowed)
+
+
+def test_an_undisposed_p1_is_reported_before_the_pass_order():
+    # the admitted pass depends on that P1's disposition, so it is asked for first
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H2, fid="f2", sev="P1")]
+    d = _dcycle(rows, "esc", head=H3)
+    assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING"
+
+
+def test_a_failover_verdict_stands_in_for_codex():
+    # gemini runs under the identical bar when codex is unavailable (C-HE-17 §1)
+    rows = [
+        _crow("1", 1, record_kind="reviewer_unavailable"),
+        _crow("1", 1, producer="gemini_review_wrapper"),
+        *(_crow("1", 1, producer=lens) for lens in LENSES),
+    ]
+    assert _next(rows) == "2"
+
+
+def test_an_unavailable_lens_does_not_complete_a_pass():
+    # three of the four reviewers delivered; the fourth lens was unavailable
+    rows = [_crow("1", 1), *(_crow("1", 1, producer=lens) for lens in LENSES[:2])]
+    rows.append(_crow("1", 1, producer=LENSES[2], record_kind="reviewer_unavailable"))
+    assert _next(rows) == "1"
+
+
+def test_a_pass_no_reviewer_performed_does_not_advance_the_cycle():
+    unavailable = [
+        _crow("1", 1, record_kind="reviewer_unavailable"),
+        _crow("1", 1, producer="gemini_review_wrapper", record_kind="reviewer_unavailable"),
+    ]
+    assert _next(unavailable) == "1"
+    assert isinstance(_dcycle(unavailable, "1"), rlg.Allowed)
+    unattested = _dcycle(unavailable, "1", state=_state())
+    assert isinstance(unattested, rlg.Refused) and unattested.code == "PREFLIGHT_MISSING"
+
+
+def test_passes_are_ordered_by_the_log_not_by_the_clock():
+    # a clock stepping backwards between passes cannot reorder the cycle
+    rows = [
+        *(dict(r, ts="2026-09-18T12:00:00Z") for r in _pass("1", 1, head=H1)),
+        *(dict(r, ts="2026-09-18T11:00:00Z") for r in _pass("2", 2, head=H1)),
+    ]
+    assert _next(rows, head=H1) == "3"
+
+
+def test_rows_outside_a_cycle_do_not_advance_it():
+    legacy = [dict(r, cycle_pass=None) for r in _pass("1", 1)]
+    assert _next(legacy) == "1"
+
+
+def test_no_pass_named_keeps_the_legacy_round_path():
+    # the legacy budget path is untouched when HARNESS_CYCLE_PASS is unset
+    d = _decide(_state(), [])
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+
+
+def test_cycle_pass_env_parses_or_refuses_loudly():
+    assert fr.cycle_pass_from_env({}) is None
+    assert fr.cycle_pass_from_env({"HARNESS_CYCLE_PASS": ""}) is None
+    assert fr.cycle_pass_from_env({"HARNESS_CYCLE_PASS": "esc"}) == "esc"
+    with pytest.raises(fr.RecordError):
+        fr.cycle_pass_from_env({"HARNESS_CYCLE_PASS": "4"})
+
+
+def test_emitted_rows_carry_the_running_pass(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_CYCLE_PASS", "2")
+    outcome = rw.ReviewOutcome(
+        terminal="BLOCK",
+        channel="codex",
+        failure_class=None,
+        reason="finding",
+        findings=[dict(location="x.py:1", message="m", severity="P2")],
+        binding=dict(head_sha=HEAD, base_sha="b" * 40, diff_digest=DIGEST),
+    )
+    rows = rw.emit_outcome(
+        outcome,
+        producer=LOOP_PRODUCER,
+        arc_id=ARC,
+        lane_id="lane-x",
+        round_n=1,
+        path=tmp_path / "log.jsonl",
+    )
+    assert rows and all(r["cycle_pass"] == "2" for r in rows)
+    for r in rows:
+        fr.validate(r)
