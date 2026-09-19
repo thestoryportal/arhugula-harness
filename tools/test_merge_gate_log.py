@@ -1364,14 +1364,70 @@ def test_arc_not_held_reason_without_reservations_substrate_refuses(monkeypatch)
     assert "no reservations substrate" in (mgl.arc_not_held_reason("u-x") or "")
 
 
-def test_a_lens_verdict_cannot_carry_a_cycle_pass_until_its_admission_lands(
+def _cycle_gate(monkeypatch, *, base: str = B, preflight: bool = True) -> None:
+    """Run lens admission for a reserved arc on the fixture's binding: the reviewed base
+    is B unless a test says otherwise, and the git reads are the gate's edge, stubbed."""
+    import review_loop_gate as rlg
+
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    pf = rlg.PreflightAttestation(
+        arc_id="u-x", head_sha=H, diff_digest=D, hit_labels=(), answers_digest="d", ts="t"
+    )
+    monkeypatch.setattr(
+        rlg, "load_state", lambda repo: rlg.GateState((pf,) if preflight else (), (), ())
+    )
+    monkeypatch.setattr(
+        rlg,
+        "_cycle_request",
+        lambda repo, binding, cycle_pass, role: rlg.CycleRequest(
+            cycle_pass, role, binding["base_sha"], base, False
+        ),
+    )
+
+
+def test_a_lens_verdict_the_cycle_does_not_admit_is_refused_and_writes_nothing(
     tmp_path: Path, monkeypatch
 ):
-    # nothing admits the lens half yet (B-294), so a pass-tagged lens row could complete
-    # the cycle out of order; the emit refuses it and writes nothing
+    # pass 3 before passes 1 and 2 would complete the cycle out of order (codex r2 P1 on
+    # U-HE-53): the emitter consults the gate and records nothing
+    _cycle_gate(monkeypatch)
     monkeypatch.setenv(fr.CYCLE_PASS_ENV, "3")
-    with pytest.raises(mgl.GateLogError, match="B-294"):
-        _emit(tmp_path, verdict="APPROVE")
+    with pytest.raises(mgl.GateLogError, match="PASS_OUT_OF_ORDER"):
+        _emit(tmp_path, verdict="APPROVE", arc_id="u-x")
     assert not (tmp_path / "log.jsonl").exists()
-    monkeypatch.delenv(fr.CYCLE_PASS_ENV)
+
+
+def test_an_admitted_lens_verdict_records_its_pass_once(tmp_path: Path, monkeypatch):
+    _cycle_gate(monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    rows = _emit(tmp_path, verdict="APPROVE", arc_id="u-x")
+    assert [r["cycle_pass"] for r in rows] == ["1"]
+    # a second emission of the same lens is serialized behind the first and refused
+    with pytest.raises(mgl.GateLogError, match="ALREADY_DELIVERED"):
+        _emit(tmp_path, verdict="APPROVE", arc_id="u-x")
+    # the pass's other lenses still join it
+    other = _emit(tmp_path, verdict="APPROVE", arc_id="u-x", lens="merge-gate-spec-conformance")
+    assert other[0]["cycle_pass"] == "1"
+
+
+def test_a_lens_verdict_on_the_wrong_base_is_refused(tmp_path: Path, monkeypatch):
+    _cycle_gate(monkeypatch, base="f" * 40)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    with pytest.raises(mgl.GateLogError, match="WRONG_BASE"):
+        _emit(tmp_path, verdict="APPROVE", arc_id="u-x")
+    assert not (tmp_path / "log.jsonl").exists()
+
+
+def test_a_pass_tagged_lens_verdict_for_an_unreserved_arc_is_refused(tmp_path: Path, monkeypatch):
+    import review_loop_gate as rlg
+
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "3")
+    with pytest.raises(mgl.GateLogError, match="CYCLE_UNRESERVED"):
+        _emit(tmp_path, verdict="APPROVE", arc_id="u-x")
+    assert not (tmp_path / "log.jsonl").exists()
+
+
+def test_a_legacy_lens_verdict_needs_no_admission(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv(fr.CYCLE_PASS_ENV, raising=False)
     assert _emit(tmp_path, verdict="APPROVE")[0]["cycle_pass"] is None

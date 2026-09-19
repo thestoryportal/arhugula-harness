@@ -410,7 +410,13 @@ def append_observations(
     `append_observation`'s arguments) -- so anything the caller derives from the current log
     (a next round number, a count) and the appends it conditions are one atomic step (two
     wrappers on one arc cannot both mint the same round; C-HE-22 / S1 codex round 7). Ids are
-    minted per pair against the rows already present PLUS the pairs appended before it."""
+    minted per pair against the rows already present PLUS the pairs appended before it.
+
+    Every row is validated before any is written, and all of them go down in ONE write, so
+    a process that dies between two rows can no longer record the first finding of a
+    verdict and strand the rest (B-294 (d)). The batch carries the log's one-row append
+    guarantee (`_append_line`): a short write is rolled back; a crash inside that one
+    syscall is the residual every single-row append already has."""
     path = path or GATE_LOG_JSONL
     written: list[dict] = []
 
@@ -422,9 +428,9 @@ def append_observations(
             row = make_row(FindingCore(finding_id=fid, **core_fields), env)
             validate(row)
             _check_against_prior_rows(row, rows)
-            _append_line(fd, _encode(row), path)
             rows.append(row)
             written.append(row)
+        _append_line(fd, b"".join(_encode(row) for row in written), path)
 
     _under_log_lock(path, body)
     return written

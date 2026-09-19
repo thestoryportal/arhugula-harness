@@ -469,6 +469,13 @@ merge-gate-emit *ARGS:
 merge-gate-emit-all *ARGS:
     uv run python tools/merge_gate_log.py emit-all "$@"
 
+# Spec v1.9 X9a: one lens verdict of a bounded-cycle pass (1, 2, esc or 3). The pass is
+# named once, here; the emitter admits the verdict by the same rules as the codex half
+# (order, fixes, stop, base) and records it tagged with the pass. Exits as `emit`.
+#   just merge-gate-emit-pass <pass> --pr <N> --arc-id <arc-id> --lens merge-gate-<id> --verdict-json .harness/tmp/<file> --base <base>
+merge-gate-emit-pass pass *ARGS:
+    p="$1"; shift; HARNESS_CYCLE_PASS="$p" uv run python tools/merge_gate_log.py emit "$@"
+
 # Absorption-step disposition write (C-HE-24 §5, U-HE-47): append ONE finding_adjudication
 # row. Exit 0 recorded / 2 NOT recorded (unknown finding_id, actor == producer, same-second
 # ts, an already-adjudicated lineage violation, or — with HARNESS_ARC_ID set — an arc this
@@ -986,6 +993,16 @@ review-with-failover-logged log base='main':
 # entry/sweep attestations the wrapper enforces before any review round.
 # `review-attest-budget` is deliberately NOT guard-allowlisted — extending the
 # round budget stays operator-visible (the loop must never self-extend it).
+# Spec v1.9 X9a: the codex half of one pass of the bounded review cycle, pass 1, 2 or esc
+# (pass 3 is one lens: `merge-gate-emit-pass 3`). The pass is named once, here, in
+# HARNESS_CYCLE_PASS; the gate admits only the next legal pass on the base X9a binds it to
+# (pass 2: the head the previous pass reviewed; otherwise the full diff from origin/main),
+# and every row the wrapper emits records it.
+# [LAW:single-enforcer] logging, spans and round-log publication stay in
+# review-with-failover-logged; this recipe only names the pass.
+review-cycle-pass pass log base='origin/main':
+    HARNESS_CYCLE_PASS="$1" just review-with-failover-logged "$2" "$3"
+
 # WR-10 (U-SR-04): labels before answers — the template verbs run preflight-grep.sh
 # over the attested range FIRST and write every hit label (sweep: + outstanding
 # finding ids) into a fresh answers template the author fills, so attestation
