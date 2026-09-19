@@ -135,13 +135,26 @@ def _same_family_heads(rows: list[dict], lens: str) -> set[tuple[str, str | None
 
 def _scored(rows: list[dict], lens: str) -> list[dict]:
     excluded = _same_family_heads(rows, lens)
-    return [
+    candidates = [
         r
         for r in rows
         if r["producer"] == lens
         and r["record_kind"] in SCORED_KINDS
         and r["round_n"] is not None
         and (r["arc_id"], r["head_sha"]) not in excluded
+    ]
+    # spec v1.9 X9d: under the bounded cycle each arc runs one cycle, so only the arc's
+    # FINAL pass-3 shadow round scores — a pass-3 re-run after a P1 fix would otherwise
+    # count one cycle twice. Rows without a cycle_pass keep the per-round unit.
+    final_pass3: dict[str, int] = {}
+    for r in candidates:
+        if r.get("cycle_pass") == "3":
+            final_pass3[r["arc_id"]] = max(final_pass3.get(r["arc_id"], 0), r["round_n"])
+    return [
+        r
+        for r in candidates
+        if r.get("cycle_pass") is None
+        or (r["cycle_pass"] == "3" and r["round_n"] == final_pass3[r["arc_id"]])
     ]
 
 
@@ -337,6 +350,7 @@ def _adjudication_row(
         disposition=disposition,
         disposition_actor=actor,
         unique_catch=uc,
+        cycle_pass=orig.get("cycle_pass"),
     )
     return fr.make_row(core, env)
 

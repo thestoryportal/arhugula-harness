@@ -843,3 +843,19 @@ def test_cli_oc_decide_and_config_if_absent(
     assert sum(1 for r in fr.read_rows(p) if r["producer"] == st.CONFIG_PRODUCER) == 1
     assert st.main(["config", "--lens", LENS, "--threshold", "1"]) == 0  # an amendment appends
     assert st.rule_from_rows(fr.read_rows(p), LENS) == (30, 1)
+
+
+def test_a_cycle_scores_only_its_final_pass_3_shadow_round():
+    # spec v1.9 X9d: a pass-3 re-run after a P1 fix changes head_sha; scoring each terminal
+    # would count one cycle twice, so only the arc's final pass-3 round is a scored unit
+    rows = [
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3"},
+        {**_row(2, LENS, "no_finding", head="i" * 40), "cycle_pass": "3"},
+        {**_row(1, LENS, "no_finding", arc="pr-2"), "cycle_pass": "3"},
+    ]
+    assert st.scored_rounds(rows, LENS) == {("pr-1", 2), ("pr-2", 1)}
+
+
+def test_rows_without_a_cycle_pass_keep_the_per_round_unit():
+    rows = [_row(1, LENS, "no_finding"), _row(2, LENS, "no_finding")]
+    assert st.scored_rounds(rows, LENS) == {("pr-1", 1), ("pr-1", 2)}

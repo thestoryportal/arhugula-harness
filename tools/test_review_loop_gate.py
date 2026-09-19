@@ -3258,3 +3258,143 @@ def test_preflight_carries_the_u_sr_04_mechanism_precedent_rule():
     assert "adopt its shape or import it outright" in section
     assert ".harness/merge-gate-log.jsonl" in section
     assert "plan skeleton as UNREVIEWED input" in section
+
+
+# ── the bounded review cycle (U-HE-53; spec v1.9 X9a/X9c) ────────────────────
+
+
+def _crow(
+    cycle_pass: str, round_n: int, ts: str, *, fid: str | None = None, sev: str = "P2", **over
+):
+    """A cycle row: a finding when `fid` is given, else a clean `no_finding` marker."""
+    kind = "finding" if fid else "no_finding"
+    return _row(round_n, kind, fid, cycle_pass=cycle_pass, ts=ts, severity=sev, **over)
+
+
+def _adj(fid: str, disposition: str, ts: str) -> dict:
+    return dict(
+        arc_id=ARC,
+        finding_id=fid,
+        record_kind="finding_adjudication",
+        disposition=disposition,
+        ts=ts,
+    )
+
+
+def test_cycle_order_without_escalation():
+    assert rlg.next_pass([], ARC, doc_only=False) == "1"
+    after1 = [_crow("1", 1, "t1")]
+    assert rlg.next_pass(after1, ARC, doc_only=False) == "2"
+    after2 = [*after1, _crow("2", 2, "t2")]
+    assert rlg.next_pass(after2, ARC, doc_only=False) == "3"
+    after3 = [*after2, _crow("3", 3, "t3")]
+    assert rlg.next_pass(after3, ARC, doc_only=False) == "3"  # pass-3 re-runs stay pass 3
+
+
+def test_doc_only_arc_starts_at_pass_3():
+    assert rlg.next_pass([], ARC, doc_only=True) == "3"
+
+
+def test_accepted_p1_in_pass_2_escalates_once():
+    rows = [
+        _crow("1", 1, "t1"),
+        _crow("2", 2, "t2", fid="f2", sev="P1"),
+        _adj("f2", "accepted", "t3"),
+    ]
+    assert rlg.next_pass(rows, ARC, doc_only=False) == "esc"
+    rows.append(_crow("esc", 3, "t4"))
+    assert rlg.next_pass(rows, ARC, doc_only=False) == "3"
+
+
+def test_rejected_or_p2_in_pass_2_does_not_escalate():
+    rejected = [
+        _crow("1", 1, "t1"),
+        _crow("2", 2, "t2", fid="f2", sev="P1"),
+        _adj("f2", "rejected", "t3"),
+    ]
+    assert rlg.next_pass(rejected, ARC, doc_only=False) == "3"
+    p2 = [
+        _crow("1", 1, "t1"),
+        _crow("2", 2, "t2", fid="f2", sev="P2"),
+        _adj("f2", "accepted", "t3"),
+    ]
+    assert rlg.next_pass(p2, ARC, doc_only=False) == "3"
+
+
+def test_out_of_order_pass_is_refused_with_the_admitted_one():
+    d = _decide(_state(preflights=(_pf(),)), [], cycle_pass="2")
+    assert isinstance(d, rlg.Refused) and d.code == "PASS_OUT_OF_ORDER"
+    assert "review-cycle-pass 1" in d.recipe
+
+
+def test_pass_1_requires_the_authoring_preflight():
+    d = _decide(_state(), [], cycle_pass="1")
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+    assert isinstance(_decide(_state(preflights=(_pf(),)), [], cycle_pass="1"), rlg.Allowed)
+
+
+def test_later_passes_need_no_re_attestation_after_the_tree_moves():
+    rows = [_crow("1", 1, "t1")]
+    moved = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="2", head_sha="f" * 40)
+    assert isinstance(moved, rlg.Allowed) and moved.round_n == 2
+
+
+def test_an_undisposed_finding_blocks_the_next_pass():
+    rows = [_crow("1", 1, "t1", fid="f1")]
+    d = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="2")
+    assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING" and "f1" in d.detail
+    rows.append(_adj("f1", "accepted", "t2"))
+    assert isinstance(_decide(_state(preflights=(_pf(),)), rows, cycle_pass="2"), rlg.Allowed)
+
+
+def test_the_cycle_ceiling_stops_the_arc_until_a_recorded_extension():
+    rows = [_crow("1", 1, "t1"), _crow("2", 2, "t2")]
+    rows += [_crow("3", n, f"t{n}") for n in range(3, rlg.PASS_CEILING + 1)]
+    spent = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="3")
+    assert isinstance(spent, rlg.Refused) and spent.code == "BUDGET_EXHAUSTED"
+    ext = rlg.BudgetExtension(arc_id=ARC, extra_rounds=1, reason="operator", ts="t")
+    assert isinstance(
+        _decide(_state(preflights=(_pf(),), extensions=(ext,)), rows, cycle_pass="3"), rlg.Allowed
+    )
+
+
+def test_lens_rows_do_not_spend_the_ceiling():
+    lens = [_crow("1", n, f"t{n}", producer="merge-gate-witness-adequacy") for n in range(1, 10)]
+    assert rlg.pass_invocations(lens, ARC) == 0
+
+
+def test_no_pass_named_keeps_the_legacy_round_path():
+    # the legacy budget path is untouched when HARNESS_CYCLE_PASS is unset
+    d = _decide(_state(), [])
+    assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+
+
+def test_cycle_pass_env_parses_or_refuses_loudly():
+    assert fr.cycle_pass_from_env({}) is None
+    assert fr.cycle_pass_from_env({"HARNESS_CYCLE_PASS": ""}) is None
+    assert fr.cycle_pass_from_env({"HARNESS_CYCLE_PASS": "esc"}) == "esc"
+    with pytest.raises(fr.RecordError):
+        fr.cycle_pass_from_env({"HARNESS_CYCLE_PASS": "4"})
+
+
+def test_emitted_rows_carry_the_running_pass(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_CYCLE_PASS", "2")
+    outcome = rw.ReviewOutcome(
+        terminal="BLOCK",
+        channel="codex",
+        failure_class=None,
+        reason="finding",
+        findings=[dict(location="x.py:1", message="m", severity="P2")],
+        binding=dict(head_sha=HEAD, base_sha="b" * 40, diff_digest=DIGEST),
+    )
+    rows = rw.emit_outcome(
+        outcome,
+        producer=LOOP_PRODUCER,
+        arc_id=ARC,
+        lane_id="lane-x",
+        round_n=1,
+        path=tmp_path / "log.jsonl",
+    )
+    assert rows and all(r["cycle_pass"] == "2" for r in rows)
+    for r in rows:
+        fr.validate(r)

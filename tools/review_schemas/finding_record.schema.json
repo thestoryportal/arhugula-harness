@@ -26,6 +26,7 @@
     "cause_attribution": {"type": ["string", "null"]},
     "disposition": {"enum": [null, "accepted", "rejected", "suppressed"]},
     "disposition_actor": {"type": ["string", "null"], "pattern": "^[^:]+$"},
-    "unique_catch": {"type": ["boolean", "null"]}
+    "unique_catch": {"type": ["boolean", "null"]},
+    "cycle_pass": {"enum": [null, "1", "2", "esc", "3"]}
   }
 }

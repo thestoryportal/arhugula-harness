@@ -667,6 +667,22 @@ for c in 'just review-with-failover-logged .harness/tmp/r1.log main review-attes
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "review-logged hardening: '$c' → not allow" || bad "review-logged over-matched: $c"
 done
+# (a') U-HE-53: one pass of the bounded review cycle — typed pass, same pinned log.
+for c in 'just review-cycle-pass 1 .harness/tmp/u-he-53-rounds/r1.log' \
+         'just review-cycle-pass esc .harness/tmp/u-he-53-rounds/r3.log origin/main' \
+         'HARNESS_ARC_ID=u-he-53 HARNESS_LANE_ID=lane-1 just review-cycle-pass 3 .harness/tmp/u-he-53-rounds/r4.log'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "review-cycle-pass → allow: '$c'" || bad "review-cycle-pass not allowed: $c → $OUT"
+done
+for c in 'just review-cycle-pass 4 .harness/tmp/r1.log' \
+         'just review-cycle-pass 1 tools/reservations.py' \
+         'just review-cycle-pass 1 .harness/tmp/../../etc/x.log' \
+         'just review-cycle-pass 1 .harness/tmp/r1.log main review-attest-budget' \
+         'just review-cycle-pass ${p:=1} .harness/tmp/r1.log' \
+         'just review-cycle-pass'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "review-cycle-pass hardening: '$c' → not allow" || bad "review-cycle-pass over-matched: $c"
+done
 # hardening: state-mutating / gh-backed / non-carrier verbs and the bare module prefix stay un-allowed
 for c in 'uv run python tools/reservations.py transition --arc-id x --to merged' \
          'uv run python tools/reservations.py gc' \

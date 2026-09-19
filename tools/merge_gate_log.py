@@ -322,6 +322,7 @@ def _emit_gate_row_locked(
                     round_n=rows[0]["round_n"],
                     cause_attribution="markdown_write_failed",
                     unique_catch=False,  # X6d: no null-attribution lens-producer rows
+                    cycle_pass=rows[0].get("cycle_pass"),
                 ),
                 jsonl_path,
             )
