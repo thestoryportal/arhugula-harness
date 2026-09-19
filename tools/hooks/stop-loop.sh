@@ -5,11 +5,15 @@
 # at turn end it injects the next-action and `decision:block`s to continue. It STOPS
 # (allows the turn to end) only at a TRUE stand-down or a bound:
 #   - INERT unless loop mode on (exit 0).
-#   - HALT MARKER (.harness/.loop-halt) present → a TRUE stand-down was signalled: the
-#     forward menu is exhausted (every forward item deferred) OR the operator stopped it.
-#     A single gated item does NOT raise this — it is deferred + worked around (see below).
+#   - HALT MARKER (.harness/.loop-halt) present → a TRUE stand-down was signalled. Three
+#     things raise it: the forward menu is exhausted (every forward item deferred) or the
+#     operator stopped it (both written from outside this hook), the iteration cap below,
+#     and the context ceiling's attended arm. A single gated item does NOT raise it — it is
+#     deferred + worked around (see below).
 #   - ITERATION CAP (HARNESS_LOOP_MAX, default 25) → hard bound on auto-continued turns
 #     (the claudefa.st turn-counter guard); log + reset + allow stop.
+#   - CONTEXT CEILING (U-HE-58) → headless, allow the stop and let the runner relaunch;
+#     attended, block ONCE for the close-out and raise the halt marker.
 #   - otherwise → increment the counter + block with the next-action + the run-scoped
 #     SKIP-SET so the loop ADVANCES past already-deferred items (never re-attempts one).
 #
@@ -40,6 +44,11 @@ _LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 hook_review_isolated && exit 0
 # shellcheck source=loop_lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/loop_lib.sh"
+
+# The Stop payload, read once. Only the ceiling reading (step 4) consumes it, but stdin is
+# a stream with one reader, so it is taken here rather than mid-script where an added caller
+# above would silently starve it.
+PAYLOAD=$(hook_read_stdin)
 
 # 1) INERT unless loop mode on.
 loop_mode_active || exit 0
@@ -80,10 +89,56 @@ if [ "$ITER" -ge "$MAX" ]; then
   exit 0
 fi
 
-# 4) Continue: increment counter + inject next-action + the run-scoped skip-set.
-ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
 NEXT=$(hook_roadmap_next "$PROJECT_DIR/.harness/roadmap_status.md")
 NEXT=${NEXT:-"(derive per CLAUDE.md §4 from the dashboard)"}
+
+# 4) Context ceiling (U-HE-58, plan §9 B4 / decision 7). memento's own ceiling hook stands
+#    down whenever stop_hook_active is set (context-ceiling.py:220), and every continued loop
+#    turn sets it — so inside loop mode the ceiling has no enforcer but this one. The reading
+#    and the ceiling come back from context_tokens.py as a single stamped verdict; nothing is
+#    re-derived here.
+if ! VERDICT_JSON=$(printf '%s' "$PAYLOAD" \
+  | /usr/bin/python3 "$(dirname "${BASH_SOURCE[0]}")/context_tokens.py" \
+      ${HARNESS_LOOP_HEADLESS:+--headless} 2>&1); then
+  # The ceiling is instrumentation over the loop, not a gate the loop may not run without,
+  # so a broken reading does not strand the run — but it is never swallowed either: the
+  # ledger is where the difference between "under the ceiling" and "never measured" lives.
+  loop_log STOP "context ceiling unreadable — continuing unmeasured: ${VERDICT_JSON}"
+else
+  VERDICT=$(printf '%s' "$VERDICT_JSON" | jq -r '.verdict')
+  TOKENS=$(printf '%s' "$VERDICT_JSON" | jq -r '.tokens')
+  CEILING=$(printf '%s' "$VERDICT_JSON" | jq -r '.ceiling')
+  case "$VERDICT" in
+    relaunch)
+      # Headless: tools/04-loop/run.sh starts the next iteration itself, and blocking here
+      # would put a second session on one worktree. The counter is the RUN's, so it stands.
+      loop_log STOP "context ceiling ${TOKENS}/${CEILING} — headless, allowing the stop so the runner relaunches"
+      exit 0
+      ;;
+    close-out)
+      # Attended: nothing will relaunch this session, so it is told to close out. The halt
+      # marker is what bounds it to ONE such block — the next Stop stands down at step 2
+      # rather than spending more context on the problem that IS too much context. Context
+      # exhaustion is a genuine stand-down, which is the condition that marker already means.
+      CLOSE_OUT=$(printf '%s' "$VERDICT_JSON" | jq -r '.close_out')
+      loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, blocking once for the close-out"
+      [ -n "$HALT" ] && : > "$HALT" 2>/dev/null
+      # A close-out block is a turn the loop spent, so it counts as one. That is also the
+      # SECOND bound: the halt marker above is the primary one, but writing it is a
+      # best-effort file write, and if it fails this arm would otherwise re-block every
+      # turn forever — the counter carries the block to the cap regardless.
+      ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
+      jq -nc --arg r "[stop-loop] CONTEXT CEILING: this session is at ~${TOKENS} tokens, past the ${CEILING} ceiling, and no runner will relaunch it. Do not start new work.
+1. Commit or push everything outstanding — a handoff across a reset loses whatever is not committed.
+2. Close out: ${CLOSE_OUT}
+The handoff is the only thing the next session wakes up with, so it says what you were doing, exactly where you stopped, and the next concrete step. The dashboard next-action to carry across is: ${NEXT}." '{"decision":"block","reason":$r}'
+      exit 0
+      ;;
+  esac
+fi
+
+# 5) Continue: increment counter + inject next-action + the run-scoped skip-set.
+ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
 

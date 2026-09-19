@@ -110,6 +110,164 @@ echo "$OUT" | jq -e '.reason | test("tools/04-loop/halt.sh")'       >/dev/null 2
 echo "$OUT" | jq -e '.reason | test("exhausted")'                >/dev/null 2>&1 && ok "exhaustion is the ONLY stand-down condition" || bad "missing exhaustion condition"
 
 
+# 8) Context ceiling (U-HE-58, plan §9 B4 / decision 7). The three arms of the verdict enum,
+#    driven end-to-end through the hook off a real transcript file — the reading, the ceiling
+#    and the dispatch, not just the presence of the call. MEMENTO_ROOT is pinned at a path
+#    that does not exist so the ceiling resolves to the 250,000 default and the suite never
+#    depends on whether the operator has the plugin installed.
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
+: > "$HARNESS_LOOP_STATUS_PATH"
+export MEMENTO_ROOT="$REPO/no-such-memento"
+
+usage_record() {  # $1 = total tokens, split across the four prompt components
+  printf '{"type":"assistant","message":{"usage":{"input_tokens":%s,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}}}\n' "$1"
+}
+OVER="$REPO/over.jsonl";  usage_record 300000 > "$OVER"
+UNDER="$REPO/under.jsonl"; usage_record 1000  > "$UNDER"
+payload() { printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$1" "$REPO"; }
+run_ceiling() {  # $1 = transcript, $2 = "headless" or "attended"
+  local headless=""; [ "$2" = headless ] && headless=1
+  payload "$1" | HARNESS_LOOP=1 HARNESS_LOOP_HEADLESS="$headless" \
+    CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK"
+}
+
+# 8a) Under the ceiling → the normal continuation, unchanged.
+OUT=$(run_ceiling "$UNDER" attended)
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "under ceiling → still continues" || bad "under-ceiling did not continue: $OUT"
+echo "$OUT" | jq -e '.reason | test("R-410")' >/dev/null 2>&1 && ok "under ceiling → normal next-action reason" || bad "under-ceiling lost the next-action"
+echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING") | not' >/dev/null 2>&1 && ok "under ceiling → no close-out reason" || bad "under-ceiling emitted a close-out: $OUT"
+[ ! -f "$REPO/.harness/.loop-halt" ] && ok "under ceiling → no halt raised" || bad "under-ceiling raised halt"
+rm -f "$REPO/.harness/.loop-iter"
+
+# 8b) Over the ceiling, headless → allow the stop; the runner relaunches. Blocking here
+#     would put a second session on one worktree, and a halt would stop the runner dead.
+OUT=$(run_ceiling "$OVER" headless)
+[ -z "$OUT" ] && ok "over ceiling + headless → allows the stop" || bad "headless blocked at ceiling: $OUT"
+[ ! -f "$REPO/.harness/.loop-halt" ] && ok "over ceiling + headless → no halt (runner must relaunch)" || bad "headless ceiling raised halt — runner would stand down"
+grep -q '| STOP | lane=[^|]* | context ceiling 300000/250000 — headless' "$HARNESS_LOOP_STATUS_PATH" && ok "headless ceiling logged with the reading" || bad "headless ceiling not logged"
+
+# 8c) Over the ceiling, attended → block once with the close-out instruction.
+OUT=$(run_ceiling "$OVER" attended)
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "over ceiling + attended → blocks" || bad "attended did not block at ceiling: $OUT"
+echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING")' >/dev/null 2>&1 && ok "attended ceiling → close-out reason" || bad "no close-out reason: $OUT"
+echo "$OUT" | jq -e '.reason | test("300000")' >/dev/null 2>&1 && ok "close-out names the reading" || bad "close-out omits the token count"
+echo "$OUT" | jq -e '.reason | test("context-save-lean")' >/dev/null 2>&1 && ok "close-out names the recipe (memento absent → the workspace checkpoint)" || bad "close-out names no recipe: $OUT"
+echo "$OUT" | jq -e '.reason | test("R-410")' >/dev/null 2>&1 && ok "close-out carries the next-action into the handoff" || bad "close-out drops the next-action"
+
+# 8d) Blocked once, never twice — the bound. A second over-ceiling stop stands down at the
+#     halt marker 8c raised, instead of spending more context on the problem that IS too
+#     much context. Without this the attended arm blocks every turn forever.
+[ -f "$REPO/.harness/.loop-halt" ] && ok "attended ceiling raises the halt marker (the bound)" || bad "no halt raised — the close-out block would repeat forever"
+OUT=$(run_ceiling "$OVER" attended)
+[ -z "$OUT" ] && ok "second over-ceiling stop stands down (blocked once, never twice)" || bad "close-out block repeated: $OUT"
+rm -f "$REPO/.harness/.loop-halt"
+
+# 8d-ii) The second bound. Raising the halt marker is a best-effort file write; if it fails
+#        the close-out arm would re-block every turn forever, so the arm also spends a turn
+#        on the counter and the cap carries it. Witnessed by making the marker path
+#        unwritable (a directory cannot be truncated into) so the primary bound cannot take.
+rm -f "$REPO/.harness/.loop-iter"
+mkdir -p "$REPO/.harness/.loop-halt"
+OUT=$(run_ceiling "$OVER" attended)
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "halt unwritable → the close-out still blocks" || bad "close-out lost with an unwritable halt: $OUT"
+[ "$(cat "$REPO/.harness/.loop-iter")" = "1" ] && ok "close-out spends a turn on the counter (the second bound)" || bad "close-out did not count its turn: $(cat "$REPO/.harness/.loop-iter" 2>/dev/null)"
+printf '30' > "$REPO/.harness/.loop-iter"
+OUT=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" \
+  | HARNESS_LOOP=1 HARNESS_LOOP_MAX=2 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+[ -z "$OUT" ] && ok "with halt unwritable the cap still terminates the close-out" || bad "close-out escaped both bounds: $OUT"
+rmdir "$REPO/.harness/.loop-halt" 2>/dev/null; rm -rf "$REPO/.harness/.loop-halt"
+rm -f "$REPO/.harness/.loop-iter"
+
+# 8e) An unreadable reading never strands the run, and is never silent either: the loop
+#     continues and the ledger carries the difference between "under" and "never measured".
+: > "$HARNESS_LOOP_STATUS_PATH"
+OUT=$(printf '{"transcript_path":"%s"}' "$REPO/absent.jsonl" | HARNESS_LOOP=1 \
+  MEMENTO_ROOT="$REPO/no-such-memento" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "missing transcript → loop continues unmeasured" || bad "missing transcript stranded the loop: $OUT"
+unset MEMENTO_ROOT
+
+# 9) The reading itself (context_tokens.py), driven in the consumer's exact invocation. The
+#    transcript scan reads backwards in 256 KB chunks, so the cases that can only go wrong
+#    there — a record straddling a chunk boundary, a torn final line, a subagent's sidechain
+#    — are witnessed here rather than inferred from the end-to-end arms above.
+READER="$SCRIPT_DIR/context_tokens.py"
+read_verdict() { printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$1" "$REPO" \
+  | MEMENTO_ROOT="$REPO/no-such-memento" /usr/bin/python3 "$READER"; }
+
+V=$(read_verdict "$UNDER")
+[ "$(echo "$V" | jq -r .ceiling)" = "250000" ] && ok "memento absent → ceiling is the 250,000 default" || bad "wrong default ceiling: $V"
+[ "$(echo "$V" | jq -r .tokens)" = "1000" ] && ok "reads the assistant record's usage" || bad "wrong token sum: $V"
+
+# All four prompt components are summed — a reader that took input_tokens alone would put a
+# long session far under its real position, which is the whole failure this guards.
+FOUR="$REPO/four.jsonl"
+printf '{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_creation_input_tokens":20,"cache_read_input_tokens":300,"output_tokens":4000}}}\n' > "$FOUR"
+[ "$(read_verdict "$FOUR" | jq -r .tokens)" = "4321" ] && ok "sums all four prompt components" || bad "component sum wrong: $(read_verdict "$FOUR")"
+
+# The ceiling is a floor the session is AT, not one it must pass: exactly at the ceiling is over.
+EXACT="$REPO/exact.jsonl"; usage_record 250000 > "$EXACT"
+[ "$(read_verdict "$EXACT" | jq -r .verdict)" = "close-out" ] && ok "exactly at the ceiling counts as over" || bad "boundary is off by one: $(read_verdict "$EXACT")"
+
+# Newest record wins: an earlier, larger reading is history, not this session's position.
+NEWEST="$REPO/newest.jsonl"; { usage_record 900000; usage_record 1000; } > "$NEWEST"
+[ "$(read_verdict "$NEWEST" | jq -r .tokens)" = "1000" ] && ok "newest assistant record wins over an older one" || bad "scan returned a stale record: $(read_verdict "$NEWEST")"
+
+# A subagent's sidechain describes its own context, never this session's.
+SIDE="$REPO/side.jsonl"
+{ usage_record 1000; printf '{"isSidechain":true,"type":"assistant","message":{"usage":{"input_tokens":900000}}}\n'; } > "$SIDE"
+[ "$(read_verdict "$SIDE" | jq -r .tokens)" = "1000" ] && ok "sidechain records are skipped" || bad "a subagent's usage leaked in: $(read_verdict "$SIDE")"
+
+# A transcript still being appended to ends in a torn line; that is ordinary, not fatal.
+TORN="$REPO/torn.jsonl"; { usage_record 1000; printf '{"type":"assis'; } > "$TORN"
+[ "$(read_verdict "$TORN" | jq -r .tokens)" = "1000" ] && ok "torn final line is skipped, not fatal" || bad "torn line broke the scan: $(read_verdict "$TORN")"
+
+# A record straddling the 256 KB chunk boundary must be rejoined, not read as two fragments.
+STRADDLE="$REPO/straddle.jsonl"
+/usr/bin/python3 -c "
+import sys
+pad = 'x' * 300_000
+with open(sys.argv[1], 'w') as f:
+    f.write('{\"type\":\"user\",\"pad\":\"%s\"}\n' % pad)
+    f.write('{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":7777}}}\n')
+" "$STRADDLE"
+[ "$(read_verdict "$STRADDLE" | jq -r .tokens)" = "7777" ] && ok "a record past a 256 KB chunk boundary still reads" || bad "chunk straddle lost the record: $(read_verdict "$STRADDLE")"
+
+# A transcript with no assistant record yet reads zero rather than guessing a number.
+EMPTY="$REPO/empty.jsonl"; printf '{"type":"user"}\n' > "$EMPTY"
+[ "$(read_verdict "$EMPTY" | jq -r .tokens)" = "0" ] && ok "no assistant record → zero, not a guess" || bad "invented a reading: $(read_verdict "$EMPTY")"
+
+# 10) memento installed. The plugin is optional, so neither arm above touches it — but when
+#     it IS there it owns the ceiling and supplies the close-out, and nothing in this repo
+#     would otherwise notice an upstream rename of either. The fixture stands in for the
+#     install, so what it pins is the five names this repo imports and the two paths it reads
+#     — not memento's config grammar, which only the real plugin has. That half was checked by
+#     hand against upstream promptctl/memento@0d1f5bc when this landed: with a session layer
+#     of `ceiling = 400000` the reading of 300,000 came back `under` at a ceiling of 400,000,
+#     where the same payload with memento absent came back `close-out` at 250,000. The two
+#     numbers differ, which is what makes that a control rather than a coincidence.
+FAKE="$REPO/memento"
+mkdir -p "$FAKE/lib" "$FAKE/skills/message-in-a-bottle/bin"
+cat > "$FAKE/lib/ceiling_config.py" <<'PY'
+"""Stands in for memento's ceiling_config: the names tools/hooks/context_tokens.py imports."""
+SHARED_AT_START = "shared-at-start.conf"
+def anchored(fallback): return fallback
+def session_directory(session_id): return __import__("pathlib").Path("/tmp") / session_id
+def shared_at_start(path, anchor): return ("shared", anchor)
+def in_force(directory, shared): return 400_000
+PY
+: > "$FAKE/skills/message-in-a-bottle/bin/finalize-session"
+fake_verdict() { printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$1" "$REPO" \
+  | MEMENTO_ROOT="$FAKE" /usr/bin/python3 "$READER"; }
+
+V=$(fake_verdict "$OVER")
+[ "$(echo "$V" | jq -r .ceiling)" = "400000" ] && ok "memento present → its ceiling wins over the default" || bad "memento ceiling ignored: $V"
+[ "$(echo "$V" | jq -r .verdict)" = "under" ] && ok "a reading over 250,000 is under a memento ceiling of 400,000" || bad "memento ceiling not applied to the verdict: $V"
+echo "$V" | jq -r .close_out | grep -q "finalize-session --reset compact" && ok "memento present → the close-out is its launcher" || bad "close-out ignored the installed launcher: $V"
+
+# --headless is what separates the two over-ceiling arms, and nothing else does.
+[ "$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" | MEMENTO_ROOT="$REPO/nope" /usr/bin/python3 "$READER" --headless | jq -r .verdict)" = "relaunch" ] \
+  && ok "--headless selects relaunch over close-out" || bad "--headless did not change the verdict"
+
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
