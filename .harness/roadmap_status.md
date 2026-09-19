@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `0ef62d8137fd` |
+| `workspace_state_hash` | `5fd221fb9ef8` |
 | `last_refreshed` | 2026-09-19T00:00:00Z |
-| `git_head` | `86b2e7ba` —  |
+| `git_head` | `91fc0939` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1597).** B-294 is closed: #1595 landed the lens half of the bounded review cycle, and #1597 corrected the plan §9 U-HE-53 row and registered B-296. The cycle is usable, but the skills still launch the legacy path, so arcs keep running the X9a cycle by hand until U-HE-54 moves them. U-HE-54 now waits on B-296: the codex half of a pass is admitted before its review runs, so two concurrent runs of one pass can both deliver, and a late verdict can add a P1 to a pass that already completed while the cycle still reads complete. Next is B-296 (re-check the codex half's admission inside the append lock, and refuse a verdict for an already-completed pass), then U-HE-54, then U-HE-57.
+**Current next action (post-#1578).** #1578 landed the one gate-log row recording #1573's door block (main red at d13bc2dd0, C-HE-06 §9), so the incident now has a durable record on main and the branch no longer blocks every lane's selection. B-294 is closed (#1595, #1597). The cycle is usable, but the skills still launch the legacy path, so arcs keep running the X9a cycle by hand until U-HE-54 moves them. U-HE-54 waits on B-296: the codex half of a pass is admitted before its review runs, so two concurrent runs of one pass can both deliver, and a late verdict can add a P1 to a pass that already completed while the cycle still reads complete. Next is B-296 (re-check the codex half's admission inside the append lock, and refuse a verdict for an already-completed pass), then U-HE-54, then U-HE-57.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -43,7 +43,6 @@
 | PR | Branch | R-NNN | Posture |
 |---|---|---|---|
 | #1292 | `fix/codex-hook-contract-recovery` | — | — |
-| #1578 | `ops/gate-log-rows-post-1573` | — | — |
 
 ---
 
@@ -51,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1578 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1597 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1595 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1593 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1591 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1583 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
