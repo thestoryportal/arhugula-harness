@@ -293,6 +293,8 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _plant_classifier(tmp_path, unmatched=())
     monkeypatch.setenv("HARNESS_GATE_LOG", str(tmp_path / "gate-log.jsonl"))
     monkeypatch.setattr(fr, "GATE_LOG_JSONL", tmp_path / "gate-log.jsonl")
+    # the fixture repo has no remote; its main plays origin/main's part
+    monkeypatch.setattr(rlg, "FULL_DIFF_REF", "main")
     monkeypatch.delenv("HARNESS_LOOP", raising=False)
     return tmp_path
 
@@ -3394,9 +3396,16 @@ def _next(rows, head=HEAD, doc_only=False, digest=DIGEST):
     return rlg.next_pass(rows, ARC, doc_only=doc_only, head_sha=head, diff_digest=digest)
 
 
-def _dcycle(rows, cycle_pass, *, head=HEAD, state=None, **over):
+def _dcycle(rows, cycle_pass, *, head=HEAD, state=None, role="codex", base=None, doc_only=False):
+    """One reviewer's admission; `base` defaults to the one X9a binds the pass to (pass 2:
+    the head the last counted run reviewed; otherwise the full diff from BASE), so order
+    tests exercise order and the base tests pass their base explicitly."""
     state = state or _state(preflights=(_pf(),))
-    return _decide(state, rows, cycle_pass=cycle_pass, head_sha=head, **over)
+    if base is None:
+        last = rlg.replay(rows, ARC, doc_only=doc_only).last
+        base = last.head_sha if cycle_pass == "2" and last is not None else BASE
+    cycle = rlg.CycleRequest(cycle_pass, role, base, BASE, doc_only)
+    return _decide(state, rows, cycle=cycle, head_sha=head)
 
 
 def test_cycle_order_without_escalation():
@@ -3420,7 +3429,7 @@ def test_a_clean_pass_3_is_not_admitted_again_at_the_same_head():
 def test_doc_only_arc_starts_at_pass_3_which_has_no_codex_half():
     assert _next([], doc_only=True) == "3"
     d = _dcycle([], "3", doc_only=True)
-    assert isinstance(d, rlg.Refused) and d.code == "PASS_HAS_NO_CODEX_HALF"
+    assert isinstance(d, rlg.Refused) and d.code == "REVIEWER_NOT_IN_PASS"
 
 
 def test_a_pass_completes_only_when_its_whole_reviewer_set_delivered():
@@ -3445,14 +3454,13 @@ def test_reviewers_that_read_different_bytes_do_not_complete_one_pass():
     assert _next(rows) == "1"
 
 
-def test_a_retry_of_a_partially_recorded_pass_is_admitted():
-    # rows append one at a time, so a crash can leave part of a codex verdict before any
-    # lens has delivered; the retry is admitted. The case where the lenses already
-    # delivered is B-294 (d), unreachable while pass-tagged lens verdicts are refused
-    partial = [_crow("1", 1, fid="f1")]
-    assert isinstance(_dcycle(partial, "1"), rlg.Refused)  # f1 still owes a disposition
-    partial.append(_adj("f1", "accepted"))
-    assert isinstance(_dcycle(partial, "1"), rlg.Allowed)
+def test_a_reviewer_delivers_once_per_pass_and_its_findings_wait_for_the_pass():
+    # a verdict is recorded whole (B-294 (d)), so a reviewer that delivered is done; its
+    # findings are adjudicated after the pass, not before its other reviewers run
+    rows = [_crow("1", 1, fid="f1")]
+    again = _dcycle(rows, "1")
+    assert isinstance(again, rlg.Refused) and again.code == "ALREADY_DELIVERED"
+    assert isinstance(_dcycle(rows, "1", role=WITNESS), rlg.Allowed)
 
 
 def test_accepted_p1_in_pass_2_escalates_once():
@@ -3638,6 +3646,110 @@ def test_no_pass_named_keeps_the_legacy_round_path():
     # the legacy budget path is untouched when HARNESS_CYCLE_PASS is unset
     d = _decide(_state(), [])
     assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
+
+
+def test_a_full_diff_pass_reviewed_on_any_other_base_is_refused():
+    # X9a binds passes 1, esc and 3 to the PR's full diff: an empty HEAD..HEAD diff, or a
+    # stale base that widens it, is not that pass (codex r4 P1 on U-HE-53)
+    for base in (HEAD, H4):
+        d = _dcycle([], "1", base=base)
+        assert isinstance(d, rlg.Refused) and d.code == "WRONG_BASE"
+        assert BASE in d.recipe
+    assert isinstance(_dcycle([], "1", base=BASE), rlg.Allowed)
+    lens_first = _dcycle([], "1", role=WITNESS, base=HEAD)
+    assert isinstance(lens_first, rlg.Refused) and lens_first.code == "WRONG_BASE"
+
+
+def test_pass_2_reviews_the_fix_delta_from_the_head_pass_1_reviewed():
+    rows = _pass("1", 1, head=H1)
+    full = _dcycle(rows, "2", head=H2, base=BASE)
+    assert isinstance(full, rlg.Refused) and full.code == "WRONG_BASE" and H1 in full.recipe
+    assert isinstance(_dcycle(rows, "2", head=H2, base=H1), rlg.Allowed)
+    lens = _dcycle(rows, "2", head=H2, base=H1, role=WITNESS)
+    assert isinstance(lens, rlg.Allowed)
+
+
+def test_only_the_reviewers_x9a_names_can_deliver_a_pass():
+    rows = _pass("1", 1, head=H1)
+    d = _dcycle(rows, "2", head=H2, role="merge-gate-concurrency")
+    assert isinstance(d, rlg.Refused) and d.code == "REVIEWER_NOT_IN_PASS"
+    # a row from outside the pass's set does not count toward it: pass 3 completes on one
+    # delivery, so a codex row tagged pass 3 would otherwise end the cycle
+    rows += _pass("2", 2, head=H2)
+    stray = [*rows, _crow("3", 3, head=H2)]
+    assert _next(stray, head=H2) == "3"
+
+
+def test_pass_3_is_one_lens_so_a_second_lens_cannot_join_it():
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
+    d = _dcycle(rows, "3", role=WITNESS)
+    assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING"
+    rows.append(_adj("f3", "rejected"))
+    done = _dcycle(rows, "3", role=WITNESS)
+    assert isinstance(done, rlg.Refused) and done.code == "CYCLE_COMPLETE"
+
+
+def test_a_pass_3_p2_goes_to_the_follow_up_and_does_not_hold_the_cycle():
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P2")]
+    rows.append(_adj("f3", "accepted"))
+    assert _next(rows) is None
+
+
+def test_refusals_come_in_x9a_order():
+    # the reviewer set is checked before the base, and a missing fix before the base, so
+    # each refusal names the first thing to repair
+    rows = _pass("1", 1, head=H1)
+    wrong_both = _dcycle(rows, "2", head=H2, base=BASE, role="merge-gate-concurrency")
+    assert isinstance(wrong_both, rlg.Refused) and wrong_both.code == "REVIEWER_NOT_IN_PASS"
+    fixed_nothing = [*_pass("1", 1, head=H1, fid="f1"), _adj("f1", "accepted")]
+    d = _dcycle(fixed_nothing, "2", head=H1, base=BASE)
+    assert isinstance(d, rlg.Refused) and d.code == "FIX_NOT_COMMITTED"
+
+
+def test_an_unresolvable_full_diff_ref_refuses_a_pass_before_its_review(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # without origin/main the gate cannot measure the full diff, and must not skip the
+    # base rule: it refuses, on both halves of the pass
+    _commit_on_branch(repo, "g.py", "x\n")
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setattr(rlg, "FULL_DIFF_REF", "origin/main")
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "STATE_UNREADABLE"
+    binding = rw.code_binding(repo, "main")
+    lens = rlg.admit_lens(
+        repo, [], lens=WITNESS, cycle_pass="1", binding=binding, arc_id=ARC, lane_id="l"
+    )
+    assert isinstance(lens, rlg.Refused) and lens.code == "STATE_UNREADABLE"
+
+
+def test_a_cycle_pass_on_an_unreserved_arc_is_refused_not_recorded_unchecked(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # rows tagged with a pass would count toward the cycle once the arc is reserved, so a
+    # named pass is admitted or refused, never let through as Inactive (codex r1 P1)
+    _commit_on_branch(repo, "g.py", "x\n")
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)  # a legacy round still runs
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "CYCLE_UNRESERVED"
+    binding = rw.code_binding(repo, "main")
+    lens = rlg.admit_lens(
+        repo, [], lens=WITNESS, cycle_pass="3", binding=binding, arc_id=ARC, lane_id="l"
+    )
+    assert isinstance(lens, rlg.Refused) and lens.code == "CYCLE_UNRESERVED"
+
+
+def test_admit_binds_the_full_diff_to_the_merge_base_with_main(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _commit_on_branch(repo, "g.py", "x\n")
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    empty = rlg.admit(repo, "HEAD", ARC)
+    assert isinstance(empty, rlg.Refused) and empty.code == "WRONG_BASE"
 
 
 def test_cycle_pass_env_parses_or_refuses_loudly():

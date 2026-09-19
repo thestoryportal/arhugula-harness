@@ -43,6 +43,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import finding_record as fr
+import review_loop_gate as rlg
 import review_wrapper_common as rw
 
 REPO = Path(__file__).resolve().parent.parent
@@ -246,25 +247,50 @@ def emit_gate_row(
     never reach the tracked logs."""
     if not _LENS_RE.match(lens):
         raise GateLogError(f"lens id {lens!r} must match ^merge-gate-[a-z-]+$")
-    # A lens verdict tagged with a cycle pass would count toward that pass, and nothing
-    # admits the lens half yet — an out-of-order pass-3 row could complete the cycle.
-    # Refused until the lens-half admission lands (B-294).
-    cycle_pass = fr.cycle_pass_from_env()
-    if cycle_pass is not None:
-        raise GateLogError(
-            f"lens verdicts cannot carry {fr.CYCLE_PASS_ENV}={cycle_pass} until the lens half "
-            "of the bounded cycle is admitted (B-294); unset it to record a legacy verdict"
-        )
+    try:
+        cycle_pass = fr.cycle_pass_from_env()
+    except fr.RecordError as exc:
+        raise GateLogError(str(exc)) from exc
     arc_id = arc_id or f"pr-{pr}"
     lane_id = lane_id or rw.env_arc_and_lane()[1]
     md_path = md_path or GATE_LOG_MD
     jsonl_path = jsonl_path or fr.GATE_LOG_JSONL
-    return _under_emit_lock(  # type: ignore[return-value]
-        jsonl_path,
-        lambda: _emit_gate_row_locked(
+
+    def admitted_emit() -> list[dict]:
+        # admission and append share the emit lock, so a second emission of this lens
+        # for the same pass reads the first one's rows before it is admitted
+        if cycle_pass is not None:
+            _admit_lens(lens, cycle_pass, outcome, arc_id, lane_id, jsonl_path)
+        return _emit_gate_row_locked(
             pr, lens, outcome, arc_id, lane_id, round_n, md_path, jsonl_path
-        ),
+        )
+
+    return _under_emit_lock(jsonl_path, admitted_emit)  # type: ignore[return-value]
+
+
+def _admit_lens(
+    lens: str,
+    cycle_pass: str,
+    outcome: rw.ReviewOutcome,
+    arc_id: str,
+    lane_id: str,
+    jsonl_path: Path,
+) -> None:
+    """Refuse a lens verdict the bounded cycle does not admit (spec v1.9 X9a): the same
+    rules the codex half passes before its review runs."""
+    if outcome.binding is None:
+        raise GateLogError(f"a {fr.CYCLE_PASS_ENV} verdict needs its binding to be admitted")
+    decision = rlg.admit_lens(
+        REPO,
+        fr.read_rows(jsonl_path),
+        lens=lens,
+        cycle_pass=cycle_pass,
+        binding=outcome.binding,
+        arc_id=arc_id,
+        lane_id=lane_id,
     )
+    if isinstance(decision, rlg.Refused):
+        raise GateLogError(f"{decision.code}: {decision.detail}; {decision.recipe}")
 
 
 def _emit_gate_row_locked(
@@ -797,10 +823,8 @@ def _read_text(arg: str) -> str:
 
 #: The three merge-gate lenses in emission order (merge-gate/SKILL.md), keyed by the
 #: `emit-all` flag that carries each one's verdict file.
-LENS_FILES: tuple[tuple[str, str], ...] = (
-    ("merge-gate-concurrency", "concurrency_json"),
-    ("merge-gate-spec-conformance", "spec_json"),
-    ("merge-gate-witness-adequacy", "witness_json"),
+LENS_FILES: tuple[tuple[str, str], ...] = tuple(
+    zip(rlg.LENSES, ("concurrency_json", "spec_json", "witness_json"), strict=True)
 )
 
 
