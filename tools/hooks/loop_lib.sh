@@ -763,9 +763,9 @@ loop_activate() {
   # NOTE: worktree GC is intentionally NOT called here. `tools/04-loop/run.sh` installs its
   # `.loop-active`-cleanup EXIT/INT/TERM trap only AFTER loop_activate returns, so a slow
   # gh/GC step here would open a pre-trap interruption window that could leave loop mode
-  # armed on Ctrl-C (codex P2). SessionStart only reports candidates; explicit
-  # post-merge/closeout worktree disposition performs the removal after the runner trap
-  # is installed and no active session owns the candidate.
+  # armed on Ctrl-C (codex P2). Removal happens at SessionStart instead, where
+  # tools/hooks/loop-gc.sh launches `loop_gc_worktrees reap` detached once its read-only
+  # report finds a candidate.
 }
 
 # Turn loop mode OFF: remove the marker + log the deactivation. Usage: loop_deactivate [reason]
@@ -781,8 +781,10 @@ loop_deactivate() {
 # ── Worktree garbage collection (U-HK-26) ─────────────────────────────────────
 # The autonomous loop ships PRs whose worktrees go stale after merge, and nothing
 # reaps them (git-arc-guard checks commits/branches; session-end-cleanup is
-# advisory-only; a hook can't remove the worktree it runs INSIDE). SessionStart reports
-# candidates; explicit post-merge/closeout disposition calls loop_gc_worktrees reap.
+# advisory-only; a hook can't remove the worktree it runs INSIDE). Every SessionStart
+# (tools/hooks/loop-gc.sh) runs the read-only report and, when it finds a candidate,
+# launches `loop_gc_worktrees reap` detached, so merged worktrees are removed with no
+# manual step; `just loop-start` runs the same reap in the foreground.
 #
 # WORKTREES ONLY — never `git branch -d/-D`. `git worktree remove` on a clean tree is
 # REVERSIBLE (branch + commits persist; `git worktree add` re-creates it); a merged
@@ -820,13 +822,45 @@ _loop_gc_local_state() {
   hook_worktree_local_state "$1"
 }
 
+# Idle grace before a reap. A merged, clean worktree whose own git admin files moved in
+# the last few minutes is probably being resumed -- the realistic case is reopening the
+# worktree whose arc just merged -- and a reaper that wins the per-worktree mutex against
+# that session's startup makes the startup fail. Skipping costs only a delay: the worktree
+# is retried at a later session start. The value is a human timescale, not a measured
+# one: ending a session and reopening one in the same worktree (a relaunch, a resume) takes
+# a minute or two, so five minutes covers it with margin, and it stays above the 3-minute
+# starting-lease window (_WORKTREE_STARTING_LEASE_WINDOW_MIN in lib.sh) so a startup still
+# inside that grace is covered by both.
+_LOOP_GC_IDLE_GRACE_MIN=5
+
+# Name the git admin file of <wt> modified within the idle grace. Returns 0 and prints its
+# git-path when there is recent activity, 1 when the worktree is idle, 2 when an admin path
+# cannot be resolved or examined (callers fail closed). Reads the worktree's own index and
+# HEAD reflog. Session transcripts and leases are not re-read here: worktree_has_live_session
+# (lib.sh) already treats a transcript under 30 minutes old or a live/starting lease as a
+# live session, and hook_safe_worktree_remove checks it under the removal mutex.
+_loop_gc_recent_activity() {
+  local wt="$1" rel file recent
+  for rel in index logs/HEAD; do
+    file=$(git -C "$wt" rev-parse --path-format=absolute --git-path "$rel" 2>/dev/null) || return 2
+    # An absent reflog (core.logAllRefUpdates=false) records no activity; it is not an error.
+    [ -e "$file" ] || continue
+    recent=$(find "$file" -maxdepth 0 -mmin "-${_LOOP_GC_IDLE_GRACE_MIN}" -print) || return 2
+    if [ -n "$recent" ]; then
+      printf '%s' "$rel"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Decide the disposition of ONE worktree and act per MODE.
 # Args: <path> <branch> <current_toplevel> <default_branch> <mode> <root>
 #   mode=reap   → mutex-backed worktree removal + log to the ledger (loop mode).
 #   mode=report → echo "<path> (<branch>)" for a reapable candidate (HIL, read-only).
 # Safe-subset gate (ALL must hold): not the current worktree; has a branch (not
 # detached); not the default branch; branch's PR merged at the worktree's exact HEAD
-# SHA; clean working tree (ignored-aware).
+# SHA; no git activity within the idle grace; clean working tree (ignored-aware).
 _loop_gc_consider() {
   local path="$1" branch="$2" current="$3" default="$4" mode="$5" root="$6"
   [ -n "$path" ] || return 0
@@ -846,6 +880,23 @@ _loop_gc_consider() {
     [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — HEAD ${head_oid:0:8} != merged ${want_oid:0:8} (name collision/reuse)"
     return 0
   fi
+  # [LAW:single-enforcer] the idle grace lives here, on the path every reap caller takes.
+  # It runs before the status probe below, and that probe runs with GIT_OPTIONAL_LOCKS=0,
+  # so no scan of ours refreshes the index it measures.
+  local activity activity_rc
+  activity=$(_loop_gc_recent_activity "$path")
+  activity_rc=$?
+  case "$activity_rc" in
+    1) ;;
+    0)
+      [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — git activity within ${_LOOP_GC_IDLE_GRACE_MIN} min ($activity); retried at a later session start"
+      return 0
+      ;;
+    *)
+      [ "$mode" = "reap" ] && loop_log GC "skipped $path ($branch) — git activity state unavailable"
+      return 0
+      ;;
+  esac
   local residue local_state_rc
   residue=$(_loop_gc_local_state "$path")                    # dirty / untracked / precious-ignored
   local_state_rc=$?
@@ -882,17 +933,41 @@ _loop_gc_consider() {
   esac
 }
 
-# Garbage-collect stale worktrees only when invoked explicitly after merge/closeout.
-# WORKTREES ONLY; fail-safe to zero removals when the merged set is unavailable.
-# Deterministic bash (NOT a Claude tool call) → bypasses permission-guard; the
-# safe-subset gate above is the backstop. Always returns 0.
-#   mode=reap   (default) → remove + log each disposition.
-#   mode=report           → echo "<path> (<branch>)" per reapable candidate (read-only).
-# Usage: loop_gc_worktrees [reap|report]
-loop_gc_worktrees() {
-  local mode="${1:-reap}"
-  command -v git >/dev/null 2>&1 || return 0
-  local root; root=$(hook_project_dir); [ -n "$root" ] || return 0
+# The repository-wide reap lock: one per git common dir, so every worktree of the
+# repository contends for the same one.
+_loop_gc_reap_lock_path() {
+  local common
+  common=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
+  printf '%s/loop-gc-reap.lock' "$common"
+}
+
+# Take the repository reap lock on fd 7 without waiting. Returns 0 when this process now
+# holds it, 1 when another live reaper holds it, 2 when it cannot be opened or locked.
+# The lock is an fcntl flock owned by the open file: it is released when fd 7 closes,
+# which the kernel does when the holder exits, so a holder that died leaves nothing
+# behind and the next reaper takes the lock at once. Call it in a subshell that ends
+# when the reap does; that subshell's exit is the release.
+_loop_gc_single_flight() {
+  local lock
+  lock=$(_loop_gc_reap_lock_path "$1") || return 2
+  exec 7>> "$lock" || return 2
+  /usr/bin/python3 - 7 <<'PY'
+import fcntl
+import sys
+
+try:
+    fcntl.flock(int(sys.argv[1]), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    raise SystemExit(1)
+except Exception:
+    raise SystemExit(2)
+PY
+}
+
+# Walk the registered worktrees and consider each. Fail-safe to zero removals when the
+# merged set is unavailable. Args: <mode> <root>.
+_loop_gc_scan() {
+  local mode="$1" root="$2"
   # Fail-safe: if gh can't reach the API (offline/unauth), do nothing rather than treat
   # every branch as unmerged-vs-merged ambiguously. One upfront probe, not N.
   if ! _loop_gc_gh_ok "$root"; then
@@ -916,6 +991,35 @@ loop_gc_worktrees() {
   done < <(git -C "$root" worktree list --porcelain 2>/dev/null)
   # Trailing record safety-net (porcelain normally ends with a blank line).
   [ -n "$path" ] && _loop_gc_consider "$path" "$branch" "$current" "$default" "$mode" "$root"
+  return 0
+}
+
+# Garbage-collect stale merged worktrees. WORKTREES ONLY. Deterministic bash (NOT a
+# Claude tool call) → bypasses permission-guard; the safe-subset gate above is the
+# backstop. Always returns 0.
+#   mode=reap   (default) → remove + log each disposition. Single-flight per repository:
+#                           concurrent session starts each launch a reaper, and every one
+#                           but the lock holder logs a skip and exits without scanning.
+#   mode=report           → echo "<path> (<branch>)" per reapable candidate (read-only,
+#                           takes no lock).
+# Usage: loop_gc_worktrees [reap|report]
+loop_gc_worktrees() {
+  local mode="${1:-reap}"
+  command -v git >/dev/null 2>&1 || return 0
+  local root; root=$(hook_project_dir); [ -n "$root" ] || return 0
+  case "$mode" in
+    reap)
+      (
+        _loop_gc_single_flight "$root"
+        case $? in
+          0) _loop_gc_scan reap "$root" ;;
+          1) loop_log GC "skipped — another reaper holds the repository reap lock; zero removals by this one" ;;
+          *) loop_log GC "skipped — repository reap lock unavailable; zero removals" ;;
+        esac
+      )
+      ;;
+    *) _loop_gc_scan "$mode" "$root" ;;
+  esac
   return 0
 }
 
