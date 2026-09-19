@@ -1245,3 +1245,4 @@ delegated `laws:prompt` author.
 | 2026-09-19T11:54:38Z | #1600 | 25a47c3dbea9 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
 | 2026-09-19T11:55:50Z | #1600 | 25a47c3dbea9 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |
 | 2026-09-19T11:56:46Z | #1600 | 25a47c3dbea9 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-19T12:04:27Z | #1600 | 780fdb4c921e | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
