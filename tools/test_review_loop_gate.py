@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
@@ -34,6 +35,10 @@ HEAD = "a" * 40
 BASE = "b" * 40
 DIGEST = "c" * 64
 LOOP_PRODUCER = "codex_review_wrapper"
+
+
+def _admit_all(log_rows: list[dict]) -> None:
+    """These tests exercise the log, not the bounded cycle's admission (B-296)."""
 
 
 def _row(round_n: int, kind: str, finding_id: str | None = None, **over) -> dict:
@@ -3775,9 +3780,188 @@ def test_emitted_rows_carry_the_running_pass(tmp_path, monkeypatch):
         producer=LOOP_PRODUCER,
         arc_id=ARC,
         lane_id="lane-x",
+        admit=_admit_all,
         round_n=1,
         path=tmp_path / "log.jsonl",
     )
     assert rows and all(r["cycle_pass"] == "2" for r in rows)
     for r in rows:
         fr.validate(r)
+
+
+# ── B-296: the codex half is admitted where its verdict is written ───────────
+
+_P1 = dict(location="x.py:1", message="m", severity="P1")
+
+
+def _verdict(binding: dict[str, str], findings: tuple[dict, ...] = ()) -> rw.ReviewOutcome:
+    terminal = "BLOCK" if findings else "APPROVE"
+    return rw.ReviewOutcome(terminal, "codex", None, "r", list(findings), dict(binding))
+
+
+def _deliver(repo: Path, binding: dict[str, str], producer=LOOP_PRODUCER, findings=()):
+    return rw.emit_outcome(
+        _verdict(binding, findings),
+        producer=producer,
+        arc_id=ARC,
+        lane_id="l",
+        round_n=None,
+        admit=rlg.delivery_admission(
+            repo, _verdict(binding, findings), producer=producer, arc_id=ARC, lane_id="l"
+        ),
+    )
+
+
+def _reserved_branch(repo: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    _commit_on_branch(repo, "g.py", "x\n")
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    _seed_current_preflight(repo)
+    return rw.code_binding(repo, "main")
+
+
+def test_two_admitted_runs_of_one_pass_record_exactly_one_delivery(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    binding = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    # both are admitted before either review ends, against the same pre-write log
+    assert all(isinstance(rlg.admit(repo, "main", ARC), rlg.Allowed) for _ in range(2))
+    barrier = threading.Barrier(2)
+    results: list[object] = []
+
+    def run() -> None:
+        barrier.wait()
+        try:
+            results.append(_deliver(repo, binding, findings=(_P1,)))
+        except rlg.CycleRefusedError as exc:
+            results.append(exc.decision.code)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(results) == 2
+    assert [r for r in results if isinstance(r, str)] == ["ALREADY_DELIVERED"]
+    delivered = [r for r in fr.read_rows() if r["producer"] == LOOP_PRODUCER]
+    assert [r["severity"] for r in delivered] == ["P1"]
+
+
+def test_the_write_time_check_reads_only_the_log(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # every gate-log writer shares the append lock, so git and state reads happen before
+    # it (merge-gate concurrency P2 on #1602): the check itself only reads its argument
+    binding = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    check = rlg.delivery_admission(
+        repo, _verdict(binding), producer=LOOP_PRODUCER, arc_id=ARC, lane_id="l"
+    )
+    monkeypatch.setattr(rlg, "_cycle_request", lambda *a: pytest.fail("git under the lock"))
+    monkeypatch.setattr(rlg, "_gate_state_in_force", lambda *a: pytest.fail("state under the lock"))
+    check([])
+    delivered = rw.outcome_rows(
+        _verdict(binding), producer=LOOP_PRODUCER, arc_id=ARC, lane_id="l", round_n=1
+    )
+    with pytest.raises(rlg.CycleRefusedError, match="ALREADY_DELIVERED"):
+        check(delivered)
+
+
+def test_a_verdict_for_a_completed_pass_is_refused_not_pooled_into_it(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    h1 = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    for producer in (LOOP_PRODUCER, *LENSES):
+        _deliver(repo, h1, producer=producer)
+    # the completed pass admits nothing more: the cycle has moved on to pass 2
+    with pytest.raises(rlg.CycleRefusedError, match="PASS_OUT_OF_ORDER"):
+        _deliver(repo, h1, findings=(_P1,))
+    # the cycle carries on at a new head and completes: pass 2 on the fix delta, pass 3
+    (repo / "h.py").write_text("y\n")
+    _commit_all(repo, "c3")
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "2")
+    fix = rw.code_binding(repo, h1["head_sha"])
+    for producer in (LOOP_PRODUCER, WITNESS):
+        _deliver(repo, fix, producer=producer)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "3")
+    _deliver(repo, rw.code_binding(repo, "main"), producer="merge-gate-spec-conformance")
+    assert rlg.completing_run(fr.read_rows(), ARC) is not None
+    # a pass-1 run still reviewing h1 delivers its P1 late (codex r1 P1 on #1597)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    with pytest.raises(rlg.CycleRefusedError, match="PASS_OUT_OF_ORDER"):
+        _deliver(repo, h1, findings=(_P1,))
+    rows = fr.read_rows()
+    assert not [r for r in rows if r.get("severity") == "P1"]
+    assert rlg.completing_run(rows, ARC) is not None
+
+
+def test_the_gemini_stand_in_is_admitted_as_the_codex_half_it_replaces(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # a failover child delivers the codex half (C-HE-17 §1), so it meets the same check
+    import agy_review as agy
+
+    binding = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.setenv("HARNESS_LANE_ID", "l")
+    monkeypatch.chdir(repo)
+    _deliver(repo, binding)
+    with pytest.raises(rlg.CycleRefusedError, match="ALREADY_DELIVERED"):
+        agy._emit(_verdict(binding, (_P1,)))
+    assert [r["producer"] for r in fr.read_rows()] == [LOOP_PRODUCER]
+
+
+def test_a_failover_child_refused_at_write_time_surfaces_as_gate_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    # a refused child writes no envelope (codex r1 P2 on #1602) and decides on its OWN
+    # binding, which may differ from the parent's if HEAD moved (codex r2 P2): the parent
+    # propagates the child's refusal rather than recording an unavailable reviewer
+    import codex_review as cr
+
+    binding = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.setenv("HARNESS_LANE_ID", "l")
+    monkeypatch.chdir(repo)
+    unavailable = rw.ReviewOutcome(
+        "REVIEWER_UNAVAILABLE", "codex", "transient", "down", [], binding
+    )
+    monkeypatch.setattr(cr, "run_codex_review", lambda repo_, base, invoke=None: unavailable)
+    child_stderr = (
+        "review gate: pass 1 reviews x..y; X9a binds it to z..y\n"
+        "  recipe: re-run pass 1 with base z\n"
+        "gemini-review: GATE_REFUSED (WRONG_BASE)\n"
+    )
+    monkeypatch.setattr(
+        cr, "run_bounded", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 3, "", child_stderr)
+    )
+    routed: list[str] = []
+    monkeypatch.setattr(cr, "_route_to_hitl", lambda *a, **k: routed.append(a[1]))
+    assert cr.main(["--base", "main", "--failover"]) == 3
+    err = capsys.readouterr().err
+    assert "codex-review: GATE_REFUSED (WRONG_BASE)" in err
+    assert "recipe: re-run pass 1 with base z" in err
+    assert routed == []
+    assert [r["record_kind"] for r in fr.read_rows()] == ["reviewer_unavailable"]
+
+
+def test_the_codex_wrapper_refuses_a_verdict_its_pass_received_while_it_reviewed(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    import codex_review as cr
+
+    binding = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.setenv("HARNESS_LANE_ID", "l")
+    monkeypatch.chdir(repo)
+
+    def review(repo_: Path, base: str, invoke=None) -> rw.ReviewOutcome:
+        _deliver(repo, binding)  # a concurrent run of the pass delivers first
+        return _verdict(binding, (_P1,))
+
+    monkeypatch.setattr(cr, "run_codex_review", review)
+    assert cr.main(["--base", "main"]) == 3
+    assert "codex-review: GATE_REFUSED (ALREADY_DELIVERED)" in capsys.readouterr().err
+    assert [r["record_kind"] for r in fr.read_rows()] == ["no_finding"]

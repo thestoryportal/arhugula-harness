@@ -542,6 +542,7 @@ def emit_outcome(
     arc_id: str,
     lane_id: str,
     round_n: int | None,
+    admit: Callable[[list[dict]], None],
     path: Path | None = None,
     attributor: Callable[[dict, list[dict]], dict] | None = None,
 ) -> list[dict]:
@@ -555,21 +556,30 @@ def emit_outcome(
     `attributor(obs, log_rows) -> obs` maps each observation against the log as it stands
     under the SAME lock (C-HE-24 §2 X6d: the merge-gate emitter derives `cause_attribution` /
     `unique_catch` from the codex rounds already on the log -- join and append are one atomic
-    step). Default is identity: channel wrappers emit unattributed rows unchanged."""
+    step). Default is identity: channel wrappers emit unattributed rows unchanged.
+
+    `admit(log_rows)` raises to refuse the whole outcome, under the same lock and before
+    anything is written: the bounded cycle's delivery admission
+    (`review_loop_gate.delivery_admission`, B-296) lives above this module, so every writer
+    names it here rather than this module importing the gate."""
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
         # minted INSIDE this critical section (codex round-16 P1: a pre-lock allocation
         # held across a 1200 s review was racy)
         n = round_n if round_n is not None else round_n_for(arc_id, producer, rows)
-        pairs = []
-        for obs in outcome_rows(
-            outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=n
-        ):
-            if attributor is not None:
-                obs = attributor(obs, rows)
-            env = fr.Envelope(**{k: obs[k] for k in _ENV_KEYS})
-            core = {k: v for k, v in obs.items() if k not in _ENV_KEYS}
-            pairs.append((core, env))
-        return pairs
+        observations = [
+            obs if attributor is None else attributor(obs, rows)
+            for obs in outcome_rows(
+                outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=n
+            )
+        ]
+        admit(rows)
+        return [
+            (
+                {k: v for k, v in obs.items() if k not in _ENV_KEYS},
+                fr.Envelope(**{k: obs[k] for k in _ENV_KEYS}),
+            )
+            for obs in observations
+        ]
 
     return fr.append_observations(build, path)
