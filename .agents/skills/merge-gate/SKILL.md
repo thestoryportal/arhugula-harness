@@ -168,7 +168,7 @@ older `merge-gate-emit` / `merge-gate-emit-all` recipes) delivers into no pass.
 - The cycle's one stop: a P1 still unfixed after pass 3 halts the arc (the gate refuses
   further passes, `BUDGET_EXHAUSTED`). It is a genuine decision point; surface the pass's
   verdicts together rather than looping or choosing silently, and continue only on a
-  recorded operator decision (`just review-attest-budget` buys one more pass-3 re-run) or
+  recorded operator decision (`just review-attest-budget <extra> <reason>` buys `<extra>` more pass-3 re-runs) or
   hold. No review runs past pass 3 otherwise.
 
 Commit and push the gate-log row before merge, then wait for CI on that final PR HEAD to be

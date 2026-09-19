@@ -272,8 +272,8 @@ diff again, so its size is paid on each of them.
 
 **The stop.** A P1 still unfixed after pass 3 — its re-run raised one again — stops the arc:
 the gate refuses further passes (`BUDGET_EXHAUSTED`). Surface it with one `AskUserQuestion`.
-The recorded answer is either a deliberate extension (`just review-attest-budget`, which buys
-one more pass-3 re-run, recorded by the operator and never granted by the loop) or register
+The recorded answer is either a deliberate extension (`just review-attest-budget <extra> <reason>`, which buys
+`<extra>` more pass-3 re-runs, recorded by the operator and never granted by the loop) or register
 and defer (`defer.sh` plus a register row). Nothing merges past a known P1.
 
 You will reach the end of this table with something still bothering you: a pass-3 P2 nobody

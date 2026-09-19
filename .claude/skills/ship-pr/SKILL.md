@@ -260,7 +260,7 @@ you run it in:
 `check-runs` all conclude success (rerun known flakes first, per
 `[[wait-for-main-ci-green-before-forward-work]]`). Skip the cycle only on a terminating
 `ops: roadmap status refresh` PR. A P1 still unfixed after pass 3 stops the arc: one
-`AskUserQuestion`, and its recorded answer extends (one more pass-3 re-run) or holds — see
+`AskUserQuestion`, and its recorded answer extends (`<extra>` more pass-3 re-runs) or holds — see
 the skill for the full procedure, parse-failure handling, and the audit-log append.
 
 **Final-gate reservation back-fill (C-HE-03 §3 + C-HE-06 §4(ii), U-HE-21).** After the
