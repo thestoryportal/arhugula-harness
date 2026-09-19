@@ -611,9 +611,21 @@ def next_pass(
         return "2"
     if last.cycle_pass == "2":
         return "esc" if _accepted(last, ("P1",), disposed) else "3"
-    if last.cycle_pass == "esc" or _accepted(last, ("P1",), disposed):
+    if last.cycle_pass == "esc" or not cycle_complete(rows, arc_id):
         return "3"
     return None if (head_sha, diff_digest) == (last.head_sha, last.diff_digest) else "3"
+
+
+def cycle_complete(rows: list[dict], arc_id: str) -> bool:
+    """The cycle is complete when its last completed pass is a pass 3 that raised no
+    accepted P1 — pass 3's re-runs end there (X9a), and the shadow trial scores the
+    pass-3 terminal only from here (X9d)."""
+    runs = [r for r in pass_runs(rows, arc_id) if r.complete]
+    return (
+        bool(runs)
+        and runs[-1].cycle_pass == "3"
+        and not _accepted(runs[-1], ("P1",), _last_dispositions(rows))
+    )
 
 
 def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:

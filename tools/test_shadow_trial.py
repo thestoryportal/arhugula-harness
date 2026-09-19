@@ -845,15 +845,46 @@ def test_cli_oc_decide_and_config_if_absent(
     assert st.rule_from_rows(fr.read_rows(p), LENS) == (30, 1)
 
 
+def _gate_pass3(arc: str, head: str, *, p1: str | None = None) -> list[dict]:
+    """A completed pass 3 in the gate log: one merge-gate lens verdict, optionally raising
+    an accepted P1 (which owes a pass-3 re-run)."""
+    row = dict(
+        arc_id=arc,
+        producer="merge-gate-spec-conformance",
+        record_kind="finding" if p1 else "no_finding",
+        finding_id=p1,
+        severity="P1",
+        cycle_pass="3",
+        head_sha=head,
+        diff_digest="d",
+        round_n=1,
+    )
+    # an adjudication copies its finding row, as merge_gate_log.adjudicate does
+    adj = [{**row, "record_kind": "finding_adjudication", "disposition": "accepted"}] if p1 else []
+    return [row, *adj]
+
+
 def test_a_cycle_scores_only_its_final_pass_3_shadow_round():
     # spec v1.9 X9d: a pass-3 re-run after a P1 fix changes head_sha; scoring each terminal
     # would count one cycle twice, so only the arc's final pass-3 round is a scored unit
     rows = [
+        *_gate_pass3("pr-1", "h" * 40, p1="g1"),
         {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3"},
+        *_gate_pass3("pr-1", "i" * 40),
         {**_row(2, LENS, "no_finding", head="i" * 40), "cycle_pass": "3"},
+        *_gate_pass3("pr-2", "h" * 40),
         {**_row(1, LENS, "no_finding", arc="pr-2"), "cycle_pass": "3"},
     ]
     assert st.scored_rounds(rows, LENS) == {("pr-1", 2), ("pr-2", 1)}
+
+
+def test_a_pass_3_that_still_owes_its_re_run_is_not_scored():
+    # the provisional round must not reach the sample: its re-run replaces the evidence
+    rows = [
+        *_gate_pass3("pr-1", "h" * 40, p1="g1"),
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3"},
+    ]
+    assert st.scored_rounds(rows, LENS) == set()
 
 
 def test_rows_without_a_cycle_pass_keep_the_per_round_unit():

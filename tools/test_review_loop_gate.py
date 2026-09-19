@@ -332,6 +332,39 @@ def test_admit_unreserved_is_inactive_in_every_mode(repo: Path, monkeypatch: pyt
     assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)
 
 
+def _commit_on_branch(repo: Path, name: str, text: str) -> None:
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "switch", "-qc", "feat"], check=True)
+    (repo / name).write_text(text)
+    subprocess.run([*git, "add", "."], check=True)
+    subprocess.run([*git, "commit", "-qm", "c2"], check=True)
+
+
+@pytest.mark.parametrize(
+    ("path", "admitted"),
+    [("g.py", "1"), ("docs/review notes.md", "3")],  # the space exercises the NUL split
+)
+def test_admit_routes_a_named_pass_through_the_cycle(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, path: str, admitted: str
+):
+    # the real wrapper entry point: the env names the pass, and the git-backed doc-only
+    # check picks where an empty cycle starts
+    (repo / path).parent.mkdir(parents=True, exist_ok=True)
+    _commit_on_branch(repo, path, "x\n")
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "2")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "PASS_OUT_OF_ORDER"
+    assert f"run pass {admitted}" in d.recipe
+
+
+def test_admit_refuses_an_unparseable_pass(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "4")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "STATE_UNREADABLE"
+
+
 # ── edges: attest CLI ────────────────────────────────────────────────────────
 
 SCRIPT_REL = Path(".claude/skills/defect-class-preflight/scripts/preflight-grep.sh")

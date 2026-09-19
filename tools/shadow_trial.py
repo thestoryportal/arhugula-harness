@@ -38,6 +38,7 @@ from math import comb
 from pathlib import Path
 
 import finding_record as fr
+import review_loop_gate as rlg
 from review_loop_gate import LOOP_PRODUCERS
 
 N_ROUNDS = 30
@@ -143,18 +144,19 @@ def _scored(rows: list[dict], lens: str) -> list[dict]:
         and r["round_n"] is not None
         and (r["arc_id"], r["head_sha"]) not in excluded
     ]
-    # spec v1.9 X9d: under the bounded cycle each arc runs one cycle, so only the arc's
-    # FINAL pass-3 shadow round scores — a pass-3 re-run after a P1 fix would otherwise
-    # count one cycle twice. Rows without a cycle_pass keep the per-round unit.
+    # spec v1.9 X9d: each arc runs one cycle, so only its FINAL pass-3 shadow round scores,
+    # and only once the gate's cycle is complete — a pass 3 that raised an accepted P1 is
+    # re-run, and scoring the provisional round would count one cycle twice. Rows without
+    # a cycle_pass keep the per-round unit.
     final_pass3: dict[str, int] = {}
     for r in candidates:
-        if r.get("cycle_pass") == "3":
+        if r.get("cycle_pass") == "3" and rlg.cycle_complete(rows, r["arc_id"]):
             final_pass3[r["arc_id"]] = max(final_pass3.get(r["arc_id"], 0), r["round_n"])
     return [
         r
         for r in candidates
         if r.get("cycle_pass") is None
-        or (r["cycle_pass"] == "3" and r["round_n"] == final_pass3[r["arc_id"]])
+        or (r["cycle_pass"] == "3" and r["round_n"] == final_pass3.get(r["arc_id"]))
     ]
 
 
