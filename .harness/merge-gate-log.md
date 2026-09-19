@@ -1238,3 +1238,11 @@ delegated `laws:prompt` author.
 | #1593 | 2026-09-19 | feat/u-he-53-bounded-cycle | merge-gate-witness-adequacy: APPROVE (r5 @aaa403cc9; 0 findings) — the only lens run this round, per the lean protocol for code-touching tooling PRs (one witness lens); concurrency and spec APPROVED at r4 and the r4→r5 delta is tests and gate-log rows only | outcome: ALL-APPROVE (lean) — codex r14 APPROVE, CI green at aaa403cc9 | blast-radius: 5 consumer chains (graft --depth 2, root checkout's graph; a floor) | note: rounds r1-r4 ran all three lenses on this tooling PR, against the lean protocol; that drift is recorded in the operator's feedback memory. |
 | 2026-09-19T09:06:11Z | #1595 | 553a1cf01ac7 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r1 |
 | 2026-09-19T09:16:44Z | #1595 | 94892989ad94 | merge-gate-concurrency | BLOCK | 1 finding(s) | r1 |
+| 2026-09-19T11:35:53Z | #1600 | 79e43568ef33 | merge-gate-witness-adequacy | BLOCK | 3 finding(s) | r1 |
+| 2026-09-19T11:38:31Z | #1600 | 79e43568ef33 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-19T11:38:44Z | #1600 | 79e43568ef33 | merge-gate-concurrency | BLOCK | 1 finding(s) | r1 |
+| 2026-09-19T11:47:17Z | #1600 | bd47a164e354 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r2 |
+| 2026-09-19T11:54:38Z | #1600 | 25a47c3dbea9 | merge-gate-concurrency | APPROVE | 0 finding(s) | r2 |
+| 2026-09-19T11:55:50Z | #1600 | 25a47c3dbea9 | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |
+| 2026-09-19T11:56:46Z | #1600 | 25a47c3dbea9 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-19T12:04:27Z | #1600 | 780fdb4c921e | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r3 |
