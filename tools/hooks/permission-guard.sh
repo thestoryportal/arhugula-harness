@@ -562,16 +562,59 @@ _review_logged_shape() {
   set -f; set -- $cmd; set +f
   { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
   [ "$1" = "just" ] && [ "$2" = "review-with-failover-logged" ] || return 1
-  # Destination PINNED to the gitignored .harness/tmp/ tree (codex r7 P1: any other
-  # charset-safe relative path — `tools/reservations.py`, a ledger — would let an
-  # auto-allowed invocation overwrite tracked state). No `..` segments; the publisher
-  # (tools/round_log_publish.py) enforces the same policy as the authority — this is
-  # the form mirror.
-  printf '%s' "$3" | grep -Eq '^\.harness/tmp/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || return 1
-  case "/$3/" in */../*) return 1 ;; esac
-  if [ "$#" -eq 4 ]; then
-    printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
+  shift 2
+  _round_log_and_base_ok "$@"
+}
+
+# Spec v1.9 X9a (B-294): `just review-cycle-pass <pass> <log> [base]` — the pass is TYPED
+# to the passes with a codex half (pass 3 is one lens), then the same pinned log/base
+# rule applies. Any base is safe to allow: the gate refuses a base X9a does not bind the
+# pass to (WRONG_BASE), so an empty HEAD..HEAD diff cannot stand in for a review.
+_review_cycle_pass_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; } || return 1
+  [ "$1" = "just" ] && [ "$2" = "review-cycle-pass" ] || return 1
+  case "$3" in 1|2|esc) ;; *) return 1 ;; esac
+  shift 3
+  _round_log_and_base_ok "$@"
+}
+
+# [LAW:single-enforcer] the one round-log destination rule both review recipes share.
+# Destination PINNED to the gitignored .harness/tmp/ tree (codex r7 P1: any other
+# charset-safe relative path — `tools/reservations.py`, a ledger — would let an
+# auto-allowed invocation overwrite tracked state). No `..` segments; the publisher
+# (tools/round_log_publish.py) enforces the same policy as the authority — this is
+# the form mirror.
+_round_log_and_base_ok() {
+  printf '%s' "$1" | grep -Eq '^\.harness/tmp/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || return 1
+  case "/$1/" in */../*) return 1 ;; esac
+  if [ "$#" -eq 2 ]; then
+    printf '%s' "$2" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
   fi
+}
+
+# Spec v1.9 X9a (B-294): `just merge-gate-emit-pass <pass> --pr <N> --arc-id <arc>
+# --lens <lens> --verdict-json .harness/tmp/<file> --base <base>` — one lens verdict of a
+# cycle pass, so the loop can record the lens half unattended. Every token is typed in
+# recipe order and the arity is fixed, so no surplus token can chain a second recipe;
+# the emitter then admits the verdict by the gate's rules (order, fixes, stop, base).
+_emit_pass_shape() {
+  local cmd="$1"
+  set -f; set -- $cmd; set +f
+  [ "$#" -eq 13 ] || return 1
+  [ "$1" = "just" ] && [ "$2" = "merge-gate-emit-pass" ] && [ "$4" = "--pr" ] \
+    && [ "$6" = "--arc-id" ] && [ "$8" = "--lens" ] && [ "${10}" = "--verdict-json" ] \
+    && [ "${12}" = "--base" ] || return 1
+  case "$3" in 1|2|esc|3) ;; *) return 1 ;; esac
+  printf '%s' "$5" | grep -Eq '^[0-9]+$' || return 1
+  printf '%s' "$7" | grep -Eq '^[A-Za-z0-9._-]+$' || return 1
+  case "$9" in merge-gate-concurrency|merge-gate-spec-conformance|merge-gate-witness-adequacy) ;;
+    *) return 1 ;; esac
+  # the emitter reads a verdict file only directly under .harness/tmp/ (the form mirror of
+  # merge_gate_log._read_text's containment walk)
+  printf '%s' "${11}" | grep -Eq '^\.harness/tmp/[A-Za-z0-9_-][A-Za-z0-9._-]*$' || return 1
+  printf '%s' "${13}" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
 }
 
 _transition_to_open_only() {
@@ -866,6 +909,16 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # U-HE-34 r3: the logged review variant — the tee lives inside the recipe, so a
       # headless venue can produce the round log without a pipe on the command line.
       # (TRIM already has the exact-shape HARNESS id prefix stripped above.)
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-cycle-pass([[:space:]]|$)' \
+       && _review_cycle_pass_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # B-294: the codex half of one cycle pass, same pinned-log discipline.
+      emit_allow
+    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+merge-gate-emit-pass([[:space:]]|$)' \
+       && _emit_pass_shape "$TRIM" \
+       && _bash_args_safe "$CMD"; then
+      # B-294: one lens verdict of a cycle pass (see _emit_pass_shape).
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+reviewer-concurrency-probe([[:space:]]+(codex|gemini)([[:space:]]+[5-9]([[:space:]]+[A-Za-z0-9._/-]+)?)?)?$' \
        && _bash_args_safe "$CMD"; then

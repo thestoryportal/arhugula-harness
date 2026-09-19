@@ -746,6 +746,36 @@ def test_locked_body_reads_through_the_fd_not_the_pathname(tmp_path: Path, monke
     assert len(fr.read_rows(p)) == 1
 
 
+def test_a_verdict_is_recorded_whole_or_not_at_all(tmp_path: Path, monkeypatch):
+    """B-294 (d): a reviewer counts as delivered once any row of its verdict is on the log,
+    so a process that dies between two rows must not leave the first one standing. The
+    whole verdict goes down in one write; a failure on any LATER write reaches nothing."""
+    p = tmp_path / "g.jsonl"
+    real_write = os.write
+    calls = []
+
+    def dies_after_one_write(fd, data):
+        calls.append(len(data))
+        if len(calls) > 1:
+            raise OSError("killed between two rows")
+        return real_write(fd, data)
+
+    monkeypatch.setattr(fr.os, "write", dies_after_one_write)
+    fields = dict(
+        observed_evidence="whole-verdict witness",
+        expected_contract="C-HE-24 §4",
+        severity="P2",
+        finding_type="terminal-block",
+        lineage_claim="fresh",
+        producer="merge-gate",
+    )
+    fr.append_observations(
+        lambda rows: [(dict(fields, location=f"x.py:{n}"), _env()) for n in (1, 2)], p
+    )
+    monkeypatch.undo()
+    assert len(fr.read_rows(p)) == 2 and len(calls) == 1
+
+
 def test_append_observations_reads_through_the_fd_not_the_pathname(tmp_path: Path, monkeypatch):
     """merge-gate r3 witness: the fd-read guarantee at append_observations -- the call
     site the C-HE-12 detection dispatch actually uses (the r2 witness covered only
