@@ -634,8 +634,11 @@ _HOOK_REGEN_IGNORED='^!! (.*/)?(\.harness/|__pycache__/|.*\.py[co]|.*\.egg-info/
 
 # Print reap-blocking local state. Return 0 when residue exists, 1 when clean, and 2 when
 # status cannot be established. Callers must treat 2 as fail-closed.
+# Args: <wt> [merged_head]. merged_head is the CALLER's proof that <wt>'s HEAD is the head
+# of its branch's merged pull request (the reaper's exact-SHA headRefOid match); it is
+# never inferred here. See the upstream block below for what the proof waives.
 hook_worktree_local_state() {
-  local wt="$1" raw line residue=""
+  local wt="$1" merged_head="${2:-}" raw line residue=""
   # GIT_OPTIONAL_LOCKS=0 keeps the probe read-only: plain `git status` rewrites a racily
   # clean index, and the reaper's idle grace (loop_lib.sh) reads the index mtime as
   # activity, so a probe that wrote it would make its own scan look like a session.
@@ -668,11 +671,24 @@ EOF
   # the remote-tracking ref is pruned by this repo's own post-merge branch-prune
   # flow while the config persists, and a resolution-gated check would then fail
   # OPEN on genuinely unpushed commits (merge-gate L1, PR #1403).
-  local ahead branch upstream_cfg
+  # C-HE-04 §6 (v1.10 X10): after a squash merge the branch's own commits are never
+  # ancestors of the default branch, so the ahead count is non-zero forever and, once the
+  # remote branch is deleted, @{u} stops resolving. When the caller proves HEAD is the
+  # merged PR's head, both refusals are waived: the merge put that content on the default
+  # branch and the reaper leaves the branch ref in place, so no commit loses its
+  # reference. The proof must EQUAL the current HEAD -- a proof for an older head (the
+  # branch advanced since the merge) waives nothing. Only these two lines are waived;
+  # status residue and the detached-HEAD line above are unconditional.
+  # [LAW:single-enforcer] the waiver is decided only here; callers hand over the proof
+  # value, never a skip flag, so the pre-check and the under-mutex recheck cannot diverge.
+  local ahead branch upstream_cfg merged_at_head=0
+  if [ -n "$merged_head" ] && [ "$(git -C "$wt" rev-parse -q --verify HEAD 2>/dev/null)" = "$merged_head" ]; then
+    merged_at_head=1
+  fi
   branch=$(git -C "$wt" symbolic-ref --short -q HEAD) || branch=""
   upstream_cfg=""
   [ -n "$branch" ] && upstream_cfg=$(git -C "$wt" config --get "branch.${branch}.merge" 2>/dev/null) || true
-  if [ -n "$upstream_cfg" ]; then
+  if [ -n "$upstream_cfg" ] && [ "$merged_at_head" -eq 0 ]; then
     if ahead=$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null); then
       if [ "${ahead:-0}" -gt 0 ]; then
         residue="${residue}${residue:+
@@ -1073,8 +1089,12 @@ _hook_lane_stack_down() {
 # restoration fails, 7 for a retained process reference, 8 after recovering an interrupted
 # quarantine, 9 when open-reference status is unavailable, 10 when the branch or HEAD
 # changed after candidate classification, otherwise return git's status.
+# The optional fifth argument is the caller's proof that the worktree HEAD is its branch's
+# merged-PR head (C-HE-04 §6, v1.10 X10). It reaches every local-state probe here, so the
+# recheck under the mutex classifies exactly as the caller's pre-check did. A caller with
+# no merge proof (safe-worktree-remove.sh) passes nothing and keeps every refusal.
 hook_safe_worktree_remove() {
-  local root="$1" wt="$2" expected_branch="${3:-}" expected_head="${4:-}"
+  local root="$1" wt="$2" expected_branch="${3:-}" expected_head="${4:-}" merged_head="${5:-}"
   local rc state_rc quarantine restore_rc transaction reference_rc session_dir identity_rc
   root=$(_hook_canonical_worktree "$root")
   wt=$(_hook_canonical_worktree "$wt")
@@ -1117,7 +1137,7 @@ hook_safe_worktree_remove() {
     hook_worktree_lock_release || true
     return 3
   fi
-  hook_worktree_local_state "$wt" >/dev/null
+  hook_worktree_local_state "$wt" "$merged_head" >/dev/null
   state_rc=$?
   case "$state_rc" in
     0)
@@ -1156,7 +1176,7 @@ hook_safe_worktree_remove() {
   case "$reference_rc" in
     0) rc=7 ;;
     1)
-      hook_worktree_local_state "$quarantine" >/dev/null
+      hook_worktree_local_state "$quarantine" "$merged_head" >/dev/null
       state_rc=$?
       case "$state_rc" in
         0) rc=4 ;;

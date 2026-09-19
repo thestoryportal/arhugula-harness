@@ -252,6 +252,52 @@ wt_present wt-merged && ok "idle grace: unresolvable git activity state keeps th
 grep -qF "skipped $BASE/wt-merged (feat-merged) — git activity state unavailable" "$HARNESS_LOOP_STATUS_PATH" \
   && ok "idle grace: the fail-closed skip is logged" || bad "idle grace: no GC row for the unavailable activity state"
 
+# ── 5c) C-HE-04 §6 (v1.10 X10): a squash-merged worktree is reaped ─────────────
+# The real squash-merge shape: the arc branch is created from origin/main and tracks it,
+# and its own commit never enters the upstream, so it is ahead of @{u} forever. Merged at
+# its exact head, clean and idle, it must be reaped; the same worktree with an uncommitted
+# change must be kept.
+squash_fixture() {
+  build_fixture
+  git init -q --bare "$BASE/origin.git"
+  git -C "$BASE/main" remote add origin "$BASE/origin.git"
+  git -C "$BASE/main" push -q origin main 2>/dev/null
+  git -C "$BASE/main" fetch -q origin
+  git -C "$BASE/main" worktree add -q --track -b feat-squash "$BASE/wt-squash" origin/main
+  git -C "$BASE/wt-squash" commit -q --allow-empty -m "arc work, squash-merged upstream"
+  age_admin "$BASE/wt-squash"
+}
+_loop_gc_merged_oid() {
+  case "$1" in
+    feat-squash) git -C "$BASE/wt-squash" rev-parse HEAD 2>/dev/null ;;
+    *) : ;;
+  esac
+}
+squash_fixture
+[ "$(git -C "$BASE/wt-squash" rev-list --count '@{u}..HEAD')" = "1" ] \
+  && ok "X10 fixture: the squash-merged worktree is ahead of its upstream" \
+  || bad "X10 fixture: worktree is not ahead of its upstream"
+loop_gc_worktrees report | grep -qF "$BASE/wt-squash (feat-squash)" \
+  && ok "X10: report lists the squash-merged worktree" || bad "X10: report omitted the squash-merged worktree"
+loop_gc_worktrees reap
+wt_present wt-squash && bad "X10: ahead-of-upstream merged-at-head worktree was not reaped" \
+  || ok "X10: ahead-of-upstream merged-at-head worktree reaped"
+git -C "$BASE/main" rev-parse --verify -q refs/heads/feat-squash >/dev/null \
+  && ok "X10: the squash-merged branch ref is left in place" || bad "X10: branch ref was deleted"
+squash_fixture
+: > "$BASE/wt-squash/uncommitted.txt"
+age_admin "$BASE/wt-squash"
+loop_gc_worktrees reap
+wt_present wt-squash && ok "X10: merged-at-head worktree with an uncommitted change kept" \
+  || bad "X10: reaped a merged worktree holding an uncommitted change"
+_loop_gc_merged_oid() {
+  local oid; oid=$(git -C "$BASE/main" rev-parse main 2>/dev/null)
+  case "$1" in
+    feat-merged|feat-dirty|feat-precious|feat-settings|feat-collision) printf '%s' "$oid" ;;
+    *) : ;;
+  esac
+}
+
 # ── 6) live-session guard: a merged+clean worktree with a RECENT transcript is kept ──
 # (the council-context-memory orphaning, 2026-06-04). Override HOME so the synthetic
 # transcript lands under a throwaway projects dir, not the real ~/.claude.

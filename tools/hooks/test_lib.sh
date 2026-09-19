@@ -903,6 +903,56 @@ case "$DETACHED_OUT" in
   *) bad "residue missing detached-HEAD line: '$DETACHED_OUT'" ;;
 esac
 
+# C-HE-04 §6 (v1.10 X10): a caller's proof that HEAD is the merged-PR head waives ONLY
+# the ahead-of-upstream and unresolvable-upstream refusals. A squash-merged arc branch is
+# ahead of its upstream forever, so without the waiver no merged worktree is reapable.
+MERGED_WT="$REPO-merged-at-head"
+git -C "$REPO" worktree add -q -b merged-at-head "$MERGED_WT"
+git -C "$MERGED_WT" push -qu origin merged-at-head 2>/dev/null
+git -C "$MERGED_WT" commit -q --allow-empty -m "squash-merged; never an ancestor of main"
+MERGED_HEAD=$(git -C "$MERGED_WT" rev-parse HEAD)
+MERGED_PARENT=$(git -C "$MERGED_WT" rev-parse HEAD~1)
+hook_worktree_local_state "$MERGED_WT" >/dev/null
+eq "X10: ahead worktree without the merge proof is still residue" "$?" "0"
+hook_worktree_local_state "$MERGED_WT" "$MERGED_HEAD" >/dev/null
+eq "X10: ahead worktree with the proof equal to HEAD is clean" "$?" "1"
+STALE_PROOF_OUT=$(hook_worktree_local_state "$MERGED_WT" "$MERGED_PARENT")
+STALE_PROOF_RC=$?
+eq "X10: a proof that differs from HEAD waives nothing" "$STALE_PROOF_RC" "0"
+case "$STALE_PROOF_OUT" in
+  *"ahead-of-upstream: 1 commit(s)"*) ok "X10: stale proof keeps the ahead-of-upstream line" ;;
+  *) bad "X10: stale proof lost the ahead-of-upstream line: '$STALE_PROOF_OUT'" ;;
+esac
+hook_worktree_local_state "$PRUNED_WT" "$(git -C "$PRUNED_WT" rev-parse HEAD)" >/dev/null
+eq "X10: unresolvable-upstream worktree with the proof equal to HEAD is clean" "$?" "1"
+DETACHED_PROOF_OUT=$(hook_worktree_local_state "$DETACHED_WT" "$(git -C "$DETACHED_WT" rev-parse HEAD)")
+DETACHED_PROOF_RC=$?
+eq "X10: detached HEAD stays residue under a matching proof" "$DETACHED_PROOF_RC" "0"
+case "$DETACHED_PROOF_OUT" in
+  *"detached HEAD"*) ok "X10: detached-HEAD line survives the proof" ;;
+  *) bad "X10: detached-HEAD line dropped under the proof: '$DETACHED_PROOF_OUT'" ;;
+esac
+: > "$MERGED_WT/uncommitted.txt"
+DIRTY_PROOF_OUT=$(hook_worktree_local_state "$MERGED_WT" "$MERGED_HEAD")
+DIRTY_PROOF_RC=$?
+eq "X10: an uncommitted change stays residue under a matching proof" "$DIRTY_PROOF_RC" "0"
+case "$DIRTY_PROOF_OUT" in
+  *"uncommitted.txt"*) ok "X10: uncommitted-change line survives the proof" ;;
+  *) bad "X10: uncommitted-change line dropped under the proof: '$DIRTY_PROOF_OUT'" ;;
+esac
+rm -f "$MERGED_WT/uncommitted.txt"
+hook_safe_worktree_remove "$REPO" "$MERGED_WT" >/dev/null
+eq "X10: safe removal with no proof still refuses the ahead worktree" "$?" "4"
+[ -d "$MERGED_WT" ] && ok "X10: unproven ahead worktree preserved" \
+  || bad "X10: unproven ahead worktree was removed"
+hook_safe_worktree_remove "$REPO" "$MERGED_WT" merged-at-head "$MERGED_HEAD" "$MERGED_HEAD" >/dev/null
+eq "X10: safe removal with the merge proof removes the ahead worktree" "$?" "0"
+[ -d "$MERGED_WT" ] && bad "X10: proven merged worktree still on disk" \
+  || ok "X10: proven merged worktree removed"
+[ "$(git -C "$REPO" rev-parse -q --verify refs/heads/merged-at-head)" = "$MERGED_HEAD" ] \
+  && ok "X10: the branch ref survives the reap (no commit loses its reference)" \
+  || bad "X10: the merged branch ref did not survive the reap"
+
 
 # ── hook_git_retry — C-HE-11 §3 bounded local-git lock retry (U-HE-32) ────────
 # The ledger writer lives one layer ABOVE lib.sh (loop_lib.sh depends on lib.sh,
