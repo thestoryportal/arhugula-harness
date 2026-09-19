@@ -72,6 +72,7 @@ import re
 import stat as stat_module
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -79,7 +80,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import finding_record as fr
-import merge_gate_log as mgl
 import review_wrapper_common as rw
 
 STATE_REL = Path(".harness/review_loop_gate_state.json")
@@ -366,8 +366,7 @@ def decide(
     diff_digest: str,
     budget: int = DEFAULT_ROUND_BUDGET,
     lane_id: str = "<lane-id>",
-    cycle_pass: str | None = None,
-    doc_only: bool = False,
+    cycle: CycleRequest | None = None,
 ) -> Allowed | Refused:
     # every recipe command carries the arc/lane prefix (codex u-sr-04 r4 P2): the
     # attest/template verbs resolve identity via env_arc_and_lane(), so a bare
@@ -381,15 +380,14 @@ def decide(
         pfx = f"HARNESS_ARC_ID={arc_id} HARNESS_LANE_ID={lane_id} "
     else:
         pfx = "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
-    if cycle_pass is not None:
+    if cycle is not None:
         return _decide_cycle(
             state,
             rows,
             arc_id=arc_id,
             head_sha=head_sha,
             diff_digest=diff_digest,
-            cycle_pass=cycle_pass,
-            doc_only=doc_only,
+            cycle=cycle,
             pfx=pfx,
         )
     scoped = _loop_rounds(rows, arc_id)
@@ -492,25 +490,34 @@ def _currency_refusal(
 #: [LAW:no-mode-explosion] two admission paths coexist: the legacy round budget (no pass
 #: named) and the bounded cycle (a pass named via HARNESS_CYCLE_PASS). Owner: U-HE-53.
 #: Exit: the legacy path is deleted once every review skill launches the cycle (its
-#: launcher and lens half land with B-294, the skills move with U-HE-54) and no open
+#: launcher and lens half landed with B-294; the skills move with U-HE-54) and no open
 #: reservation predates that switch.
 
 #: The codex channel's role in a pass: either loop producer delivers it, since a gemini
 #: failover stands in for codex under the identical bar (C-HE-17 §1).
 _CODEX = "codex"
-_LENSES = frozenset(lens for lens, _ in mgl.LENS_FILES)
+#: The three merge-gate lenses, in the skill's emission order. The gate owns these
+#: identities; the lens emitter imports them, so admission and emission name one set.
+LENSES = ("merge-gate-concurrency", "merge-gate-spec-conformance", "merge-gate-witness-adequacy")
+_LENSES = frozenset(LENSES)
 _WITNESS_LENS = "merge-gate-witness-adequacy"
 
 #: X9a's reviewer set per pass. Pass 1 and the escalation (a repeat of pass 1) are codex
-#: and all three lenses; pass 2 is codex and the witness lens; pass 3 is one lens.
+#: and all three lenses; pass 2 is codex and the witness lens; pass 3 is one lens, any of
+#: the three, so its set is the lenses and ONE delivery completes it.
 _PASS_REVIEWERS: dict[str, frozenset[str]] = {
     "1": frozenset({_CODEX, *_LENSES}),
     "2": frozenset({_CODEX, _WITNESS_LENS}),
     "esc": frozenset({_CODEX, *_LENSES}),
+    "3": _LENSES,
 }
 
 #: The passes with a codex half; pass 3 is one merge-gate lens.
-CODEX_PASSES = tuple(_PASS_REVIEWERS)
+CODEX_PASSES = tuple(p for p, reviewers in _PASS_REVIEWERS.items() if _CODEX in reviewers)
+
+#: X9a's "full diff" is the PR's whole diff: everything since the branch left main. A lane
+#: reviews against origin/main, since its local main is stale.
+FULL_DIFF_REF = "origin/main"
 
 #: Severities that are review findings (a reviewer's P1-P3), as opposed to the
 #: deterministic-check severities (hard/warn/info) that share the record shape.
@@ -532,7 +539,7 @@ class PassRun:
     @property
     def complete(self) -> bool:
         if self.cycle_pass == "3":
-            return bool(self.delivered & _LENSES)
+            return bool(self.delivered)
         return _PASS_REVIEWERS[self.cycle_pass] <= self.delivered
 
 
@@ -552,10 +559,11 @@ def pass_runs(rows: list[dict], arc_id: str) -> list[PassRun]:
     completed: list[tuple[str, str, str]] = []
     for r in rows:
         role = _role(r.get("producer", ""))
+        # a verdict from a reviewer outside the pass's set is not part of that pass
         if (
             r.get("arc_id") != arc_id
-            or r.get("cycle_pass") is None
-            or role is None
+            or r.get("cycle_pass") not in _PASS_REVIEWERS
+            or role not in _PASS_REVIEWERS[r["cycle_pass"]]
             or r.get("record_kind") not in ("finding", "no_finding")
         ):
             continue
@@ -585,12 +593,6 @@ def _accepted(run: PassRun, severities: tuple[str, ...], disposed: dict[str, str
     )
 
 
-def _must_fix(run: PassRun) -> tuple[str, ...]:
-    """X9a: an accepted P1 is always fixed; an accepted P2 is fixed only when raised
-    before pass 3 (a pass-3 P2 goes to the follow-up item)."""
-    return ("P1",) if run.cycle_pass == "3" else ("P1", "P2")
-
-
 def _successor(run: PassRun, disposed: dict[str, str | None]) -> str | None:
     """The pass X9a requires after `run` under the current dispositions; None when `run`
     completes the cycle."""
@@ -608,11 +610,13 @@ def _successor(run: PassRun, disposed: dict[str, str | None]) -> str | None:
 
 @dataclass(frozen=True)
 class CycleReplay:
-    """Where the cycle stands: the pass X9a requires next (None once complete) and the
-    pass-3 run that completed it."""
+    """Where the cycle stands: the pass X9a requires next (None once complete), the
+    pass-3 run that completed it, and the last run that counted (the head pass 2's fix
+    delta starts from)."""
 
     expected: str | None
     completed_by: PassRun | None
+    last: PassRun | None
 
 
 def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
@@ -631,13 +635,15 @@ def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
     history = runs[0].cycle_pass if runs and runs[0].cycle_pass in ("1", "3") else None
     expected: str | None = history or ("3" if doc_only else "1")
     completed_by: PassRun | None = None
+    last: PassRun | None = None
     for run in runs:
         want = expected or "3"  # after completion, a new commit gets one pass 3
         if run.cycle_pass != want:
             continue
         expected = _successor(run, disposed)
         completed_by = run if expected is None else None
-    return CycleReplay(expected, completed_by)
+        last = run
+    return CycleReplay(expected, completed_by, last)
 
 
 def next_pass(
@@ -670,6 +676,19 @@ def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
     return n
 
 
+@dataclass(frozen=True)
+class CycleRequest:
+    """One reviewer asking to deliver its verdict into a pass of the bounded cycle: the
+    codex half from the review wrapper, or one lens from the lens emitter. Both are
+    admitted by the same rules (`_decide_cycle`)."""
+
+    cycle_pass: str
+    role: str  # _CODEX or one of LENSES
+    base_sha: str  # the base of the diff this reviewer reads
+    full_diff_base: str  # merge-base(FULL_DIFF_REF, head): the base of the PR's whole diff
+    doc_only: bool
+
+
 def _decide_cycle(
     state: GateState,
     rows: list[dict],
@@ -677,10 +696,12 @@ def _decide_cycle(
     arc_id: str,
     head_sha: str,
     diff_digest: str,
-    cycle_pass: str,
-    doc_only: bool,
+    cycle: CycleRequest,
     pfx: str,
 ) -> Allowed | Refused:
+    # [LAW:single-enforcer] the one admission for both halves of a pass, so the codex
+    # wrapper and the lens emitter cannot disagree about order, fixes, stop or base
+    cycle_pass = cycle.cycle_pass
     # X9a's stop: pass 3 raised a P1, it was fixed, and the re-run raised one again. Each
     # recorded extension (`review-attest-budget`) buys exactly one more re-run.
     reruns = 1 + sum(e.extra_rounds for e in state.extensions if e.arc_id == arc_id)
@@ -695,10 +716,16 @@ def _decide_cycle(
                 "Nothing merges past a known P1."
             ),
         )
+    runs = pass_runs(rows, arc_id)
+    key = (cycle_pass, head_sha, diff_digest)
+    joining = next((r for r in runs if (r.cycle_pass, r.head_sha, r.diff_digest) == key), None)
     disposed = _last_dispositions(rows)
+    # the findings of the pass still being delivered are adjudicated after it, not before
+    # its remaining reviewers run
     open_ids = sorted(
         f["finding_id"]
-        for run in pass_runs(rows, arc_id)
+        for run in runs
+        if run is not joining or run.complete
         for f in run.findings
         if disposed.get(f["finding_id"]) is None
     )
@@ -714,7 +741,7 @@ def _decide_cycle(
             ),
         )
     expected = next_pass(
-        rows, arc_id, doc_only=doc_only, head_sha=head_sha, diff_digest=diff_digest
+        rows, arc_id, doc_only=cycle.doc_only, head_sha=head_sha, diff_digest=diff_digest
     )
     if expected is None:
         return Refused(
@@ -730,17 +757,29 @@ def _decide_cycle(
             ),
             recipe=f"run pass {expected}: " + _pass_recipe(expected),
         )
-    if cycle_pass not in CODEX_PASSES:
+    if cycle.role not in _PASS_REVIEWERS[cycle_pass]:
         return Refused(
-            code="PASS_HAS_NO_CODEX_HALF",
-            detail="pass 3 is one merge-gate lens on the full diff (X9a); codex is not in it",
+            code="REVIEWER_NOT_IN_PASS",
+            detail=f"{cycle.role} is not a reviewer of pass {cycle_pass} (X9a)",
             recipe=_pass_recipe(cycle_pass),
         )
-    completed = [r for r in pass_runs(rows, arc_id) if r.complete]
+    if joining is not None and (joining.complete or cycle.role in joining.delivered):
+        return Refused(
+            code="ALREADY_DELIVERED",
+            detail=(
+                f"{cycle.role} already delivered pass {cycle_pass} at {head_sha[:12]}"
+                if cycle.role in joining.delivered
+                else f"pass {cycle_pass} is already complete at {head_sha[:12]}"
+            ),
+            recipe="each reviewer delivers one verdict per pass; commit to start a new one",
+        )
+    completed = [r for r in runs if r.complete]
     # every run on this head is checked, not only the last: a disposition reversed after
     # later passes ran leaves its accepted finding on an earlier run
+    # an accepted P1 or P2 from a pass at this head must be fixed before the next pass;
+    # a pass-3 P2 never gets here, since pass 3 re-runs only on its own P1 (`_successor`)
     unfixed = [
-        r for r in completed if r.head_sha == head_sha and _accepted(r, _must_fix(r), disposed)
+        r for r in completed if r.head_sha == head_sha and _accepted(r, ("P1", "P2"), disposed)
     ]
     if unfixed:
         return Refused(
@@ -751,6 +790,20 @@ def _decide_cycle(
             ),
             recipe="commit the fix for every accepted P1/P2, then launch the next pass",
         )
+    # X9a: pass 2 reviews the fix delta from the head the previous pass reviewed; every
+    # other pass reviews the full diff. The order check above guarantees pass 2 follows
+    # a counted run.
+    last = replay(rows, arc_id, doc_only=cycle.doc_only).last
+    base = last.head_sha if cycle_pass == "2" and last is not None else cycle.full_diff_base
+    if cycle.base_sha != base:
+        return Refused(
+            code="WRONG_BASE",
+            detail=(
+                f"pass {cycle_pass} reviews {cycle.base_sha[:12]}..{head_sha[:12]}; X9a binds "
+                f"it to {base[:12]}..{head_sha[:12]}"
+            ),
+            recipe=f"re-run pass {cycle_pass} with base {base}",
+        )
     # the cycle's first pass reviews the authored diff, so the preflight is attested once,
     # before it, and never re-attested per pass (X9a); a retry after an unavailable
     # reviewer is still that first pass
@@ -760,14 +813,11 @@ def _decide_cycle(
 
 def _pass_recipe(cycle_pass: str) -> str:
     codex = (
-        f"its codex half on the review wrapper with HARNESS_CYCLE_PASS={cycle_pass}, and "
+        f"`just review-cycle-pass {cycle_pass} <log> <base>` for its codex half, and "
         if cycle_pass in CODEX_PASSES
         else ""
     )
-    return (
-        f"run pass {cycle_pass}: {codex}its merge-gate lens verdicts, which record once B-294 "
-        "admits the lens half"
-    )
+    return f"{codex}`just merge-gate-emit-pass {cycle_pass} ...` for each of its lens verdicts"
 
 
 # ── edge: admit ──────────────────────────────────────────────────────────────
@@ -799,6 +849,83 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
             detail=str(exc),
             recipe="set HARNESS_CYCLE_PASS to one of 1, 2, esc, 3 — or unset it for a legacy round",
         )
+    state = _gate_state_in_force(repo, arc_id)
+    if not isinstance(state, GateState):
+        return state
+    try:
+        binding = rw.code_binding(repo, base)
+        cycle = None if cycle_pass is None else _cycle_request(repo, binding, cycle_pass, _CODEX)
+    except subprocess.CalledProcessError as exc:
+        # An unresolvable base / broken git is a WRAPPER-infrastructure failure, not an
+        # admission fact: defer to run_codex_review's own binding path, which classifies
+        # it REVIEWER_UNAVAILABLE under the existing terminal contract (codex r1 P2).
+        return Inactive(
+            reason=f"code binding unavailable ({exc}) — the wrapper's binding path classifies"
+        )
+    except GateError as exc:
+        return Refused(code="STATE_UNREADABLE", detail=str(exc), recipe=_FULL_DIFF_RECIPE)
+    try:
+        rows = fr.read_rows()
+    except Exception as exc:
+        # the gate log is the round/obligation AUTHORITY (codex r7 P2): unreadable
+        # must refuse, matching the state-file and reservation-store disciplines —
+        # never a raw traceback out of the wrapper
+        return Refused(
+            code="STATE_UNREADABLE",
+            detail=f"gate log unreadable: {exc}",
+            recipe="inspect .harness/merge-gate-log.jsonl (or HARNESS_GATE_LOG) — the "
+            "gate cannot derive rounds or obligations without it",
+        )
+    # the lane comes from the same env boundary that named the arc, so refusal
+    # recipes render the exact working prefix (a fallback lane renders truthfully
+    # as the fallback the verbs would themselves resolve)
+    _, lane_id = rw.env_arc_and_lane()
+    return decide(
+        state,
+        rows,
+        arc_id=arc_id,
+        head_sha=binding["head_sha"],
+        diff_digest=binding["diff_digest"],
+        lane_id=lane_id,
+        cycle=cycle,
+    )
+
+
+def admit_lens(
+    repo: Path,
+    rows: list[dict],
+    *,
+    lens: str,
+    cycle_pass: str,
+    binding: Mapping[str, str],
+    arc_id: str,
+    lane_id: str,
+) -> Decision:
+    """The lens half of a pass, admitted by the same rules as the codex half. The emitter
+    calls this with the log read under its emit lock, so two emissions of one lens are
+    serialized and the second sees the first's rows."""
+    state = _gate_state_in_force(repo, arc_id)
+    if not isinstance(state, GateState):
+        return state
+    try:
+        cycle = _cycle_request(repo, binding, cycle_pass, lens)
+    except (GateError, subprocess.CalledProcessError) as exc:
+        # the lens emitter has no binding path of its own to defer to: unreadable refuses
+        return Refused(code="STATE_UNREADABLE", detail=str(exc), recipe=_FULL_DIFF_RECIPE)
+    return decide(
+        state,
+        rows,
+        arc_id=arc_id,
+        head_sha=binding["head_sha"],
+        diff_digest=binding["diff_digest"],
+        lane_id=lane_id,
+        cycle=cycle,
+    )
+
+
+def _gate_state_in_force(repo: Path, arc_id: str) -> GateState | Inactive | Refused:
+    """The gate state for a reserved arc; Inactive for an unreserved one; Refused when
+    either cannot be read."""
     # Reservation scope FIRST: Inactive means the gate is not in force for this arc,
     # so an unreadable state file must not refuse an out-of-scope invocation (it broke
     # the whole wrapper battery on a live schema migration before this ordering).
@@ -825,7 +952,7 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         # rounds mint under the branch-*/-nolane fallback ids on every C-HE-24 row.
         return Inactive(reason=f"arc {arc_id} unreserved — attestation gate not in force")
     try:
-        state = load_state(repo)
+        return load_state(repo)
     except GateError as exc:
         return Refused(
             code="STATE_UNREADABLE",
@@ -835,47 +962,34 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
                 "only tightens the gate — round counts live in the gate log)"
             ),
         )
+
+
+_FULL_DIFF_RECIPE = (
+    f"fetch {FULL_DIFF_REF} (`git fetch origin main`): a pass is bound to the PR's full diff, "
+    f"measured from merge-base({FULL_DIFF_REF}, HEAD)"
+)
+
+
+def _cycle_request(
+    repo: Path, binding: Mapping[str, str], cycle_pass: str, role: str
+) -> CycleRequest:
+    head_sha = binding["head_sha"]
     try:
-        binding = rw.code_binding(repo, base)
-        # the doc-only read is the same kind of git read on the same pinned shas, so it
-        # fails the same way and is classified by the same arm
-        doc_only = cycle_pass is not None and _doc_only(repo, binding)
+        full_diff_base = rw._git(repo, "merge-base", FULL_DIFF_REF, head_sha)
     except subprocess.CalledProcessError as exc:
-        # An unresolvable base / broken git is a WRAPPER-infrastructure failure, not an
-        # admission fact: defer to run_codex_review's own binding path, which classifies
-        # it REVIEWER_UNAVAILABLE under the existing terminal contract (codex r1 P2).
-        return Inactive(
-            reason=f"code binding unavailable ({exc}) — the wrapper's binding path classifies"
-        )
-    try:
-        rows = fr.read_rows()
-    except Exception as exc:
-        # the gate log is the round/obligation AUTHORITY (codex r7 P2): unreadable
-        # must refuse, matching the state-file and reservation-store disciplines —
-        # never a raw traceback out of the wrapper
-        return Refused(
-            code="STATE_UNREADABLE",
-            detail=f"gate log unreadable: {exc}",
-            recipe="inspect .harness/merge-gate-log.jsonl (or HARNESS_GATE_LOG) — the "
-            "gate cannot derive rounds or obligations without it",
-        )
-    # the lane comes from the same env boundary that named the arc, so refusal
-    # recipes render the exact working prefix (a fallback lane renders truthfully
-    # as the fallback the verbs would themselves resolve)
-    _, lane_id = rw.env_arc_and_lane()
-    return decide(
-        state,
-        rows,
-        arc_id=arc_id,
-        head_sha=binding["head_sha"],
-        diff_digest=binding["diff_digest"],
-        lane_id=lane_id,
+        raise GateError(f"cannot resolve merge-base({FULL_DIFF_REF}, {head_sha[:12]})") from exc
+    # the doc-only read is the same kind of git read as the binding, on the same pinned
+    # shas, so it fails the same way and is classified by the caller's binding arm
+    return CycleRequest(
         cycle_pass=cycle_pass,
-        doc_only=doc_only,
+        role=role,
+        base_sha=binding["base_sha"],
+        full_diff_base=full_diff_base,
+        doc_only=_doc_only(repo, binding),
     )
 
 
-def _doc_only(repo: Path, binding: dict[str, str]) -> bool:
+def _doc_only(repo: Path, binding: Mapping[str, str]) -> bool:
     """A diff is doc-only when every path it touches is Markdown (X9a: pass 3 alone).
 
     Rename detection is off, so a rename lists its source path as well as its

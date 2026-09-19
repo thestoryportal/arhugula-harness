@@ -667,6 +667,43 @@ for c in 'just review-with-failover-logged .harness/tmp/r1.log main review-attes
   OUT=$(run_on "$(pl Bash "$c" '')")
   [ "$(dec "$OUT")" != "allow" ] && ok "review-logged hardening: '$c' → not allow" || bad "review-logged over-matched: $c"
 done
+# (a') B-294: one pass of the bounded review cycle — typed pass, same pinned log.
+for c in 'just review-cycle-pass 1 .harness/tmp/b-294-rounds/r1.log' \
+         'just review-cycle-pass esc .harness/tmp/b-294-rounds/r3.log origin/main' \
+         'HARNESS_ARC_ID=b-294 HARNESS_LANE_ID=lane-1 just review-cycle-pass 2 .harness/tmp/b-294-rounds/r4.log 0123abcd'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "review-cycle-pass → allow: '$c'" || bad "review-cycle-pass not allowed: $c → $OUT"
+done
+for c in 'just review-cycle-pass 4 .harness/tmp/r1.log' \
+         'just review-cycle-pass 3 .harness/tmp/r1.log' \
+         'just review-cycle-pass 1 tools/reservations.py' \
+         'just review-cycle-pass 1 .harness/tmp/../../etc/x.log' \
+         'just review-cycle-pass 1 .harness/tmp/r1.log main review-attest-budget' \
+         'just review-cycle-pass ${p:=1} .harness/tmp/r1.log' \
+         'just review-cycle-pass'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "review-cycle-pass hardening: '$c' → not allow" || bad "review-cycle-pass over-matched: $c"
+done
+# (a'') B-294: one lens verdict of a cycle pass — every token typed, arity fixed.
+EP='--pr 1600 --arc-id b-294 --lens merge-gate-witness-adequacy --verdict-json .harness/tmp/b-294-w.txt --base origin/main'
+for c in "just merge-gate-emit-pass 1 $EP" \
+         "just merge-gate-emit-pass 3 $EP" \
+         "HARNESS_ARC_ID=b-294 just merge-gate-emit-pass esc $EP"; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" = "allow" ] && ok "merge-gate-emit-pass → allow: '$c'" || bad "merge-gate-emit-pass not allowed: $c → $OUT"
+done
+for c in "just merge-gate-emit-pass 4 $EP" \
+         'just merge-gate-emit-pass 1 --pr 1600 --arc-id b-294 --lens merge-gate-forged --verdict-json .harness/tmp/w.txt --base origin/main' \
+         'just merge-gate-emit-pass 1 --pr 1600 --arc-id b-294 --lens merge-gate-witness-adequacy --verdict-json tools/x.txt --base origin/main' \
+         'just merge-gate-emit-pass 1 --pr 1600 --arc-id b-294 --lens merge-gate-witness-adequacy --verdict-json .harness/tmp/../x.txt --base origin/main' \
+         'just merge-gate-emit-pass 1 --pr 1600 --arc-id b-294 --lens merge-gate-witness-adequacy --verdict-json .harness/tmp/sub/w.txt --base origin/main' \
+         'just merge-gate-emit-pass 1 --pr x1 --arc-id b-294 --lens merge-gate-witness-adequacy --verdict-json .harness/tmp/w.txt --base origin/main' \
+         "just merge-gate-emit-pass 1 $EP merge-gate-adjudicate" \
+         'just merge-gate-emit-pass 1 --arc-id b-294 --pr 1600 --lens merge-gate-witness-adequacy --verdict-json .harness/tmp/w.txt --base origin/main' \
+         'just merge-gate-emit-pass ${p:=1} --pr 1600 --arc-id b-294 --lens merge-gate-witness-adequacy --verdict-json .harness/tmp/w.txt --base origin/main'; do
+  OUT=$(run_on "$(pl Bash "$c" '')")
+  [ "$(dec "$OUT")" != "allow" ] && ok "merge-gate-emit-pass hardening: '$c' → not allow" || bad "merge-gate-emit-pass over-matched: $c"
+done
 # hardening: state-mutating / gh-backed / non-carrier verbs and the bare module prefix stay un-allowed
 for c in 'uv run python tools/reservations.py transition --arc-id x --to merged' \
          'uv run python tools/reservations.py gc' \
