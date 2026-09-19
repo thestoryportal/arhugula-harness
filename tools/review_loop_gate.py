@@ -731,17 +731,20 @@ def _decide_cycle(
             recipe=_pass_recipe(cycle_pass),
         )
     completed = [r for r in pass_runs(rows, arc_id) if r.complete]
-    if completed and head_sha == completed[-1].head_sha:
-        last = completed[-1]
-        if _accepted(last, _must_fix(last), disposed):
-            return Refused(
-                code="FIX_NOT_COMMITTED",
-                detail=(
-                    f"pass {last.cycle_pass} accepted findings at {head_sha[:12]} and the head "
-                    "has not moved"
-                ),
-                recipe="commit the fix for every accepted P1/P2, then launch the next pass",
-            )
+    # every run on this head is checked, not only the last: a disposition reversed after
+    # later passes ran leaves its accepted finding on an earlier run
+    unfixed = [
+        r for r in completed if r.head_sha == head_sha and _accepted(r, _must_fix(r), disposed)
+    ]
+    if unfixed:
+        return Refused(
+            code="FIX_NOT_COMMITTED",
+            detail=(
+                f"pass {unfixed[0].cycle_pass} accepted findings at {head_sha[:12]} and the "
+                "head has not moved"
+            ),
+            recipe="commit the fix for every accepted P1/P2, then launch the next pass",
+        )
     # the cycle's first pass reviews the authored diff, so the preflight is attested once,
     # before it, and never re-attested per pass (X9a); a retry after an unavailable
     # reviewer is still that first pass

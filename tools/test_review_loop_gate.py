@@ -3457,6 +3457,15 @@ def test_a_disposition_reversed_after_later_passes_re_opens_the_escalation():
     assert rlg.completing_run(rows, ARC) is None
 
 
+def test_a_reversed_finding_on_an_earlier_run_still_needs_a_new_head():
+    # the escalation the reversal re-opens must not run on the head the P1 was found at
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    rows += [_adj("f2", "rejected"), *_pass("3", 1, head=H1), _adj("f2", "accepted")]
+    same = _dcycle(rows, "esc", head=H1)
+    assert isinstance(same, rlg.Refused) and same.code == "FIX_NOT_COMMITTED"
+    assert isinstance(_dcycle(rows, "esc", head=H2), rlg.Allowed)
+
+
 def test_pass_3_does_not_complete_while_a_p1_it_raised_is_undisposed():
     rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
     assert rlg.completing_run(rows, ARC) is None

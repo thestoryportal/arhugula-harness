@@ -869,11 +869,11 @@ def test_a_cycle_scores_only_its_final_pass_3_shadow_round():
     # would count one cycle twice, so only the arc's final pass-3 round is a scored unit
     rows = [
         *_gate_pass3("pr-1", "h" * 40, p1="g1"),
-        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3"},
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3", "diff_digest": "d"},
         *_gate_pass3("pr-1", "i" * 40),
-        {**_row(2, LENS, "no_finding", head="i" * 40), "cycle_pass": "3"},
+        {**_row(2, LENS, "no_finding", head="i" * 40), "cycle_pass": "3", "diff_digest": "d"},
         *_gate_pass3("pr-2", "h" * 40),
-        {**_row(1, LENS, "no_finding", arc="pr-2"), "cycle_pass": "3"},
+        {**_row(1, LENS, "no_finding", arc="pr-2"), "cycle_pass": "3", "diff_digest": "d"},
     ]
     assert st.scored_rounds(rows, LENS) == {("pr-1", 2), ("pr-2", 1)}
 
@@ -882,7 +882,7 @@ def test_a_pass_3_that_still_owes_its_re_run_is_not_scored():
     # the provisional round must not reach the sample: its re-run replaces the evidence
     rows = [
         *_gate_pass3("pr-1", "h" * 40, p1="g1"),
-        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3"},
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3", "diff_digest": "d"},
     ]
     assert st.scored_rounds(rows, LENS) == set()
 
@@ -892,8 +892,16 @@ def test_only_the_shadow_review_of_the_completing_head_is_scored():
     # so the provisional shadow result must not stand in for it
     rows = [
         *_gate_pass3("pr-1", "h" * 40, p1="g1"),
-        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3"},
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3", "diff_digest": "d"},
         *_gate_pass3("pr-1", "i" * 40),
+    ]
+    assert st.scored_rounds(rows, LENS) == set()
+
+
+def test_a_shadow_review_of_other_bytes_at_the_completing_head_is_not_scored():
+    rows = [
+        *_gate_pass3("pr-1", "h" * 40),
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3", "diff_digest": "e"},
     ]
     assert st.scored_rounds(rows, LENS) == set()
 
