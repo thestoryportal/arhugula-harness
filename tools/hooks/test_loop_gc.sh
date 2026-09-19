@@ -72,6 +72,9 @@ trap 'kill_leftover_reapers; rm -rf "$BASE"; rm -f "$HARNESS_LOOP_STATUS_PATH"' 
 . "$SCRIPT_DIR/lib.sh"
 # shellcheck source=loop_lib.sh
 . "$SCRIPT_DIR/loop_lib.sh"
+# Keep the production merged-oid lookup reachable under another name before the stubs below
+# replace it, so case 5e can drive the real gh argv.
+eval "$(declare -f _loop_gc_merged_oid | sed '1s/^_loop_gc_merged_oid/_real_loop_gc_merged_oid/')"
 
 # GC classification/recheck tests need a deterministic clean reference scan on
 # Linux runners whose ptrace policy makes unrelated same-user /proc entries
@@ -251,6 +254,108 @@ wt_present wt-merged && ok "idle grace: unresolvable git activity state keeps th
   || bad "idle grace: removed a worktree whose git activity state could not be read"
 grep -qF "skipped $BASE/wt-merged (feat-merged) — git activity state unavailable" "$HARNESS_LOOP_STATUS_PATH" \
   && ok "idle grace: the fail-closed skip is logged" || bad "idle grace: no GC row for the unavailable activity state"
+
+# ── 5c) C-HE-04 §6 (v1.10 X10): a squash-merged worktree is reaped ─────────────
+# The real squash-merge shape: the arc branch is created from origin/main and tracks it,
+# and its own commit never enters the upstream, so it is ahead of @{u} forever. Merged at
+# its exact head, clean and idle, it must be reaped; the same worktree with an uncommitted
+# change must be kept.
+squash_fixture() {
+  build_fixture
+  git init -q --bare "$BASE/origin.git"
+  git -C "$BASE/main" remote add origin "$BASE/origin.git"
+  git -C "$BASE/main" push -q origin main 2>/dev/null
+  git -C "$BASE/main" fetch -q origin
+  git -C "$BASE/main" worktree add -q --track -b feat-squash "$BASE/wt-squash" origin/main
+  git -C "$BASE/wt-squash" commit -q --allow-empty -m "arc work, squash-merged upstream"
+  age_admin "$BASE/wt-squash"
+}
+_loop_gc_merged_oid() {
+  case "$1" in
+    feat-squash) git -C "$BASE/wt-squash" rev-parse HEAD 2>/dev/null ;;
+    *) : ;;
+  esac
+}
+squash_fixture
+[ "$(git -C "$BASE/wt-squash" rev-list --count '@{u}..HEAD')" = "1" ] \
+  && ok "X10 fixture: the squash-merged worktree is ahead of its upstream" \
+  || bad "X10 fixture: worktree is not ahead of its upstream"
+loop_gc_worktrees report | grep -qF "$BASE/wt-squash (feat-squash)" \
+  && ok "X10: report lists the squash-merged worktree" || bad "X10: report omitted the squash-merged worktree"
+loop_gc_worktrees reap
+wt_present wt-squash && bad "X10: ahead-of-upstream merged-at-head worktree was not reaped" \
+  || ok "X10: ahead-of-upstream merged-at-head worktree reaped"
+git -C "$BASE/main" rev-parse --verify -q refs/heads/feat-squash >/dev/null \
+  && ok "X10: the squash-merged branch ref is left in place" || bad "X10: branch ref was deleted"
+squash_fixture
+: > "$BASE/wt-squash/uncommitted.txt"
+age_admin "$BASE/wt-squash"
+loop_gc_worktrees reap
+wt_present wt-squash && ok "X10: merged-at-head worktree with an uncommitted change kept" \
+  || bad "X10: reaped a merged worktree holding an uncommitted change"
+
+# ── 5d) X10 through the reaper when the upstream no longer resolves ────────────
+# After a squash merge the remote branch is deleted and the tracking ref pruned, while
+# branch.<name>.merge stays configured, so @{u} stops resolving. Merged at its exact head,
+# clean and idle, the worktree must still be reaped; with an uncommitted change it is kept.
+squash_fixture
+git -C "$BASE/main" update-ref -d refs/remotes/origin/main
+git -C "$BASE/wt-squash" config --get branch.feat-squash.merge >/dev/null \
+  && ! git -C "$BASE/wt-squash" rev-parse -q --verify '@{u}' >/dev/null 2>&1 \
+  && ok "X10 fixture: upstream configured but unresolvable" \
+  || bad "X10 fixture: upstream is not configured-but-unresolvable"
+loop_gc_worktrees reap
+wt_present wt-squash && bad "X10: unresolvable-upstream merged-at-head worktree was not reaped" \
+  || ok "X10: unresolvable-upstream merged-at-head worktree reaped"
+squash_fixture
+git -C "$BASE/main" update-ref -d refs/remotes/origin/main
+: > "$BASE/wt-squash/uncommitted.txt"
+age_admin "$BASE/wt-squash"
+loop_gc_worktrees reap
+wt_present wt-squash && ok "X10: unresolvable-upstream worktree with an uncommitted change kept" \
+  || bad "X10: reaped an unresolvable-upstream worktree holding an uncommitted change"
+
+# ── 5e) the real merged-oid lookup only accepts PRs merged into the default branch ──
+# X10's waiver rests on the merge having put the content on the DEFAULT branch. A fake `gh`
+# on PATH plays a server holding one PR per branch: feat-trunk merged into the default
+# branch (trunk, via origin/HEAD, so the base is resolved and not hard-coded), feat-release
+# merged only into `release`. It records its argv and answers only the base it is asked for.
+BASE_REPO="$BASE/base-repo"; FAKE_BIN="$BASE/fake-gh-bin"; GH_ARGV="$BASE/gh-argv"
+git init -q -b trunk "$BASE_REPO"
+git -C "$BASE_REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/trunk
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/gh" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$GH_ARGV"
+base=""; head=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in --base) base="$2"; shift ;; --head) head="$2"; shift ;; esac
+  shift
+done
+case "$head:$base" in
+  feat-trunk:trunk|feat-trunk:) printf 'aaaa1111\n' ;;
+  feat-release:release|feat-release:) printf 'bbbb2222\n' ;;
+esac
+exit 0
+FAKE
+chmod +x "$FAKE_BIN/gh"
+: > "$GH_ARGV"
+TRUNK_OID=$(GH_ARGV="$GH_ARGV" PATH="$FAKE_BIN:$PATH" _real_loop_gc_merged_oid feat-trunk "$BASE_REPO")
+RELEASE_OID=$(GH_ARGV="$GH_ARGV" PATH="$FAKE_BIN:$PATH" _real_loop_gc_merged_oid feat-release "$BASE_REPO")
+[ "$TRUNK_OID" = "aaaa1111" ] && ok "merged-oid: a PR merged into the default branch is the proof" \
+  || bad "merged-oid: default-branch PR not found: '$TRUNK_OID'"
+[ -z "$RELEASE_OID" ] && ok "merged-oid: a PR merged only into a non-default branch proves nothing" \
+  || bad "merged-oid: a non-default-base merge counted as proof: '$RELEASE_OID'"
+[ "$(grep -c -- '--base trunk' "$GH_ARGV")" -eq 2 ] \
+  && ok "merged-oid: every lookup passes --base <default branch>" \
+  || bad "merged-oid: gh argv lacks --base trunk: [$(tr '\n' ';' < "$GH_ARGV")]"
+_loop_gc_merged_oid() {
+  local oid; oid=$(git -C "$BASE/main" rev-parse main 2>/dev/null)
+  case "$1" in
+    feat-merged|feat-dirty|feat-precious|feat-settings|feat-collision) printf '%s' "$oid" ;;
+    *) : ;;
+  esac
+}
 
 # ── 6) live-session guard: a merged+clean worktree with a RECENT transcript is kept ──
 # (the council-context-memory orphaning, 2026-06-04). Override HOME so the synthetic

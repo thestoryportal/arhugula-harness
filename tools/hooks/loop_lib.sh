@@ -809,17 +809,22 @@ _loop_gc_gh_ok() {
 # is the pre-squash head SHA → an exact-SHA match is both precise and squash-merge-safe.
 # Args: <branch> <repo_dir>. Runs gh inside <repo_dir> so the lookup targets THIS repo,
 # not the caller's cwd (codex P2). Isolated so tests can stub it.
+# [LAW:types-are-the-program] Only a PR merged into <repo_dir>'s DEFAULT branch counts:
+# C-HE-04 §6 X10 waives the unpushed-commit refusals because the merge put the content on
+# the default branch, so a PR merged into any other base proves nothing and the worktree
+# is simply not a candidate.
 _loop_gc_merged_oid() {
   ( cd "$2" 2>/dev/null || exit 0
-    hook_bounded 6 gh pr list --state merged --head "$1" --limit 5 --json headRefOid \
-      --jq '.[0].headRefOid // empty' 2>/dev/null )
+    hook_bounded 6 gh pr list --state merged --base "$(hook_default_branch)" --head "$1" \
+      --limit 5 --json headRefOid --jq '.[0].headRefOid // empty' 2>/dev/null )
 }
 
 # Echo a worktree's reap-BLOCKING local state (empty = safe to reap). `--ignored`
 # surfaces precious ignored entries that `git worktree remove` would delete. The
 # canonical filter lives in lib.sh and is re-run under the removal mutex.
+# Args: <wt> <merged_head> -- the merged-PR head the caller proved equal to HEAD.
 _loop_gc_local_state() {
-  hook_worktree_local_state "$1"
+  hook_worktree_local_state "$1" "$2"
 }
 
 # Idle grace before a reap. A merged, clean worktree whose own git admin files moved in
@@ -897,8 +902,13 @@ _loop_gc_consider() {
       return 0
       ;;
   esac
+  # C-HE-04 §6 (v1.10 X10): HEAD == want_oid is proved above, so want_oid is passed as the
+  # merge proof. A squash-merged branch is ahead of (or has lost) its upstream forever, and
+  # without the proof that refusal would keep every merged worktree. The waiver is safe:
+  # the content is on the default branch and this reaper leaves the branch ref in place.
+  # Report and reap both classify through this one probe, so they agree.
   local residue local_state_rc
-  residue=$(_loop_gc_local_state "$path")                    # dirty / untracked / precious-ignored
+  residue=$(_loop_gc_local_state "$path" "$want_oid")        # dirty / untracked / precious-ignored
   local_state_rc=$?
   case "$local_state_rc" in
     0)
@@ -916,7 +926,7 @@ _loop_gc_consider() {
     printf '%s (%s)\n' "$path" "$branch"
     return 0
   fi
-  hook_safe_worktree_remove "$root" "$path" "$branch" "$head_oid" 2>/dev/null
+  hook_safe_worktree_remove "$root" "$path" "$branch" "$head_oid" "$want_oid" 2>/dev/null
   local remove_rc=$?
   case "$remove_rc" in
     0) loop_log GC "reaped worktree $path (branch $branch merged+clean; branch ref left for operator)" ;;
