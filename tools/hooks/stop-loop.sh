@@ -5,15 +5,18 @@
 # at turn end it injects the next-action and `decision:block`s to continue. It STOPS
 # (allows the turn to end) only at a TRUE stand-down or a bound:
 #   - INERT unless loop mode on (exit 0).
-#   - HALT MARKER (.harness/.loop-halt) present → a TRUE stand-down was signalled. Three
-#     things raise it: the forward menu is exhausted (every forward item deferred) or the
-#     operator stopped it (both written from outside this hook), the iteration cap below,
-#     and the context ceiling's attended arm. A single gated item does NOT raise it — it is
-#     deferred + worked around (see below).
+#   - HALT MARKER (.harness/.loop-halt) present → a TRUE stand-down was signalled. It is
+#     per-LANE, so only RUN-wide conditions may raise it, and exactly two do: the forward
+#     menu is exhausted / the operator stopped it (tools/04-loop/halt.sh, from outside this
+#     hook), and the iteration cap below. A single gated item does NOT raise it — it is
+#     deferred + worked around (see below). Neither does the context ceiling: being out of
+#     context is a fact about ONE session, and raising a lane-wide marker for it would stand
+#     an unrelated concurrent run down (pass-1 concurrency lens P1).
 #   - ITERATION CAP (HARNESS_LOOP_MAX, default 25) → hard bound on auto-continued turns
 #     (the claudefa.st turn-counter guard); log + reset + allow stop.
 #   - CONTEXT CEILING (U-HE-58) → headless, allow the stop and let the runner relaunch;
-#     attended, block ONCE for the close-out and raise the halt marker.
+#     attended, block ONCE for the close-out, bounded by a per-SESSION spent marker
+#     (.harness/.loop-ceiling-spent) and by the turn it spends on the counter.
 #   - otherwise → increment the counter + block with the next-action + the run-scoped
 #     SKIP-SET so the loop ADVANCES past already-deferred items (never re-attempts one).
 #
