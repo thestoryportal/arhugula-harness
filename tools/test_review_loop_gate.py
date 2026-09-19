@@ -3311,8 +3311,8 @@ def _adj(fid: str, disposition: str) -> dict:
     )
 
 
-def _next(rows, head=HEAD, doc_only=False):
-    return rlg.next_pass(rows, ARC, doc_only=doc_only, head_sha=head)
+def _next(rows, head=HEAD, doc_only=False, digest=DIGEST):
+    return rlg.next_pass(rows, ARC, doc_only=doc_only, head_sha=head, diff_digest=digest)
 
 
 def _dcycle(rows, cycle_pass, *, head=HEAD, state=None, **over):
@@ -3329,6 +3329,7 @@ def test_cycle_order_without_escalation():
     rows += _pass("3", 1)
     assert _next(rows) is None  # a clean pass 3 completes the cycle at this head
     assert _next(rows, head=H4) == "3"  # a later commit gets one pass sized to the change
+    assert _next(rows, digest="e" * 64) == "3"  # same head, different reviewed bytes
 
 
 def test_a_clean_pass_3_is_not_admitted_again_at_the_same_head():
@@ -3358,9 +3359,13 @@ def test_reviewers_that_read_different_bytes_do_not_complete_one_pass():
     assert _next(rows) == "1"
 
 
-def test_a_second_codex_launch_for_a_started_pass_is_refused():
-    d = _dcycle([_crow("1", 1)], "1")
-    assert isinstance(d, rlg.Refused) and d.code == "CODEX_HALF_DELIVERED"
+def test_a_retry_of_a_partially_recorded_pass_is_admitted():
+    # rows append one at a time, so a crash can leave part of a verdict; the retry must
+    # run, or the findings it would record are lost
+    partial = [_crow("1", 1, fid="f1")]
+    assert isinstance(_dcycle(partial, "1"), rlg.Refused)  # f1 still owes a disposition
+    partial.append(_adj("f1", "accepted"))
+    assert isinstance(_dcycle(partial, "1"), rlg.Allowed)
 
 
 def test_accepted_p1_in_pass_2_escalates_once():

@@ -590,9 +590,11 @@ def _must_fix(run: PassRun) -> tuple[str, ...]:
     return ("P1",) if run.cycle_pass == "3" else ("P1", "P2")
 
 
-def next_pass(rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str) -> str | None:
-    """The pass the cycle admits next at `head_sha`, derived from the gate log alone;
-    None when the cycle is complete at this head.
+def next_pass(
+    rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str, diff_digest: str
+) -> str | None:
+    """The pass the cycle admits next on the binding (`head_sha`, `diff_digest`), derived
+    from the gate log alone; None when the cycle is complete on exactly that binding.
 
     A doc-only arc runs pass 3 alone; any other arc starts at pass 1. After pass 2 the
     cycle escalates (once) exactly when pass 2 raised an accepted P1. Pass 3 re-runs only
@@ -610,7 +612,7 @@ def next_pass(rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str) -
         return "esc" if _accepted(last, ("P1",), disposed) else "3"
     if last.cycle_pass == "esc" or _accepted(last, ("P1",), disposed):
         return "3"
-    return "3" if head_sha != last.head_sha else None
+    return None if (head_sha, diff_digest) == (last.head_sha, last.diff_digest) else "3"
 
 
 def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
@@ -667,7 +669,9 @@ def _decide_cycle(
                 "--actor <runner>_absorber`, fixing the accepted P1/P2 first"
             ),
         )
-    expected = next_pass(rows, arc_id, doc_only=doc_only, head_sha=head_sha)
+    expected = next_pass(
+        rows, arc_id, doc_only=doc_only, head_sha=head_sha, diff_digest=diff_digest
+    )
     if expected is None:
         return Refused(
             code="CYCLE_COMPLETE",
@@ -700,17 +704,6 @@ def _decide_cycle(
                 ),
                 recipe="commit the fix for every accepted P1/P2, then launch the next pass",
             )
-    started = [
-        r
-        for r in pass_runs(rows, arc_id)
-        if (r.cycle_pass, r.head_sha, r.diff_digest) == (cycle_pass, head_sha, diff_digest)
-    ]
-    if started and _CODEX in started[0].delivered:
-        return Refused(
-            code="CODEX_HALF_DELIVERED",
-            detail=f"codex already reviewed pass {cycle_pass} at {head_sha[:12]}",
-            recipe="the pass completes when its merge-gate lens verdicts are emitted",
-        )
     # the cycle's first pass reviews the authored diff, so the preflight is attested once,
     # before it, and never re-attested per pass (X9a); a retry after an unavailable
     # reviewer is still that first pass
