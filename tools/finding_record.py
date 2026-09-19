@@ -412,9 +412,11 @@ def append_observations(
     wrappers on one arc cannot both mint the same round; C-HE-22 / S1 codex round 7). Ids are
     minted per pair against the rows already present PLUS the pairs appended before it.
 
-    Every row is validated before any is written, and all of them go down in ONE write: a
-    reviewer's verdict is delivered whole or not at all, so a crash cannot record the first
-    finding of a verdict and strand the rest (B-294 (d))."""
+    Every row is validated before any is written, and all of them go down in ONE write, so
+    a process that dies between two rows can no longer record the first finding of a
+    verdict and strand the rest (B-294 (d)). The batch carries the log's one-row append
+    guarantee (`_append_line`): a short write is rolled back; a crash inside that one
+    syscall is the residual every single-row append already has."""
     path = path or GATE_LOG_JSONL
     written: list[dict] = []
 

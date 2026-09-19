@@ -851,7 +851,7 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         )
     state = _gate_state_in_force(repo, arc_id)
     if not isinstance(state, GateState):
-        return state
+        return state if cycle_pass is None else _cycle_not_in_force(state, arc_id)
     try:
         binding = rw.code_binding(repo, base)
         cycle = None if cycle_pass is None else _cycle_request(repo, binding, cycle_pass, _CODEX)
@@ -900,13 +900,13 @@ def admit_lens(
     binding: Mapping[str, str],
     arc_id: str,
     lane_id: str,
-) -> Decision:
+) -> Allowed | Refused:
     """The lens half of a pass, admitted by the same rules as the codex half. The emitter
     calls this with the log read under its emit lock, so two emissions of one lens are
     serialized and the second sees the first's rows."""
     state = _gate_state_in_force(repo, arc_id)
     if not isinstance(state, GateState):
-        return state
+        return _cycle_not_in_force(state, arc_id)
     try:
         cycle = _cycle_request(repo, binding, cycle_pass, lens)
     except (GateError, subprocess.CalledProcessError) as exc:
@@ -920,6 +920,21 @@ def admit_lens(
         diff_digest=binding["diff_digest"],
         lane_id=lane_id,
         cycle=cycle,
+    )
+
+
+def _cycle_not_in_force(state: Inactive | Refused, arc_id: str) -> Refused:
+    """A pass of the bounded cycle is admitted or refused, never recorded unchecked: its
+    rows would count toward the cycle once the arc is reserved (codex r1 P1 on B-294)."""
+    if isinstance(state, Refused):
+        return state
+    return Refused(
+        code="CYCLE_UNRESERVED",
+        detail=f"a cycle pass was named for {arc_id}, which is not reserved: {state.reason}",
+        recipe=(
+            f"reserve the arc first (`tools/reservations.py reserve --arc-id {arc_id} ...`), "
+            "or unset HARNESS_CYCLE_PASS for a legacy round"
+        ),
     )
 
 
