@@ -68,9 +68,9 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   sentences written from a narrative instead of from a call site.
 - **Size gate.** Keep the unit near ~300 changed non-test lines; above that, split it into
   its own arcs BEFORE pass 1 — every full-diff pass of the cycle reads the whole diff again.
-- **Admission attestation (B-215; X9a) — once, before pass 1.** For a
-  reserved arc, `review-cycle-pass 1` exits 3 (`GATE_REFUSED`, not a review terminal)
-  unless the pass is admitted: pass 1 needs a preflight attestation bound to the
+- **Admission attestation (B-215; X9a) — once, before the cycle's first pass.** For a
+  reserved arc, the first pass — pass 1, or pass 3 on a doc-only PR — is refused
+  (`GATE_REFUSED`, not a review terminal) unless it is admitted: it needs a preflight attestation bound to the
   committed diff — run the defect-class-preflight sweep, COMMIT the work, then
   labels-before-answers (U-SR-04, charter WR-10):
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>`
@@ -83,11 +83,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   — they resolve the arc via env_arc_and_lane(), so a bare invocation binds the
   branch-* fallback arc while the prefixed review checks the reserved one and
   refuses; template + attest AFTER the final pre-PR commit — the attestation binds
-  head+digest, and pass 1 is admitted only on the bytes it attests). It is attested once:
+  head+digest, and the first pass is admitted only on the bytes it attests). It is attested once:
   later passes are admitted by the cycle's own state, and there is no sweep attestation
   between passes (X9a) — sweep a fix's own bytes by hand before committing it
   (`defect-class-preflight`), but `review-template-sweep`/`review-attest-sweep` are no
-  longer a pass precondition. The cycle's one stop — a P1 still unfixed after pass 3 — is
+  longer a pass precondition. The cycle's one stop — pass 3 raising an accepted P1 on two consecutive runs — is
   the register-and-hold point (`defer.sh` + register row), and only an operator extends it
   (`just review-attest-budget`, deliberately ask-gated); see `merge-gate`'s
   `## The review cycle`.
@@ -96,14 +96,14 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]`
   (`<pass>` is `1`, `2` or `esc` — pass 3 has no codex half; `[base]` defaults to
   `origin/main`, and pass 2 passes the head pass 1 reviewed; the recipe tags the run with
-  its pass and runs `just review-with-failover-logged` — the C-HE-18 fail-closed `codex-review` wrapper with
+  its pass and runs `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged` — the C-HE-18 fail-closed `codex-review` wrapper with
   the C-HE-17 `gemini-review` failover; its in-recipe log publisher is the
   only way a guarded venue produces the round log that `arc-metrics queue
   --round-logs` later reads; U-HE-49, C-HE-21 §1 X6b: the recipe evaluates
   gate admission BEFORE launching — a refused launch exits 3 with no reviewer call and
   no round log — and publishes each attempt under its own minted `r<N>-a<K>.log` name,
-  so pass the plain `r<N>.log` round name — `r1` for pass 1, `r2` for pass 2, `r3` for
-  the escalation — and expect the attempt-suffixed file on disk). Run it in background mode, or
+  so pass the plain `r<N>.log` round name — the arc's next codex round, normally `r1` for
+  pass 1, `r2` for pass 2, `r3` for the escalation — and expect the attempt-suffixed file on disk). Run it in background mode, or
   with a Bash tool timeout ABOVE the wrapper's own shared deadline (1260 s primary +
   bounded failover — e.g. ≥ 3000000 ms): a shorter tool timeout kills a valid required
   review mid-flight. The inline `HARNESS_*` prefix is REQUIRED
@@ -246,20 +246,22 @@ you run it in:
    with `merge-gate-emit-pass 1` (lane-prefixed, as `merge-gate` documents). Pass 1 is complete when codex and all three lenses
    have delivered. CI runs meanwhile.
 2. **Fix round** — adjudicate every finding, fix and commit every accepted P1/P2, and
-   collect every P3/prose finding (plus any pass-3 P2 later) into ONE follow-up row for the
-   arc in `.harness/forward-register.yaml`. Push once.
+   collect every P3/prose finding into ONE follow-up row for the arc in
+   `.harness/forward-register.yaml`, committed with the last fix before pass 3 (a P2 or P3
+   that pass 3 raises stays in the gate log and joins the row on the arc's next PR — a
+   commit after pass 3 owes another pass 3). Push once.
 3. **Pass 2** — `just review-cycle-pass 2 …r2.log <pass-1 head>` plus the witness-adequacy
-   lens on the same fix delta. An accepted pass-2 P1 triggers the escalation (a repeat of
-   pass 1, `esc`, at most once) before pass 3.
+   lens on the same fix delta. An accepted pass-2 P1 is fixed and committed, then triggers the escalation (a
+   repeat of pass 1, `esc`, at most once) before pass 3.
 4. **Pass 3** — one lens on the full diff; it blocks only on an accepted P1, and its
    re-run after a fix is still pass 3. Its terminal triggers the shadow trial (above).
-   A doc-only PR runs this step alone.
+   A doc-only PR runs pass 3 alone.
 
 **Merge condition: CI green at the final head AND pass 3 clean** → merge without HIL, per
 `[[feedback-merge-without-hil-once-ci-green]]`. CI is fully green when the head's
 `check-runs` all conclude success (rerun known flakes first, per
 `[[wait-for-main-ci-green-before-forward-work]]`). Skip the cycle only on a terminating
-`ops: roadmap status refresh` PR. A P1 still unfixed after pass 3 stops the arc: one
+`ops: roadmap status refresh` PR. Pass 3 raising an accepted P1 on two consecutive runs stops the arc: one
 `AskUserQuestion`, and its recorded answer extends (`<extra>` more pass-3 re-runs) or holds — see
 the skill for the full procedure, parse-failure handling, and the audit-log append.
 

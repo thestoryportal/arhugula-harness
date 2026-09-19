@@ -3321,6 +3321,12 @@ def test_carriers_document_the_template_first_attest_flow():
         # U-HE-54 (spec v1.9 X9a): the sweep is no longer a pass precondition, so ship-pr
         # names it only as retired; the preflight skill still documents the full flow.
         verbs = ("preflight",) if "ship-pr" in rel.parts else ("preflight", "sweep")
+        if "ship-pr" in rel.parts:
+            # X9a moved the sweep off the pass path: ship-pr must state the attest-once rule
+            # AND must not document the old per-round sweep attestation as a step
+            assert "It is attested once" in text, rel
+            assert "there is no sweep attestation between passes (X9a)" in text, rel
+            assert "just review-attest-sweep <answers-file>" not in text, rel
         if "sweep" in verbs:
             # sweep-template must be spelled WITH the arc/lane prefix (codex u-sr-04 r1
             # P2: a bare invocation queries the branch-* fallback arc's obligations,

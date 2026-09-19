@@ -69,7 +69,7 @@ FLAT_TL=$(flat "$TL") || bad "two-lane: could not read the carrier to flatten it
 FLAT_RC=$(flat "$RC") || bad "roadmap-continue: could not read the carrier to flatten it"
 FLAT_MG=$(flat "$MG") || bad "merge-gate: could not read the carrier to flatten it"
 FLAT_SP=$(flat "$SP") || bad "ship-pr: could not read the carrier to flatten it"
-EXPECTED_CLAIMS=34
+EXPECTED_CLAIMS=36
 seen=0
 while IFS='|' read -r key claim; do
   [ -n "$key" ] || continue
@@ -98,7 +98,9 @@ MG|Each PR runs **one** bounded cycle, launched the moment the PR is pushed and 
 MG|- An accepted **P1** blocks until fixed. Raised in pass 2 it triggers the escalation; raised in the escalation or in pass 3, fix and commit it and pass 3 re-runs.
 MG|- An accepted **P2** raised in pass 1, pass 2 or the escalation is fixed before pass 3 runs.
 MG|- An accepted P2 first raised **in pass 3**, and every **P3 or prose** finding from any pass, goes into ONE follow-up row for the arc in `.harness/forward-register.yaml` — not fixed in this PR, never a pass of its own.
-MG|**The stop.** A P1 still unfixed after pass 3 — its re-run raised one again — stops the arc: the gate refuses further passes (`BUDGET_EXHAUSTED`).
+MG|**The stop.** Pass 3 raising an accepted P1 on two consecutive runs — its re-run after a P1 fix raised a P1 again, the same one or a new one — stops the arc: the gate refuses further passes (`BUDGET_EXHAUSTED`; `unfixed_after_pass_3` counts those runs, not finding identity).
+MG|A **doc-only** PR runs pass 3 alone: one lens on the full diff, no codex half (X9a).
+MG|the head the previous pass reviewed for pass 2 (the fix delta — the emitter refuses any other base, `WRONG_BASE`).
 MG|Nothing merges past a known P1.
 MG|Invariants bind by live carriage (C-HE-21 §2), not by an appeal to their number.
 MG|- **#5 is live** (no verdict inferred from absence) in this skill's `## Parsing — fail closed` and in `ship-pr`'s `## Pre-merge gate — CI green + decorrelated 3-lens review (before the merge door)`.

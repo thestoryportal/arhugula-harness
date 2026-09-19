@@ -936,7 +936,11 @@ def test_merge_gate_carriers_run_the_bounded_review_cycle() -> None:
         assert "X9a" in carrier, path
         assert "pass 3" in carrier, path
         assert "escalation" in carrier, path
-        assert "unfixed after pass 3" in carrier, path
+        # whole bounds, not fragments (U-HE-54 witness lens r1): the escalation's cap, the
+        # doc-only shape, and the stop's two-consecutive-runs trigger each pinned as a clause
+        assert "at most once" in carrier, path
+        assert re.search(r"[Dd]oc-only PR runs pass 3 alone", carrier), path
+        assert "accepted P1 on two consecutive runs" in carrier, path
         assert "follow-up" in carrier, path
         assert "ten rounds" not in carrier, path
         assert "eleventh" not in carrier.lower(), path
@@ -1425,6 +1429,8 @@ def test_merge_gate_carriers_wire_arc_id_and_adjudication() -> None:
         flat = " ".join(text.split())
         assert "just merge-gate-emit-pass <pass> --pr <" in flat, carrier
         assert "--base <base>" in flat, carrier
+        # pass 2's base is the head the previous pass reviewed, never the full diff's
+        assert "the head the previous pass reviewed for pass 2" in flat, carrier
         assert "delivers into no pass" in flat, carrier
         assert "just merge-gate-emit-all --pr <" not in flat, carrier
 

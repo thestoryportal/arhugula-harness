@@ -18,7 +18,7 @@ Antigravity and CI; it replaces neither.
 3. The merge condition is all required checks on the final PR HEAD and current base `main`
    HEAD terminal green AND pass 3 clean.
 4. Inspect the closed changed-file set. Substantive runtime, test, hook, or tool logic runs
-   the full cycle. A documentation-only PR runs pass 3 alone (one lens); only a terminating
+   the full cycle. A doc-only PR runs pass 3 alone (one lens); only a terminating
    roadmap refresh takes a logged `GATE SKIPPED-PROPORTIONAL` — do not pretend a skip is an
    approval.
 5. If the diff changes `.codex/hooks.json`, `.codex/hooks/**`, `tools/hooks/**`, or the Codex
@@ -165,7 +165,7 @@ older `merge-gate-emit` / `merge-gate-emit-all` recipes) delivers into no pass.
   (the prefix is REQUIRED for the guard's auto-allow and holder-bound to this lane's
   live reservation; actor must differ from the lens producer, write-time enforced).
   The `finding_id` is on the emitted JSONL row. Exit 2 = not recorded; re-run.
-- The cycle's one stop: a P1 still unfixed after pass 3 halts the arc (the gate refuses
+- The cycle's one stop: pass 3 raising an accepted P1 on two consecutive runs halts the arc (the gate refuses
   further passes, `BUDGET_EXHAUSTED`). It is a genuine decision point; surface the pass's
   verdicts together rather than looping or choosing silently, and continue only on a
   recorded operator decision (`just review-attest-budget <extra> <reason>` buys `<extra>` more pass-3 re-runs) or

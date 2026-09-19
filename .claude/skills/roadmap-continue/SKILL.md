@@ -167,7 +167,7 @@ Throughput: well under N×; merges serialize; trailing lanes re-gate on head cha
    C-HE-21 §1 X6b: the recipe evaluates gate admission BEFORE launching — a refusal
    exits 3 having spent no reviewer call and claimed no round name — and publishes
    each attempt under its own minted name `r<N>-a<K>.log`, so pass the plain `r<N>.log`
-   round name (`r1` pass 1, `r2` pass 2, `r3` the escalation) and NEVER pre-create or
+   round name (the arc's next codex round: normally `r1` pass 1, `r2` pass 2, `r3` the escalation) and NEVER pre-create or
    reuse log files; a refused attempt's retry keeps the same `r<N>` and the publisher
    lands it cleanly) — the fail-closed `codex-review` wrapper (C-HE-18) with the
    `gemini-review` D-C failover (C-HE-17); a verdict counts only on its schema parse

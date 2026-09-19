@@ -76,9 +76,10 @@ P3 or prose finding into ONE follow-up register row) → pass 2 (this reviewer +
 lens, on the fix delta) → the escalation, at most once and only on an accepted pass-2 P1 →
 pass 3 (one lens, full diff; blocks only on P1). On the Claude-authored path the codex half
 is `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]`.
-A BLOCK is input to the next pass, never a reason to re-review the same pass; a P1 still
-unfixed after pass 3 stops the arc for a recorded operator decision. The preflight is
-attested once, before pass 1. Never count self-review by the authoring model as decorrelated.
+A BLOCK is input to the next pass, never a reason to re-review the same pass; pass 3
+raising an accepted P1 on two consecutive runs stops the arc for a recorded operator
+decision. The preflight is attested once, before the cycle's first pass (pass 1, or pass 3
+on a doc-only PR). Never count self-review by the authoring model as decorrelated.
 
 The shadow trial (U-HE-43; C-HE-29) runs ONLY where the shadow lens is a second reviewer
 family: the Claude-authored path, where `just codex-review` blocks and Gemini shadows it. When

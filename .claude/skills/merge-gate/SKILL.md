@@ -1,6 +1,6 @@
 ---
 name: merge-gate
-description: Decorrelated 3-lens review — the lens half of the bounded review cycle (spec v1.9 X9a). Launches Agent-tool subagents (concurrency/race-conditions, spec-conformance-against-ledgers, test-witness-adequacy) against a PR's diff, each returning a structured APPROVE/BLOCK verdict recorded per pass with `merge-gate-emit-pass`. Use as soon as the PR is pushed, concurrent with CI, in the /loop continue → ship-pr flow: pass 1 runs all three lenses beside codex, pass 2 the witness lens on the fix delta, the escalation repeats pass 1 at most once, pass 3 is one lens on the full diff. Doc-only PRs run pass 3 alone; skip only `ops: roadmap status refresh` PRs. Merge only when CI is green and pass 3 is clean; a P1 still unfixed after pass 3 stops the arc and surfaces via AskUserQuestion.
+description: Decorrelated 3-lens review — the lens half of the bounded review cycle (spec v1.9 X9a). Launches Agent-tool subagents (concurrency/race-conditions, spec-conformance-against-ledgers, test-witness-adequacy) against a PR's diff, each returning a structured APPROVE/BLOCK verdict recorded per pass with `merge-gate-emit-pass`. Use as soon as the PR is pushed, concurrent with CI, in the /loop continue → ship-pr flow: pass 1 runs all three lenses beside codex, pass 2 the witness lens on the fix delta, the escalation repeats pass 1 at most once, pass 3 is one lens on the full diff. Doc-only PRs run pass 3 alone; skip only `ops: roadmap status refresh` PRs. Merge only when CI is green and pass 3 is clean; pass 3 raising an accepted P1 on two consecutive runs stops the arc and surfaces via AskUserQuestion.
 ---
 
 # merge-gate — decorrelated 3-lens pre-merge review
@@ -254,24 +254,30 @@ the whole of it.
 - An accepted **P2** raised in pass 1, pass 2 or the escalation is fixed before pass 3 runs.
 - An accepted P2 first raised **in pass 3**, and every **P3 or prose** finding from any pass,
   goes into ONE follow-up row for the arc in `.harness/forward-register.yaml` — not fixed in
-  this PR, never a pass of its own.
+  this PR, never a pass of its own. Write the row with the last fix commit before pass 3;
+  what pass 3 itself raises stays in the gate log and joins that row on the arc's NEXT PR,
+  because a register commit after pass 3 would owe another pass 3.
 - A **rejected** finding carries its cited law and needs nothing further.
 
 Adjudicate every finding (`merge-gate-adjudicate`, below) before launching the next pass; the
 gate refuses the launch otherwise (`ADJUDICATION_MISSING`), and refuses a pass whose accepted
 P1/P2 fix is not yet committed (`FIX_NOT_COMMITTED`).
 
-Launch mechanics. The defect-class preflight is attested ONCE, before pass 1
-(`review-attest-preflight`, see `ship-pr`); there is no sweep attestation between passes.
-The codex log name is `r<N>.log` for the next codex round (pass 1 → `r1.log`, pass 2 →
-`r2.log`, the escalation → `r3.log`); any other name is refused. Never run two codex runs of
+Launch mechanics. The defect-class preflight is attested ONCE, before the cycle's first pass —
+pass 1, or pass 3 on a doc-only PR (`review-attest-preflight`, see `ship-pr`; the gate refuses
+the first pass without it, `PREFLIGHT_MISSING`); there is no sweep attestation between passes.
+The codex log name is `r<N>.log`, N being the arc's next codex round — normally `r1` for
+pass 1, `r2` for pass 2 and `r3` for the escalation, but a `REVIEWER_UNAVAILABLE` round takes a
+number too and shifts the rest; a wrong name is refused before launch (`ROUND_NAME_MISMATCH`),
+and the refusal names the right one. Never run two codex runs of
 one pass at once. A doc-only PR runs pass 3 alone. A commit added after the cycle completes
 gets exactly one pass 3 (`CYCLE_COMPLETE` names this). Keep a unit near ~300 changed non-test
 lines and split it before pass 1 when it runs over: every full-diff pass reads the whole
 diff again, so its size is paid on each of them.
 
-**The stop.** A P1 still unfixed after pass 3 — its re-run raised one again — stops the arc:
-the gate refuses further passes (`BUDGET_EXHAUSTED`). Surface it with one `AskUserQuestion`.
+**The stop.** Pass 3 raising an accepted P1 on two consecutive runs — its re-run after a P1 fix raised a P1
+again, the same one or a new one — stops the arc: the gate refuses further passes
+(`BUDGET_EXHAUSTED`; `unfixed_after_pass_3` counts those runs, not finding identity). Surface it with one `AskUserQuestion`.
 The recorded answer is either a deliberate extension (`just review-attest-budget <extra> <reason>`, which buys
 `<extra>` more pass-3 re-runs, recorded by the operator and never granted by the loop) or register
 and defer (`defer.sh` plus a register row). Nothing merges past a known P1.
@@ -317,8 +323,8 @@ every accepted finding real.
   recorded, re-run). Rejected dispositions
   keep a `unique_catch=true` row from counting (C-HE-29 §2).
 - **A pass-3 `BLOCK`** blocks only on an accepted P1: fix it, commit, and pass 3 re-runs.
-  The escalation rule's one recorded escape is the stop in `## The review cycle` — a P1 still
-  unfixed after pass 3 halts the arc until the operator records an extension or a hold, and
+  The escalation rule's one recorded escape is the stop in `## The review cycle` — pass 3
+  raising an accepted P1 on two consecutive runs halts the arc until the operator records an extension or a hold, and
   the loop never grants its own (the v1.5 X5 recorded-decision checkpoint survives only as
   this escape).
 - At the stop, or immediately for a judgment-call disagreement (not a mechanical defect):

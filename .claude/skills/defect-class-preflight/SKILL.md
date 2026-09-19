@@ -43,7 +43,7 @@ Three meta-rules that outrank the list:
   you MEANT to write, not the one you are committing: re-run
   `scripts/preflight-grep.sh` over the absorption's own bytes and answer from its
   hits. Under the bounded review cycle (spec v1.9 X9a) nothing checks this for you: the
-  preflight is attested ONCE, before pass 1 (`ship-pr`'s admission attestation), and no gate asks
+  preflight is attested ONCE, before the cycle's first pass (`ship-pr`'s admission attestation), and no gate asks
   for a fix-round answers file again. The sweep of a fix is now your own discipline
   between passes, and skipping it stays invisible until the next pass bills for it.
 - **Every numeric bound names the contract value it derives from.** Any literal in a
