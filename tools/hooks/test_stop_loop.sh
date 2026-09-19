@@ -6,6 +6,11 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK="$SCRIPT_DIR/stop-loop.sh"
+# For hook_bounded, used as the OUTER guard on the hang witness (section 8f). The hook under
+# test sources this itself; the suite borrows the same helper rather than calling a `timeout`
+# binary stock macOS does not ship.
+# shellcheck source=lib.sh
+. "$SCRIPT_DIR/lib.sh"
 
 PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
@@ -157,17 +162,17 @@ echo "$OUT" | jq -e '.reason | test("R-410")' >/dev/null 2>&1 && ok "close-out c
 # 8d) Blocked once, never twice — the bound. A second over-ceiling stop stands down at the
 #     spent marker 8c wrote, instead of spending more context on the problem that IS too
 #     much context. Without this the attended arm blocks every turn forever.
-[ "$(cat "$REPO/.harness/.loop-ceiling-spent" 2>/dev/null)" = "s1" ] && ok "attended ceiling records the session as spent (the bound)" || bad "no spent marker — the close-out block would repeat forever"
+[ -f "$REPO/.harness/.loop-ceiling-spent-s1" ] && ok "attended ceiling records the session as spent (the bound)" || bad "no spent marker — the close-out block would repeat forever"
 OUT=$(run_ceiling "$OVER" attended)
 [ -z "$OUT" ] && ok "second over-ceiling stop stands down (blocked once, never twice)" || bad "close-out block repeated: $OUT"
-rm -f "$REPO/.harness/.loop-ceiling-spent"
+rm -f "$REPO/.harness/.loop-ceiling-spent-s1"
 
 # 8d-ii) The second bound. Writing the spent marker is a best-effort file write; if it fails
 #        the close-out arm would re-block every turn forever, so the arm also spends a turn
 #        on the counter and the cap carries it. Witnessed by making the marker path
 #        unwritable (a directory cannot be truncated into) so the primary bound cannot take.
 rm -f "$REPO/.harness/.loop-iter"
-mkdir -p "$REPO/.harness/.loop-ceiling-spent"
+mkdir -p "$REPO/.harness/.loop-ceiling-spent-s1"
 OUT=$(run_ceiling "$OVER" attended)
 echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "spent marker unwritable → the close-out still blocks" || bad "close-out lost with an unwritable marker: $OUT"
 [ "$(cat "$REPO/.harness/.loop-iter")" = "1" ] && ok "close-out spends a turn on the counter (the second bound)" || bad "close-out did not count its turn: $(cat "$REPO/.harness/.loop-iter" 2>/dev/null)"
@@ -181,22 +186,27 @@ printf '30' > "$REPO/.harness/.loop-iter"
 OUT=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" \
   | HARNESS_LOOP=1 HARNESS_LOOP_MAX=2 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 [ -z "$OUT" ] && ok "a counter at the cap stands the session down even with the ceiling over" || bad "close-out escaped both bounds: $OUT"
-rm -rf "$REPO/.harness/.loop-ceiling-spent"
+rm -rf "$REPO/.harness/.loop-ceiling-spent-s1"
 rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
 
 # 8d-iii) The spent marker is keyed by SESSION, not by lane (pass-1 concurrency lens P1). A
 #         second session sharing the worktree must get its own one block, and must never be
 #         stood down by another session's reading.
-rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-ceiling-spent"
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness"/.loop-ceiling-spent-*
 OUT=$(printf '{"transcript_path":"%s","session_id":"alpha","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING")' >/dev/null 2>&1 && ok "session alpha gets its close-out block" || bad "alpha not blocked: $OUT"
-[ "$(cat "$REPO/.harness/.loop-ceiling-spent")" = "alpha" ] && ok "the spent marker records the session id, not a bare flag" || bad "spent marker content: $(cat "$REPO/.harness/.loop-ceiling-spent" 2>/dev/null)"
+[ -f "$REPO/.harness/.loop-ceiling-spent-alpha" ] && ok "the spent marker is keyed by session id, so another session cannot overwrite it" || bad "no per-session spent marker: $(ls "$REPO/.harness/" | tr '\n' ' ')"
 OUT=$(printf '{"transcript_path":"%s","session_id":"alpha","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 [ -z "$OUT" ] && ok "alpha's SECOND stop stands down (spent)" || bad "alpha re-blocked: $OUT"
 OUT=$(printf '{"transcript_path":"%s","session_id":"beta","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING")' >/dev/null 2>&1 && ok "session beta still gets ITS block (spent-ness is per session)" || bad "beta inherited alpha's spent state: $OUT"
+# INTERLEAVED, which is the order a single shared file loses on: beta's block must not clear
+# alpha's spent-ness. With the id in the file's CONTENTS, beta's write overwrote alpha's and
+# alpha was blocked a second time (pass-1 codex P2); with the id in the NAME it cannot.
+OUT=$(printf '{"transcript_path":"%s","session_id":"alpha","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+[ -z "$OUT" ] && ok "alpha stays spent after beta's block (interleaved stops)" || bad "beta's block un-spent alpha — one session's ceiling reached another: $OUT"
 [ ! -f "$REPO/.harness/.loop-halt" ] && ok "the attended arm never raises the lane-wide halt marker" || bad "close-out raised .loop-halt — a concurrent run would stand down"
-rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-ceiling-spent"
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness"/.loop-ceiling-spent-*
 
 # 8e) An unmeasurable session never strands the run, and is never silent either: the loop
 #     continues AND the ledger records that nothing was measured. Asserting only the
@@ -218,14 +228,19 @@ unset MEMENTO_ROOT
 #     blocks `open()` forever, which is the real shape of the hazard — a transcript the hook
 #     cannot finish reading. The whole hook runs under an OUTER `timeout` so that removing
 #     the bound fails the assert fast instead of hanging the suite.
-rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-ceiling-spent"
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness"/.loop-ceiling-spent-*
 : > "$HARNESS_LOOP_STATUS_PATH"
 FIFO="$REPO/hang.jsonl"; rm -f "$FIFO"; mkfifo "$FIFO"
+# The OUTER guard is hook_bounded, not raw `timeout`: stock macOS ships neither `timeout`
+# nor `gtimeout` (lib.sh documents exactly this, which is why hook_bounded carries a
+# pure-bash fallback). Calling the binary directly would exit 127 there and be read as a
+# successful non-timeout — the assert passing for the wrong reason (pass-1 codex P3).
+HANG_START=$SECONDS
 OUT=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$FIFO" "$REPO" \
   | HARNESS_LOOP=1 HARNESS_LOOP_CEILING_TIMEOUT=1 MEMENTO_ROOT="$REPO/no-such-memento" \
-    CLAUDE_PROJECT_DIR="$REPO" timeout 20 bash "$HOOK")
-HANG_RC=$?
-[ "$HANG_RC" -ne 124 ] && ok "an unreadable-forever transcript is cut off by the bound, not left to hang" || bad "the ceiling read hung past the bound (outer timeout fired)"
+    CLAUDE_PROJECT_DIR="$REPO" hook_bounded 20 bash "$HOOK")
+HANG_ELAPSED=$(( SECONDS - HANG_START ))
+[ "$HANG_ELAPSED" -lt 15 ] && ok "an unreadable-forever transcript is cut off by the bound, not left to hang" || bad "the ceiling read hung past the bound (outer guard fired after ${HANG_ELAPSED}s)"
 echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "a timed-out reading still lets the loop continue" || bad "timeout stranded the loop: $OUT"
 grep -q 'context ceiling unreadable' "$HARNESS_LOOP_STATUS_PATH" && ok "the timed-out reading is RECORDED as unmeasured" || bad "timeout left no ledger row: $(cat "$HARNESS_LOOP_STATUS_PATH")"
 rm -f "$FIFO" "$REPO/.harness/.loop-iter"
@@ -285,6 +300,13 @@ SIDE="$REPO/side.jsonl"
 # A transcript still being appended to ends in a torn line; that is ordinary, not fatal.
 TORN="$REPO/torn.jsonl"; { usage_record 1000; printf '{"type":"assis'; } > "$TORN"
 [ "$(read_verdict "$TORN" | jq -r .tokens)" = "1000" ] && ok "torn final line is skipped, not fatal" || bad "torn line broke the scan: $(read_verdict "$TORN")"
+
+# A malformed LAST record in a file that ENDS IN A NEWLINE is complete, so it is corruption
+# rather than an append caught mid-write. Tolerating it would skip the newest record and read
+# the older 900000 one instead (pass-1 codex P2).
+SEALED="$REPO/sealed.jsonl"
+{ usage_record 900000; printf '{"type":"assistant","message":{"usa\n'; } > "$SEALED"
+read_verdict "$SEALED" >/dev/null 2>&1 && bad "a complete-but-malformed final record was tolerated" || ok "a malformed final record in a newline-terminated file fails loudly"
 
 # A corrupt record that is NOT the final line is real corruption, and skipping it would fall
 # through to an older, LOWER usage — an over-ceiling session read as comfortably under, which

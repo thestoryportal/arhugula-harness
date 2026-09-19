@@ -85,16 +85,23 @@ def records_newest_first(transcript_path):
 
     Sidechains are a subagent's conversation and never describe this session's context.
 
-    Exactly ONE unparseable line is tolerated — the file's last — because a transcript being
-    appended to is routinely caught mid-write there. Any other unparseable line is real
-    corruption and raises, because the alternative is worse than a crash: skipping it falls
-    through to an OLDER record with a LOWER usage, which reads as a session comfortably under
-    a ceiling it has in fact passed. A measurement that fails is recoverable; one that is
+    An unparseable line is tolerated in exactly one place: the last line of a file that does
+    NOT end in a newline, which is what an append caught mid-write looks like. A trailing
+    newline means every record in the file is complete, so a malformed one there is real
+    corruption, not a torn write — tolerating it anyway would skip the newest record and fall
+    through to an OLDER one with a LOWER usage, reading as a session comfortably under a
+    ceiling it has in fact passed. A measurement that fails is recoverable; one that is
     quietly too low is the failure this whole gate exists to prevent. [LAW:no-silent-failure]
     """
     with open(transcript_path, "rb") as handle:
         handle.seek(0, os.SEEK_END)
-        end, straddling_head, at_tail = handle.tell(), b"", True
+        end, straddling_head = handle.tell(), b""
+        # Only an unterminated file can have a torn last line; a trailing newline means the
+        # writer finished every record it started.
+        at_tail = False
+        if end:
+            handle.seek(end - 1)
+            at_tail = handle.read(1) != b"\n"
         while end > 0:
             start = max(0, end - TAIL_CHUNK)
             handle.seek(start)

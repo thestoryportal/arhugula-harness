@@ -16,7 +16,7 @@
 #     (the claudefa.st turn-counter guard); log + reset + allow stop.
 #   - CONTEXT CEILING (U-HE-58) → headless, allow the stop and let the runner relaunch;
 #     attended, block ONCE for the close-out, bounded by a per-SESSION spent marker
-#     (.harness/.loop-ceiling-spent) and by the turn it spends on the counter.
+#     (.harness/.loop-ceiling-spent-<session>) and by the turn it spends on the counter.
 #   - otherwise → increment the counter + block with the next-action + the run-scoped
 #     SKIP-SET so the loop ADVANCES past already-deferred items (never re-attempts one).
 #
@@ -129,10 +129,7 @@ else
       exit 0
       ;;
     close-out)
-      # Attended: nothing will relaunch this session, so it is told to close out. The halt
-      # marker is what bounds it to ONE such block — the next Stop stands down at step 2
-      # rather than spending more context on the problem that IS too much context. Context
-      # exhaustion is a genuine stand-down, which is the condition that marker already means.
+      # Attended: nothing will relaunch this session, so it is told to close out.
       # Blocked once, never twice — but the "once" is per SESSION, not per lane. The halt
       # marker would have been the obvious bound and is the wrong one: it is per-worktree
       # (loop_halt_path reads only the project dir), every writer of it so far meant a
@@ -142,15 +139,22 @@ else
       # reading that says nothing about it. So the spent-ness is keyed by session id: this
       # file holds the id of the session last told to close out, and a session that does not
       # find its own id there gets its one block.
-      SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent"
-      SESSION=$(hook_json "$PAYLOAD" '.session_id')
-      if [ -n "$SESSION" ] && [ "$(cat "$SPENT" 2>/dev/null)" = "$SESSION" ]; then
+      # The id is in the NAME, not the contents. One shared file holding "the last session
+      # told to close out" loses under interleaving — alpha writes, beta overwrites, alpha's
+      # next stop no longer looks spent and is blocked again (pass-1 codex P2). A file per
+      # session cannot be overwritten by another session, and the check is then a plain
+      # existence test rather than a read-and-compare.
+      # `-cd` DELETES every character outside the safe set rather than substituting it:
+      # jq -r emits a trailing newline, and substituting would fold it into the filename.
+      SESSION=$(hook_json "$PAYLOAD" '.session_id' | tr -cd 'A-Za-z0-9_-')
+      SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent-${SESSION}"
+      if [ -n "$SESSION" ] && [ -f "$SPENT" ]; then
         loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, close-out already asked of this session; allowing the stop"
         exit 0
       fi
       CLOSE_OUT=$(printf '%s' "$VERDICT_JSON" | jq -r '.close_out')
       loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, blocking once for the close-out"
-      printf '%s' "$SESSION" > "$SPENT" 2>/dev/null
+      : > "$SPENT" 2>/dev/null
       # A close-out block is a turn the loop spent, so it counts as one. That is also the
       # SECOND bound: the marker above is the primary one, but writing it is a best-effort
       # file write, and if it fails this arm would otherwise re-block every turn forever —
