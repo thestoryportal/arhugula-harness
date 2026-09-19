@@ -46,6 +46,47 @@ def test_classify_names_every_matching_class_and_empty_for_unmatched():
     assert out["a:2"] == []
 
 
+def test_record_contradicts_its_evidence_is_not_class_2_vocabulary():
+    # U-HE-45's plan-record arc tried THREE terms for this shape and withdrew all three; the
+    # ALSO-evaluated-and-LEFT-OUT note above CLASSES carries the measurements. This pins the
+    # withdrawal so none of them creeps back.
+    #
+    # p:1/p:2 are the genuine members and they STAY in the intake pile — the shape is class 2's
+    # subject, but no bounded vocabulary reaches it. n:1/n:2 are the counterexamples that killed
+    # the last two terms: an ordinary numeric contrast, and an "identifies only" that is about a
+    # sanitizer rather than a record. Re-add `,\s*not\s+\d` and n:1 goes red; re-add
+    # `identifies only` and n:2 goes red.
+    rows = [
+        {
+            "finding_id": "p:1",
+            "observed_evidence": "The review audit conflicts with the durable gate log: rounds"
+            " 1-5 contain 2/3/3/2/1 findings (11 total), not 2/2/3/2/1 (10 total).",
+            "location": ".harness/plan/x.md:7793",
+        },
+        {
+            "finding_id": "p:2",
+            "observed_evidence": "This identifies only B-285/B-286 as the actionable frontier,"
+            " but B-287 and B-288 also qualify.",
+            "location": ".harness/clearance/x-cleared-2026-09-18.md:46",
+        },
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "The API returns 1, not 2.",
+            "location": "harness-cp/src/harness_cp/x.py:10",
+        },
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "The sanitizer identifies only SQL injection and therefore lets"
+            " XSS through.",
+            "location": "harness-as/src/harness_as/y.py:22",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    name = "2 prose stale / counts / cites"
+    for row in rows:
+        assert name not in out[row["finding_id"]], (row["finding_id"], out[row["finding_id"]])
+
+
 def test_bare_drift_is_not_class_2_vocabulary():
     # handoff-s2 §2 B proposed `\bdrift` for class 2; the corpus said no (30 of 35 "drift"
     # rows are contract / configuration / roadmap drift or the arc-metrics drift cohort —
@@ -75,6 +116,142 @@ def test_bare_drift_is_not_class_2_vocabulary():
     out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
     for fid in ("d:1", "d:2", "d:3", "d:4"):
         assert "2 prose stale / counts / cites" not in out[fid], fid
+
+
+def test_class_7_does_not_claim_sourced_shell_caller_state():
+    """The shell half of class 7 was tried and withdrawn; nothing here claims it.
+
+    A sourced file mutating its caller's shell IS class 7's concern in another substrate, but
+    no term for it survived. `caller's shell` was tried and WITHDRAWN: it claimed a finding
+    this class does not own, and under the prefer-to-miss policy a term that steals from the
+    unmatched pile does not earn its place. That claim is EXISTENTIAL and so survives a growing
+    corpus; what is not restated is any COUNT or PRECISION figure, which a growing gate log
+    makes true at one anchor and false at the next. These shapes stay in the pile where a human
+    reads them.
+
+    Pinned in both directions: re-adding any such term reds the first assertion, and losing
+    the Python vocabulary reds the second.
+    """
+    unclaimed = [
+        {
+            "finding_id": "u:1",
+            "observed_evidence": (
+                "because lane-init.sh is sourced, this assignment writes _LI_SRC into the "
+                "caller's shell, and every successful path leaves it defined"
+            ),
+            "location": "tools/hooks/lane-init.sh:31",
+        },
+        {
+            "finding_id": "u:2",
+            "observed_evidence": (
+                "lib.sh inherits the caller's shell options, so a caller running with set -e "
+                "exits on the first lock collision before rc=$? is captured"
+            ),
+            "location": "tools/hooks/lib.sh:144",
+        },
+    ]
+    still_claimed = [
+        {
+            "finding_id": "k:1",
+            "observed_evidence": "the fixture writes os.environ directly and never restores it",
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(unclaimed + still_claimed)).stdout)
+    for fid in ("u:1", "u:2"):
+        assert "7 env-var mutation / restore" not in out[fid], (fid, out[fid])
+    assert "7 env-var mutation / restore" in out["k:1"], out["k:1"]
+
+
+def test_class_4_claims_the_leaves_this_test_green_idiom():
+    """The canonical vacuous-witness phrasing, adopted on MEASURED evidence.
+
+    Run against the committed corpus this alternative newly matched rows that were each
+    audited individually: every one is "removing/reverting/deleting X leaves this test
+    green", which is class 4 exactly. Three sibling candidates were measured in the same
+    pass and rejected for mixing in races, spec findings and lock ordering -- `cannot
+    detect`, `never (exercis|reach)`, `claim ... is false`. Measuring first is the whole
+    difference between this term and the ones this arc withdrew.
+    """
+    positives = [
+        {
+            "finding_id": "g:1",
+            "observed_evidence": (
+                "the test exercises only the readability preflight and never the new "
+                "per-source status check; removing the guard would leave this test green"
+            ),
+            "location": "tools/hooks/test_lane_init.sh:1053",
+        },
+        {
+            "finding_id": "g:2",
+            "observed_evidence": (
+                "deleting the production _kill_after call would leave the suite green"
+            ),
+            "location": "",
+        },
+    ]
+    negatives = [
+        {
+            "finding_id": "g:n1",
+            "observed_evidence": "a peer can claim the file between glob and read",
+            "location": "",
+        },
+        {
+            "finding_id": "g:n2",
+            "observed_evidence": (
+                "the holder gate admits a terminal merged reservation, contradicting C-HE-03 §6"
+            ),
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(positives + negatives)).stdout)
+    for fid in ("g:1", "g:2"):
+        assert "4 vacuous witness" in out[fid], (fid, out[fid])
+    for fid in ("g:n1", "g:n2"):
+        assert "4 vacuous witness" not in out[fid], (fid, out[fid])
+
+
+def test_class_3_does_not_describe_the_class_table_itself():
+    """No class term names this table's own machinery, deliberately.
+
+    Every phrasing tried ("intake path", "intake pile", "classifies unrelated") also reads
+    naturally in findings about ingestion endpoints and queue growth, and narrowing never
+    converged -- round after round, each correct, each attacking the phrase the last one
+    added. A classifier cannot be widened to catch the complaint that it is too wide.
+    Findings about the table stay unmatched, which is where a human reads them.
+    """
+    rows = [
+        {
+            "finding_id": "m:1",
+            "observed_evidence": (
+                "classifies unrelated ownership findings, which removes it from the "
+                "unmatched intake pile"
+            ),
+            "location": "",
+        },
+        {
+            "finding_id": "m:2",
+            "observed_evidence": (
+                "the webhook intake pile grows without bound and exhausts memory under burst"
+            ),
+            "location": "",
+        },
+        {
+            "finding_id": "m:3",
+            "observed_evidence": "the unsigned webhook intake path accepts forged payloads",
+            "location": "",
+        },
+        # ...while genuine class-3 vocabulary is untouched by the removal.
+        {
+            "finding_id": "m:4",
+            "observed_evidence": "the except arm swallows the error and returns an empty list",
+            "location": "",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    for fid in ("m:1", "m:2", "m:3"):
+        assert "3 silent failure / fallback" not in out[fid], (fid, out[fid])
+    assert "3 silent failure / fallback" in out["m:4"], out["m:4"]
 
 
 def test_classify_reads_the_location_too():
@@ -336,6 +513,114 @@ def test_class_16_needs_both_a_blessing_verb_and_the_artifact_doing_it():
         assert "16 witness codifies the divergence" in out[r["finding_id"]], r["location"]
     for r in not_codifying:
         assert "16 witness codifies the divergence" not in out[r["finding_id"]], r["finding_id"]
+
+
+def test_record_field_vs_body_is_not_class_vocabulary():
+    # U-HE-45's plan-record arc shipped this shape as class 18 and SUBTRACTED it after two
+    # consecutive rounds landed on it (that arc's r2 and r3); the ALSO-evaluated-and-LEFT-OUT
+    # note above CLASSES carries the measurements.
+    #
+    # WHAT THIS TEST IS AND IS NOT (codex r4 P3): the bound diff adds class 18 and removes it
+    # again, so `CLASSES` is behaviourally IDENTICAL to base and this test passes with the
+    # classifier edits reverted. It therefore does NOT witness a delta in this diff — it is
+    # coverage of pre-existing behaviour whose job is to make a FUTURE re-addition go red.
+    # Calling it a subtraction witness would be the overclaim class 4 is about.
+    #
+    # p:1/p:2 are the genuine members and they STAY in the intake pile, which is the right place
+    # for a shape whose vocabulary was measured unable to carry it. n:1/n:2 are the two false
+    # positives that killed it: both keep a field term and a contradiction term in ONE sentence
+    # while describing nothing of the kind, so no window separates them — and n:2 additionally
+    # shows `mark` matching inside `benchmarks`. If anyone re-adds the row, these are what go red.
+    rows = [
+        {
+            "finding_id": "p:1",
+            "observed_evidence": "B-282 is marked `open` even though its own summary says"
+            " U-HE-40 is HELD and U-HE-41 is not startable.",
+            "location": ".harness/forward-register.yaml:11947",
+        },
+        {
+            "finding_id": "p:2",
+            "observed_evidence": "This marks the combined Step 1-2 complete even though the"
+            " status says its required half was NOT performed.",
+            "location": ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md:7798",
+        },
+        {
+            "finding_id": "n:1",
+            "observed_evidence": "The status field is parsed correctly even though a missing"
+            " verdict file makes the unrelated hook fail.",
+            "location": "tools/merge_gate_log.py:347",
+        },
+        {
+            "finding_id": "n:2",
+            "observed_evidence": "The benchmarks remain open even though the sample size is small.",
+            "location": "tools/arc_cost.py:1",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(rows)).stdout)
+    for row in rows:
+        assert out[row["finding_id"]] == [], (row["finding_id"], out[row["finding_id"]])
+
+
+def test_class_18_needs_a_contract_reference_on_every_alternative():
+    """Rows measured into class 18 at the 2,247-finding corpus, plus the false positives
+    each alternative must refuse. The contract is that EVERY alternative binds to a
+    `C-HE` reference: a bare contradiction verb is what class 2 rejected, and an
+    unqualified `declares the complete` matched a benign schema sentence for one round
+    (codex r10 P2). Asserted through `classify`, never against the regex
+    ([LAW:behavior-not-structure])."""
+    departures = [
+        {
+            "finding_id": "d:1",
+            "observed_evidence": "The holder gate now permits appending against a terminal"
+            " `merged` reservation, contradicting C-HE-03 §6's explicit prohibition.",
+            "location": "tools/arc_metrics.py:555",
+        },
+        {
+            "finding_id": "d:2",
+            "observed_evidence": "Masked pairs are omitted from the numerator, but"
+            " canonical C-HE-13 §4 still requires the real textual-conflict rate.",
+            "location": "tools/arc_disjoint_check.py:374",
+        },
+        {
+            "finding_id": "d:3",
+            "observed_evidence": "TERMINAL_NOT_GREEN admits TIMED_OUT even though C-HE-19"
+            " declares the complete CI outcome domain to be exactly SUCCESS, FAILURE,"
+            " and CANCELLED.",
+            "location": "tools/merge_door.py:47",
+        },
+    ]
+
+    refused = [
+        {
+            "finding_id": "x:1",
+            # a benign completeness claim with no contract in sight: the exact false
+            # positive the unqualified third alternative produced
+            "observed_evidence": "The schema declares the complete set of accepted"
+            " fields, so the extra key is ignored.",
+            "location": "tools/forward_register.py:417",
+        },
+        {
+            "finding_id": "x:2",
+            # a bare contradiction verb, unbound to any contract -- class 2's rejection
+            "observed_evidence": "The comment contradicts the code it sits above.",
+            "location": "tools/merge_door.py:900",
+        },
+        {
+            "finding_id": "x:3",
+            # a passing cite of a contract number, making no claim about departing from it
+            "observed_evidence": "Implements the C-HE-06 §4 landing steps in order.",
+            "location": "tools/merge_door.py:1200",
+        },
+    ]
+    out = json.loads(_run("classify", stdin=json.dumps(departures + refused)).stdout)
+    for row in departures:
+        assert "18 the code departs from a cleared contract" in out[row["finding_id"]], row[
+            "finding_id"
+        ]
+    for row in refused:
+        assert "18 the code departs from a cleared contract" not in out[row["finding_id"]], row[
+            "finding_id"
+        ]
 
 
 def test_owed_pointer_refresh_is_not_class_vocabulary():

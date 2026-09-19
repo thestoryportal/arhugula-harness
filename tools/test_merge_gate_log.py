@@ -1362,3 +1362,16 @@ def test_cli_emit_recovers_a_reservation_arc_orphan_via_the_real_entry_point(
 def test_arc_not_held_reason_without_reservations_substrate_refuses(monkeypatch):
     monkeypatch.setitem(sys.modules, "reservations", None)  # import raises ImportError
     assert "no reservations substrate" in (mgl.arc_not_held_reason("u-x") or "")
+
+
+def test_a_lens_verdict_cannot_carry_a_cycle_pass_until_its_admission_lands(
+    tmp_path: Path, monkeypatch
+):
+    # nothing admits the lens half yet (B-294), so a pass-tagged lens row could complete
+    # the cycle out of order; the emit refuses it and writes nothing
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "3")
+    with pytest.raises(mgl.GateLogError, match="B-294"):
+        _emit(tmp_path, verdict="APPROVE")
+    assert not (tmp_path / "log.jsonl").exists()
+    monkeypatch.delenv(fr.CYCLE_PASS_ENV)
+    assert _emit(tmp_path, verdict="APPROVE")[0]["cycle_pass"] is None

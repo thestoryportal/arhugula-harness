@@ -413,6 +413,16 @@ merge-door-unblock pr sha='':
       echo "merge-door-unblock: using blocked_at_sha=$sha from door state" >&2
     fi
     uv run python tools/merge_door.py unblock {{pr}} "$sha" --lane-id "$lane"
+# C-HE-06 §6, second half: free the successor lease `merge-door-unblock` mints. Unblock
+# clears the BLOCK; it does not open the door, so a landing whose own commit reddened
+# `main` is wedged until this runs -- `land` re-blocks on the merge sha's immutable run
+# and `gc` skips live leases. Same lane-id fallback, and the same loud abort on absence.
+merge-door-release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    lane="${HARNESS_LANE_ID:-$(cat .harness/.lane-id 2>/dev/null || true)}"
+    [ -n "$lane" ] || { echo "merge-door-release: no HARNESS_LANE_ID and no .harness/.lane-id (run lane-init)" >&2; exit 64; }
+    uv run python tools/merge_door.py release --lane-id "$lane"
 merge-door-status:
     uv run python tools/merge_door.py status
 

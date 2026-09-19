@@ -22,7 +22,7 @@ Copied verbatim from the spec; every unit's requirements implicitly include thes
 - "CANCELLED is INCOMPLETE, never green" (C-HE-19 §1).
 - "No new **authority**: no new hash-chained findings ledger" (C-HE-23 §1); `.harness/arc-metrics.jsonl` carries only `record_kind=arc` rows; finding-class rows live in `.harness/merge-gate-log.jsonl` (C-HE-24 §2).
 - `lane_id`, `producer`, `reviewer_identity`, `deterministic_check_id` MUST NOT contain `:` (C-HE-03 §3, C-HE-24 §2).
-- "No flat round cap anywhere" (C-HE-21 §1); "No mechanized check is ever cited as grounds for a round cap" (C-HE-31 inv).
+- One bounded review cycle per PR — pass 1 → fix → pass 2 → escalation at most once → pass 3; nothing merges past a known P1 (C-HE-21 §1, spec v1.9 X9a). No mechanized check is cited as grounds for skipping a pass (C-HE-31 inv, v1.9 X9b). *(Pre-v1.9 wording: "No flat round cap anywhere", itself stale since v1.5 X5.)*
 - Every verification line marked **mutation-probe** MUST go RED against the unfixed guard and GREEN after the fix, confirmed via `just mutation-probe` (spec §0.3). `just mutation-probe-coverage-check` asserts coverage before a contract closes (§8.1).
 - Skip policy (§8.1): only `docker-daemon-absent`, `provider-login-absent`, `gh-auth-absent` may skip, each with the named reason; a skipped **phase0** row fails `just lanes-phase0-check`. No row may skip on "slow".
 - The plan MUST cite `C-HE-NN`, never the design corpus (spec §13); it MUST NOT be consumed before the clearance marker `.harness/clearance/spec-he-loop-lanes-v1-cleared-<date>.md` exists (spec §14).
@@ -6009,12 +6009,16 @@ def ports(k: int) -> dict[str, int]:
 def project(k: int) -> str:
     return "arhugula-r420-self-hosted-local" + (f"-lane{k}" if k else "")
 ```
-`tools/hooks/lane-init.sh` (sourced):
+`tools/hooks/lane-init.sh` (sourced) — **indicative skeleton only; the shipped file is authoritative and has diverged well beyond this sketch**:
 ```bash
 #!/usr/bin/env bash
 # Lane initialisation (C-HE-11). Source at worktree start: exports HARNESS_LANE_ID, HARNESS_LANE_INDEX,
 # sets gc.auto 0 ONCE (repo-wide, idempotent), and defines lane_stack_allowed for the Docker stack.
-_LI_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Root resolution is NOT this one-liner. `BASH_SOURCE` is bash-only and this file is SOURCED, so
+# under zsh it resolved against the caller's cwd: sourcing returned rc=0 with ZERO of five library
+# functions loaded. The shipped bash+zsh ladder (zsh `%x` via eval) is tools/hooks/lane-init.sh:66-76
+# and is authoritative; do not reintroduce a ${BASH_SOURCE[0]} form in a block labelled (sourced).
+_LI_ROOT="$(CDPATH= cd "$(dirname "${_LI_SRC:-$0}")/../.." && pwd)"  # _LI_SRC per that ladder
 source "$_LI_ROOT/tools/hooks/lib.sh"; source "$_LI_ROOT/tools/hooks/loop_lib.sh"
 _LI_Q="${ARC_METRICS_QUEUE_DIR:-$HOME/.gstack/projects/arhugula-v2/arc-metrics-queue}"
 [ -n "${HARNESS_LANE_ID:-}" ] || export HARNESS_LANE_ID="$(uv run --quiet python "$_LI_ROOT/tools/reservations.py" mint-lane-id --worktree "$PWD" 2>/dev/null || printf '%s-%s-%s' "$(hostname -s)" "$(basename "$PWD")" "$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')")"
@@ -7752,8 +7756,62 @@ def main(argv=None) -> int:
 
 **Depends on.** U-HE-44.
 
+**Unit status (as-built, 2026-09-18).** Step 3 ran and is merged; Step 1–2 is HALF done and stays UNTICKED for that reason — see the `--next-action` bullet below. The row-registration half landed on PR #1569
+(`dc68fd8c4779db6d78860ef4e4130668ce72f0c0`, door-merged; main's own post-merge CI green).
+Step 3's terminating refresh is #1574 (`96e1739c5`) — issued by the merge door itself rather
+than a hand-authored PR, which is the production continuation's behaviour. A tick here means
+the step was carried out, never that the sketch below is what shipped. Divergences, each
+deliberate:
+
+- **The registered statuses are NOT all forward work.** The scope was authored when S1–S8 were
+  all ahead of execution; grounding every row against landing evidence found that TEN of the
+  eleven steps had ALREADY landed. S1–S6 and S8 are `closed` rows naming their cluster commits
+  or PRs in the canonical `pr` field; only **S7** carries forward work and it is `held`, not
+  `open`, because U-HE-40 is held at 15/15 review rounds (B-244) and U-HE-41 depends on it.
+  `B-287` registers the general defect: a close-step's scope describes the world at authoring
+  time, and a plan long enough to execute over weeks will have moved.
+- **U-HE-01 is filed under S2, not S1**, per §6's own rationale (the finding record and
+  `lane_id` are what make S4d's detections emit). The §3 map labels it `S2-root` while omitting
+  it from S2's list, which is what made this worth stating.
+- **`depends_on` is carried as a structured list of B-ids**, not prose, so the topology is
+  machine-derivable — `--open` emits file order and would otherwise admit S1 before S2's root.
+- **The pilot-bar row carries a bespoke close condition.** The generic "every unit in ‹units›
+  landed" template was VACUOUS on a row whose unit set is empty: it was closable without a
+  single passing pilot, on the row whose whole purpose is to gate on passing pilots. It now
+  requires three distinct run_ids at 3–4 lanes each reporting `pass: true`, and records that
+  `pilot-2026-09-17-a` counts toward none of them (that run is permanently FAIL — `pass` keys on
+  whether a coordination HITL escalation OCCURRED, and the DEFERRED-HIL row is durable).
+- **Step 1–2's `--next-action` half was NOT performed, and cannot be as written — which is why
+  its box stays UNCHECKED.** § the convention above: a checked box means the step was carried out,
+  so ticking a combined step whose second half is undone would record a required deliverable as
+  complete (out-of-family review caught exactly that in this record's first draft). `B-288`
+  records why: `hook_roadmap_next` (`tools/hooks/lib.sh:286-292`) accepts five carriers and every
+  one names a unit (`U-*`/`R-*`) or a plan doc, while this arc's actionable frontier is FIVE
+  register rows — `B-284`, `B-285`, `B-286`, `B-287` and `B-288`. Four are `registered_finding`
+  with empty `depends_on`; `B-284` is `open` with its sole dependency `B-281` already `closed`,
+  and `--open` applies NO dependency filtering, so all five are emitted — `B-*` rows the parser
+  cannot see. Out-of-family review raised the pointer on FOUR
+  consecutive rounds and each rewording only moved which BLOCKED thing was named (U-HE-45 just
+  completed → held U-HE-40 → the plan doc whose only remaining S7 work is that same held unit).
+  Registered rather than reworded a fifth time, and `roadmap_status.md` landed byte-identical to
+  main. Note the sketch's own suggested paragraph carries NONE of the five carriers and would
+  itself have returned empty.
+
+**Review.** codex rounds r1–r6 (r1–r5 BLOCK with **2/3/3/2/1** findings, r6 APPROVE) plus one
+fresh-context witness lens (APPROVE) — **11** findings, all accepted and adjudicated on the gate
+log; the counts here are read from the gate log's own `round_n` field, an earlier draft of this
+line having claimed 2/2/3/2/1 and 10 from memory. Round 5's finding was resolved by SUBTRACTION
+rather than the constraint proposed: preflight class 17, added during this arc's own r2
+absorption, was removed at r5 (net −55 lines). Its findings fell in rounds **2, 3 and 5 — three
+rounds, NOT three consecutive ones**: r4's two findings were the roadmap pointer and the `#TBD`
+closure citations. So the two-consecutive-rounds trigger actually fired at **r3**, where the row
+was fixed instead of withdrawn, and r5 is where the accumulated evidence was finally acted on —
+the subtraction was overdue rather than premature. The shape is recorded as an
+evaluated-and-LEFT-OUT vocabulary in both carriers. Residual: `phases` were never recorded on this arc's reservation, so
+its C-HE-27 timing spans do not exist.
+
 - [ ] **Step 1–2:** add rows; run `uv run python tools/roadmap_status_refresh.py --next-action "<one paragraph: 'Execute Implementation_Plan_HE_Loop_Lanes_v1 §2 in topological order starting at U-HE-01 (finding record) — S1/S2 roots; Phase 0 = U-HE-01..33 gates N ≥ 2.'>"` as part of the doc-only PR's terminating refresh (CLAUDE.md §12.2.1).
-- [ ] **Step 3:** Commit `ops: roadmap status refresh post-#<PR>` (the terminating refresh, roadmap_status.md only) — after the doc-only PR that carries the spec + ADRs + council ledger + this plan merges.
+- [x] **Step 3:** Commit `ops: roadmap status refresh post-#<PR>` (the terminating refresh, roadmap_status.md only) — after the doc-only PR that carries the spec + ADRs + council ledger + this plan merges.
 
 ---
 ## §3 Dependency graph
@@ -8079,6 +8137,37 @@ Acceptance mechanism per charter §3: eval-backed units close on "case added to 
 ### §8.6 Coverage note
 
 The §4 coverage matrix is unchanged for the v1.0 contract×unit set: the X6 clauses are v1.6 additions to already-covered contracts (C-HE-21/24/25/27/28), and §8.2 is the coverage table for the rev's own source set (every [A]/[B] recommendation id and charter WR-id maps to exactly one unit or an explicit no-unit disposition). The dependency graph gains no cycle: U-HE-46…49 and U-SR-01…09 are roots; U-HE-50 and U-HE-51 depend only on the four R0 units.
+
+## §9 One-hour arc program (rev 2026-09-18; spec v1.9 X9a–X9h)
+
+**Goal.** Mean arc wall-clock ≤ 60 min, single or parallel lanes, measured by `tools/arc_wallclock.py` (baseline: mean 177, median 126, code-arc median 203 over the last 30 reserved arcs). The operator-approved program, including its red-team corrections, is authored at `~/.claude/plans/memoized-sparking-meteor.md`; this section is the in-repo carrier of its unit list, dependency order and file locks. Each unit lands through `tools/hooks/safe-merge.sh`; U-HE-52 is a lean doc PR, U-HE-53 runs the full gate, and every later unit uses the bounded cycle U-HE-53 enforces. Size cap ≈ 300 changed non-test lines per unit; the files listed are the unit's lock, and no two units in one wave share a file.
+
+| Unit | Plan id | Title | After | Owns |
+|---|---|---|---|---|
+| U-HE-52 | A1 | Spec v1.9 amendment + this section | — | spec, plan, clearance marker, artifact heads |
+| U-HE-53 | A2 | Bounded cycle in `review_loop_gate.py`; `cycle_pass` field; `just review-cycle-pass` | 52 | `tools/review_loop_gate.py`, `finding_record.py`, `review_wrapper_common.py`, `merge_gate_log.py`, `tools/shadow_trial.py` (X9d reducer), `tools/review_schemas/finding_record.schema.json` (the `cycle_pass` field; the schema is `additionalProperties: false`) + tests, justfile review recipes |
+| U-HE-54 | A3 | Skills and doc carriers for the cycle; CLAUDE.md §13.1 | 53 | ship-pr, merge-gate, defect-class-preflight, roadmap-continue (+ `.agents` twins), `test_skill_lanes_docs.sh`, `test_codex_workflow_parity.py`, CLAUDE.md |
+| U-HE-55 | B1 | Deny bare `gh pr merge` in every mode | 53 | `.claude/settings.json`, new `tools/hooks/test_settings_merge_deny.sh` |
+| U-HE-56 | B2 | Keep test fixtures out of the real loop ledger | 53 | `tools/hooks/test_pretooluse_bash_emit_policy.sh` (+ any leaking suite found) |
+| U-HE-57 | B3 | Per-arc wall-clock metric | 53 | new `tools/arc_wallclock.py` + test, `tools/codex-parity-check.sh` |
+| U-HE-58 | B4 | memento + the loop-hook context ceiling (headless: allow the stop) | 55 | `tools/hooks/stop-loop.sh` + test, new `tools/hooks/context_tokens.py`, `.claude/settings.json` |
+| U-HE-59 | B5 | Lane permission profile; lanes never edit `~/.claude/settings.json` | 58 | `.claude/settings.json`, two-lane skill + test |
+| U-HE-60 | C1 | Install and configure `lit`; sync pinned to `origin`; lane-init sets upstream | 53 | `.lit/`, `CONTEXT.md`, `tools/hooks/lane-init.sh` |
+| U-HE-61 | C2 | Migrate open work into `lit` (old files stay authoritative) | 60, 57 | new `tools/lit_migrate.py` + test, `codex-parity-check.sh`, `ci.yml` coverage list |
+| U-HE-62 | C3 | Read paths switch to `lit`, opened by a locked catch-up: re-run `tools/lit_migrate.py` against the old files and require count and id parity with `lit` before any reader switches (U-HE-61's snapshot predates writes made while the old files stayed authoritative) | 61, 54, 58 | `tools/hooks/{lib,loop_lib,prompt-context,postcompact-reinject,stop-loop}.sh`, `tools/roadmap-audit/session-start.sh`, `.codex/hooks/session_start.py`, `tools/prime_report.py`, `tools/arc_wallclock.py`, roadmap-continue + tests |
+| U-HE-63 | C4a | Guard drops the drift/lag family (harmless while refreshes still run) | 62 | `tools/codex_context_guard.py`, `.codex/hooks/stop_gate.py`, `tools/ci_bookkeeping_diff.py` + tests |
+| U-HE-64 | C4c | Hooks and skills stop expecting refreshes | 62 | `tools/roadmap-audit/session-start.sh`, `tools/hooks/{prompt-context,stop-loop}.sh`, ship-pr post-merge section, two-lane skill + tests |
+| U-HE-65 | C4b | Door without refresh: step (viii) → `lit done` | 63, 64 | `tools/merge_door.py`, `tools/hooks/safe-merge.sh`, `tools/test_merge_door.py`, `tools/lanes_verify.py`, `ci.yml:459`, `tools/reservations.py` + test (reconcile-all lit repair, X9e) |
+| U-HE-66 | C5b | Repoint the remaining consumers (tolerant of both paths) | 65 | closure/docs/exit-report/disjoint/leg-selfcheck/claim-precision/arc-metrics tools + tests, justfile roadmap recipes, `AGENTS.md`, context-save-lean |
+| U-HE-67 | C5c | Governance text; §12 headings and pack pointers kept | 65 | CLAUDE.md §12, `docs/governance/roadmap-protocol.md`, `CONTEXT.md`, `Project_Roadmap_v1.md` |
+| U-HE-68 | C5a | Retire the plain files into `.harness/archive/roadmap-plainfile/` | 66, 67 | the five roadmap files, `roadmap_status_refresh.py` + tests, `post-merge-refresh.sh`, validators' `DEFAULT_LEDGER`, `ci.yml` arc-ledger job, hook registrations |
+| U-HE-69 | D1 | CI-side capped reviewer, SHA-pinned, non-blocking (operator secret gate) | 54 | new `.github/workflows/code-review.yml`, `.github/code-review.conf` |
+| U-HE-70 | P1 | `HARNESS_PILOT_RUN_ID` stamped at reserve time | 53 | `tools/reservations.py` + test |
+| U-HE-71 | D2 | Validation: five single-lane code arcs, then a three-lane pilot | 68, 57, 70 | — |
+
+**Waves.** 1: 52 · 2: 53 · 3: 54 ∥ 60 ∥ 57 ∥ 55 ∥ 56 · 4: 61 ∥ 58 ∥ 69 ∥ 70 · 5: 59 ∥ 62 · 6: 63 ∥ 64 · 7: 65 · 8: 66 ∥ 67 · 9: 68 · 10: 71. Every unit after U-HE-53 depends on it, so none lands under the old review flow.
+
+**Done when** `tools/arc_wallclock.py` reports a mean ≤ 60 min over five arcs landed after U-HE-68, and the three-lane pilot's `tools/lanes_pilot.py report` passes.
 
 ## Execution handoff
 

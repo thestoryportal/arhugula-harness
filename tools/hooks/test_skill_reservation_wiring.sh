@@ -131,6 +131,18 @@ grep -q '\.harness/\.lane-id' "$JF" \
 grep -q 'no HARNESS_LANE_ID and no .harness/.lane-id' "$JF" \
   && ok "unblock recipe aborts loud when NO lane source exists (codex r1: empty lane mints an unresumable lease)" \
   || bad "unblock recipe lacks the empty-lane abort"
+# C-HE-06 §6's SECOND half. Unblock mints a successor lease, so without release the door
+# stays shut and the documented recovery is unreachable from the CLI.
+# anchored on the TARGET line, not any mention: the surrounding comment also contains the
+# name, so an unanchored grep stays green when the recipe itself is renamed or deleted
+grep -qE '^merge-door-release:' "$JF" \
+  && ok "release recipe target present" || bad "no merge-door-release: recipe target"
+grep -q 'merge-door-release: no HARNESS_LANE_ID and no .harness/.lane-id' "$JF" \
+  && ok "release recipe aborts loud when NO lane source exists" \
+  || bad "release recipe lacks the empty-lane abort"
+grep -qE '`just merge-door-release`' "$SP" \
+  && ok "ship-pr documents the release half of the C-HE-06 §6 recovery" \
+  || bad "ship-pr names unblock without its release half"
 grep -q 'emit-refresh-pr-json' "$RSR" \
   && ok "refresh tool emits PR json" || bad "no --emit-refresh-pr-json"
 grep -q 'next-action-draft' "$SP" \

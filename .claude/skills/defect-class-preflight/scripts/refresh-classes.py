@@ -101,7 +101,8 @@ from pathlib import Path
 # decide what to do next still naming what was just finished (6-8 corpus rows: Step-5-
 # executed-but-plan-still-unticked, fence-live-but-roadmap_status-still-says, decisions-
 # ratified-but-version-summary-still-open). It is NOT a class because the vocabulary cannot
-# carry it, measured over three review rounds, each trading one imprecision for another:
+# carry it, measured over three review rounds -- r2, r3 and r5 of that arc, NOT three
+# consecutive ones (r4's findings were elsewhere) -- each trading one imprecision for another:
 #   (a) `(?:never|not |un)refreshe?` gave the `never` arm no separator, so it demanded
 #       "neverrefresh" and missed the plainest wording. It hid because the arc's own finding
 #       matched a DIFFERENT arm — a masked alternative is invisible until a row needs only it.
@@ -117,24 +118,87 @@ from pathlib import Path
 # defect this shape named on that arc is registered as B-288 instead, where prose can carry
 # the polarity a regex cannot. Note also that tools/test_governance_router.py already
 # forward-references "class 17" for the sub-span shape, so the number was spoken for.
+# ALSO evaluated and LEFT OUT: a "record field contradicts its own body" class (U-HE-45's
+# plan-record arc, 2026-09-18). The SHAPE is real and has two measured instances one arc apart:
+# `B-282` shipped `status: open` while its own summary said U-HE-40 is HELD (and OPEN_STATUSES
+# excludes `held`, so `--open` counted a blocked row as executable), and a U-HE-45 plan tick
+# marked a COMBINED step `[x]` while the paragraph beneath it said half that step was never
+# performed. Four corpus rows carry it. It is NOT a class because the vocabulary cannot
+# distinguish prose that DESCRIBES a field from prose that SETS one, and three review rounds
+# each traded one imprecision for another:
+#   (a) two independent tuple patterns matched across SENTENCES ("The status field is parsed
+#       correctly. The hook still fails even though ..."), fixed with class 16's window;
+#   (b) the same terms then matched unrelated text WITHIN one sentence ("The status field is
+#       parsed correctly even though a missing verdict file makes the unrelated hook fail") --
+#       no window can separate those;
+#   (c) `mark` without a word boundary matched inside `benchmarks` ("The benchmarks remain open
+#       even though the sample size is small").
+# (b) is the terminal one, and it is the wall the withdrawn owed-pointer class hit too: the
+# distinction is SEMANTIC, not lexical. A false match is worse than `unmatched` -- unmatched
+# OWES an intake line, a false match silences it -- so an arm that cannot tell "describes a
+# field" from "sets a field" actively hides the new classes this table exists to surface.
+# Sweep the shape BY HAND: for every status, disposition or checkbox a diff SETS, does the body
+# of that same record agree, and which consumer reads the field rather than the body?
+# ALSO evaluated and LEFT OUT: vocabulary for "a record contradicts its own evidence"
+# (U-HE-45's plan-record arc, 2026-09-18). The SHAPE is class 2's own subject and it recurred
+# twice in that arc -- a review audit stating finding counts the gate log's round_n refutes, and
+# a cleared marker naming two of the four rows `--open` emits. THREE terms were tried against it
+# and all three were withdrawn, each for the same reason one layer down:
+#   * `omits` -- measured at +84 corpus rows and rejected before shipping.
+#   * `,\s*not\s+\d` -- shipped, then removed one round later: it matches ANY numeric contrast
+#     ("The API returns 1, not 2."). The error was treating BREADTH on the current corpus (+3
+#     rows, each inspected and genuine) as PRECISION -- a corpus that happens not to contain a
+#     phrasing does not exclude it, and this table is read against findings that do not exist yet.
+#   * `identifies only` -- shipped on the claim that it is SEMANTICALLY bounded to a record's
+#     completeness, and removed the next round when that claim proved false: "The sanitizer
+#     identifies only SQL injection and therefore lets XSS through" is an implementation defect.
+#     Anything that identifies things can identify only some of them.
+# The lesson is not about these three words. A finding's prose DESCRIBING a record is lexically
+# indistinguishable from prose ABOUT the thing the record describes, which is the same wall the
+# withdrawn class-17 (polarity) and class-18 (reference) vocabularies hit. Sweep it by hand: for
+# every count, status or completeness claim a record states, which source of truth refutes it,
+# and did you read that source THIS session?
 CLASSES: dict[str, str | tuple[str, ...]] = {
     "1 race / TOCTOU / atomicity / lock": (
-        r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive"
+        # `symlink` belongs to this class by its own containment rider (the O_NOFOLLOW +
+        # post-open fstat idiom), which the vocabulary did not carry. Measured at the
+        # 2,247-finding corpus: 72 rows mention it, 10 of them matched NO class, and all
+        # ten are containment defects -- a planted or dangling link read as
+        # absent, or followed without containment.
+        r"race|TOCTOU|atomic|lock|flock|concurrent|interleav|CAS|exclusive|symlink"
     ),
     "2 prose stale / counts / cites": (
         r"stale|close_out|mis-cite|cite|count|narrat|docstring claim|partition"
     ),
+    # No term here describes THIS TABLE, deliberately. Every phrasing tried for it
+    # ("intake path", "intake pile", "classifies unrelated") reads just as naturally in
+    # findings about ingestion endpoints and queue growth, and the narrowing never converged:
+    # successive review rounds of one arc, each finding correct, each attacking the
+    # phrase the last one added. A classifier cannot be widened to catch the complaint that
+    # it is too wide. Findings ABOUT this table stay in the unmatched pile, where a human
+    # reads them -- the prefer-to-miss policy stated above, applied to the table itself.
     "3 silent failure / fallback": (
         r"swallow|silent|fallback|2>/dev/null|\|\| true|exit code|ignored error"
     ),
     "4 vacuous witness": (
         r"witness|vacuous|stays green|cannot fail|only .*presence|never red"
         r"|does not red|remains green|unexercised"
+        r"|leaves? (this|the) (test|suite) green"
     ),
     "5 timeout / retry / budget": r"timeout|retry|budget|backoff|deadline",
     "6 unreachable / dead branch": (
         r"unreachable|dead|never reach|no witness could|half-dead|cannot see|restore arm"
     ),
+    # A sourced shell file mutating its caller's shell IS this class's concern in another
+    # substrate, but no vocabulary for it survives here. `caller's shell` was tried and
+    # WITHDRAWN: it claimed a finding this class does not own -- an EXISTENTIAL claim, which
+    # survives a growing corpus because a later row cannot unmake an earlier one. Under the
+    # prefer-to-miss policy a term that steals from the unmatched pile does not earn its place.
+    # What is NOT restated is any COUNT or PRECISION figure; that evidence
+    # is deliberately NOT restated here. The gate log only grows -- including with this arc's
+    # own findings -- so any statement about what the term matches is true at one anchor and
+    # false at the next -- which review rounds of this arc kept proving. Re-derive with
+    # `classify` if you need it. Pinned absent by tools/test_refresh_classes.py.
     "7 env-var mutation / restore": (r"monkeypatch|os\.environ|env var|setenv|restore|undo\(\)"),
     "8 subprocess boundary": (r"subprocess|child process|inherit|process boundary|spawns|nested"),
     "9 path / default resolution": (
@@ -312,16 +376,37 @@ CLASSES: dict[str, str | tuple[str, ...]] = {
     "16 witness codifies the divergence": (
         r"\btests?(?![a-z])(?:[^.!?]|[.!?]\S){0,80}(codif|enshrin|blesses)"
     ),
-    # Added U-HE-45. The unit's OWN deliverable included refreshing the live
-    # next-action pointer; the diff shipped the register rows and left the pointer
-    # naming the unit it had just completed, so /roadmap-continue would route
-    # straight back to finished work. Recurs in this workspace: the owed refresh
-    # after a tiebreaker PASS, and "the refresh must be the immediate next commit".
-    # Distinct from class 2 (a stale COUNT or cite drifts over time) and from class
-    # 12 (a contract phrase QUOTED into the diff with no line behind it): here the
-    # obligation is a deliverable of the unit itself, and the surface it was owed on
-    # is one consumers READ to decide what to do next -- so the cost is misrouting,
-    # not a wrong number.
+    "18 the code departs from a cleared contract": (
+        r"contradict\w*\s+(?:the\s+)?(?:canonical\s+)?C-HE"
+        r"|canonical C-HE-\d+[^.]{0,80}(?:still requires|says|table|statement)"
+        r"|C-HE-\d+[^.]{0,60}declares the complete"
+    ),
+    # Measured at the 2,247-finding corpus: the pattern MATCHES 26 rows and this class
+    # CLAIMS 23 (earlier classes take the other three — it is appended last), 14 of which
+    # matched no other
+    # class, and six of those fourteen are ONE defect recurring across rounds (a holder
+    # gate admitting a terminal `merged` reservation against C-HE-03 §6). The cluster was
+    # already NOTICED by class 2's own note, which refused a bare `contradict` because it
+    # "sweeps that whole cluster in, the same wrong direction as `drift`" -- correct for
+    # class 2, and the reason the rows sat unmatched: they needed their own home, not a
+    # prose-drift class. Placed LAST so it can never steal a row an earlier class claims.
+    #
+    # Distinct from its two neighbours, which is why it is not an extension of either.
+    # Class 12 is a contract phrase QUOTED into the diff with nothing discharging it --
+    # the words are present and the line is missing. Class 16 is the WITNESS asserting the
+    # departed behaviour, so review reads a covered change. This is the CODE half: the
+    # implementation states something the cleared contract explicitly denies, whether or
+    # not any prose quotes it and whether or not a test blesses it.
+    #
+    # EVERY alternative is bound to a `C-HE` reference, and that is the whole precision
+    # story. `contradict` is safe HERE only because of that binding -- the bare verb is
+    # what class 2 rejected. The second alternative carries its own claim shape
+    # (`canonical C-HE-N ... still requires/says/table/statement`) in a bounded window, so
+    # a passing cite of a contract number cannot satisfy it. The third was shipped
+    # UNQUALIFIED for one round and was wrong: a bare `declares the complete` matches a
+    # benign "the schema declares the complete set" with no contract in sight and no
+    # negative polarity, silently emptying a row from the intake pile (codex r10 P2). It is
+    # now bound to a contract reference within 60 characters like its siblings.
 }
 
 
