@@ -74,11 +74,11 @@ snapshot:
   total: 296
   open: 2
   design_substrate_gated: 3
-  registered_finding: 124
+  registered_finding: 123
   operator_gated: 0
   held: 4
-  closed: 163
-  identity_digest: e26db88d3f4b4f31
+  closed: 164
+  identity_digest: c1b6591535778266
 
 items:
 - id: B-1
@@ -12220,9 +12220,9 @@ items:
   council: 'NO — one mechanism question (where a non-blocking finding is recorded); no cross-domain tension.'
 - id: B-296
   title: 'the codex half of a cycle pass is admitted before its review runs, so two concurrent runs of one pass can both deliver'
-  status: registered_finding
-  pr: '#1595'
-  heading: '### B-296 · the codex half of a cycle pass is admitted before its review runs, so two concurrent runs of one pass can both deliver *(pass-3 concurrency lens on #1595, 2026-09-19; REGISTERED)*'
+  status: closed
+  pr: '#1602'
+  heading: '### B-296 · the codex half of a cycle pass is admitted before its review runs, so two concurrent runs of one pass can both deliver *(pass-3 concurrency lens on #1595, 2026-09-19; CLOSED by #1602, 2026-09-19)*'
   summary: 'rlg.admit() decides the codex half of a cycle pass (tools/codex_review.py:607, tools/agy_review.py:851) BEFORE the multi-minute review runs, and the verdict is written later by review_wrapper_common.emit_outcome -> fr.append_observations with no re-admission under the log lock. Two concurrent runs of one pass on one arc and head (a retry while the first is still running, or two lanes) both read the same pre-write log, both are Allowed, and both write rows tagged with the pass; pass_runs() pools their findings into one PassRun, so ALREADY_DELIVERED never fires for the second. The lens half is admitted inside the emit lock (B-294) and does not have this gap. The late run can also append after the cycle completed: a pass-1 run B still reviewing H1 while run A''s pass 1, then passes 2 and 3 on H2, complete clean adds B''s P1 to the completed pass-1 run, and the replay still reports the cycle complete at H2 with that P1 undisposed (codex r1 P1 on #1597). Nothing merges on cycle completion yet; once U-HE-54 moves the skills onto the cycle, this row is a prerequisite of U-HE-54.'
-  close_out: 'OPEN 2026-09-19. Raised as a P2 by the pass-3 concurrency lens on #1595 and routed here per spec v1.9 X9a (an accepted P2 first raised in pass 3 goes to the follow-up item). WHAT CLOSES THIS ROW: the codex half''s admission is re-checked at write time, inside the same critical section as the append (the round_n minting precedent in emit_outcome''s build callback), so a second delivery of one pass by the codex role is refused and writes nothing; with a witness that two admitted runs racing the same pre-write log record exactly one delivery, and that a verdict arriving for an already-completed pass is refused rather than pooled into it.'
+  close_out: 'CLOSED 2026-09-19 by #1602: the codex half''s admission is re-decided at write time, inside the gate log''s append lock. rw.emit_outcome takes a required admit(log_rows) hook called in its build callback (the round_n minting precedent); rlg.delivery_admission does the reservation, state-file and git reads before the lock and returns a check, pure over the log, that runs every pass delivery through the same _decide_cycle as the pre-review admit() (merge-gate concurrency P2 on #1602: no git under the shared lock). A refusal raises CycleRefusedError and writes nothing; the codex and gemini wrappers report GATE_REFUSED and exit 3, and a failover parent propagates its child''s refusal, read from the child''s GATE_REFUSED exit and stderr, rather than recording an unavailable reviewer (codex r1 and r2 P2 on #1602). Witnesses (tools/test_review_loop_gate.py, B-296 section): two admitted runs racing one pre-write log record exactly one delivery; a verdict for a completed pass, and a late pass-1 P1 after the cycle completed at a new head, are refused and not pooled; the gemini stand-in, the codex wrapper, the refused failover child, and a check that reads only the log; mutation probes on a scratch copy killed 8 of 8 with an unmutated control passing.'
   council: 'NO — one mechanism (move the codex-half check inside the append lock); no cross-domain tension.'

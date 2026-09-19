@@ -34,10 +34,12 @@ from pathlib import Path
 import review_loop_gate as rlg
 import review_wrapper_common as rw
 from agy_review import (
+    GATE_REFUSED_EXIT,
     GEMINI_PROMPT_VERSION,
     TerminationRequested,
     gemini_config_hash,
     handle_termination_signal,
+    refusal_from_stderr,
     run_bounded,
 )
 
@@ -383,7 +385,14 @@ def _emit_rows(
 ) -> int:
     arc_id, lane_id = rw.env_arc_and_lane()
     written = rw.emit_outcome(
-        outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=round_n
+        outcome,
+        producer=producer,
+        arc_id=arc_id,
+        lane_id=lane_id,
+        round_n=round_n,
+        admit=rlg.delivery_admission(
+            Path.cwd(), outcome, producer=producer, arc_id=arc_id, lane_id=lane_id
+        ),
     )  # round minted under the log lock when None (codex round 7); every terminal yields a row
     n = written[0]["round_n"]
     rw.record_round_outcome_if_reserved(
@@ -522,6 +531,10 @@ def _run_gemini_failover(repo: Path, base: str, chain_round: int | None = None) 
                 finding_count=len(outcome.findings),
             )
         return outcome
+    if proc.returncode == GATE_REFUSED_EXIT:
+        # a child refused at write time (B-296) writes no envelope; its refusal is decided
+        # on its own binding, so the parent propagates it rather than re-deciding it
+        raise rlg.CycleRefusedError(refusal_from_stderr(stderr))
     outcome = rw.ReviewOutcome(
         "REVIEWER_UNAVAILABLE",
         "gemini",
@@ -608,10 +621,7 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(decision, rlg.Inactive):
         print(f"codex-review: review gate INACTIVE — {decision.reason}", file=sys.stderr)
     elif isinstance(decision, rlg.Refused):
-        print(f"review gate: {decision.detail}", file=sys.stderr)
-        print(f"  recipe: {decision.recipe}", file=sys.stderr)
-        print(f"codex-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
-        return 3
+        return _refused(decision)
 
     # Mirror agy_review's SIGTERM discipline (U-HE-35 codex r8 P2): run_bounded spawns
     # the vendor CLI in ITS OWN session, so only this process can tear that group down —
@@ -623,8 +633,18 @@ def main(argv: list[str] | None = None) -> int:
         return _reviewed_main(args, invoke)
     except TerminationRequested as exc:
         return exc.exit_code
+    except rlg.CycleRefusedError as exc:
+        # the pass was delivered while this review ran (B-296): its verdict is not recorded
+        return _refused(exc.decision)
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
+
+
+def _refused(decision: rlg.Refused) -> int:
+    print(f"review gate: {decision.detail}", file=sys.stderr)
+    print(f"  recipe: {decision.recipe}", file=sys.stderr)
+    print(f"codex-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
+    return 3
 
 
 def _reviewed_main(args: argparse.Namespace, invoke) -> int:

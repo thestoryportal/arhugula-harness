@@ -24,6 +24,10 @@ H, B, D = "a" * 40, "b" * 40, "c" * 64
 LENS = "merge-gate-concurrency"
 
 
+def _admit_all(log_rows: list[dict]) -> None:
+    """These tests exercise the log, not the bounded cycle's admission (B-296)."""
+
+
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HARNESS_GATE_LOG", str(tmp_path / "unused-gate-log.jsonl"))
@@ -466,6 +470,7 @@ def test_legacy_markdown_rows_and_wrapper_rows_are_outside_the_comparison(tmp_pa
         producer="codex_review_wrapper",
         arc_id="pr-1397",
         lane_id="h",
+        admit=_admit_all,
         round_n=1,
         path=jl,
     )
@@ -1056,6 +1061,7 @@ def _codex_round(tmp_path: Path, arc_id: str, findings: list[dict], round_n: int
         producer="codex_review_wrapper",
         arc_id=arc_id,
         lane_id="h-w-1",
+        admit=_admit_all,
         round_n=round_n,
         path=tmp_path / "log.jsonl",
     )
