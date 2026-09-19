@@ -273,6 +273,10 @@
       "Bash(npx graft:*)",
       "Bash(graft-dev:*)",
       "Bash(node dist/cli.js:*)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)",
+      "Bash(rtk gh pr merge:*)"
     ]
   }
 }
