@@ -144,8 +144,10 @@ force or pruning push. The permission guard continues to deny force/pruning push
 history rewrite, every direct worktree removal, branch-resetting worktree creation,
 force local-branch deletion, and remote-branch deletion. The mutex-backed wrapper
 is the only authorized worktree-removal path, including for the explicit
-`just codex-worktree-gc --reap` closeout action. SessionStart only reports candidates;
-it never reaps them. Active session leases never expire; only the pre-activation startup state has
+`just codex-worktree-gc --reap` closeout action. SessionStart (tools/hooks/loop-gc.sh, run
+by both runners) reports candidates and, when it finds one, launches `loop_gc_worktrees reap`
+detached; that reap takes a repository-wide single-flight lock, skips any worktree with git
+activity inside a short idle grace, and removes only through the same wrapper. Active session leases never expire; only the pre-activation startup state has
 a bounded recovery window, so a killed SessionStart cannot strand a worktree forever.
 
 ## Memory and restore rule

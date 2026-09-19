@@ -9,14 +9,26 @@
 #               one, `loop_gc_worktrees reap` is launched DETACHED (own stdio, nohup'd,
 #               disowned). SessionStart is a latency-sensitive lease/context boundary:
 #               the hook never waits on the reaper, so its latency stays that of the
-#               report alone. The reaper re-applies the whole safe-subset gate itself
-#               and removes only through hook_safe_worktree_remove (mutex, live
-#               session/lease, process-reference and identity rechecks), so a candidate
-#               that went live between report and reap is still skipped; every
-#               disposition lands as a GC row in the loop ledger.
+#               report alone. Reapers are single-flight per repository: concurrent
+#               session starts each launch one, and all but the holder of the reap lock
+#               (in the git common dir) log a skip and exit. The reaper re-applies the
+#               whole safe-subset gate itself, skips a worktree whose index or HEAD
+#               reflog moved within the idle grace (_LOOP_GC_IDLE_GRACE_MIN in
+#               loop_lib.sh; it is retried at a later session start), and removes only
+#               through hook_safe_worktree_remove (mutex, live session/lease,
+#               process-reference and identity rechecks), so a candidate that shows a
+#               live session or recent git activity by the time the reaper reaches it
+#               is skipped; every disposition lands as a GC row in the loop ledger.
 #             → inject additionalContext naming the candidates being reaped + their
 #               branch refs + a MEMORY.md over-cap flag + the U-HK-44
 #               unreconciled-subagent clause.
+#
+#   RESIDUAL  A session opened inside an idle, merged, clean worktree in the seconds
+#             another session's reaper is removing it gets a startup error: the reaper
+#             can take the per-worktree mutex before that session has registered a
+#             lease or touched git, and no check can see a session that has left no
+#             trace yet. Nothing is lost: the worktree held nothing unmerged, and
+#             `git worktree add` recreates it from the surviving branch ref.
 #
 # Runs as deterministic hook bash and always exits 0.
 
