@@ -25,7 +25,9 @@ read the same territory — Claude Code's transcript format — rather than one 
 other, so neither is the other's second source of truth.
 
 Usage: `context_tokens.py [--headless] < <Stop payload>`; the verdict goes to stdout as JSON.
-Test: `tools/hooks/test_context_tokens.py`.
+A session whose context cannot be measured exits non-zero rather than reporting a number, and
+the caller records that; see `main`. Tests: sections 9 and 10 of `tools/hooks/test_stop_loop.sh`,
+which drive this file directly, beside the end-to-end arms in section 8.
 """
 
 import json
@@ -81,23 +83,36 @@ def resolve_ceiling(session_id, cwd):
 def records_newest_first(transcript_path):
     """This session's records, newest first, reading only as far back as the caller consumes.
 
-    Sidechains are a subagent's conversation and never describe this session's context. A
-    torn final line is ordinary in a file still being appended to, so an unparseable line is
-    skipped rather than raised.
+    Sidechains are a subagent's conversation and never describe this session's context.
+
+    Exactly ONE unparseable line is tolerated — the file's last — because a transcript being
+    appended to is routinely caught mid-write there. Any other unparseable line is real
+    corruption and raises, because the alternative is worse than a crash: skipping it falls
+    through to an OLDER record with a LOWER usage, which reads as a session comfortably under
+    a ceiling it has in fact passed. A measurement that fails is recoverable; one that is
+    quietly too low is the failure this whole gate exists to prevent. [LAW:no-silent-failure]
     """
     with open(transcript_path, "rb") as handle:
         handle.seek(0, os.SEEK_END)
-        end, straddling_head = handle.tell(), b""
+        end, straddling_head, at_tail = handle.tell(), b"", True
         while end > 0:
             start = max(0, end - TAIL_CHUNK)
             handle.seek(start)
             lines = (handle.read(end - start) + straddling_head).split(b"\n")
             straddling_head = b"" if start == 0 else lines.pop(0)
             for line in reversed(lines):
+                if not line.strip():
+                    continue
+                final_line, at_tail = at_tail, False
                 try:
                     record = json.loads(line)
                 except ValueError:
-                    continue
+                    if final_line:
+                        continue
+                    raise ValueError(
+                        f"{transcript_path}: unparseable record before the final line — the "
+                        f"session's context cannot be measured from a corrupt transcript"
+                    ) from None
                 if not record.get("isSidechain"):
                     yield record
             end = start
@@ -143,10 +158,17 @@ def main():
     headless = "--headless" in sys.argv[1:]
     hook = json.load(sys.stdin)
     transcript = hook.get("transcript_path")
-    # A payload with no transcript cannot be measured, and guessing a number would put the
-    # loop over or under a ceiling on a fiction. `under` is what the loop does anyway when
-    # nothing is wrong, and the zero says plainly that nothing was read. [LAW:no-silent-failure]
-    tokens = context_tokens(transcript) if transcript and Path(transcript).is_file() else 0
+    # An unmeasurable session exits non-zero so the caller's loud arm records it. Returning a
+    # zero would be the worse failure: zero is a legal reading, it resolves to `under`, and
+    # the loop would then run on past its ceiling with the ledger showing nothing wrong —
+    # indistinguishable from a session genuinely below the line. A missing FILE raises out of
+    # records_newest_first for the same reason. [LAW:no-silent-failure]
+    if not transcript:
+        sys.exit(
+            "context_tokens: the Stop payload carries no transcript_path, so this "
+            "session's context cannot be measured."
+        )
+    tokens = context_tokens(transcript)
     ceiling = resolve_ceiling(hook.get("session_id", ""), hook.get("cwd") or os.getcwd())
     verdict = verdict_for(tokens, ceiling, headless)
     print(

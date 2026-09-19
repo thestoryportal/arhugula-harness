@@ -155,35 +155,60 @@ echo "$OUT" | jq -e '.reason | test("context-save-lean")' >/dev/null 2>&1 && ok 
 echo "$OUT" | jq -e '.reason | test("R-410")' >/dev/null 2>&1 && ok "close-out carries the next-action into the handoff" || bad "close-out drops the next-action"
 
 # 8d) Blocked once, never twice — the bound. A second over-ceiling stop stands down at the
-#     halt marker 8c raised, instead of spending more context on the problem that IS too
+#     spent marker 8c wrote, instead of spending more context on the problem that IS too
 #     much context. Without this the attended arm blocks every turn forever.
-[ -f "$REPO/.harness/.loop-halt" ] && ok "attended ceiling raises the halt marker (the bound)" || bad "no halt raised — the close-out block would repeat forever"
+[ "$(cat "$REPO/.harness/.loop-ceiling-spent" 2>/dev/null)" = "s1" ] && ok "attended ceiling records the session as spent (the bound)" || bad "no spent marker — the close-out block would repeat forever"
 OUT=$(run_ceiling "$OVER" attended)
 [ -z "$OUT" ] && ok "second over-ceiling stop stands down (blocked once, never twice)" || bad "close-out block repeated: $OUT"
-rm -f "$REPO/.harness/.loop-halt"
+rm -f "$REPO/.harness/.loop-ceiling-spent"
 
-# 8d-ii) The second bound. Raising the halt marker is a best-effort file write; if it fails
+# 8d-ii) The second bound. Writing the spent marker is a best-effort file write; if it fails
 #        the close-out arm would re-block every turn forever, so the arm also spends a turn
 #        on the counter and the cap carries it. Witnessed by making the marker path
 #        unwritable (a directory cannot be truncated into) so the primary bound cannot take.
 rm -f "$REPO/.harness/.loop-iter"
-mkdir -p "$REPO/.harness/.loop-halt"
+mkdir -p "$REPO/.harness/.loop-ceiling-spent"
 OUT=$(run_ceiling "$OVER" attended)
-echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "halt unwritable → the close-out still blocks" || bad "close-out lost with an unwritable halt: $OUT"
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "spent marker unwritable → the close-out still blocks" || bad "close-out lost with an unwritable marker: $OUT"
 [ "$(cat "$REPO/.harness/.loop-iter")" = "1" ] && ok "close-out spends a turn on the counter (the second bound)" || bad "close-out did not count its turn: $(cat "$REPO/.harness/.loop-iter" 2>/dev/null)"
+#        The counter carries it to the cap: with the spent-marker unwritable, a session that
+#        has already spent MAX turns takes step 3 and stands down rather than blocking again.
+#        (Step 3 is what fires here, which is the point — the close-out arm must not be able
+#        to outrun the cap, whatever happens to its own marker.)
 printf '30' > "$REPO/.harness/.loop-iter"
 OUT=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" \
   | HARNESS_LOOP=1 HARNESS_LOOP_MAX=2 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
-[ -z "$OUT" ] && ok "with halt unwritable the cap still terminates the close-out" || bad "close-out escaped both bounds: $OUT"
-rmdir "$REPO/.harness/.loop-halt" 2>/dev/null; rm -rf "$REPO/.harness/.loop-halt"
-rm -f "$REPO/.harness/.loop-iter"
+[ -z "$OUT" ] && ok "a counter at the cap stands the session down even with the ceiling over" || bad "close-out escaped both bounds: $OUT"
+rm -rf "$REPO/.harness/.loop-ceiling-spent"
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
 
-# 8e) An unreadable reading never strands the run, and is never silent either: the loop
-#     continues and the ledger carries the difference between "under" and "never measured".
+# 8d-iii) The spent marker is keyed by SESSION, not by lane (pass-1 concurrency lens P1). A
+#         second session sharing the worktree must get its own one block, and must never be
+#         stood down by another session's reading.
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-ceiling-spent"
+OUT=$(printf '{"transcript_path":"%s","session_id":"alpha","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING")' >/dev/null 2>&1 && ok "session alpha gets its close-out block" || bad "alpha not blocked: $OUT"
+[ "$(cat "$REPO/.harness/.loop-ceiling-spent")" = "alpha" ] && ok "the spent marker records the session id, not a bare flag" || bad "spent marker content: $(cat "$REPO/.harness/.loop-ceiling-spent" 2>/dev/null)"
+OUT=$(printf '{"transcript_path":"%s","session_id":"alpha","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+[ -z "$OUT" ] && ok "alpha's SECOND stop stands down (spent)" || bad "alpha re-blocked: $OUT"
+OUT=$(printf '{"transcript_path":"%s","session_id":"beta","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING")' >/dev/null 2>&1 && ok "session beta still gets ITS block (spent-ness is per session)" || bad "beta inherited alpha's spent state: $OUT"
+[ ! -f "$REPO/.harness/.loop-halt" ] && ok "the attended arm never raises the lane-wide halt marker" || bad "close-out raised .loop-halt — a concurrent run would stand down"
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-ceiling-spent"
+
+# 8e) An unmeasurable session never strands the run, and is never silent either: the loop
+#     continues AND the ledger records that nothing was measured. Asserting only the
+#     continuation would pass identically with the whole feature removed (pass-1 codex P2),
+#     so the ledger line is the assert that actually distinguishes the two.
 : > "$HARNESS_LOOP_STATUS_PATH"
-OUT=$(printf '{"transcript_path":"%s"}' "$REPO/absent.jsonl" | HARNESS_LOOP=1 \
+OUT=$(printf '{"transcript_path":"%s","session_id":"s1"}' "$REPO/absent.jsonl" | HARNESS_LOOP=1 \
   MEMENTO_ROOT="$REPO/no-such-memento" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "missing transcript → loop continues unmeasured" || bad "missing transcript stranded the loop: $OUT"
+grep -q 'context ceiling unreadable' "$HARNESS_LOOP_STATUS_PATH" && ok "missing transcript is RECORDED as unmeasured, not read as under" || bad "unmeasured session left no ledger row: $(cat "$HARNESS_LOOP_STATUS_PATH")"
+: > "$HARNESS_LOOP_STATUS_PATH"
+OUT=$(printf '{"session_id":"s1"}' | HARNESS_LOOP=1 MEMENTO_ROOT="$REPO/no-such-memento" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+grep -q 'context ceiling unreadable' "$HARNESS_LOOP_STATUS_PATH" && ok "a payload with no transcript_path is recorded too, never scored as zero" || bad "absent transcript_path scored silently: $(cat "$HARNESS_LOOP_STATUS_PATH")"
+rm -f "$REPO/.harness/.loop-iter"
 unset MEMENTO_ROOT
 
 # 9) The reading itself (context_tokens.py), driven in the consumer's exact invocation. The
@@ -221,16 +246,37 @@ SIDE="$REPO/side.jsonl"
 TORN="$REPO/torn.jsonl"; { usage_record 1000; printf '{"type":"assis'; } > "$TORN"
 [ "$(read_verdict "$TORN" | jq -r .tokens)" = "1000" ] && ok "torn final line is skipped, not fatal" || bad "torn line broke the scan: $(read_verdict "$TORN")"
 
+# A corrupt record that is NOT the final line is real corruption, and skipping it would fall
+# through to an older, LOWER usage — an over-ceiling session read as comfortably under, which
+# is the one failure direction that matters (pass-1 codex P2). It must fail loudly instead.
+CORRUPT="$REPO/corrupt.jsonl"
+{ usage_record 900000; printf '{"type":"assistant","message":{"usa\n'; printf '{"type":"user"}\n'; } > "$CORRUPT"
+read_verdict "$CORRUPT" >/dev/null 2>&1 && bad "a corrupt mid-file record was skipped, not raised" || ok "a corrupt record before the final line fails loudly"
+# Captured rather than piped: the reader exits non-zero here BY DESIGN, and under
+# `set -o pipefail` a `python | grep` pipeline would report that exit as the grep's failure.
+CORRUPT_ERR=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$CORRUPT" "$REPO" \
+  | MEMENTO_ROOT="$REPO/no-such-memento" /usr/bin/python3 "$READER" 2>&1 || true)
+case "$CORRUPT_ERR" in
+  *"unparseable record before the final line"*) ok "the corruption failure names what it could not measure" ;;
+  *) bad "corruption error message unhelpful: $CORRUPT_ERR" ;;
+esac
+
 # A record straddling the 256 KB chunk boundary must be rejoined, not read as two fragments.
+# The RECORD ITSELF has to be longer than TAIL_CHUNK for that path to run: an earlier version
+# of this case padded a preceding line instead, which left the assistant record wholly inside
+# the first backward window, so the scan returned on it before a second iteration — and
+# deleting the whole straddling_head mechanism kept the test green (pass-1 witness lens P2).
+# Here the record is ~300 KB and is the last line, so the first window holds only its tail
+# (unparseable alone) and the rejoin is the only way its usage is ever read.
 STRADDLE="$REPO/straddle.jsonl"
 /usr/bin/python3 -c "
 import sys
 pad = 'x' * 300_000
 with open(sys.argv[1], 'w') as f:
-    f.write('{\"type\":\"user\",\"pad\":\"%s\"}\n' % pad)
-    f.write('{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":7777}}}\n')
+    f.write('{\"type\":\"user\",\"n\":1}\n')
+    f.write('{\"type\":\"assistant\",\"pad\":\"%s\",\"message\":{\"usage\":{\"input_tokens\":7777}}}\n' % pad)
 " "$STRADDLE"
-[ "$(read_verdict "$STRADDLE" | jq -r .tokens)" = "7777" ] && ok "a record past a 256 KB chunk boundary still reads" || bad "chunk straddle lost the record: $(read_verdict "$STRADDLE")"
+[ "$(read_verdict "$STRADDLE" | jq -r .tokens)" = "7777" ] && ok "a record straddling the 256 KB chunk boundary is rejoined" || bad "chunk straddle lost the record: $(read_verdict "$STRADDLE" 2>&1)"
 
 # A transcript with no assistant record yet reads zero rather than guessing a number.
 EMPTY="$REPO/empty.jsonl"; printf '{"type":"user"}\n' > "$EMPTY"

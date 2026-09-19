@@ -97,8 +97,13 @@ NEXT=${NEXT:-"(derive per CLAUDE.md §4 from the dashboard)"}
 #    turn sets it — so inside loop mode the ceiling has no enforcer but this one. The reading
 #    and the ceiling come back from context_tokens.py as a single stamped verdict; nothing is
 #    re-derived here.
+# Bounded like every other shell-out in this family (loop_lib's gh calls, run.sh's claude
+# child): the transcript it scans is being appended to by the live session, and an attended
+# session has no outer bound of its own, so an unbounded read here would hang the turn with
+# no recovery. Exceeding the bound is a non-zero exit, which lands in the loud arm below.
 if ! VERDICT_JSON=$(printf '%s' "$PAYLOAD" \
-  | /usr/bin/python3 "$(dirname "${BASH_SOURCE[0]}")/context_tokens.py" \
+  | hook_bounded "${HARNESS_LOOP_CEILING_TIMEOUT:-15}" \
+      /usr/bin/python3 "$(dirname "${BASH_SOURCE[0]}")/context_tokens.py" \
       ${HARNESS_LOOP_HEADLESS:+--headless} 2>&1); then
   # The ceiling is instrumentation over the loop, not a gate the loop may not run without,
   # so a broken reading does not strand the run — but it is never swallowed either: the
@@ -120,13 +125,30 @@ else
       # marker is what bounds it to ONE such block — the next Stop stands down at step 2
       # rather than spending more context on the problem that IS too much context. Context
       # exhaustion is a genuine stand-down, which is the condition that marker already means.
+      # Blocked once, never twice — but the "once" is per SESSION, not per lane. The halt
+      # marker would have been the obvious bound and is the wrong one: it is per-worktree
+      # (loop_halt_path reads only the project dir), every writer of it so far meant a
+      # RUN-wide stand-down, and being over the ceiling is a fact about one session's own
+      # transcript. An attended session opened beside a running `just loop` shares the lane,
+      # so raising it there would stand the unrelated headless run down over a context
+      # reading that says nothing about it. So the spent-ness is keyed by session id: this
+      # file holds the id of the session last told to close out, and a session that does not
+      # find its own id there gets its one block.
+      SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent"
+      SESSION=$(hook_json "$PAYLOAD" '.session_id')
+      if [ -n "$SESSION" ] && [ "$(cat "$SPENT" 2>/dev/null)" = "$SESSION" ]; then
+        loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, close-out already asked of this session; allowing the stop"
+        exit 0
+      fi
       CLOSE_OUT=$(printf '%s' "$VERDICT_JSON" | jq -r '.close_out')
       loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, blocking once for the close-out"
-      [ -n "$HALT" ] && : > "$HALT" 2>/dev/null
+      printf '%s' "$SESSION" > "$SPENT" 2>/dev/null
       # A close-out block is a turn the loop spent, so it counts as one. That is also the
-      # SECOND bound: the halt marker above is the primary one, but writing it is a
-      # best-effort file write, and if it fails this arm would otherwise re-block every
-      # turn forever — the counter carries the block to the cap regardless.
+      # SECOND bound: the marker above is the primary one, but writing it is a best-effort
+      # file write, and if it fails this arm would otherwise re-block every turn forever —
+      # the counter carries the block to the cap regardless. Re-read immediately before the
+      # write so the value written is not the one read back before the ceiling subprocess.
+      ITER=$(cat "$ITERF" 2>/dev/null || echo 0); [[ "$ITER" =~ ^[0-9]+$ ]] || ITER=0
       ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
       jq -nc --arg r "[stop-loop] CONTEXT CEILING: this session is at ~${TOKENS} tokens, past the ${CEILING} ceiling, and no runner will relaunch it. Do not start new work.
 1. Commit or push everything outstanding — a handoff across a reset loses whatever is not committed.
@@ -138,6 +160,11 @@ The handoff is the only thing the next session wakes up with, so it says what yo
 fi
 
 # 5) Continue: increment counter + inject next-action + the run-scoped skip-set.
+# Re-read first: the counter is per-lane, and step 4's subprocess sits between the read at
+# step 3 and this write, so incrementing the pre-ceiling value would drop a concurrent
+# session's turn. (The cap DECISION at step 3 still rests on the earlier read; that window
+# is pre-existing and is now bounded by step 4's timeout.)
+ITER=$(cat "$ITERF" 2>/dev/null || echo 0); [[ "$ITER" =~ ^[0-9]+$ ]] || ITER=0
 ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
