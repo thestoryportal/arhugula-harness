@@ -871,11 +871,31 @@ def main() -> int:
         signal.signal(signal.SIGTERM, previous_sigterm)
 
 
+#: The exit code of a gate refusal, and nothing else: a failover parent reads it as the
+#: child's refusal, since a refused child writes no outcome envelope (B-296).
+GATE_REFUSED_EXIT = 3
+_REFUSAL_LINES = re.compile(
+    r"^review gate: (?P<detail>.*)\n  recipe: (?P<recipe>.*)\n"
+    r"gemini-review: GATE_REFUSED \((?P<code>\w+)\)$",
+    re.M,
+)
+
+
 def _refused(decision: rlg.Refused) -> int:
     print(f"review gate: {decision.detail}", file=sys.stderr)
     print(f"  recipe: {decision.recipe}", file=sys.stderr)
     print(f"gemini-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
-    return 3
+    return GATE_REFUSED_EXIT
+
+
+def refusal_from_stderr(stderr: str) -> rlg.Refused:
+    """The refusal `_refused` printed, read back by a failover parent; stderr that lost
+    its lines still refuses, carrying its tail as the detail."""
+    found = list(_REFUSAL_LINES.finditer(stderr))
+    if not found:
+        return rlg.Refused("GATE_REFUSED", stderr.strip()[-400:], "see the gemini wrapper's stderr")
+    m = found[-1]
+    return rlg.Refused(m["code"], m["detail"], m["recipe"])
 
 
 if __name__ == "__main__":

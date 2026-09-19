@@ -31,14 +31,15 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-import finding_record as fr
 import review_loop_gate as rlg
 import review_wrapper_common as rw
 from agy_review import (
+    GATE_REFUSED_EXIT,
     GEMINI_PROMPT_VERSION,
     TerminationRequested,
     gemini_config_hash,
     handle_termination_signal,
+    refusal_from_stderr,
     run_bounded,
 )
 
@@ -530,14 +531,10 @@ def _run_gemini_failover(repo: Path, base: str, chain_round: int | None = None) 
                 finding_count=len(outcome.findings),
             )
         return outcome
-    # a child refused at write time (B-296) leaves no envelope: the parent asks the same
-    # admission for the delivery it stood in for, so a pass delivered meanwhile surfaces
-    # as GATE_REFUSED rather than as an unavailable reviewer
-    arc_id, lane_id = rw.env_arc_and_lane()
-    stand_in = rw.ReviewOutcome("APPROVE", "gemini", None, "", [], binding)
-    rlg.delivery_admission(
-        repo, stand_in, producer=GEMINI_PRODUCER, arc_id=arc_id, lane_id=lane_id
-    )(fr.read_rows())
+    if proc.returncode == GATE_REFUSED_EXIT:
+        # a child refused at write time (B-296) writes no envelope; its refusal is decided
+        # on its own binding, so the parent propagates it rather than re-deciding it
+        raise rlg.CycleRefusedError(refusal_from_stderr(stderr))
     outcome = rw.ReviewOutcome(
         "REVIEWER_UNAVAILABLE",
         "gemini",

@@ -3914,8 +3914,9 @@ def test_the_gemini_stand_in_is_admitted_as_the_codex_half_it_replaces(
 def test_a_failover_child_refused_at_write_time_surfaces_as_gate_refused(
     repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
-    # the child writes no envelope when refused (codex r1 P2 on #1602): the parent must
-    # not read that as an unavailable reviewer and route the arc to HITL
+    # a refused child writes no envelope (codex r1 P2 on #1602) and decides on its OWN
+    # binding, which may differ from the parent's if HEAD moved (codex r2 P2): the parent
+    # propagates the child's refusal rather than recording an unavailable reviewer
     import codex_review as cr
 
     binding = _reserved_branch(repo, monkeypatch)
@@ -3927,18 +3928,22 @@ def test_a_failover_child_refused_at_write_time_surfaces_as_gate_refused(
         "REVIEWER_UNAVAILABLE", "codex", "transient", "down", [], binding
     )
     monkeypatch.setattr(cr, "run_codex_review", lambda repo_, base, invoke=None: unavailable)
-
-    def refused_child(cmd, **kw) -> subprocess.CompletedProcess[str]:
-        _deliver(repo, binding)  # a concurrent run of the pass delivers first
-        return subprocess.CompletedProcess(cmd, 3, "", "gemini-review: GATE_REFUSED")
-
-    monkeypatch.setattr(cr, "run_bounded", refused_child)
+    child_stderr = (
+        "review gate: pass 1 reviews x..y; X9a binds it to z..y\n"
+        "  recipe: re-run pass 1 with base z\n"
+        "gemini-review: GATE_REFUSED (WRONG_BASE)\n"
+    )
+    monkeypatch.setattr(
+        cr, "run_bounded", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 3, "", child_stderr)
+    )
     routed: list[str] = []
     monkeypatch.setattr(cr, "_route_to_hitl", lambda *a, **k: routed.append(a[1]))
     assert cr.main(["--base", "main", "--failover"]) == 3
-    assert "codex-review: GATE_REFUSED (ALREADY_DELIVERED)" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "codex-review: GATE_REFUSED (WRONG_BASE)" in err
+    assert "recipe: re-run pass 1 with base z" in err
     assert routed == []
-    assert [r["record_kind"] for r in fr.read_rows()] == ["reviewer_unavailable", "no_finding"]
+    assert [r["record_kind"] for r in fr.read_rows()] == ["reviewer_unavailable"]
 
 
 def test_the_codex_wrapper_refuses_a_verdict_its_pass_received_while_it_reviewed(
