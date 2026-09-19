@@ -32,21 +32,31 @@ export HARNESS_LOOP_STATUS_PATH="${TMPDIR:-/tmp}/loop-gc-test-$$-loop_status.md"
 # fixture when the caller deletes it. They are not this shell's children, so liveness is
 # polled rather than `wait`ed.
 kill_leftover_reapers() {
-  local pids alive pid waited=0
-  pids=$(pgrep -f "loop-gc-reap $BASE/") || return 0
+  local roots pids alive pid waited=0
+  roots=$(pgrep -f "loop-gc-reap $BASE/") || return 0
+  # A reaper blocked on an exec'd child (git, gh, sleep) does not pass TERM on, and once it
+  # dies that child is reparented to init and no longer a pgrep -P descendant — so the whole
+  # tree is snapshotted BEFORE anything is signalled, and every member is killed and waited.
+  pids=$(for pid in $roots; do tree_pids "$pid"; done)
   kill $pids 2>/dev/null
-  echo "  note: killed leftover detached reaper(s): $(printf '%s' "$pids" | tr '\n' ' ')"
+  echo "  note: killed leftover detached reaper(s): $(printf '%s' "$roots" | tr '\n' ' ')"
   while :; do
     alive=""
     for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
     [ -z "$alive" ] && return 0
     [ "$waited" -eq 20 ] && kill -KILL $alive 2>/dev/null
     if [ "$waited" -ge 40 ]; then
-      echo "  FATAL: reaper(s) survived KILL:$alive"
+      echo "  FATAL: reaper process(es) survived KILL:$alive"
       return 1
     fi
     sleep 0.1; waited=$((waited + 1))
   done
+}
+# Print <pid> and every descendant, one per line.
+tree_pids() {
+  local child
+  printf '%s\n' "$1"
+  for child in $(pgrep -P "$1"); do tree_pids "$child"; done
 }
 # Kill <pid> and every descendant, deepest first.
 kill_tree() {
@@ -487,6 +497,25 @@ if [ -n "$KR_PID" ]; then
     || ok "cleanup: kill_leftover_reapers waits for a killed reaper to exit, escalating to KILL"
 else
   bad "cleanup fixture: stand-in reaper never started"
+fi
+
+# A reaper killed while it waits on an exec'd child must not leave that child running: this
+# stand-in blocks on a foreground `sleep` (TERM to the bash frame does not reach it), and
+# the child must be gone when kill_leftover_reapers returns.
+( nohup bash -c 'sleep 30; :' loop-gc-reap "$BASE/blocked-reaper" </dev/null >/dev/null 2>&1 & )
+KB_WAITED=0; KB_CHILD=""
+until [ -n "$KB_CHILD" ] || [ "$KB_WAITED" -ge 50 ]; do
+  KB_ROOT=$(pgrep -f "loop-gc-reap $BASE/blocked-reaper")
+  [ -n "$KB_ROOT" ] && KB_CHILD=$(pgrep -P "$KB_ROOT")
+  [ -n "$KB_CHILD" ] || { sleep 0.1; KB_WAITED=$((KB_WAITED + 1)); }
+done
+if [ -n "$KB_CHILD" ]; then
+  kill_leftover_reapers >/dev/null
+  kill -0 $KB_CHILD 2>/dev/null \
+    && { bad "cleanup: a killed reaper's exec'd child was still running when kill_leftover_reapers returned"; kill -KILL $KB_CHILD; } \
+    || ok "cleanup: kill_leftover_reapers also stops a killed reaper's exec'd children"
+else
+  bad "cleanup fixture: blocked stand-in reaper or its child never started"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
