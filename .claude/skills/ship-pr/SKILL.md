@@ -551,8 +551,10 @@ the run the door already confirmed green before releasing.
 
 Local branch refs are left alone entirely; they carry no unique cleanup obligation. Worktree
 removal is a separate, structurally later step (a session can't remove the worktree it's
-running inside) — that's `loop_gc_worktrees`, which still runs at the next session's
-SessionStart per U-HK-26; unrelated to this step.
+running inside): the next session's SessionStart hook (`tools/hooks/loop-gc.sh`, U-HK-26)
+launches `loop_gc_worktrees reap` detached, which removes each merged, clean, non-live
+worktree under the safe-subset gate. It is autonomous — never hand the operator a
+worktree-removal step in a report.
 
 **Loop mode:** `permission-guard.sh`'s deny-list hard-blocks `git push --force-with-lease`
 unconditionally, even in loop mode (branch deletion is a destructive git operation — the

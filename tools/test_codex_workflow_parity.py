@@ -879,11 +879,17 @@ def test_session_lifecycle_wrappers_order_registration_and_release() -> None:
     assert end.index('session-lease.sh" end') < end.index("session-end-cleanup.sh")
 
 
-def test_session_start_hygiene_is_report_only_and_never_reaps() -> None:
+def test_session_start_hygiene_reports_then_reaps_detached() -> None:
+    # The behavioral witness (hook returns before the reaper, merged worktree gone,
+    # gated ones kept) is tools/hooks/test_loop_gc.sh case 7; this pins the launch shape.
     hygiene = (ROOT / "tools" / "hooks" / "loop-gc.sh").read_text(encoding="utf-8")
+    report = hygiene.index("CANDS=$(loop_gc_worktrees report)")
+    launch = hygiene.index("nohup bash -c")
+    launch_stmt = hygiene[launch : hygiene.index('disown "$!"', launch)]
 
-    assert "loop_gc_worktrees report" in hygiene
-    assert "loop_gc_worktrees reap" not in hygiene
+    assert report < launch
+    assert "loop_gc_worktrees reap" in launch_stmt
+    assert "</dev/null >/dev/null 2>&1 &" in launch_stmt
 
 
 def test_parity_regressions_are_blocking_locally_and_in_ci() -> None:

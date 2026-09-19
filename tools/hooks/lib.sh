@@ -636,7 +636,10 @@ _HOOK_REGEN_IGNORED='^!! (.*/)?(\.harness/|__pycache__/|.*\.py[co]|.*\.egg-info/
 # status cannot be established. Callers must treat 2 as fail-closed.
 hook_worktree_local_state() {
   local wt="$1" raw line residue=""
-  raw=$(git -C "$wt" status --porcelain --ignored 2>/dev/null) || return 2
+  # GIT_OPTIONAL_LOCKS=0 keeps the probe read-only: plain `git status` rewrites a racily
+  # clean index, and the reaper's idle grace (loop_lib.sh) reads the index mtime as
+  # activity, so a probe that wrote it would make its own scan look like a session.
+  raw=$(GIT_OPTIONAL_LOCKS=0 git -C "$wt" status --porcelain --ignored 2>/dev/null) || return 2
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     if printf '%s\n' "$line" | grep -Eq "$_HOOK_REGEN_IGNORED"; then

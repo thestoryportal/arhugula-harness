@@ -1,14 +1,36 @@
 #!/usr/bin/env bash
-# SessionStart worktree hygiene visibility (U-HK-26).
+# SessionStart worktree hygiene (U-HK-26).
 #
-# The autonomous loop ships PRs whose worktrees go stale after merge; nothing reaps
-# them (git-arc-guard checks commits/branches and session-end-cleanup is advisory-only).
-# SessionStart is a latency-sensitive lease/context boundary, so this hook only reports
-# candidates. The controller performs explicit reaping after merge/closeout.
+# Worktrees go stale once their PR merges, and a session cannot remove the worktree it
+# runs inside, so the NEXT session start is where they get reaped — autonomously, with
+# no manual step (operator directive 2026-09-19).
 #
-#   ALL MODES → VISIBILITY: inject advisory additionalContext listing stale-worktree
-#               candidates + their branch refs + a MEMORY.md over-cap flag + the
-#               U-HK-44 unreconciled-subagent clause. Never delete.
+#   ALL MODES → the read-only `report` pass finds candidates; when there is at least
+#               one, `loop_gc_worktrees reap` is launched DETACHED (own stdio, nohup'd,
+#               disowned). SessionStart is a latency-sensitive lease/context boundary:
+#               the hook never waits on the reaper, so its latency stays that of the
+#               report alone. Reapers are single-flight per repository: concurrent
+#               session starts each launch one, and all but the holder of the reap lock
+#               (in the git common dir) log a skip and exit. The reaper re-applies the
+#               whole safe-subset gate itself, skips a worktree whose index or HEAD
+#               reflog moved within the idle grace (_LOOP_GC_IDLE_GRACE_MIN in
+#               loop_lib.sh; it is retried at a later session start), and removes only
+#               through hook_safe_worktree_remove (mutex, live session/lease,
+#               process-reference and identity rechecks), so a candidate that shows a
+#               live session or recent git activity by the time the reaper reaches it
+#               is skipped; every disposition lands as a GC row in the loop ledger.
+#             → inject additionalContext naming the candidates being reaped + their
+#               branch refs + a MEMORY.md over-cap flag + the U-HK-44
+#               unreconciled-subagent clause.
+#
+#   RESIDUAL  A session launched in a worktree is protected from its first instant:
+#             hook_safe_worktree_remove refuses while any process of the user holds a
+#             cwd, root, open fd or mapping inside it (checked under the removal
+#             mutex), and that covers the session and the shell it was launched from.
+#             What remains is a process that changes directory into the worktree during
+#             the seconds its removal is in progress. Nothing is lost either way: every
+#             candidate is clean and merged at its exact head, and `git worktree add`
+#             recreates it from the surviving branch ref.
 #
 # Runs as deterministic hook bash and always exits 0.
 
@@ -24,12 +46,20 @@ hook_review_isolated && exit 0
 
 PROJECT_DIR=$(hook_project_dir); [ -z "$PROJECT_DIR" ] && exit 0
 
-# Advisory visibility only. Cheap pre-check: only pay for the gh
-# merged-set lookup when there is MORE than one worktree (the common case — sitting
-# in main with no linked worktrees — pays nothing and adds zero SessionStart latency).
+# Cheap pre-check: only pay for the gh merged-set lookup when there is MORE than one
+# worktree (the common case — sitting in main with no linked worktrees — pays nothing
+# and adds zero SessionStart latency).
 CANDS=""
 WTC=$(git -C "$PROJECT_DIR" worktree list 2>/dev/null | grep -c .)
 [ "${WTC:-0}" -ge 2 ] 2>/dev/null && CANDS=$(loop_gc_worktrees report)
+# [LAW:single-enforcer] the reaper owns every removal decision; the report only decides
+# whether a reaper is worth a process. Its stdio is detached from the hook's pipes, so
+# neither the harness nor a `$(...)` caller waits on it.
+if [ -n "$CANDS" ]; then
+  nohup bash -c '. "$1/lib.sh" && . "$1/loop_lib.sh" && loop_gc_worktrees reap' \
+    loop-gc-reap "$_DIR" </dev/null >/dev/null 2>&1 &
+  disown "$!"
+fi
 
 # U-CTX-07 companion: reap a STALE capture-failure lock (crashed holder). The
 # failure hook itself NEVER reclaims — in-band reclamation on a reusable
@@ -383,7 +413,7 @@ if [ -n "$CANDS" ]; then
   # `git branch -d ...` string — a ref name can contain shell metacharacters (codex P2).
   # Capped to the SAME top-3 subset as LIST, so every branch shown has a visible entry.
   BRANCHES=$(printf '%s\n' "$CANDS" | head -3 | sed -E 's/.*\(([^)]+)\)$/\1/' | paste -sd', ' -)
-  MSG="$MSG ${N} stale merged worktree(s) — the explicit post-merge closeout reaps them, or remove manually: ${LIST}. Their merged branch refs (prune each with git branch -d; listed as data): ${BRANCHES}."
+  MSG="$MSG ${N} stale merged worktree(s) being reaped in the background under the safe-subset gate (merged at exact HEAD, clean, no live session/lease or process reference; each skip is logged as a GC row in the loop ledger): ${LIST}. Their merged local branch refs are left in place on purpose — they hold nothing unmerged, so no action is needed (listed as data): ${BRANCHES}."
 fi
 [ -n "$MEMFLAG" ] && MSG="$MSG ${MEMFLAG}"
 [ -n "$UNREC" ] && MSG="$MSG ${UNREC}"
