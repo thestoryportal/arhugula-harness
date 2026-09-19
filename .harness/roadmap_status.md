@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `22294985e734` |
+| `workspace_state_hash` | `635b1b4fe5d8` |
 | `last_refreshed` | 2026-09-19T00:00:00Z |
-| `git_head` | `44a8b889` —  |
+| `git_head` | `f69b08d5` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1608).** Merged worktrees are now reaped autonomously in the standard flow (#1606 + #1608): SessionStart launches loop_gc_worktrees reap detached, and spec v1.10 X10 lets the reaper remove a worktree that is ahead of (or has lost) its upstream when its HEAD is proved to be its branch's PR merged into the default branch; U-HE-54 carry-overs (the diagrams P3 into B-297, the .agents gemini-review base into B-299) ride the next PR, then U-HE-55
+**Current next action (post-#1610).** U-HE-55 landed (#1610): `.claude/settings.json` denies `Bash(gh pr merge:*)` and `Bash(rtk gh pr merge:*)`, so a bare merge is refused in every Claude Code permission mode, not only where the loop-mode guard runs; the U-HE-54 and worktree-autoreap follow-ups rode its first commit (B-297 item 4, B-299 pass-2 base, new B-300), and its own follow-up row is B-301. The pass-3 P3 on #1610 (`.claude/skills/ship-pr/SKILL.md` still says the raw verb is denied in loop mode only) joins B-301 in the first commit of the next PR, then U-HE-58
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1610 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1608 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1606 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1604 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1602 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1600 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
