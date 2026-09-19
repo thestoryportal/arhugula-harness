@@ -542,7 +542,7 @@ def emit_outcome(
     arc_id: str,
     lane_id: str,
     round_n: int | None,
-    admit: Callable[[list[dict], list[dict]], None],
+    admit: Callable[[list[dict]], None],
     path: Path | None = None,
     attributor: Callable[[dict, list[dict]], dict] | None = None,
 ) -> list[dict]:
@@ -558,9 +558,9 @@ def emit_outcome(
     `unique_catch` from the codex rounds already on the log -- join and append are one atomic
     step). Default is identity: channel wrappers emit unattributed rows unchanged.
 
-    `admit(log_rows, new_rows)` raises to refuse the whole outcome, under the same lock and
-    before anything is written: the bounded cycle's delivery admission
-    (`review_loop_gate.admit_deliveries`, B-296) lives above this module, so every writer
+    `admit(log_rows)` raises to refuse the whole outcome, under the same lock and before
+    anything is written: the bounded cycle's delivery admission
+    (`review_loop_gate.delivery_admission`, B-296) lives above this module, so every writer
     names it here rather than this module importing the gate."""
 
     def build(rows: list[dict]) -> list[tuple[dict, fr.Envelope]]:
@@ -573,7 +573,7 @@ def emit_outcome(
                 outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=n
             )
         ]
-        admit(rows, observations)
+        admit(rows)
         return [
             (
                 {k: v for k, v in obs.items() if k not in _ENV_KEYS},

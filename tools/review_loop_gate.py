@@ -51,7 +51,7 @@ serial within its lane and blocked on its own foreground subprocess, and round
 minting itself (`round_n_for`) carries the identical documented residual,
 registered to U-HE-19/21 — the gate adds no new window and holds no lock.
 A bounded-cycle pass does not rest on that discipline for its deliveries: every
-verdict row that joins a pass is re-decided by `admit_deliveries` under the gate
+verdict row that joins a pass is re-decided by `delivery_admission` under the gate
 log's append lock (B-296), so two concurrent runs of one pass record one delivery.
 
 Trust boundary (the u-he-33 `_record_detection` precedent, reaffirmed here): the
@@ -75,7 +75,7 @@ import re
 import stat as stat_module
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -916,15 +916,9 @@ def admit_lens(
     """The lens half of a pass, admitted by the same rules as the codex half. The emitter
     calls this with the log read under its emit lock, so two emissions of one lens are
     serialized and the second sees the first's rows."""
-    return _admit_role(
-        repo,
-        rows,
-        role=lens,
-        cycle_pass=cycle_pass,
-        binding=binding,
-        arc_id=arc_id,
-        lane_id=lane_id,
-    )
+    return _prepare_role(
+        repo, role=lens, cycle_pass=cycle_pass, binding=binding, arc_id=arc_id, lane_id=lane_id
+    )(rows)
 
 
 class CycleRefusedError(Exception):
@@ -935,52 +929,62 @@ class CycleRefusedError(Exception):
         self.decision = decision
 
 
-def admit_deliveries(repo: Path, log_rows: list[dict], new_rows: list[dict]) -> None:
-    """Admit every pass delivery among `new_rows` against `log_rows`, the log as it stands
-    under the append lock, raising `CycleRefusedError` so the append writes nothing (B-296).
-    `admit()` answers before a multi-minute review, when a concurrent run of the same pass
-    may still be reviewing; only this answer, given where the verdict is written, sees
-    every delivery that landed first."""
-    # [LAW:single-enforcer] one outcome's rows share a role, pass and binding; each distinct
-    # delivery among them passes the same _decide_cycle as the pre-review admission
+def delivery_admission(
+    repo: Path, outcome: rw.ReviewOutcome, *, producer: str, arc_id: str, lane_id: str
+) -> Callable[[list[dict]], None]:
+    """The write-time admission of every pass delivery `outcome` would record (B-296): a
+    check over the log as it stands under the append lock, raising `CycleRefusedError` so
+    the append writes nothing. `admit()` answers before a multi-minute review, when a
+    concurrent run of the same pass may still be reviewing; only this answer, given where
+    the verdict is written, sees every delivery that landed first.
+
+    The reservation, state-file and git reads happen here, before the lock; the returned
+    check reads only the log, so the lock every gate-log writer shares never waits on git."""
+    # [LAW:single-enforcer] each distinct delivery passes the same _decide_cycle as the
+    # pre-review admission; an outcome that delivers nothing (unavailable, untagged) has none
+    rows = rw.outcome_rows(outcome, producer=producer, arc_id=arc_id, lane_id=lane_id, round_n=0)
     deliveries = {
-        (r["arc_id"], r["lane_id"], role, r["cycle_pass"]): r
-        for r in new_rows
-        if (role := _delivering_role(r)) is not None
+        (role, r["cycle_pass"]): r for r in rows if (role := _delivering_role(r)) is not None
     }
-    for (arc_id, lane_id, role, cycle_pass), row in deliveries.items():
-        decision = _admit_role(
-            repo,
-            log_rows,
-            role=role,
-            cycle_pass=cycle_pass,
-            binding=row,
-            arc_id=arc_id,
-            lane_id=lane_id,
+    deciders = [
+        _prepare_role(
+            repo, role=role, cycle_pass=cycle_pass, binding=r, arc_id=arc_id, lane_id=lane_id
         )
-        if isinstance(decision, Refused):
-            raise CycleRefusedError(decision)
+        for (role, cycle_pass), r in deliveries.items()
+    ]
+
+    def check(log_rows: list[dict]) -> None:
+        for decider in deciders:
+            decision = decider(log_rows)
+            if isinstance(decision, Refused):
+                raise CycleRefusedError(decision)
+
+    return check
 
 
-def _admit_role(
+def _prepare_role(
     repo: Path,
-    rows: list[dict],
     *,
     role: str,
     cycle_pass: str,
     binding: Mapping[str, str],
     arc_id: str,
     lane_id: str,
-) -> Allowed | Refused:
+) -> Callable[[list[dict]], Allowed | Refused]:
+    """One reviewer's admission with its reads done now: the returned decider is pure over
+    the log rows it is given."""
+    # [LAW:effects-at-boundaries] reservation, state file and git here; decide() is pure
     state = _gate_state_in_force(repo, arc_id)
     if not isinstance(state, GateState):
-        return _cycle_not_in_force(state, arc_id)
+        refused = _cycle_not_in_force(state, arc_id)
+        return lambda rows: refused
     try:
         cycle = _cycle_request(repo, binding, cycle_pass, role)
     except (GateError, subprocess.CalledProcessError) as exc:
         # the lens emitter has no binding path of its own to defer to: unreadable refuses
-        return Refused(code="STATE_UNREADABLE", detail=str(exc), recipe=_FULL_DIFF_RECIPE)
-    return decide(
+        unreadable = Refused(code="STATE_UNREADABLE", detail=str(exc), recipe=_FULL_DIFF_RECIPE)
+        return lambda rows: unreadable
+    return lambda rows: decide(
         state,
         rows,
         arc_id=arc_id,

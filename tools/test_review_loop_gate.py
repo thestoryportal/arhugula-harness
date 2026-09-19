@@ -9,7 +9,6 @@ review terminal per C-HE-16 §3 — no C-HE-24 row, no round outcome).
 from __future__ import annotations
 
 import ast
-import functools
 import hashlib
 import importlib.util
 import json
@@ -38,7 +37,7 @@ DIGEST = "c" * 64
 LOOP_PRODUCER = "codex_review_wrapper"
 
 
-def _admit_all(log_rows: list[dict], new_rows: list[dict]) -> None:
+def _admit_all(log_rows: list[dict]) -> None:
     """These tests exercise the log, not the bounded cycle's admission (B-296)."""
 
 
@@ -3807,7 +3806,9 @@ def _deliver(repo: Path, binding: dict[str, str], producer=LOOP_PRODUCER, findin
         arc_id=ARC,
         lane_id="l",
         round_n=None,
-        admit=functools.partial(rlg.admit_deliveries, repo),
+        admit=rlg.delivery_admission(
+            repo, _verdict(binding, findings), producer=producer, arc_id=ARC, lane_id="l"
+        ),
     )
 
 
@@ -3844,6 +3845,24 @@ def test_two_admitted_runs_of_one_pass_record_exactly_one_delivery(
     assert [r for r in results if isinstance(r, str)] == ["ALREADY_DELIVERED"]
     delivered = [r for r in fr.read_rows() if r["producer"] == LOOP_PRODUCER]
     assert [r["severity"] for r in delivered] == ["P1"]
+
+
+def test_the_write_time_check_reads_only_the_log(repo: Path, monkeypatch: pytest.MonkeyPatch):
+    # every gate-log writer shares the append lock, so git and state reads happen before
+    # it (merge-gate concurrency P2 on #1602): the check itself only reads its argument
+    binding = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    check = rlg.delivery_admission(
+        repo, _verdict(binding), producer=LOOP_PRODUCER, arc_id=ARC, lane_id="l"
+    )
+    monkeypatch.setattr(rlg, "_cycle_request", lambda *a: pytest.fail("git under the lock"))
+    monkeypatch.setattr(rlg, "_gate_state_in_force", lambda *a: pytest.fail("state under the lock"))
+    check([])
+    delivered = rw.outcome_rows(
+        _verdict(binding), producer=LOOP_PRODUCER, arc_id=ARC, lane_id="l", round_n=1
+    )
+    with pytest.raises(rlg.CycleRefusedError, match="ALREADY_DELIVERED"):
+        check(delivered)
 
 
 def test_a_verdict_for_a_completed_pass_is_refused_not_pooled_into_it(
@@ -3890,6 +3909,36 @@ def test_the_gemini_stand_in_is_admitted_as_the_codex_half_it_replaces(
     with pytest.raises(rlg.CycleRefusedError, match="ALREADY_DELIVERED"):
         agy._emit(_verdict(binding, (_P1,)))
     assert [r["producer"] for r in fr.read_rows()] == [LOOP_PRODUCER]
+
+
+def test_a_failover_child_refused_at_write_time_surfaces_as_gate_refused(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    # the child writes no envelope when refused (codex r1 P2 on #1602): the parent must
+    # not read that as an unavailable reviewer and route the arc to HITL
+    import codex_review as cr
+
+    binding = _reserved_branch(repo, monkeypatch)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    monkeypatch.setenv("HARNESS_ARC_ID", ARC)
+    monkeypatch.setenv("HARNESS_LANE_ID", "l")
+    monkeypatch.chdir(repo)
+    unavailable = rw.ReviewOutcome(
+        "REVIEWER_UNAVAILABLE", "codex", "transient", "down", [], binding
+    )
+    monkeypatch.setattr(cr, "run_codex_review", lambda repo_, base, invoke=None: unavailable)
+
+    def refused_child(cmd, **kw) -> subprocess.CompletedProcess[str]:
+        _deliver(repo, binding)  # a concurrent run of the pass delivers first
+        return subprocess.CompletedProcess(cmd, 3, "", "gemini-review: GATE_REFUSED")
+
+    monkeypatch.setattr(cr, "run_bounded", refused_child)
+    routed: list[str] = []
+    monkeypatch.setattr(cr, "_route_to_hitl", lambda *a, **k: routed.append(a[1]))
+    assert cr.main(["--base", "main", "--failover"]) == 3
+    assert "codex-review: GATE_REFUSED (ALREADY_DELIVERED)" in capsys.readouterr().err
+    assert routed == []
+    assert [r["record_kind"] for r in fr.read_rows()] == ["reviewer_unavailable", "no_finding"]
 
 
 def test_the_codex_wrapper_refuses_a_verdict_its_pass_received_while_it_reviewed(

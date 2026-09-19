@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import functools
 import hashlib
 import json
 import os
@@ -548,7 +547,9 @@ def _emit(outcome: rw.ReviewOutcome) -> None:
         arc_id=arc_id,
         lane_id=lane_id,
         round_n=None,
-        admit=functools.partial(rlg.admit_deliveries, Path.cwd()),
+        admit=rlg.delivery_admission(
+            Path.cwd(), outcome, producer=producer_name(), arc_id=arc_id, lane_id=lane_id
+        ),
     )  # the round is minted under the log lock (codex round 7); every terminal yields >= 1 row
     round_n = written[0]["round_n"]
     if os.environ.get("HARNESS_FAILOVER_CHILD") != "1" and not shadow_lens():

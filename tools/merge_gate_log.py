@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
-import functools
 import hashlib
 import json
 import os
@@ -311,7 +310,9 @@ def _emit_gate_row_locked(
             arc_id=arc_id,
             lane_id=lane_id,
             round_n=round_n,
-            admit=functools.partial(rlg.admit_deliveries, REPO),
+            admit=rlg.delivery_admission(
+                REPO, outcome, producer=lens, arc_id=arc_id, lane_id=lane_id
+            ),
             path=jsonl_path,
             attributor=attribute_lens_row,  # X6d: emit-time attribution, same critical section
         )

@@ -16,7 +16,7 @@ import review_loop_gate as rlg
 import review_wrapper_common as rw
 
 
-def _admit_all(log_rows: list[dict], new_rows: list[dict]) -> None:
+def _admit_all(log_rows: list[dict]) -> None:
     """These tests exercise the log, not the bounded cycle's admission (B-296)."""
 
 

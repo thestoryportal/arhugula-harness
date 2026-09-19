@@ -18,7 +18,6 @@ C-HE-24 row, no round outcome, C-HE-16 §3's terminal enum untouched.
 from __future__ import annotations
 
 import argparse
-import functools
 import hashlib
 import json
 import math
@@ -32,6 +31,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
+import finding_record as fr
 import review_loop_gate as rlg
 import review_wrapper_common as rw
 from agy_review import (
@@ -389,7 +389,9 @@ def _emit_rows(
         arc_id=arc_id,
         lane_id=lane_id,
         round_n=round_n,
-        admit=functools.partial(rlg.admit_deliveries, Path.cwd()),
+        admit=rlg.delivery_admission(
+            Path.cwd(), outcome, producer=producer, arc_id=arc_id, lane_id=lane_id
+        ),
     )  # round minted under the log lock when None (codex round 7); every terminal yields a row
     n = written[0]["round_n"]
     rw.record_round_outcome_if_reserved(
@@ -528,6 +530,14 @@ def _run_gemini_failover(repo: Path, base: str, chain_round: int | None = None) 
                 finding_count=len(outcome.findings),
             )
         return outcome
+    # a child refused at write time (B-296) leaves no envelope: the parent asks the same
+    # admission for the delivery it stood in for, so a pass delivered meanwhile surfaces
+    # as GATE_REFUSED rather than as an unavailable reviewer
+    arc_id, lane_id = rw.env_arc_and_lane()
+    stand_in = rw.ReviewOutcome("APPROVE", "gemini", None, "", [], binding)
+    rlg.delivery_admission(
+        repo, stand_in, producer=GEMINI_PRODUCER, arc_id=arc_id, lane_id=lane_id
+    )(fr.read_rows())
     outcome = rw.ReviewOutcome(
         "REVIEWER_UNAVAILABLE",
         "gemini",

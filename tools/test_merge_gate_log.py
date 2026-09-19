@@ -24,7 +24,7 @@ H, B, D = "a" * 40, "b" * 40, "c" * 64
 LENS = "merge-gate-concurrency"
 
 
-def _admit_all(log_rows: list[dict], new_rows: list[dict]) -> None:
+def _admit_all(log_rows: list[dict]) -> None:
     """These tests exercise the log, not the bounded cycle's admission (B-296)."""
 
 
