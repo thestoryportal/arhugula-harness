@@ -16,6 +16,10 @@ import review_loop_gate as rlg
 import review_wrapper_common as rw
 
 
+def _admit_all(log_rows: list[dict], new_rows: list[dict]) -> None:
+    """These tests exercise the log, not the bounded cycle's admission (B-296)."""
+
+
 @pytest.fixture(autouse=True)
 def _no_live_reviewers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Nothing in this battery may reach a real reviewer, the tracked gate log, or the live HITL
@@ -469,7 +473,13 @@ def test_emit_outcome_mints_distinct_ids_on_rerun_at_same_head(tmp_path: Path):
         "stdout",
     )
     first = rw.emit_outcome(
-        out, producer="codex_review_wrapper", arc_id="pr-1", lane_id="h-w-1", round_n=1, path=log
+        out,
+        producer="codex_review_wrapper",
+        arc_id="pr-1",
+        lane_id="h-w-1",
+        admit=_admit_all,
+        round_n=1,
+        path=log,
     )
     out2 = rw.ReviewOutcome(
         "BLOCK",
@@ -481,7 +491,13 @@ def test_emit_outcome_mints_distinct_ids_on_rerun_at_same_head(tmp_path: Path):
         "stdout",
     )
     second = rw.emit_outcome(
-        out2, producer="codex_review_wrapper", arc_id="pr-1", lane_id="h-w-1", round_n=2, path=log
+        out2,
+        producer="codex_review_wrapper",
+        arc_id="pr-1",
+        lane_id="h-w-1",
+        admit=_admit_all,
+        round_n=2,
+        path=log,
     )
     assert first[0]["finding_id"].endswith(":1") and second[0]["finding_id"].endswith(":2")
     rows = fr.read_rows(log)
@@ -497,6 +513,7 @@ def test_emit_outcome_unavailable_row_uses_nohead_token(tmp_path: Path):
         producer="codex_review_wrapper",
         arc_id="pr-1",
         lane_id="h-w-1",
+        admit=_admit_all,
         round_n=1,
         path=log,
     )
@@ -684,7 +701,9 @@ def test_gate_lens_rounds_stay_producer_scoped(tmp_path, monkeypatch):
     monkeypatch.delenv("HARNESS_ROUND_N", raising=False)
     out = rw.ReviewOutcome("APPROVE", "merge-gate", None, "", [], EXPECTED, "stdout")
     rounds = [
-        rw.emit_outcome(out, producer=lens, arc_id="a1", lane_id="l", round_n=None)[0]["round_n"]
+        rw.emit_outcome(
+            out, producer=lens, arc_id="a1", lane_id="l", admit=_admit_all, round_n=None
+        )[0]["round_n"]
         for lens in (
             "merge-gate-concurrency",
             "merge-gate-spec-conformance",
@@ -1511,9 +1530,9 @@ def test_concurrent_emitters_never_share_a_round(tmp_path, monkeypatch):
     out = rw.ReviewOutcome("REVIEWER_UNAVAILABLE", "codex", "transient", "x", [], EXPECTED)
 
     def emit(_):
-        return rw.emit_outcome(out, producer="p", arc_id="a", lane_id="l", round_n=None, path=log)[
-            0
-        ]["round_n"]
+        return rw.emit_outcome(
+            out, producer="p", arc_id="a", lane_id="l", admit=_admit_all, round_n=None, path=log
+        )[0]["round_n"]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
         rounds = sorted(ex.map(emit, range(8)))
@@ -1723,7 +1742,9 @@ def test_one_outcome_repeating_a_location_mints_distinct_ids_in_one_call(tmp_pat
         EXPECTED,
         "stdout",
     )
-    rows = rw.emit_outcome(out, producer="p", arc_id="a", lane_id="l", round_n=None, path=log)
+    rows = rw.emit_outcome(
+        out, producer="p", arc_id="a", lane_id="l", admit=_admit_all, round_n=None, path=log
+    )
     assert [r["finding_id"].rsplit(":", 1)[1] for r in rows] == ["1", "2"]
     assert len({r["finding_id"] for r in fr.read_rows(log)}) == 2
 

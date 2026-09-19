@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -310,9 +311,12 @@ def _emit_gate_row_locked(
             arc_id=arc_id,
             lane_id=lane_id,
             round_n=round_n,
+            admit=functools.partial(rlg.admit_deliveries, REPO),
             path=jsonl_path,
             attributor=attribute_lens_row,  # X6d: emit-time attribution, same critical section
         )
+    except rlg.CycleRefusedError as exc:
+        raise GateLogError(str(exc)) from exc
     except (OSError, fr.RecordError) as exc:  # (1) machine record FIRST; unrecordable = no verdict
         raise GateLogError(f"gate verdict could not be recorded: {exc}") from exc
     head = rows[0]["head_sha"] or "nohead"

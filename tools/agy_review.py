@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ import threading
 import time
 from pathlib import Path
 
+import review_loop_gate as rlg
 import review_wrapper_common as rw  # C-HE-15/16 shared core
 
 MODEL_ARGUMENT = "Gemini 3.1 Pro (High)"
@@ -541,7 +543,12 @@ def _emit(outcome: rw.ReviewOutcome) -> None:
     (codex round 4)."""
     arc_id, lane_id = rw.env_arc_and_lane()
     written = rw.emit_outcome(
-        outcome, producer=producer_name(), arc_id=arc_id, lane_id=lane_id, round_n=None
+        outcome,
+        producer=producer_name(),
+        arc_id=arc_id,
+        lane_id=lane_id,
+        round_n=None,
+        admit=functools.partial(rlg.admit_deliveries, Path.cwd()),
     )  # the round is minted under the log lock (codex round 7); every terminal yields >= 1 row
     round_n = written[0]["round_n"]
     if os.environ.get("HARNESS_FAILOVER_CHILD") != "1" and not shadow_lens():
@@ -846,23 +853,28 @@ def main() -> int:
     # after the blocking chain reached its terminal, its rows carry `producer=gemini-shadow`,
     # which the gate's budget and obligations never count, so admission does not apply.
     if os.environ.get("HARNESS_FAILOVER_CHILD") != "1" and not shadow_lens():
-        import review_loop_gate as rlg
-
         decision = rlg.admit(Path.cwd(), args.base, rw.env_arc_and_lane()[0])
         if isinstance(decision, rlg.Inactive):
             print(f"gemini-review: review gate INACTIVE — {decision.reason}", file=sys.stderr)
         elif isinstance(decision, rlg.Refused):
-            print(f"review gate: {decision.detail}", file=sys.stderr)
-            print(f"  recipe: {decision.recipe}", file=sys.stderr)
-            print(f"gemini-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
-            return 3
+            return _refused(decision)
     previous_sigterm = signal.signal(signal.SIGTERM, handle_termination_signal)
     try:
         return run_review(Path.cwd(), args.base)
     except TerminationRequested as exc:
         return exc.exit_code
+    except rlg.CycleRefusedError as exc:
+        # the pass was delivered while this review ran (B-296): no rows, no envelope
+        return _refused(exc.decision)
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm)
+
+
+def _refused(decision: rlg.Refused) -> int:
+    print(f"review gate: {decision.detail}", file=sys.stderr)
+    print(f"  recipe: {decision.recipe}", file=sys.stderr)
+    print(f"gemini-review: GATE_REFUSED ({decision.code})", file=sys.stderr)
+    return 3
 
 
 if __name__ == "__main__":
