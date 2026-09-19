@@ -836,6 +836,9 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         )
     try:
         binding = rw.code_binding(repo, base)
+        # the doc-only read is the same kind of git read on the same pinned shas, so it
+        # fails the same way and is classified by the same arm
+        doc_only = cycle_pass is not None and _doc_only(repo, binding)
     except subprocess.CalledProcessError as exc:
         # An unresolvable base / broken git is a WRAPPER-infrastructure failure, not an
         # admission fact: defer to run_codex_review's own binding path, which classifies
@@ -867,7 +870,7 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
         diff_digest=binding["diff_digest"],
         lane_id=lane_id,
         cycle_pass=cycle_pass,
-        doc_only=cycle_pass is not None and _doc_only(repo, binding),
+        doc_only=doc_only,
     )
 
 

@@ -358,6 +358,19 @@ def test_admit_routes_a_named_pass_through_the_cycle(
     assert f"run pass {admitted}" in d.recipe
 
 
+def test_a_failing_doc_only_read_degrades_like_the_binding_read(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # a concurrent gc or reset between the two git reads must not crash the wrapper
+    def broken(*_a, **_k):
+        raise subprocess.CalledProcessError(128, ["git", "diff"])
+
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
+    monkeypatch.setattr(rlg, "_doc_only", broken)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)
+
+
 def test_a_bad_pass_refuses_before_an_unreserved_review_runs(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -3417,6 +3430,13 @@ def test_a_pass_completes_only_when_its_whole_reviewer_set_delivered():
     assert _next(_pass("1", 1)) == "2"
     pass2_without_witness = [*_pass("1", 1), _crow("2", 2)]
     assert _next(pass2_without_witness) == "2"
+    # the escalation repeats pass 1, so it too needs all three lenses beside codex
+    escalation = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    escalation += [_adj("f2", "accepted"), _crow("esc", 3, head=H2)]
+    escalation += [_crow("esc", 3, head=H2, producer=lens) for lens in LENSES[:2]]
+    assert _next(escalation, head=H2) == "esc"
+    escalation.append(_crow("esc", 3, head=H2, producer=LENSES[2]))
+    assert _next(escalation, head=H2) == "3"
 
 
 def test_reviewers_that_read_different_bytes_do_not_complete_one_pass():
@@ -3426,8 +3446,9 @@ def test_reviewers_that_read_different_bytes_do_not_complete_one_pass():
 
 
 def test_a_retry_of_a_partially_recorded_pass_is_admitted():
-    # rows append one at a time, so a crash can leave part of a verdict; the retry must
-    # run, or the findings it would record are lost
+    # rows append one at a time, so a crash can leave part of a codex verdict before any
+    # lens has delivered; the retry is admitted. The case where the lenses already
+    # delivered is B-294 (d), unreachable while pass-tagged lens verdicts are refused
     partial = [_crow("1", 1, fid="f1")]
     assert isinstance(_dcycle(partial, "1"), rlg.Refused)  # f1 still owes a disposition
     partial.append(_adj("f1", "accepted"))
