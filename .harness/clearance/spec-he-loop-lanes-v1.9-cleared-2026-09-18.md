@@ -7,7 +7,7 @@ back_reference:
   - ".harness/clearance/spec-he-loop-lanes-v1.8-cleared-2026-09-18.md (prior head; v1.9 layers the one-hour-arc program on top of it)"
   - ".harness/spec/Spec_HE_Loop_Lanes_v1.md (v1.9 change-note: X9a bounded review cycle · X9b non-goals follow · X9c cycle_pass field · X9d shadow trial scores pass-3 terminals · X9e door step (viii) becomes lit done · X9f lit is the state of record · X9g tiebreaker on a stale content branch · X9h ROADMAP_STATUS_DRIFT retires with its artifact)"
   - ".harness/plan/Implementation_Plan_HE_Loop_Lanes_v1.md §9 (the unit program U-HE-52 … U-HE-71, its waves and file locks)"
-  - ".harness/tmp/arc-wallclock-optimization-2026-09-18.md (the measured audit: mean 177 min, median 126, review rounds 64% of arc hours, 34% of accepted P1/P2 first raised at round 6 or later)"
+  - ".harness/audit/arc-wallclock-optimization-2026-09-18.md (the measured audit: mean 177 min, median 126, review rounds 64% of arc hours, 34% of accepted P1/P2 first raised at round 6 or later)"
   - "operator ratified 2026-09-18: all audit recommendations accepted, including lit in place of the plain-file roadmap system and a bounded review cycle, with the late-round-yield cost stated before the decision"
   - "red-team pass against the code before any spec byte moved (independent planner, 9 blockers and 11 should-fix corrections folded into the program)"
   - "council NOT convened (proportionality: the decision is the operator's, taken with its measured cost; the amendment records it rather than weighing an open tension)"
