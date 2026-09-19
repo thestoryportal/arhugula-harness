@@ -1418,9 +1418,7 @@ def test_a_lens_verdict_on_the_wrong_base_is_refused(tmp_path: Path, monkeypatch
     assert not (tmp_path / "log.jsonl").exists()
 
 
-def test_a_pass_tagged_lens_verdict_for_an_unreserved_arc_is_refused(
-    tmp_path: Path, monkeypatch
-):
+def test_a_pass_tagged_lens_verdict_for_an_unreserved_arc_is_refused(tmp_path: Path, monkeypatch):
     import review_loop_gate as rlg
 
     monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
