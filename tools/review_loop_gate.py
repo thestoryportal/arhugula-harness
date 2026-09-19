@@ -492,11 +492,11 @@ def _currency_refusal(
 #: named) and the bounded cycle (a pass named via HARNESS_CYCLE_PASS). Owner: U-HE-53.
 #: Exit: the legacy path is deleted once every review skill launches through
 #: `just review-cycle-pass` (U-HE-54) and no open reservation predates that switch.
-#: The cycle's hard ceiling on pass INVOCATIONS: pass 1, pass 2, one escalation and
-#: pass 3 with two re-runs after P1 fixes. Beyond it the arc stops for a recorded
-#: decision (register-and-hold, or an ask-gated `review-attest-budget` extension) —
-#: X9a's rule that nothing merges past a known P1.
-PASS_CEILING = 6
+#: The longest cycle X9a admits, counted in PERFORMED passes: pass 1, pass 2, the one
+#: escalation, pass 3, and the one pass-3 re-run after its P1 fix. A P1 surviving that
+#: re-run is X9a's "still unfixed after pass 3" stop, so the next pass needs a recorded
+#: decision (register-and-hold, or an ask-gated `review-attest-budget` extension).
+PASS_CEILING = 5
 
 #: The pass that must follow each pass. After pass 2 the successor depends on the data
 #: (an accepted P1 in pass 2 escalates, once), so pass 2 has no fixed entry here.
@@ -519,6 +519,19 @@ def _last_dispositions(rows: list[dict]) -> dict[str, str | None]:
     return last
 
 
+def _performed(rows: list[dict], arc_id: str) -> list[dict]:
+    """Cycle rows proving a loop reviewer returned a verdict. A pass whose every channel
+    was REVIEWER_UNAVAILABLE reviewed nothing, so it neither advances the cycle nor
+    spends the ceiling."""
+    return [
+        r
+        for r in _cycle_rows(rows, arc_id)
+        if r.get("producer") in LOOP_PRODUCERS
+        and r.get("round_n") is not None
+        and r.get("record_kind") in ("finding", "no_finding")
+    ]
+
+
 def _cycle_findings(rows: list[dict], arc_id: str) -> list[dict]:
     return [
         r
@@ -534,10 +547,10 @@ def next_pass(rows: list[dict], arc_id: str, *, doc_only: bool) -> str:
     cycle escalates (once) exactly when pass 2 raised an accepted P1; otherwise it goes
     to pass 3, the merge gate, whose re-runs stay pass 3."""
     # [LAW:effects-at-boundaries] pure: rows in, pass out — admit() reads the log
-    cycle = sorted(_cycle_rows(rows, arc_id), key=lambda r: r["ts"])
-    if not cycle:
+    performed = sorted(_performed(rows, arc_id), key=lambda r: r["ts"])
+    if not performed:
         return "3" if doc_only else "1"
-    last = cycle[-1]["cycle_pass"]
+    last = performed[-1]["cycle_pass"]
     if last in _FIXED_SUCCESSOR:
         return _FIXED_SUCCESSOR[last]
     disposed = _last_dispositions(rows)
@@ -550,17 +563,10 @@ def next_pass(rows: list[dict], arc_id: str, *, doc_only: bool) -> str:
     return "esc" if escalate else "3"
 
 
-def pass_invocations(rows: list[dict], arc_id: str) -> int:
-    """Distinct (producer, round) review invocations the cycle has spent. Lens rows are
-    excluded for the same reason the legacy budget excludes them: lens round numbers are
-    per-lens scales (LOOP_PRODUCERS)."""
-    return len(
-        {
-            (r["producer"], r["round_n"])
-            for r in _cycle_rows(rows, arc_id)
-            if r.get("producer") in LOOP_PRODUCERS and r.get("round_n") is not None
-        }
-    )
+def passes_performed(rows: list[dict], arc_id: str) -> int:
+    """Passes the cycle has spent: one per chain round that returned a verdict, whichever
+    loop producer delivered it (a gemini failover shares the codex round)."""
+    return len({r["round_n"] for r in _performed(rows, arc_id)})
 
 
 def _decide_cycle(
@@ -574,7 +580,7 @@ def _decide_cycle(
     doc_only: bool,
     pfx: str,
 ) -> Allowed | Refused:
-    spent = pass_invocations(rows, arc_id)
+    spent = passes_performed(rows, arc_id)
     allowed_total = PASS_CEILING + sum(
         e.extra_rounds for e in state.extensions if e.arc_id == arc_id
     )
@@ -590,25 +596,6 @@ def _decide_cycle(
                 "Nothing merges past a known P1."
             ),
         )
-    expected = next_pass(rows, arc_id, doc_only=doc_only)
-    if cycle_pass != expected:
-        return Refused(
-            code="PASS_OUT_OF_ORDER",
-            detail=(
-                f"pass {cycle_pass} requested for {arc_id}; the cycle admits pass {expected} next"
-            ),
-            recipe=(
-                f"launch the admitted pass: `{pfx}just review-cycle-pass {expected} <round-log>`"
-            ),
-        )
-    scoped = _loop_rounds(rows, arc_id)
-    if not _cycle_rows(rows, arc_id):
-        # the first pass of a cycle reviews the authored diff: the preflight is attested
-        # once, here, and never re-attested per pass (X9a — authoring-time preflight)
-        refusal = _currency_refusal(state, arc_id, head_sha, diff_digest, pfx)
-        if refusal is not None:
-            return refusal
-        return Allowed(round_n=_next_round(scoped))
     disposed = _last_dispositions(rows)
     open_ids = sorted(
         f["finding_id"]
@@ -621,12 +608,31 @@ def _decide_cycle(
             detail="findings from earlier passes without a disposition: " + ", ".join(open_ids),
             recipe=(
                 "every accepted finding gets exactly one disposition before the next pass "
-                "(X9a): adjudicate each id with `uv run python tools/merge_gate_log.py "
-                "adjudicate --finding-id <id> --disposition accepted|rejected --actor "
-                "claude_absorber`, fixing the accepted P1/P2 first"
+                f"(X9a): adjudicate each id with `HARNESS_ARC_ID={arc_id} just "
+                "merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected "
+                "--actor <runner>_absorber`, fixing the accepted P1/P2 first"
             ),
         )
-    return Allowed(round_n=_next_round(scoped))
+    expected = next_pass(rows, arc_id, doc_only=doc_only)
+    if cycle_pass != expected:
+        return Refused(
+            code="PASS_OUT_OF_ORDER",
+            detail=(
+                f"pass {cycle_pass} requested for {arc_id}; the cycle admits pass {expected} next"
+            ),
+            recipe=(
+                f"launch the admitted pass: `{pfx}just review-cycle-pass {expected} <round-log>`"
+            ),
+        )
+    # the cycle's first performed pass reviews the authored diff, so the preflight is
+    # attested once, before it, and never re-attested per pass (X9a); a pass-1 retry
+    # after an unavailable reviewer is still that first pass
+    refusal = (
+        _currency_refusal(state, arc_id, head_sha, diff_digest, pfx)
+        if not _performed(rows, arc_id)
+        else None
+    )
+    return refusal or Allowed(round_n=_next_round(_loop_rounds(rows, arc_id)))
 
 
 # ── edge: admit ──────────────────────────────────────────────────────────────

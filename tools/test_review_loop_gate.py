@@ -3358,9 +3358,47 @@ def test_the_cycle_ceiling_stops_the_arc_until_a_recorded_extension():
     )
 
 
+def test_the_ceiling_is_the_longest_cycle_x9a_admits():
+    # X9a: 1 -> 2 -> esc -> 3 -> one re-run of 3 after a P1 fix; a P1 surviving the re-run
+    # is the stop, so a sixth pass is never part of a legal cycle
+    assert rlg.PASS_CEILING == 5
+
+
 def test_lens_rows_do_not_spend_the_ceiling():
     lens = [_crow("1", n, f"t{n}", producer="merge-gate-witness-adequacy") for n in range(1, 10)]
-    assert rlg.pass_invocations(lens, ARC) == 0
+    assert rlg.passes_performed(lens, ARC) == 0
+
+
+def test_a_failover_pass_spends_one_pass_not_two():
+    # gemini failover reuses the codex chain round (codex_review._run_gemini_failover)
+    rows = [
+        _crow("1", 1, "t1", record_kind="reviewer_unavailable"),
+        _crow("1", 1, "t2", producer="gemini_review_wrapper"),
+    ]
+    assert rlg.passes_performed(rows, ARC) == 1
+    assert rlg.next_pass(rows, ARC, doc_only=False) == "2"
+
+
+def test_a_pass_no_reviewer_performed_does_not_advance_the_cycle():
+    unavailable = [
+        _crow("1", 1, "t1", record_kind="reviewer_unavailable"),
+        _crow("1", 1, "t2", producer="gemini_review_wrapper", record_kind="reviewer_unavailable"),
+    ]
+    assert rlg.passes_performed(unavailable, ARC) == 0
+    assert rlg.next_pass(unavailable, ARC, doc_only=False) == "1"
+    # ...and the retry of pass 1 is still admitted against the authoring preflight
+    retry = _decide(_state(preflights=(_pf(),)), unavailable, cycle_pass="1")
+    assert isinstance(retry, rlg.Allowed)
+    unattested = _decide(_state(), unavailable, cycle_pass="1")
+    assert isinstance(unattested, rlg.Refused) and unattested.code == "PREFLIGHT_MISSING"
+
+
+def test_an_undisposed_p1_is_reported_before_the_pass_order():
+    # an unadjudicated pass-2 P1 must not be answered with "launch pass 3": the admitted
+    # pass depends on that disposition
+    rows = [_crow("1", 1, "t1"), _crow("2", 2, "t2", fid="f2", sev="P1")]
+    d = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="esc")
+    assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING"
 
 
 def test_no_pass_named_keeps_the_legacy_round_path():
