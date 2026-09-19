@@ -79,6 +79,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import finding_record as fr
+import merge_gate_log as mgl
 import review_wrapper_common as rw
 
 STATE_REL = Path(".harness/review_loop_gate_state.json")
@@ -492,23 +493,77 @@ def _currency_refusal(
 #: named) and the bounded cycle (a pass named via HARNESS_CYCLE_PASS). Owner: U-HE-53.
 #: Exit: the legacy path is deleted once every review skill launches through
 #: `just review-cycle-pass` (U-HE-54) and no open reservation predates that switch.
-#: The longest cycle X9a admits, counted in PERFORMED passes: pass 1, pass 2, the one
-#: escalation, pass 3, and the one pass-3 re-run after its P1 fix. A P1 surviving that
-#: re-run is X9a's "still unfixed after pass 3" stop, so the next pass needs a recorded
-#: decision (register-and-hold, or an ask-gated `review-attest-budget` extension).
-PASS_CEILING = 5
 
-#: The pass that must follow each pass. After pass 2 the successor depends on the data
-#: (an accepted P1 in pass 2 escalates, once), so pass 2 has no fixed entry here.
-_FIXED_SUCCESSOR = {"1": "2", "esc": "3", "3": "3"}
+#: The codex channel's role in a pass: either loop producer delivers it, since a gemini
+#: failover stands in for codex under the identical bar (C-HE-17 §1).
+_CODEX = "codex"
+_LENSES = frozenset(lens for lens, _ in mgl.LENS_FILES)
+_WITNESS_LENS = "merge-gate-witness-adequacy"
+
+#: X9a's reviewer set per pass. Pass 1 and the escalation (a repeat of pass 1) are codex
+#: and all three lenses; pass 2 is codex and the witness lens; pass 3 is one lens.
+_PASS_REVIEWERS: dict[str, frozenset[str]] = {
+    "1": frozenset({_CODEX, *_LENSES}),
+    "2": frozenset({_CODEX, _WITNESS_LENS}),
+    "esc": frozenset({_CODEX, *_LENSES}),
+}
+
+#: The passes whose codex half `just review-cycle-pass` launches; pass 3 has none.
+CODEX_PASSES = tuple(_PASS_REVIEWERS)
 
 #: Severities that are review findings (a reviewer's P1-P3), as opposed to the
 #: deterministic-check severities (hard/warn/info) that share the record shape.
 _REVIEW_SEVERITIES = ("P1", "P2", "P3")
 
 
-def _cycle_rows(rows: list[dict], arc_id: str) -> list[dict]:
-    return [r for r in rows if r.get("arc_id") == arc_id and r.get("cycle_pass") is not None]
+@dataclass(frozen=True)
+class PassRun:
+    """One pass as X9a defines it: a reviewer set delivering verdicts on one head."""
+
+    cycle_pass: str
+    head_sha: str
+    delivered: frozenset[str]
+    findings: tuple[dict, ...]
+
+    @property
+    def complete(self) -> bool:
+        if self.cycle_pass == "3":
+            return bool(self.delivered & _LENSES)
+        return _PASS_REVIEWERS[self.cycle_pass] <= self.delivered
+
+
+def _role(producer: str) -> str | None:
+    if producer in LOOP_PRODUCERS:
+        return _CODEX
+    return producer if producer in _LENSES else None
+
+
+def pass_runs(rows: list[dict], arc_id: str) -> list[PassRun]:
+    """Every pass run of the arc's cycle, ordered by when it completed (incomplete runs
+    last, by first verdict). Only verdict rows count: a reviewer that was UNAVAILABLE
+    delivered nothing, so its pass neither completes nor advances the cycle."""
+    # [LAW:one-source-of-truth] append order is the log's own order; wall-clock ts is not
+    delivered: dict[tuple[str, str], set[str]] = {}
+    findings: dict[tuple[str, str], list[dict]] = {}
+    completed: list[tuple[str, str]] = []
+    for r in rows:
+        role = _role(r.get("producer", ""))
+        if (
+            r.get("arc_id") != arc_id
+            or r.get("cycle_pass") is None
+            or role is None
+            or r.get("record_kind") not in ("finding", "no_finding")
+        ):
+            continue
+        key = (r["cycle_pass"], r["head_sha"])
+        delivered.setdefault(key, set()).add(role)
+        if r["record_kind"] == "finding" and r.get("severity") in _REVIEW_SEVERITIES:
+            findings.setdefault(key, []).append(r)
+        run = PassRun(*key, frozenset(delivered[key]), ())
+        if run.complete and key not in completed:
+            completed.append(key)
+    order = completed + [k for k in delivered if k not in completed]
+    return [PassRun(*k, frozenset(delivered[k]), tuple(findings.get(k, ()))) for k in order]
 
 
 def _last_dispositions(rows: list[dict]) -> dict[str, str | None]:
@@ -519,54 +574,51 @@ def _last_dispositions(rows: list[dict]) -> dict[str, str | None]:
     return last
 
 
-def _performed(rows: list[dict], arc_id: str) -> list[dict]:
-    """Cycle rows proving a loop reviewer returned a verdict. A pass whose every channel
-    was REVIEWER_UNAVAILABLE reviewed nothing, so it neither advances the cycle nor
-    spends the ceiling."""
-    return [
-        r
-        for r in _cycle_rows(rows, arc_id)
-        if r.get("producer") in LOOP_PRODUCERS
-        and r.get("round_n") is not None
-        and r.get("record_kind") in ("finding", "no_finding")
-    ]
+def _accepted(run: PassRun, severities: tuple[str, ...], disposed: dict[str, str | None]) -> bool:
+    return any(
+        f["severity"] in severities and disposed.get(f["finding_id"]) == "accepted"
+        for f in run.findings
+    )
 
 
-def _cycle_findings(rows: list[dict], arc_id: str) -> list[dict]:
-    return [
-        r
-        for r in _cycle_rows(rows, arc_id)
-        if r.get("record_kind") == "finding" and r.get("severity") in _REVIEW_SEVERITIES
-    ]
+def _must_fix(run: PassRun) -> tuple[str, ...]:
+    """X9a: an accepted P1 is always fixed; an accepted P2 is fixed only when raised
+    before pass 3 (a pass-3 P2 goes to the follow-up item)."""
+    return ("P1",) if run.cycle_pass == "3" else ("P1", "P2")
 
 
-def next_pass(rows: list[dict], arc_id: str, *, doc_only: bool) -> str:
-    """The only pass the cycle admits next, derived from the gate log alone.
+def next_pass(rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str) -> str | None:
+    """The pass the cycle admits next at `head_sha`, derived from the gate log alone;
+    None when the cycle is complete at this head.
 
     A doc-only arc runs pass 3 alone; any other arc starts at pass 1. After pass 2 the
-    cycle escalates (once) exactly when pass 2 raised an accepted P1; otherwise it goes
-    to pass 3, the merge gate, whose re-runs stay pass 3."""
+    cycle escalates (once) exactly when pass 2 raised an accepted P1. Pass 3 re-runs only
+    after its own accepted P1; once pass 3 is clean the cycle is complete, and a later
+    commit gets one more pass 3 (X9a: one pass sized to the change)."""
     # [LAW:effects-at-boundaries] pure: rows in, pass out — admit() reads the log
-    performed = sorted(_performed(rows, arc_id), key=lambda r: r["ts"])
-    if not performed:
+    runs = [r for r in pass_runs(rows, arc_id) if r.complete]
+    if not runs:
         return "3" if doc_only else "1"
-    last = performed[-1]["cycle_pass"]
-    if last in _FIXED_SUCCESSOR:
-        return _FIXED_SUCCESSOR[last]
+    last = runs[-1]
     disposed = _last_dispositions(rows)
-    escalate = any(
-        f["cycle_pass"] == "2"
-        and f["severity"] == "P1"
-        and disposed.get(f["finding_id"]) == "accepted"
-        for f in _cycle_findings(rows, arc_id)
-    )
-    return "esc" if escalate else "3"
+    if last.cycle_pass == "1":
+        return "2"
+    if last.cycle_pass == "2":
+        return "esc" if _accepted(last, ("P1",), disposed) else "3"
+    if last.cycle_pass == "esc" or _accepted(last, ("P1",), disposed):
+        return "3"
+    return "3" if head_sha != last.head_sha else None
 
 
-def passes_performed(rows: list[dict], arc_id: str) -> int:
-    """Passes the cycle has spent: one per chain round that returned a verdict, whichever
-    loop producer delivered it (a gemini failover shares the codex round)."""
-    return len({r["round_n"] for r in _performed(rows, arc_id)})
+def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
+    """Consecutive trailing pass-3 runs that each raised an accepted P1."""
+    disposed = _last_dispositions(rows)
+    n = 0
+    for run in reversed([r for r in pass_runs(rows, arc_id) if r.complete]):
+        if run.cycle_pass != "3" or not _accepted(run, ("P1",), disposed):
+            break
+        n += 1
+    return n
 
 
 def _decide_cycle(
@@ -580,17 +632,15 @@ def _decide_cycle(
     doc_only: bool,
     pfx: str,
 ) -> Allowed | Refused:
-    spent = passes_performed(rows, arc_id)
-    allowed_total = PASS_CEILING + sum(
-        e.extra_rounds for e in state.extensions if e.arc_id == arc_id
-    )
-    if spent >= allowed_total:
+    # X9a's stop: pass 3 raised a P1, it was fixed, and the re-run raised one again. Each
+    # recorded extension (`review-attest-budget`) buys exactly one more re-run.
+    reruns = 1 + sum(e.extra_rounds for e in state.extensions if e.arc_id == arc_id)
+    if unfixed_after_pass_3(rows, arc_id) > reruns:
         return Refused(
             code="BUDGET_EXHAUSTED",
-            detail=f"{spent} cycle passes spent for {arc_id}; ceiling {allowed_total}",
+            detail=f"a P1 is still unfixed after pass 3 of {arc_id}'s cycle",
             recipe=(
-                "the bounded cycle is spent (spec v1.9 X9a): a P1 still unfixed after pass 3 "
-                "stops the arc — register the residual and defer "
+                "the bounded cycle stops here (spec v1.9 X9a): register the residual and defer "
                 "(`bash tools/04-loop/defer.sh <arc> '<reason>'`), or an operator records a "
                 f"deliberate extension via `{pfx}just review-attest-budget` (ask-gated). "
                 "Nothing merges past a known P1."
@@ -599,7 +649,8 @@ def _decide_cycle(
     disposed = _last_dispositions(rows)
     open_ids = sorted(
         f["finding_id"]
-        for f in _cycle_findings(rows, arc_id)
+        for run in pass_runs(rows, arc_id)
+        for f in run.findings
         if disposed.get(f["finding_id"]) is None
     )
     if open_ids:
@@ -613,26 +664,62 @@ def _decide_cycle(
                 "--actor <runner>_absorber`, fixing the accepted P1/P2 first"
             ),
         )
-    expected = next_pass(rows, arc_id, doc_only=doc_only)
+    expected = next_pass(rows, arc_id, doc_only=doc_only, head_sha=head_sha)
+    if expected is None:
+        return Refused(
+            code="CYCLE_COMPLETE",
+            detail=f"{arc_id}'s cycle is complete at {head_sha[:12]}: pass 3 was clean",
+            recipe="nothing to review; a new commit gets one pass 3 (a merge-gate lens)",
+        )
     if cycle_pass != expected:
         return Refused(
             code="PASS_OUT_OF_ORDER",
             detail=(
                 f"pass {cycle_pass} requested for {arc_id}; the cycle admits pass {expected} next"
             ),
-            recipe=(
-                f"launch the admitted pass: `{pfx}just review-cycle-pass {expected} <round-log>`"
-            ),
+            recipe=f"run pass {expected}: " + _pass_recipe(expected, pfx),
         )
-    # the cycle's first performed pass reviews the authored diff, so the preflight is
-    # attested once, before it, and never re-attested per pass (X9a); a pass-1 retry
-    # after an unavailable reviewer is still that first pass
-    refusal = (
-        _currency_refusal(state, arc_id, head_sha, diff_digest, pfx)
-        if not _performed(rows, arc_id)
-        else None
-    )
+    if cycle_pass not in CODEX_PASSES:
+        return Refused(
+            code="PASS_HAS_NO_CODEX_HALF",
+            detail="pass 3 is one merge-gate lens on the full diff (X9a); codex is not in it",
+            recipe=_pass_recipe(cycle_pass, pfx),
+        )
+    completed = [r for r in pass_runs(rows, arc_id) if r.complete]
+    if completed and head_sha == completed[-1].head_sha:
+        last = completed[-1]
+        if _accepted(last, _must_fix(last), disposed):
+            return Refused(
+                code="FIX_NOT_COMMITTED",
+                detail=(
+                    f"pass {last.cycle_pass} accepted findings at {head_sha[:12]} and the head "
+                    "has not moved"
+                ),
+                recipe="commit the fix for every accepted P1/P2, then launch the next pass",
+            )
+    started = [
+        r for r in pass_runs(rows, arc_id) if (r.cycle_pass, r.head_sha) == (cycle_pass, head_sha)
+    ]
+    if started and _CODEX in started[0].delivered:
+        return Refused(
+            code="CODEX_HALF_DELIVERED",
+            detail=f"codex already reviewed pass {cycle_pass} at {head_sha[:12]}",
+            recipe="the pass completes when its merge-gate lens verdicts are emitted",
+        )
+    # the cycle's first pass reviews the authored diff, so the preflight is attested once,
+    # before it, and never re-attested per pass (X9a); a retry after an unavailable
+    # reviewer is still that first pass
+    refusal = None if completed else _currency_refusal(state, arc_id, head_sha, diff_digest, pfx)
     return refusal or Allowed(round_n=_next_round(_loop_rounds(rows, arc_id)))
+
+
+def _pass_recipe(cycle_pass: str, pfx: str) -> str:
+    if cycle_pass in CODEX_PASSES:
+        return (
+            f"`{pfx}just review-cycle-pass {cycle_pass} <round-log>` for codex, and the "
+            f"merge-gate lenses emitted with HARNESS_CYCLE_PASS={cycle_pass}"
+        )
+    return "run one merge-gate lens with HARNESS_CYCLE_PASS=3 and emit its verdict"
 
 
 # ── edge: admit ──────────────────────────────────────────────────────────────
@@ -737,7 +824,22 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
 
 def _doc_only(repo: Path, binding: dict[str, str]) -> bool:
     """A diff is doc-only when every path it touches is Markdown (X9a: pass 3 alone)."""
-    names = rw._git(repo, "diff", "--name-only", binding["base_sha"], binding["head_sha"]).split()
+    out = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "diff",
+            "-z",
+            "--name-only",
+            binding["base_sha"],
+            binding["head_sha"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    names = [n for n in out.split("\0") if n]
     return bool(names) and all(n.endswith(".md") for n in names)
 
 

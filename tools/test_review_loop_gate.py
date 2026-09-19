@@ -3263,142 +3263,199 @@ def test_preflight_carries_the_u_sr_04_mechanism_precedent_rule():
 # ── the bounded review cycle (U-HE-53; spec v1.9 X9a/X9c) ────────────────────
 
 
-def _crow(
-    cycle_pass: str, round_n: int, ts: str, *, fid: str | None = None, sev: str = "P2", **over
-):
-    """A cycle row: a finding when `fid` is given, else a clean `no_finding` marker."""
+LENSES = ("merge-gate-concurrency", "merge-gate-spec-conformance", "merge-gate-witness-adequacy")
+WITNESS = "merge-gate-witness-adequacy"
+H1, H2, H3, H4 = ("1" * 40, "2" * 40, "3" * 40, "4" * 40)
+#: X9a's reviewer set per pass (pass 3 is one lens, any of the three)
+REVIEWERS = {
+    "1": (LOOP_PRODUCER, *LENSES),
+    "2": (LOOP_PRODUCER, WITNESS),
+    "esc": (LOOP_PRODUCER, *LENSES),
+    "3": ("merge-gate-spec-conformance",),
+}
+
+
+def _crow(cycle_pass: str, round_n: int, *, head: str = HEAD, fid=None, sev="P2", **over):
+    """One reviewer's verdict row: a finding when `fid` is given, else `no_finding`."""
     kind = "finding" if fid else "no_finding"
-    return _row(round_n, kind, fid, cycle_pass=cycle_pass, ts=ts, severity=sev, **over)
+    return _row(
+        round_n, kind, fid, cycle_pass=cycle_pass, head_sha=head, severity=sev, ts="t", **over
+    )
 
 
-def _adj(fid: str, disposition: str, ts: str) -> dict:
+def _pass(cycle_pass: str, round_n: int, *, head: str = HEAD, fid=None, sev="P2") -> list[dict]:
+    """A complete pass: every reviewer X9a names for it delivers a verdict; the first one
+    (codex, or the pass-3 lens) raises `fid` when given."""
+    by = REVIEWERS[cycle_pass]
+    first = _crow(cycle_pass, round_n, head=head, fid=fid, sev=sev, producer=by[0])
+    return [first, *(_crow(cycle_pass, round_n, head=head, producer=p) for p in by[1:])]
+
+
+def _adj(fid: str, disposition: str) -> dict:
     return dict(
         arc_id=ARC,
         finding_id=fid,
         record_kind="finding_adjudication",
         disposition=disposition,
-        ts=ts,
+        ts="t",
     )
 
 
+def _next(rows, head=HEAD, doc_only=False):
+    return rlg.next_pass(rows, ARC, doc_only=doc_only, head_sha=head)
+
+
+def _dcycle(rows, cycle_pass, *, head=HEAD, state=None, **over):
+    state = state or _state(preflights=(_pf(),))
+    return _decide(state, rows, cycle_pass=cycle_pass, head_sha=head, **over)
+
+
 def test_cycle_order_without_escalation():
-    assert rlg.next_pass([], ARC, doc_only=False) == "1"
-    after1 = [_crow("1", 1, "t1")]
-    assert rlg.next_pass(after1, ARC, doc_only=False) == "2"
-    after2 = [*after1, _crow("2", 2, "t2")]
-    assert rlg.next_pass(after2, ARC, doc_only=False) == "3"
-    after3 = [*after2, _crow("3", 3, "t3")]
-    assert rlg.next_pass(after3, ARC, doc_only=False) == "3"  # pass-3 re-runs stay pass 3
+    assert _next([]) == "1"
+    rows = _pass("1", 1)
+    assert _next(rows) == "2"
+    rows += _pass("2", 2)
+    assert _next(rows) == "3"
+    rows += _pass("3", 1)
+    assert _next(rows) is None  # a clean pass 3 completes the cycle at this head
+    assert _next(rows, head=H4) == "3"  # a later commit gets one pass sized to the change
 
 
-def test_doc_only_arc_starts_at_pass_3():
-    assert rlg.next_pass([], ARC, doc_only=True) == "3"
+def test_a_clean_pass_3_is_not_admitted_again_at_the_same_head():
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1)]
+    d = _dcycle(rows, "esc")
+    assert isinstance(d, rlg.Refused) and d.code == "CYCLE_COMPLETE"
+
+
+def test_doc_only_arc_starts_at_pass_3_which_has_no_codex_half():
+    assert _next([], doc_only=True) == "3"
+    d = _dcycle([], "3", doc_only=True)
+    assert isinstance(d, rlg.Refused) and d.code == "PASS_HAS_NO_CODEX_HALF"
+
+
+def test_a_pass_completes_only_when_its_whole_reviewer_set_delivered():
+    codex_only = [_crow("1", 1)]
+    assert _next(codex_only) == "1"
+    assert _next([*codex_only, _crow("1", 1, producer=LENSES[0])]) == "1"
+    assert _next(_pass("1", 1)) == "2"
+    pass2_without_witness = [*_pass("1", 1), _crow("2", 2)]
+    assert _next(pass2_without_witness) == "2"
+
+
+def test_a_second_codex_launch_for_a_started_pass_is_refused():
+    d = _dcycle([_crow("1", 1)], "1")
+    assert isinstance(d, rlg.Refused) and d.code == "CODEX_HALF_DELIVERED"
 
 
 def test_accepted_p1_in_pass_2_escalates_once():
-    rows = [
-        _crow("1", 1, "t1"),
-        _crow("2", 2, "t2", fid="f2", sev="P1"),
-        _adj("f2", "accepted", "t3"),
-    ]
-    assert rlg.next_pass(rows, ARC, doc_only=False) == "esc"
-    rows.append(_crow("esc", 3, "t4"))
-    assert rlg.next_pass(rows, ARC, doc_only=False) == "3"
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H2, fid="f2", sev="P1")]
+    rows.append(_adj("f2", "accepted"))
+    assert _next(rows, head=H3) == "esc"
+    rows += _pass("esc", 3, head=H3)
+    assert _next(rows, head=H3) == "3"
 
 
 def test_rejected_or_p2_in_pass_2_does_not_escalate():
-    rejected = [
-        _crow("1", 1, "t1"),
-        _crow("2", 2, "t2", fid="f2", sev="P1"),
-        _adj("f2", "rejected", "t3"),
-    ]
-    assert rlg.next_pass(rejected, ARC, doc_only=False) == "3"
-    p2 = [
-        _crow("1", 1, "t1"),
-        _crow("2", 2, "t2", fid="f2", sev="P2"),
-        _adj("f2", "accepted", "t3"),
-    ]
-    assert rlg.next_pass(p2, ARC, doc_only=False) == "3"
+    base = _pass("1", 1, head=H1)
+    rejected = [*base, *_pass("2", 2, head=H2, fid="f2", sev="P1"), _adj("f2", "rejected")]
+    assert _next(rejected, head=H2) == "3"
+    p2 = [*base, *_pass("2", 2, head=H2, fid="f2", sev="P2"), _adj("f2", "accepted")]
+    assert _next(p2, head=H3) == "3"
+
+
+def test_pass_3_re_runs_only_after_its_own_accepted_p1():
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1)]
+    rows += [*_pass("3", 1, head=H1, fid="f3", sev="P1"), _adj("f3", "accepted")]
+    assert _next(rows, head=H2) == "3"
+
+
+def test_a_p1_still_unfixed_after_the_pass_3_re_run_stops_the_arc():
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1)]
+    rows += [*_pass("3", 1, head=H1, fid="f3", sev="P1"), _adj("f3", "accepted")]
+    first_rerun = _dcycle(rows, "3", head=H2)
+    assert not (isinstance(first_rerun, rlg.Refused) and first_rerun.code == "BUDGET_EXHAUSTED")
+    rows += [*_pass("3", 2, head=H2, fid="g3", sev="P1"), _adj("g3", "accepted")]
+    stopped = _dcycle(rows, "3", head=H3)
+    assert isinstance(stopped, rlg.Refused) and stopped.code == "BUDGET_EXHAUSTED"
+    ext = rlg.BudgetExtension(arc_id=ARC, extra_rounds=1, reason="operator", ts="t")
+    extended = _dcycle(rows, "3", head=H3, state=_state(preflights=(_pf(),), extensions=(ext,)))
+    assert not (isinstance(extended, rlg.Refused) and extended.code == "BUDGET_EXHAUSTED")
 
 
 def test_out_of_order_pass_is_refused_with_the_admitted_one():
-    d = _decide(_state(preflights=(_pf(),)), [], cycle_pass="2")
+    d = _dcycle([], "2")
     assert isinstance(d, rlg.Refused) and d.code == "PASS_OUT_OF_ORDER"
     assert "review-cycle-pass 1" in d.recipe
 
 
 def test_pass_1_requires_the_authoring_preflight():
-    d = _decide(_state(), [], cycle_pass="1")
+    d = _dcycle([], "1", state=_state())
     assert isinstance(d, rlg.Refused) and d.code == "PREFLIGHT_MISSING"
-    assert isinstance(_decide(_state(preflights=(_pf(),)), [], cycle_pass="1"), rlg.Allowed)
+    assert isinstance(_dcycle([], "1"), rlg.Allowed)
 
 
 def test_later_passes_need_no_re_attestation_after_the_tree_moves():
-    rows = [_crow("1", 1, "t1")]
-    moved = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="2", head_sha="f" * 40)
+    moved = _dcycle(_pass("1", 1, head=H1), "2", head=H2)
     assert isinstance(moved, rlg.Allowed) and moved.round_n == 2
 
 
+def test_an_accepted_p1_or_p2_needs_a_new_head_before_the_next_pass():
+    rows = [*_pass("1", 1, head=H1, fid="f1", sev="P2"), _adj("f1", "accepted")]
+    same = _dcycle(rows, "2", head=H1)
+    assert isinstance(same, rlg.Refused) and same.code == "FIX_NOT_COMMITTED"
+    assert isinstance(_dcycle(rows, "2", head=H2), rlg.Allowed)
+    rejected = [*_pass("1", 1, head=H1, fid="f1", sev="P1"), _adj("f1", "rejected")]
+    assert isinstance(_dcycle(rejected, "2", head=H1), rlg.Allowed)
+
+
 def test_an_undisposed_finding_blocks_the_next_pass():
-    rows = [_crow("1", 1, "t1", fid="f1")]
-    d = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="2")
+    rows = _pass("1", 1, head=H1, fid="f1")
+    d = _dcycle(rows, "2", head=H2)
     assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING" and "f1" in d.detail
-    rows.append(_adj("f1", "accepted", "t2"))
-    assert isinstance(_decide(_state(preflights=(_pf(),)), rows, cycle_pass="2"), rlg.Allowed)
+    rows.append(_adj("f1", "accepted"))
+    assert isinstance(_dcycle(rows, "2", head=H2), rlg.Allowed)
 
 
-def test_the_cycle_ceiling_stops_the_arc_until_a_recorded_extension():
-    rows = [_crow("1", 1, "t1"), _crow("2", 2, "t2")]
-    rows += [_crow("3", n, f"t{n}") for n in range(3, rlg.PASS_CEILING + 1)]
-    spent = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="3")
-    assert isinstance(spent, rlg.Refused) and spent.code == "BUDGET_EXHAUSTED"
-    ext = rlg.BudgetExtension(arc_id=ARC, extra_rounds=1, reason="operator", ts="t")
-    assert isinstance(
-        _decide(_state(preflights=(_pf(),), extensions=(ext,)), rows, cycle_pass="3"), rlg.Allowed
-    )
+def test_an_undisposed_p1_is_reported_before_the_pass_order():
+    # the admitted pass depends on that P1's disposition, so it is asked for first
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H2, fid="f2", sev="P1")]
+    d = _dcycle(rows, "esc", head=H3)
+    assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING"
 
 
-def test_the_ceiling_is_the_longest_cycle_x9a_admits():
-    # X9a: 1 -> 2 -> esc -> 3 -> one re-run of 3 after a P1 fix; a P1 surviving the re-run
-    # is the stop, so a sixth pass is never part of a legal cycle
-    assert rlg.PASS_CEILING == 5
-
-
-def test_lens_rows_do_not_spend_the_ceiling():
-    lens = [_crow("1", n, f"t{n}", producer="merge-gate-witness-adequacy") for n in range(1, 10)]
-    assert rlg.passes_performed(lens, ARC) == 0
-
-
-def test_a_failover_pass_spends_one_pass_not_two():
-    # gemini failover reuses the codex chain round (codex_review._run_gemini_failover)
+def test_a_failover_verdict_stands_in_for_codex():
+    # gemini runs under the identical bar when codex is unavailable (C-HE-17 §1)
     rows = [
-        _crow("1", 1, "t1", record_kind="reviewer_unavailable"),
-        _crow("1", 1, "t2", producer="gemini_review_wrapper"),
+        _crow("1", 1, record_kind="reviewer_unavailable"),
+        _crow("1", 1, producer="gemini_review_wrapper"),
+        *(_crow("1", 1, producer=lens) for lens in LENSES),
     ]
-    assert rlg.passes_performed(rows, ARC) == 1
-    assert rlg.next_pass(rows, ARC, doc_only=False) == "2"
+    assert _next(rows) == "2"
 
 
 def test_a_pass_no_reviewer_performed_does_not_advance_the_cycle():
     unavailable = [
-        _crow("1", 1, "t1", record_kind="reviewer_unavailable"),
-        _crow("1", 1, "t2", producer="gemini_review_wrapper", record_kind="reviewer_unavailable"),
+        _crow("1", 1, record_kind="reviewer_unavailable"),
+        _crow("1", 1, producer="gemini_review_wrapper", record_kind="reviewer_unavailable"),
     ]
-    assert rlg.passes_performed(unavailable, ARC) == 0
-    assert rlg.next_pass(unavailable, ARC, doc_only=False) == "1"
-    # ...and the retry of pass 1 is still admitted against the authoring preflight
-    retry = _decide(_state(preflights=(_pf(),)), unavailable, cycle_pass="1")
-    assert isinstance(retry, rlg.Allowed)
-    unattested = _decide(_state(), unavailable, cycle_pass="1")
+    assert _next(unavailable) == "1"
+    assert isinstance(_dcycle(unavailable, "1"), rlg.Allowed)
+    unattested = _dcycle(unavailable, "1", state=_state())
     assert isinstance(unattested, rlg.Refused) and unattested.code == "PREFLIGHT_MISSING"
 
 
-def test_an_undisposed_p1_is_reported_before_the_pass_order():
-    # an unadjudicated pass-2 P1 must not be answered with "launch pass 3": the admitted
-    # pass depends on that disposition
-    rows = [_crow("1", 1, "t1"), _crow("2", 2, "t2", fid="f2", sev="P1")]
-    d = _decide(_state(preflights=(_pf(),)), rows, cycle_pass="esc")
-    assert isinstance(d, rlg.Refused) and d.code == "ADJUDICATION_MISSING"
+def test_passes_are_ordered_by_the_log_not_by_the_clock():
+    # a clock stepping backwards between passes cannot reorder the cycle
+    rows = [
+        *(dict(r, ts="2026-09-18T12:00:00Z") for r in _pass("1", 1, head=H1)),
+        *(dict(r, ts="2026-09-18T11:00:00Z") for r in _pass("2", 2, head=H1)),
+    ]
+    assert _next(rows, head=H1) == "3"
+
+
+def test_rows_outside_a_cycle_do_not_advance_it():
+    legacy = [dict(r, cycle_pass=None) for r in _pass("1", 1)]
+    assert _next(legacy) == "1"
 
 
 def test_no_pass_named_keeps_the_legacy_round_path():

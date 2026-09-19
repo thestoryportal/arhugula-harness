@@ -244,6 +244,7 @@ _CORE_IMMUTABLE = (
     "diff_digest",
     "round_n",
     "cause_attribution",
+    "cycle_pass",
 )
 
 
@@ -292,10 +293,12 @@ def _check_against_prior_rows(row: dict, rows: list[dict]) -> None:
             f"{row['record_kind']!r} row may not follow it (only a same-kind retry or a "
             "finding_adjudication may)"
         )
+    # .get: cycle_pass is optional (null by default), and rows written before it existed
+    # carry no key at all — absent and null are the same value
     for k in _CORE_IMMUTABLE:
-        if row[k] != orig[k]:
+        if row.get(k) != orig.get(k):
             raise RecordError(
-                f"adjudication may not change core field {k!r} ({orig[k]!r} -> {row[k]!r})"
+                f"adjudication may not change core field {k!r} ({orig.get(k)!r} -> {row.get(k)!r})"
             )
     if row["record_kind"] == "finding_adjudication":
         latest_ts = max(r["ts"] for r in prior)

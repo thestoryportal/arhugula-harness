@@ -977,7 +977,8 @@ review-with-failover-logged log base='main':
 # gate admits only the next legal pass and every row the wrapper emits records it.
 # [LAW:single-enforcer] logging, spans and round-log publication stay in
 # review-with-failover-logged; this recipe only names the pass.
-# One pass of the bounded review cycle: pass is 1, 2, esc or 3.
+# The codex half of one pass of the bounded review cycle: pass is 1, 2 or esc (pass 3
+# is one merge-gate lens, emitted with HARNESS_CYCLE_PASS=3).
 review-cycle-pass pass log base='origin/main':
     HARNESS_CYCLE_PASS={{pass}} just review-with-failover-logged {{log}} {{base}}
 

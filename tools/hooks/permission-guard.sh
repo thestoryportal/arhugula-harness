@@ -567,13 +567,14 @@ _review_logged_shape() {
 }
 
 # U-HE-53 (spec v1.9 X9a): `just review-cycle-pass <pass> <log> [base]` — the pass is
-# TYPED to the cycle's four values, then the same pinned log/base rule applies.
+# TYPED to the passes with a codex half (pass 3 is one lens), then the same pinned
+# log/base rule applies.
 _review_cycle_pass_shape() {
   local cmd="$1"
   set -f; set -- $cmd; set +f
   { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; } || return 1
   [ "$1" = "just" ] && [ "$2" = "review-cycle-pass" ] || return 1
-  case "$3" in 1|2|esc|3) ;; *) return 1 ;; esac
+  case "$3" in 1|2|esc) ;; *) return 1 ;; esac
   shift 3
   _round_log_and_base_ok "$@"
 }
