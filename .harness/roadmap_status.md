@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `d84b38eb3be1` |
+| `workspace_state_hash` | `22294985e734` |
 | `last_refreshed` | 2026-09-19T00:00:00Z |
-| `git_head` | `62115ae9` —  |
+| `git_head` | `44a8b889` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1606).** SessionStart now reaps merged worktrees autonomously (#1606): tools/hooks/loop-gc.sh launches loop_gc_worktrees reap detached whenever its report finds a candidate, under a repository-wide single-flight lock and a 5-minute idle grace, removing only through hook_safe_worktree_remove (exact merged head, clean, no live session/lease or process inside), so the operator never removes a worktree by hand; U-HE-54 carry-overs (the diagrams P3 into B-297, the .agents gemini-review base into B-299) ride the next PR, then U-HE-55
+**Current next action (post-#1608).** Merged worktrees are now reaped autonomously in the standard flow (#1606 + #1608): SessionStart launches loop_gc_worktrees reap detached, and spec v1.10 X10 lets the reaper remove a worktree that is ahead of (or has lost) its upstream when its HEAD is proved to be its branch's PR merged into the default branch; U-HE-54 carry-overs (the diagrams P3 into B-297, the .agents gemini-review base into B-299) ride the next PR, then U-HE-55
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1608 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1606 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1604 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1602 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1600 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1578 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
