@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `b3004086a4fd` |
+| `workspace_state_hash` | `d84b38eb3be1` |
 | `last_refreshed` | 2026-09-19T00:00:00Z |
-| `git_head` | `68040c62` —  |
+| `git_head` | `62115ae9` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1604).** U-HE-54 landed (#1604): the ship-pr, merge-gate, roadmap-continue and defect-class-preflight skills (and their .agents twins, CLAUDE.md §13.1) now run spec v1.9 X9a's bounded review cycle — one cycle per PR launched on push and concurrent with CI, lens verdicts recorded per pass with merge-gate-emit-pass, merge on CI green AND a clean pass 3 — and the wiring witnesses pin it; B-297 (follow-ups, plus the pass-3 diagrams P3 owed on the next PR), B-298 (gate vs X9a divergence: stop trigger, doc-only preflight, pass-3 follow-up timing) and B-299 (typed cycle-pass Gemini recipe) are registered, then U-HE-55
+**Current next action (post-#1606).** SessionStart now reaps merged worktrees autonomously (#1606): tools/hooks/loop-gc.sh launches loop_gc_worktrees reap detached whenever its report finds a candidate, under a repository-wide single-flight lock and a 5-minute idle grace, removing only through hook_safe_worktree_remove (exact merged head, clean, no live session/lease or process inside), so the operator never removes a worktree by hand; U-HE-54 carry-overs (the diagrams P3 into B-297, the .agents gemini-review base into B-299) ride the next PR, then U-HE-55
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1606 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1604 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1602 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1600 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1578 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1597 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
