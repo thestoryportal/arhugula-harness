@@ -235,6 +235,66 @@ for REMOVE_CASE in \
     || bad "loop GC lost safe removal rc $FORCED_REMOVE_RC"
 done
 
+# ── 7) SessionStart autonomously reaps (operator directive 2026-09-19) ─────────
+# Drives the REAL hook script as a subprocess. The detached reaper is a fresh process,
+# so the test shell's function stubs cannot reach it; instead the hook is run from a
+# scratch hooks dir holding a byte-identical copy of loop-gc.sh and lib.sh plus a copy
+# of loop_lib.sh with the stubs appended. The reaper only sees them if it sources its
+# libraries from the hook's own directory — the contract under test. The stubbed
+# merged-oid lookup is fast on a branch's FIRST call (the hook's synchronous report)
+# and slow on feat-merged's SECOND (the reaper's), so a hook that waited on the reaper
+# would take at least REAP_DELAY; the process-reference observer is stubbed clean for the same
+# Linux ptrace reason as at the top of this file.
+build_fixture
+export CLAUDE_PROJECT_DIR="$BASE/main"
+AR_HOOKS="$BASE/autoreap-hooks"; AR_CALLS="$BASE/autoreap-calls"; AR_HOME="$BASE/autoreap-home"
+mkdir -p "$AR_HOOKS" "$AR_CALLS" "$AR_HOME"
+cp "$SCRIPT_DIR/loop-gc.sh" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$AR_HOOKS/"
+REAP_DELAY=4
+cat >> "$AR_HOOKS/loop_lib.sh" <<STUBS
+_loop_gc_gh_ok() { return 0; }
+_hook_worktree_open_references() { return 1; }
+_loop_gc_merged_oid() {
+  local f="$AR_CALLS/\$1" n
+  n=\$(( \$(cat "\$f" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "\$f"
+  [ "\$n" -ge 2 ] && [ "\$1" = feat-merged ] && sleep $REAP_DELAY
+  case "\$1" in
+    feat-merged|feat-dirty) git -C "$BASE/main" rev-parse main ;;
+    *) : ;;
+  esac
+}
+STUBS
+ar_now() { /usr/bin/python3 -c 'import time; print(time.time())'; }
+AR_T0=$(ar_now)
+AR_OUT=$(HOME="$AR_HOME" bash "$AR_HOOKS/loop-gc.sh")
+AR_ELAPSED=$(/usr/bin/python3 -c 'import sys; print(float(sys.argv[2]) - float(sys.argv[1]))' "$AR_T0" "$(ar_now)")
+/usr/bin/python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) < float(sys.argv[2]) else 1)' "$AR_ELAPSED" "$REAP_DELAY" \
+  && ok "autoreap: hook returned in ${AR_ELAPSED}s, before the reaper's ${REAP_DELAY}s lookup" \
+  || bad "autoreap: hook took ${AR_ELAPSED}s — it waited on the reaper"
+wt_present wt-merged && ok "autoreap: candidate still present when the hook returned (reap is detached)" \
+  || bad "autoreap: candidate already gone at hook return — reap ran synchronously"
+printf '%s' "$AR_OUT" | jq -r '.hookSpecificOutput.additionalContext' \
+  | grep -qF "being reaped in the background" \
+  && ok "autoreap: hygiene message says the candidates are being reaped" \
+  || bad "autoreap: hygiene message wrong: $AR_OUT"
+# Wait (bounded) for the reaper to finish ALL three dispositions: the merged removal
+# and the dirty skip are ledger rows; the unmerged worktree returns silently after its
+# second lookup, so its call counter is the completion witness.
+ar_done() {
+  grep -qF "reaped worktree $BASE/wt-merged" "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null \
+    && grep -qF "skipped $BASE/wt-dirty" "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null \
+    && [ "$(cat "$AR_CALLS/feat-unmerged" 2>/dev/null)" = "2" ]
+}
+AR_WAITED=0
+until ar_done || [ "$AR_WAITED" -ge 60 ]; do sleep 1; AR_WAITED=$((AR_WAITED + 1)); done
+ar_done && ok "autoreap: detached reaper finished within ${AR_WAITED}s" \
+  || bad "autoreap: detached reaper never finished (ledger: $(tail -5 "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null))"
+wt_present wt-merged && bad "autoreap: merged+clean worktree was NOT reaped" \
+  || ok "autoreap: merged+clean non-current worktree reaped with no manual step"
+wt_present wt-dirty && ok "autoreap: dirty worktree left untouched" || bad "autoreap: removed a dirty worktree"
+wt_present wt-unmerged && ok "autoreap: unmerged worktree left untouched" || bad "autoreap: removed an unmerged worktree"
+[ -d "$BASE/main" ] && ok "autoreap: current (main) checkout untouched" || bad "autoreap: main checkout removed"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # U-HK-44 — unreconciled-subagent sweep + prune of .harness/.agents-registry.jsonl.
 #
