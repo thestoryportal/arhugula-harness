@@ -3466,6 +3466,25 @@ def test_a_reversed_finding_on_an_earlier_run_still_needs_a_new_head():
     assert isinstance(_dcycle(rows, "esc", head=H2), rlg.Allowed)
 
 
+def test_the_escalation_a_reversal_re_opens_can_run_and_complete_the_cycle():
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    rows += [_adj("f2", "rejected"), *_pass("3", 1, head=H1), _adj("f2", "accepted")]
+    rows += _pass("esc", 3, head=H2)  # the superseded pass 3 stays in the log
+    assert _next(rows, head=H2) == "3"
+    rows += _pass("3", 2, head=H2)
+    assert _next(rows, head=H2) is None
+    assert rlg.completing_run(rows, ARC) is not None
+
+
+def test_a_cycle_keeps_the_shape_its_history_started_with():
+    # a completed doc-only cycle that gains a code commit gets one pass 3, not a new pass 1
+    doc_cycle = _pass("3", 1, head=H1)
+    assert _next(doc_cycle, head=H2, doc_only=False) == "3"
+    # and a code cycle in progress keeps going when the diff turns doc-only
+    code_cycle = _pass("1", 1, head=H1)
+    assert _next(code_cycle, head=H1, doc_only=True) == "2"
+
+
 def test_pass_3_does_not_complete_while_a_p1_it_raised_is_undisposed():
     rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
     assert rlg.completing_run(rows, ARC) is None

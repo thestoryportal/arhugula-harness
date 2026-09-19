@@ -614,19 +614,26 @@ class CycleReplay:
     completed_by: PassRun | None
 
 
-def replay(rows: list[dict], arc_id: str, *, start: str) -> CycleReplay:
-    """Walk the completed runs in log order, checking each against the pass X9a requires
-    under the CURRENT dispositions. The first run that departs from it is where the
-    cycle resumes: a disposition reversed after later passes ran (a pass-2 P1 rejected,
-    then accepted after a clean pass 3) re-opens the escalation it now demands."""
+def replay(rows: list[dict], arc_id: str, *, doc_only: bool) -> CycleReplay:
+    """Walk the completed runs in log order against the pass X9a requires under the
+    CURRENT dispositions. A run that departs from it was superseded by a later
+    disposition (a pass-2 P1 rejected, then accepted after a clean pass 3) and does not
+    count: the walk skips it, so the escalation it now demands is required next and,
+    once it runs, the cycle carries on from there.
+
+    The cycle's start is its own history — the first completed run — so a doc-only cycle
+    that later gains a code commit keeps its shape; the current diff (`doc_only`)
+    decides only for an arc with no completed run yet."""
     # [LAW:effects-at-boundaries] pure: rows in, state out — admit() reads the log
     disposed = _last_dispositions(rows)
-    expected: str | None = start
+    runs = [r for r in pass_runs(rows, arc_id) if r.complete]
+    history = runs[0].cycle_pass if runs and runs[0].cycle_pass in ("1", "3") else None
+    expected: str | None = history or ("3" if doc_only else "1")
     completed_by: PassRun | None = None
-    for run in (r for r in pass_runs(rows, arc_id) if r.complete):
+    for run in runs:
         want = expected or "3"  # after completion, a new commit gets one pass 3
         if run.cycle_pass != want:
-            return CycleReplay(want, None)
+            continue
         expected = _successor(run, disposed)
         completed_by = run if expected is None else None
     return CycleReplay(expected, completed_by)
@@ -636,9 +643,8 @@ def next_pass(
     rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str, diff_digest: str
 ) -> str | None:
     """The pass the cycle admits next on the binding (`head_sha`, `diff_digest`); None when
-    the cycle is complete on exactly that binding. A doc-only arc starts at pass 3, any
-    other at pass 1."""
-    state = replay(rows, arc_id, start="3" if doc_only else "1")
+    the cycle is complete on exactly that binding."""
+    state = replay(rows, arc_id, doc_only=doc_only)
     done = state.completed_by
     if done is not None and (head_sha, diff_digest) == (done.head_sha, done.diff_digest):
         return None
@@ -647,10 +653,9 @@ def next_pass(
 
 def completing_run(rows: list[dict], arc_id: str) -> PassRun | None:
     """The pass-3 run that completed the arc's cycle, or None while it is incomplete; the
-    shadow trial scores the pass-3 terminal of exactly this run (X9d)."""
-    first = next((r for r in pass_runs(rows, arc_id) if r.complete), None)
-    start = "3" if first is not None and first.cycle_pass == "3" else "1"
-    return replay(rows, arc_id, start=start).completed_by
+    shadow trial scores the pass-3 terminal of exactly this run (X9d). `doc_only` is moot
+    here: an arc with no completed run has no completing run either way."""
+    return replay(rows, arc_id, doc_only=False).completed_by
 
 
 def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
