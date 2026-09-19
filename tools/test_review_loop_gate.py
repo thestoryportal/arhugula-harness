@@ -3529,6 +3529,21 @@ def test_a_cycle_keeps_the_shape_its_history_started_with():
     assert _next(code_cycle, head=H1, doc_only=True) == "2"
 
 
+def test_an_operator_suppressed_p1_lets_pass_3_complete():
+    # suppressed is C-HE-24 §5's logged operator override; it closes a finding as
+    # rejected does, so the cycle must not stall at pass 3
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
+    rows.append(_adj("f3", "suppressed"))
+    assert rlg.completing_run(rows, ARC) is not None
+    assert _next(rows) is None
+
+
+def test_deterministic_check_rows_are_not_cycle_findings():
+    # a hard/warn/info row shares the record shape but is not a reviewer's finding
+    rows = [*_pass("1", 1, fid="h1", sev="hard")]
+    assert isinstance(_dcycle(rows, "2", head=H2), rlg.Allowed)
+
+
 def test_pass_3_does_not_complete_while_a_p1_it_raised_is_undisposed():
     rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
     assert rlg.completing_run(rows, ARC) is None

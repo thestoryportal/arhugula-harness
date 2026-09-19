@@ -601,8 +601,9 @@ def _successor(run: PassRun, disposed: dict[str, str | None]) -> str | None:
         return "esc" if any(disposed.get(fid) == "accepted" for fid in p1) else "3"
     if run.cycle_pass == "esc":
         return "3"
-    # pass 3 ends the cycle only once every P1 it raised is disposed and none accepted
-    return None if all(disposed.get(fid) == "rejected" for fid in p1) else "3"
+    # pass 3 ends the cycle only once every P1 it raised is disposed and none accepted:
+    # rejected and an operator's suppressed override both close a finding
+    return None if all(disposed.get(fid) not in (None, "accepted") for fid in p1) else "3"
 
 
 @dataclass(frozen=True)
