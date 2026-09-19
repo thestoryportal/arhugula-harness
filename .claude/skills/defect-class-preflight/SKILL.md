@@ -835,7 +835,7 @@ commit and invoke the reviewers — they should be confirming, not discovering.
 Since B-215, the named-answer set is ATTESTED, not merely written — and since
 U-SR-04 (charter WR-10) the labels come BEFORE the answers: after the final
 commit, generate the answers file with `HARNESS_ARC_ID=<arc-id>
-HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>` — the
+HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file> origin/main` — the
 destination must live under `.harness/tmp/` (the gitignored scratch namespace; the
 verb refuses anywhere else, keeping attestation artifacts out of the stop-gate's
 tree-dirty view). It runs
@@ -845,7 +845,7 @@ were authored before the labels existed). Fill every placeholder with the named
 answer — attestation refuses a file still carrying one, and a deleted placeholder
 is not an answer either: every label section and finding line must carry content
 beyond what the template wrote — then attest with the
-same-prefixed `just review-attest-preflight <answers-file>`. The inline prefix is
+same-prefixed `just review-attest-preflight <answers-file> origin/main`. The inline prefix is
 REQUIRED on both verbs exactly as for the review itself (they resolve the arc via
 env_arc_and_lane(); a bare invocation binds the branch-* fallback arc, not the
 reserved one). The review wrapper refuses round 1 of a reserved arc without a

@@ -942,10 +942,36 @@ def test_merge_gate_carriers_run_the_bounded_review_cycle() -> None:
         assert "at most once" in carrier, path
         assert re.search(r"[Dd]oc-only PR runs pass 3 alone", carrier), path
         assert "accepted P1 on two consecutive runs" in carrier, path
-        assert "follow-up" in carrier, path
+        assert "make no edit in this worktree" in carrier, path
         assert "ten rounds" not in carrier, path
         assert "eleventh" not in carrier.lower(), path
         assert "to convergence" not in carrier, path
+
+    # U-HE-54 escalation witness lens: the follow-up routing is pinned as each carrier's
+    # whole clause (the bare word recurs elsewhere), and both roadmap-continue carriers
+    # pin the cycle they hand to ship-pr.
+    routing = {
+        ".agents/skills/merge-gate/SKILL.md": "a pass-3 P2 and every P3 or prose finding go to "
+        "ONE follow-up register row for the arc",
+        ".claude/skills/ship-pr/SKILL.md": "collect every P3/prose finding into ONE follow-up "
+        "row for the arc in `.harness/forward-register.yaml`, committed with the last fix "
+        "before pass 3",
+        ".agents/skills/ship-pr/SKILL.md": "every P3 or prose finding into ONE follow-up "
+        "register row",
+    }
+    for rel, clause in routing.items():
+        carrier = " ".join((ROOT / rel).read_text(encoding="utf-8").split())
+        assert clause in carrier, rel
+    for rel in [
+        ".claude/skills/roadmap-continue/SKILL.md",
+        ".agents/skills/roadmap-continue/SKILL.md",
+    ]:
+        carrier = " ".join((ROOT / rel).read_text(encoding="utf-8").split())
+        assert "review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]" in carrier, (
+            rel
+        )
+        assert "bounded review cycle" in carrier and "X9a" in carrier, rel
+        assert "just review-with-failover-logged .harness/tmp" not in carrier, rel
 
     # U-HE-54 pass-2 witness lens: the preflight binds to the cycle's FIRST pass (pass 3 on
     # a doc-only PR, which the gate refuses without it) and pass-3 findings travel through

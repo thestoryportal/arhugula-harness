@@ -105,10 +105,11 @@ Throughput: well under N×; merges serialize; trailing lanes re-gate on head cha
    if ANY arc-open command above (`source tools/hooks/lane-init.sh`, `selectable`, `reserve`) is refused
    by the permission layer, proceed with the arc UNRESERVED and say so in the PR body;
    append safety still holds (the U-HE-19 drain bootstrap mints the reservation at
-   closure and the C-HE-03 §6 holder gate fences the ledger). The same rule downstream:
-   a refused PREFIXED review invocation degrades to the bare `just review-with-failover`
-   (allowlisted; writes the pre-U-HE-21 fallback ids — witnessed as guard-ALLOW), and
-   the ship-pr back-fills are skipped per its unreserved-arc clause.*
+   closure and the C-HE-03 §6 holder gate fences the ledger); the ship-pr back-fills are
+   skipped per its unreserved-arc clause. Review does NOT degrade the same way (spec v1.9
+   X9a): a refused prefixed `review-cycle-pass` holds the arc and surfaces the refusal,
+   because an untagged bare review is a legacy round that delivers into no cycle pass —
+   the reviewer call would be spent and the pass would stay incomplete.*
 
    **Queue + execute span edges (U-HE-34; C-HE-27 §1/§3).** Immediately after the reserve
    (or the same-lane resume) succeeds, record the queue-phase start edge; when grounding

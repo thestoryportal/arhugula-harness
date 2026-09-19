@@ -77,7 +77,7 @@ check them rather than trusting remembered or checkpointed remaining work.
    every count/arithmetic claim from source, verify every `#NNN` reference is the PR it
    claims, confirm local gates ran against the *current* staged/worktree fingerprint
    (re-record if the diff changes), and record that the pass ran — carried into the
-   PR body at ship-pr. Then, for a Codex-authored diff, use Antigravity through `just gemini-review` as the
+   PR body at ship-pr. Then, for a Codex-authored diff, use Antigravity through `HARNESS_CYCLE_PASS=<pass> HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just gemini-review origin/main` (the pass tag admits it into the cycle; B-299) as the
    out-of-family reviewer under the operator's standing all-forward-work authorization; do
    not request per-run approval. This review uses the OAuth-authenticated `agy` CLI only—never
    provider API keys, service-account/Vertex routing, or a direct API call. For a Claude-authored

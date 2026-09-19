@@ -275,7 +275,7 @@ The codex log name is `r<N>.log`, N being the arc's next codex round — normall
 pass 1, `r2` for pass 2 and `r3` for the escalation, but a `REVIEWER_UNAVAILABLE` round takes a
 number too and shifts the rest; a wrong name is refused before launch (`ROUND_NAME_MISMATCH`),
 and the refusal names the right one. Never run two codex runs of
-one pass at once. A doc-only PR runs pass 3 alone. A commit added after the cycle completes
+one pass at once. While a pass is in flight — its codex half or any of its lenses still running — make no edit in this worktree, not even for the next arc: the lenses read consumer files from the local tree, and no binding pins those bytes, so an edit mid-pass silently changes what a verdict was computed against. CI runs remotely and needs no such hold. A doc-only PR runs pass 3 alone. A commit added after the cycle completes
 gets exactly one pass 3 (`CYCLE_COMPLETE` names this). Keep a unit near ~300 changed non-test
 lines and split it before pass 1 when it runs over: every full-diff pass reads the whole
 diff again, so its size is paid on each of them.

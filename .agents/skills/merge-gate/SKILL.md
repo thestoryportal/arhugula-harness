@@ -13,7 +13,8 @@ Antigravity and CI; it replaces neither.
 1. Confirm the PR number, branch, base, and final code HEAD from non-empty Git/GitHub output.
 2. The lenses run beside the authorship-dependent out-of-family reviewer in the same pass,
    not after it (for Codex-authored work that is Antigravity through `just gemini-review`),
-   and concurrently with PR CI. Confirm no stale prior CI branch remains unresolved; inspect
+   and concurrently with PR CI; while a pass is in flight, make no edit in this worktree (lenses
+   read local consumer files that no binding pins). Confirm no stale prior CI branch remains unresolved; inspect
    its PR, worktree, and unique commits before any cleanup.
 3. The merge condition is all required checks on the final PR HEAD and current base `main`
    HEAD terminal green AND pass 3 clean.

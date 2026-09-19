@@ -69,7 +69,7 @@ FLAT_TL=$(flat "$TL") || bad "two-lane: could not read the carrier to flatten it
 FLAT_RC=$(flat "$RC") || bad "roadmap-continue: could not read the carrier to flatten it"
 FLAT_MG=$(flat "$MG") || bad "merge-gate: could not read the carrier to flatten it"
 FLAT_SP=$(flat "$SP") || bad "ship-pr: could not read the carrier to flatten it"
-EXPECTED_CLAIMS=41
+EXPECTED_CLAIMS=44
 seen=0
 while IFS='|' read -r key claim; do
   [ -n "$key" ] || continue
@@ -93,6 +93,8 @@ TL|"Four lanes, four times the arcs" is exactly the claim this forbids; nothing 
 RC|One turn of this loop is one lane's arc.
 RC|N ≥ 2 lanes build concurrently in isolated worktrees, each with its own gates and reviewers, and land through exactly one merge door, one arc at a time (C-HE-01 §1); N is a dial (§2).
 RC|The step-2 reservation and disjointness gate are what let a lane run beside its siblings.
+RC|runs its ONE bounded review cycle (spec v1.9 X9a; `merge-gate`'s `## The review cycle`) — launched on push, concurrent with CI, not to convergence.
+RC|a refused prefixed `review-cycle-pass` holds the arc and surfaces the refusal, because an untagged bare review is a legacy round that delivers into no cycle pass
 RC|Throughput: well under N×; merges serialize; trailing lanes re-gate on head change — **prior, not measurement** until AC#10 (C-HE-28) produces a baseline.
 MG|Each PR runs **one** bounded cycle, launched the moment the PR is pushed and run concurrently with CI.
 MG|- An accepted **P1** blocks until fixed. Raised in pass 2 it triggers the escalation; raised in the escalation or in pass 3, fix and commit it and pass 3 re-runs.
@@ -102,6 +104,7 @@ MG|**The stop.** Pass 3 raising an accepted P1 on two consecutive runs — its r
 MG|A **doc-only** PR runs pass 3 alone: one lens on the full diff, no codex half (X9a).
 MG|the head the previous pass reviewed for pass 2 (the fix delta — the emitter refuses any other base, `WRONG_BASE`).
 MG|Nothing merges past a known P1.
+MG|While a pass is in flight — its codex half or any of its lenses still running — make no edit in this worktree, not even for the next arc: the lenses read consumer files from the local tree, and no binding pins those bytes, so an edit mid-pass silently changes what a verdict was computed against.
 MG|X9a words the stop as a P1 still *unfixed* after pass 3; the gate is stricter, and the divergence is registered as B-298 — follow the gate, since it is what refuses.
 MG|Launch mechanics. The defect-class preflight is attested ONCE, before the cycle's first pass — pass 1, or pass 3 on a doc-only PR (`review-attest-preflight`, see `ship-pr`; the gate refuses the first pass without it, `PREFLIGHT_MISSING`; X9a names only pass 1, and the doc-only case is part of B-298); there is no sweep attestation between passes.
 MG|What pass 3 itself raises cannot be committed here (the landing delta admits only the gate-log files, so a register commit after pass 3 would owe another pass 3): list each such finding id in the arc's close-out checkpoint under Remaining Work, and add it to the row — creating the row if pass 3 raised the arc's first follow-up finding — in the first commit of the arc's next PR.

@@ -63,9 +63,14 @@ cannot catch defects introduced per round.
 
 ## Authorship-dependent out-of-family review
 
-- When Codex authored the change, run `just gemini-review`. Despite its legacy recipe
-  name, it invokes the Antigravity `agy` subscription CLI with provider API environment
-  variables stripped. Require exit 0, non-empty output, and final `VERDICT: APPROVE`.
+- When Codex authored the change, run `HARNESS_CYCLE_PASS=<pass> HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just gemini-review origin/main` for each
+  pass with a codex half. Despite its legacy recipe name, it invokes the Antigravity `agy`
+  subscription CLI with provider API environment variables stripped; the pass tag is what
+  admits its rows into the cycle as the pass's out-of-family half (`gemini_review_wrapper`
+  is a loop producer) — an untagged run is a legacy round that completes no pass. In loop
+  mode the permission guard does not auto-allow the `HARNESS_CYCLE_PASS=` prefix, so the call
+  surfaces for approval; a typed cycle-pass Gemini recipe is registered as B-299. Require
+  exit 0, non-empty output, and a final verdict line.
 - When Claude authored the change, `just codex-review` is the out-of-family gate.
 
 Either reviewer is the codex half of ONE bounded review cycle per PR (spec v1.9 X9a;
@@ -76,7 +81,7 @@ P3 or prose finding into ONE follow-up register row) → pass 2 (this reviewer +
 lens, on the fix delta) → the escalation, at most once and only on an accepted pass-2 P1 →
 pass 3 (one lens, full diff; blocks only on P1). On the Claude-authored path the codex half
 is `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]`.
-A BLOCK is input to the next pass, never a reason to re-review the same pass; pass 3
+While a pass is in flight — its codex half or any of its lenses still running — make no edit in this worktree, not even for the next arc: the lenses read consumer files from the local tree, and no binding pins those bytes, so an edit mid-pass silently changes what a verdict was computed against. CI runs remotely and needs no such hold. A BLOCK is input to the next pass, never a reason to re-review the same pass; pass 3
 raising an accepted P1 on two consecutive runs stops the arc for a recorded operator
 decision. A doc-only PR runs pass 3 alone. The preflight is attested once, before the
 cycle's first pass (pass 1, or pass 3 on a doc-only PR). A P2 or P3 that pass 3 raises is
