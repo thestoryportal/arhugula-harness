@@ -1418,6 +1418,18 @@ def test_a_lens_verdict_on_the_wrong_base_is_refused(tmp_path: Path, monkeypatch
     assert not (tmp_path / "log.jsonl").exists()
 
 
+def test_a_pass_tagged_lens_verdict_for_an_unreserved_arc_is_refused(
+    tmp_path: Path, monkeypatch
+):
+    import review_loop_gate as rlg
+
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "3")
+    with pytest.raises(mgl.GateLogError, match="CYCLE_UNRESERVED"):
+        _emit(tmp_path, verdict="APPROVE", arc_id="u-x")
+    assert not (tmp_path / "log.jsonl").exists()
+
+
 def test_a_legacy_lens_verdict_needs_no_admission(tmp_path: Path, monkeypatch):
     monkeypatch.delenv(fr.CYCLE_PASS_ENV, raising=False)
     assert _emit(tmp_path, verdict="APPROVE")[0]["cycle_pass"] is None

@@ -3724,6 +3724,24 @@ def test_an_unresolvable_full_diff_ref_refuses_a_pass_before_its_review(
     assert isinstance(lens, rlg.Refused) and lens.code == "STATE_UNREADABLE"
 
 
+def test_a_cycle_pass_on_an_unreserved_arc_is_refused_not_recorded_unchecked(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # rows tagged with a pass would count toward the cycle once the arc is reserved, so a
+    # named pass is admitted or refused, never let through as Inactive (codex r1 P1)
+    _commit_on_branch(repo, "g.py", "x\n")
+    monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: False)
+    assert isinstance(rlg.admit(repo, "main", ARC), rlg.Inactive)  # a legacy round still runs
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "1")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "CYCLE_UNRESERVED"
+    binding = rw.code_binding(repo, "main")
+    lens = rlg.admit_lens(
+        repo, [], lens=WITNESS, cycle_pass="3", binding=binding, arc_id=ARC, lane_id="l"
+    )
+    assert isinstance(lens, rlg.Refused) and lens.code == "CYCLE_UNRESERVED"
+
+
 def test_admit_binds_the_full_diff_to_the_merge_base_with_main(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ):
