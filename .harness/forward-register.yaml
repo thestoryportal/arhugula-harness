@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 296
+  total: 299
   open: 2
   design_substrate_gated: 3
-  registered_finding: 123
+  registered_finding: 126
   operator_gated: 0
   held: 4
   closed: 164
-  identity_digest: c1b6591535778266
+  identity_digest: 3aa1983ce3efd3c9
 
 items:
 - id: B-1
@@ -12226,3 +12226,27 @@ items:
   summary: 'rlg.admit() decides the codex half of a cycle pass (tools/codex_review.py:607, tools/agy_review.py:851) BEFORE the multi-minute review runs, and the verdict is written later by review_wrapper_common.emit_outcome -> fr.append_observations with no re-admission under the log lock. Two concurrent runs of one pass on one arc and head (a retry while the first is still running, or two lanes) both read the same pre-write log, both are Allowed, and both write rows tagged with the pass; pass_runs() pools their findings into one PassRun, so ALREADY_DELIVERED never fires for the second. The lens half is admitted inside the emit lock (B-294) and does not have this gap. The late run can also append after the cycle completed: a pass-1 run B still reviewing H1 while run A''s pass 1, then passes 2 and 3 on H2, complete clean adds B''s P1 to the completed pass-1 run, and the replay still reports the cycle complete at H2 with that P1 undisposed (codex r1 P1 on #1597). Nothing merges on cycle completion yet; once U-HE-54 moves the skills onto the cycle, this row is a prerequisite of U-HE-54.'
   close_out: 'CLOSED 2026-09-19 by #1602: the codex half''s admission is re-decided at write time, inside the gate log''s append lock. rw.emit_outcome takes a required admit(log_rows) hook called in its build callback (the round_n minting precedent); rlg.delivery_admission does the reservation, state-file and git reads before the lock and returns a check, pure over the log, that runs every pass delivery through the same _decide_cycle as the pre-review admit() (merge-gate concurrency P2 on #1602: no git under the shared lock). A refusal raises CycleRefusedError and writes nothing; the codex and gemini wrappers report GATE_REFUSED and exit 3, and a failover parent propagates its child''s refusal, read from the child''s GATE_REFUSED exit and stderr, rather than recording an unavailable reviewer (codex r1 and r2 P2 on #1602). Witnesses (tools/test_review_loop_gate.py, B-296 section): two admitted runs racing one pre-write log record exactly one delivery; a verdict for a completed pass, and a late pass-1 P1 after the cycle completed at a new head, are refused and not pooled; the gemini stand-in, the codex wrapper, the refused failover child, and a check that reads only the log; mutation probes on a scratch copy killed 8 of 8 with an unmutated control passing.'
   council: 'NO — one mechanism (move the codex-half check inside the append lock); no cross-domain tension.'
+- id: B-297
+  title: 'U-HE-54 follow-ups: a pass-2 wording note in ship-pr and a parity test that branches on the checkout path'
+  status: registered_finding
+  pr: '#1604'
+  heading: '### B-297 · U-HE-54 follow-ups: a pass-2 wording note in ship-pr and a parity test that branches on the checkout path *(U-HE-54 cycle on #1604, 2026-09-19; REGISTERED)*'
+  summary: 'The arc''s one follow-up row under spec v1.9 X9a (P3/prose findings, plus any pass-3 P2). (1) Pass-1 concurrency lens P3: `.claude/skills/ship-pr/SKILL.md` pre-merge step 3 (pass 2) does not say the codex half and the witness lens launch together, as step 1 says for pass 1; wording only. (2) Found while verifying: `tools/test_codex_workflow_parity.py::test_arc_metrics_capture_is_mirrored_across_both_ship_carriers` picks its assertion branch with `".claude" in str(path)` over an ABSOLUTE path, so run from a `.claude/worktrees/` checkout the `.agents` carrier takes the Claude branch and fails on `--transcript`; CI (a normal path) is unaffected.  (3) Escalation spec-conformance lens P3: AGENTS.md:59 and .codex/notes/merge-gate-lenses/README.md still describe the retired all-approve / re-gate-to-convergence model; the enforceable Codex procedure (.agents/skills/merge-gate/SKILL.md) is updated, the governance text is not. Findings pass 3 raises on #1604 join this row on the arc''s next PR.'
+  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: (1) the pass-2 step names the same launch-together shape as pass 1; (2) the parity test keys its branch on the path relative to ROOT (e.g. `path.relative_to(ROOT).parts[0]`), with the test green when run from a `.claude/worktrees/` checkout. (3) AGENTS.md and the Codex lens README state the bounded cycle.'
+  council: 'NO — two independent, mechanical follow-ups; no cross-domain tension.'
+- id: B-298
+  title: 'the bounded-cycle gate and spec v1.9 X9a diverge on the stop trigger, the doc-only preflight, and when pass-3 follow-up findings reach the register'
+  status: registered_finding
+  pr: '#1604'
+  heading: '### B-298 · the bounded-cycle gate and spec v1.9 X9a diverge on the stop trigger, the doc-only preflight, and when pass-3 follow-up findings reach the register *(U-HE-54 codex pass 2 on #1604, 2026-09-19; REGISTERED)*'
+  summary: 'Found while moving the skills onto the cycle (U-HE-54, #1604): codex pass 1 held the carriers to the gate, codex pass 2 held the same sentences to the spec, and the gate and the spec disagree in three places. (1) Stop: X9a says a P1 still unfixed after pass 3 stops the arc; tools/review_loop_gate.py unfixed_after_pass_3 counts consecutive pass-3 runs that each raised ANY accepted P1, so a fixed P1 followed by a new, distinct P1 is refused BUDGET_EXHAUSTED. (2) Doc-only preflight: X9a binds the one-time preflight to before pass 1 and defines doc-only arcs as pass 3 alone; _decide_cycle applies _currency_refusal to whatever pass comes first, so a doc-only arc''s first pass 3 needs the preflight too. (3) Follow-up timing: X9a puts every pass-3 P2 and P3 into the cycle''s one follow-up work item, but merge-gate-landing-delta admits only the two gate-log files after pass 3, so a register edit carrying pass-3 findings would owe another pass 3. The carriers now follow the gate (it is what refuses), name each divergence, and carry pass-3 findings through the close-out checkpoint into the next PR.'
+  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: a recorded decision per item, each either a spec amendment (X9a reworded to what the gate enforces) or a gate change (the gate brought to X9a''s wording), with the skill carriers re-pinned to the result: (1) the stop keyed on finding identity or X9a reworded to consecutive P1-raising runs; (2) the doc-only preflight either dropped from the gate or added to X9a; (3) the landing delta admits a follow-up-register-only edit after pass 3, or X9a moves pass-3 findings to the next PR. This is a Class 2 back-flow item: the spec is design-substrate-adjacent (.harness/spec, cleared v1.9), so the spec arm needs a clearance marker.'
+  council: 'NO for items (2) and (3); item (1) carries a nameable tension (review cost vs catching a regressing fix) that a dyadic convening could weigh if the operator wants it.'
+- id: B-299
+  title: 'no typed cycle-pass recipe for the Gemini reviewer, so a Codex-authored arc''s cycle review asks for approval in loop mode'
+  status: registered_finding
+  pr: '#1604'
+  heading: '### B-299 · no typed cycle-pass recipe for the Gemini reviewer, so a Codex-authored arc''s cycle review asks for approval in loop mode *(U-HE-54 codex escalation on #1604, 2026-09-19; REGISTERED)*'
+  summary: 'On a Codex-authored arc the out-of-family half of a cycle pass is Antigravity (`just gemini-review`). The gate admits its rows into a pass only when HARNESS_CYCLE_PASS is set (review_loop_gate.admit reads it; gemini_review_wrapper is in LOOP_PRODUCERS), but the only typed pass recipe, `just review-cycle-pass`, runs the codex wrapper, and the permission guard auto-allows only the HARNESS_ARC_ID/HARNESS_LANE_ID prefixes. So the carriers now document `HARNESS_CYCLE_PASS=<pass> HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just gemini-review origin/main`, which works at the gate but surfaces for approval in loop mode.'
+  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: a typed `just review-cycle-pass-gemini <pass> <log> [base]` (or a `--reviewer` arm on review-cycle-pass) that sets the pass and runs agy_review, an exact-shape permission-guard allowance for it with a test in tools/hooks/test_permission_guard.sh, and the .agents ship-pr / roadmap-continue carriers repointed to it.'
+  council: 'NO — one recipe plus one guard allowance; no cross-domain tension.'

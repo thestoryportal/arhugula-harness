@@ -1,6 +1,6 @@
 ---
 name: defect-class-preflight
-description: Pre-commit self-review sweep against the recurring defect classes this workspace's reviewers actually catch, distilled from the merge-gate/codex finding corpus (the corpus only grows; scripts/refresh-classes.py rederives counts). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), whenever a review round's fix is being committed (fixes introduce their own defects), and whenever a diff introduces a new consumer of an existing data surface — another tool's log/ledger/store/output, an env variable, or an external SDK — which fires the new-consumer inventory pause at authoring time, BEFORE the consumer is written. One pass here is how a first draft survives review — skipping it is how arcs run 9–17 BLOCK rounds.
+description: Pre-commit self-review sweep against the recurring defect classes this workspace's reviewers actually catch, distilled from the merge-gate/codex finding corpus (the corpus only grows; scripts/refresh-classes.py rederives counts). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-cycle-pass` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), whenever a review round's fix is being committed (fixes introduce their own defects), and whenever a diff introduces a new consumer of an existing data surface — another tool's log/ledger/store/output, an env variable, or an external SDK — which fires the new-consumer inventory pause at authoring time, BEFORE the consumer is written. One pass here is how a first draft survives review — skipping it is how arcs run 9–17 BLOCK rounds.
 ---
 
 # defect-class-preflight — sweep the diff before the reviewers do
@@ -42,7 +42,10 @@ Three meta-rules that outrank the list:
   later. An answers file carried over from the pre-absorption sweep describes the diff
   you MEANT to write, not the one you are committing: re-run
   `scripts/preflight-grep.sh` over the absorption's own bytes and answer from its
-  hits.
+  hits. Under the bounded review cycle (spec v1.9 X9a) nothing checks this for you: the
+  preflight is attested ONCE, before the cycle's first pass (`ship-pr`'s admission attestation), and no gate asks
+  for a fix-round answers file again. The sweep of a fix is now your own discipline
+  between passes, and skipping it stays invisible until the next pass bills for it.
 - **Every numeric bound names the contract value it derives from.** Any literal in a
   guard, allowlist, validator, or budget — a range, a cap, an arity, a retry count —
   is either traceable to a contract value you can cite, or it is a guess wearing a
@@ -900,7 +903,7 @@ commit and invoke the reviewers — they should be confirming, not discovering.
 Since B-215, the named-answer set is ATTESTED, not merely written — and since
 U-SR-04 (charter WR-10) the labels come BEFORE the answers: after the final
 commit, generate the answers file with `HARNESS_ARC_ID=<arc-id>
-HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>` — the
+HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file> origin/main` — the
 destination must live under `.harness/tmp/` (the gitignored scratch namespace; the
 verb refuses anywhere else, keeping attestation artifacts out of the stop-gate's
 tree-dirty view). It runs
@@ -910,7 +913,7 @@ were authored before the labels existed). Fill every placeholder with the named
 answer — attestation refuses a file still carrying one, and a deleted placeholder
 is not an answer either: every label section and finding line must carry content
 beyond what the template wrote — then attest with the
-same-prefixed `just review-attest-preflight <answers-file>`. The inline prefix is
+same-prefixed `just review-attest-preflight <answers-file> origin/main`. The inline prefix is
 REQUIRED on both verbs exactly as for the review itself (they resolve the arc via
 env_arc_and_lane(); a bare invocation binds the branch-* fallback arc, not the
 reserved one). The review wrapper refuses round 1 of a reserved arc without a

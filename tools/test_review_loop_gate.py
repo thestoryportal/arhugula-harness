@@ -3317,15 +3317,25 @@ def test_carriers_document_the_template_first_attest_flow():
         # squashed: the carriers hard-wrap prose, so verb and argument may split lines
         text = _squash((_repo_root() / rel).read_text(encoding="utf-8"))
         assert "review-template-preflight <answers-file>" in text, rel
-        # sweep-template must be spelled WITH the arc/lane prefix (codex u-sr-04 r1
-        # P2: a bare invocation queries the branch-* fallback arc's obligations,
-        # finds none, and declines — the documented command must be the working one)
-        assert (
-            "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
-            "just review-template-sweep <answers-file>"
-        ) in text, rel
-        # order pin: the template step is documented BEFORE its attest verb, per verb
-        for verb in ("preflight", "sweep"):
+        # order pin: the template step is documented BEFORE its attest verb, per verb.
+        # U-HE-54 (spec v1.9 X9a): the sweep is no longer a pass precondition, so ship-pr
+        # names it only as retired; the preflight skill still documents the full flow.
+        verbs = ("preflight",) if "ship-pr" in rel.parts else ("preflight", "sweep")
+        if "ship-pr" in rel.parts:
+            # X9a moved the sweep off the pass path: ship-pr must state the attest-once rule
+            # AND must not document the old per-round sweep attestation as a step
+            assert "It is attested once" in text, rel
+            assert "there is no sweep attestation between passes (X9a)" in text, rel
+            assert "just review-attest-sweep <answers-file>" not in text, rel
+        if "sweep" in verbs:
+            # sweep-template must be spelled WITH the arc/lane prefix (codex u-sr-04 r1
+            # P2: a bare invocation queries the branch-* fallback arc's obligations,
+            # finds none, and declines — the documented command must be the working one)
+            assert (
+                "HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> "
+                "just review-template-sweep <answers-file>"
+            ) in text, rel
+        for verb in verbs:
             assert text.index(f"review-template-{verb}") < text.index(f"review-attest-{verb}"), (
                 f"{rel}: template-{verb} documented after attest-{verb}"
             )

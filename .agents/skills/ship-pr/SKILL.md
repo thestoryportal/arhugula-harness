@@ -63,13 +63,31 @@ cannot catch defects introduced per round.
 
 ## Authorship-dependent out-of-family review
 
-- When Codex authored the change, run `just gemini-review`. Despite its legacy recipe
-  name, it invokes the Antigravity `agy` subscription CLI with provider API environment
-  variables stripped. Require exit 0, non-empty output, and final `VERDICT: APPROVE`.
+- When Codex authored the change, run `HARNESS_CYCLE_PASS=<pass> HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just gemini-review origin/main` for each
+  pass with a codex half. Despite its legacy recipe name, it invokes the Antigravity `agy`
+  subscription CLI with provider API environment variables stripped; the pass tag is what
+  admits its rows into the cycle as the pass's out-of-family half (`gemini_review_wrapper`
+  is a loop producer) — an untagged run is a legacy round that completes no pass. In loop
+  mode the permission guard does not auto-allow the `HARNESS_CYCLE_PASS=` prefix, so the call
+  surfaces for approval; a typed cycle-pass Gemini recipe is registered as B-299. Require
+  exit 0, non-empty output, and a final verdict line.
 - When Claude authored the change, `just codex-review` is the out-of-family gate.
 
-A BLOCK means fix, add a regression witness where applicable, re-run local gates, and
-review the new diff again. Never count self-review by the authoring model as decorrelated.
+Either reviewer is the codex half of ONE bounded review cycle per PR (spec v1.9 X9a;
+`## The review cycle` in `.claude/skills/merge-gate/SKILL.md`), launched once the PR is
+pushed and concurrent with CI: pass 1 (this reviewer + all three merge-gate lenses, full
+diff) → one fix round (adjudicate every finding; fix and commit every accepted P1/P2; every
+P3 or prose finding into ONE follow-up register row) → pass 2 (this reviewer + the witness
+lens, on the fix delta) → the escalation, at most once and only on an accepted pass-2 P1 →
+pass 3 (one lens, full diff; blocks only on P1). On the Claude-authored path the codex half
+is `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]`.
+While a pass is in flight — its codex half or any of its lenses still running — make no edit in this worktree, not even for the next arc: the lenses read consumer files from the local tree, and no binding pins those bytes, so an edit mid-pass silently changes what a verdict was computed against. CI runs remotely and needs no such hold. A BLOCK is input to the next pass, never a reason to re-review the same pass; pass 3
+raising an accepted P1 on two consecutive runs stops the arc for a recorded operator
+decision. A doc-only PR runs pass 3 alone. The preflight is attested once, before the
+cycle's first pass (pass 1, or pass 3 on a doc-only PR). A P2 or P3 that pass 3 raises is
+listed under Remaining Work in the close-out checkpoint and joins the follow-up row in the
+first commit of the arc's next PR (B-298: the gate and X9a diverge on the stop trigger, the
+doc-only preflight, and this timing). Never count self-review by the authoring model as decorrelated.
 
 The shadow trial (U-HE-43; C-HE-29) runs ONLY where the shadow lens is a second reviewer
 family: the Claude-authored path, where `just codex-review` blocks and Gemini shadows it. When
@@ -80,7 +98,7 @@ not adjudicate its findings with a Codex identity (the authoring family). The sa
 `gemini_review_wrapper`): skip the shadow for that head. The reducer enforces the premise from
 rows alone (a shadow round on a head where `gemini_review_wrapper` recorded a terminal for the
 arc is not scored and its findings never count), so a mistaken run wastes a review, never the
-trial. On the Claude-authored path, after the blocking chain reaches its terminal for this head: `HARNESS_ARC_ID=<arc-id>
+trial. On the Claude-authored path, pass 3's terminal triggers it (X9d — the reducer scores the pass-3 run that completes the cycle, once per arc): `HARNESS_ARC_ID=<arc-id>
 HARNESS_LANE_ID=<lane-id> just shadow-trial-score` — rows land under `producer=gemini-shadow`
 (one `no_finding` marker when clean), no gate admission, no reservation round, no budget spend,
 and its exit never blocks. Dispose each shadow finding with `just shadow-trial-adjudicate
@@ -113,16 +131,17 @@ amend-threshold.
    skipped-required checks are not green. Inventory open PR and remote topic branches before
    merge; if a stale prior branch exists, inspect its PR/worktree/unique commits and reconcile
    it without deleting or overwriting work.
-5. Run the `merge-gate` skill for every substantive code or hook PR after PR CI is green
-   and out-of-family review has converged. This is the fresh three-lens gate, not a second
-   generic review. A documentation-only or terminating-refresh PR may take a proportional
-   skip, but the skip and evidence must be logged.
-6. Append the result to `.harness/merge-gate-log.md`, commit and push that row, then wait
-   for CI on the final PR HEAD to be green again. If a code fix follows any approval,
-   re-run out-of-family review and the affected lens against the delta.
+5. Run the `merge-gate` skill for each pass of the cycle, beside the out-of-family
+   reviewer and concurrently with PR CI — not after CI and not after review converges.
+   These are the fresh lenses, not a second generic review. A documentation-only PR runs
+   pass 3 alone; only a terminating-refresh PR takes a proportional skip, and the skip and
+   evidence must be logged.
+6. Append each pass's result to `.harness/merge-gate-log.md`, commit and push the rows,
+   then wait for CI on the final PR HEAD to be green again. A code commit after the cycle
+   completes gets exactly one pass 3.
 
 Merge only when the operator's request or standing autonomous-loop authorization includes
-merge. All three lenses must approve and final-HEAD CI must be green. Never use `--admin` to
+merge. Pass 3 must be clean and final-HEAD CI must be green. Never use `--admin` to
 bypass protection.
 
 ```bash

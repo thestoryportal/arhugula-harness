@@ -77,14 +77,18 @@ check them rather than trusting remembered or checkpointed remaining work.
    every count/arithmetic claim from source, verify every `#NNN` reference is the PR it
    claims, confirm local gates ran against the *current* staged/worktree fingerprint
    (re-record if the diff changes), and record that the pass ran — carried into the
-   PR body at ship-pr. Then, for a Codex-authored diff, use Antigravity through `just gemini-review` as the
+   PR body at ship-pr. Then, for a Codex-authored diff, use Antigravity through `HARNESS_CYCLE_PASS=<pass> HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just gemini-review origin/main` (the pass tag admits it into the cycle; B-299) as the
    out-of-family reviewer under the operator's standing all-forward-work authorization; do
    not request per-run approval. This review uses the OAuth-authenticated `agy` CLI only—never
    provider API keys, service-account/Vertex routing, or a direct API call. For a Claude-authored
    diff, use `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just
-   review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` (the logged wrapper;
-   a bare `just codex-review` writes fallback ids and emits no spans). Validate
-   exit status, non-empty output, and the final verdict before recording the review gate.
+   review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]` (it runs
+   `review-with-failover-logged` tagged with its pass; a bare `just codex-review` writes fallback ids and emits
+   no spans). Either reviewer is the codex half of ONE bounded review cycle per PR (spec
+   v1.9 X9a), launched after ship-pr pushes the PR and run concurrently with CI — pass 1,
+   one fix round, pass 2, the escalation at most once, pass 3 — never review to
+   convergence. Validate exit status, non-empty output, and the final verdict before
+   recording each pass.
 7. **Phase-span carrier (U-HE-50; C-HE-27 §5 X6a; interim until B-218).** The logged
    wrapper emits the `verify` start/end edges at its own process boundaries — never emit
    `verify` by hand on that path (a re-emission is only a no-op replay). The remaining
