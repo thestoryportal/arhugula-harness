@@ -32,7 +32,7 @@ PRESERVED-VERBATIM clauses for untouched neighbors.>
 Register touches say REPLACED-not-appended. Always include: clearance marker,
 CLAUDE.md head-pointer bump, lineage append, check tools
 (forward_register/arc_ledger/substitution_ledger --check, just overlay-check,
-codex_context_guard check, ruff), then out-of-family review to convergence.>
+codex_context_guard check, ruff), then the PR's one bounded review cycle (spec v1.9 X9a).>
 
 ## Process
 - Branch <name> off current origin/main. NEVER `git add -A` — stage explicit paths.

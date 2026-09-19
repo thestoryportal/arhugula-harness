@@ -69,7 +69,7 @@ FLAT_TL=$(flat "$TL") || bad "two-lane: could not read the carrier to flatten it
 FLAT_RC=$(flat "$RC") || bad "roadmap-continue: could not read the carrier to flatten it"
 FLAT_MG=$(flat "$MG") || bad "merge-gate: could not read the carrier to flatten it"
 FLAT_SP=$(flat "$SP") || bad "ship-pr: could not read the carrier to flatten it"
-EXPECTED_CLAIMS=30
+EXPECTED_CLAIMS=44
 seen=0
 while IFS='|' read -r key claim; do
   [ -n "$key" ] || continue
@@ -93,28 +93,42 @@ TL|"Four lanes, four times the arcs" is exactly the claim this forbids; nothing 
 RC|One turn of this loop is one lane's arc.
 RC|N ≥ 2 lanes build concurrently in isolated worktrees, each with its own gates and reviewers, and land through exactly one merge door, one arc at a time (C-HE-01 §1); N is a dial (§2).
 RC|The step-2 reservation and disjointness gate are what let a lane run beside its siblings.
+RC|runs its ONE bounded review cycle (spec v1.9 X9a; `merge-gate`'s `## The review cycle`) — launched on push, concurrent with CI, not to convergence.
+RC|a refused prefixed `review-cycle-pass` holds the arc and surfaces the refusal, because an untagged bare review is a legacy round that delivers into no cycle pass
 RC|Throughput: well under N×; merges serialize; trailing lanes re-gate on head change — **prior, not measurement** until AC#10 (C-HE-28) produces a baseline.
-MG|**Every ten rounds is a recorded-decision checkpoint, not a cap** (period set by operator decision, 2026-08-01; recast under C-HE-21 §1, v1.5 X5, ratified 2026-08-25): an eleventh substantive disagreement stops automatic fix-and-re-gate until a recorded decision continues or holds.
-MG|Continuation is unbounded — the next checkpoint falls ten rounds later — and the loop never grants its own.
-MG|Both failure shapes are real: without the checkpoint, auto-fix-and-re-gate is an infinite loop in autonomous mode; with a cap, review is shortened exactly when it is still paying.
+MG|Each PR runs **one** bounded cycle, launched the moment the PR is pushed and run concurrently with CI.
+MG|- An accepted **P1** blocks until fixed. Raised in pass 2 it triggers the escalation; raised in the escalation or in pass 3, fix and commit it and pass 3 re-runs.
+MG|- An accepted **P2** raised in pass 1, pass 2 or the escalation is fixed before pass 3 runs.
+MG|- An accepted P2 first raised **in pass 3**, and every **P3 or prose** finding from any pass, goes into ONE follow-up row for the arc in `.harness/forward-register.yaml` — not fixed in this PR, never a pass of its own.
+MG|**The stop.** Pass 3 raising an accepted P1 on two consecutive runs — its re-run after a P1 fix raised a P1 again, the same one or a new one — stops the arc: the gate refuses further passes (`BUDGET_EXHAUSTED`; `unfixed_after_pass_3` counts those runs, not finding identity).
+MG|A **doc-only** PR runs pass 3 alone: one lens on the full diff, no codex half (X9a).
+MG|the head the previous pass reviewed for pass 2 (the fix delta — the emitter refuses any other base, `WRONG_BASE`).
+MG|Nothing merges past a known P1.
+MG|While a pass is in flight — its codex half or any of its lenses still running — make no edit in this worktree, not even for the next arc: the lenses read consumer files from the local tree, and no binding pins those bytes, so an edit mid-pass silently changes what a verdict was computed against.
+MG|X9a words the stop as a P1 still *unfixed* after pass 3; the gate is stricter, and the divergence is registered as B-298 — follow the gate, since it is what refuses.
+MG|Launch mechanics. The defect-class preflight is attested ONCE, before the cycle's first pass — pass 1, or pass 3 on a doc-only PR (`review-attest-preflight`, see `ship-pr`; the gate refuses the first pass without it, `PREFLIGHT_MISSING`; X9a names only pass 1, and the doc-only case is part of B-298); there is no sweep attestation between passes.
+MG|What pass 3 itself raises cannot be committed here (the landing delta admits only the gate-log files, so a register commit after pass 3 would owe another pass 3): list each such finding id in the arc's close-out checkpoint under Remaining Work, and add it to the row — creating the row if pass 3 raised the arc's first follow-up finding — in the first commit of the arc's next PR.
 MG|Invariants bind by live carriage (C-HE-21 §2), not by an appeal to their number.
 MG|- **#5 is live** (no verdict inferred from absence) in this skill's `## Parsing — fail closed` and in `ship-pr`'s `## Pre-merge gate — CI green + decorrelated 3-lens review (before the merge door)`.
 MG|- **#14 is C-HE-19**: CANCELLED is INCOMPLETE, never green — carried by `ship-pr`'s post-merge CI check and by `tools/merge_door.py`.
 MG|- **invariant #16 is void**: C-HE-21 §2 found no concurrent-reviewer-cap carrier in `.claude/`, `tools/`, `justfile` or CLAUDE.md. It throttles neither lenses nor lanes.
 MG|A later appeal to a numbered invariant cites its live carrier the same way, or it does not bind.
-MG|No flat round cap anywhere (C-HE-21 §1): the checkpoint in the gate outcome above punctuates review and never shortens it.
+MG|One bounded cycle per PR (C-HE-21 §1, v1.9 X9a): no review runs past pass 3 without a recorded operator decision, and no mechanized check is cited as grounds for skipping a pass (C-HE-31, v1.9 X9b).
 MG|No eval-harness / model-judge as a governance gate (C-HE-21 §4).
 MG|- **K5 —** structured findings require location, observed evidence, expected contract and a reproduction basis (the C-HE-24 shape); admissible alternatives are optional, not mandated.
 MG|- **K6 —** dropped: a reviewer never acquires authority to suppress its own finding by self-classifying its scope. A lens may record scope metadata; suppression belongs to a second decorrelated lens, a deterministic rule, or a logged operator override, and every suppression leaves an audit row. Ambiguous scope blocks.
 MG|- **K7 —** routing by arc type and finding class is deferred until their predictiveness is measured (C-HE-26 §3); shadow mode only, if run at all.
 MG|- **K8 —** a blocking post-edit hook is admitted only for fast, deterministic, low-false-positive checks at a stable boundary (C-HE-31 §3), not on every intermediate edit.
-SP|automatic fix-and-re-gate pauses at a recorded-decision checkpoint every ten rounds — a checkpoint, never a cap (C-HE-21 §1): an eleventh substantive disagreement is the decision point surfaced to the operator via one `AskUserQuestion`, and its recorded answer continues review (unbounded) or holds it
+SP|The review is ONE bounded cycle per PR (spec v1.9 X9a), and it starts the moment the PR is pushed — **concurrent with CI, not after it**.
+SP|**Merge condition: CI green at the final head AND pass 3 clean** → merge without HIL
+SP|- **Admission attestation (B-215; X9a) — once, before the cycle's first pass.**
+SP|A P2 or P3 that pass 3 raises cannot be committed on this PR (a commit after pass 3 owes another pass 3): list its finding id under Remaining Work in the arc's close-out checkpoint and add it to the row in the first commit of the arc's next PR (B-298).
+SP|Keep the unit near ~300 changed non-test lines; above that, split it into its own arcs BEFORE pass 1 — every full-diff pass of the cycle reads the whole diff again.
 SP|These are refusals, not gaps. Each will look like a speed fix at the moment an arc is dragging, and each was priced and rejected on evidence:
-SP|- **No auto-stopping round cap**, and no shortening of review generically. The merge-gate ten-round checkpoint is a recorded decision to continue or hold, not a stop (C-HE-21 §1).
+SP|- **No review past the cycle without a recorded decision.** The bounded cycle is the cap (v1.9 X9b struck the old no-round-cap and no-collapsing-review-layers refusals: passes 2 and 3 are deliberately narrower than pass 1).
 SP|- **No best-of-N** / parallel variant generation as a speed fix — a measured null result at this model's temperature.
 SP|- **No fast mode for throughput** — 6× the price for 2.5× the throughput, and it would disturb the 98.0% cache-read the token economics rest on.
 SP|- **No agent framework** for mechanization (CLAUDE.md §3.2 framework-pull discipline).
-SP|- **No collapsing of review layers** — 93.4% of 679 findings across 146 PRs were single-tool catches, and merge-gate blocked 46% of 141 gated PRs.
 CLAIMS
 # Boundedness marker: a truncated or mis-parsed claim list must fail loud, not pass on fewer checks.
 if [ "$seen" -eq "$EXPECTED_CLAIMS" ]; then
@@ -188,6 +202,8 @@ done <<< "$rows"
 [ "$missing" -eq 0 ] && ok "two-lane carries every C-HE-14 row byte-exact"
 
 # --- 5. §8 AC#7: no numeric round cap in any loop skill ----------------------------------
+# v1.9 X9a/X9b superseded the no-cap rule with ONE bounded cycle, counted in passes; this scan
+# stays so a round COUNT cannot creep back in as a second, parallel stop beside the cycle.
 NUM='([0-9]+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty)'
 CAP='(^|[^a-z])(max|maximum|cap|capped|ceiling|limit|limited)'
 # Five shapes, each matched over the flattened carrier so a wrapped cap is one string:
@@ -234,10 +250,8 @@ prefixed() { # $1 = file, $2 = the command that must follow the prefix
     bad "$(carrier "$1") lacks 'HARNESS_LANE_ID=<lane-id> $2'"
   fi
 }
-prefixed "$MG"  "just merge-gate-emit-all --pr <PR#> --arc-id <arc-id>"
-prefixed "$MG"  "just merge-gate-emit --pr <PR#> --arc-id <arc-id> --lens <id>"
-prefixed "$AMG" "just merge-gate-emit-all --pr <N> --arc-id <arc-id>"
-prefixed "$AMG" "just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id>"
+prefixed "$MG"  "just merge-gate-emit-pass <pass> --pr <PR#> --arc-id <arc-id> --lens <id>"
+prefixed "$AMG" "just merge-gate-emit-pass <pass> --pr <N> --arc-id <arc-id> --lens <id>"
 prefixed "$SP"  "just arc-metrics drain"
 prefixed "$ASP" "just arc-metrics drain"
 for f in "$MG" "$AMG" "$SP" "$ASP"; do
@@ -248,7 +262,7 @@ for f in "$MG" "$AMG" "$SP" "$ASP"; do
     bad "$(carrier "$f"): bare-command scan could not run (sed exit $rs)"
     continue
   fi
-  left=$(printf '%s\n' "$stripped" | grep -nE 'just (merge-gate-emit(-all)?|arc-metrics drain)([^A-Za-z-]|$)'); rg=$?
+  left=$(printf '%s\n' "$stripped" | grep -nE 'just (merge-gate-emit(-all|-pass)?|arc-metrics drain)([^A-Za-z-]|$)'); rg=$?
   if [ "$rg" -gt 1 ]; then
     bad "$(carrier "$f"): bare-command scan could not run (grep exit $rg)"
   elif [ -n "$left" ]; then

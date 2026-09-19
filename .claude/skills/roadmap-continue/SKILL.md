@@ -105,10 +105,11 @@ Throughput: well under N×; merges serialize; trailing lanes re-gate on head cha
    if ANY arc-open command above (`source tools/hooks/lane-init.sh`, `selectable`, `reserve`) is refused
    by the permission layer, proceed with the arc UNRESERVED and say so in the PR body;
    append safety still holds (the U-HE-19 drain bootstrap mints the reservation at
-   closure and the C-HE-03 §6 holder gate fences the ledger). The same rule downstream:
-   a refused PREFIXED review invocation degrades to the bare `just review-with-failover`
-   (allowlisted; writes the pre-U-HE-21 fallback ids — witnessed as guard-ALLOW), and
-   the ship-pr back-fills are skipped per its unreserved-arc clause.*
+   closure and the C-HE-03 §6 holder gate fences the ledger); the ship-pr back-fills are
+   skipped per its unreserved-arc clause. Review does NOT degrade the same way (spec v1.9
+   X9a): a refused prefixed `review-cycle-pass` holds the arc and surfaces the refusal,
+   because an untagged bare review is a legacy round that delivers into no cycle pass —
+   the reviewer call would be spent and the pass would stay incomplete.*
 
    **Queue + execute span edges (U-HE-34; C-HE-27 §1/§3).** Immediately after the reserve
    (or the same-lane resume) succeeds, record the queue-phase start edge; when grounding
@@ -155,20 +156,23 @@ Throughput: well under N×; merges serialize; trailing lanes re-gate on head cha
    branch diff — an uncommitted tree makes HEAD-bound checks stale); **grounding pass** (re-read every
    file:line cite at the now-current HEAD, recompute every count, verify every #NNN,
    confirm `just codex-check` ran at the *current* HEAD, state the pass in the PR body — per
-   ship-pr U-WT-01) then out-of-family
-   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log` to
-   convergence (§13.1; the LOGGED variant is canonical — U-HE-34: its in-recipe log publisher is
+   ship-pr U-WT-01), then attest the preflight once and hand to `ship-pr`, which opens the
+   PR and runs its ONE bounded review cycle (spec v1.9 X9a; `merge-gate`'s
+   `## The review cycle`) — launched on push, concurrent with CI, not to convergence.
+   Each pass's codex half is
+   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]`
+   (it runs `review-with-failover-logged` tagged with its pass — U-HE-34: its in-recipe log publisher is
    how a guarded venue produces the round log arc-metrics later reads; the inline
    prefix is the step-2 arc-open ids — a bare invocation
    writes `branch-*`/`-nolane` fallback ids into the C-HE-24/25 rows. U-HE-49,
    C-HE-21 §1 X6b: the recipe evaluates gate admission BEFORE launching — a refusal
    exits 3 having spent no reviewer call and claimed no round name — and publishes
    each attempt under its own minted name `r<N>-a<K>.log`, so pass the plain `r<N>.log`
-   round name and NEVER pre-create or reuse log files; a refused attempt's retry keeps
-   the same `r<N>` and the publisher lands it cleanly) —
-   the fail-closed `codex-review` wrapper (C-HE-18) with the `gemini-review` D-C failover
-   (C-HE-17); a verdict counts only on its schema parse (C-HE-15), never on exit code or
-   silence. *Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored
+   round name (the arc's next codex round: normally `r1` pass 1, `r2` pass 2, `r3` the escalation) and NEVER pre-create or
+   reuse log files; a refused attempt's retry keeps the same `r<N>` and the publisher
+   lands it cleanly) — the fail-closed `codex-review` wrapper (C-HE-18) with the
+   `gemini-review` D-C failover (C-HE-17); a verdict counts only on its schema parse
+   (C-HE-15), never on exit code or silence. *Invariant #3 (restated, C-HE-17 §3): out-of-family review covers Codex-authored
    work as before, AND serves as the D-C failover for Claude-authored diffs at the identical
    bar. Exit 2 (`REVIEWER_UNAVAILABLE` on both channels) blocks the arc; record both reasons.*
 
