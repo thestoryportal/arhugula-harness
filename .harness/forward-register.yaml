@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 293
+  total: 294
   open: 2
   design_substrate_gated: 3
-  registered_finding: 120
+  registered_finding: 121
   operator_gated: 0
   held: 4
   closed: 164
-  identity_digest: 6c9b0a7f6e3bb0c9
+  identity_digest: efc0987e3c0d95b8
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12178,13 +12178,13 @@ items:
   close_out: 'CLOSED 2026-09-19 by #1602: the codex half''s admission is re-decided at write time, inside the gate log''s append lock. rw.emit_outcome takes a required admit(log_rows) hook called in its build callback (the round_n minting precedent); rlg.delivery_admission does the reservation, state-file and git reads before the lock and returns a check, pure over the log, that runs every pass delivery through the same _decide_cycle as the pre-review admit() (merge-gate concurrency P2 on #1602: no git under the shared lock). A refusal raises CycleRefusedError and writes nothing; the codex and gemini wrappers report GATE_REFUSED and exit 3, and a failover parent propagates its child''s refusal, read from the child''s GATE_REFUSED exit and stderr, rather than recording an unavailable reviewer (codex r1 and r2 P2 on #1602). Witnesses (tools/test_review_loop_gate.py, B-296 section): two admitted runs racing one pre-write log record exactly one delivery; a verdict for a completed pass, and a late pass-1 P1 after the cycle completed at a new head, are refused and not pooled; the gemini stand-in, the codex wrapper, the refused failover child, and a check that reads only the log; mutation probes on a scratch copy killed 8 of 8 with an unmutated control passing.'
   council: 'NO — one mechanism (move the codex-half check inside the append lock); no cross-domain tension.'
 - id: B-297
-  title: 'U-HE-54 follow-ups: a pass-2 wording note in ship-pr and a parity test that branches on the checkout path'
+  title: 'U-HE-54 follow-ups: ship-pr pass-2 wording, a path-dependent parity test, and governance text and diagrams still showing the retired review model'
   status: registered_finding
   pr: '#1604'
-  heading: '### B-297 · U-HE-54 follow-ups: a pass-2 wording note in ship-pr and a parity test that branches on the checkout path *(U-HE-54 cycle on #1604, 2026-09-19; REGISTERED)*'
-  summary: 'The arc''s one follow-up row under spec v1.9 X9a (P3/prose findings, plus any pass-3 P2). (1) Pass-1 concurrency lens P3: `.claude/skills/ship-pr/SKILL.md` pre-merge step 3 (pass 2) does not say the codex half and the witness lens launch together, as step 1 says for pass 1; wording only. (2) Found while verifying: `tools/test_codex_workflow_parity.py::test_arc_metrics_capture_is_mirrored_across_both_ship_carriers` picks its assertion branch with `".claude" in str(path)` over an ABSOLUTE path, so run from a `.claude/worktrees/` checkout the `.agents` carrier takes the Claude branch and fails on `--transcript`; CI (a normal path) is unaffected.  (3) Escalation spec-conformance lens P3: AGENTS.md:59 and .codex/notes/merge-gate-lenses/README.md still describe the retired all-approve / re-gate-to-convergence model; the enforceable Codex procedure (.agents/skills/merge-gate/SKILL.md) is updated, the governance text is not. Findings pass 3 raises on #1604 join this row on the arc''s next PR.'
-  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: (1) the pass-2 step names the same launch-together shape as pass 1; (2) the parity test keys its branch on the path relative to ROOT (e.g. `path.relative_to(ROOT).parts[0]`), with the test green when run from a `.claude/worktrees/` checkout. (3) AGENTS.md and the Codex lens README state the bounded cycle.'
-  council: 'NO — two independent, mechanical follow-ups; no cross-domain tension.'
+  heading: '### B-297 · U-HE-54 follow-ups: ship-pr pass-2 wording, a path-dependent parity test, and governance text and diagrams still showing the retired review model *(U-HE-54 cycle on #1604, 2026-09-19; REGISTERED)*'
+  summary: 'The arc''s one follow-up row under spec v1.9 X9a (P3/prose findings, plus any pass-3 P2). (1) Pass-1 concurrency lens P3: `.claude/skills/ship-pr/SKILL.md` pre-merge step 3 (pass 2) does not say the codex half and the witness lens launch together, as step 1 says for pass 1; wording only. (2) Found while verifying: `tools/test_codex_workflow_parity.py::test_arc_metrics_capture_is_mirrored_across_both_ship_carriers` picks its assertion branch with `".claude" in str(path)` over an ABSOLUTE path, so run from a `.claude/worktrees/` checkout the `.agents` carrier takes the Claude branch and fails on `--transcript`; CI (a normal path) is unaffected.  (3) Escalation spec-conformance lens P3: AGENTS.md:59 and .codex/notes/merge-gate-lenses/README.md still describe the retired all-approve / re-gate-to-convergence model; the enforceable Codex procedure (.agents/skills/merge-gate/SKILL.md) is updated, the governance text is not. (4) Pass-3 P3 on #1604, carried here by U-HE-55: docs/diagrams/code-loop/00-overview and 03-review-gates (each an .html render plus its .workflow.json source) still depict the review model U-HE-54 retired, not the bounded cycle.'
+  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: (1) the pass-2 step names the same launch-together shape as pass 1; (2) the parity test keys its branch on the path relative to ROOT (e.g. `path.relative_to(ROOT).parts[0]`), with the test green when run from a `.claude/worktrees/` checkout. (3) AGENTS.md and the Codex lens README state the bounded cycle. (4) both diagrams, source and render, show the bounded cycle.'
+  council: 'NO — four independent, mechanical follow-ups; no cross-domain tension.'
 - id: B-298
   title: 'the bounded-cycle gate and spec v1.9 X9a diverge on the stop trigger, the doc-only preflight, and when pass-3 follow-up findings reach the register'
   status: registered_finding
@@ -12198,6 +12198,14 @@ items:
   status: registered_finding
   pr: '#1604'
   heading: '### B-299 · no typed cycle-pass recipe for the Gemini reviewer, so a Codex-authored arc''s cycle review asks for approval in loop mode *(U-HE-54 codex escalation on #1604, 2026-09-19; REGISTERED)*'
-  summary: 'On a Codex-authored arc the out-of-family half of a cycle pass is Antigravity (`just gemini-review`). The gate admits its rows into a pass only when HARNESS_CYCLE_PASS is set (review_loop_gate.admit reads it; gemini_review_wrapper is in LOOP_PRODUCERS), but the only typed pass recipe, `just review-cycle-pass`, runs the codex wrapper, and the permission guard auto-allows only the HARNESS_ARC_ID/HARNESS_LANE_ID prefixes. So the carriers now document `HARNESS_CYCLE_PASS=<pass> HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just gemini-review origin/main`, which works at the gate but surfaces for approval in loop mode.'
-  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: a typed `just review-cycle-pass-gemini <pass> <log> [base]` (or a `--reviewer` arm on review-cycle-pass) that sets the pass and runs agy_review, an exact-shape permission-guard allowance for it with a test in tools/hooks/test_permission_guard.sh, and the .agents ship-pr / roadmap-continue carriers repointed to it.'
+  summary: 'On a Codex-authored arc the out-of-family half of a cycle pass is Antigravity (`just gemini-review`). The gate admits its rows into a pass only when HARNESS_CYCLE_PASS is set (review_loop_gate.admit reads it; gemini_review_wrapper is in LOOP_PRODUCERS), but the only typed pass recipe, `just review-cycle-pass`, runs the codex wrapper, and the permission guard auto-allows only the HARNESS_ARC_ID/HARNESS_LANE_ID prefixes. So the carriers now document `HARNESS_CYCLE_PASS=<pass> HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just gemini-review origin/main`, which works at the gate but surfaces for approval in loop mode. A second gap in the same invocation (U-HE-54 shadow review on #1604, carried here by U-HE-55): it passes `origin/main` as the base for every pass, but the gate binds pass 2 to the head the last counted run reviewed (B-294 (b), WRONG_BASE), so the documented pass-2 invocation would be refused. This is reasoned from the gate, not run. Pass 2 needs the pass-1 head as its base.'
+  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: a typed `just review-cycle-pass-gemini <pass> <log> [base]` (or a `--reviewer` arm on review-cycle-pass) that sets the pass and runs agy_review, an exact-shape permission-guard allowance for it with a test in tools/hooks/test_permission_guard.sh, and the .agents ship-pr / roadmap-continue carriers repointed to it. The carriers pass the pass-1 head as the base for pass 2, not `origin/main`.'
   council: 'NO — one recipe plus one guard allowance; no cross-domain tension.'
+- id: B-300
+  title: 'worktree-autoreap follow-ups: an unexercised removal interleaving, and a default branch read outside the repository root'
+  status: registered_finding
+  pr: '#1606 + #1608'
+  heading: '### B-300 · worktree-autoreap follow-ups: an unexercised removal interleaving, and a default branch read outside the repository root *(pass-1 review on #1606 and #1608, 2026-09-19; carried by U-HE-55; REGISTERED)*'
+  summary: '(1) #1606 pass-1 concurrency lens P3: hook_safe_worktree_remove (tools/hooks/lib.sh) classifies a candidate before it takes the per-worktree removal mutex and again under it, so a session that starts in the worktree between the two checks is meant to be caught by the recheck. That ordering is argued in the code comments; no test drives a session start into the window between the pre-check and the recheck. (2) #1608 pass-1 note: _loop_gc_scan (tools/hooks/loop_lib.sh) reads the worktree list with `git -C "$root"` but takes the default branch from hook_default_branch, which runs git in the caller''s working directory. The value feeds one check, _loop_gc_consider''s skip of the default-branch worktree; _loop_gc_merged_oid already changes into $root before it resolves the default branch for its `gh pr list --base`. SessionStart runs the reaper from inside the repository, and outside a repository hook_default_branch falls back to `main`, which is this repository''s default, so no wrong result has been observed.'
+  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: (1) a test that holds a reaper between its pre-check and its under-mutex recheck, starts a session in the candidate worktree, and shows the recheck refuses the removal, with a probe that deleting the recheck reds it; (2) _loop_gc_scan resolves the default branch against $root, with a test that runs the scan from a directory outside the repository.'
+  council: 'NO — two mechanical follow-ups; no cross-domain tension.'
