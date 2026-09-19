@@ -71,14 +71,14 @@
 
 
 snapshot:
-  total: 294
+  total: 295
   open: 2
   design_substrate_gated: 3
-  registered_finding: 121
+  registered_finding: 122
   operator_gated: 0
   held: 4
   closed: 164
-  identity_digest: efc0987e3c0d95b8
+  identity_digest: cf8e7f790c9e87b5
 items:
 - id: B-1
   title: Layered capability-aware routing activation
@@ -12205,7 +12205,15 @@ items:
   title: 'worktree-autoreap follow-ups: an unexercised removal interleaving, and a default branch read outside the repository root'
   status: registered_finding
   pr: '#1606 + #1608'
-  heading: '### B-300 · worktree-autoreap follow-ups: an unexercised removal interleaving, and a default branch read outside the repository root *(pass-1 review on #1606 and #1608, 2026-09-19; carried by U-HE-55; REGISTERED)*'
+  heading: '### B-300 · worktree-autoreap follow-ups: an unexercised removal interleaving, and a default branch read outside the repository root *(pass-1 notes on #1606 and #1608, 2026-09-19, carried from their close-out checkpoint by U-HE-55; neither is a gate-log row; REGISTERED)*'
   summary: '(1) #1606 pass-1 concurrency lens P3: hook_safe_worktree_remove (tools/hooks/lib.sh) classifies a candidate before it takes the per-worktree removal mutex and again under it, so a session that starts in the worktree between the two checks is meant to be caught by the recheck. That ordering is argued in the code comments; no test drives a session start into the window between the pre-check and the recheck. (2) #1608 pass-1 note: _loop_gc_scan (tools/hooks/loop_lib.sh) reads the worktree list with `git -C "$root"` but takes the default branch from hook_default_branch, which runs git in the caller''s working directory. The value feeds one check, _loop_gc_consider''s skip of the default-branch worktree; _loop_gc_merged_oid already changes into $root before it resolves the default branch for its `gh pr list --base`. SessionStart runs the reaper from inside the repository, and outside a repository hook_default_branch falls back to `main`, which is this repository''s default, so no wrong result has been observed.'
   close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: (1) a test that holds a reaper between its pre-check and its under-mutex recheck, starts a session in the candidate worktree, and shows the recheck refuses the removal, with a probe that deleting the recheck reds it; (2) _loop_gc_scan resolves the default branch against $root, with a test that runs the scan from a directory outside the repository.'
   council: 'NO — two mechanical follow-ups; no cross-domain tension.'
+- id: B-301
+  title: 'U-HE-55 follow-ups: the deny rule''s matcher behaviour beyond a plain prefix rests on a dated probe'
+  status: registered_finding
+  pr: '#1610'
+  heading: '### B-301 · U-HE-55 follow-ups: the deny rule''s matcher behaviour beyond a plain prefix rests on a dated probe *(U-HE-55 cycle on #1610, 2026-09-19; REGISTERED)*'
+  summary: 'The arc''s one follow-up row under spec v1.9 X9a. (1) Pass-1 witness-adequacy lens P3: tools/hooks/test_settings_merge_deny.sh models Claude Code''s permission matcher as an exact prefix or prefix plus a space. Three properties it relies on come from one live probe recorded in its header (2026-09-19, a bypass-permissions session): a project deny rule holds in bypass mode, it catches its command behind `true &&` and behind a `FOO=1` prefix, and it is checked against both the typed command and the rtk rewrite. No automated test re-checks them, so a Claude Code change to any of them would pass CI. (2) Pass-1 spec-conformance lens P3: B-300''s provenance read as gate-log findings; fixed in the same commit that opened this row (B-300''s heading now names the close-out checkpoint).'
+  close_out: 'OPEN 2026-09-19. WHAT CLOSES THIS ROW: (1) a check that re-runs the probe against the installed Claude Code (a headless session with throwaway deny rules on harmless commands, as in the header), or a recorded decision that the dated probe is enough for a rule the loop-mode guard also backs. (2) is closed.'
+  council: 'NO — one verification question about an external matcher; no cross-domain tension.'
