@@ -887,6 +887,17 @@ def test_a_pass_3_that_still_owes_its_re_run_is_not_scored():
     assert st.scored_rounds(rows, LENS) == set()
 
 
+def test_only_the_shadow_review_of_the_completing_head_is_scored():
+    # the provisional pass 3 at h owed a re-run; the clean re-run at i has no shadow row,
+    # so the provisional shadow result must not stand in for it
+    rows = [
+        *_gate_pass3("pr-1", "h" * 40, p1="g1"),
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3"},
+        *_gate_pass3("pr-1", "i" * 40),
+    ]
+    assert st.scored_rounds(rows, LENS) == set()
+
+
 def test_rows_without_a_cycle_pass_keep_the_per_round_unit():
     rows = [_row(1, LENS, "no_finding"), _row(2, LENS, "no_finding")]
     assert st.scored_rounds(rows, LENS) == {("pr-1", 1), ("pr-1", 2)}

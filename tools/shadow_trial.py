@@ -146,11 +146,13 @@ def _scored(rows: list[dict], lens: str) -> list[dict]:
     ]
     # spec v1.9 X9d: each arc runs one cycle, so only its FINAL pass-3 shadow round scores,
     # and only once the gate's cycle is complete — a pass 3 that raised an accepted P1 is
-    # re-run, and scoring the provisional round would count one cycle twice. Rows without
+    # re-run, and scoring the provisional round would count one cycle twice. The scored round
+    # is the shadow review of the head whose pass 3 completed the cycle. Rows without
     # a cycle_pass keep the per-round unit.
     final_pass3: dict[str, int] = {}
     for r in candidates:
-        if r.get("cycle_pass") == "3" and rlg.cycle_complete(rows, r["arc_id"]):
+        done = rlg.completing_run(rows, r["arc_id"]) if r.get("cycle_pass") == "3" else None
+        if done is not None and r["head_sha"] == done.head_sha:
             final_pass3[r["arc_id"]] = max(final_pass3.get(r["arc_id"], 0), r["round_n"])
     return [
         r

@@ -358,6 +358,16 @@ def test_admit_routes_a_named_pass_through_the_cycle(
     assert f"run pass {admitted}" in d.recipe
 
 
+def test_a_bad_pass_refuses_before_an_unreserved_review_runs(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # the wrapper stamps rows for unreserved arcs too, so the value is refused before
+    # the review, not when its verdict is recorded
+    monkeypatch.setenv(fr.CYCLE_PASS_ENV, "4")
+    d = rlg.admit(repo, "main", ARC)
+    assert isinstance(d, rlg.Refused) and d.code == "STATE_UNREADABLE"
+
+
 def test_admit_refuses_an_unparseable_pass(repo: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
     monkeypatch.setenv(fr.CYCLE_PASS_ENV, "4")
@@ -3434,6 +3444,24 @@ def test_a_p1_still_unfixed_after_the_pass_3_re_run_stops_the_arc():
     ext = rlg.BudgetExtension(arc_id=ARC, extra_rounds=1, reason="operator", ts="t")
     extended = _dcycle(rows, "3", head=H3, state=_state(preflights=(_pf(),), extensions=(ext,)))
     assert not (isinstance(extended, rlg.Refused) and extended.code == "BUDGET_EXHAUSTED")
+
+
+def test_a_disposition_reversed_after_later_passes_re_opens_the_escalation():
+    # a pass-2 P1 rejected, a clean pass 3, then the rejection reversed: the P1 now demands
+    # the escalation that never ran, so the cycle is not complete
+    rows = [*_pass("1", 1, head=H1), *_pass("2", 2, head=H1, fid="f2", sev="P1")]
+    rows += [_adj("f2", "rejected"), *_pass("3", 1, head=H1)]
+    assert _next(rows, head=H1) is None
+    rows.append(_adj("f2", "accepted"))
+    assert _next(rows, head=H2) == "esc"
+    assert rlg.completing_run(rows, ARC) is None
+
+
+def test_pass_3_does_not_complete_while_a_p1_it_raised_is_undisposed():
+    rows = [*_pass("1", 1), *_pass("2", 2), *_pass("3", 1, fid="f3", sev="P1")]
+    assert rlg.completing_run(rows, ARC) is None
+    rows.append(_adj("f3", "rejected"))
+    assert rlg.completing_run(rows, ARC) is not None
 
 
 def test_out_of_order_pass_is_refused_with_the_admitted_one():

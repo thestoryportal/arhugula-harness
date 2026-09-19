@@ -591,41 +591,66 @@ def _must_fix(run: PassRun) -> tuple[str, ...]:
     return ("P1",) if run.cycle_pass == "3" else ("P1", "P2")
 
 
+def _successor(run: PassRun, disposed: dict[str, str | None]) -> str | None:
+    """The pass X9a requires after `run` under the current dispositions; None when `run`
+    completes the cycle."""
+    p1 = [f["finding_id"] for f in run.findings if f["severity"] == "P1"]
+    if run.cycle_pass == "1":
+        return "2"
+    if run.cycle_pass == "2":
+        return "esc" if any(disposed.get(fid) == "accepted" for fid in p1) else "3"
+    if run.cycle_pass == "esc":
+        return "3"
+    # pass 3 ends the cycle only once every P1 it raised is disposed and none accepted
+    return None if all(disposed.get(fid) == "rejected" for fid in p1) else "3"
+
+
+@dataclass(frozen=True)
+class CycleReplay:
+    """Where the cycle stands: the pass X9a requires next (None once complete) and the
+    pass-3 run that completed it."""
+
+    expected: str | None
+    completed_by: PassRun | None
+
+
+def replay(rows: list[dict], arc_id: str, *, start: str) -> CycleReplay:
+    """Walk the completed runs in log order, checking each against the pass X9a requires
+    under the CURRENT dispositions. The first run that departs from it is where the
+    cycle resumes: a disposition reversed after later passes ran (a pass-2 P1 rejected,
+    then accepted after a clean pass 3) re-opens the escalation it now demands."""
+    # [LAW:effects-at-boundaries] pure: rows in, state out — admit() reads the log
+    disposed = _last_dispositions(rows)
+    expected: str | None = start
+    completed_by: PassRun | None = None
+    for run in (r for r in pass_runs(rows, arc_id) if r.complete):
+        want = expected or "3"  # after completion, a new commit gets one pass 3
+        if run.cycle_pass != want:
+            return CycleReplay(want, None)
+        expected = _successor(run, disposed)
+        completed_by = run if expected is None else None
+    return CycleReplay(expected, completed_by)
+
+
 def next_pass(
     rows: list[dict], arc_id: str, *, doc_only: bool, head_sha: str, diff_digest: str
 ) -> str | None:
-    """The pass the cycle admits next on the binding (`head_sha`, `diff_digest`), derived
-    from the gate log alone; None when the cycle is complete on exactly that binding.
-
-    A doc-only arc runs pass 3 alone; any other arc starts at pass 1. After pass 2 the
-    cycle escalates (once) exactly when pass 2 raised an accepted P1. Pass 3 re-runs only
-    after its own accepted P1; once pass 3 is clean the cycle is complete, and a later
-    commit gets one more pass 3 (X9a: one pass sized to the change)."""
-    # [LAW:effects-at-boundaries] pure: rows in, pass out — admit() reads the log
-    runs = [r for r in pass_runs(rows, arc_id) if r.complete]
-    if not runs:
-        return "3" if doc_only else "1"
-    last = runs[-1]
-    disposed = _last_dispositions(rows)
-    if last.cycle_pass == "1":
-        return "2"
-    if last.cycle_pass == "2":
-        return "esc" if _accepted(last, ("P1",), disposed) else "3"
-    if last.cycle_pass == "esc" or not cycle_complete(rows, arc_id):
-        return "3"
-    return None if (head_sha, diff_digest) == (last.head_sha, last.diff_digest) else "3"
+    """The pass the cycle admits next on the binding (`head_sha`, `diff_digest`); None when
+    the cycle is complete on exactly that binding. A doc-only arc starts at pass 3, any
+    other at pass 1."""
+    state = replay(rows, arc_id, start="3" if doc_only else "1")
+    done = state.completed_by
+    if done is not None and (head_sha, diff_digest) == (done.head_sha, done.diff_digest):
+        return None
+    return state.expected or "3"
 
 
-def cycle_complete(rows: list[dict], arc_id: str) -> bool:
-    """The cycle is complete when its last completed pass is a pass 3 that raised no
-    accepted P1 — pass 3's re-runs end there (X9a), and the shadow trial scores the
-    pass-3 terminal only from here (X9d)."""
-    runs = [r for r in pass_runs(rows, arc_id) if r.complete]
-    return (
-        bool(runs)
-        and runs[-1].cycle_pass == "3"
-        and not _accepted(runs[-1], ("P1",), _last_dispositions(rows))
-    )
+def completing_run(rows: list[dict], arc_id: str) -> PassRun | None:
+    """The pass-3 run that completed the arc's cycle, or None while it is incomplete; the
+    shadow trial scores the pass-3 terminal of exactly this run (X9d)."""
+    first = next((r for r in pass_runs(rows, arc_id) if r.complete), None)
+    start = "3" if first is not None and first.cycle_pass == "3" else "1"
+    return replay(rows, arc_id, start=start).completed_by
 
 
 def unfixed_after_pass_3(rows: list[dict], arc_id: str) -> int:
@@ -753,6 +778,18 @@ def _reservation_exists(arc_id: str) -> bool:
 
 
 def admit(repo: Path, base: str, arc_id: str) -> Decision:
+    # [LAW:one-source-of-truth] the running pass is read through the one parser every
+    # row emitter uses, so the gate and the rows it later counts cannot disagree. Parsed
+    # before the scope decision: the wrapper stamps every row, reserved or not, and a bad
+    # value must refuse before the review runs rather than when its verdict is recorded
+    try:
+        cycle_pass = fr.cycle_pass_from_env()
+    except fr.RecordError as exc:
+        return Refused(
+            code="STATE_UNREADABLE",
+            detail=str(exc),
+            recipe="set HARNESS_CYCLE_PASS to one of 1, 2, esc, 3 — or unset it for a legacy round",
+        )
     # Reservation scope FIRST: Inactive means the gate is not in force for this arc,
     # so an unreadable state file must not refuse an out-of-scope invocation (it broke
     # the whole wrapper battery on a live schema migration before this ordering).
@@ -814,16 +851,6 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
     # recipes render the exact working prefix (a fallback lane renders truthfully
     # as the fallback the verbs would themselves resolve)
     _, lane_id = rw.env_arc_and_lane()
-    # [LAW:one-source-of-truth] the running pass is read through the one parser every
-    # row emitter uses, so the gate and the rows it later counts cannot disagree
-    try:
-        cycle_pass = fr.cycle_pass_from_env()
-    except fr.RecordError as exc:
-        return Refused(
-            code="STATE_UNREADABLE",
-            detail=str(exc),
-            recipe="set HARNESS_CYCLE_PASS to one of 1, 2, esc, 3 — or unset it for a legacy round",
-        )
     return decide(
         state,
         rows,
