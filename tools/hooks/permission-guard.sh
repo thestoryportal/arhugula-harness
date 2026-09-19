@@ -562,34 +562,15 @@ _review_logged_shape() {
   set -f; set -- $cmd; set +f
   { [ "$#" -eq 3 ] || [ "$#" -eq 4 ]; } || return 1
   [ "$1" = "just" ] && [ "$2" = "review-with-failover-logged" ] || return 1
-  shift 2
-  _round_log_and_base_ok "$@"
-}
-
-# U-HE-53 (spec v1.9 X9a): `just review-cycle-pass <pass> <log> [base]` — the pass is
-# TYPED to the passes with a codex half (pass 3 is one lens), then the same pinned
-# log/base rule applies.
-_review_cycle_pass_shape() {
-  local cmd="$1"
-  set -f; set -- $cmd; set +f
-  { [ "$#" -eq 4 ] || [ "$#" -eq 5 ]; } || return 1
-  [ "$1" = "just" ] && [ "$2" = "review-cycle-pass" ] || return 1
-  case "$3" in 1|2|esc) ;; *) return 1 ;; esac
-  shift 3
-  _round_log_and_base_ok "$@"
-}
-
-# [LAW:single-enforcer] the one round-log destination rule both review recipes share.
-# Destination PINNED to the gitignored .harness/tmp/ tree (codex r7 P1: any other
-# charset-safe relative path — `tools/reservations.py`, a ledger — would let an
-# auto-allowed invocation overwrite tracked state). No `..` segments; the publisher
-# (tools/round_log_publish.py) enforces the same policy as the authority — this is
-# the form mirror.
-_round_log_and_base_ok() {
-  printf '%s' "$1" | grep -Eq '^\.harness/tmp/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || return 1
-  case "/$1/" in */../*) return 1 ;; esac
-  if [ "$#" -eq 2 ]; then
-    printf '%s' "$2" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
+  # Destination PINNED to the gitignored .harness/tmp/ tree (codex r7 P1: any other
+  # charset-safe relative path — `tools/reservations.py`, a ledger — would let an
+  # auto-allowed invocation overwrite tracked state). No `..` segments; the publisher
+  # (tools/round_log_publish.py) enforces the same policy as the authority — this is
+  # the form mirror.
+  printf '%s' "$3" | grep -Eq '^\.harness/tmp/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$' || return 1
+  case "/$3/" in */../*) return 1 ;; esac
+  if [ "$#" -eq 4 ]; then
+    printf '%s' "$4" | grep -Eq '^[A-Za-z0-9._/][A-Za-z0-9._/-]*$' || return 1
   fi
 }
 
@@ -885,11 +866,6 @@ if [ "$TOOL" = "Bash" ] && [ -n "$CMD" ]; then
       # U-HE-34 r3: the logged review variant — the tee lives inside the recipe, so a
       # headless venue can produce the round log without a pipe on the command line.
       # (TRIM already has the exact-shape HARNESS id prefix stripped above.)
-      emit_allow
-    elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+review-cycle-pass([[:space:]]|$)' \
-       && _review_cycle_pass_shape "$TRIM" \
-       && _bash_args_safe "$CMD"; then
-      # U-HE-53: one pass of the bounded review cycle, same pinned-log discipline.
       emit_allow
     elif printf '%s' "$TRIM" | grep -Eq '^just[[:space:]]+reviewer-concurrency-probe([[:space:]]+(codex|gemini)([[:space:]]+[5-9]([[:space:]]+[A-Za-z0-9._/-]+)?)?)?$' \
        && _bash_args_safe "$CMD"; then

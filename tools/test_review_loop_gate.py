@@ -3406,7 +3406,7 @@ def test_a_p1_still_unfixed_after_the_pass_3_re_run_stops_the_arc():
 def test_out_of_order_pass_is_refused_with_the_admitted_one():
     d = _dcycle([], "2")
     assert isinstance(d, rlg.Refused) and d.code == "PASS_OUT_OF_ORDER"
-    assert "review-cycle-pass 1" in d.recipe
+    assert "run pass 1" in d.recipe
 
 
 def test_pass_1_requires_the_authoring_preflight():

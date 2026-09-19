@@ -828,3 +828,22 @@ def test_a_row_written_before_cycle_pass_existed_can_still_be_adjudicated(tmp_pa
     }
     fr.append_row(adj, p)
     assert fr.read_rows(p)[-1]["disposition"] == "accepted"
+
+
+def test_a_legacy_row_missing_a_required_core_field_still_fails_closed(tmp_path: Path):
+    # only cycle_pass reads absent as null; a row missing base_sha is corrupt and an
+    # adjudication against it must not pass as if it had carried an explicit null
+    p = tmp_path / "g.jsonl"
+    broken = fr.make_row(_core(), _env(base_sha=None))
+    del broken["base_sha"]
+    p.write_text(json.dumps(broken) + "\n")
+    adj = {
+        **broken,
+        "base_sha": None,
+        "record_kind": "finding_adjudication",
+        "ts": "2026-08-18T00:00:01Z",
+        "disposition": "accepted",
+        "disposition_actor": "operator",
+    }
+    with pytest.raises(KeyError):
+        fr.append_row(adj, p)

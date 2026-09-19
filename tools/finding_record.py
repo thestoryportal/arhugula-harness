@@ -293,13 +293,12 @@ def _check_against_prior_rows(row: dict, rows: list[dict]) -> None:
             f"{row['record_kind']!r} row may not follow it (only a same-kind retry or a "
             "finding_adjudication may)"
         )
-    # .get: cycle_pass is optional (null by default), and rows written before it existed
-    # carry no key at all — absent and null are the same value
     for k in _CORE_IMMUTABLE:
-        if row.get(k) != orig.get(k):
-            raise RecordError(
-                f"adjudication may not change core field {k!r} ({orig.get(k)!r} -> {row.get(k)!r})"
-            )
+        # cycle_pass alone is optional: rows written before it existed carry no key, and
+        # absent reads as its null default; every other core field must be present
+        was, now = (orig.get(k), row.get(k)) if k == "cycle_pass" else (orig[k], row[k])
+        if now != was:
+            raise RecordError(f"adjudication may not change core field {k!r} ({was!r} -> {now!r})")
     if row["record_kind"] == "finding_adjudication":
         latest_ts = max(r["ts"] for r in prior)
         if row["ts"] <= latest_ts:

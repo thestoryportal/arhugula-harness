@@ -973,15 +973,6 @@ review-with-failover-logged log base='main':
 # entry/sweep attestations the wrapper enforces before any review round.
 # `review-attest-budget` is deliberately NOT guard-allowlisted — extending the
 # round budget stays operator-visible (the loop must never self-extend it).
-# U-HE-53 (spec v1.9 X9a/X9c): the pass is named once, here, in HARNESS_CYCLE_PASS; the
-# gate admits only the next legal pass and every row the wrapper emits records it.
-# [LAW:single-enforcer] logging, spans and round-log publication stay in
-# review-with-failover-logged; this recipe only names the pass.
-# The codex half of one pass of the bounded review cycle: pass is 1, 2 or esc (pass 3
-# is one merge-gate lens, emitted with HARNESS_CYCLE_PASS=3).
-review-cycle-pass pass log base='origin/main':
-    HARNESS_CYCLE_PASS={{pass}} just review-with-failover-logged {{log}} {{base}}
-
 # WR-10 (U-SR-04): labels before answers — the template verbs run preflight-grep.sh
 # over the attested range FIRST and write every hit label (sweep: + outstanding
 # finding ids) into a fresh answers template the author fills, so attestation

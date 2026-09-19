@@ -491,8 +491,9 @@ def _currency_refusal(
 # ── the bounded review cycle (spec v1.9 X9a, C-HE-21 §1) ─────────────────────
 #: [LAW:no-mode-explosion] two admission paths coexist: the legacy round budget (no pass
 #: named) and the bounded cycle (a pass named via HARNESS_CYCLE_PASS). Owner: U-HE-53.
-#: Exit: the legacy path is deleted once every review skill launches through
-#: `just review-cycle-pass` (U-HE-54) and no open reservation predates that switch.
+#: Exit: the legacy path is deleted once every review skill launches the cycle (its
+#: launcher and lens half land with B-294, the skills move with U-HE-54) and no open
+#: reservation predates that switch.
 
 #: The codex channel's role in a pass: either loop producer delivers it, since a gemini
 #: failover stands in for codex under the identical bar (C-HE-17 §1).
@@ -508,7 +509,7 @@ _PASS_REVIEWERS: dict[str, frozenset[str]] = {
     "esc": frozenset({_CODEX, *_LENSES}),
 }
 
-#: The passes whose codex half `just review-cycle-pass` launches; pass 3 has none.
+#: The passes with a codex half; pass 3 is one merge-gate lens.
 CODEX_PASSES = tuple(_PASS_REVIEWERS)
 
 #: Severities that are review findings (a reviewer's P1-P3), as opposed to the
@@ -684,13 +685,13 @@ def _decide_cycle(
             detail=(
                 f"pass {cycle_pass} requested for {arc_id}; the cycle admits pass {expected} next"
             ),
-            recipe=f"run pass {expected}: " + _pass_recipe(expected, pfx),
+            recipe=f"run pass {expected}: " + _pass_recipe(expected),
         )
     if cycle_pass not in CODEX_PASSES:
         return Refused(
             code="PASS_HAS_NO_CODEX_HALF",
             detail="pass 3 is one merge-gate lens on the full diff (X9a); codex is not in it",
-            recipe=_pass_recipe(cycle_pass, pfx),
+            recipe=_pass_recipe(cycle_pass),
         )
     completed = [r for r in pass_runs(rows, arc_id) if r.complete]
     if completed and head_sha == completed[-1].head_sha:
@@ -711,13 +712,16 @@ def _decide_cycle(
     return refusal or Allowed(round_n=_next_round(_loop_rounds(rows, arc_id)))
 
 
-def _pass_recipe(cycle_pass: str, pfx: str) -> str:
-    if cycle_pass in CODEX_PASSES:
-        return (
-            f"`{pfx}just review-cycle-pass {cycle_pass} <round-log>` for codex, and the "
-            f"merge-gate lenses emitted with HARNESS_CYCLE_PASS={cycle_pass}"
-        )
-    return "run one merge-gate lens with HARNESS_CYCLE_PASS=3 and emit its verdict"
+def _pass_recipe(cycle_pass: str) -> str:
+    codex = (
+        f"its codex half on the review wrapper with HARNESS_CYCLE_PASS={cycle_pass}, and "
+        if cycle_pass in CODEX_PASSES
+        else ""
+    )
+    return (
+        f"run pass {cycle_pass}: {codex}its merge-gate lens verdicts, which record once B-294 "
+        "admits the lens half"
+    )
 
 
 # ── edge: admit ──────────────────────────────────────────────────────────────
