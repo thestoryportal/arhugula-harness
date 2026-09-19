@@ -8149,10 +8149,10 @@ The §4 coverage matrix is unchanged for the v1.0 contract×unit set: the X6 cla
 | U-HE-54 | A3 | Skills and doc carriers for the cycle; CLAUDE.md §13.1 | 53 | ship-pr, merge-gate, defect-class-preflight, roadmap-continue (+ `.agents` twins), `test_skill_lanes_docs.sh`, `test_codex_workflow_parity.py`, CLAUDE.md |
 | U-HE-55 | B1 | Deny bare `gh pr merge` in every mode | 53 | `.claude/settings.json`, new `tools/hooks/test_settings_merge_deny.sh` |
 | U-HE-56 | B2 | Keep test fixtures out of the real loop ledger | 53 | `tools/hooks/test_pretooluse_bash_emit_policy.sh` (+ any leaking suite found) |
-| U-HE-57 | B3 | Per-arc wall-clock metric | 52 | new `tools/arc_wallclock.py` + test, `tools/codex-parity-check.sh` |
+| U-HE-57 | B3 | Per-arc wall-clock metric | 53 | new `tools/arc_wallclock.py` + test, `tools/codex-parity-check.sh` |
 | U-HE-58 | B4 | memento + the loop-hook context ceiling (headless: allow the stop) | 55 | `tools/hooks/stop-loop.sh` + test, new `tools/hooks/context_tokens.py`, `.claude/settings.json` |
 | U-HE-59 | B5 | Lane permission profile; lanes never edit `~/.claude/settings.json` | 58 | `.claude/settings.json`, two-lane skill + test |
-| U-HE-60 | C1 | Install and configure `lit`; sync pinned to `origin`; lane-init sets upstream | 52 | `.lit/`, `CONTEXT.md`, `tools/hooks/lane-init.sh` |
+| U-HE-60 | C1 | Install and configure `lit`; sync pinned to `origin`; lane-init sets upstream | 53 | `.lit/`, `CONTEXT.md`, `tools/hooks/lane-init.sh` |
 | U-HE-61 | C2 | Migrate open work into `lit` (old files stay authoritative) | 60, 57 | new `tools/lit_migrate.py` + test, `codex-parity-check.sh`, `ci.yml` coverage list |
 | U-HE-62 | C3 | Read paths switch to `lit` | 61, 54, 58 | `tools/hooks/{lib,loop_lib,prompt-context,postcompact-reinject,stop-loop}.sh`, `tools/roadmap-audit/session-start.sh`, `.codex/hooks/session_start.py`, `tools/prime_report.py`, `tools/arc_wallclock.py`, roadmap-continue + tests |
 | U-HE-63 | C4a | Guard drops the drift/lag family (harmless while refreshes still run) | 62 | `tools/codex_context_guard.py`, `.codex/hooks/stop_gate.py`, `tools/ci_bookkeeping_diff.py` + tests |
@@ -8162,10 +8162,10 @@ The §4 coverage matrix is unchanged for the v1.0 contract×unit set: the X6 cla
 | U-HE-67 | C5c | Governance text; §12 headings and pack pointers kept | 65 | CLAUDE.md §12, `docs/governance/roadmap-protocol.md`, `CONTEXT.md`, `Project_Roadmap_v1.md` |
 | U-HE-68 | C5a | Retire the plain files into `.harness/archive/roadmap-plainfile/` | 66, 67 | the five roadmap files, `roadmap_status_refresh.py` + tests, `post-merge-refresh.sh`, validators' `DEFAULT_LEDGER`, `ci.yml` arc-ledger job, hook registrations |
 | U-HE-69 | D1 | CI-side capped reviewer, SHA-pinned, non-blocking (operator secret gate) | 54 | new `.github/workflows/code-review.yml`, `.github/code-review.conf` |
-| U-HE-70 | P1 | `HARNESS_PILOT_RUN_ID` stamped at reserve time | 52 | `tools/reservations.py` + test |
+| U-HE-70 | P1 | `HARNESS_PILOT_RUN_ID` stamped at reserve time | 53 | `tools/reservations.py` + test |
 | U-HE-71 | D2 | Validation: five single-lane code arcs, then a three-lane pilot | 68, 57, 70 | — |
 
-**Waves.** 1: 52 · 2: 53 ∥ 60 ∥ 57 · 3: 54 ∥ 61 ∥ 55 ∥ 56 · 4: 58 ∥ 69 ∥ 70 · 5: 59 ∥ 62 · 6: 63 ∥ 64 · 7: 65 · 8: 66 ∥ 67 · 9: 68 · 10: 71.
+**Waves.** 1: 52 · 2: 53 · 3: 54 ∥ 60 ∥ 57 ∥ 55 ∥ 56 · 4: 61 ∥ 58 ∥ 69 ∥ 70 · 5: 59 ∥ 62 · 6: 63 ∥ 64 · 7: 65 · 8: 66 ∥ 67 · 9: 68 · 10: 71. Every unit after U-HE-53 depends on it, so none lands under the old review flow.
 
 **Done when** `tools/arc_wallclock.py` reports a mean ≤ 60 min over five arcs landed after U-HE-68, and the three-lane pilot's `tools/lanes_pilot.py report` passes.
 
