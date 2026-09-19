@@ -809,10 +809,14 @@ _loop_gc_gh_ok() {
 # is the pre-squash head SHA → an exact-SHA match is both precise and squash-merge-safe.
 # Args: <branch> <repo_dir>. Runs gh inside <repo_dir> so the lookup targets THIS repo,
 # not the caller's cwd (codex P2). Isolated so tests can stub it.
+# [LAW:types-are-the-program] Only a PR merged into <repo_dir>'s DEFAULT branch counts:
+# C-HE-04 §6 X10 waives the unpushed-commit refusals because the merge put the content on
+# the default branch, so a PR merged into any other base proves nothing and the worktree
+# is simply not a candidate.
 _loop_gc_merged_oid() {
   ( cd "$2" 2>/dev/null || exit 0
-    hook_bounded 6 gh pr list --state merged --head "$1" --limit 5 --json headRefOid \
-      --jq '.[0].headRefOid // empty' 2>/dev/null )
+    hook_bounded 6 gh pr list --state merged --base "$(hook_default_branch)" --head "$1" \
+      --limit 5 --json headRefOid --jq '.[0].headRefOid // empty' 2>/dev/null )
 }
 
 # Echo a worktree's reap-BLOCKING local state (empty = safe to reap). `--ignored`

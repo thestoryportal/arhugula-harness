@@ -871,6 +871,20 @@ hook_safe_worktree_remove "$REPO" "$AHEAD_WT" >/dev/null
 eq "safe removal refuses a committed-but-unpushed worktree" "$?" "4"
 [ -d "$AHEAD_WT" ] && ok "ahead-of-upstream worktree preserved" \
   || bad "ahead-of-upstream worktree was removed"
+# C-HE-04 §6 X10: agent teardown (safe-worktree-remove.sh) holds no merge proof, so the
+# waiver never reaches it -- the real script, as a subprocess, still refuses the ahead
+# worktree, both bare and with --expect-branch/--expect-head naming the current HEAD (an
+# identity check is not a merge proof).
+AHEAD_HEAD=$(git -C "$AHEAD_WT" rev-parse HEAD)
+CLAUDE_PROJECT_DIR="$REPO" HARNESS_LOOP_STATUS_PATH="$REPO/teardown-ledger.md" \
+  bash "$SCRIPT_DIR/safe-worktree-remove.sh" "$AHEAD_WT" >/dev/null 2>"$REPO/teardown.err"
+eq "X10: agent teardown still refuses an ahead-of-upstream worktree" "$?" "4"
+CLAUDE_PROJECT_DIR="$REPO" HARNESS_LOOP_STATUS_PATH="$REPO/teardown-ledger.md" \
+  bash "$SCRIPT_DIR/safe-worktree-remove.sh" --expect-branch ahead-branch --expect-head "$AHEAD_HEAD" \
+  "$AHEAD_WT" >/dev/null 2>>"$REPO/teardown.err"
+eq "X10: agent teardown with --expect-head = HEAD still refuses it" "$?" "4"
+[ -d "$AHEAD_WT" ] && ok "X10: agent teardown left the ahead worktree in place" \
+  || bad "X10: agent teardown removed an ahead-of-upstream worktree"
 git -C "$AHEAD_WT" push -q origin ahead-branch 2>/dev/null
 hook_worktree_local_state "$AHEAD_WT" >/dev/null
 eq "pushed-to-upstream worktree is clean" "$?" "1"
