@@ -38,6 +38,7 @@ from math import comb
 from pathlib import Path
 
 import finding_record as fr
+import review_loop_gate as rlg
 from review_loop_gate import LOOP_PRODUCERS
 
 N_ROUNDS = 30
@@ -135,13 +136,32 @@ def _same_family_heads(rows: list[dict], lens: str) -> set[tuple[str, str | None
 
 def _scored(rows: list[dict], lens: str) -> list[dict]:
     excluded = _same_family_heads(rows, lens)
-    return [
+    candidates = [
         r
         for r in rows
         if r["producer"] == lens
         and r["record_kind"] in SCORED_KINDS
         and r["round_n"] is not None
         and (r["arc_id"], r["head_sha"]) not in excluded
+    ]
+    # spec v1.9 X9d: each arc runs one cycle, so only its FINAL pass-3 shadow round scores,
+    # and only once the gate's cycle is complete — a pass 3 that raised an accepted P1 is
+    # re-run, and scoring the provisional round would count one cycle twice. The scored round
+    # is the shadow review of the binding whose pass 3 completed the cycle. Rows without
+    # a cycle_pass keep the per-round unit.
+    final_pass3: dict[str, int] = {}
+    for r in candidates:
+        done = rlg.completing_run(rows, r["arc_id"]) if r.get("cycle_pass") == "3" else None
+        if done is not None and (r["head_sha"], r["diff_digest"]) == (
+            done.head_sha,
+            done.diff_digest,
+        ):
+            final_pass3[r["arc_id"]] = max(final_pass3.get(r["arc_id"], 0), r["round_n"])
+    return [
+        r
+        for r in candidates
+        if r.get("cycle_pass") is None
+        or (r["cycle_pass"] == "3" and r["round_n"] == final_pass3.get(r["arc_id"]))
     ]
 
 
@@ -337,6 +357,7 @@ def _adjudication_row(
         disposition=disposition,
         disposition_actor=actor,
         unique_catch=uc,
+        cycle_pass=orig.get("cycle_pass"),
     )
     return fr.make_row(core, env)
 

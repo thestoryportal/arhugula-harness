@@ -463,6 +463,7 @@ def outcome_rows(
         base_sha=b.get("base_sha"),
         diff_digest=b.get("diff_digest"),
         round_n=round_n,
+        cycle_pass=fr.cycle_pass_from_env(),
     )
     if outcome.terminal == "REVIEWER_UNAVAILABLE":
         ft = "permanent-fail-exit" if outcome.failure_class == "permanent" else "transient-retry"
@@ -530,6 +531,7 @@ _ENV_KEYS = (
     "round_n",
     "cause_attribution",
     "unique_catch",
+    "cycle_pass",
 )
 
 
