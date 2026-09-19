@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `751b44e61ec1` |
+| `workspace_state_hash` | `7ae78631233c` |
 | `last_refreshed` | 2026-09-19T00:00:00Z |
-| `git_head` | `75ec7e13` —  |
+| `git_head` | `fc2706a1` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1591).** next implementable unit is **U-HE-53** — the bounded review cycle in the review gate (plan §9 of the loop-lanes implementation plan; spec v1.9 X9a/X9c), then its wave-3 units U-HE-54, U-HE-55, U-HE-56, U-HE-57 and U-HE-60.
+**Current next action (post-#1593).** U-HE-53 landed the gate half of the bounded review cycle: the cycle_pass field on every gate-log row, pass runs keyed by the reviewed binding, the replay under current dispositions, and the fail-closed refusal of pass-tagged lens verdicts. The cycle is not usable yet: its lens half (lens admission, the per-pass base, unattended lens emission, whole-verdict delivery and the launcher) is registered as B-294 by operator decision. Operator decision 2026-09-19: build B-294 next, ahead of U-HE-57, and until the skills move onto the cycle every arc runs the cleared X9a cycle by hand (pass 1 codex plus the witness lens, one fix round, pass 2 codex on the fix delta, escalation at most once on an accepted P1, pass 3 one lens; touched suites per round, the full suite once before landing, one push per round). Next is the B-294 lens half, the prerequisite of **U-HE-54**, then U-HE-57.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1593 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1591 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1583 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1579 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | 1585 | 2026-09-18 | #1585 closed B-292 (doc-only, verified on main). Generated AT the content merge tip 12143ce9 so the recorded git_head equals this refresh's own future merge parent. |
-| 1586 | 2026-09-18 | #1586 landed the post-#1584 refresh but recorded git_head=8795402f (its own first refresh commit) instead of f4c8f653 (the merge commit's parent), because the content was regenerated on the refresh branch after an amend rather than at the content merge tip. The PR went green and main's own run hard-failed ROADMAP_STATUS_DRIFT. This re-anchors at b2a4c9d2. |
 
 ---
 
