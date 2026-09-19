@@ -872,13 +872,18 @@ def admit(repo: Path, base: str, arc_id: str) -> Decision:
 
 
 def _doc_only(repo: Path, binding: dict[str, str]) -> bool:
-    """A diff is doc-only when every path it touches is Markdown (X9a: pass 3 alone)."""
+    """A diff is doc-only when every path it touches is Markdown (X9a: pass 3 alone).
+
+    Rename detection is off, so a rename lists its source path as well as its
+    destination (a code file renamed to `.md` is not doc-only), and the names are read
+    as bytes, since git admits paths the process locale cannot decode."""
     out = subprocess.run(
         [
             "git",
             "-C",
             str(repo),
             "diff",
+            "--no-renames",
             "-z",
             "--name-only",
             binding["base_sha"],
@@ -886,10 +891,9 @@ def _doc_only(repo: Path, binding: dict[str, str]) -> bool:
         ],
         check=True,
         capture_output=True,
-        text=True,
     ).stdout
-    names = [n for n in out.split("\0") if n]
-    return bool(names) and all(n.endswith(".md") for n in names)
+    names = [n for n in out.split(b"\0") if n]
+    return bool(names) and all(n.endswith(b".md") for n in names)
 
 
 # ── edge: launch (U-HE-49; C-HE-21 §1 X6b) ───────────────────────────────────

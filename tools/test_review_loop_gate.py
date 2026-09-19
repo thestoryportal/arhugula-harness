@@ -368,6 +368,29 @@ def test_a_bad_pass_refuses_before_an_unreserved_review_runs(
     assert isinstance(d, rlg.Refused) and d.code == "STATE_UNREADABLE"
 
 
+def test_a_code_file_renamed_to_markdown_is_not_doc_only(repo: Path):
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "switch", "-qc", "feat"], check=True)
+    subprocess.run([*git, "mv", "f.txt", "f.md"], check=True)
+    subprocess.run([*git, "commit", "-qm", "rename"], check=True)
+    binding = rw.code_binding(repo, "main")
+    assert rlg._doc_only(repo, binding) is False
+
+
+def test_a_path_the_locale_cannot_decode_does_not_crash_doc_only(repo: Path):
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "switch", "-qc", "feat"], check=True)
+    # the index takes the raw bytes directly (a filesystem may refuse such a name)
+    blob = subprocess.run(
+        [*git, "hash-object", "-w", "--stdin"], input=b"x\n", capture_output=True, check=True
+    ).stdout.strip()
+    cacheinfo = b"100644," + blob + b",notes-\xff.md"
+    subprocess.run([*git, "update-index", "--add", "--cacheinfo", cacheinfo], check=True)
+    subprocess.run([*git, "commit", "-qm", "odd path"], check=True)
+    binding = rw.code_binding(repo, "main")
+    assert rlg._doc_only(repo, binding) is True
+
+
 def test_admit_refuses_an_unparseable_pass(repo: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(rlg, "_reservation_exists", lambda arc_id: True)
     monkeypatch.setenv(fr.CYCLE_PASS_ENV, "4")
