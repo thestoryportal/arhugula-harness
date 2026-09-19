@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `96773d898115` |
+| `workspace_state_hash` | `130b00f7ca5e` |
 | `last_refreshed` | 2026-09-19T00:00:00Z |
-| `git_head` | `d773605a` —  |
+| `git_head` | `cf98d108` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1600).** U-HE-57 landed `tools/arc_wallclock.py`, the per-arc wall-clock measure spec v1.9 tracks as its outcome (C-HE-28 §2, X9h): reservation → verify-span start → last review row → content merge → door release, per phase, with the rolling mean and median and a per-lanes-at-open cohort split. Report it per arc from now on (`uv run python tools/arc_wallclock.py --last 12`). Its first reading: mean total 265 min, median 109 over 12 arcs, goal NOT MET, and every recent arc falls in the `unknown` lanes cohort, because the ship-pr open flip skips the `concurrent_lanes_at_open` sensor. Operator-approved order (2026-09-19): B-296 next (re-check the codex half's admission inside the append lock, and refuse a verdict for an already-completed pass), then U-HE-54 (skills onto the cycle; depends on B-296), then U-HE-55, then U-HE-58, then the lit chain from U-HE-60 in plan wave order. Arcs keep running the X9a cycle by hand on `just review-cycle-pass` / `just merge-gate-emit-pass` until U-HE-54.
+**Current next action (post-#1602).** B-296 landed (#1602): the bounded cycle's codex half is re-decided at write time inside the gate log's append lock via rlg.delivery_admission (reads hoisted before the lock), and a refused failover child's own GATE_REFUSED propagates to its parent, so two concurrent runs of one pass record exactly one delivery; the U-HE-54 prerequisite is met, then U-HE-54
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1602 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1600 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1578 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1597 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1595 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1593 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
