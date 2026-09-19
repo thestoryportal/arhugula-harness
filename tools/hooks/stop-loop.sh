@@ -97,12 +97,17 @@ NEXT=${NEXT:-"(derive per CLAUDE.md §4 from the dashboard)"}
 #    turn sets it — so inside loop mode the ceiling has no enforcer but this one. The reading
 #    and the ceiling come back from context_tokens.py as a single stamped verdict; nothing is
 #    re-derived here.
-# Bounded like every other shell-out in this family (loop_lib's gh calls, run.sh's claude
-# child): the transcript it scans is being appended to by the live session, and an attended
-# session has no outer bound of its own, so an unbounded read here would hang the turn with
-# no recovery. Exceeding the bound is a non-zero exit, which lands in the loud arm below.
+# Bounded like every other shell-out in this family: the transcript it scans is being
+# appended to by the live session, and an attended session has no outer bound of its own, so
+# an unbounded read here would hang the turn with no recovery. Exceeding the bound is a
+# non-zero exit, which lands in the loud arm below.
+#
+# 6s is not invented: it is the bound loop_lib.sh already uses for its own shell-outs
+# (`hook_bounded 6 gh pr list`, loop_lib.sh:803 and :819), and those are NETWORK calls. This
+# one is a local file read, measured at 0.03s against the largest real transcript on this
+# machine, so the family's existing constant is already ~200x the observed cost.
 if ! VERDICT_JSON=$(printf '%s' "$PAYLOAD" \
-  | hook_bounded "${HARNESS_LOOP_CEILING_TIMEOUT:-15}" \
+  | hook_bounded "${HARNESS_LOOP_CEILING_TIMEOUT:-6}" \
       /usr/bin/python3 "$(dirname "${BASH_SOURCE[0]}")/context_tokens.py" \
       ${HARNESS_LOOP_HEADLESS:+--headless} 2>&1); then
   # The ceiling is instrumentation over the loop, not a gate the loop may not run without,

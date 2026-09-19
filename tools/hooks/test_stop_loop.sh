@@ -171,10 +171,12 @@ mkdir -p "$REPO/.harness/.loop-ceiling-spent"
 OUT=$(run_ceiling "$OVER" attended)
 echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "spent marker unwritable → the close-out still blocks" || bad "close-out lost with an unwritable marker: $OUT"
 [ "$(cat "$REPO/.harness/.loop-iter")" = "1" ] && ok "close-out spends a turn on the counter (the second bound)" || bad "close-out did not count its turn: $(cat "$REPO/.harness/.loop-iter" 2>/dev/null)"
-#        The counter carries it to the cap: with the spent-marker unwritable, a session that
-#        has already spent MAX turns takes step 3 and stands down rather than blocking again.
-#        (Step 3 is what fires here, which is the point — the close-out arm must not be able
-#        to outrun the cap, whatever happens to its own marker.)
+#        The assert below is narrower than it looks, and is labelled for what it actually
+#        proves: with ITER=30 and MAX=2 the pre-existing step-3 cap intercepts BEFORE step 4
+#        runs at all, so this re-exercises section 4's cap rather than any new close-out
+#        interaction. It is kept because the ordering itself is the claim — a session already
+#        past its cap must stand down whatever the ceiling says — but the close-out arm's own
+#        second bound is witnessed by the counter assert above, not here.
 printf '30' > "$REPO/.harness/.loop-iter"
 OUT=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" \
   | HARNESS_LOOP=1 HARNESS_LOOP_MAX=2 CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
@@ -210,6 +212,44 @@ OUT=$(printf '{"session_id":"s1"}' | HARNESS_LOOP=1 MEMENTO_ROOT="$REPO/no-such-
 grep -q 'context ceiling unreadable' "$HARNESS_LOOP_STATUS_PATH" && ok "a payload with no transcript_path is recorded too, never scored as zero" || bad "absent transcript_path scored silently: $(cat "$HARNESS_LOOP_STATUS_PATH")"
 rm -f "$REPO/.harness/.loop-iter"
 unset MEMENTO_ROOT
+
+# 8f) The timeout bound, witnessed by an actual hang (pass-2 witness lens P1: nothing
+#     exercised it, so deleting `hook_bounded` left the suite green). A FIFO with no writer
+#     blocks `open()` forever, which is the real shape of the hazard — a transcript the hook
+#     cannot finish reading. The whole hook runs under an OUTER `timeout` so that removing
+#     the bound fails the assert fast instead of hanging the suite.
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-ceiling-spent"
+: > "$HARNESS_LOOP_STATUS_PATH"
+FIFO="$REPO/hang.jsonl"; rm -f "$FIFO"; mkfifo "$FIFO"
+OUT=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$FIFO" "$REPO" \
+  | HARNESS_LOOP=1 HARNESS_LOOP_CEILING_TIMEOUT=1 MEMENTO_ROOT="$REPO/no-such-memento" \
+    CLAUDE_PROJECT_DIR="$REPO" timeout 20 bash "$HOOK")
+HANG_RC=$?
+[ "$HANG_RC" -ne 124 ] && ok "an unreadable-forever transcript is cut off by the bound, not left to hang" || bad "the ceiling read hung past the bound (outer timeout fired)"
+echo "$OUT" | jq -e '.decision=="block"' >/dev/null 2>&1 && ok "a timed-out reading still lets the loop continue" || bad "timeout stranded the loop: $OUT"
+grep -q 'context ceiling unreadable' "$HARNESS_LOOP_STATUS_PATH" && ok "the timed-out reading is RECORDED as unmeasured" || bad "timeout left no ledger row: $(cat "$HARNESS_LOOP_STATUS_PATH")"
+rm -f "$FIFO" "$REPO/.harness/.loop-iter"
+
+# 8g) The counter re-read before the increment (pass-2 witness lens P1: unwitnessed, because
+#     nothing wrote .loop-iter between step 3's read and step 5's write). The FIFO holds the
+#     hook INSIDE the ceiling step while this test plays the concurrent session and bumps the
+#     counter; the hook must then increment what it finds NOW (7 -> 8), not the 0 it read
+#     before. Without the re-read it writes 1 and clobbers the other session's turn.
+: > "$HARNESS_LOOP_STATUS_PATH"
+FIFO="$REPO/slow.jsonl"; rm -f "$FIFO"; mkfifo "$FIFO"
+rm -f "$REPO/.harness/.loop-iter"
+( printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$FIFO" "$REPO" \
+  | HARNESS_LOOP=1 HARNESS_LOOP_CEILING_TIMEOUT=20 MEMENTO_ROOT="$REPO/no-such-memento" \
+    CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" > "$REPO/slow.out" ) &
+SLOW_PID=$!
+# The hook is now blocked opening the FIFO, which is exactly the window step 3's read and
+# step 5's write straddle. Another session lands its own turn in that window.
+sleep 1
+printf '7' > "$REPO/.harness/.loop-iter"
+usage_record 1000 > "$FIFO"          # unblocks the reader: under the ceiling -> continue path
+wait "$SLOW_PID" 2>/dev/null
+[ "$(cat "$REPO/.harness/.loop-iter")" = "8" ] && ok "the continue arm increments the counter it re-reads (7 -> 8), not the stale one" || bad "stale counter written: $(cat "$REPO/.harness/.loop-iter" 2>/dev/null) (expected 8)"
+rm -f "$FIFO" "$REPO/slow.out" "$REPO/.harness/.loop-iter"
 
 # 9) The reading itself (context_tokens.py), driven in the consumer's exact invocation. The
 #    transcript scan reads backwards in 256 KB chunks, so the cases that can only go wrong
