@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `7ae78631233c` |
+| `workspace_state_hash` | `3ad355561221` |
 | `last_refreshed` | 2026-09-19T00:00:00Z |
-| `git_head` | `fc2706a1` —  |
+| `git_head` | `dfd0490f` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1593).** U-HE-53 landed the gate half of the bounded review cycle: the cycle_pass field on every gate-log row, pass runs keyed by the reviewed binding, the replay under current dispositions, and the fail-closed refusal of pass-tagged lens verdicts. The cycle is not usable yet: its lens half (lens admission, the per-pass base, unattended lens emission, whole-verdict delivery and the launcher) is registered as B-294 by operator decision. Operator decision 2026-09-19: build B-294 next, ahead of U-HE-57, and until the skills move onto the cycle every arc runs the cleared X9a cycle by hand (pass 1 codex plus the witness lens, one fix round, pass 2 codex on the fix delta, escalation at most once on an accepted P1, pass 3 one lens; touched suites per round, the full suite once before landing, one push per round). Next is the B-294 lens half, the prerequisite of **U-HE-54**, then U-HE-57.
+**Current next action (post-#1595).** B-294 landed the lens half of the bounded review cycle: one admission for both halves of a pass (order, fix evidence, stop rule, reviewer set, one delivery per reviewer, the base X9a binds each pass to), lens admission under the emit lock, `just review-cycle-pass` and `just merge-gate-emit-pass` with exact-shape guard allows, whole-verdict appends, and a named pass on an unreserved arc refused. The cycle is now usable, but the skills still launch the legacy path, so arcs keep running the X9a cycle by hand until U-HE-54 moves them. Owed first: the doc-only follow-up that corrects the plan §9 U-HE-53 row, closes the B-294 register row and registers B-296 (the codex half is admitted before its review runs, so two concurrent runs of one pass can both deliver; pass-3 concurrency lens P2). Then U-HE-54 (skills and doc carriers onto the cycle), then U-HE-57.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -51,11 +51,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1595 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1593 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1591 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1583 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1579 | 2026-09-18 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| 1585 | 2026-09-18 | #1585 closed B-292 (doc-only, verified on main). Generated AT the content merge tip 12143ce9 so the recorded git_head equals this refresh's own future merge parent. |
 
 ---
 
