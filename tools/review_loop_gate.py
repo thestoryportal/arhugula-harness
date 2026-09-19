@@ -518,10 +518,13 @@ _REVIEW_SEVERITIES = ("P1", "P2", "P3")
 
 @dataclass(frozen=True)
 class PassRun:
-    """One pass as X9a defines it: a reviewer set delivering verdicts on one head."""
+    """One pass as X9a defines it: a reviewer set delivering verdicts on one binding. The
+    binding is the head plus the digest of the reviewed diff, so reviewers who read
+    different byte ranges at one head are two runs, never one complete pass."""
 
     cycle_pass: str
     head_sha: str
+    diff_digest: str
     delivered: frozenset[str]
     findings: tuple[dict, ...]
 
@@ -543,9 +546,9 @@ def pass_runs(rows: list[dict], arc_id: str) -> list[PassRun]:
     last, by first verdict). Only verdict rows count: a reviewer that was UNAVAILABLE
     delivered nothing, so its pass neither completes nor advances the cycle."""
     # [LAW:one-source-of-truth] append order is the log's own order; wall-clock ts is not
-    delivered: dict[tuple[str, str], set[str]] = {}
-    findings: dict[tuple[str, str], list[dict]] = {}
-    completed: list[tuple[str, str]] = []
+    delivered: dict[tuple[str, str, str], set[str]] = {}
+    findings: dict[tuple[str, str, str], list[dict]] = {}
+    completed: list[tuple[str, str, str]] = []
     for r in rows:
         role = _role(r.get("producer", ""))
         if (
@@ -555,7 +558,7 @@ def pass_runs(rows: list[dict], arc_id: str) -> list[PassRun]:
             or r.get("record_kind") not in ("finding", "no_finding")
         ):
             continue
-        key = (r["cycle_pass"], r["head_sha"])
+        key = (r["cycle_pass"], r["head_sha"], r["diff_digest"])
         delivered.setdefault(key, set()).add(role)
         if r["record_kind"] == "finding" and r.get("severity") in _REVIEW_SEVERITIES:
             findings.setdefault(key, []).append(r)
@@ -698,7 +701,9 @@ def _decide_cycle(
                 recipe="commit the fix for every accepted P1/P2, then launch the next pass",
             )
     started = [
-        r for r in pass_runs(rows, arc_id) if (r.cycle_pass, r.head_sha) == (cycle_pass, head_sha)
+        r
+        for r in pass_runs(rows, arc_id)
+        if (r.cycle_pass, r.head_sha, r.diff_digest) == (cycle_pass, head_sha, diff_digest)
     ]
     if started and _CODEX in started[0].delivered:
         return Refused(

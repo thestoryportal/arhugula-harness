@@ -3275,11 +3275,21 @@ REVIEWERS = {
 }
 
 
-def _crow(cycle_pass: str, round_n: int, *, head: str = HEAD, fid=None, sev="P2", **over):
+def _crow(
+    cycle_pass: str, round_n: int, *, head: str = HEAD, digest=DIGEST, fid=None, sev="P2", **over
+):
     """One reviewer's verdict row: a finding when `fid` is given, else `no_finding`."""
     kind = "finding" if fid else "no_finding"
     return _row(
-        round_n, kind, fid, cycle_pass=cycle_pass, head_sha=head, severity=sev, ts="t", **over
+        round_n,
+        kind,
+        fid,
+        cycle_pass=cycle_pass,
+        head_sha=head,
+        diff_digest=digest,
+        severity=sev,
+        ts="t",
+        **over,
     )
 
 
@@ -3340,6 +3350,12 @@ def test_a_pass_completes_only_when_its_whole_reviewer_set_delivered():
     assert _next(_pass("1", 1)) == "2"
     pass2_without_witness = [*_pass("1", 1), _crow("2", 2)]
     assert _next(pass2_without_witness) == "2"
+
+
+def test_reviewers_that_read_different_bytes_do_not_complete_one_pass():
+    # codex against origin/main and a lens against a stale local main at the same head
+    rows = [_crow("1", 1), *(_crow("1", 1, producer=lens, digest="e" * 64) for lens in LENSES)]
+    assert _next(rows) == "1"
 
 
 def test_a_second_codex_launch_for_a_started_pass_is_refused():

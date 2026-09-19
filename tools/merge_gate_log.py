@@ -246,6 +246,15 @@ def emit_gate_row(
     never reach the tracked logs."""
     if not _LENS_RE.match(lens):
         raise GateLogError(f"lens id {lens!r} must match ^merge-gate-[a-z-]+$")
+    # A lens verdict tagged with a cycle pass would count toward that pass, and nothing
+    # admits the lens half yet — an out-of-order pass-3 row could complete the cycle.
+    # Refused until the lens-half admission lands (B-294).
+    cycle_pass = fr.cycle_pass_from_env()
+    if cycle_pass is not None:
+        raise GateLogError(
+            f"lens verdicts cannot carry {fr.CYCLE_PASS_ENV}={cycle_pass} until the lens half "
+            "of the bounded cycle is admitted (B-294); unset it to record a legacy verdict"
+        )
     arc_id = arc_id or f"pr-{pr}"
     lane_id = lane_id or rw.env_arc_and_lane()[1]
     md_path = md_path or GATE_LOG_MD
