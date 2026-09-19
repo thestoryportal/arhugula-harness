@@ -27,6 +27,7 @@ tools/test_arc_close_recipe.py \
   tools/test_pin_scope.py \
   tools/test_rtk_shape_guard.py \
   tools/test_arc_metrics.py \
+  tools/test_arc_wallclock.py \
   tools/test_round_log_publish.py \
   tools/test_arc_metrics_lanes.py \
   tools/test_arc_lever_report.py \
