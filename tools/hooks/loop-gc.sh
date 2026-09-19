@@ -23,12 +23,14 @@
 #               branch refs + a MEMORY.md over-cap flag + the U-HK-44
 #               unreconciled-subagent clause.
 #
-#   RESIDUAL  A session opened inside an idle, merged, clean worktree in the seconds
-#             another session's reaper is removing it gets a startup error: the reaper
-#             can take the per-worktree mutex before that session has registered a
-#             lease or touched git, and no check can see a session that has left no
-#             trace yet. Nothing is lost: the worktree held nothing unmerged, and
-#             `git worktree add` recreates it from the surviving branch ref.
+#   RESIDUAL  A session launched in a worktree is protected from its first instant:
+#             hook_safe_worktree_remove refuses while any process of the user holds a
+#             cwd, root, open fd or mapping inside it (checked under the removal
+#             mutex), and that covers the session and the shell it was launched from.
+#             What remains is a process that changes directory into the worktree during
+#             the seconds its removal is in progress. Nothing is lost either way: every
+#             candidate is clean and merged at its exact head, and `git worktree add`
+#             recreates it from the surviving branch ref.
 #
 # Runs as deterministic hook bash and always exits 0.
 

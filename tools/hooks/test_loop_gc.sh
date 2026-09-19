@@ -28,11 +28,31 @@ export HARNESS_LOOP_STATUS_PATH="${TMPDIR:-/tmp}/loop-gc-test-$$-loop_status.md"
 # Detached reapers launched by case 7 carry the scratch hooks dir (under $BASE) in their
 # argv. Any still running when the suite ends — a timed-out wait, an early exit — is killed
 # before the fixture is deleted, so none outlives the suite or acts on a vanished tree.
+# A killed reaper is waited for (TERM, then KILL after 2 s) so none is still acting on the
+# fixture when the caller deletes it. They are not this shell's children, so liveness is
+# polled rather than `wait`ed.
 kill_leftover_reapers() {
-  local pids
+  local pids alive pid waited=0
   pids=$(pgrep -f "loop-gc-reap $BASE/") || return 0
   kill $pids 2>/dev/null
   echo "  note: killed leftover detached reaper(s): $(printf '%s' "$pids" | tr '\n' ' ')"
+  while :; do
+    alive=""
+    for pid in $pids; do kill -0 "$pid" 2>/dev/null && alive="$alive $pid"; done
+    [ -z "$alive" ] && return 0
+    [ "$waited" -eq 20 ] && kill -KILL $alive 2>/dev/null
+    if [ "$waited" -ge 40 ]; then
+      echo "  FATAL: reaper(s) survived KILL:$alive"
+      return 1
+    fi
+    sleep 0.1; waited=$((waited + 1))
+  done
+}
+# Kill <pid> and every descendant, deepest first.
+kill_tree() {
+  local child
+  for child in $(pgrep -P "$1"); do kill_tree "$child"; done
+  kill "$1" 2>/dev/null
 }
 # One EXIT trap only — bash REPLACES the handler rather than chaining, so the ledger pin's
 # cleanup has to live here rather than in a second trap.
@@ -207,6 +227,21 @@ ln -s "$BASE/wt-merged" "$BASE/sym-merged"
 _loop_gc_consider "$BASE/sym-merged" feat-merged "$BASE/wt-merged" main reap "$BASE/main"
 wt_present wt-merged && ok "self-exclusion canonicalizes path vs current (symlink-proof)" || bad "reaped current worktree via symlinked path spelling"
 
+# ── 5b) idle grace fails closed: an unresolvable git admin path skips, never removes ──
+# git is wrapped so that resolving wt-merged's admin paths (--git-path) fails while HEAD
+# still resolves at the merged oid, the one state that reaches the activity check.
+build_fixture
+git() {
+  case " $* " in *" -C $BASE/wt-merged "*" --git-path "*) return 128 ;; esac
+  command git "$@"
+}
+_loop_gc_consider "$BASE/wt-merged" feat-merged "$BASE/main" main reap "$BASE/main"
+unset -f git
+wt_present wt-merged && ok "idle grace: unresolvable git activity state keeps the worktree" \
+  || bad "idle grace: removed a worktree whose git activity state could not be read"
+grep -qF "skipped $BASE/wt-merged (feat-merged) — git activity state unavailable" "$HARNESS_LOOP_STATUS_PATH" \
+  && ok "idle grace: the fail-closed skip is logged" || bad "idle grace: no GC row for the unavailable activity state"
+
 # ── 6) live-session guard: a merged+clean worktree with a RECENT transcript is kept ──
 # (the council-context-memory orphaning, 2026-06-04). Override HOME so the synthetic
 # transcript lands under a throwaway projects dir, not the real ~/.claude.
@@ -256,12 +291,37 @@ SF_WAITED=0
 until [ -f "$SF_READY" ] || [ "$SF_WAITED" -ge 100 ]; do sleep 0.1; SF_WAITED=$((SF_WAITED + 1)); done
 [ -f "$SF_READY" ] && ok "single-flight fixture: a live process holds the reap lock" \
   || bad "single-flight fixture: lock holder never signalled ready"
-SF_ROWS_BEFORE=$(grep -c 'another reaper holds the repository reap lock' "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null)
-loop_gc_worktrees reap
+sf_skip_rows() { grep -c 'another reaper holds the repository reap lock' "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null; }
+# One reap from <project dir>, bounded to 15 s. A reaper facing a held lock skips at once;
+# one that waits on the lock instead is killed here, so that defect fails in seconds
+# rather than after the holder's 120 s.
+sf_reap_bounded() {
+  local pid waited=0
+  ( export CLAUDE_PROJECT_DIR="$1"; loop_gc_worktrees reap ) &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt 150 ]; do sleep 0.1; waited=$((waited + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill_tree "$pid"; wait "$pid" 2>/dev/null
+    return 1
+  fi
+  wait "$pid"
+}
+SF_ROWS_BEFORE=$(sf_skip_rows)
+sf_reap_bounded "$BASE/main" && ok "single-flight: a reaper facing the held lock returns without waiting on it" \
+  || bad "single-flight: reaper still running after 15 s — it waited on the held lock instead of skipping"
 wt_present wt-merged && ok "single-flight: reaper removed nothing while another holds the lock" \
   || bad "single-flight: reaper removed a worktree while another reaper held the lock"
-[ "$(grep -c 'another reaper holds the repository reap lock' "$HARNESS_LOOP_STATUS_PATH" 2>/dev/null)" -eq $((SF_ROWS_BEFORE + 1)) ] \
+[ "$(sf_skip_rows)" -eq $((SF_ROWS_BEFORE + 1)) ] \
   && ok "single-flight: the skip is logged as one GC row" || bad "single-flight: no GC row for the lock skip"
+# The lock is per repository, not per worktree: a reaper started from a LINKED worktree
+# (whose own git dir differs from the main checkout's) must contend for the same lock the
+# main-checkout holder took. wt-dirty is not a candidate, and wt-merged still is.
+sf_reap_bounded "$BASE/wt-dirty" && ok "single-flight: a linked-worktree reaper returns without waiting on the lock" \
+  || bad "single-flight: linked-worktree reaper still running after 15 s"
+wt_present wt-merged && ok "single-flight: a reaper started in a linked worktree sees the main checkout's lock held" \
+  || bad "single-flight: a linked-worktree reaper removed a worktree while the repository lock was held"
+[ "$(sf_skip_rows)" -eq $((SF_ROWS_BEFORE + 2)) ] \
+  && ok "single-flight: the linked-worktree skip is logged" || bad "single-flight: no GC row for the linked-worktree lock skip"
 kill "$SF_HOLDER" 2>/dev/null; wait "$SF_HOLDER" 2>/dev/null
 loop_gc_worktrees reap
 wt_present wt-merged && bad "single-flight: a dead holder's lock blocked the next reaper" \
@@ -311,7 +371,17 @@ AR_HOOKS="$BASE/autoreap-hooks"; AR_CALLS="$BASE/autoreap-calls"; AR_HOME="$BASE
 mkdir -p "$AR_HOOKS" "$AR_CALLS" "$AR_HOME"
 cp "$SCRIPT_DIR/loop-gc.sh" "$SCRIPT_DIR/lib.sh" "$SCRIPT_DIR/loop_lib.sh" "$AR_HOOKS/"
 REAP_DELAY=4
+# The first reaper holds the reap lock for LINGER seconds after its scan finishes, as a
+# loaded machine can: every ledger row is visible while it still holds the lock. A next
+# hook run that does not wait for it to exit loses single-flight and never reaps.
+LINGER=3
 cat >> "$AR_HOOKS/loop_lib.sh" <<STUBS
+eval "\$(declare -f _loop_gc_scan | sed '1s/^_loop_gc_scan/_ar_real_loop_gc_scan/')"
+_loop_gc_scan() {
+  _ar_real_loop_gc_scan "\$@"
+  [ "\$1" = reap ] && [ ! -e "$AR_CALLS/lingered" ] && { : > "$AR_CALLS/lingered"; sleep $LINGER; }
+  return 0
+}
 _loop_gc_gh_ok() { return 0; }
 _hook_worktree_open_references() { return 1; }
 _loop_gc_merged_oid() {
@@ -336,6 +406,9 @@ ar_wait() {
   kill_leftover_reapers
   return 1
 }
+# Before the next hook run: every reaper this case launched has exited and released the
+# reap lock. Ledger rows alone do not say that.
+ar_reapers_gone() { ! pgrep -f "loop-gc-reap $AR_HOOKS" >/dev/null; }
 AR_T0=$(ar_now)
 AR_OUT=$(ar_run)
 AR_ELAPSED=$(/usr/bin/python3 -c 'import sys; print(float(sys.argv[2]) - float(sys.argv[1]))' "$AR_T0" "$(ar_now)")
@@ -374,6 +447,8 @@ wt_present wt-fresh && ok "autoreap: merged+clean worktree with a just-touched i
 # session. The hook's synchronous report runs `git status` on it first; the reap still
 # lands only because that probe leaves the index it reads untouched.
 age_admin "$BASE/wt-fresh"
+ar_wait ar_reapers_gone && ok "autoreap: the first reaper exited before the next session start" \
+  || bad "autoreap: the first reaper was still running after 60 s"
 ar_run >/dev/null
 ar_wait ar_logged "reaped worktree $BASE/wt-fresh" \
   && ok "autoreap: the same worktree is reaped once its git admin files are past the idle grace" \
@@ -383,6 +458,8 @@ wt_present wt-fresh && bad "autoreap: aged worktree still registered" || ok "aut
 # No candidates → no reaper. Every worktree left is gated (dirty, unmerged, precious,
 # collision, live lease), so the report is empty. A launched reaper would make its own
 # merged-oid lookup for feat-dirty after the report's; only the report's may happen.
+ar_wait ar_reapers_gone && ok "autoreap: the second reaper exited before the next session start" \
+  || bad "autoreap: the second reaper was still running after 60 s"
 AR_DIRTY_BEFORE=$(cat "$AR_CALLS/feat-dirty")
 AR_OUT3=$(ar_run)
 [ -z "$AR_OUT3" ] && ok "no-candidates: hook emits no hygiene context" || bad "no-candidates: unexpected context: $AR_OUT3"
@@ -395,6 +472,22 @@ until ar_reaper_looked || [ "$AR_WAITED" -ge 5 ]; do sleep 1; AR_WAITED=$((AR_WA
   && ok "no-candidates: only the report's lookup ran — no reaper was spawned" \
   || { bad "no-candidates: feat-dirty lookups went $AR_DIRTY_BEFORE → $(cat "$AR_CALLS/feat-dirty") (a reaper ran)"; kill_leftover_reapers; }
 hook_release_session_lease "$BASE/wt-settings" "autoreap-live"
+
+# The suite's cleanup must not return while a reaper it killed still runs. This stand-in
+# ignores TERM and is orphaned (not this shell's child) like a real detached reaper.
+( nohup bash -c 'trap "" TERM; while :; do sleep 0.2; done' loop-gc-reap "$BASE/stubborn-reaper" \
+    </dev/null >/dev/null 2>&1 & )
+KR_WAITED=0
+until pgrep -f "loop-gc-reap $BASE/stubborn-reaper" >/dev/null || [ "$KR_WAITED" -ge 50 ]; do sleep 0.1; KR_WAITED=$((KR_WAITED + 1)); done
+KR_PID=$(pgrep -f "loop-gc-reap $BASE/stubborn-reaper")
+if [ -n "$KR_PID" ]; then
+  kill_leftover_reapers >/dev/null
+  kill -0 $KR_PID 2>/dev/null \
+    && { bad "cleanup: a TERM-ignoring reaper was still alive when kill_leftover_reapers returned"; kill -KILL $KR_PID; } \
+    || ok "cleanup: kill_leftover_reapers waits for a killed reaper to exit, escalating to KILL"
+else
+  bad "cleanup fixture: stand-in reaper never started"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # U-HK-44 — unreconciled-subagent sweep + prune of .harness/.agents-registry.jsonl.

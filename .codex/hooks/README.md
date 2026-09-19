@@ -5,9 +5,11 @@ These hooks are a Codex-native compatibility layer for the Claude hooks in `.cla
 Every Claude hook behavior supported by Codex's lifecycle is wired here. The Codex-native guards remain additive:
 
 - `codex-session-start.sh` registers the session under the shared git directory before
-  sequentially running posture, roadmap audit, and read-only worktree hygiene reporting.
-  Destructive GC is an explicit post-merge/closeout action, never a SessionStart action.
-  The wrapper activates the lease only
+  sequentially running posture, roadmap audit, and worktree hygiene (`tools/hooks/loop-gc.sh`).
+  Hygiene runs a read-only report and, when it finds a merged, clean candidate, launches
+  `loop_gc_worktrees reap` detached; that reap removes only through the mutex-backed
+  wrapper, which skips any worktree with a live lease or a process inside it. The wrapper
+  activates the lease only
   after startup succeeds; normal failures release immediately and an abandoned starting
   lease expires after a three-minute grace window, longer than the 105-second hook timeout.
   A repeated `SessionStart(source=compact)` for the same root session preserves the active
