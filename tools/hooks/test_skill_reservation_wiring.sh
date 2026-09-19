@@ -64,9 +64,11 @@ grep -q '\.harness/\.lane-id' "$RC" \
 grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover' "$RC" \
   && ok "roadmap-continue names the inline-prefixed review invocation" \
   || bad "no inline-prefixed review invocation in roadmap-continue"
-grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover' "$SP" \
-  && ok "ship-pr preflight review carries the inline HARNESS_* prefix (standalone runs)" \
-  || bad "ship-pr preflight review lacks the inline HARNESS_* prefix"
+# U-HE-54 (spec v1.9 X9a): ship-pr's review is the cycle's codex half, `review-cycle-pass`,
+# which runs the logged wrapper under the same inline-prefix requirement.
+grep -q 'HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass' "$SP" \
+  && ok "ship-pr cycle-pass review carries the inline HARNESS_* prefix (standalone runs)" \
+  || bad "ship-pr cycle-pass review lacks the inline HARNESS_* prefix"
 # Round-4 codex corrections (races + headless degradation):
 grep -q 'lost race' "$RC" || grep -q 'lost the race' "$RC" \
   && ok "reserve race-loss handled like the occupied path" || bad "no reserve race-loss clause"

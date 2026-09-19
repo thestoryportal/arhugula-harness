@@ -1,6 +1,6 @@
 ---
 name: defect-class-preflight
-description: Pre-commit self-review sweep against the recurring defect classes this workspace's reviewers actually catch, distilled from the merge-gate/codex finding corpus (the corpus only grows; scripts/refresh-classes.py rederives counts). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-with-failover` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), whenever a review round's fix is being committed (fixes introduce their own defects), and whenever a diff introduces a new consumer of an existing data surface — another tool's log/ledger/store/output, an env variable, or an external SDK — which fires the new-consumer inventory pause at authoring time, BEFORE the consumer is written. One pass here is how a first draft survives review — skipping it is how arcs run 9–17 BLOCK rounds.
+description: Pre-commit self-review sweep against the recurring defect classes this workspace's reviewers actually catch, distilled from the merge-gate/codex finding corpus (the corpus only grows; scripts/refresh-classes.py rederives counts). Use BEFORE every commit of code in an arc — after writing or modifying any code under tools/ or harness-*/ and before invoking `just review-cycle-pass` or the merge-gate. Also use whenever about to claim a fix is complete, whenever a diff touches a shared surface (env variables, hooks, conftest, constants), whenever a review round's fix is being committed (fixes introduce their own defects), and whenever a diff introduces a new consumer of an existing data surface — another tool's log/ledger/store/output, an env variable, or an external SDK — which fires the new-consumer inventory pause at authoring time, BEFORE the consumer is written. One pass here is how a first draft survives review — skipping it is how arcs run 9–17 BLOCK rounds.
 ---
 
 # defect-class-preflight — sweep the diff before the reviewers do
@@ -42,7 +42,10 @@ Three meta-rules that outrank the list:
   later. An answers file carried over from the pre-absorption sweep describes the diff
   you MEANT to write, not the one you are committing: re-run
   `scripts/preflight-grep.sh` over the absorption's own bytes and answer from its
-  hits.
+  hits. Under the bounded review cycle (spec v1.9 X9a) nothing checks this for you: the
+  preflight is attested ONCE, before pass 1 (`ship-pr`'s admission attestation), and no gate asks
+  for a fix-round answers file again. The sweep of a fix is now your own discipline
+  between passes, and skipping it stays invisible until the next pass bills for it.
 - **Every numeric bound names the contract value it derives from.** Any literal in a
   guard, allowlist, validator, or budget — a range, a cap, an arity, a retry count —
   is either traceable to a contract value you can cite, or it is a guess wearing a

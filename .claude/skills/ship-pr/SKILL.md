@@ -1,6 +1,6 @@
 ---
 name: ship-pr
-description: Open a PR for the current arc, gate the merge through CI-green + the decorrelated `merge-gate` 3-lens review (code-touching PRs), and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the roadmap_status.md refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + gate + refresh ritual.
+description: Open a PR for the current arc, run its one bounded review cycle (codex + the decorrelated `merge-gate` lenses, launched on push and concurrent with CI), merge on CI green AND a clean pass 3, and run the post-merge fixed-point refresh checklist correctly. Use when the operator says "/ship-pr", "ship it", "open the PR", "land this", or when an arc is built+green and ready to merge. Codifies the §12.2 post-merge audit + the §12.2.1 terminating-refresh fixed-point so the roadmap_status.md refresh is done right (and does not recurse). Do NOT use to author code (that is the arc itself) — use it for the PR + gate + refresh ritual.
 ---
 
 # ship-pr — PR + fixed-point refresh (U-HK-23)
@@ -66,9 +66,11 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 - **The non-mechanical residue is a habit, not a script:** *when you write a sentence about
   what the code does, open the file in the same action.* Both P1s on the `B-71` leg were
   sentences written from a narrative instead of from a call site.
-- **Admission attestation (B-215) — the wrapper REFUSES unattested rounds.** For a
-  reserved arc, `review-with-failover` exits 3 (`GATE_REFUSED`, not a review terminal)
-  unless the round is admitted: round 1 needs a preflight attestation bound to the
+- **Size gate.** Keep the unit near ~300 changed non-test lines; above that, split it into
+  its own arcs BEFORE pass 1 — every full-diff pass of the cycle reads the whole diff again.
+- **Admission attestation (B-215; X9a) — once, before pass 1.** For a
+  reserved arc, `review-cycle-pass 1` exits 3 (`GATE_REFUSED`, not a review terminal)
+  unless the pass is admitted: pass 1 needs a preflight attestation bound to the
   committed diff — run the defect-class-preflight sweep, COMMIT the work, then
   labels-before-answers (U-SR-04, charter WR-10):
   `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-template-preflight <answers-file>`
@@ -80,30 +82,28 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   (the inline prefix is REQUIRED on all these verbs exactly as for the review itself
   — they resolve the arc via env_arc_and_lane(), so a bare invocation binds the
   branch-* fallback arc while the prefixed review checks the reserved one and
-  refuses; template + attest AFTER the final commit — the attestation binds
-  head+digest and goes stale on any later commit). After every BLOCK round: absorb,
-  classify each finding, commit, then
-  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-template-sweep <answers-file>`
-  (pre-fills every outstanding
-  finding_id token-exactly plus the range's hit labels; a bare invocation queries
-  the branch-* fallback arc's obligations and declines), fill, and
-  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-attest-sweep <answers-file>`
-  (the refusal enumerates anything missing;
-  findings are obligations across both loop channels, not per-round rows). The
-  round budget is
-  `DEFAULT_ROUND_BUDGET` in `tools/review_loop_gate.py` (the one authority on the
-  number); exhaustion is the register-and-hold point (`defer.sh` + register row), and
-  only an operator extends it (`just review-attest-budget`, deliberately ask-gated).
-- **Out-of-family review.** `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-with-failover-logged .harness/tmp/<arc-id>-rounds/r<N>.log`
-  (branch-vs-`main`; the C-HE-18 fail-closed `codex-review` wrapper with the C-HE-17
-  `gemini-review` failover; the logged variant is CANONICAL — its in-recipe log publisher is the
+  refuses; template + attest AFTER the final pre-PR commit — the attestation binds
+  head+digest, and pass 1 is admitted only on the bytes it attests). It is attested once:
+  later passes are admitted by the cycle's own state, and there is no sweep attestation
+  between passes (X9a) — sweep a fix's own bytes by hand before committing it
+  (`defect-class-preflight`), but `review-template-sweep`/`review-attest-sweep` are no
+  longer a pass precondition. The cycle's one stop — a P1 still unfixed after pass 3 — is
+  the register-and-hold point (`defer.sh` + register row), and only an operator extends it
+  (`just review-attest-budget`, deliberately ask-gated); see `merge-gate`'s
+  `## The review cycle`.
+- **Out-of-family review.** The codex half of each cycle pass; it launches in
+  `## Pre-merge gate` below, after the PR is pushed, never here:
+  `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]`
+  (`<pass>` is `1`, `2` or `esc` — pass 3 has no codex half; `[base]` defaults to
+  `origin/main`, and pass 2 passes the head pass 1 reviewed; the recipe tags the run with
+  its pass and runs `just review-with-failover-logged` — the C-HE-18 fail-closed `codex-review` wrapper with
+  the C-HE-17 `gemini-review` failover; its in-recipe log publisher is the
   only way a guarded venue produces the round log that `arc-metrics queue
-  --round-logs` later reads, and the bare `just review-with-failover` remains only for
-  a venue that cannot take the log path; U-HE-49, C-HE-21 §1 X6b: the recipe evaluates
+  --round-logs` later reads; U-HE-49, C-HE-21 §1 X6b: the recipe evaluates
   gate admission BEFORE launching — a refused launch exits 3 with no reviewer call and
   no round log — and publishes each attempt under its own minted `r<N>-a<K>.log` name,
-  so pass the plain `r<N>.log` round name and expect the attempt-suffixed file on disk)
-  to convergence. Run it in background mode, or
+  so pass the plain `r<N>.log` round name — `r1` for pass 1, `r2` for pass 2, `r3` for
+  the escalation — and expect the attempt-suffixed file on disk). Run it in background mode, or
   with a Bash tool timeout ABOVE the wrapper's own shared deadline (1260 s primary +
   bounded failover — e.g. ≥ 3000000 ms): a shorter tool timeout kills a valid required
   review mid-flight. The inline `HARNESS_*` prefix is REQUIRED
@@ -123,8 +123,10 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
   working tree pollutes + dilutes the review of the actual diff (the 2026-06-26 finding at
   `.harness/uncommitted-review-flaw-verification-arc.md`). `-uncommitted` is for genuine
   pre-commit review in a CLEAN tree only.
-- **Shadow trial, off-path (U-HE-43; C-HE-29).** After the blocking chain has reached its
-  terminal for this head, run the second reviewer's lens as a SHADOW — it never blocks and
+- **Shadow trial, off-path (U-HE-43; C-HE-29; X9d).** Pass 3's terminal triggers it: once
+  the pass-3 run that completes the cycle has recorded its verdict, run the second
+  reviewer's lens as a SHADOW on that head — the reducer scores exactly that completing
+  run's terminal, once per arc. It never blocks and
   never spends the arc's review budget. The shadow lens (gemini) must DIFFER from the
   producer that supplied the blocking terminal for THIS head: codex on this Claude-authored
   path — when the D-C failover supplied the verdict instead (`gemini-review (failover)`,
@@ -234,23 +236,35 @@ canonical §12 protocol** rather than re-stating it — the recipe lives in CLAU
 
 ## Pre-merge gate — CI green + decorrelated 3-lens review (before the merge door)
 
-Once the PR's HEAD sha shows CI fully green (`check-runs`, rerunning known flakes first, per
-`[[wait-for-main-ci-green-before-forward-work]]`), and for any PR that touches
-`harness-*/src|tests` (or equivalent code surface — skip doc-only and terminating
-`ops: roadmap status refresh` PRs), invoke the **`merge-gate`** skill before the merge
-door: three parallel Agent-tool subagents (concurrency/race-conditions,
-spec-conformance-against-ledgers, test-witness-adequacy), each returning a structured
-`VERDICT: APPROVE`/`VERDICT: BLOCK: <reason>` line. All-approve → merge without HIL, per
-`[[feedback-merge-without-hil-once-ci-green]]` (CI-green remains the base precondition; this
-gate is an additional one for code-touching PRs, not a replacement). Any block or split
-verdict → do not merge; automatic fix-and-re-gate pauses at a recorded-decision checkpoint
-every ten rounds — a checkpoint, never a cap (C-HE-21 §1): an eleventh substantive
-disagreement is the decision point surfaced to the operator via one `AskUserQuestion`, and
-its recorded answer continues review (unbounded) or holds it — see the skill for the full
-procedure, parse-failure handling, and the audit-log append.
+The review is ONE bounded cycle per PR (spec v1.9 X9a), and it starts the moment the PR is
+pushed — **concurrent with CI, not after it**. The **`merge-gate`** skill's
+`## The review cycle` is the definition (passes, dispositions, the stop); this is the order
+you run it in:
+
+1. **Pass 1** — launch together: the codex half (`just review-cycle-pass 1 …r1.log`, above,
+   in the background) and all three merge-gate lenses in parallel Agent calls, each recorded
+   with `merge-gate-emit-pass 1` (lane-prefixed, as `merge-gate` documents). Pass 1 is complete when codex and all three lenses
+   have delivered. CI runs meanwhile.
+2. **Fix round** — adjudicate every finding, fix and commit every accepted P1/P2, and
+   collect every P3/prose finding (plus any pass-3 P2 later) into ONE follow-up row for the
+   arc in `.harness/forward-register.yaml`. Push once.
+3. **Pass 2** — `just review-cycle-pass 2 …r2.log <pass-1 head>` plus the witness-adequacy
+   lens on the same fix delta. An accepted pass-2 P1 triggers the escalation (a repeat of
+   pass 1, `esc`, at most once) before pass 3.
+4. **Pass 3** — one lens on the full diff; it blocks only on an accepted P1, and its
+   re-run after a fix is still pass 3. Its terminal triggers the shadow trial (above).
+   A doc-only PR runs this step alone.
+
+**Merge condition: CI green at the final head AND pass 3 clean** → merge without HIL, per
+`[[feedback-merge-without-hil-once-ci-green]]`. CI is fully green when the head's
+`check-runs` all conclude success (rerun known flakes first, per
+`[[wait-for-main-ci-green-before-forward-work]]`). Skip the cycle only on a terminating
+`ops: roadmap status refresh` PR. A P1 still unfixed after pass 3 stops the arc: one
+`AskUserQuestion`, and its recorded answer extends (one more pass-3 re-run) or holds — see
+the skill for the full procedure, parse-failure handling, and the audit-log append.
 
 **Final-gate reservation back-fill (C-HE-03 §3 + C-HE-06 §4(ii), U-HE-21).** After the
-gate all-approves and BEFORE the merge door: refresh the merge tuple and record the
+cycle's pass 3 is clean and BEFORE the merge door: refresh the merge tuple and record the
 attested merge tree the door will byte-compare. Obtain the three values first, each as
 its own command (`git merge-tree --write-tree` needs git ≥ 2.38; prints the tree OID),
 then pass them as LITERALS (no `$( )`; same fresh-shell rule as the PR-creation
@@ -281,7 +295,7 @@ lane opens pre-acquire, drain-start remains the closure-capture opener.
 
 ## Land through the merge door (C-HE-06/07, U-HE-28)
 
-After CI green + `merge-gate` all-APPROVE + the final-gate back-fill/flip above, first
+After CI green + a clean pass 3 + the final-gate back-fill/flip above, first
 **author the next-action pointer** (§12.2 requires the refresh to carry the re-derived
 pointer, and the wrapper's fixed refresh string cannot take flags): Write the gitignored
 draft `.harness/.next-action-draft` — first line exactly `post-pr: <N>` (this PR's
@@ -739,15 +753,15 @@ evaluated against one.
 These are refusals, not gaps. Each will look like a speed fix at the moment an arc is dragging,
 and each was priced and rejected on evidence:
 
-- **No auto-stopping round cap**, and no shortening of review generically. The merge-gate
-  ten-round checkpoint is a recorded decision to continue or hold, not a stop (C-HE-21 §1).
+- **No review past the cycle without a recorded decision.** The bounded cycle is the cap
+  (v1.9 X9b struck the old no-round-cap and no-collapsing-review-layers refusals: passes 2
+  and 3 are deliberately narrower than pass 1). "One more pass to be safe" after pass 3 is
+  the speed-fix's mirror image, and it is refused the same way (C-HE-21 §1).
 - **No best-of-N** / parallel variant generation as a speed fix — a measured null result at
   this model's temperature.
 - **No fast mode for throughput** — 6× the price for 2.5× the throughput, and it would disturb
   the 98.0% cache-read the token economics rest on.
 - **No agent framework** for mechanization (CLAUDE.md §3.2 framework-pull discipline).
-- **No collapsing of review layers** — 93.4% of 679 findings across 146 PRs were single-tool
-  catches, and merge-gate blocked 46% of 141 gated PRs.
 
 ## Notes
 

@@ -921,26 +921,26 @@ def test_session_end_hook_uses_supported_timeout() -> None:
     assert hooks[0]["timeout"] <= 3
 
 
-def test_merge_gate_honors_operator_authorized_ten_round_checkpoint() -> None:
-    # The 2026-08-01 operator decision set the period at ten rounds; C-HE-21 §1 (v1.5 X5,
-    # ratified 2026-08-25) makes it a recorded-decision checkpoint, never an auto-stopping
-    # cap (U-HE-39). All three carriers keep the period and the eleventh-disagreement
-    # decision point; they must not describe it as a cap.
+def test_merge_gate_carriers_run_the_bounded_review_cycle() -> None:
+    # Spec v1.9 X9a (U-HE-54) replaced the ten-round recorded-decision checkpoint with ONE
+    # bounded cycle per PR: pass 1 -> fix -> pass 2 -> escalation at most once -> pass 3,
+    # launched on push and concurrent with CI; a P1 unfixed after pass 3 stops the arc for a
+    # recorded operator decision. Each carrier must name the cycle and its stop, and none may
+    # keep the retired checkpoint or its convergence loop beside it.
     for path in [
         ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md",
         ROOT / ".claude" / "skills" / "merge-gate" / "SKILL.md",
         ROOT / ".claude" / "skills" / "ship-pr" / "SKILL.md",
     ]:
-        merge_gate = path.read_text(encoding="utf-8")
-        assert "ten rounds" in merge_gate, path
-        assert "eleventh" in merge_gate.lower(), path
-        assert "disagreement" in merge_gate, path
-        assert "recorded-decision checkpoint" in merge_gate, path
-        # The noun alone survives "the checkpoint is a cap"; pin the negation (U-HE-39 lens r1).
-        assert "not a cap" in merge_gate or "never a cap" in merge_gate, path
-        assert "capped at ten" not in merge_gate.lower(), path
-        assert "cap this at ten" not in merge_gate.lower(), path
-        assert "cap automatic fix/re-gate at ten" not in merge_gate.lower(), path
+        carrier = " ".join(path.read_text(encoding="utf-8").split())
+        assert "X9a" in carrier, path
+        assert "pass 3" in carrier, path
+        assert "escalation" in carrier, path
+        assert "unfixed after pass 3" in carrier, path
+        assert "follow-up" in carrier, path
+        assert "ten rounds" not in carrier, path
+        assert "eleventh" not in carrier.lower(), path
+        assert "to convergence" not in carrier, path
 
     codex_merge_gate = (ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md").read_text(
         encoding="utf-8"
@@ -1414,17 +1414,19 @@ def test_merge_gate_carriers_wire_arc_id_and_adjudication() -> None:
     codex = (ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md").read_text(encoding="utf-8")
     claude = (ROOT / ".claude" / "skills" / "merge-gate" / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id>" in codex
+    assert "just merge-gate-emit-pass <pass> --pr <N> --arc-id <arc-id> --lens <id>" in codex
     assert "--arc-id <arc-id>" in claude
 
-    # B-230 Task 5: BOTH carriers record the three verdicts in one call and name the
-    # per-lens form only as the repair path — reverting either carrier to three calls
-    # must red this suite.
-    emit_all = "just merge-gate-emit-all --pr <"
+    # U-HE-54 (spec v1.9 X9a) supersedes B-230 Task 5's one-call emit-all: a lens verdict
+    # counts only when it is recorded INTO its cycle pass, so BOTH carriers document the
+    # per-lens `emit-pass` form with its diff base, and name the pass-less recipes only as
+    # the ones that deliver into no pass -- a carrier reverted to emit-all must red here.
     for text, carrier in ((codex, "codex"), (claude, "claude")):
-        assert emit_all in text, carrier
-        assert "--concurrency-json" in text and "--witness-json" in text, carrier
-        assert "never" in text and "re-running `emit-all`" in text, carrier
+        flat = " ".join(text.split())
+        assert "just merge-gate-emit-pass <pass> --pr <" in flat, carrier
+        assert "--base <base>" in flat, carrier
+        assert "delivers into no pass" in flat, carrier
+        assert "just merge-gate-emit-all --pr <" not in flat, carrier
 
     # the documented command MUST carry the HARNESS_ARC_ID= prefix (r5 P2): the guard
     # auto-allows only the prefixed form, so a bare instruction strands headless at ask

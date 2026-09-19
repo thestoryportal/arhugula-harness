@@ -1,6 +1,6 @@
 ---
 name: merge-gate
-description: Use after out-of-family review and PR CI are green for a substantive arhugula-v2 code or hook PR, immediately before merge.
+description: Use for each pass of an arhugula-v2 PR's bounded review cycle (spec v1.9 X9a), from the push that opens it until pass 3 is clean, concurrent with PR CI — all three lenses in pass 1 and the escalation, the witness lens in pass 2, one lens in pass 3.
 ---
 
 # Merge Gate
@@ -11,14 +11,16 @@ Antigravity and CI; it replaces neither.
 ## Scope and preconditions
 
 1. Confirm the PR number, branch, base, and final code HEAD from non-empty Git/GitHub output.
-2. Confirm the authorship-dependent out-of-family reviewer approved. For Codex-authored work
-   that is Antigravity through `just gemini-review`.
-3. Confirm all required checks on the reviewed PR HEAD and current base `main` HEAD are
-   terminal green. Confirm no stale prior CI branch remains unresolved; inspect its PR,
-   worktree, and unique commits before any cleanup.
-4. Inspect the closed changed-file set. Substantive runtime, test, hook, or tool logic uses
-   all three lenses. A documentation-only or terminating roadmap refresh may take a logged
-   `GATE SKIPPED-PROPORTIONAL`; do not pretend a skip is an approval.
+2. The lenses run beside the authorship-dependent out-of-family reviewer in the same pass,
+   not after it (for Codex-authored work that is Antigravity through `just gemini-review`),
+   and concurrently with PR CI. Confirm no stale prior CI branch remains unresolved; inspect
+   its PR, worktree, and unique commits before any cleanup.
+3. The merge condition is all required checks on the final PR HEAD and current base `main`
+   HEAD terminal green AND pass 3 clean.
+4. Inspect the closed changed-file set. Substantive runtime, test, hook, or tool logic runs
+   the full cycle. A documentation-only PR runs pass 3 alone (one lens); only a terminating
+   roadmap refresh takes a logged `GATE SKIPPED-PROPORTIONAL` — do not pretend a skip is an
+   approval.
 5. If the diff changes `.codex/hooks.json`, `.codex/hooks/**`, `tools/hooks/**`, or the Codex
    hook adapter/witness, run `just codex-hook-runtime-witness` on the final code HEAD and
    require its provider-free report to prove all lifecycle events, both tool phase pairs,
@@ -107,7 +109,9 @@ surfaces to the operator as an approval — which is the correct gate for changi
 reviewers are asked, not an obstacle to route around.
 
 Before launching, publish each lens's binding with
-`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy>`. It
+`just merge-gate-binding merge-gate-<concurrency|spec-conformance|witness-adequacy> <base>`
+(`<base>` is `origin/main` for pass 1, the escalation and pass 3; the head the previous pass
+reviewed for pass 2 — the emitter refuses any other, `WRONG_BASE`). It
 writes the six values to a file and prints ONLY that path (U-SR-03, charter WR-09): name the
 printed path in that lens's prompt and have the lens read the values from it, so no binding
 value is transcribed into the prompt or into the verdict block — that is where both round-3
@@ -124,42 +128,48 @@ verdict bound to the wrong tree. Require,
 immediately before the
 `VERDICT:` line, one fenced ```json block matching `tools/review_schemas/merge-gate.schema.json`
 (`verdict`, `findings`, the six values verbatim). After each run, copy the output file into
-the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored); once all three exist,
-record them in ONE call (B-230 Task 5):
-`HARNESS_LANE_ID=<lane-id> just merge-gate-emit-all --pr <N> --arc-id <arc-id> --concurrency-json .harness/tmp/merge-gate-lens-concurrency.txt --spec-json .harness/tmp/merge-gate-lens-spec-conformance.txt --witness-json .harness/tmp/merge-gate-lens-witness-adequacy.txt`
-(`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's `arc_id`
-to `pr-<N>`, which breaks the N6/phase joins AND the U-HE-47 unique-catch join against the
-preceding codex rounds, whose rows carry the reservation arc id; `<lane-id>` is the
-`.harness/.lane-id` content, without which every row records the `-nolane` fallback).
-It records the three lenses in that order, ALWAYS all three (a recorded BLOCK is a result,
-not an abort), and exits with the worst per-lens code: 0 = APPROVE recorded, 1 = BLOCK
-recorded, 2 = NOT recorded (JSONL row first, structured markdown line second, C-HE-23 §2;
-the final `VERDICT:` line must agree with the block, exact-line match). A lens that exited 2
-does not count — treat it as `BLOCK`, re-run THAT lens, and record it alone with
-`HARNESS_LANE_ID=<lane-id> just merge-gate-emit --pr <N> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt`
-(never by re-running `emit-all`, which mints a fresh round for the two lenses that were fine;
-there is no resumption — the JSONL is the only record).
+the worktree (`.harness/tmp/merge-gate-lens-<id>.txt`, gitignored) and record it into its
+pass of the bounded review cycle (spec v1.9 X9a; the definition is `## The review cycle` in
+`.claude/skills/merge-gate/SKILL.md` — pass 1 and the escalation run all three lenses,
+pass 2 the witness lens on the fix delta, pass 3 one lens on the full diff):
+`HARNESS_LANE_ID=<lane-id> just merge-gate-emit-pass <pass> --pr <N> --arc-id <arc-id> --lens <id> --verdict-json .harness/tmp/merge-gate-lens-<id>.txt --base <base>`
+(`<base>` is the lens binding's base: `origin/main`, or the previous pass's head for pass 2;
+`--arc-id` is the RESERVATION id, e.g. `u-he-34` — omitting it defaults the row's `arc_id`
+to `pr-<N>`, which breaks the N6/phase joins, the cycle admission AND the U-HE-47
+unique-catch join against the codex rounds, whose rows carry the reservation arc id;
+`<lane-id>` is the `.harness/.lane-id` content, without which every row records the
+`-nolane` fallback). Exit 0 = APPROVE recorded, 1 = BLOCK recorded, 2 = NOT recorded
+(JSONL row first, structured markdown line second, C-HE-23 §2; the final `VERDICT:` line
+must agree with the block, exact-line match; the cycle admission refuses an out-of-order,
+wrong-base or already-delivered verdict and prints the recipe to follow). A lens that
+exited 2 does not count — treat it as `BLOCK`, re-run THAT lens, and record it alone; there
+is no resumption — the JSONL is the only record. A verdict recorded without its pass (the
+older `merge-gate-emit` / `merge-gate-emit-all` recipes) delivers into no pass.
 
 ## Outcome
 
-- All three approve: the `emit-all` call (plus any per-lens repair) is the machine record —
-  after a repair the outcome is the worst of the three RECORDED rows at the reviewed head,
-  never the last exit code seen; additionally append the
+- A pass approves: its `emit-pass` calls are the machine record — the pass's outcome is
+  the worst of its RECORDED rows at the reviewed head, never the last exit code seen;
+  additionally append the
   PR/date/branch/head/verdicts/outcome row to `.harness/merge-gate-log.md`
   (`just merge-gate-log-check` is the consistency reducer).
-- Any block: reconcile it against current HEAD. If real and mechanical, fix it, add the
-  appropriate witness, re-run Antigravity and local/CI gates, then re-run the blocking lens
-  against the delta. A broad code change invalidates all three approvals.
+- Any block: reconcile it against current HEAD, then follow the cycle's disposition rule —
+  an accepted P1/P2 from pass 1, pass 2 or the escalation is fixed (with its witness) and
+  committed before the next pass; an accepted pass-2 P1 triggers the escalation, at most
+  once; pass 3 blocks only on an accepted P1 and re-runs after its fix; a pass-3 P2 and
+  every P3 or prose finding go to ONE follow-up register row for the arc. A block is input
+  to the next pass, never a reason to re-run the same one.
 - Absorption adjudication (C-HE-24 §5, U-HE-47): for each gate `finding` row absorbed
   (fix applied) or refuted, append its disposition —
   `HARNESS_ARC_ID=<arc-id> just merge-gate-adjudicate --finding-id <id> --disposition accepted|rejected --actor codex_absorber`
   (the prefix is REQUIRED for the guard's auto-allow and holder-bound to this lane's
   live reservation; actor must differ from the lens producer, write-time enforced).
   The `finding_id` is on the emitted JSONL row. Exit 2 = not recorded; re-run.
-- Automatic fix/re-gate pauses at a recorded-decision checkpoint every ten rounds (period by
-  operator decision, 2026-08-01; a checkpoint, not a cap, under C-HE-21 §1). An eleventh
-  substantive disagreement is a genuine decision point; surface all verdicts together
-  rather than looping or choosing silently, and continue only on a recorded decision.
+- The cycle's one stop: a P1 still unfixed after pass 3 halts the arc (the gate refuses
+  further passes, `BUDGET_EXHAUSTED`). It is a genuine decision point; surface the pass's
+  verdicts together rather than looping or choosing silently, and continue only on a
+  recorded operator decision (`just review-attest-budget` buys one more pass-3 re-run) or
+  hold. No review runs past pass 3 otherwise.
 
 Commit and push the gate-log row before merge, then wait for CI on that final PR HEAD to be
 green. The log-only commit does not require re-running approved lenses, but any code, test,
