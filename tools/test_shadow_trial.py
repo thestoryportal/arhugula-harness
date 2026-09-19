@@ -906,6 +906,27 @@ def test_a_shadow_review_of_other_bytes_at_the_completing_head_is_not_scored():
     assert st.scored_rounds(rows, LENS) == set()
 
 
+def test_the_latest_shadow_round_at_the_completing_binding_is_the_one_scored():
+    rows = [
+        *_gate_pass3("pr-1", "h" * 40),
+        {**_row(1, LENS, "no_finding", head="h" * 40), "cycle_pass": "3", "diff_digest": "d"},
+        {**_row(2, LENS, "no_finding", head="h" * 40), "cycle_pass": "3", "diff_digest": "d"},
+    ]
+    assert st.scored_rounds(rows, LENS) == {("pr-1", 2)}
+
+
+def test_adjudicating_a_cycle_tagged_shadow_finding_keeps_its_pass(tmp_path: Path):
+    # cycle_pass is part of the immutable lineage core, so the adjudication row must carry
+    # the finding's pass or the append is refused
+    p = tmp_path / "g.jsonl"
+    tagged = {**_row(4, LENS, location="only-shadow", uc=None), "cycle_pass": "3"}
+    fr.append_row(tagged, p)
+    row = st.adjudicate(
+        tagged["finding_id"], disposition="accepted", actor="operator", lens=LENS, path=p
+    )
+    assert row["cycle_pass"] == "3"
+
+
 def test_rows_without_a_cycle_pass_keep_the_per_round_unit():
     rows = [_row(1, LENS, "no_finding"), _row(2, LENS, "no_finding")]
     assert st.scored_rounds(rows, LENS) == {("pr-1", 1), ("pr-1", 2)}

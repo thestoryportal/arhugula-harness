@@ -3602,6 +3602,13 @@ def test_a_failover_verdict_stands_in_for_codex():
     assert _next(rows) == "2"
 
 
+def test_an_unavailable_lens_does_not_complete_a_pass():
+    # three of the four reviewers delivered; the fourth lens was unavailable
+    rows = [_crow("1", 1), *(_crow("1", 1, producer=lens) for lens in LENSES[:2])]
+    rows.append(_crow("1", 1, producer=LENSES[2], record_kind="reviewer_unavailable"))
+    assert _next(rows) == "1"
+
+
 def test_a_pass_no_reviewer_performed_does_not_advance_the_cycle():
     unavailable = [
         _crow("1", 1, record_kind="reviewer_unavailable"),
