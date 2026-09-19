@@ -159,6 +159,7 @@ tools/dashboard/public/
 .harness/loop_status.md
 .harness/.loop-iter
 .harness/.loop-halt
+.harness/.loop-ceiling-spent-*
 .harness/codex_loop_state.json
 .harness/review_loop_gate_state.json
 

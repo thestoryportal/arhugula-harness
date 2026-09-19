@@ -261,10 +261,47 @@ SLOW_PID=$!
 # step 5's write straddle. Another session lands its own turn in that window.
 sleep 1
 printf '7' > "$REPO/.harness/.loop-iter"
-usage_record 1000 > "$FIFO"          # unblocks the reader: under the ceiling -> continue path
+# Unblocks the reader. A FIFO is not seekable, so the reader then fails rather than
+# returning `under` — which is fine and is the point: BOTH the unreadable arm and the
+# `under` arm fall through to step 5, where the re-read lives. What the FIFO buys is the
+# HOLD, which is the only way to open the window at all.
+usage_record 1000 > "$FIFO"
 wait "$SLOW_PID" 2>/dev/null
 [ "$(cat "$REPO/.harness/.loop-iter")" = "8" ] && ok "the continue arm increments the counter it re-reads (7 -> 8), not the stale one" || bad "stale counter written: $(cat "$REPO/.harness/.loop-iter" 2>/dev/null) (expected 8)"
 rm -f "$FIFO" "$REPO/slow.out" "$REPO/.harness/.loop-iter"
+
+# 8h) The cap re-check against the FRESH counter (pass-1 concurrency P2 / codex P2). Step 3
+#     decides the cap on a value read BEFORE the ceiling subprocess; a concurrent Stop can
+#     reach MAX inside that window. Same FIFO fixture as 8g: the hook is blocked mid-step-4
+#     while this test plays the other session and drives the counter to the cap. The hook must
+#     then stand down, not block a turn its stale authorisation no longer covers.
+: > "$HARNESS_LOOP_STATUS_PATH"
+FIFO="$REPO/cap.jsonl"; rm -f "$FIFO"; mkfifo "$FIFO"
+printf '0' > "$REPO/.harness/.loop-iter"
+( printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$FIFO" "$REPO" \
+  | HARNESS_LOOP=1 HARNESS_LOOP_MAX=5 HARNESS_LOOP_CEILING_TIMEOUT=20 \
+    MEMENTO_ROOT="$REPO/no-such-memento" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK" > "$REPO/cap.out" ) &
+CAP_PID=$!
+sleep 1
+printf '5' > "$REPO/.harness/.loop-iter"     # the other session reaches the cap meanwhile
+# Unblocks the reader; as in 8g the FIFO is unseekable so step 4 ends in the unreadable arm,
+# which falls through to step 5 exactly as a normal `under` reading would. Without the
+# re-check, step 5 blocks a turn on step 3's stale `0 < 5`.
+usage_record 1000 > "$FIFO"
+wait "$CAP_PID" 2>/dev/null
+[ ! -s "$REPO/cap.out" ] && ok "a cap reached during the ceiling read stands the turn down" || bad "blocked past the cap on a stale authorisation: $(cat "$REPO/cap.out")"
+grep -q 'iteration cap 5 reached while measuring the ceiling' "$HARNESS_LOOP_STATUS_PATH" && ok "the mid-ceiling cap stand-down is logged as such" || bad "mid-ceiling cap not logged: $(cat "$HARNESS_LOOP_STATUS_PATH")"
+rm -f "$FIFO" "$REPO/cap.out" "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
+
+# 8i) A payload with NO session id must not fall back to one shared marker (pass-1
+#     concurrency P3): a bare `.loop-ceiling-spent-` would put every such session back on the
+#     single file the per-session scheme exists to replace. It blocks, bounded by the counter,
+#     and writes no marker at all.
+rm -f "$REPO/.harness"/.loop-ceiling-spent-*
+OUT=$(printf '{"transcript_path":"%s","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 MEMENTO_ROOT="$REPO/no-such-memento" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING")' >/dev/null 2>&1 && ok "a session with no id still gets its close-out block" || bad "no-id session lost its block: $OUT"
+[ -z "$(ls "$REPO/.harness"/.loop-ceiling-spent-* 2>/dev/null)" ] && ok "a session with no id writes NO shared spent marker" || bad "no-id session wrote a shared marker: $(ls "$REPO/.harness"/.loop-ceiling-spent-* 2>/dev/null)"
+rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness"/.loop-ceiling-spent-*
 
 # 9) The reading itself (context_tokens.py), driven in the consumer's exact invocation. The
 #    transcript scan reads backwards in 256 KB chunks, so the cases that can only go wrong

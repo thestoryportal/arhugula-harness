@@ -1291,3 +1291,6 @@ delegated `laws:prompt` author.
 | 2026-09-19T23:06:06Z | #1612 | 7fd866a7f29f | merge-gate-concurrency | BLOCK | 5 finding(s) | r1 |
 | 2026-09-19T23:06:06Z | #1612 | 7fd866a7f29f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
 | 2026-09-19T23:06:07Z | #1612 | 7fd866a7f29f | merge-gate-witness-adequacy | BLOCK | 3 finding(s) | r1 |
+| 2026-09-19T23:50:23Z | #1612 | 17e10a8fd4c2 | merge-gate-concurrency | BLOCK | 3 finding(s) | r2 |
+| 2026-09-19T23:50:23Z | #1612 | 17e10a8fd4c2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-19T23:50:24Z | #1612 | 17e10a8fd4c2 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |

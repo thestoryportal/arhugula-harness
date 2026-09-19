@@ -147,14 +147,18 @@ else
       # `-cd` DELETES every character outside the safe set rather than substituting it:
       # jq -r emits a trailing newline, and substituting would fold it into the filename.
       SESSION=$(hook_json "$PAYLOAD" '.session_id' | tr -cd 'A-Za-z0-9_-')
-      SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent-${SESSION}"
-      if [ -n "$SESSION" ] && [ -f "$SPENT" ]; then
+      # No id means nothing to scope by, and a bare `.loop-ceiling-spent-` would put every
+      # such session back on ONE shared marker — the collision the filename scheme exists to
+      # prevent. Leave SPENT empty instead and let the counter be the only bound.
+      SPENT=""
+      [ -n "$SESSION" ] && SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent-${SESSION}"
+      if [ -n "$SPENT" ] && [ -f "$SPENT" ]; then
         loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, close-out already asked of this session; allowing the stop"
         exit 0
       fi
       CLOSE_OUT=$(printf '%s' "$VERDICT_JSON" | jq -r '.close_out')
       loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, blocking once for the close-out"
-      : > "$SPENT" 2>/dev/null
+      [ -n "$SPENT" ] && : > "$SPENT" 2>/dev/null
       # A close-out block is a turn the loop spent, so it counts as one. That is also the
       # SECOND bound: the marker above is the primary one, but writing it is a best-effort
       # file write, and if it fails this arm would otherwise re-block every turn forever —
@@ -174,9 +178,17 @@ fi
 # 5) Continue: increment counter + inject next-action + the run-scoped skip-set.
 # Re-read first: the counter is per-lane, and step 4's subprocess sits between the read at
 # step 3 and this write, so incrementing the pre-ceiling value would drop a concurrent
-# session's turn. (The cap DECISION at step 3 still rests on the earlier read; that window
-# is pre-existing and is now bounded by step 4's timeout.)
+# session's turn — AND step 3's cap decision was made against that stale value. Re-check the
+# cap here, where the number is current: without it a concurrent Stop that reaches MAX inside
+# the ceiling window lets this turn block anyway, carrying the counter one past a bound the
+# header calls hard.
 ITER=$(cat "$ITERF" 2>/dev/null || echo 0); [[ "$ITER" =~ ^[0-9]+$ ]] || ITER=0
+if [ "$ITER" -ge "$MAX" ]; then
+  loop_log STOP "iteration cap ${MAX} reached while measuring the ceiling — loop stopping (run /loop-start to resume)"
+  [ -n "$HALT" ] && : > "$HALT" 2>/dev/null
+  rm -f "$ITERF" 2>/dev/null
+  exit 0
+fi
 ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
