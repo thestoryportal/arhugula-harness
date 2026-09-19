@@ -8145,7 +8145,7 @@ The §4 coverage matrix is unchanged for the v1.0 contract×unit set: the X6 cla
 | Unit | Plan id | Title | After | Owns |
 |---|---|---|---|---|
 | U-HE-52 | A1 | Spec v1.9 amendment + this section | — | spec, plan, clearance marker, artifact heads |
-| U-HE-53 | A2 | Bounded cycle in `review_loop_gate.py`; `cycle_pass` field; `just review-cycle-pass` | 52 | `tools/review_loop_gate.py`, `finding_record.py`, `review_wrapper_common.py`, `merge_gate_log.py`, `tools/shadow_trial.py` (X9d reducer) + tests, justfile review recipes |
+| U-HE-53 | A2 | Bounded cycle in `review_loop_gate.py`; `cycle_pass` field; `just review-cycle-pass` | 52 | `tools/review_loop_gate.py`, `finding_record.py`, `review_wrapper_common.py`, `merge_gate_log.py`, `tools/shadow_trial.py` (X9d reducer), `tools/review_schemas/finding_record.schema.json` (the `cycle_pass` field; the schema is `additionalProperties: false`) + tests, justfile review recipes |
 | U-HE-54 | A3 | Skills and doc carriers for the cycle; CLAUDE.md §13.1 | 53 | ship-pr, merge-gate, defect-class-preflight, roadmap-continue (+ `.agents` twins), `test_skill_lanes_docs.sh`, `test_codex_workflow_parity.py`, CLAUDE.md |
 | U-HE-55 | B1 | Deny bare `gh pr merge` in every mode | 53 | `.claude/settings.json`, new `tools/hooks/test_settings_merge_deny.sh` |
 | U-HE-56 | B2 | Keep test fixtures out of the real loop ledger | 53 | `tools/hooks/test_pretooluse_bash_emit_policy.sh` (+ any leaking suite found) |
