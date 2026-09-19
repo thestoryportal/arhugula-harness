@@ -7,15 +7,16 @@ against `concurrent_lanes_at_open`. It reads the stores the loop already writes:
 
 - the reservation (C-HE-03), through `reservations.current`: reserved_at, PR, merge sha
   and the `concurrent_lanes_at_open` sensor, read as lanes by `arc_metrics.lanes_at_open`;
-- the gate log (C-HE-24): the first and last review row for the arc;
+- the reservation's `phases.verify.start` span (C-HE-27 §5): when review round 1 began;
+- the gate log (C-HE-24): the last review row for the arc;
 - git: when the merge commit landed on main;
 - the merge door (C-HE-06): the `released.<token>` record, whose mtime `_move_lease`
   stamps immediately before the rename that releases the lease.
 
 Phases, in minutes:
 
-    build     reserved      -> first review row
-    review    first review  -> last review row
+    build     reserved      -> review start (the verify span's round-1 admission)
+    review    review start  -> last review row
     to_merge  last review   -> merge commit   (CI wait, gate rows, the door's merge step)
     door      merge commit  -> lease release  (post-merge CI, refresh or lit step)
     total     reserved      -> lease release
@@ -26,7 +27,7 @@ over all arcs and per lanes-at-open cohort (`unknown` where the sensor recorded 
 
 The merge instant comes from the reservation's merge_sha; when an older reservation
 lacks one, it is resolved from the squash commit on main whose subject ends `(#<pr>)`,
-and the row says so (`merged_source`). A merged arc whose merge instant cannot be
+and the JSON row says so (`merged_source`). A merged arc whose merge instant cannot be
 resolved is listed as unmeasured with the reason.
 
 Usage:
@@ -71,7 +72,9 @@ class Timeline:
     arc_id: str
     pr: int | None
     reserved: datetime
-    first_review: datetime | None
+    #: round-1 admission: the reservation's `phases.verify.start` span edge, which
+    #: review-with-failover-logged writes before the reviewer runs (C-HE-27 §5)
+    review_start: datetime | None
     last_review: datetime | None
     merged: datetime
     released: datetime | None
@@ -86,6 +89,7 @@ class Timeline:
 @dataclass(frozen=True)
 class Unmeasured:
     arc_id: str
+    reserved: datetime
     reason: str
 
 
@@ -101,8 +105,8 @@ def phases(t: Timeline) -> dict[str, float | None]:
     # [LAW:dataflow-not-control-flow] every phase is computed every time; absence flows
     # through as None rather than branching the set of phases
     return {
-        "build": _minutes(t.reserved, t.first_review),
-        "review": _minutes(t.first_review, t.last_review),
+        "build": _minutes(t.reserved, t.review_start),
+        "review": _minutes(t.review_start, t.last_review),
         "to_merge": _minutes(t.last_review, t.merged),
         "door": _minutes(t.merged, t.released),
         "total": _minutes(t.reserved, t.released),
@@ -133,9 +137,16 @@ def cohort_label(lanes: int | None) -> str:
     return "unknown" if lanes is None else str(lanes)
 
 
-def latest(timelines: list[Timeline], n: int) -> list[Timeline]:
-    """The n most recently merged; n >= 1 is guaranteed by `_positive_int` at the CLI."""
-    return sorted(timelines, key=lambda t: t.merged)[-n:]
+def latest(
+    timelines: list[Timeline], unmeasured: list[Unmeasured], n: int
+) -> tuple[list[Timeline], list[Unmeasured]]:
+    """The n most recently reserved merged arcs, measured or not -- `reserved` is the one
+    instant every merged arc has; n >= 1 is guaranteed by `_positive_int` at the CLI."""
+    cut = sorted([t.reserved for t in timelines] + [u.reserved for u in unmeasured])[-n:][0]
+    return (
+        sorted((t for t in timelines if t.reserved >= cut), key=lambda t: t.reserved),
+        [u for u in unmeasured if u.reserved >= cut],
+    )
 
 
 def goal_verdict(mean_total: float | None) -> str:
@@ -151,15 +162,23 @@ def _ts(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _review_bounds(rows: list[dict]) -> dict[str, tuple[datetime, datetime]]:
-    bounds: dict[str, tuple[datetime, datetime]] = {}
+def _last_review(rows: list[dict]) -> dict[str, datetime]:
+    """The last review row per arc: rows are minted when a reviewer RETURNS, so the last
+    one ends the review phase (the first one marks round 1's end, not the start)."""
+    last: dict[str, datetime] = {}
     for r in rows:
         if not str(r.get("producer", "")).startswith(REVIEW_PRODUCER_PREFIXES):
             continue
         at = _ts(r["ts"])
-        lo, hi = bounds.get(r["arc_id"], (at, at))
-        bounds[r["arc_id"]] = (min(lo, at), max(hi, at))
-    return bounds
+        last[r["arc_id"]] = max(last.get(r["arc_id"], at), at)
+    return last
+
+
+def _verify_start(head: dict) -> datetime | None:
+    """Round-1 admission from the reservation's span record; None for an arc before the
+    span existed (U-HE-50), never a substitute instant."""
+    start = (head.get("phases") or {}).get("verify", {}).get("start")
+    return _ts(start) if start else None
 
 
 def _releases(door_dir: Path) -> dict[str, datetime]:
@@ -248,7 +267,7 @@ def load(gate_log: Path, repo: Path, door_dir: Path) -> tuple[list[Timeline], li
         rows = [json.loads(line) for line in gate_log.read_text().splitlines() if line.strip()]
     except (OSError, json.JSONDecodeError) as exc:
         raise StoreError(f"gate log unreadable at {gate_log}: {exc}") from exc
-    review = _review_bounds(rows)
+    last_review = _last_review(rows)
     releases = _releases(door_dir)
     squash = _squash_commits(repo)
     timelines: list[Timeline] = []
@@ -256,17 +275,16 @@ def load(gate_log: Path, repo: Path, door_dir: Path) -> tuple[list[Timeline], li
     for arc, head in heads:
         resolved = _merge_instant(repo, head, squash)
         if isinstance(resolved, str):
-            unmeasured.append(Unmeasured(arc, resolved))
+            unmeasured.append(Unmeasured(arc, _ts(head["reserved_at"]), resolved))
             continue
         merged, source = resolved
-        first_last = review.get(arc)
         timelines.append(
             Timeline(
                 arc_id=arc,
                 pr=head.get("pr"),
                 reserved=_ts(head["reserved_at"]),
-                first_review=first_last[0] if first_last else None,
-                last_review=first_last[1] if first_last else None,
+                review_start=_verify_start(head),
+                last_review=last_review.get(arc),
                 merged=merged,
                 released=releases.get(arc),
                 lanes=arc_metrics.lanes_at_open(head),
@@ -320,7 +338,10 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument(
-        "--last", type=_positive_int, default=30, help="report the N most recently merged arcs"
+        "--last",
+        type=_positive_int,
+        default=30,
+        help="report the N most recently reserved merged arcs",
     )
     ap.add_argument("--json", action="store_true", help="emit the phases and summary as JSON")
     args = ap.parse_args(argv)
@@ -329,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
     except StoreError as exc:
         print(f"arc_wallclock: {exc}", file=sys.stderr)
         return 2
-    window = latest(timelines, args.last)
+    window, unmeasured = latest(timelines, unmeasured, args.last)
     if args.json:
         print(
             json.dumps(
@@ -339,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:
                             "arc_id": t.arc_id,
                             "pr": t.pr,
                             "lanes": t.lanes,
+                            "merged_source": t.merged_source,
                             **phases(t),
                         }
                         for t in window
@@ -346,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
                     "summary": summarize(window),
                     "by_lanes": {cohort_label(k): v for k, v in by_cohort(window).items()},
                     "goal": goal_verdict(summarize(window)["total"]["mean"]),
-                    "unmeasured": [u.__dict__ for u in unmeasured],
+                    "unmeasured": [{"arc_id": u.arc_id, "reason": u.reason} for u in unmeasured],
                 },
                 indent=2,
             )

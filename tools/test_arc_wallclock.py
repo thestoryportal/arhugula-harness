@@ -28,7 +28,7 @@ def _timeline(arc="a", *, review=(10, 40), merged=50, released=60, lanes=None) -
         arc_id=arc,
         pr=1,
         reserved=T0,
-        first_review=_t(first) if first is not None else None,
+        review_start=_t(first) if first is not None else None,
         last_review=_t(last) if last is not None else None,
         merged=_t(merged),
         released=_t(released) if released is not None else None,
@@ -75,9 +75,15 @@ def test_cohorts_split_the_total_by_lanes_in_numeric_order_unknown_last():
     assert c[10]["mean"] == 120 and c[None]["mean"] == 90
 
 
-def test_latest_keeps_the_most_recently_merged_arcs():
-    old, new = _timeline("old", merged=10, released=20), _timeline("new", merged=90, released=95)
-    assert [t.arc_id for t in aw.latest([new, old], 1)] == ["new"]
+def test_latest_windows_measured_and_unmeasured_arcs_together_by_reservation():
+    old = aw.Timeline("old", 1, _t(0), None, None, _t(10), _t(20), 1)
+    mid = aw.Timeline("mid", 2, _t(5), None, None, _t(90), _t(95), 1)
+    older_gap = aw.Unmeasured("older-gap", _t(-5), "git cannot resolve")
+    newest_gap = aw.Unmeasured("newest-gap", _t(30), "git cannot resolve")
+    # the newest arc is unmeasured: it holds its window slot, it is not replaced by an
+    # older measurable arc, and older unmeasured arcs fall outside the window
+    assert aw.latest([old, mid], [older_gap, newest_gap], 1) == ([], [newest_gap])
+    assert aw.latest([mid, old], [older_gap, newest_gap], 2) == ([mid], [newest_gap])
 
 
 def test_goal_is_met_at_exactly_sixty_minutes_and_not_above():
@@ -86,14 +92,14 @@ def test_goal_is_met_at_exactly_sixty_minutes_and_not_above():
     assert aw.goal_verdict(None) == "no arcs with a recorded release"
 
 
-def test_review_bounds_take_the_earliest_and_latest_review_rows_only():
+def test_last_review_is_the_latest_review_row_only():
     rows = [
         {"arc_id": "a", "producer": "merge-gate-concurrency", "ts": "2026-09-18T12:40:00Z"},
         {"arc_id": "a", "producer": "codex_review_wrapper", "ts": "2026-09-18T12:10:00Z"},
         {"arc_id": "a", "producer": "claude_absorber", "ts": "2026-09-18T11:00:00Z"},
         {"arc_id": "a", "producer": "merge-door", "ts": "2026-09-18T14:00:00Z"},
     ]
-    assert aw._review_bounds(rows) == {"a": (_t(10), _t(40))}
+    assert aw._last_review(rows) == {"a": _t(40)}
 
 
 # ── the effectful edge, over real stores ─────────────────────────────────────
@@ -138,19 +144,24 @@ def _release(queue: Path, token: str, arc: str, at: datetime) -> None:
 
 def test_load_reads_the_stores_and_names_unmeasurable_arcs(stores):
     queue, repo, log, sha = stores
-    _reserve(queue, "with-sha", merge_sha=sha, pr=7, concurrent_lanes_at_open=2)
+    verify = {"verify": {"start": "2026-09-18T12:05:00Z", "end": "2026-09-18T12:09:00Z"}}
+    _reserve(queue, "with-sha", merge_sha=sha, pr=7, concurrent_lanes_at_open=2, phases=verify)
     _reserve(queue, "by-subject", merge_sha=None, pr=7, concurrent_lanes_at_open=None)
     _reserve(queue, "bypassed", merge_sha=None, pr=None)
     _reserve(queue, "lost-sha", merge_sha="0" * 40, pr=8)
     _reserve(queue, "open", state="open")
     _release(queue, "tok", "with-sha", _t(75))
+    _release(queue, "tok0", "with-sha", _t(65))  # an earlier release record of the same arc
     row = {"arc_id": "with-sha", "producer": "codex_review_wrapper", "ts": "2026-09-18T12:10:00Z"}
     log.write_text(json.dumps(row) + "\n")
     timelines, unmeasured = aw.load(log, repo, queue / "merge-door")
     by_arc = {t.arc_id: t for t in timelines}
     assert set(by_arc) == {"with-sha", "by-subject"}
-    assert by_arc["with-sha"].released == _t(75)  # the released record's mtime
-    assert by_arc["with-sha"].first_review == _t(10)
+    assert by_arc["with-sha"].released == _t(75)  # the LATEST released record's mtime
+    assert by_arc["with-sha"].review_start == _t(5)  # the verify span, not the first row
+    assert by_arc["with-sha"].last_review == _t(10)
+    assert by_arc["by-subject"].review_start is None  # no span recorded: no substitute
+    assert by_arc["with-sha"].merged_source == "reservation"
     # the sensor stores siblings; the cohort key is lanes (arc_metrics.lanes_at_open)
     assert by_arc["with-sha"].lanes == 3
     assert by_arc["by-subject"].lanes is None  # an explicit null is unknown
@@ -254,9 +265,26 @@ def test_the_cli_publishes_lanes_cohorts_and_the_goal(stores, monkeypatch, capsy
     assert aw.main(["--json"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["arcs"][0]["lanes"] == 1 and out["arcs"][0]["total"] == 45
+    assert out["arcs"][0]["merged_source"] == "reservation"
     assert out["by_lanes"] == {"1": {"n": 1, "mean": 45, "median": 45}}
     assert out["goal"] == "MET"
     assert aw.main([]) == 0
     text = capsys.readouterr().out
     assert "  1                       1       45       45" in text
     assert "-> MET" in text
+
+
+def test_a_reservation_merge_sha_takes_precedence_over_the_squash_subject(stores):
+    queue, repo, log, first = stores
+    env = {**os.environ, "GIT_COMMITTER_DATE": "2026-09-18T15:00:00Z"}
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+         "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "later (#9)"],
+        check=True, env=env,
+    )  # fmt: skip
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _reserve(queue, "a", merge_sha=first, pr=9)
+    (t,), _ = aw.load(log, repo, queue / "merge-door")
+    assert t.merged_source == "reservation"
+    assert t.merged == aw._commit_time(repo, first)
+    assert t.merged != aw._commit_time(repo, "HEAD")
