@@ -69,7 +69,7 @@ FLAT_TL=$(flat "$TL") || bad "two-lane: could not read the carrier to flatten it
 FLAT_RC=$(flat "$RC") || bad "roadmap-continue: could not read the carrier to flatten it"
 FLAT_MG=$(flat "$MG") || bad "merge-gate: could not read the carrier to flatten it"
 FLAT_SP=$(flat "$SP") || bad "ship-pr: could not read the carrier to flatten it"
-EXPECTED_CLAIMS=36
+EXPECTED_CLAIMS=41
 seen=0
 while IFS='|' read -r key claim; do
   [ -n "$key" ] || continue
@@ -102,6 +102,9 @@ MG|**The stop.** Pass 3 raising an accepted P1 on two consecutive runs — its r
 MG|A **doc-only** PR runs pass 3 alone: one lens on the full diff, no codex half (X9a).
 MG|the head the previous pass reviewed for pass 2 (the fix delta — the emitter refuses any other base, `WRONG_BASE`).
 MG|Nothing merges past a known P1.
+MG|X9a words the stop as a P1 still *unfixed* after pass 3; the gate is stricter, and the divergence is registered as B-298 — follow the gate, since it is what refuses.
+MG|Launch mechanics. The defect-class preflight is attested ONCE, before the cycle's first pass — pass 1, or pass 3 on a doc-only PR (`review-attest-preflight`, see `ship-pr`; the gate refuses the first pass without it, `PREFLIGHT_MISSING`; X9a names only pass 1, and the doc-only case is part of B-298); there is no sweep attestation between passes.
+MG|What pass 3 itself raises cannot be committed here (the landing delta admits only the gate-log files, so a register commit after pass 3 would owe another pass 3): list each such finding id in the arc's close-out checkpoint under Remaining Work, and add it to the row — creating the row if pass 3 raised the arc's first follow-up finding — in the first commit of the arc's next PR.
 MG|Invariants bind by live carriage (C-HE-21 §2), not by an appeal to their number.
 MG|- **#5 is live** (no verdict inferred from absence) in this skill's `## Parsing — fail closed` and in `ship-pr`'s `## Pre-merge gate — CI green + decorrelated 3-lens review (before the merge door)`.
 MG|- **#14 is C-HE-19**: CANCELLED is INCOMPLETE, never green — carried by `ship-pr`'s post-merge CI check and by `tools/merge_door.py`.
@@ -115,6 +118,8 @@ MG|- **K7 —** routing by arc type and finding class is deferred until their pr
 MG|- **K8 —** a blocking post-edit hook is admitted only for fast, deterministic, low-false-positive checks at a stable boundary (C-HE-31 §3), not on every intermediate edit.
 SP|The review is ONE bounded cycle per PR (spec v1.9 X9a), and it starts the moment the PR is pushed — **concurrent with CI, not after it**.
 SP|**Merge condition: CI green at the final head AND pass 3 clean** → merge without HIL
+SP|- **Admission attestation (B-215; X9a) — once, before the cycle's first pass.**
+SP|A P2 or P3 that pass 3 raises cannot be committed on this PR (a commit after pass 3 owes another pass 3): list its finding id under Remaining Work in the arc's close-out checkpoint and add it to the row in the first commit of the arc's next PR (B-298).
 SP|Keep the unit near ~300 changed non-test lines; above that, split it into its own arcs BEFORE pass 1 — every full-diff pass of the cycle reads the whole diff again.
 SP|These are refusals, not gaps. Each will look like a speed fix at the moment an arc is dragging, and each was priced and rejected on evidence:
 SP|- **No review past the cycle without a recorded decision.** The bounded cycle is the cap (v1.9 X9b struck the old no-round-cap and no-collapsing-review-layers refusals: passes 2 and 3 are deliberately narrower than pass 1).

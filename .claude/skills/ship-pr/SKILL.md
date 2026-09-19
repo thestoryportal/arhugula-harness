@@ -247,9 +247,10 @@ you run it in:
    have delivered. CI runs meanwhile.
 2. **Fix round** — adjudicate every finding, fix and commit every accepted P1/P2, and
    collect every P3/prose finding into ONE follow-up row for the arc in
-   `.harness/forward-register.yaml`, committed with the last fix before pass 3 (a P2 or P3
-   that pass 3 raises stays in the gate log and joins the row on the arc's next PR — a
-   commit after pass 3 owes another pass 3). Push once.
+   `.harness/forward-register.yaml`, committed with the last fix before pass 3. A P2 or P3
+   that pass 3 raises cannot be committed on this PR (a commit after pass 3 owes another
+   pass 3): list its finding id under Remaining Work in the arc's close-out checkpoint and
+   add it to the row in the first commit of the arc's next PR (B-298). Push once.
 3. **Pass 2** — `just review-cycle-pass 2 …r2.log <pass-1 head>` plus the witness-adequacy
    lens on the same fix delta. An accepted pass-2 P1 is fixed and committed, then triggers the escalation (a
    repeat of pass 1, `esc`, at most once) before pass 3.

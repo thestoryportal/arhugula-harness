@@ -931,6 +931,7 @@ def test_merge_gate_carriers_run_the_bounded_review_cycle() -> None:
         ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md",
         ROOT / ".claude" / "skills" / "merge-gate" / "SKILL.md",
         ROOT / ".claude" / "skills" / "ship-pr" / "SKILL.md",
+        ROOT / ".agents" / "skills" / "ship-pr" / "SKILL.md",
     ]:
         carrier = " ".join(path.read_text(encoding="utf-8").split())
         assert "X9a" in carrier, path
@@ -945,6 +946,21 @@ def test_merge_gate_carriers_run_the_bounded_review_cycle() -> None:
         assert "ten rounds" not in carrier, path
         assert "eleventh" not in carrier.lower(), path
         assert "to convergence" not in carrier, path
+
+    # U-HE-54 pass-2 witness lens: the preflight binds to the cycle's FIRST pass (pass 3 on
+    # a doc-only PR, which the gate refuses without it) and pass-3 findings travel through
+    # the close-out checkpoint -- pinned in every carrier that states either rule.
+    for rel in [
+        ".claude/skills/merge-gate/SKILL.md",
+        ".claude/skills/ship-pr/SKILL.md",
+        ".agents/skills/ship-pr/SKILL.md",
+        ".claude/skills/defect-class-preflight/SKILL.md",
+    ]:
+        carrier = " ".join((ROOT / rel).read_text(encoding="utf-8").split())
+        assert "before the cycle's first pass" in carrier, rel
+        if "defect-class-preflight" not in rel:
+            assert "under Remaining Work" in carrier or "Remaining Work in the" in carrier, rel
+            assert "B-298" in carrier, rel
 
     codex_merge_gate = (ROOT / ".agents" / "skills" / "merge-gate" / "SKILL.md").read_text(
         encoding="utf-8"

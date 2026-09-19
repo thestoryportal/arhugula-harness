@@ -254,9 +254,13 @@ the whole of it.
 - An accepted **P2** raised in pass 1, pass 2 or the escalation is fixed before pass 3 runs.
 - An accepted P2 first raised **in pass 3**, and every **P3 or prose** finding from any pass,
   goes into ONE follow-up row for the arc in `.harness/forward-register.yaml` — not fixed in
-  this PR, never a pass of its own. Write the row with the last fix commit before pass 3;
-  what pass 3 itself raises stays in the gate log and joins that row on the arc's NEXT PR,
-  because a register commit after pass 3 would owe another pass 3.
+  this PR, never a pass of its own. Write the row with the last fix commit before pass 3.
+  What pass 3 itself raises cannot be committed here (the landing delta admits only the
+  gate-log files, so a register commit after pass 3 would owe another pass 3): list each such
+  finding id in the arc's close-out checkpoint under Remaining Work, and add it to the row —
+  creating the row if pass 3 raised the arc's first follow-up finding — in the first commit
+  of the arc's next PR. The gate-log rows are its durable source until then; this timing gap
+  against X9a is registered as B-298.
 - A **rejected** finding carries its cited law and needs nothing further.
 
 Adjudicate every finding (`merge-gate-adjudicate`, below) before launching the next pass; the
@@ -265,7 +269,8 @@ P1/P2 fix is not yet committed (`FIX_NOT_COMMITTED`).
 
 Launch mechanics. The defect-class preflight is attested ONCE, before the cycle's first pass —
 pass 1, or pass 3 on a doc-only PR (`review-attest-preflight`, see `ship-pr`; the gate refuses
-the first pass without it, `PREFLIGHT_MISSING`); there is no sweep attestation between passes.
+the first pass without it, `PREFLIGHT_MISSING`; X9a names only pass 1, and the doc-only case is
+part of B-298); there is no sweep attestation between passes.
 The codex log name is `r<N>.log`, N being the arc's next codex round — normally `r1` for
 pass 1, `r2` for pass 2 and `r3` for the escalation, but a `REVIEWER_UNAVAILABLE` round takes a
 number too and shifts the rest; a wrong name is refused before launch (`ROUND_NAME_MISMATCH`),
@@ -277,7 +282,9 @@ diff again, so its size is paid on each of them.
 
 **The stop.** Pass 3 raising an accepted P1 on two consecutive runs — its re-run after a P1 fix raised a P1
 again, the same one or a new one — stops the arc: the gate refuses further passes
-(`BUDGET_EXHAUSTED`; `unfixed_after_pass_3` counts those runs, not finding identity). Surface it with one `AskUserQuestion`.
+(`BUDGET_EXHAUSTED`; `unfixed_after_pass_3` counts those runs, not finding identity). X9a
+words the stop as a P1 still *unfixed* after pass 3; the gate is stricter, and the divergence
+is registered as B-298 — follow the gate, since it is what refuses. Surface it with one `AskUserQuestion`.
 The recorded answer is either a deliberate extension (`just review-attest-budget <extra> <reason>`, which buys
 `<extra>` more pass-3 re-runs, recorded by the operator and never granted by the loop) or register
 and defer (`defer.sh` plus a register row). Nothing merges past a known P1.

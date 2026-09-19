@@ -165,7 +165,7 @@ older `merge-gate-emit` / `merge-gate-emit-all` recipes) delivers into no pass.
   (the prefix is REQUIRED for the guard's auto-allow and holder-bound to this lane's
   live reservation; actor must differ from the lens producer, write-time enforced).
   The `finding_id` is on the emitted JSONL row. Exit 2 = not recorded; re-run.
-- The cycle's one stop: pass 3 raising an accepted P1 on two consecutive runs halts the arc (the gate refuses
+- The cycle's one stop (the gate's reading; X9a's wording differs, B-298): pass 3 raising an accepted P1 on two consecutive runs halts the arc (the gate refuses
   further passes, `BUDGET_EXHAUSTED`). It is a genuine decision point; surface the pass's
   verdicts together rather than looping or choosing silently, and continue only on a
   recorded operator decision (`just review-attest-budget <extra> <reason>` buys `<extra>` more pass-3 re-runs) or

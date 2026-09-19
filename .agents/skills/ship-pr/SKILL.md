@@ -78,8 +78,11 @@ pass 3 (one lens, full diff; blocks only on P1). On the Claude-authored path the
 is `HARNESS_ARC_ID=<arc-id> HARNESS_LANE_ID=<lane-id> just review-cycle-pass <pass> .harness/tmp/<arc-id>-rounds/r<N>.log [base]`.
 A BLOCK is input to the next pass, never a reason to re-review the same pass; pass 3
 raising an accepted P1 on two consecutive runs stops the arc for a recorded operator
-decision. The preflight is attested once, before the cycle's first pass (pass 1, or pass 3
-on a doc-only PR). Never count self-review by the authoring model as decorrelated.
+decision. A doc-only PR runs pass 3 alone. The preflight is attested once, before the
+cycle's first pass (pass 1, or pass 3 on a doc-only PR). A P2 or P3 that pass 3 raises is
+listed under Remaining Work in the close-out checkpoint and joins the follow-up row in the
+first commit of the arc's next PR (B-298: the gate and X9a diverge on the stop trigger, the
+doc-only preflight, and this timing). Never count self-review by the authoring model as decorrelated.
 
 The shadow trial (U-HE-43; C-HE-29) runs ONLY where the shadow lens is a second reviewer
 family: the Claude-authored path, where `just codex-review` blocks and Gemini shadows it. When
