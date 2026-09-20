@@ -1301,3 +1301,4 @@ delegated `laws:prompt` author.
 | 2026-09-20T02:38:20Z | #1614 | 75c4da515d69 | merge-gate-concurrency | BLOCK | 2 finding(s) | r1 |
 | 2026-09-20T02:38:56Z | #1614 | 75c4da515d69 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
 | 2026-09-20T03:03:50Z | #1614 | 746c20f08d24 | merge-gate-witness-adequacy | BLOCK | 1 finding(s) | r2 |
+| 2026-09-20T03:22:56Z | #1614 | d6e8425c1c23 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
