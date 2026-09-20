@@ -80,29 +80,57 @@ def enabled_here(project_dir):
     """Whether memento is enabled for this project, as a tri-state: True, False, or None
     when no settings file mentions it at all.
 
-    Deliberately NOT a precedence cascade. Claude Code's ordering between the local, project
-    and user layers for this key was not probed, and a guessed order is a claim about someone
-    else's semantics wearing an implementation's clothes — so the rule is the one that needs
-    no ordering: any explicit `false` disables, otherwise any `true` enables. Where exactly
-    one layer mentions the plugin — every case this repo actually produces — the two rules
-    agree; where they could differ, this one errs toward the default ceiling, which is the
-    recoverable direction.
+    The precedence is the one Claude Code actually implements, probed rather than assumed
+    (2026-09-19, `claude plugin list` under a synthetic HOME with deliberately disagreeing
+    layers): the FIRST layer that mentions the plugin decides, in the order local, project,
+    user. The CLI states the rule itself when the layers disagree — "Disabled in
+    ~/.claude/settings.json but still loads — project settings enable it, which overrides
+    your user setting" — and a local `false` over a project `true` reports disabled.
+
+    An earlier revision of this function ducked the question with `all(states)`: any explicit
+    false disabled, on the reasoning that an unprobed order is a guess and the conservative
+    direction is the recoverable one. It is the wrong trade. A user-level `false` left behind
+    from some other project would have read as disabled HERE, where Claude Code loads the
+    plugin — the hook would enforce the default ceiling and offer the fallback close-out for
+    a session that genuinely has memento. Conservative in the wrong direction is still wrong,
+    and the interface was there to be run the whole time. (codex, pass 2)
 
     A settings file that does not parse is left to raise, for the same reason the manifest is:
     a hook that cannot read its own configuration must say so rather than pick a number.
     [LAW:no-silent-failure]
     """
     project = Path(project_dir)
-    states = []
     for path in (*(project / name for name in ENABLEMENT_FILES), USER_SETTINGS):
         if not path.is_file():
             continue
         enabled = json.loads(path.read_text()).get(ENABLEMENT_KEY) or {}
         if PLUGIN_KEY in enabled:
-            states.append(bool(enabled[PLUGIN_KEY]))
-    if not states:
-        return None
-    return all(states)
+            return bool(enabled[PLUGIN_KEY])
+    return None
+
+
+def applies_here(record, project_dir):
+    """Whether Claude Code would apply this install record to this project.
+
+    Enablement (above) is a global yes/no for the session; this is per RECORD. The manifest
+    carries one record per install, so an upgrade made from another workspace sits beside
+    this project's own with a newer `installedAt` and a different version's `installPath`.
+    Taking the newest unconditionally would hand this session another workspace's version.
+
+    A `user`-scope record applies everywhere. Otherwise the record's `projectPath` must be
+    this project or an ancestor of it. That test is deliberately used to PREFER a record and
+    never to reject the set: this repo's lanes run at sibling paths (`~/Projects/lane-1`),
+    so a lane matches no record at all, and rejecting on that basis would read as
+    "not installed" in every lane — the failure this whole arc exists to remove.
+    """
+    if record.get("scope") == "user":
+        return True
+    recorded = record.get("projectPath")
+    if not recorded:
+        return False
+    here = Path(project_dir).resolve()
+    recorded = Path(recorded).resolve()
+    return recorded == here or recorded in here.parents
 
 
 def memento_root(project_dir):
@@ -116,12 +144,14 @@ def memento_root(project_dir):
     some other repo would have supplied this project's ceiling layers and close-out launcher
     although Claude Code would never activate it here.
 
-    The record's own `projectPath` is NOT that discriminator, and using it would be worse than
-    the bug: it names where the install was made FROM, and this repo's lanes run at sibling
-    paths (`~/Projects/lane-1`, not a child of `~/Projects/arhugula-v2`), so a path test would
-    silently read as "not installed" in every lane. A lane carries the same TRACKED
-    `.claude/settings.json`, so the enablement key is right in exactly the places the path
-    test is wrong.
+    `enabled_here` answers the first; `applies_here` narrows the second. The record's own
+    `projectPath` cannot be the whole discriminator — it names where the install was made
+    FROM, and this repo's lanes run at sibling paths (`~/Projects/lane-1`, not a child of
+    `~/Projects/arhugula-v2`), so a path test used as a FILTER would read as "not installed"
+    in every lane. Used as a PREFERENCE over the standing set it is right in both places: the
+    main checkout takes its own record's version, and a lane, matching none, falls back to the
+    newest install that stands rather than to nothing. The lane's fallback can still reach
+    another workspace's version; that residual is named at B-303 (5) rather than papered over.
 
     MEMENTO_ROOT wins over both, which is how the suite points at a fixture instead of the
     operator's real install — and is also why the asserts in section 10 of `test_stop_loop.sh`
@@ -142,8 +172,15 @@ def memento_root(project_dir):
         return None
     records = json.loads(PLUGIN_MANIFEST.read_text()).get("plugins", {}).get(PLUGIN_KEY) or []
     newest_first = sorted(records, key=lambda one: one.get("installedAt", ""), reverse=True)
-    roots = (Path(one["installPath"]) for one in newest_first if one.get("installPath"))
-    return next((one for one in roots if (one / "lib" / "ceiling_config.py").is_file()), None)
+    standing = [
+        one
+        for one in newest_first
+        if one.get("installPath")
+        and (Path(one["installPath"]) / "lib" / "ceiling_config.py").is_file()
+    ]
+    bound = [one for one in standing if applies_here(one, project_dir)]
+    chosen = bound or standing
+    return Path(chosen[0]["installPath"]) if chosen else None
 
 
 def resolve_ceiling(root, session_id, cwd):

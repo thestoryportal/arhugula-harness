@@ -592,11 +592,64 @@ rm -f "$PROJECT_SETTINGS"
 enable_at "$USER_SETTINGS_F" true
 [ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "the user layer enables it with no project layer" || bad "user-layer enablement missed: $(found_verdict "$MANIFEST")"
 
-# Both layers, disagreeing. Any explicit false disables -- the rule that needs no precedence
-# order, and the one that errs toward the default ceiling where a guessed order could not.
-enable_at "$PROJECT_SETTINGS" false
-[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "250000" ] && ok "a false in either layer wins over a true in the other" || bad "a disagreeing pair did not disable: $(found_verdict "$MANIFEST")"
+# Both layers, disagreeing, BOTH WAYS ROUND. The precedence is Claude Code's own, probed
+# rather than assumed (2026-09-19, `claude plugin list` under a synthetic HOME with
+# deliberately disagreeing layers): the FIRST layer that mentions the plugin decides, in the
+# order local, project, user -- the CLI even states it, "project settings enable it, which
+# overrides your user setting". The second of these two asserts is the one that matters: it
+# is the ONLY case separating that rule from the any-false-disables rule shipped at
+# 746c20f0, under which a stale user-level false read as disabled HERE, where Claude Code
+# loads the plugin. The first direction passes under both rules and discriminates nothing on
+# its own. (codex, pass 2)
+enable_at "$PROJECT_SETTINGS" false; enable_at "$USER_SETTINGS_F" true
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "250000" ] && ok "a project false beats a user true" || bad "project-over-user precedence missed: $(found_verdict "$MANIFEST")"
+
+enable_at "$PROJECT_SETTINGS" true; enable_at "$USER_SETTINGS_F" false
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a project true beats a user false — a stale user-level false does not disable it here" || bad "a user-level false wrongly disabled an enabled project: $(found_verdict "$MANIFEST")"
+
+# The LOCAL layer, which the precedence fix makes the highest of the three and which no
+# assert reached until now. It is not hypothetical: .claude/settings.local.json is a real,
+# live, gitignored file in this repo. (merge-gate witness lens, pass 2)
+LOCAL_SETTINGS="$REPO/.claude/settings.local.json"
+enable_at "$LOCAL_SETTINGS" false; enable_at "$PROJECT_SETTINGS" true; rm -f "$USER_SETTINGS_F"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "250000" ] && ok "a local false beats a project true" || bad "the local layer was not read: $(found_verdict "$MANIFEST")"
+
+enable_at "$LOCAL_SETTINGS" true; enable_at "$PROJECT_SETTINGS" false
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a local true beats a project false" || bad "local-over-project precedence missed: $(found_verdict "$MANIFEST")"
+rm -f "$LOCAL_SETTINGS"
 enable_at "$PROJECT_SETTINGS" true; rm -f "$USER_SETTINGS_F"
+
+# 11c-2) WHICH record answers, once enablement has said yes. The manifest holds one record
+#        per install, so an upgrade made from another workspace sits beside this project's
+#        own with a newer installedAt and a DIFFERENT version's installPath. Newest-wins
+#        alone would hand this session that other workspace's version. (codex, pass 2)
+record_naming() { python3 -c "
+import json, sys
+json.dump({'plugins': {'memento@memento': [
+    {'installPath': p, 'installedAt': t, 'scope': sc, 'projectPath': pp}
+    for p, t, sc, pp in zip(sys.argv[2::4], sys.argv[3::4], sys.argv[4::4], sys.argv[5::4])]}},
+    open(sys.argv[1], 'w'))
+" "$MANIFEST" "$@"; }
+
+# A NEWER record bound to some other workspace, beside an OLDER one bound to this project.
+# This project's own record answers, so the ceiling is 400,000 and not the newer 500,000.
+record_naming "$FAKE2" "2026-09-21T00:00:00.000Z" project /somewhere/else \
+              "$FAKE"  "2026-09-20T02:04:51.189Z" project "$REPO"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "this project's own record beats a newer one bound elsewhere" || bad "another workspace's install displaced this project's: $(found_verdict "$MANIFEST")"
+
+# A user-scope record applies everywhere, so it is bound here even with no projectPath match.
+record_naming "$FAKE2" "2026-09-21T00:00:00.000Z" user "" \
+              "$FAKE"  "2026-09-20T02:04:51.189Z" project "$REPO"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "500000" ] && ok "a newer user-scope record applies here too" || bad "a user-scope record was treated as foreign: $(found_verdict "$MANIFEST")"
+
+# NOTHING bound here -- the lane shape, since a lane runs at a sibling path and matches no
+# record. The set must NOT be filtered to empty: falling back to the newest standing install
+# is what keeps the ceiling alive in a lane, and reading as "not installed" there is the
+# failure this whole arc exists to remove.
+record_naming "$FAKE2" "2026-09-21T00:00:00.000Z" project /somewhere/else \
+              "$FAKE"  "2026-09-20T02:04:51.189Z" project /elsewhere/again
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "500000" ] && ok "no record bound here → the newest standing install, not nothing" || bad "an unbound set was filtered to empty (the lane failure): $(found_verdict "$MANIFEST")"
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
 
 # 11d) The reader writes no session record. `shared_at_start` and `shared_unrecorded` resolve
 #      the same ceiling and differ only in that the first WRITES; memento's own Stop hook owns
