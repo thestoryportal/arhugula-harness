@@ -163,8 +163,17 @@ echo "$OUT" | jq -e '.reason | test("R-410")' >/dev/null 2>&1 && ok "close-out c
 #     spent marker 8c wrote, instead of spending more context on the problem that IS too
 #     much context. Without this the attended arm blocks every turn forever.
 [ -f "$REPO/.harness/.loop-ceiling-spent-s1" ] && ok "attended ceiling records the session as spent (the bound)" || bad "no spent marker — the close-out block would repeat forever"
+ITER_BEFORE=$(cat "$REPO/.harness/.loop-iter" 2>/dev/null || echo 0)
 OUT=$(run_ceiling "$OVER" attended)
 [ -z "$OUT" ] && ok "second over-ceiling stop stands down (blocked once, never twice)" || bad "close-out block repeated: $OUT"
+# ...and costs NOTHING. A stand-down is not a turn. When the spent check sat BELOW the
+# counter, every redundant Stop against an already-closed-out session silently spent a turn
+# of the LANE-WIDE counter; sibling Stop hooks re-fire Stop on the same session, so those
+# phantom turns accumulate until the cap raises .loop-halt and stands an unrelated concurrent
+# run down — the exact outcome this arc's first P1 removed (pass-3 concurrency P1).
+[ "$(cat "$REPO/.harness/.loop-iter" 2>/dev/null || echo 0)" = "$ITER_BEFORE" ] && ok "an already-spent stop spends no counter turn" || bad "spent stop drained the lane counter: ${ITER_BEFORE} -> $(cat "$REPO/.harness/.loop-iter" 2>/dev/null)"
+run_ceiling "$OVER" attended >/dev/null; run_ceiling "$OVER" attended >/dev/null
+[ "$(cat "$REPO/.harness/.loop-iter" 2>/dev/null || echo 0)" = "$ITER_BEFORE" ] && ok "repeated spent stops still spend nothing (no unbounded drain)" || bad "repeated spent stops drained the counter to $(cat "$REPO/.harness/.loop-iter" 2>/dev/null)"
 rm -f "$REPO/.harness/.loop-ceiling-spent-s1"
 
 # 8d-ii) The second bound. Writing the spent marker is a best-effort file write; if it fails

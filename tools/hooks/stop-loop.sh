@@ -132,7 +132,29 @@ else
   esac
 fi
 
-# 5) Spend this turn on the counter, once, for every arm that continues.
+# 5) Already told to close out? Then this Stop is a stand-down, not a turn, and it resolves
+#    HERE — above the counter, with every other stand-down. Ordering is the whole finding: an
+#    earlier revision put this check below the increment, so each redundant Stop against an
+#    already-spent session silently spent a turn of the LANE-WIDE counter. Sibling Stop hooks
+#    re-fire Stop on the same session, so those phantom turns accumulate, and the counter is
+#    what raises `.loop-halt` at the cap — one spent session could have stood an unrelated
+#    concurrent run down, which is the exact outcome this arc's first P1 removed.
+if [ "${CEILING_ACTION:-}" = "close-out" ]; then
+  # "Once" is per SESSION — the id is in the marker's NAME, because one shared file holding
+  # the last session's id loses under interleaving (alpha writes, beta overwrites, alpha is
+  # blocked again). A payload with no id falls back to the bare path: that reopens a collision
+  # between two id-less sessions, which is strictly better than writing no marker at all and
+  # re-blocking every turn to the cap. Registered as B-302 item (6).
+  SESSION=$(hook_json "$PAYLOAD" '.session_id' | tr -cd 'A-Za-z0-9_-')
+  SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent-${SESSION}"
+  if [ -f "$SPENT" ]; then
+    loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, close-out already asked of this session; allowing the stop"
+    exit 0
+  fi
+fi
+
+# 6) Spend this turn on the counter, once, for every arm that CONTINUES — which by here
+#    means every arm still running, since the stand-downs above have all exited.
 #
 # The cap decision at step 3 was made against a value read BEFORE step 4's subprocess, and a
 # concurrent Stop on the same lane can reach MAX inside that window. So the counter is re-read
@@ -155,19 +177,9 @@ fi
 ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
 
 if [ "${CEILING_ACTION:-}" = "close-out" ]; then
-  # Attended and over the ceiling: nothing will relaunch this session, so block once and tell
-  # it to close out. "Once" is per SESSION — the id is in the marker's NAME, because one
-  # shared file holding the last session's id loses under interleaving (alpha writes, beta
-  # overwrites, alpha is blocked again). A payload with no id falls back to the bare path:
-  # that reopens a collision between two id-less sessions, which is strictly better than the
-  # alternative of writing no marker at all and re-blocking every turn to the cap, and it is
-  # registered as B-302 item (6).
-  SESSION=$(hook_json "$PAYLOAD" '.session_id' | tr -cd 'A-Za-z0-9_-')
-  SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent-${SESSION}"
-  if [ -f "$SPENT" ]; then
-    loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, close-out already asked of this session; allowing the stop"
-    exit 0
-  fi
+  # Attended, over the ceiling, and not yet asked (step 5 stood down if it had been): nothing
+  # will relaunch this session, so block once and tell it to close out. This DID spend a turn,
+  # which is why it sits below the counter rather than above it.
   CLOSE_OUT=$(printf '%s' "$VERDICT_JSON" | jq -r '.close_out')
   loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, blocking once for the close-out"
   : > "$SPENT" 2>/dev/null
@@ -178,7 +190,7 @@ The handoff is the only thing the next session wakes up with, so it says what yo
   exit 0
 fi
 
-# 6) Continue: inject next-action + the run-scoped skip-set. The turn was already counted
+# 7) Continue: inject next-action + the run-scoped skip-set. The turn was already counted
 #    above, on the one path every continuing arm shares.
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
