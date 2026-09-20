@@ -32,6 +32,7 @@ the caller records that; see `main`. Tests: sections 9 and 10 of `tools/hooks/te
 which drive this file directly, beside the end-to-end arms in section 8.
 """
 
+import importlib.util
 import json
 import os
 import sys
@@ -61,15 +62,71 @@ PLUGIN_MANIFEST = Path(
     or Path.home() / ".claude" / "plugins" / "installed_plugins.json"
 )
 PLUGIN_KEY = "memento@memento"
+# The settings files that decide whether Claude Code ACTIVATES a plugin here. The manifest
+# above says what is installed on the machine and where; it does not say what runs in this
+# project, and the two genuinely differ — an install recorded against another workspace is
+# still in the shared cache, still has a standing `installPath`, and is still not enabled
+# here. `enabledPlugins` is the key that decides, which is what `claude plugin list` reports
+# as `Status: enabled` (probed 2026-09-19 against this project's own install).
+ENABLEMENT_FILES = (
+    Path(".claude") / "settings.local.json",
+    Path(".claude") / "settings.json",
+)
+USER_SETTINGS = Path.home() / ".claude" / "settings.json"
+ENABLEMENT_KEY = "enabledPlugins"
 
 
-def memento_root():
-    """Where memento is installed, or None when it is not. Absence is a legal domain value.
+def enabled_here(project_dir):
+    """Whether memento is enabled for this project, as a tri-state: True, False, or None
+    when no settings file mentions it at all.
 
-    MEMENTO_ROOT wins where it is set, which is how the suite points at a fixture instead of
-    the operator's real install — and is also why every test in section 10 of
-    `test_stop_loop.sh` pins it, and why the discovery path below is the one a real session
-    takes and the one a pinned test can never exercise. It gets its own arm there.
+    Deliberately NOT a precedence cascade. Claude Code's ordering between the local, project
+    and user layers for this key was not probed, and a guessed order is a claim about someone
+    else's semantics wearing an implementation's clothes — so the rule is the one that needs
+    no ordering: any explicit `false` disables, otherwise any `true` enables. Where exactly
+    one layer mentions the plugin — every case this repo actually produces — the two rules
+    agree; where they could differ, this one errs toward the default ceiling, which is the
+    recoverable direction.
+
+    A settings file that does not parse is left to raise, for the same reason the manifest is:
+    a hook that cannot read its own configuration must say so rather than pick a number.
+    [LAW:no-silent-failure]
+    """
+    project = Path(project_dir)
+    states = []
+    for path in (*(project / name for name in ENABLEMENT_FILES), USER_SETTINGS):
+        if not path.is_file():
+            continue
+        enabled = json.loads(path.read_text()).get(ENABLEMENT_KEY) or {}
+        if PLUGIN_KEY in enabled:
+            states.append(bool(enabled[PLUGIN_KEY]))
+    if not states:
+        return None
+    return all(states)
+
+
+def memento_root(project_dir):
+    """Where memento is installed AND enabled for this project, or None. Absence is a legal
+    domain value.
+
+    Two questions, and they are not the same one. The manifest answers *where on this machine*
+    — it is global, and it carries a record per install, including installs made from other
+    workspaces whose files sit in the same shared cache. `enabled_here` answers *whether this
+    project runs it*. An earlier revision asked only the first, so a memento installed for
+    some other repo would have supplied this project's ceiling layers and close-out launcher
+    although Claude Code would never activate it here.
+
+    The record's own `projectPath` is NOT that discriminator, and using it would be worse than
+    the bug: it names where the install was made FROM, and this repo's lanes run at sibling
+    paths (`~/Projects/lane-1`, not a child of `~/Projects/arhugula-v2`), so a path test would
+    silently read as "not installed" in every lane. A lane carries the same TRACKED
+    `.claude/settings.json`, so the enablement key is right in exactly the places the path
+    test is wrong.
+
+    MEMENTO_ROOT wins over both, which is how the suite points at a fixture instead of the
+    operator's real install — and is also why the asserts in section 10 of `test_stop_loop.sh`
+    pin it, and why the discovery path below is the one a real session takes and the one a
+    pinned test can never exercise. It gets its own section there.
 
     A manifest that is absent means no plugin is installed; a manifest that is present and
     does not parse is a genuine failure and is left to raise, where `stop-loop.sh`'s loud arm
@@ -81,7 +138,7 @@ def memento_root():
     override = os.environ.get("MEMENTO_ROOT")
     if override:
         return Path(override)
-    if not PLUGIN_MANIFEST.is_file():
+    if not PLUGIN_MANIFEST.is_file() or enabled_here(project_dir) is not True:
         return None
     records = json.loads(PLUGIN_MANIFEST.read_text()).get("plugins", {}).get(PLUGIN_KEY) or []
     newest_first = sorted(records, key=lambda one: one.get("installedAt", ""), reverse=True)
@@ -105,21 +162,27 @@ def resolve_ceiling(root, session_id, cwd):
     wants the number takes the value the record would have held. Both return the same
     resolved ceiling, so nothing about the verdict changes; what changes is that this hook
     stops being a second author of a file upstream says has one.
+
+    Loaded from its path and never entered into `sys.modules`. The earlier
+    `sys.path.insert` + `import ceiling_config` cached the module under its NAME, which was
+    harmless while the path was a frozen constant and stopped being harmless the moment
+    `memento_root` made it vary: a second call in one process with a different root would
+    silently be served the first root's module, with no error. Binding the module to the
+    file it came from removes the alias rather than documenting it, and drops the
+    `sys.path` mutation with it.
     """
     config = (root / "lib" / "ceiling_config.py") if root else None
     if not config or not config.is_file():
         return DEFAULT_CEILING
-    sys.path.insert(0, str(config.parent))
-    from ceiling_config import (
-        SHARED_AT_START,
-        anchored,
-        in_force,
-        session_directory,
-        shared_unrecorded,
-    )
+    spec = importlib.util.spec_from_file_location("memento_ceiling_config", config)
+    ceiling_config = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ceiling_config)
 
-    directory = session_directory(session_id)
-    return in_force(directory, shared_unrecorded(directory / SHARED_AT_START, anchored(cwd)))
+    directory = ceiling_config.session_directory(session_id)
+    shared = ceiling_config.shared_unrecorded(
+        directory / ceiling_config.SHARED_AT_START, ceiling_config.anchored(cwd)
+    )
+    return ceiling_config.in_force(directory, shared)
 
 
 def records_newest_first(transcript_path):
@@ -220,8 +283,9 @@ def main():
             "session's context cannot be measured."
         )
     tokens = context_tokens(transcript)
-    root = memento_root()
-    ceiling = resolve_ceiling(root, hook.get("session_id", ""), hook.get("cwd") or os.getcwd())
+    cwd = hook.get("cwd") or os.getcwd()
+    root = memento_root(cwd)
+    ceiling = resolve_ceiling(root, hook.get("session_id", ""), cwd)
     verdict = verdict_for(tokens, ceiling, headless)
     print(
         json.dumps(
