@@ -8,9 +8,9 @@
 
 | Field | Value |
 |---|---|
-| `workspace_state_hash` | `e5bfdf7e434b` |
+| `workspace_state_hash` | `140a5021fef1` |
 | `last_refreshed` | 2026-09-20T00:00:00Z |
-| `git_head` | `90a08759` —  |
+| `git_head` | `dd571885` —  |
 | `latest_retirement_batch` | `.harness/phase-7d-retirement-events-batch-57.md` |
 | `open_fork_doc_count` | 121 |
 
@@ -22,7 +22,7 @@
 
 **Purpose.** Live pointer to the next Claude/Codex-executable frontier. Full round-by-round history (every prior round, verbatim, most-recent-first) lives in the archive below — grep it by PR/`B-`/`R-`-id/round, never read wholesale.
 
-**Current next action (post-#1610).** U-HE-55 landed (#1610): `.claude/settings.json` denies `Bash(gh pr merge:*)` and `Bash(rtk gh pr merge:*)`, so a bare merge is refused in every Claude Code permission mode, not only where the loop-mode guard runs; the U-HE-54 and worktree-autoreap follow-ups rode its first commit (B-297 item 4, B-299 pass-2 base, new B-300), and its own follow-up row is B-301. The pass-3 P3 on #1610 (`.claude/skills/ship-pr/SKILL.md` still says the raw verb is denied in loop mode only) joins B-301 in the first commit of the next PR, then U-HE-58
+**Current next action (post-#1614).** U-HE-58b landed the half of U-HE-58 that made it useful: the context ceiling can now actually find memento. #1612's install-path constant omitted the version segment a real `claude plugin install` writes, so `lib/ceiling_config.py` was never under it and the plugin read as absent forever — and it shipped green because every assert pinned the `MEMENTO_ROOT` override that bypasses discovery. #1614 reads Claude Code's own `installed_plugins.json`, gates on `enabledPlugins` with the precedence probed from `claude plugin list` (local > project > user), prefers the record bound to this project without ever filtering the set to empty (a lane matches none), loads memento's module by path rather than by cached name, and stops writing the shared-at-start record memento's own hook owns. 75 → 99 asserts, 15 mutation probes. Four residuals are registered at B-303 with named closure conditions. The original U-HE-58 objective is still not demonstrated end to end: a real session hitting the ceiling and the next resuming from a handoff needs the double-hook question resolved now both Stop hooks can be live, a project ceiling chosen (250,000 on a 1M session is the operator's number to pick, `ceiling set project <N>`), proof-of-close-out in the attended arm, and a handoff on the headless arm — then U-HE-59.
 
 **Archive.** `.harness/roadmap-next-action-archive.md` (PRIOR rounds only, verbatim as each stood when superseded — the current round lives only in this head; the newest superseded round may lag there until the next content PR archives it, and is always losslessly recoverable from this file's own git history meanwhile).
 
@@ -50,11 +50,11 @@
 
 | R-NNN / PR | Closed at | Notes |
 |---|---|---|
+| PR #1614 | 2026-09-20 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1612 | 2026-09-20 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1610 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1608 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 | PR #1606 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
-| PR #1604 | 2026-09-19 | landed through the merge door; terminating refresh as continuation (C-HE-06 §4(viii)) |
 
 ---
 
