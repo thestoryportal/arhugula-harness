@@ -95,11 +95,13 @@ fi
 NEXT=$(hook_roadmap_next "$PROJECT_DIR/.harness/roadmap_status.md")
 NEXT=${NEXT:-"(derive per CLAUDE.md §4 from the dashboard)"}
 
-# 4) Context ceiling (U-HE-58, plan §9 B4 / decision 7). memento's own ceiling hook stands
-#    down whenever stop_hook_active is set (context-ceiling.py:220), and every continued loop
-#    turn sets it — so inside loop mode the ceiling has no enforcer but this one. The reading
-#    and the ceiling come back from context_tokens.py as a single stamped verdict; nothing is
-#    re-derived here.
+# 4) Context ceiling (U-HE-58, plan §9 B4 / decision 7). memento's own ceiling hook reaches
+#    its stop_hook_active branch only once a session is ALREADY over the ceiling, and there it
+#    declares its one forced close-out attempt spent and allows the stop (context-ceiling.py:
+#    220-225, upstream promptctl/memento @0d1f5bc) — even for a loop session it never
+#    blocked. Every continued loop turn sets that flag, so inside loop mode the ceiling has
+#    no enforcer but this one. The reading and the ceiling come back from context_tokens.py
+#    as a single stamped verdict; nothing is re-derived here.
 # Bounded like every other shell-out in this family: the transcript it scans is being
 # appended to by the live session, and an attended session has no outer bound of its own, so
 # an unbounded read here would hang the turn with no recovery. Exceeding the bound is a

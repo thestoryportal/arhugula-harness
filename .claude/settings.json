@@ -278,5 +278,8 @@
       "Bash(gh pr merge:*)",
       "Bash(rtk gh pr merge:*)"
     ]
+  },
+  "enabledPlugins": {
+    "memento@memento": true
   }
 }

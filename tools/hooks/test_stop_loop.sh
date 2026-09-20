@@ -16,7 +16,7 @@ PASS=0; FAIL=0
 ok()  { echo "  ok: $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 
-REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL mktemp"; exit 1; }
+export REPO="$(mktemp -d)"; { [ -n "$REPO" ] && [ -d "$REPO" ]; } || { echo "FATAL mktemp"; exit 1; }
 trap 'rm -rf "$REPO"' EXIT
 mkdir -p "$REPO/.harness"
 # C-HE-09 §2 (U-HE-29): the loop ledger is a SHARED venue outside every worktree, so it is
@@ -336,7 +336,7 @@ rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness"/.loop-ceiling-spent-*
 #    transcript scan reads backwards in 256 KB chunks, so the cases that can only go wrong
 #    there — a record straddling a chunk boundary, a torn final line, a subagent's sidechain
 #    — are witnessed here rather than inferred from the end-to-end arms above.
-READER="$SCRIPT_DIR/context_tokens.py"
+export READER="$SCRIPT_DIR/context_tokens.py"
 read_verdict() { printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$1" "$REPO" \
   | MEMENTO_ROOT="$REPO/no-such-memento" /usr/bin/python3 "$READER"; }
 
@@ -415,23 +415,48 @@ EMPTY="$REPO/empty.jsonl"; printf '{"type":"user"}\n' > "$EMPTY"
 #     would otherwise notice an upstream rename of either. The fixture stands in for the
 #     install, so what it pins is the five names this repo imports and the two paths it reads
 #     — not memento's config grammar, which only the real plugin has. That half was checked by
-#     hand against upstream promptctl/memento@0d1f5bc when this landed: with a session layer
-#     of `ceiling = 400000` the reading of 300,000 came back `under` at a ceiling of 400,000,
-#     where the same payload with memento absent came back `close-out` at 250,000. The two
-#     numbers differ, which is what makes that a control rather than a coincidence.
-FAKE="$REPO/memento"
+#     hand against a real `claude plugin install memento@memento` of promptctl/memento@0d1f5bc:
+#     with a session layer of `ceiling = 400000` the reading of 300,000 came back `under` at a
+#     ceiling of 400,000, where the same payload with memento absent came back `close-out` at
+#     250,000. The two numbers differ, which is what makes that a control rather than a
+#     coincidence.
+#
+#     `shared_unrecorded` and not `shared_at_start`: the two resolve the same ceiling and
+#     differ only in that the second WRITES the session's shared-at-start record, which
+#     memento's own Stop hook owns (ceiling_config.py:294-305). Checked by hand the same way —
+#     the record was deleted, the reading re-run, the ceiling came back unchanged at 400,000
+#     and the file was not recreated.
+#
+#     The asserts here pin MEMENTO_ROOT, so they do not reach the discovery a real session
+#     uses. That is its own section below, and it is where the arm that matters lives.
+export FAKE="$REPO/memento"
 mkdir -p "$FAKE/lib" "$FAKE/skills/message-in-a-bottle/bin"
 cat > "$FAKE/lib/ceiling_config.py" <<'PY'
-"""Stands in for memento's ceiling_config: the names tools/hooks/context_tokens.py imports."""
+"""Stands in for memento's ceiling_config: the names tools/hooks/context_tokens.py imports.
+
+Both readers are defined, and they differ the way the real ones do: shared_at_start WRITES
+the session's record and shared_unrecorded does not. That difference is the point. While
+this fixture carried only the name the code calls, reverting the call site failed as an
+ImportError -- a symbol-presence pin, green for any pair of names renamed in lockstep and
+blind to the property the change was made for. Now the revert is observable as a file
+appearing where none should. (merge-gate witness lens, pass 1)
+"""
+import os, pathlib
 SHARED_AT_START = "shared-at-start.conf"
+WROTE = pathlib.Path(os.environ["FIXTURE_WRITE_MARKER"])
 def anchored(fallback): return fallback
-def session_directory(session_id): return __import__("pathlib").Path("/tmp") / session_id
-def shared_at_start(path, anchor): return ("shared", anchor)
+def session_directory(session_id): return pathlib.Path("/tmp") / session_id
+def shared_at_start(path, anchor):
+    WROTE.write_text("shared_at_start wrote the session record\n")
+    return ("shared", anchor)
+def shared_unrecorded(path, anchor): return ("shared", anchor)
 def in_force(directory, shared): return 400_000
 PY
+export FIXTURE="$FAKE/lib/ceiling_config.py"
 : > "$FAKE/skills/message-in-a-bottle/bin/finalize-session"
+MARKER="$REPO/shared-at-start-was-written"
 fake_verdict() { printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$1" "$REPO" \
-  | MEMENTO_ROOT="$FAKE" /usr/bin/python3 "$READER"; }
+  | MEMENTO_ROOT="$FAKE" FIXTURE_WRITE_MARKER="$MARKER" /usr/bin/python3 "$READER"; }
 
 V=$(fake_verdict "$OVER")
 [ "$(echo "$V" | jq -r .ceiling)" = "400000" ] && ok "memento present → its ceiling wins over the default" || bad "memento ceiling ignored: $V"
@@ -441,6 +466,227 @@ echo "$V" | jq -r .close_out | grep -q "finalize-session --reset compact" && ok 
 # --headless is what separates the two over-ceiling arms, and nothing else does.
 [ "$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" | MEMENTO_ROOT="$REPO/nope" /usr/bin/python3 "$READER" --headless | jq -r .verdict)" = "relaunch" ] \
   && ok "--headless selects relaunch over close-out" || bad "--headless did not change the verdict"
+
+# 11) Finding memento, which is the arm the asserts above pin away. An install path carries
+#     a version segment the plugin name does not name (`.../cache/memento/memento/0.7.0`), so
+#     the path cannot be spelled as a constant — and the revision that spelled one out landed
+#     green, because MEMENTO_ROOT was pinned in the tests and by hand in the controls. A
+#     real install changed nothing: the constant named a directory OF version directories,
+#     `lib/ceiling_config.py` was not under it, and memento read as absent forever. So these
+#     asserts run with MEMENTO_ROOT UNSET, against Claude Code's own installed_plugins.json,
+#     which is where that path is actually decided.
+# A fixture HOME, separate from the fixture project, so the user and project enablement
+# layers are distinguishable AND hermetic: USER_SETTINGS takes no env override, so an
+# unpinned HOME would read the operator's real ~/.claude/settings.json and the suite
+# would pass or fail by machine state.
+FHOME="$REPO/home"; mkdir -p "$FHOME/.claude/plugins" "$REPO/.claude"
+enable_at() { printf '{"enabledPlugins":{"memento@memento":%s}}' "$2" > "$1"; }
+PROJECT_SETTINGS="$REPO/.claude/settings.json"
+USER_SETTINGS_F="$FHOME/.claude/settings.json"
+enable_at "$PROJECT_SETTINGS" true
+MANIFEST="$REPO/installed_plugins.json"
+# `env -u` and not a subshell unset: MEMENTO_ROOT is exported at the top of this file for
+# every other section, and it must stay exported for them.
+found_verdict() { printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" \
+  | env -u MEMENTO_ROOT HOME="$FHOME" FIXTURE_WRITE_MARKER="$MARKER" \
+      HARNESS_PLUGIN_MANIFEST="$1" /usr/bin/python3 "$READER"; }
+
+manifest_naming() { python3 -c "
+import json, sys
+json.dump({'plugins': {'memento@memento': [
+    {'installPath': p, 'installedAt': t} for p, t in zip(sys.argv[2::2], sys.argv[3::2])]}},
+    open(sys.argv[1], 'w'))
+" "$MANIFEST" "$@"; }
+
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
+V=$(found_verdict "$MANIFEST")
+[ "$(echo "$V" | jq -r .ceiling)" = "400000" ] && ok "the manifest's installPath is found with MEMENTO_ROOT unset" || bad "discovery missed the installed plugin: $V"
+echo "$V" | jq -r .close_out | grep -q "finalize-session --reset compact" && ok "a discovered install supplies the launcher too" || bad "discovered install gave no launcher: $V"
+
+# A manifest that is not there at all is memento not installed, which is a legal value.
+V=$(found_verdict "$REPO/no-such-manifest.json")
+[ "$(echo "$V" | jq -r .ceiling)" = "250000" ] && ok "no manifest → the default ceiling" || bad "invented a ceiling with no manifest: $V"
+echo "$V" | jq -r .close_out | grep -q "context-save-lean" && ok "no manifest → the workspace close-out" || bad "claimed a launcher with no manifest: $V"
+
+# The manifest exists and names other plugins but not this one — the ordinary shape on a
+# machine that has never installed memento, and distinct from having no manifest at all.
+printf '{"version":1,"plugins":{"something-else@elsewhere":[{"installPath":"/x"}]}}' > "$REPO/other-plugins.json"
+[ "$(found_verdict "$REPO/other-plugins.json" | jq -r .ceiling)" = "250000" ] && ok "a manifest without memento reads as not installed" || bad "a foreign manifest entry was taken for memento: $(found_verdict "$REPO/other-plugins.json")"
+
+# A record carrying neither field. Both are read with .get, so the failure to design for
+# would be a KeyError out of the search — the reading lost to a record that names nothing.
+printf '{"plugins":{"memento@memento":[{"scope":"project"}]}}' > "$REPO/fieldless.json"
+[ "$(found_verdict "$REPO/fieldless.json" | jq -r .ceiling)" = "250000" ] && ok "a record with no installPath is skipped, not fatal" || bad "a fieldless record broke the search: $(found_verdict "$REPO/fieldless.json" 2>&1)"
+
+# The same, mixed with a good record: the fieldless one must not displace it, and an absent
+# installedAt must not sort ABOVE a real one under newest-first.
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
+python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1])); d['plugins']['memento@memento'].insert(0, {'scope': 'user'})
+json.dump(d, open(sys.argv[1], 'w'))
+" "$MANIFEST"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a fieldless record does not displace a good one" || bad "a fieldless record shadowed the install: $(found_verdict "$MANIFEST" 2>&1)"
+
+# The manifest holds one record per install, so a plugin installed at two scopes or upgraded
+# in place has several. Both of the next two asserts need a SECOND fixture that also stands
+# and states a DIFFERENT ceiling: with only one standing path, ordering and the existence
+# filter are both unobservable — whichever way either goes, the single good path is the
+# answer. Two probes proved exactly that before this fixture existed.
+export FAKE2="$REPO/memento-newer"
+mkdir -p "$FAKE2/lib" "$FAKE2/skills/message-in-a-bottle/bin"
+sed 's/400_000/500_000/' "$FAKE/lib/ceiling_config.py" > "$FAKE2/lib/ceiling_config.py"
+: > "$FAKE2/skills/message-in-a-bottle/bin/finalize-session"
+
+# Two installs that both stand: the newest answers, and 500,000 is only reachable through it.
+manifest_naming "$FAKE2" "2026-09-21T00:00:00.000Z" "$FAKE" "2026-09-20T02:04:51.189Z"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "500000" ] && ok "the newest of two standing installs answers" || bad "record ordering ignored: $(found_verdict "$MANIFEST")"
+
+# The newest record no longer stands — an uninstall, or a pruned cache. That is not a failure
+# and not the end of the search: the older install that IS there is the answer. Without the
+# existence check the stale path is taken and nothing below it is ever reached.
+manifest_naming "$REPO/gone-away" "2026-09-21T00:00:00.000Z" "$FAKE" "2026-09-20T02:04:51.189Z"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a newest record that no longer stands is skipped for one that does" || bad "a stale manifest path stopped the search: $(found_verdict "$MANIFEST")"
+
+# A manifest that exists and does not parse is a genuine failure. Reporting the default here
+# would be a session reading as comfortably under a ceiling nobody could resolve.
+printf 'not json at all' > "$REPO/broken-manifest.json"
+found_verdict "$REPO/broken-manifest.json" >/dev/null 2>&1 \
+  && bad "a corrupt manifest was swallowed and a ceiling reported anyway" \
+  || ok "a corrupt manifest exits non-zero rather than reporting a ceiling"
+
+
+# 11b) The manifest's own DEFAULT path. Every assert above pins HARNESS_PLUGIN_MANIFEST, so
+#      the literal a real session actually resolves -- $HOME/.claude/plugins/installed_plugins.json
+#      -- was written by hand and read by nothing. That is this arc's own bug one layer down:
+#      a wrong segment in that literal makes is_file() false forever and every real session
+#      degrades silently to "memento not installed", with the suite still green. So this
+#      assert sets HOME and leaves BOTH overrides off, which is the only way the default is
+#      reached. (merge-gate witness lens, pass 1)
+mkdir -p "$FHOME/.claude/plugins"
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
+cp "$MANIFEST" "$FHOME/.claude/plugins/installed_plugins.json"
+DEFAULTED=$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" \
+  | env -u MEMENTO_ROOT -u HARNESS_PLUGIN_MANIFEST HOME="$FHOME" FIXTURE_WRITE_MARKER="$MARKER" \
+      /usr/bin/python3 "$READER")
+[ "$(echo "$DEFAULTED" | jq -r .ceiling)" = "400000" ] && ok "the manifest's default path is the one a real session resolves" || bad "the hand-written default path does not resolve: $DEFAULTED"
+rm -f "$FHOME/.claude/plugins/installed_plugins.json"
+
+# 11c) Enablement. The manifest says what is INSTALLED on this machine; it does not say what
+#      runs in this project, and an install made from another workspace still has a standing
+#      installPath in the shared cache. `enabledPlugins` is what Claude Code actually reports
+#      as `Status: enabled`. The record's own projectPath is NOT usable for this: this repo's
+#      lanes run at SIBLING paths, so a path test would read as "not installed" in every lane.
+#      (codex pass 1)
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
+rm -f "$PROJECT_SETTINGS" "$USER_SETTINGS_F"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "250000" ] && ok "installed but enabled nowhere → not memento" || bad "an unenabled install was used: $(found_verdict "$MANIFEST")"
+
+enable_at "$PROJECT_SETTINGS" false
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "250000" ] && ok "an explicit false disables it" || bad "an explicit false was ignored: $(found_verdict "$MANIFEST")"
+
+# The user layer enables it on its own, which is what makes the fixture HOME load-bearing
+# rather than decoration: read the operator's real settings here and the result is machine
+# state, not a test.
+rm -f "$PROJECT_SETTINGS"
+enable_at "$USER_SETTINGS_F" true
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "the user layer enables it with no project layer" || bad "user-layer enablement missed: $(found_verdict "$MANIFEST")"
+
+# Both layers, disagreeing, BOTH WAYS ROUND. The precedence is Claude Code's own, probed
+# rather than assumed (2026-09-19, `claude plugin list` under a synthetic HOME with
+# deliberately disagreeing layers): the FIRST layer that mentions the plugin decides, in the
+# order local, project, user -- the CLI even states it, "project settings enable it, which
+# overrides your user setting". The second of these two asserts is the one that matters: it
+# is the ONLY case separating that rule from the any-false-disables rule shipped at
+# 746c20f0, under which a stale user-level false read as disabled HERE, where Claude Code
+# loads the plugin. The first direction passes under both rules and discriminates nothing on
+# its own. (codex, pass 2)
+enable_at "$PROJECT_SETTINGS" false; enable_at "$USER_SETTINGS_F" true
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "250000" ] && ok "a project false beats a user true" || bad "project-over-user precedence missed: $(found_verdict "$MANIFEST")"
+
+enable_at "$PROJECT_SETTINGS" true; enable_at "$USER_SETTINGS_F" false
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a project true beats a user false — a stale user-level false does not disable it here" || bad "a user-level false wrongly disabled an enabled project: $(found_verdict "$MANIFEST")"
+
+# The LOCAL layer, which the precedence fix makes the highest of the three and which no
+# assert reached until now. It is not hypothetical: .claude/settings.local.json is a real,
+# live, gitignored file in this repo. (merge-gate witness lens, pass 2)
+LOCAL_SETTINGS="$REPO/.claude/settings.local.json"
+enable_at "$LOCAL_SETTINGS" false; enable_at "$PROJECT_SETTINGS" true; rm -f "$USER_SETTINGS_F"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "250000" ] && ok "a local false beats a project true" || bad "the local layer was not read: $(found_verdict "$MANIFEST")"
+
+enable_at "$LOCAL_SETTINGS" true; enable_at "$PROJECT_SETTINGS" false
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a local true beats a project false" || bad "local-over-project precedence missed: $(found_verdict "$MANIFEST")"
+rm -f "$LOCAL_SETTINGS"
+enable_at "$PROJECT_SETTINGS" true; rm -f "$USER_SETTINGS_F"
+
+# 11c-2) WHICH record answers, once enablement has said yes. The manifest holds one record
+#        per install, so an upgrade made from another workspace sits beside this project's
+#        own with a newer installedAt and a DIFFERENT version's installPath. Newest-wins
+#        alone would hand this session that other workspace's version. (codex, pass 2)
+record_naming() { python3 -c "
+import json, sys
+json.dump({'plugins': {'memento@memento': [
+    {'installPath': p, 'installedAt': t, 'scope': sc, 'projectPath': pp}
+    for p, t, sc, pp in zip(sys.argv[2::4], sys.argv[3::4], sys.argv[4::4], sys.argv[5::4])]}},
+    open(sys.argv[1], 'w'))
+" "$MANIFEST" "$@"; }
+
+# A NEWER record bound to some other workspace, beside an OLDER one bound to this project.
+# This project's own record answers, so the ceiling is 400,000 and not the newer 500,000.
+record_naming "$FAKE2" "2026-09-21T00:00:00.000Z" project /somewhere/else \
+              "$FAKE"  "2026-09-20T02:04:51.189Z" project "$REPO"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "this project's own record beats a newer one bound elsewhere" || bad "another workspace's install displaced this project's: $(found_verdict "$MANIFEST")"
+
+# A user-scope record applies everywhere, so it is bound here even with no projectPath match.
+record_naming "$FAKE2" "2026-09-21T00:00:00.000Z" user "" \
+              "$FAKE"  "2026-09-20T02:04:51.189Z" project "$REPO"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "500000" ] && ok "a newer user-scope record applies here too" || bad "a user-scope record was treated as foreign: $(found_verdict "$MANIFEST")"
+
+# NOTHING bound here -- the lane shape, since a lane runs at a sibling path and matches no
+# record. The set must NOT be filtered to empty: falling back to the newest standing install
+# is what keeps the ceiling alive in a lane, and reading as "not installed" there is the
+# failure this whole arc exists to remove.
+record_naming "$FAKE2" "2026-09-21T00:00:00.000Z" project /somewhere/else \
+              "$FAKE"  "2026-09-20T02:04:51.189Z" project /elsewhere/again
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "500000" ] && ok "no record bound here → the newest standing install, not nothing" || bad "an unbound set was filtered to empty (the lane failure): $(found_verdict "$MANIFEST")"
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
+
+# 11d) The reader writes no session record. `shared_at_start` and `shared_unrecorded` resolve
+#      the same ceiling and differ only in that the first WRITES; memento's own Stop hook owns
+#      that write. Asserting the ceiling cannot see the difference, so the fixture's
+#      shared_at_start leaves a marker and this asserts the marker is absent -- a revert of
+#      the call site then reds on the property, not on a symbol name.
+#      Positive control first: the marker mechanism has to be able to fire, or "absent" proves
+#      only that nothing was ever watching.
+CONTROL=$(FIXTURE_WRITE_MARKER="$MARKER" /usr/bin/python3 -c "
+import importlib.util, os, pathlib
+spec = importlib.util.spec_from_file_location('c', os.environ['FIXTURE'])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.shared_at_start(pathlib.Path('/tmp/x'), '/tmp')
+print(pathlib.Path(os.environ['FIXTURE_WRITE_MARKER']).is_file())
+" 2>&1)
+[ "$CONTROL" = "True" ] && ok "positive control: the fixture's shared_at_start does leave a marker" || bad "the marker mechanism cannot fire, so its absence proves nothing: $CONTROL"
+rm -f "$MARKER"
+
+fake_verdict "$OVER" >/dev/null
+[ ! -f "$MARKER" ] && ok "resolving the ceiling writes no session record" || bad "the reader wrote the record memento's hook owns"
+
+# 11e) Two roots in ONE process. Every other assert here is its own subprocess, so none of
+#      them can see how the ceiling_config module is loaded -- and `from ceiling_config import`
+#      caches by module NAME, so a second call with a different root would silently be served
+#      the first root's module. That was harmless while the root was a frozen constant and
+#      stopped being harmless when memento_root() made it vary. This is the only shape that
+#      observes it: resolve twice, two roots, two different ceilings.
+#      (merge-gate concurrency lens, pass 1)
+ISOLATION=$(FIXTURE_WRITE_MARKER="$MARKER" /usr/bin/python3 -c "
+import importlib.util, os, pathlib, sys
+spec = importlib.util.spec_from_file_location('ct', os.environ['READER'])
+ct = importlib.util.module_from_spec(spec); spec.loader.exec_module(ct)
+first = ct.resolve_ceiling(pathlib.Path(os.environ['FAKE']), 's1', os.environ['REPO'])
+second = ct.resolve_ceiling(pathlib.Path(os.environ['FAKE2']), 's1', os.environ['REPO'])
+print(first, second, 'ceiling_config' in sys.modules)
+" 2>&1)
+[ "$ISOLATION" = "400000 500000 False" ] && ok "two roots in one process resolve to their own ceilings, and neither is cached by name" || bad "the second root was served the first root's module: $ISOLATION"
 
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"
