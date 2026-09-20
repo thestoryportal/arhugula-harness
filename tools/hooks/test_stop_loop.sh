@@ -415,10 +415,20 @@ EMPTY="$REPO/empty.jsonl"; printf '{"type":"user"}\n' > "$EMPTY"
 #     would otherwise notice an upstream rename of either. The fixture stands in for the
 #     install, so what it pins is the five names this repo imports and the two paths it reads
 #     — not memento's config grammar, which only the real plugin has. That half was checked by
-#     hand against upstream promptctl/memento@0d1f5bc when this landed: with a session layer
-#     of `ceiling = 400000` the reading of 300,000 came back `under` at a ceiling of 400,000,
-#     where the same payload with memento absent came back `close-out` at 250,000. The two
-#     numbers differ, which is what makes that a control rather than a coincidence.
+#     hand against a real `claude plugin install memento@memento` of promptctl/memento@0d1f5bc:
+#     with a session layer of `ceiling = 400000` the reading of 300,000 came back `under` at a
+#     ceiling of 400,000, where the same payload with memento absent came back `close-out` at
+#     250,000. The two numbers differ, which is what makes that a control rather than a
+#     coincidence.
+#
+#     `shared_unrecorded` and not `shared_at_start`: the two resolve the same ceiling and
+#     differ only in that the second WRITES the session's shared-at-start record, which
+#     memento's own Stop hook owns (ceiling_config.py:294-305). Checked by hand the same way —
+#     the record was deleted, the reading re-run, the ceiling came back unchanged at 400,000
+#     and the file was not recreated.
+#
+#     The asserts here pin MEMENTO_ROOT, so they do not reach the discovery a real session
+#     uses. That is its own section below, and it is where the arm that matters lives.
 FAKE="$REPO/memento"
 mkdir -p "$FAKE/lib" "$FAKE/skills/message-in-a-bottle/bin"
 cat > "$FAKE/lib/ceiling_config.py" <<'PY'
@@ -426,7 +436,7 @@ cat > "$FAKE/lib/ceiling_config.py" <<'PY'
 SHARED_AT_START = "shared-at-start.conf"
 def anchored(fallback): return fallback
 def session_directory(session_id): return __import__("pathlib").Path("/tmp") / session_id
-def shared_at_start(path, anchor): return ("shared", anchor)
+def shared_unrecorded(path, anchor): return ("shared", anchor)
 def in_force(directory, shared): return 400_000
 PY
 : > "$FAKE/skills/message-in-a-bottle/bin/finalize-session"
@@ -441,6 +451,84 @@ echo "$V" | jq -r .close_out | grep -q "finalize-session --reset compact" && ok 
 # --headless is what separates the two over-ceiling arms, and nothing else does.
 [ "$(printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" | MEMENTO_ROOT="$REPO/nope" /usr/bin/python3 "$READER" --headless | jq -r .verdict)" = "relaunch" ] \
   && ok "--headless selects relaunch over close-out" || bad "--headless did not change the verdict"
+
+# 11) Finding memento, which is the arm the asserts above pin away. An install path carries
+#     a version segment the plugin name does not name (`.../cache/memento/memento/0.7.0`), so
+#     the path cannot be spelled as a constant — and the revision that spelled one out landed
+#     green, because MEMENTO_ROOT was pinned in the tests and by hand in the controls. A
+#     real install changed nothing: the constant named a directory OF version directories,
+#     `lib/ceiling_config.py` was not under it, and memento read as absent forever. So these
+#     asserts run with MEMENTO_ROOT UNSET, against Claude Code's own installed_plugins.json,
+#     which is where that path is actually decided.
+MANIFEST="$REPO/installed_plugins.json"
+# `env -u` and not a subshell unset: MEMENTO_ROOT is exported at the top of this file for
+# every other section, and it must stay exported for them.
+found_verdict() { printf '{"transcript_path":"%s","session_id":"s1","cwd":"%s"}' "$OVER" "$REPO" \
+  | env -u MEMENTO_ROOT HARNESS_PLUGIN_MANIFEST="$1" /usr/bin/python3 "$READER"; }
+
+manifest_naming() { python3 -c "
+import json, sys
+json.dump({'plugins': {'memento@memento': [
+    {'installPath': p, 'installedAt': t} for p, t in zip(sys.argv[2::2], sys.argv[3::2])]}},
+    open(sys.argv[1], 'w'))
+" "$MANIFEST" "$@"; }
+
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
+V=$(found_verdict "$MANIFEST")
+[ "$(echo "$V" | jq -r .ceiling)" = "400000" ] && ok "the manifest's installPath is found with MEMENTO_ROOT unset" || bad "discovery missed the installed plugin: $V"
+echo "$V" | jq -r .close_out | grep -q "finalize-session --reset compact" && ok "a discovered install supplies the launcher too" || bad "discovered install gave no launcher: $V"
+
+# A manifest that is not there at all is memento not installed, which is a legal value.
+V=$(found_verdict "$REPO/no-such-manifest.json")
+[ "$(echo "$V" | jq -r .ceiling)" = "250000" ] && ok "no manifest → the default ceiling" || bad "invented a ceiling with no manifest: $V"
+echo "$V" | jq -r .close_out | grep -q "context-save-lean" && ok "no manifest → the workspace close-out" || bad "claimed a launcher with no manifest: $V"
+
+# The manifest exists and names other plugins but not this one — the ordinary shape on a
+# machine that has never installed memento, and distinct from having no manifest at all.
+printf '{"version":1,"plugins":{"something-else@elsewhere":[{"installPath":"/x"}]}}' > "$REPO/other-plugins.json"
+[ "$(found_verdict "$REPO/other-plugins.json" | jq -r .ceiling)" = "250000" ] && ok "a manifest without memento reads as not installed" || bad "a foreign manifest entry was taken for memento: $(found_verdict "$REPO/other-plugins.json")"
+
+# A record carrying neither field. Both are read with .get, so the failure to design for
+# would be a KeyError out of the search — the reading lost to a record that names nothing.
+printf '{"plugins":{"memento@memento":[{"scope":"project"}]}}' > "$REPO/fieldless.json"
+[ "$(found_verdict "$REPO/fieldless.json" | jq -r .ceiling)" = "250000" ] && ok "a record with no installPath is skipped, not fatal" || bad "a fieldless record broke the search: $(found_verdict "$REPO/fieldless.json" 2>&1)"
+
+# The same, mixed with a good record: the fieldless one must not displace it, and an absent
+# installedAt must not sort ABOVE a real one under newest-first.
+manifest_naming "$FAKE" "2026-09-20T02:04:51.189Z"
+python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1])); d['plugins']['memento@memento'].insert(0, {'scope': 'user'})
+json.dump(d, open(sys.argv[1], 'w'))
+" "$MANIFEST"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a fieldless record does not displace a good one" || bad "a fieldless record shadowed the install: $(found_verdict "$MANIFEST" 2>&1)"
+
+# The manifest holds one record per install, so a plugin installed at two scopes or upgraded
+# in place has several. Both of the next two asserts need a SECOND fixture that also stands
+# and states a DIFFERENT ceiling: with only one standing path, ordering and the existence
+# filter are both unobservable — whichever way either goes, the single good path is the
+# answer. Two probes proved exactly that before this fixture existed.
+FAKE2="$REPO/memento-newer"
+mkdir -p "$FAKE2/lib" "$FAKE2/skills/message-in-a-bottle/bin"
+sed 's/400_000/500_000/' "$FAKE/lib/ceiling_config.py" > "$FAKE2/lib/ceiling_config.py"
+: > "$FAKE2/skills/message-in-a-bottle/bin/finalize-session"
+
+# Two installs that both stand: the newest answers, and 500,000 is only reachable through it.
+manifest_naming "$FAKE2" "2026-09-21T00:00:00.000Z" "$FAKE" "2026-09-20T02:04:51.189Z"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "500000" ] && ok "the newest of two standing installs answers" || bad "record ordering ignored: $(found_verdict "$MANIFEST")"
+
+# The newest record no longer stands — an uninstall, or a pruned cache. That is not a failure
+# and not the end of the search: the older install that IS there is the answer. Without the
+# existence check the stale path is taken and nothing below it is ever reached.
+manifest_naming "$REPO/gone-away" "2026-09-21T00:00:00.000Z" "$FAKE" "2026-09-20T02:04:51.189Z"
+[ "$(found_verdict "$MANIFEST" | jq -r .ceiling)" = "400000" ] && ok "a newest record that no longer stands is skipped for one that does" || bad "a stale manifest path stopped the search: $(found_verdict "$MANIFEST")"
+
+# A manifest that exists and does not parse is a genuine failure. Reporting the default here
+# would be a session reading as comfortably under a ceiling nobody could resolve.
+printf 'not json at all' > "$REPO/broken-manifest.json"
+found_verdict "$REPO/broken-manifest.json" >/dev/null 2>&1 \
+  && bad "a corrupt manifest was swallowed and a ceiling reported anyway" \
+  || ok "a corrupt manifest exits non-zero rather than reporting a ceiling"
 
 echo "----"
 echo "stop_loop: $PASS passed, $FAIL failed"

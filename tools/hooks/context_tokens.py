@@ -2,13 +2,15 @@
 """Where this session's context sits against its ceiling, as one decided verdict.
 
 The loop's Stop hook (`stop-loop.sh`) continues a turn by blocking the stop, and a block
-sets `stop_hook_active` on the next Stop. memento's own ceiling hook steps aside whenever
-that flag is set (`memento/hooks/scripts/context-ceiling.py:220`, upstream `promptctl/memento`
-@0d1f5bc), so in loop mode the ceiling has no enforcer unless the loop hook is one. This is
-that enforcer's measuring half: it reads the transcript, resolves the ceiling, and hands back
-one verdict for the shell to dispatch on. [LAW:parse-dont-validate] the verdict is the stamp —
-`stop-loop.sh` reads it and re-derives none of it, so there is nothing left downstream to
-re-check.
+sets `stop_hook_active` on the next Stop. memento's own ceiling hook reaches its
+`stop_hook_active` branch only once a session is ALREADY over the ceiling, and what it does
+there is declare its one forced close-out attempt spent and allow the stop
+(`memento/hooks/scripts/context-ceiling.py:220-225`, upstream `promptctl/memento` @0d1f5bc) —
+even for a loop session it never actually blocked. So in loop mode the ceiling has no
+enforcer unless the loop hook is one. This is that enforcer's measuring half: it reads the
+transcript, resolves the ceiling, and hands back one verdict for the shell to dispatch on.
+[LAW:parse-dont-validate] the verdict is the stamp — `stop-loop.sh` reads it and re-derives
+none of it, so there is nothing left downstream to re-check.
 
 Verdicts, the domain's own enum:
 
@@ -47,15 +49,47 @@ PROMPT_COMPONENTS = (
     "output_tokens",
 )
 TAIL_CHUNK = 256 * 1024
-# Where `claude plugin install memento@memento` puts the plugin. MEMENTO_ROOT overrides it,
-# which is what lets the suite point at a fixture instead of the operator's real install.
-MEMENTO_ROOT = Path(
-    os.environ.get("MEMENTO_ROOT")
-    or Path.home() / ".claude" / "plugins" / "cache" / "memento" / "memento"
+# Claude Code's own record of what is installed where. An install path carries a VERSION
+# segment the plugin name does not name — `.../cache/memento/memento/<version>`, 0.7.0 at the
+# install this was written against — so it cannot be
+# spelled out as a constant, and an earlier revision that did spell one out resolved to a
+# directory of version directories: `lib/ceiling_config.py` was not under it, memento read as
+# absent, and installing the plugin changed nothing at all. [LAW:one-source-of-truth] the
+# manifest is where that path is decided, so it is read rather than reconstructed.
+PLUGIN_MANIFEST = Path(
+    os.environ.get("HARNESS_PLUGIN_MANIFEST")
+    or Path.home() / ".claude" / "plugins" / "installed_plugins.json"
 )
+PLUGIN_KEY = "memento@memento"
 
 
-def resolve_ceiling(session_id, cwd):
+def memento_root():
+    """Where memento is installed, or None when it is not. Absence is a legal domain value.
+
+    MEMENTO_ROOT wins where it is set, which is how the suite points at a fixture instead of
+    the operator's real install — and is also why every test in section 10 of
+    `test_stop_loop.sh` pins it, and why the discovery path below is the one a real session
+    takes and the one a pinned test can never exercise. It gets its own arm there.
+
+    A manifest that is absent means no plugin is installed; a manifest that is present and
+    does not parse is a genuine failure and is left to raise, where `stop-loop.sh`'s loud arm
+    records the session as unmeasured rather than as comfortably under a ceiling.
+    [LAW:no-silent-failure] Records are taken newest-installed first, and the first one whose
+    directory actually holds the module is the answer — a recorded path that no longer stands
+    (an uninstall, a pruned cache) is not an error, it is simply not memento.
+    """
+    override = os.environ.get("MEMENTO_ROOT")
+    if override:
+        return Path(override)
+    if not PLUGIN_MANIFEST.is_file():
+        return None
+    records = json.loads(PLUGIN_MANIFEST.read_text()).get("plugins", {}).get(PLUGIN_KEY) or []
+    newest_first = sorted(records, key=lambda one: one.get("installedAt", ""), reverse=True)
+    roots = (Path(one["installPath"]) for one in newest_first if one.get("installPath"))
+    return next((one for one in roots if (one / "lib" / "ceiling_config.py").is_file()), None)
+
+
+def resolve_ceiling(root, session_id, cwd):
     """The ceiling in force, from memento's layers when memento is installed.
 
     [LAW:one-source-of-truth] memento owns this number wherever it exists — the operator can
@@ -63,9 +97,17 @@ def resolve_ceiling(session_id, cwd):
     clock that disagrees the first time they do. Absence of the plugin is a legal domain
     value, not a failure, so it resolves to the default; an import that exists and *raises*
     is a genuine failure and is left to surface. [LAW:no-silent-failure]
+
+    `shared_unrecorded` rather than `shared_at_start`, because the two differ in exactly one
+    thing: the second WRITES the session's record of what the shared layers resolved to.
+    memento's Stop hook owns that write — "one writer, which is what keeps two files in one
+    directory from being two clocks" (`ceiling_config.py:294-305`) — and a reader that only
+    wants the number takes the value the record would have held. Both return the same
+    resolved ceiling, so nothing about the verdict changes; what changes is that this hook
+    stops being a second author of a file upstream says has one.
     """
-    config = MEMENTO_ROOT / "lib" / "ceiling_config.py"
-    if not config.is_file():
+    config = (root / "lib" / "ceiling_config.py") if root else None
+    if not config or not config.is_file():
         return DEFAULT_CEILING
     sys.path.insert(0, str(config.parent))
     from ceiling_config import (
@@ -73,11 +115,11 @@ def resolve_ceiling(session_id, cwd):
         anchored,
         in_force,
         session_directory,
-        shared_at_start,
+        shared_unrecorded,
     )
 
     directory = session_directory(session_id)
-    return in_force(directory, shared_at_start(directory / SHARED_AT_START, anchored(cwd)))
+    return in_force(directory, shared_unrecorded(directory / SHARED_AT_START, anchored(cwd)))
 
 
 def records_newest_first(transcript_path):
@@ -142,15 +184,17 @@ def verdict_for(tokens, ceiling, headless):
     return "relaunch" if headless else "close-out"
 
 
-def close_out_recipe():
+def close_out_recipe(root):
     """The close-out an attended session is told to run.
 
     memento's launcher when it is installed, because that one resets the session in place and
     carries a handoff across the reset; this workspace's own checkpoint skill otherwise, which
     saves the state but leaves ending the session to the operator.
     """
-    launcher = MEMENTO_ROOT / "skills" / "message-in-a-bottle" / "bin" / "finalize-session"
-    if launcher.is_file():
+    launcher = (
+        (root / "skills" / "message-in-a-bottle" / "bin" / "finalize-session") if root else None
+    )
+    if launcher and launcher.is_file():
         return (
             f"{launcher} --reset compact "
             f"'<handoff: what you were doing, where you stopped, the next step>'"
@@ -176,7 +220,8 @@ def main():
             "session's context cannot be measured."
         )
     tokens = context_tokens(transcript)
-    ceiling = resolve_ceiling(hook.get("session_id", ""), hook.get("cwd") or os.getcwd())
+    root = memento_root()
+    ceiling = resolve_ceiling(root, hook.get("session_id", ""), hook.get("cwd") or os.getcwd())
     verdict = verdict_for(tokens, ceiling, headless)
     print(
         json.dumps(
@@ -184,7 +229,7 @@ def main():
                 "verdict": verdict,
                 "tokens": tokens,
                 "ceiling": ceiling,
-                "close_out": close_out_recipe(),
+                "close_out": close_out_recipe(root),
             }
         )
     )
