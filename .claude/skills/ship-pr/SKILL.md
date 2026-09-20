@@ -332,7 +332,9 @@ PR, and hands `{pr, head_sha}` back for the door to merge under the SAME held le
 then releases. Exit 0 = landed + refreshed; 3 = door blocked (a `DEFERRED-HIL` row names
 `just merge-door-unblock <pr> <sha>`); 4 = re-gate (base moved / door failed); 5 = budget
 exhausted (HITL). `just merge-door-status` prints the live lease. Never issue
-`gh pr merge` yourself; the guard denies the raw verb in loop mode (C-HE-07).
+`gh pr merge` yourself. Two things refuse it, and they cover different ground: the
+permission guard denies the raw verb in loop mode (C-HE-07), and since U-HE-55 (#1610)
+`.claude/settings.json` denies it in every permission mode, loop or not.
 
 **Unblock is half of C-HE-06 §6; `just merge-door-release` is the other half.** Unblock
 clears the BLOCK and mints a *successor lease still held by this lane* — the door is not

@@ -757,7 +757,11 @@ loop_activate() {
   [ -z "$mp" ] && return 1
   mkdir -p "$(dirname "$mp")" 2>/dev/null
   : > "$mp" 2>/dev/null || return 1
-  # Fresh run: clear any stale iteration counter / halt marker from a prior run.
+  # Fresh run: clear any stale iteration counter / halt marker from a prior run. The
+  # per-session ceiling markers (U-HE-58) are deliberately NOT swept here: the glob cannot
+  # tell a dead session's marker from a live one's, and clearing a live session's would
+  # un-spend it and re-block it. They are gitignored and zero-byte; B-302 item (8) carries
+  # the accumulation.
   rm -f "$(loop_iter_path)" "$(loop_halt_path)" 2>/dev/null
   loop_log ACTIVATE "${1:-loop mode on}"
   # NOTE: worktree GC is intentionally NOT called here. `tools/04-loop/run.sh` installs its

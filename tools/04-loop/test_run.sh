@@ -80,10 +80,15 @@ cat > "$REPO/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 echo "called" >> "$CLAUDE_PROJECT_DIR/.harness/claude_calls.log"
 echo "HARNESS_LOOP_MAX=${HARNESS_LOOP_MAX:-unset}" >> "$CLAUDE_PROJECT_DIR/.harness/child_env.log"
+echo "HARNESS_LOOP_HEADLESS=${HARNESS_LOOP_HEADLESS:-unset}" >> "$CLAUDE_PROJECT_DIR/.harness/child_env.log"
 EOF
 chmod +x "$REPO/bin/claude"
 CLAUDE_PROJECT_DIR="$REPO" PATH="$REPO/bin:$PATH" bash "$RUN" --max 3 >/dev/null 2>&1
 grep -q 'HARNESS_LOOP_MAX=3' "$REPO/.harness/child_env.log" && ok "--max passed to child as HARNESS_LOOP_MAX" || bad "child env: $(cat "$REPO/.harness/child_env.log" 2>/dev/null)"
+# The child is a session this runner will relaunch, and only the runner knows that. Without
+# the stamp the in-session context ceiling (U-HE-58) reads every headless child as attended
+# and blocks it for a close-out nothing will follow, instead of allowing the stop.
+grep -q 'HARNESS_LOOP_HEADLESS=1' "$REPO/.harness/child_env.log" && ok "child is stamped headless for the context ceiling" || bad "headless stamp missing: $(cat "$REPO/.harness/child_env.log" 2>/dev/null)"
 
 # 4d) HARNESS_LOOP_PROMPT env is honored as the prompt source (codex P3 multi-word path).
 rm -f "$REPO/.harness/child_env.log" "$REPO/.harness/claude_calls.log"

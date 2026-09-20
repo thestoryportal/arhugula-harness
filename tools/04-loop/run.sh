@@ -120,7 +120,14 @@ while [ "$i" -lt "$MAX" ]; do
   # the turn fires the trap, which kills CHILD and exits.
   # Pass the cap to the child too, so the in-session Stop-continue (stop-loop.sh) honors
   # the same --max instead of defaulting to 25 in-session turns.
-  HARNESS_LOOP=1 HARNESS_LOOP_MAX="$MAX" hook_bounded "${HARNESS_LOOP_TURN_TIMEOUT:-1800}" \
+  # HARNESS_LOOP_HEADLESS marks the child as one this runner will relaunch, which is what
+  # the in-session context ceiling (U-HE-58) needs to know: over the ceiling it allows the
+  # stop here and lets the next iteration below start a fresh session, where an attended
+  # session — which nothing relaunches — is blocked and told to close out instead. The
+  # runner stamps it because the runner is the only thing that knows it for certain; an
+  # ambient guess from the platform's own env is folklore that drifts between versions.
+  HARNESS_LOOP=1 HARNESS_LOOP_MAX="$MAX" HARNESS_LOOP_HEADLESS=1 \
+    hook_bounded "${HARNESS_LOOP_TURN_TIMEOUT:-1800}" \
     claude -p "$ITER_PROMPT" --permission-mode default &
   CHILD=$!
   wait "$CHILD" || loop_log COMPLETED "iteration ${i} claude exited nonzero/bounded"

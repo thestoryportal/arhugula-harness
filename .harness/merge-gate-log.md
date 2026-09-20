@@ -1288,3 +1288,12 @@ delegated `laws:prompt` author.
 | 2026-09-19T21:28:22Z | #1610 | bf981c8f0b65 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
 | 2026-09-19T21:35:02Z | #1610 | bf981c8f0b65 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
 | #1610 | 2026-09-19 | feat/u-he-55-deny-bare-merge | pass 2 @bf981c8f0 (fix delta vs 01257c26b) + pass 3 @bf981c8f0 (full diff) | pass 2 — codex: BLOCK (1 P2: fixing the B-300 provenance P3 in this PR breaks the carry-to-follow-up rule) REJECTED by claude_absorber, cited law: X9a routes a P3 into the one follow-up item (B-301 item 2 carries it) and merge-gate Gate outcome admits a fix "trivially co-located with work already in the diff" (B-300 is authored in this PR); merge-gate-witness-adequacy: APPROVE (no test in the delta). Pass 3 — merge-gate-spec-conformance: APPROVE (1 P3 — ship-pr/SKILL.md:335 says the raw verb is denied in loop mode only; carried via the close-out checkpoint to the next PR, B-295 emptied array). Shadow (gemini-shadow): APPROVE, no_finding | outcome: CYCLE COMPLETE — pass 1 -> fix -> pass 2 (P2 rejected) -> pass 3 clean | blast-radius: 10 consumers (files reading .claude/settings.json) |
+| 2026-09-19T23:06:06Z | #1612 | 7fd866a7f29f | merge-gate-concurrency | BLOCK | 5 finding(s) | r1 |
+| 2026-09-19T23:06:06Z | #1612 | 7fd866a7f29f | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r1 |
+| 2026-09-19T23:06:07Z | #1612 | 7fd866a7f29f | merge-gate-witness-adequacy | BLOCK | 3 finding(s) | r1 |
+| 2026-09-19T23:50:23Z | #1612 | 17e10a8fd4c2 | merge-gate-concurrency | BLOCK | 3 finding(s) | r2 |
+| 2026-09-19T23:50:23Z | #1612 | 17e10a8fd4c2 | merge-gate-spec-conformance | APPROVE | 0 finding(s) | r2 |
+| 2026-09-19T23:50:24Z | #1612 | 17e10a8fd4c2 | merge-gate-witness-adequacy | APPROVE | 0 finding(s) | r2 |
+| 2026-09-20T00:00:44Z | #1612 | 85ef356be9fd | merge-gate-witness-adequacy | BLOCK | 2 finding(s) | r3 |
+| 2026-09-20T00:14:33Z | #1612 | 48c90fbd447e | merge-gate-concurrency | BLOCK | 2 finding(s) | r3 |
+| 2026-09-20T00:24:38Z | #1612 | 1c2be55993c9 | merge-gate-concurrency | APPROVE | 0 finding(s) | r4 |
