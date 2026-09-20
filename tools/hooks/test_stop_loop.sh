@@ -265,7 +265,10 @@ printf '7' > "$REPO/.harness/.loop-iter"
 # returning `under` — which is fine and is the point: BOTH the unreadable arm and the
 # `under` arm fall through to step 5, where the re-read lives. What the FIFO buys is the
 # HOLD, which is the only way to open the window at all.
-usage_record 1000 > "$FIFO"
+# Bounded: if the hook exited before opening the FIFO (a slow runner reaching the cap at
+# step 3 first), an unbounded write to a reader-less FIFO would block forever and hang CI
+# instead of failing an assert (pass-2 codex P2).
+usage_record 1000 | hook_bounded 15 dd of="$FIFO" 2>/dev/null
 wait "$SLOW_PID" 2>/dev/null
 [ "$(cat "$REPO/.harness/.loop-iter")" = "8" ] && ok "the continue arm increments the counter it re-reads (7 -> 8), not the stale one" || bad "stale counter written: $(cat "$REPO/.harness/.loop-iter" 2>/dev/null) (expected 8)"
 rm -f "$FIFO" "$REPO/slow.out" "$REPO/.harness/.loop-iter"
@@ -287,21 +290,38 @@ printf '5' > "$REPO/.harness/.loop-iter"     # the other session reaches the cap
 # Unblocks the reader; as in 8g the FIFO is unseekable so step 4 ends in the unreadable arm,
 # which falls through to step 5 exactly as a normal `under` reading would. Without the
 # re-check, step 5 blocks a turn on step 3's stale `0 < 5`.
-usage_record 1000 > "$FIFO"
+# Bounded: if the hook exited before opening the FIFO (a slow runner reaching the cap at
+# step 3 first), an unbounded write to a reader-less FIFO would block forever and hang CI
+# instead of failing an assert (pass-2 codex P2).
+usage_record 1000 | hook_bounded 15 dd of="$FIFO" 2>/dev/null
 wait "$CAP_PID" 2>/dev/null
 [ ! -s "$REPO/cap.out" ] && ok "a cap reached during the ceiling read stands the turn down" || bad "blocked past the cap on a stale authorisation: $(cat "$REPO/cap.out")"
 grep -q 'iteration cap 5 reached while measuring the ceiling' "$HARNESS_LOOP_STATUS_PATH" && ok "the mid-ceiling cap stand-down is logged as such" || bad "mid-ceiling cap not logged: $(cat "$HARNESS_LOOP_STATUS_PATH")"
 rm -f "$FIFO" "$REPO/cap.out" "$REPO/.harness/.loop-iter" "$REPO/.harness/.loop-halt"
 
-# 8i) A payload with NO session id must not fall back to one shared marker (pass-1
-#     concurrency P3): a bare `.loop-ceiling-spent-` would put every such session back on the
-#     single file the per-session scheme exists to replace. It blocks, bounded by the counter,
-#     and writes no marker at all.
-rm -f "$REPO/.harness"/.loop-ceiling-spent-*
+# 8i) A payload with NO session id still gets a BOUNDED close-out. An earlier revision wrote
+#     no marker at all for this case, to avoid two id-less sessions sharing one; codex pass 2
+#     showed that trades a collision for something worse — the session is then re-blocked
+#     every turn until the lane cap. The bound wins: the marker is written at the bare path,
+#     so an id-less session is blocked once like any other. The residual collision between
+#     TWO id-less sessions is registered as B-302 item (6) rather than traded away again.
+rm -f "$REPO/.harness"/.loop-ceiling-spent-* "$REPO/.harness/.loop-iter"
 OUT=$(printf '{"transcript_path":"%s","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 MEMENTO_ROOT="$REPO/no-such-memento" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
 echo "$OUT" | jq -e '.reason | test("CONTEXT CEILING")' >/dev/null 2>&1 && ok "a session with no id still gets its close-out block" || bad "no-id session lost its block: $OUT"
-[ -z "$(ls "$REPO/.harness"/.loop-ceiling-spent-* 2>/dev/null)" ] && ok "a session with no id writes NO shared spent marker" || bad "no-id session wrote a shared marker: $(ls "$REPO/.harness"/.loop-ceiling-spent-* 2>/dev/null)"
+OUT=$(printf '{"transcript_path":"%s","cwd":"%s"}' "$OVER" "$REPO" | HARNESS_LOOP=1 MEMENTO_ROOT="$REPO/no-such-memento" CLAUDE_PROJECT_DIR="$REPO" bash "$HOOK")
+[ -z "$OUT" ] && ok "a session with no id is bounded too (blocked once, not every turn to the cap)" || bad "no-id session re-blocked: $OUT"
 rm -f "$REPO/.harness/.loop-iter" "$REPO/.harness"/.loop-ceiling-spent-*
+
+# NOT WITNESSED, and said plainly rather than faked: that the cap also covers the CLOSE-OUT
+# arm. Staging it needs the counter to reach MAX *during* step 4 AND the verdict to be
+# close-out — but the only way to hold the hook inside step 4 is the unseekable FIFO above,
+# which always ends in the unreadable arm. A first attempt at this case set ITER=MAX up front
+# and passed with the cap re-check deleted, because step 3 stood the session down before step
+# 4 ever ran; it was removed rather than shipped green. What carries the property instead is
+# structure, not a test: the read, the cap check and the increment are straight-line code
+# ahead of the close-out emission, on the single path every continuing arm converges to, so
+# the arm cannot reach its block without passing the check. 8h pins that the check exists and
+# fires; the ordering is visible in the file. B-302 item (7) carries the gap.
 
 # 9) The reading itself (context_tokens.py), driven in the consumer's exact invocation. The
 #    transcript scan reads backwards in 256 KB chunks, so the cases that can only go wrong

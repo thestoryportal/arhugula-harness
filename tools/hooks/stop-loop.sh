@@ -128,60 +128,23 @@ else
       loop_log STOP "context ceiling ${TOKENS}/${CEILING} — headless, allowing the stop so the runner relaunches"
       exit 0
       ;;
-    close-out)
-      # Attended: nothing will relaunch this session, so it is told to close out.
-      # Blocked once, never twice — but the "once" is per SESSION, not per lane. The halt
-      # marker would have been the obvious bound and is the wrong one: it is per-worktree
-      # (loop_halt_path reads only the project dir), every writer of it so far meant a
-      # RUN-wide stand-down, and being over the ceiling is a fact about one session's own
-      # transcript. An attended session opened beside a running `just loop` shares the lane,
-      # so raising it there would stand the unrelated headless run down over a context
-      # reading that says nothing about it. So the spent-ness is keyed by session id: this
-      # file holds the id of the session last told to close out, and a session that does not
-      # find its own id there gets its one block.
-      # The id is in the NAME, not the contents. One shared file holding "the last session
-      # told to close out" loses under interleaving — alpha writes, beta overwrites, alpha's
-      # next stop no longer looks spent and is blocked again (pass-1 codex P2). A file per
-      # session cannot be overwritten by another session, and the check is then a plain
-      # existence test rather than a read-and-compare.
-      # `-cd` DELETES every character outside the safe set rather than substituting it:
-      # jq -r emits a trailing newline, and substituting would fold it into the filename.
-      SESSION=$(hook_json "$PAYLOAD" '.session_id' | tr -cd 'A-Za-z0-9_-')
-      # No id means nothing to scope by, and a bare `.loop-ceiling-spent-` would put every
-      # such session back on ONE shared marker — the collision the filename scheme exists to
-      # prevent. Leave SPENT empty instead and let the counter be the only bound.
-      SPENT=""
-      [ -n "$SESSION" ] && SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent-${SESSION}"
-      if [ -n "$SPENT" ] && [ -f "$SPENT" ]; then
-        loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, close-out already asked of this session; allowing the stop"
-        exit 0
-      fi
-      CLOSE_OUT=$(printf '%s' "$VERDICT_JSON" | jq -r '.close_out')
-      loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, blocking once for the close-out"
-      [ -n "$SPENT" ] && : > "$SPENT" 2>/dev/null
-      # A close-out block is a turn the loop spent, so it counts as one. That is also the
-      # SECOND bound: the marker above is the primary one, but writing it is a best-effort
-      # file write, and if it fails this arm would otherwise re-block every turn forever —
-      # the counter carries the block to the cap regardless. Re-read immediately before the
-      # write so the value written is not the one read back before the ceiling subprocess.
-      ITER=$(cat "$ITERF" 2>/dev/null || echo 0); [[ "$ITER" =~ ^[0-9]+$ ]] || ITER=0
-      ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
-      jq -nc --arg r "[stop-loop] CONTEXT CEILING: this session is at ~${TOKENS} tokens, past the ${CEILING} ceiling, and no runner will relaunch it. Do not start new work.
-1. Commit or push everything outstanding — a handoff across a reset loses whatever is not committed.
-2. Close out: ${CLOSE_OUT}
-The handoff is the only thing the next session wakes up with, so it says what you were doing, exactly where you stopped, and the next concrete step. The dashboard next-action to carry across is: ${NEXT}." '{"decision":"block","reason":$r}'
-      exit 0
-      ;;
+    close-out) CEILING_ACTION=close-out ;;
   esac
 fi
 
-# 5) Continue: increment counter + inject next-action + the run-scoped skip-set.
-# Re-read first: the counter is per-lane, and step 4's subprocess sits between the read at
-# step 3 and this write, so incrementing the pre-ceiling value would drop a concurrent
-# session's turn — AND step 3's cap decision was made against that stale value. Re-check the
-# cap here, where the number is current: without it a concurrent Stop that reaches MAX inside
-# the ceiling window lets this turn block anyway, carrying the counter one past a bound the
-# header calls hard.
+# 5) Spend this turn on the counter, once, for every arm that continues.
+#
+# The cap decision at step 3 was made against a value read BEFORE step 4's subprocess, and a
+# concurrent Stop on the same lane can reach MAX inside that window. So the counter is re-read
+# and the cap re-checked HERE — one read, one check, one increment, on the single path every
+# continuing arm converges to. An earlier revision duplicated all three into the close-out arm
+# as well, and the copy that arm carried had no cap check at all: the defect was the
+# duplication, so the fix is to have one. [LAW:dataflow-not-control-flow] the arms differ in
+# the VALUE of CEILING_ACTION, not in which bookkeeping runs.
+#
+# It remains an unlocked read-modify-write: two Stops landing together can both read MAX-1,
+# both pass, and both block. That needs a lock rather than a re-read, is bounded to one extra
+# turn, and is registered as B-302 item (5) rather than papered over here.
 ITER=$(cat "$ITERF" 2>/dev/null || echo 0); [[ "$ITER" =~ ^[0-9]+$ ]] || ITER=0
 if [ "$ITER" -ge "$MAX" ]; then
   loop_log STOP "iteration cap ${MAX} reached while measuring the ceiling — loop stopping (run /loop-start to resume)"
@@ -190,6 +153,33 @@ if [ "$ITER" -ge "$MAX" ]; then
   exit 0
 fi
 ITER=$((ITER + 1)); printf '%s' "$ITER" > "$ITERF" 2>/dev/null
+
+if [ "${CEILING_ACTION:-}" = "close-out" ]; then
+  # Attended and over the ceiling: nothing will relaunch this session, so block once and tell
+  # it to close out. "Once" is per SESSION — the id is in the marker's NAME, because one
+  # shared file holding the last session's id loses under interleaving (alpha writes, beta
+  # overwrites, alpha is blocked again). A payload with no id falls back to the bare path:
+  # that reopens a collision between two id-less sessions, which is strictly better than the
+  # alternative of writing no marker at all and re-blocking every turn to the cap, and it is
+  # registered as B-302 item (6).
+  SESSION=$(hook_json "$PAYLOAD" '.session_id' | tr -cd 'A-Za-z0-9_-')
+  SPENT="$PROJECT_DIR/.harness/.loop-ceiling-spent-${SESSION}"
+  if [ -f "$SPENT" ]; then
+    loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, close-out already asked of this session; allowing the stop"
+    exit 0
+  fi
+  CLOSE_OUT=$(printf '%s' "$VERDICT_JSON" | jq -r '.close_out')
+  loop_log STOP "context ceiling ${TOKENS}/${CEILING} — attended, blocking once for the close-out"
+  : > "$SPENT" 2>/dev/null
+  jq -nc --arg r "[stop-loop] CONTEXT CEILING: this session is at ~${TOKENS} tokens, past the ${CEILING} ceiling, and no runner will relaunch it. Do not start new work.
+1. Commit or push everything outstanding — a handoff across a reset loses whatever is not committed.
+2. Close out: ${CLOSE_OUT}
+The handoff is the only thing the next session wakes up with, so it says what you were doing, exactly where you stopped, and the next concrete step. The dashboard next-action to carry across is: ${NEXT}." '{"decision":"block","reason":$r}'
+  exit 0
+fi
+
+# 6) Continue: inject next-action + the run-scoped skip-set. The turn was already counted
+#    above, on the one path every continuing arm shares.
 SKIP=$(loop_skip_set)
 SKIP=${SKIP:-none}
 
