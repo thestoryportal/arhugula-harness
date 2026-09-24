@@ -151,6 +151,7 @@ def _site_hitl(tenant_id: str | None) -> _CapturingEd25519Backend:
         gate_result=None,
         step_context=_step_context(tenant_id),
         raise_on_failure=True,
+        effective_gate_level=GateLevel.AUTO,
         auto_approved=True,
     )
     assert cp_entry is not None and write_result is not None

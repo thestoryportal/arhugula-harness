@@ -1943,6 +1943,7 @@ def test_auto_approve_audit_entry_is_non_vacuous_approve_not_timeout(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=True,
+        effective_gate_level=CPGateLevel.AUTO,
         auto_approved=True,
     )
     assert cp_entry.response == HITLResponse.APPROVE.value
@@ -2320,6 +2321,7 @@ def test_timeout_reject_audit_entry_is_reject_shaped(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=False,
+        effective_gate_level=CPGateLevel.AUTO,
         system_reject_reason="timeout-fail-closed",
     )
     assert cp_entry.response == HITLResponse.REJECT.value
@@ -2335,6 +2337,7 @@ def test_residual_timeout_audit_entry_keeps_partial_shape(
     `system_reject_reason`) keeps the `response=""` partial entry, consistent
     with RT-FAIL-HITL-GATE-TIMEOUT (the pre-existing v1.9 disposition)."""
     from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
     from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
 
     provider, _ = tracer_provider
@@ -2350,6 +2353,7 @@ def test_residual_timeout_audit_entry_keeps_partial_shape(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=False,
+        effective_gate_level=CPGateLevel.AUTO,
     )
     assert cp_entry.response == ""
     assert cp_entry.rejection_reason_hash is None
@@ -3318,6 +3322,7 @@ def test_sab_removal_audit_entry_response_is_placement_removed_not_approve(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=True,
+        effective_gate_level=CPGateLevel.AUTO,
         placement_removed=True,
     )
     assert cp_entry.response == "placement-removed"
@@ -3474,6 +3479,8 @@ def test_signing_backend_is_passed_into_audit_composition(
     deliver the backend to the OD signing seam (sign invoked), not merely
     hold it as an inert field.
     """
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
+
     provider, _ = tracer_provider
     backend = _CountingBackend()
     composer = _make_composer(
@@ -3489,6 +3496,7 @@ def test_signing_backend_is_passed_into_audit_composition(
         gate_result=None,
         step_context=_make_step_context(),
         raise_on_failure=True,
+        effective_gate_level=CPGateLevel.AUTO,
         auto_approved=True,
     )
     assert cp_entry.response == HITLResponse.APPROVE.value
@@ -3520,6 +3528,7 @@ async def test_hitl_audit_persist_counts_as_inflight_effect_at_trip_time(
     `ACKED_EFFECT_AMBIGUOUS`, because the write is no longer counted as an
     in-flight effect at the moment it trips the token.
     """
+    from harness_cp.gate_level_rule import GateLevel as CPGateLevel
     from harness_cp.sub_agent_dispatch_cancellation import (
         DISPATCH_CANCEL_TOKEN_VAR,
         DispatchCancelToken,
@@ -3550,6 +3559,7 @@ async def test_hitl_audit_persist_counts_as_inflight_effect_at_trip_time(
             gate_result=None,
             step_context=_make_step_context(),
             raise_on_failure=True,
+            effective_gate_level=CPGateLevel.AUTO,
             auto_approved=True,
         )
     finally:
@@ -3934,6 +3944,46 @@ async def test_descended_partial_binding_respects_parent_ask(
     assert len(surface.calls) == 1
     assert len(inner.calls) == 1
     assert len(record_gate_audits) == 1
+
+
+@pytest.mark.asyncio
+async def test_descended_auto_parent_removal_persists_clamped_auto_level(
+    tracer_provider: tuple[TracerProvider, InMemorySpanExporter],
+) -> None:
+    # [LAW:behavior-not-structure] The persisted audit must name the level that skipped the gate.
+    from harness_as import BlastRadiusTier
+    from harness_cp.gate_level_rule import GateLevel
+    from harness_runtime.lifecycle.hitl_auto_approve_policy import HITLAutoApprovePolicy
+
+    provider, _ = tracer_provider
+    audit = _MockAuditWriter()
+    inner = _MockInnerDispatcher()
+    surface = _MockAskUserQuestionSurface([])
+    composer = _sab_composer(
+        tracer_provider=provider,
+        blast=BlastRadiusTier.READ_ONLY,
+        policy=HITLAutoApprovePolicy(solo_persona_floor_auto=False),
+        surface=surface,
+        inner=inner,
+        audit=audit,
+    )
+    context = _make_step_context().model_copy(
+        update={"sub_agent_descent": True, "parent_gate_level": GateLevel.AUTO}
+    )
+
+    result = await composer.dispatch(
+        _sab_binding(PersonaTier.SOLO_DEVELOPER, removed=True),
+        _sab_step(),
+        step_context=context,
+    )
+
+    assert result == {"inner_dispatched": True}
+    assert surface.calls == []
+    assert len(inner.calls) == 1
+    assert len(audit.appends) == 1
+    entry = audit.appends[0][1].payload
+    assert entry.audit_namespace_attrs["audit.cp.response"] == "placement-removed"
+    assert entry.audit_namespace_attrs["audit.cp.gate_level"] == "auto"
 
 
 @pytest.mark.asyncio

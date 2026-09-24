@@ -15262,7 +15262,8 @@ def _execute_hierarchical_delegation(
     recorded `descent.child_gate_level` to each child `execute_workflow` call.
     The child clamps its manifest default to this floor once and threads the
     effective value through all strategy contexts, including resume re-entry.
-    A reusable AUTO child under an ASK parent therefore executes at ASK.
+    A reusable AUTO child under an ASK parent gates at ASK at matching placements.
+    Steps with no placement still bypass the composer until placement inheritance lands.
     The prior recorded-not-applied conclusion is retained only as historical
     provenance in `.harness/class_3_hierarchical_delegation_descent_recorded_not_applied.md`.
     """

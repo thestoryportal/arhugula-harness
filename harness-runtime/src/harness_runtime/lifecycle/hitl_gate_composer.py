@@ -1598,7 +1598,7 @@ class RuntimeHITLGateComposer:
         gate_result: AskUserQuestionResult | None,
         step_context: StepExecutionContext,
         raise_on_failure: bool,
-        effective_gate_level: CPGateLevel = CPGateLevel.AUTO,
+        effective_gate_level: CPGateLevel,
         auto_approved: bool = False,
         placement_removed: bool = False,
         system_reject_reason: str | None = None,
@@ -2213,26 +2213,27 @@ class RuntimeHITLGateComposer:
                         ),
                         mcp_trust_tier=resolved_mcp_trust_tier,
                     )
-                    removal_effective = (
-                        clamped is not None
-                        and _effective_gate_level(clamped, placement, step_context)
-                        is CPGateLevel.AUTO
+                    removal_effective_level = (
+                        _effective_gate_level(clamped, placement, step_context)
+                        if clamped is not None
+                        else None
                     )
                     gate_span.set_attribute("hitl.gate.sub_agent_boundary_removal_requested", True)
                     gate_span.set_attribute(
                         "hitl.gate.sub_agent_boundary_removal_effective",
-                        bool(removal_effective),
+                        removal_effective_level is CPGateLevel.AUTO,
                     )
-                    if removal_effective:
+                    if removal_effective_level is CPGateLevel.AUTO:
                         # Removal applied → skip the gate. Auto-audit (fail-closed):
                         # a removed preventive gate NEVER goes live un-audited.
+                        # [LAW:one-source-of-truth] Audit the clamped level that authorized removal.
                         await self._compose_and_persist_audit_off_loop(
                             parent_action_id=parent_action_id,
                             placement=placement,
                             cell=cell,
                             gate_result=None,
                             step_context=step_context,
-                            effective_gate_level=effective_gate_level,
+                            effective_gate_level=removal_effective_level,
                             raise_on_failure=True,
                             placement_removed=True,
                         )
