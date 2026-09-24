@@ -264,20 +264,38 @@ async def test_claude_scratch_cwd_removed_after_timeout_or_cancel(
 ) -> None:
     command, records = _fake_claude(tmp_path, sleeper=True)
     runner = _ClaudeCodeSubprocessRunner()
-    task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=0.2))
+    task = asyncio.create_task(
+        runner.run((command,), stdin="", timeout_seconds=15.0 if cancel else 3.0)
+    )
     if cancel:
-        for _ in range(10_000):
-            if records.exists() or task.done():
-                break
-            await asyncio.sleep(0)
-        assert records.exists()
+        try:
+            async with asyncio.timeout(10):
+                while True:
+                    if task.done():
+                        await task
+                    if records.exists():
+                        try:
+                            call = json.loads(records.read_text().splitlines()[0])
+                        except (IndexError, json.JSONDecodeError):
+                            pass  # The fake may have opened the file but not completed the line.
+                        else:
+                            break
+                    await asyncio.sleep(0.01)
+        except BaseException:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            raise
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
     else:
         with pytest.raises(ExternalCLIProcessTimeout):
             await task
-    call = json.loads(records.read_text().splitlines()[0])
+        call = json.loads(records.read_text().splitlines()[0])
     assert call["mode"] == 0o700
     assert call["entries"] == []
     assert not Path(call["cwd"]).exists()
@@ -1225,9 +1243,13 @@ def _group_cli(tmp_path: Path, *, normal: bool = False) -> tuple[str, Path]:
 
 async def _recorded_group(records: Path) -> dict[str, int]:
     async with asyncio.timeout(5):
-        while not records.exists():
+        while True:
+            if records.exists():
+                try:
+                    return json.loads(records.read_text())
+                except json.JSONDecodeError:
+                    pass  # The fake may have opened the file before json.dump completed.
             await asyncio.sleep(0.01)
-    return json.loads(records.read_text())
 
 
 def _not_running(pid: int) -> bool:
