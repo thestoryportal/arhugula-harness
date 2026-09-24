@@ -396,8 +396,15 @@ async def _settle_on_completion(
             # the audit-failure report (structured log keyed by `result_ref`)
             # BEFORE settling, so the report precedes the worker's re-raise —
             # and whether or not the deadline claimed `outcome`, since the
-            # carrier's effect completed either way.
-            report_post_effect_audit_failure(exc)
+            # carrier's effect completed either way. A report that itself
+            # fails is what this completed dispatch now raises (carrier as its
+            # context), so it too settles `outcome` rather than leaving it to
+            # the deadline.
+            try:
+                report_post_effect_audit_failure(exc)
+            except BaseException as report_exc:
+                _settle(outcome, partial(outcome.set_exception, report_exc))
+                raise
             _settle(outcome, partial(outcome.set_exception, exc))
             raise
         except BaseException as exc:

@@ -34,6 +34,8 @@ Test taxonomy (mapped to module docstring D1-D6):
   D5c/D5d/D5e — A completed ``TimeoutError`` / audit carrier / BaseException
        control signal keeps its outcome while asyncio's copy of it to the
        bridge future is still queued.
+  D5f — An audit-reporter failure on a completed carrier reaches the worker,
+       carrier as context, unfenced.
   D6 — ``materialize_sync_dispatcher_facade`` raises ``RuntimeError`` when
        called outside an async context.
 """
@@ -644,6 +646,41 @@ async def test_d5e_completed_base_exception_signal_wins_over_lagging_outcome_cop
 
     assert inner.task_done_while_held == [True]
     assert excinfo.value is signal
+    assert len(inner.fences) == 1
+    assert inner.fences[0].tripped is False
+
+
+class _UnreprableResult:
+    """An effect payload whose ``repr`` fails — the audit-failure report
+    formats ``repr(exc.result)``, and the carrier's ``result`` is untyped."""
+
+    def __repr__(self) -> str:
+        raise ValueError("synthetic repr failure")
+
+
+@pytest.mark.asyncio
+async def test_d5f_audit_reporter_failure_reaches_worker_with_carrier_as_context() -> None:
+    """D5f — the dispatch completed with a post-effect audit carrier, but the
+    audit-failure report itself raises. The worker gets that reporter
+    failure promptly, with the carrier chained as its ``__context__`` so the
+    completed effect stays visible — not a deadline timeout that fences an
+    already-completed dispatch."""
+    carrier = PostEffectAuditSigningError(
+        "audit signing failed after a completed provider response (test)",
+        effect_class=PostEffectClass.PROVIDER_RESPONSE,
+        result=_UnreprableResult(),
+        result_ref="test-tenant:" + "c" * 32,
+    )
+    release = threading.Event()
+    inner = _CompletesWithCopyHeldAsyncDispatcher(
+        error=carrier, release=release, fences=[], task_done_while_held=[]
+    )
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=1.0)
+
+    with pytest.raises(ValueError, match="synthetic repr failure") as excinfo:
+        await asyncio.to_thread(_dispatch_then_release, facade, release)
+
+    assert excinfo.value.__context__ is carrier
     assert len(inner.fences) == 1
     assert inner.fences[0].tripped is False
 
