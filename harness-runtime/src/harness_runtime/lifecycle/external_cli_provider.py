@@ -16,6 +16,7 @@ import asyncio
 import inspect
 import json
 import os
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -186,6 +187,41 @@ _SCRUBBED_PROVIDER_ENV_VARS: frozenset[str] = frozenset(
         "GOOGLE_APPLICATION_CREDENTIALS",
     }
 )
+
+_CLAUDE_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "TZ",
+        "TMPDIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    }
+)
+
+
+def _claude_child_env() -> dict[str, str]:
+    # [LAW:single-enforcer] The Claude subscription subprocess has one env boundary.
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in _CLAUDE_ENV_KEYS or key.startswith("LC_")
+    }
 
 
 def _notify_wire(on_wire: Callable[[], None] | None) -> None:
@@ -366,6 +402,25 @@ class AsyncioSubprocessRunner:
         timeout_seconds: float,
         on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
+        return await self._run_process(
+            argv,
+            stdin=stdin,
+            timeout_seconds=timeout_seconds,
+            on_wire=on_wire,
+            env=_scrubbed_child_env(),
+            cwd=None,
+        )
+
+    async def _run_process(
+        self,
+        argv: tuple[str, ...],
+        *,
+        stdin: str,
+        timeout_seconds: float,
+        on_wire: Callable[[], None] | None,
+        env: Mapping[str, str],
+        cwd: str | None,
+    ) -> CLIProcessResult:
         if not argv:
             raise ExternalCLICommandError("", 127, "empty argv")
         try:
@@ -374,7 +429,8 @@ class AsyncioSubprocessRunner:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=_scrubbed_child_env(),
+                env=env,
+                cwd=cwd,
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
@@ -421,6 +477,29 @@ class AsyncioSubprocessRunner:
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
             stderr=stderr_bytes.decode("utf-8", errors="replace"),
         )
+
+
+class _ClaudeCodeSubprocessRunner(AsyncioSubprocessRunner):
+    """Production Claude boundary; one empty private cwd per child."""
+
+    async def run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        stdin: str,
+        timeout_seconds: float,
+        on_wire: Callable[[], None] | None = None,
+    ) -> CLIProcessResult:
+        # [LAW:no-ambient-temporal-coupling] The child is reaped before its cwd is removed.
+        with tempfile.TemporaryDirectory(prefix="arhugula-claude-", dir="/tmp") as cwd:
+            return await self._run_process(
+                argv,
+                stdin=stdin,
+                timeout_seconds=timeout_seconds,
+                on_wire=on_wire,
+                env=_claude_child_env(),
+                cwd=cwd,
+            )
 
 
 class RecordingSubprocessRunner:
@@ -672,10 +751,14 @@ def _claude_inference_argv(command: str, model: str) -> tuple[str, ...]:
         "--input-format",
         "text",
         "--no-session-persistence",
+        "--safe-mode",
+        "--strict-mcp-config",
         "--tools",
         "",
         "--permission-mode",
         "dontAsk",
+        "--permission-prompts",
+        "none",
         "--model",
         model,
     )
@@ -938,7 +1021,7 @@ async def construct_claude_code_cli_adapter(
 ) -> ClaudeCodeCLIAdapter:
     if config.kind is not ExternalCLIProviderKind.CLAUDE_CODE:
         raise ValueError(f"unsupported Claude Code adapter kind: {config.kind}")
-    process_runner = runner if runner is not None else AsyncioSubprocessRunner()
+    process_runner = runner if runner is not None else _ClaudeCodeSubprocessRunner()
     if config.auth_check:
         await _assert_claude_authenticated(config, process_runner)
     return ClaudeCodeCLIAdapter(

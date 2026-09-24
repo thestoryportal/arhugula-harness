@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +19,7 @@ from harness_runtime.lifecycle.external_cli_provider import (
     ExternalCLIOutputError,
     ExternalCLIProcessTimeout,
     RecordingSubprocessRunner,
+    _ClaudeCodeSubprocessRunner,
     construct_antigravity_cli_adapter,
     construct_claude_code_cli_adapter,
     construct_codex_cli_adapter,
@@ -121,15 +124,177 @@ async def test_claude_dispatch_uses_argv_and_stdin_for_text_only_prompt() -> Non
         "--input-format",
         "text",
         "--no-session-persistence",
+        "--safe-mode",
+        "--strict-mcp-config",
         "--tools",
         "",
         "--permission-mode",
         "dontAsk",
+        "--permission-prompts",
+        "none",
         "--model",
         "sonnet",
     )
     assert stdin == "Reply OK"
     assert timeout == 42.0
+
+
+def _fake_claude(tmp_path: Path, *, sleeper: bool = False) -> tuple[str, Path]:
+    script = tmp_path / "fake-claude"
+    records = tmp_path / "records.jsonl"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, stat, sys, time\n"
+        "cwd = pathlib.Path.cwd()\n"
+        "record = {'argv': sys.argv[1:], 'stdin': sys.stdin.read(), "
+        "'cwd': str(cwd), 'mode': stat.S_IMODE(cwd.stat().st_mode), "
+        "'entries': sorted(p.name for p in cwd.iterdir()), "
+        "'env_keys': sorted(os.environ)}\n"
+        f"with open({str(records)!r}, 'a') as stream: "
+        "stream.write(json.dumps(record) + '\\n')\n"
+        + ("time.sleep(300)\n" if sleeper else "")
+        + "print(json.dumps({'loggedIn': True} if sys.argv[1:3] == "
+        "['auth', 'status'] else {'result': 'OK'}))\n"
+    )
+    script.chmod(0o700)
+    return str(script), records
+
+
+@pytest.mark.asyncio
+async def test_default_claude_runner_isolates_auth_and_inference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command, records = _fake_claude(tmp_path)
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "GITHUB_TOKEN",
+        "SSH_AUTH_SOCK",
+        "HARNESS_SECRET",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ):
+        monkeypatch.setenv(key, "secret-sentinel")
+    monkeypatch.setenv("LC_TEST", "locale-sentinel")
+    adapter = await construct_claude_code_cli_adapter(
+        ExternalCLIProviderConfig(
+            provider="claude_code",
+            kind="claude-code",
+            command=command,
+            timeout_seconds=2.0,
+        )
+    )
+    prompt = "Prompt bytes Ω\n"
+    assert (await adapter.dispatch_text(model="sonnet", prompt=prompt)).text == "OK"
+    calls = [json.loads(line) for line in records.read_text().splitlines()]
+    assert len(calls) == 2
+    auth, inference = calls
+    assert auth["argv"] == ["auth", "status", "--json"]
+    assert auth["stdin"] == ""
+    assert inference["stdin"] == prompt
+    assert prompt not in inference["argv"]
+    assert inference["argv"] == [
+        "--print",
+        "--output-format",
+        "json",
+        "--input-format",
+        "text",
+        "--no-session-persistence",
+        "--safe-mode",
+        "--strict-mcp-config",
+        "--tools",
+        "",
+        "--permission-mode",
+        "dontAsk",
+        "--permission-prompts",
+        "none",
+        "--model",
+        "sonnet",
+    ]
+    assert auth["cwd"] != inference["cwd"]
+    allowed = {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "TZ",
+        "TMPDIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "CLAUDE_CONFIG_DIR",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    }
+    for call in calls:
+        assert call["mode"] == 0o700
+        assert call["entries"] == []
+        assert not Path(call["cwd"]).exists()
+        assert not Path(call["cwd"]).is_relative_to(Path.cwd())
+        assert "LC_TEST" in call["env_keys"]
+        assert all(key in allowed or key.startswith("LC_") for key in call["env_keys"])
+        assert set(call["env_keys"]).isdisjoint(
+            {
+                "ANTHROPIC_API_KEY",
+                "AWS_SECRET_ACCESS_KEY",
+                "GITHUB_TOKEN",
+                "SSH_AUTH_SOCK",
+                "HARNESS_SECRET",
+                "DBUS_SESSION_BUS_ADDRESS",
+            }
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_claude_scratch_cwd_removed_after_timeout_or_cancel(
+    tmp_path: Path,
+    cancel: bool,
+) -> None:
+    command, records = _fake_claude(tmp_path, sleeper=True)
+    runner = _ClaudeCodeSubprocessRunner()
+    task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=0.2))
+    if cancel:
+        for _ in range(10_000):
+            if records.exists() or task.done():
+                break
+            await asyncio.sleep(0)
+        assert records.exists()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    else:
+        with pytest.raises(ExternalCLIProcessTimeout):
+            await task
+    call = json.loads(records.read_text().splitlines()[0])
+    assert call["mode"] == 0o700
+    assert call["entries"] == []
+    assert not Path(call["cwd"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_other_default_runner_retains_scrubbed_env_and_inherited_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    command, records = _fake_claude(tmp_path)
+    monkeypatch.setenv("HARNESS_SECRET", "secret-sentinel")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-sentinel")
+    result = await AsyncioSubprocessRunner().run((command,), stdin="", timeout_seconds=2.0)
+    assert result.exit_code == 0
+    call = json.loads(records.read_text().splitlines()[0])
+    assert call["cwd"] == str(Path.cwd())
+    assert "HARNESS_SECRET" in call["env_keys"]
+    assert "ANTHROPIC_API_KEY" not in call["env_keys"]
 
 
 @pytest.mark.asyncio
