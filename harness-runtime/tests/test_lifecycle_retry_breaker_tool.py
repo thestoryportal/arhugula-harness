@@ -751,3 +751,22 @@ async def test_trip_during_real_tool_attempt_marks_job_ack_ambiguous() -> None:
 
     token.ack()
     assert token.wait_ack(grace_seconds=0.1) is FenceAckOutcome.ACKED_EFFECT_AMBIGUOUS
+
+
+@pytest.mark.asyncio
+async def test_container_cleanup_failure_is_not_retried() -> None:
+    from harness_runtime.lifecycle.docker_tool_execution_driver import ToolContainerCleanupError
+
+    tp, _exporter = _tracer_provider_with_exporter()
+    failure = ToolContainerCleanupError("container cleanup uncertain")
+    inner = _MockInnerToolDispatcher(outcomes=[failure, {"would": "retry"}])
+    wrapper = RetryBreakerToolDispatcher(
+        inner=inner,
+        retry_breaker=_retry_breaker_with_tool_policy(max_attempts=3),
+        tracer_provider=tp,
+        sleep_fn=_RecordingSleep(),
+    )
+    with pytest.raises(ToolContainerCleanupError) as excinfo:
+        await wrapper.dispatch(_binding(), _step(), step_context=_step_context())
+    assert excinfo.value is failure
+    assert len(inner.calls) == 1

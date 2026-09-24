@@ -19,6 +19,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
+from uuid import uuid4
 
 from harness_as.sandbox_tier import SandboxTier
 
@@ -29,7 +30,17 @@ from harness_runtime.lifecycle.runtime_tool_dispatcher import (
     ToolInvocationTimeoutError,
 )
 
-__all__ = ["DockerToolRunnerExecutionDriver", "GVisorRunscToolRunnerExecutionDriver"]
+__all__ = [
+    "DockerToolRunnerExecutionDriver",
+    "GVisorRunscToolRunnerExecutionDriver",
+    "ToolContainerCleanupError",
+]
+
+CONTAINER_CLEANUP_TIMEOUT_SECONDS = 10.0
+
+
+class ToolContainerCleanupError(ToolInvocationProtocolError):
+    """Docker container cleanup is uncertain, so a tool retry is forbidden."""
 
 
 async def _reap_child(proc: asyncio.subprocess.Process) -> None:
@@ -115,10 +126,16 @@ class DockerToolRunnerExecutionDriver:
             },
         }
         image_id = await self._resolve_local_image_id()
+        # [LAW:no-ambient-temporal-coupling] Each attempt has an exact cleanup target.
+        container_name = f"harness-tool-{uuid4().hex}"
         argv = [
             *self._docker_command(),
             "run",
             "--rm",
+            "--name",
+            container_name,
+            "--label",
+            "io.arhugula.harness.tool-run=1",
             "--network",
             self.network,
             *self._runtime_args(),
@@ -130,6 +147,7 @@ class DockerToolRunnerExecutionDriver:
             argv=argv,
             stdin=json.dumps(payload).encode("utf-8"),
             timeout_message=f"Docker tool runner timed out after {self.timeout_seconds:.1f}s",
+            container_name=container_name,
         )
 
         if returncode != 0:
@@ -208,6 +226,7 @@ class DockerToolRunnerExecutionDriver:
         argv: Sequence[str],
         stdin: bytes,
         timeout_message: str,
+        container_name: str | None = None,
     ) -> tuple[bytes, bytes, int]:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -221,18 +240,101 @@ class DockerToolRunnerExecutionDriver:
                 timeout=self.timeout_seconds,
             )
         except TimeoutError as exc:
-            await _reap_child(proc)
+            if container_name is None:
+                await _reap_child(proc)
+            elif await self._settle_interrupted_run(proc, container_name):
+                raise asyncio.CancelledError() from exc
             raise ToolInvocationTimeoutError(timeout_message) from exc
         except asyncio.CancelledError:
-            # Cancelling the awaiting coroutine does not kill the Docker
-            # subprocess — same reasoning as the TimeoutError branch above,
-            # which is precisely why that branch explicitly kills + reaps.
-            # Without this, an external cancellation (an outer step-level
-            # timeout, workflow shutdown) orphans the container. The
-            # `CancelledError` is NEVER swallowed.
-            await _reap_child(proc)
+            if container_name is None:
+                await _reap_child(proc)
+            else:
+                await self._settle_interrupted_run(proc, container_name)
             raise
         return stdout, stderr, proc.returncode or 0
+
+    async def _settle_interrupted_run(
+        self, proc: asyncio.subprocess.Process, container_name: str
+    ) -> bool:
+        """Reap CLI and remove its container before releasing timeout/cancel.
+
+        Shielding the task, then awaiting it again after an outer cancellation,
+        prevents a second cancellation from abandoning an in-flight rm. A
+        harness SIGKILL can still bypass this code; a daemon sweep is needed.
+        """
+
+        async def settle() -> None:
+            reap_error: OSError | None = None
+            try:
+                await _reap_child(proc)
+            except OSError as exc:
+                reap_error = exc
+            await self._remove_container(container_name)
+            if reap_error is not None:
+                raise ToolContainerCleanupError(
+                    f"Docker tool container {container_name} was removed but CLI reap failed: "
+                    f"{type(reap_error).__name__}"
+                ) from reap_error
+
+        # [LAW:no-ambient-temporal-coupling] Cleanup completion gates retry or cancellation.
+        task = asyncio.create_task(settle())
+        cancelled_during_cleanup = False
+        while True:
+            try:
+                await asyncio.shield(task)
+                return cancelled_during_cleanup
+            except asyncio.CancelledError as exc:
+                cancelled_during_cleanup = True
+                if task.cancelled():
+                    raise ToolContainerCleanupError(
+                        f"Docker tool container {container_name} cleanup task was cancelled"
+                    ) from exc
+
+    async def _remove_container(self, container_name: str) -> None:
+        argv = (*self._docker_command(), "rm", "-f", container_name)
+        proc: asyncio.subprocess.Process | None = None
+        try:
+            # [LAW:verifiable-goals] Bound spawn and communication independently of run timeout.
+            async with asyncio.timeout(CONTAINER_CLEANUP_TIMEOUT_SECONDS):
+                proc = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _stdout, stderr = await proc.communicate(b"")
+        except TimeoutError as exc:
+            if proc is not None:
+                try:
+                    await _reap_child(proc)
+                except OSError:
+                    pass  # the container outcome is already uncertain; typed timeout wins
+            raise ToolContainerCleanupError(
+                f"Docker tool container {container_name} cleanup timed out after "
+                f"{CONTAINER_CLEANUP_TIMEOUT_SECONDS:.1f}s"
+            ) from exc
+        except OSError as exc:
+            if proc is not None:
+                try:
+                    await _reap_child(proc)
+                except OSError:
+                    pass  # the typed cleanup failure still prevents retry
+            raise ToolContainerCleanupError(
+                f"Docker tool container {container_name} cleanup I/O failed: {type(exc).__name__}"
+            ) from exc
+        if proc.returncode == 0:
+            return
+        detail = " ".join(stderr.decode("utf-8", errors="replace").split())
+        if detail in (
+            f"No such container: {container_name}",
+            f"Error response from daemon: No such container: {container_name}",
+        ):
+            return
+        # [LAW:no-silent-failure] Retain bounded stderr context without exposing tool output.
+        bounded = "".join(ch if ch.isprintable() else " " for ch in detail[:160])
+        raise ToolContainerCleanupError(
+            f"Docker tool container {container_name} cleanup exited {proc.returncode}: {bounded}"
+        )
 
     def _docker_command(self) -> tuple[str, ...]:
         if self.docker_command is not None:
