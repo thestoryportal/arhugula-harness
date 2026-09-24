@@ -152,7 +152,8 @@ otlp_endpoint = "http://localhost:4318"
 # REQUIRED at bootstrap stage IS-1: 4 path bindings covering the
 # `PathClass` enum (SKILLS / PROMPTS / ROUTING_MANIFEST / STATE_LEDGER).
 # Each binding maps a (path_class, workflow_class, deployment_surface)
-# tuple to an absolute filesystem path.
+# tuple to an absolute directory path. For STATE_LEDGER, stage 1 writes
+# state.jsonl inside that directory.
 #
 # IMPORTANT — `workflow_class` MUST match the `[workflow].workload_class`
 # of the manifests you intend to run, or bootstrap stage IS-1 will not
@@ -182,7 +183,7 @@ path = "/absolute/path/to/your/workspace/routing_manifest"
 path_class = "STATE_LEDGER"
 workflow_class = "pipeline-automation"
 deployment_surface = "local-development"
-path = "/absolute/path/to/your/workspace/.harness/state.jsonl"
+path = "/absolute/path/to/your/workspace/.harness/state-ledger"
 
 
 # REQUIRED for any workflow that dispatches an inference step: the routing

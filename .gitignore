@@ -35,6 +35,8 @@ audit-entries.jsonl.lock
 # here, so a smoke run fills it with state.jsonl + runtime sidecars — throwaway state,
 # never committed (codex round-2 [P2]).
 .harness/r420-scratch/
+# [LAW:effects-at-boundaries] Keep the local onboarding ledger and sidecars out of source.
+.harness/onboarding/
 routing_manifest/
 # spec-he-loop-lanes (U-HE-12/13): transient artifacts beside the two tracked records --
 # the arc-metrics ledger's atomic-rewrite temp (its writer CLAIM is QUEUE_DIR-adjacent,
