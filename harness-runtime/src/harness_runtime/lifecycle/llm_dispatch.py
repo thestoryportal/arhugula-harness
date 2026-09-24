@@ -5369,6 +5369,8 @@ def materialize_llm_dispatcher_stage(
     prompt_versions_by_sha: Mapping[str, str] | None = None,
     approved_prompt_version_shas: frozenset[str] = frozenset(),
     routing_activation: bool = False,
+    embedding_routing_candidates: Mapping[WorkloadClass, str] | None = None,
+    external_cli_provider_names: tuple[str, ...] = (),
     embedding_model_dir: Path | None = None,
     embedding_cache_dir: Path | None = None,
     embedding_classifier: LayerDecisionFn | None = None,
@@ -5417,20 +5419,26 @@ def materialize_llm_dispatcher_stage(
 
         from harness_runtime.lifecycle.embedding_resolution import (
             EmbeddingModelError,
-            default_routing_corpus,
+            RoutingCorpusConfigError,
             make_fastembed_embedding,
+            routing_corpus,
         )
 
         try:
+            # [LAW:single-enforcer] The built map is the actual stage-3a admission result.
+            corpus = routing_corpus(
+                embedding_routing_candidates,
+                set(providers) & ({"ollama"} | set(external_cli_provider_names)),
+            )
             embed = make_fastembed_embedding(
                 model_dir=embedding_model_dir, cache_dir=embedding_cache_dir
             )
-        except (EmbeddingModelError, ImportError) as exc:
+        except (RoutingCorpusConfigError, EmbeddingModelError, ImportError) as exc:
             # [LAW:no-silent-failure] A missing or invalid local L2 model aborts bootstrap.
             raise LLMDispatchBindError(str(exc)) from exc
         embedding_classifier = make_embedding_classifier(
             embed=embed,
-            corpus=default_routing_corpus(),
+            corpus=corpus,
         )
 
     return RuntimeLLMDispatcher(

@@ -2128,6 +2128,9 @@ class RuntimeConfig(BaseModel):
     optional `[embedding]` extra), and a partial routing manifest. The LIVE exercise
     needs a second configured provider (a deployment gate, not a build gate)."""
 
+    embedding_routing_candidates: dict[WorkloadClass, str] | None = None
+    """Four explicit provider:model labels for the active L2 corpus."""
+
     embedding_model_dir: Path | None = None
     """Absolute local FastEmbed directory with SHA256SUMS; required only when the
     routing factory builds its own L2 classifier."""

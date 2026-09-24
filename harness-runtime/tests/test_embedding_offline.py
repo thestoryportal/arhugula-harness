@@ -150,10 +150,16 @@ def test_factory_activation_needs_local_model_but_injection_and_default_off_do_n
         return real_import(name)
 
     monkeypatch.setattr(importlib, "import_module", no_fastembed)
-    providers = {"test": object()}
+    providers = {"ollama": object(), "claude_code": object()}
     tracer = object()
     with pytest.raises(LLMDispatchBindError, match="embedding_model_dir"):
-        materialize_llm_dispatcher_stage(providers, tracer, routing_activation=True)
+        materialize_llm_dispatcher_stage(
+            providers,
+            tracer,
+            routing_activation=True,
+            embedding_routing_candidates=PROFILE_CANDIDATES,
+            external_cli_provider_names=("claude_code",),
+        )
     off = materialize_llm_dispatcher_stage(providers, tracer)
 
     def injected(*_args: object) -> None:
@@ -164,3 +170,118 @@ def test_factory_activation_needs_local_model_but_injection_and_default_off_do_n
     )
     assert not off.routing_activation and off.embedding_classifier is None
     assert on.routing_activation and on.embedding_classifier is injected
+
+
+PROFILE_CANDIDATES = {
+    "software-engineering": "claude_code:sonnet",
+    "content-creation": "claude_code:haiku",
+    "pipeline-automation": "ollama:llama3.2:3b",
+    "research": "claude_code:sonnet",
+}
+
+
+def test_profile_corpus_requires_all_classes_before_model_import(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from harness_runtime.lifecycle import embedding_resolution
+
+    monkeypatch.setattr(
+        embedding_resolution,
+        "make_fastembed_embedding",
+        lambda **_kwargs: pytest.fail("model imported before corpus admission"),
+    )
+    providers = {"ollama": object(), "claude_code": object()}
+    for candidates in (None, {"software-engineering": "claude_code:sonnet"}):
+        with pytest.raises(LLMDispatchBindError, match="embedding routing candidates"):
+            materialize_llm_dispatcher_stage(
+                providers,
+                object(),
+                routing_activation=True,
+                embedding_routing_candidates=candidates,
+                external_cli_provider_names=("claude_code",),
+            )
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    ("unknown:sonnet", "anthropic:claude", "claude_code:", "ollama:llama3.2:3b"),
+)
+def test_profile_corpus_refuses_unavailable_candidate_before_model_import(
+    monkeypatch: pytest.MonkeyPatch, candidate: str
+) -> None:
+    from harness_runtime.lifecycle import embedding_resolution
+
+    monkeypatch.setattr(
+        embedding_resolution,
+        "make_fastembed_embedding",
+        lambda **_kwargs: pytest.fail("model imported before corpus admission"),
+    )
+    candidates = dict(PROFILE_CANDIDATES)
+    candidates["research"] = candidate
+    providers = {"claude_code": object()}
+    with pytest.raises(LLMDispatchBindError, match="embedding routing candidates"):
+        materialize_llm_dispatcher_stage(
+            providers,
+            object(),
+            routing_activation=True,
+            embedding_routing_candidates=candidates,
+            external_cli_provider_names=("claude_code",),
+        )
+
+
+def test_profile_corpus_builds_configured_labels_without_real_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from harness_cp import embedding_routing
+    from harness_runtime.lifecycle import embedding_resolution
+
+    observed: list[object] = []
+
+    def classifier(*, embed: object, corpus: object) -> object:
+        observed.append(corpus)
+        return lambda *_args: None
+
+    monkeypatch.setattr(embedding_resolution, "make_fastembed_embedding", lambda **_kw: object())
+    monkeypatch.setattr(embedding_routing, "make_embedding_classifier", classifier)
+    dispatcher = materialize_llm_dispatcher_stage(
+        {"ollama": object(), "claude_code": object()},
+        object(),
+        routing_activation=True,
+        embedding_routing_candidates=PROFILE_CANDIDATES,
+        external_cli_provider_names=("claude_code",),
+    )
+    assert dispatcher.embedding_classifier is not None
+    assert len(observed) == 1
+    corpus = observed[0]
+    assert len(corpus.exemplars) == 16
+    assert {item.workload_class for item in corpus.exemplars} == set(PROFILE_CANDIDATES)
+    assert all(
+        item.candidate == PROFILE_CANDIDATES[item.workload_class] for item in corpus.exemplars
+    )
+
+
+def test_runtime_config_parses_profile_candidate_keys(tmp_path: Path) -> None:
+    from harness_core.deployment_surface import DeploymentSurface
+    from harness_core.workload_class import WorkloadClass
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_runtime.types import (
+        CollectorConfig,
+        OTelConfig,
+        PathBindingConfig,
+        ProviderSecretsConfig,
+        RuntimeConfig,
+    )
+
+    config = RuntimeConfig(
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4318"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        embedding_routing_candidates=PROFILE_CANDIDATES,
+    )
+    assert config.embedding_routing_candidates is not None
+    assert set(config.embedding_routing_candidates) == set(WorkloadClass)
+    assert config.embedding_routing_candidates[WorkloadClass.RESEARCH] == "claude_code:sonnet"

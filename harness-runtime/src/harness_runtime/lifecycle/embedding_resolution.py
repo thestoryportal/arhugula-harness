@@ -31,10 +31,12 @@ import importlib
 import os
 import re
 import stat
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from harness_core.workload_class import WorkloadClass
 from harness_cp.embedding_routing import EmbeddingFn, EmbeddingRoutingCorpus
 
 # The pinned local realization is BAAI/bge-small-en-v1.5. Other model layouts
@@ -190,26 +192,37 @@ def make_fastembed_embedding(
     return _embed
 
 
-def default_routing_corpus() -> EmbeddingRoutingCorpus:
-    """A representative trained per-workload-class corpus (C-CP-02 §2.1 — the L2
-    authoring deliverable).
+class RoutingCorpusConfigError(ValueError):
+    """The active L2 corpus does not match the constructed provider profile."""
 
-    Maps characteristic call-site utterances across the four ``WorkloadClass``
-    families to a sensible ``"provider:model"`` candidate (capability-aware,
-    cheapest-adequate per the C-CP-02 cost discipline). This is an **illustrative
-    default**: the candidates and exemplars are operator-tunable — an operator
-    retrains the corpus for their own provider bindings + workload mix; it
-    demonstrates + exercises the capability rather than fixing a routing policy.
-    """
-    # Candidate bindings (illustrative; capability-aware-cheapest-adequate):
-    #   hard reasoning / code  → a frontier model
-    #   creative / short-form  → a cheaper fast model
-    #   deterministic pipeline → a free local model
-    #   research / analysis    → a long-context frontier model
-    code = "anthropic:claude-opus-4-8"
-    creative = "anthropic:claude-haiku-4-5"
-    pipeline = "ollama:llama3.2:3b"
-    research = "openai:gpt-5.5"
+
+def routing_corpus(
+    candidates: Mapping[WorkloadClass, str] | None,
+    available_provider_names: Collection[str],
+) -> EmbeddingRoutingCorpus:
+    """Bind the fixed exemplar texts to the profile's admitted providers."""
+    # [LAW:parse-dont-validate] Admit all labels once before model construction.
+    if candidates is None or set(candidates) != set(WorkloadClass):
+        raise RoutingCorpusConfigError(
+            "embedding routing candidates must name exactly four workload classes"
+        )
+    for candidate in candidates.values():
+        provider, separator, model = candidate.partition(":")
+        if (
+            not separator
+            or not provider
+            or not model
+            or provider.strip() != provider
+            or model.strip() != model
+            or provider not in available_provider_names
+        ):
+            raise RoutingCorpusConfigError(
+                "embedding routing candidates require a constructed profile provider:model"
+            )
+    code = candidates[WorkloadClass.SOFTWARE_ENGINEERING]
+    creative = candidates[WorkloadClass.CONTENT_CREATION]
+    pipeline = candidates[WorkloadClass.PIPELINE_AUTOMATION]
+    research = candidates[WorkloadClass.RESEARCH]
     return EmbeddingRoutingCorpus.from_pairs(
         [
             # software-engineering

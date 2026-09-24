@@ -413,10 +413,17 @@ async def execute(
             approved_prompt_version_shas=config.approved_prompt_version_shas,
             # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate).
             # When True, the DECLARATIVE layer is §2.2-faithful (declines on a
-            # manifest-miss → EMBEDDING → L3) and the factory builds the default L2
-            # classifier from the verified local model (fail-loud on absent model,
-            # cache or optional extra). Default False preserves the #213 echo.
+            # manifest-miss → EMBEDDING → L3) and the factory builds the configured L2
+            # classifier from explicit profile labels and the verified local model
+            # (fail-loud on absent labels, model, cache or optional extra).
+            # Default False preserves the #213 echo.
             routing_activation=config.routing_activation,
+            embedding_routing_candidates=config.embedding_routing_candidates,
+            external_cli_provider_names=tuple(
+                item.provider
+                for item in config.external_cli_providers
+                if item.provider in config.enabled_provider_names
+            ),
             embedding_model_dir=config.embedding_model_dir,
             embedding_cache_dir=config.embedding_cache_dir,
             # B-18-KEEPALIVE — Anthropic model string for prewarm/keep-alive pings
