@@ -9,7 +9,7 @@ services:
       - ./tempo.yaml:/etc/tempo.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "${R420_PORT_TEMPO:-3200}:3200"
+      - "127.0.0.1:${R420_PORT_TEMPO:-3200}:3200"
     expose:
       - "4317"
       - "4318"
@@ -21,8 +21,8 @@ services:
     volumes:
       - ./otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
-      - "${R420_PORT_OTEL_GRPC:-4317}:4317"
-      - "${R420_PORT_OTEL_HTTP:-4318}:4318"
+      - "127.0.0.1:${R420_PORT_OTEL_GRPC:-4317}:4317"
+      - "127.0.0.1:${R420_PORT_OTEL_HTTP:-4318}:4318"
     depends_on:
       tempo:
         condition: service_started
@@ -30,19 +30,26 @@ services:
   grafana:
     image: ${R420_GRAFANA_IMAGE:-grafana/grafana:12.2.0}
     environment:
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # [LAW:effects-at-boundaries] Grafana reads the operator-owned Compose secret at startup.
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
       GF_SECURITY_ADMIN_USER: admin
       GF_USERS_DEFAULT_THEME: light
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "${R420_PORT_GRAFANA:-3000}:3000"
+      - "127.0.0.1:${R420_PORT_GRAFANA:-3000}:3000"
+    secrets:
+      - grafana_admin_password
     depends_on:
       tempo:
         condition: service_started
+
+# [LAW:no-silent-failure] Refuse an unset password-file path before any stack command resolves.
+secrets:
+  grafana_admin_password:
+    file: ${R420_GRAFANA_ADMIN_PASSWORD_FILE:?Set R420_GRAFANA_ADMIN_PASSWORD_FILE to the private admin password file}
 
 volumes:
   grafana-data:
