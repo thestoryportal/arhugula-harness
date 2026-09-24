@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -770,6 +772,7 @@ class _AlreadyReapedFakeProcess:
 
     def __init__(self) -> None:
         self.returncode: int | None = 0
+        self.pid = os.getpgrp()  # Synthetic child: force the safe direct-child fallback.
         self.kill_calls = 0
         self.wait_calls = 0
         self.parked_in_communicate = False
@@ -1198,3 +1201,296 @@ async def test_generic_command_auth_check_without_auth_args_raises_before_any_sp
         )
 
     assert runner.calls == []
+
+
+# [LAW:behavior-not-structure] These fixtures observe OS process-group behavior
+# through a provider-free executable, not a mocked CLI implementation.
+def _group_cli(tmp_path: Path, *, normal: bool = False) -> tuple[str, Path]:
+    script = tmp_path / "fake-group-cli"
+    records = tmp_path / "group-record.json"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"with open({str(records)!r}, 'w') as stream: "
+        "json.dump({'pid': os.getpid(), 'pgid': os.getpgrp(), "
+        "'sid': os.getsid(0), 'grandchild': child.pid, "
+        "'grandchild_pgid': os.getpgid(child.pid)}, stream)\n"
+        + ("print('OK', flush=True)\n" if normal else "time.sleep(300)\n")
+    )
+    script.chmod(0o700)
+    return str(script), records
+
+
+async def _recorded_group(records: Path) -> dict[str, int]:
+    async with asyncio.timeout(5):
+        while not records.exists():
+            await asyncio.sleep(0.01)
+    return json.loads(records.read_text())
+
+
+def _not_running(pid: int) -> bool:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1].split()[0]
+    except FileNotFoundError:
+        return True
+    return state in {"Z", "X"}
+
+
+async def _assert_group_stopped(record: dict[str, int]) -> None:
+    async with asyncio.timeout(5):
+        while not all(_not_running(record[key]) for key in ("pid", "grandchild")):
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runner_type", [AsyncioSubprocessRunner, _ClaudeCodeSubprocessRunner])
+async def test_default_runner_uses_private_group_and_reaps_detached_grandchild_on_success(
+    tmp_path: Path, runner_type: type[AsyncioSubprocessRunner], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command, records = _group_cli(tmp_path, normal=True)
+    real_killpg = os.killpg
+    targets: list[int] = []
+
+    def recording_killpg(pgid: int, sig: int) -> None:
+        targets.append(pgid)
+        real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", recording_killpg)
+    async with asyncio.timeout(10):
+        result = await runner_type().run((command,), stdin="", timeout_seconds=3)
+    record = await _recorded_group(records)
+    assert result.exit_code == 0 and result.stdout == "OK\n"
+    assert record["pgid"] == record["pid"] == record["sid"]
+    assert record["grandchild_pgid"] == record["pgid"] != os.getpgrp()
+    assert targets == [record["pgid"]]
+    await _assert_group_stopped(record)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_kind", ["timeout", "cancel", "observer"])
+async def test_default_runner_reaps_entire_group_on_interrupted_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exit_kind: str
+) -> None:
+    command, records = _group_cli(tmp_path)
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def spawn_after_record(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_spawn(*argv, **kwargs)
+        if exit_kind == "observer":
+            await _recorded_group(records)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_after_record)
+    real_killpg = os.killpg
+    targets: list[int] = []
+
+    def recording_killpg(pgid: int, sig: int) -> None:
+        targets.append(pgid)
+        real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", recording_killpg)
+    runner = AsyncioSubprocessRunner()
+    async with asyncio.timeout(10):
+        if exit_kind == "timeout":
+            with pytest.raises(ExternalCLIProcessTimeout):
+                await runner.run((command,), stdin="", timeout_seconds=0.2)
+        elif exit_kind == "cancel":
+            task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=5))
+            await _recorded_group(records)
+            task.cancel("original cancellation")
+            with pytest.raises(asyncio.CancelledError, match="original cancellation"):
+                await task
+        else:
+            failure = RuntimeError("observer failed")
+
+            def observer() -> None:
+                raise failure
+
+            with pytest.raises(RuntimeError) as caught:
+                await runner.run((command,), stdin="", timeout_seconds=5, on_wire=observer)
+            assert caught.value is failure
+    record = await _recorded_group(records)
+    assert targets == [record["pgid"]]
+    assert targets[0] != os.getpgrp()
+    await _assert_group_stopped(record)
+
+
+@pytest.mark.asyncio
+async def test_second_cancellation_waits_for_group_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    command, records = _group_cli(tmp_path)
+    real_terminate = provider._terminate_group
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def held_terminate(process: asyncio.subprocess.Process) -> str | None:
+        entered.set()
+        await release.wait()
+        return await real_terminate(process)
+
+    monkeypatch.setattr(provider, "_terminate_group", held_terminate)
+    task = asyncio.create_task(
+        AsyncioSubprocessRunner().run((command,), stdin="", timeout_seconds=5)
+    )
+    record = await _recorded_group(records)
+    task.cancel("first")
+    async with asyncio.timeout(5):
+        await entered.wait()
+        task.cancel("second")
+        await asyncio.sleep(0)
+        assert not task.done()
+        release.set()
+        with pytest.raises(asyncio.CancelledError, match="first"):
+            await task
+    await _assert_group_stopped(record)
+
+
+@pytest.mark.asyncio
+async def test_failed_spawn_has_no_group_signal_and_no_claude_scratch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    targets: list[int] = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: targets.append(pgid))
+    real_mkdtemp = provider.tempfile.mkdtemp
+    dirs: list[str] = []
+
+    def recorded_mkdtemp(*args: Any, **kwargs: Any) -> str:
+        cwd = real_mkdtemp(*args, **kwargs)
+        dirs.append(cwd)
+        return cwd
+
+    monkeypatch.setattr(provider.tempfile, "mkdtemp", recorded_mkdtemp)
+    with pytest.raises(ExternalCLICommandError):
+        await _ClaudeCodeSubprocessRunner().run(
+            (str(tmp_path / "missing-cli"),), stdin="", timeout_seconds=1
+        )
+    assert targets == []
+    assert len(dirs) == 1 and not Path(dirs[0]).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_kind", ["success", "timeout", "cancel"])
+async def test_scratch_removal_failure_preserves_outcome(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    exit_kind: str,
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    command, records = _group_cli(tmp_path, normal=exit_kind == "success")
+    real_rmtree = shutil.rmtree
+
+    def failing_rmtree(path: str) -> None:
+        real_rmtree(path)
+        raise OSError("secret-stderr-sentinel")
+
+    monkeypatch.setattr(provider.shutil, "rmtree", failing_rmtree)
+    runner = _ClaudeCodeSubprocessRunner()
+    async with asyncio.timeout(10):
+        if exit_kind == "success":
+            result = await runner.run((command,), stdin="", timeout_seconds=3)
+            assert result.exit_code == 0
+        elif exit_kind == "timeout":
+            with pytest.raises(ExternalCLIProcessTimeout) as caught:
+                await runner.run((command,), stdin="", timeout_seconds=0.2)
+            assert provider._SCRATCH_UNCERTAIN in caught.value.__notes__
+        else:
+            task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=5))
+            await _recorded_group(records)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await task
+            assert provider._SCRATCH_UNCERTAIN in caught.value.__notes__
+    assert provider._SCRATCH_UNCERTAIN in caplog.text
+    assert "secret-stderr-sentinel" not in caplog.text
+    await _assert_group_stopped(await _recorded_group(records))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_kind", ["timeout", "cancel"])
+async def test_refused_group_signal_keeps_outcome_and_reports_uncertainty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    exit_kind: str,
+) -> None:
+    import harness_runtime.lifecycle.external_cli_provider as provider
+
+    command, records = _group_cli(tmp_path)
+    real_killpg = os.killpg
+
+    def denied_killpg(pgid: int, sig: int) -> None:
+        raise PermissionError("secret-stderr-sentinel")
+
+    monkeypatch.setattr(os, "killpg", denied_killpg)
+    runner = AsyncioSubprocessRunner()
+    try:
+        async with asyncio.timeout(10):
+            if exit_kind == "timeout":
+                with pytest.raises(ExternalCLIProcessTimeout) as caught:
+                    await runner.run((command,), stdin="", timeout_seconds=0.2)
+            else:
+                task = asyncio.create_task(runner.run((command,), stdin="", timeout_seconds=5))
+                await _recorded_group(records)
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError) as caught:
+                    await task
+        assert provider._CLEANUP_UNCERTAIN in caught.value.__notes__
+        assert provider._CLEANUP_UNCERTAIN in caplog.text
+        assert "secret-stderr-sentinel" not in caplog.text
+    finally:
+        if records.exists():
+            real_killpg(json.loads(records.read_text())["pgid"], 9)
+    await _assert_group_stopped(await _recorded_group(records))
+
+
+@pytest.mark.asyncio
+async def test_default_runner_child_has_its_own_session_without_descendants() -> None:
+    result = await AsyncioSubprocessRunner().run(
+        (
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps({'pid': os.getpid(), "
+            "'pgid': os.getpgrp(), 'sid': os.getsid(0)}))",
+        ),
+        stdin="",
+        timeout_seconds=2,
+    )
+    child = json.loads(result.stdout)
+    assert result.exit_code == 0
+    assert child["pid"] == child["pgid"] == child["sid"]
+    assert child["pgid"] != os.getpgrp()
+
+
+@pytest.mark.asyncio
+async def test_observer_timeout_error_remains_the_observer_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command, records = _group_cli(tmp_path)
+    real_spawn = asyncio.create_subprocess_exec
+
+    async def spawn_after_record(*argv: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_spawn(*argv, **kwargs)
+        await _recorded_group(records)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn_after_record)
+    failure = TimeoutError("observer's own timeout")
+
+    def observer() -> None:
+        raise failure
+
+    with pytest.raises(TimeoutError) as caught:
+        await AsyncioSubprocessRunner().run(
+            (command,), stdin="", timeout_seconds=5, on_wire=observer
+        )
+    assert caught.value is failure
+    await _assert_group_stopped(await _recorded_group(records))

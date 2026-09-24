@@ -15,7 +15,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import os
+import shutil
+import signal
+import sys
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -362,33 +366,63 @@ def _scrubbed_child_env() -> dict[str, str]:
     }
 
 
-async def _reap_child(process: asyncio.subprocess.Process) -> None:
-    """SIGKILL a child and await its exit, tolerating one already reaped.
+_CLEANUP_WAIT_SECONDS = 5.0
+_CLEANUP_UNCERTAIN = "External CLI process-group cleanup could not be confirmed"
+_SCRATCH_UNCERTAIN = "Claude scratch directory removal failed"
+_LOG = logging.getLogger(__name__)
 
-    `Process.kill()` raises `ProcessLookupError` once asyncio's transport has
-    finished with the child — `BaseSubprocessTransport._call_connection_lost`
-    clears the `Popen` reference, and `Process.kill()` delegates to that same
-    transport, whose own `kill()` runs `BaseSubprocessTransport._check_proc()`
-    first — and every reap site below races that: the child can exit and the
-    transport can finish in the window between the event that sends us into
-    the reap path (cancellation, a deadline, a raising observer) and the
-    `kill()` itself (codex R1 [P2]). Letting it escape would replace the
-    exception being unwound — a `CancelledError`, an
-    `ExternalCLIProcessTimeout`, or the observer's own error — with an
-    unrelated `ProcessLookupError`, e.g. classifying a shutdown cancellation as
-    a provider failure. An already-exited child needs no signal and cannot be
-    leaked, so suppression loses nothing; `wait()` stays unconditional because
-    it still resolves immediately from the recorded return code.
 
-    `docker_tool_execution_driver._reap_child` is a deliberate local sibling of
-    this helper (this one is module-private, so the Docker tier driver carries
-    its own copy rather than importing it); an edit here likely belongs there too.
-    """
+async def _terminate_group(process: asyncio.subprocess.Process) -> str | None:
+    """Signal the isolated process group, then bound direct-child reaping."""
+    uncertain = False
+    if os.name == "posix" and process.pid != os.getpgrp():
+        try:
+            # [LAW:single-enforcer] The runner owns the lifetime of every child in this group.
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            uncertain = True
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+    else:
+        if os.name == "posix":
+            uncertain = True  # Never signal the harness's own process group.
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
     try:
-        process.kill()
-    except ProcessLookupError:
-        pass
-    await process.wait()
+        await asyncio.wait_for(process.wait(), timeout=_CLEANUP_WAIT_SECONDS)
+    except (OSError, TimeoutError):
+        uncertain = True
+    return _CLEANUP_UNCERTAIN if uncertain else None
+
+
+async def _settle_process(
+    process: asyncio.subprocess.Process, original: BaseException | None = None
+) -> None:
+    """Finish cleanup despite repeated caller cancellation; preserve the first outcome."""
+    # [LAW:no-ambient-temporal-coupling] The cleanup task owns the exit boundary.
+    task = asyncio.create_task(_terminate_group(process))
+    cancelled: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+    try:
+        note = task.result()
+    except Exception:
+        note = _CLEANUP_UNCERTAIN
+    if note is not None:
+        _LOG.warning("%s", note)
+        if original is not None:
+            original.add_note(note)
+    if cancelled is not None and not isinstance(original, asyncio.CancelledError):
+        raise cancelled
 
 
 class AsyncioSubprocessRunner:
@@ -431,47 +465,32 @@ class AsyncioSubprocessRunner:
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
                 cwd=cwd,
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError as exc:
             raise ExternalCLICommandError(argv[0], 127, str(exc)) from exc
 
-        # A child process now exists and can observe the payload: THIS is the
-        # wire (B-87, codex R3 [P2-1]). Every raise above is pre-wire — the
-        # empty-argv guard, the missing-command translation, and anything
-        # `create_subprocess_exec` raises that is NOT translated (a
-        # `PermissionError` on an unexecutable command propagates as-is and is
-        # pre-wire for free). Everything below is post-wire.
+        # The child exists before the wire notification. Every post-spawn outcome
+        # settles its group before the caller can observe completion.
         try:
             _notify_wire(on_wire)
-        except BaseException:
-            # A caller-supplied observer that raises must not leak the child we
-            # just spawned (B-87, codex R7 [P2-2]): this guard is one of the
-            # three reap sites — see `_reap_child` — and control would unwind
-            # past the `communicate` block below, past the other two, and the
-            # CLI would keep running. Repeated observer failures would leak one
-            # process each. Same reap idiom as those sites; the observer's
-            # exception is then propagated unchanged.
-            await _reap_child(process)
+        except BaseException as exc:
+            await _settle_process(process, exc)
             raise
 
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(stdin.encode("utf-8")),
-                timeout=timeout_seconds,
+                process.communicate(stdin.encode("utf-8")), timeout=timeout_seconds
             )
         except TimeoutError as exc:
-            await _reap_child(process)
-            raise ExternalCLIProcessTimeout(argv[0], timeout_seconds) from exc
-        except asyncio.CancelledError:
-            # A cancellation delivered while awaiting the child must not leak it
-            # either (B-87 residual): without this clause control unwinds past
-            # the only two reap sites — the timeout path above and the R7
-            # observer guard — and the CLI keeps running. Same reap idiom;
-            # SIGKILL is already issued, so the wait resolves without needing a
-            # fresh cancellation scope. The `CancelledError` is NEVER swallowed.
-            await _reap_child(process)
+            outcome = ExternalCLIProcessTimeout(argv[0], timeout_seconds)
+            await _settle_process(process, outcome)
+            raise outcome from exc
+        except BaseException as exc:
+            await _settle_process(process, exc)
             raise
 
+        await _settle_process(process)
         return CLIProcessResult(
             exit_code=process.returncode or 0,
             stdout=stdout_bytes.decode("utf-8", errors="replace"),
@@ -490,8 +509,9 @@ class _ClaudeCodeSubprocessRunner(AsyncioSubprocessRunner):
         timeout_seconds: float,
         on_wire: Callable[[], None] | None = None,
     ) -> CLIProcessResult:
-        # [LAW:no-ambient-temporal-coupling] The child is reaped before its cwd is removed.
-        with tempfile.TemporaryDirectory(prefix="arhugula-claude-", dir="/tmp") as cwd:
+        # [LAW:no-ambient-temporal-coupling] The process group settles before cwd removal.
+        cwd = tempfile.mkdtemp(prefix="arhugula-claude-", dir="/tmp")
+        try:
             return await self._run_process(
                 argv,
                 stdin=stdin,
@@ -500,6 +520,15 @@ class _ClaudeCodeSubprocessRunner(AsyncioSubprocessRunner):
                 env=_claude_child_env(),
                 cwd=cwd,
             )
+        finally:
+            outcome = sys.exc_info()[1]
+            try:
+                shutil.rmtree(cwd)
+            except Exception:
+                # [LAW:no-silent-failure] Removal cannot replace the call outcome.
+                _LOG.warning("%s", _SCRATCH_UNCERTAIN)
+                if outcome is not None:
+                    outcome.add_note(_SCRATCH_UNCERTAIN)
 
 
 class RecordingSubprocessRunner:
