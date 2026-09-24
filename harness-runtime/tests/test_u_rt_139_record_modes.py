@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 from harness_core import PersonaTier
 from harness_core.deployment_surface import DeploymentSurface
+from harness_cp.f5_signing_key_resolution import SigningBackend
 from harness_cp.topology_pattern import TopologyPattern
 from harness_is.jsonl_event_ledger_lifecycle import JsonlLedgerHandle
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
@@ -1666,3 +1667,99 @@ def test_b93_retag_refuses_on_lock_timeout(
         f"the retag replace-lock site was not the raise point ({asked}) — this "
         f"test did not exercise the arm it claims to"
     )
+
+
+# B1b direct callers must share bootstrap's loaded-key separation boundary.
+def _local_alias_config(
+    dep: _Deployment, *, copied_row_key: bool
+) -> tuple[RuntimeConfig, SigningBackend]:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from harness_runtime.config.audit_signing import make_audit_signing_backend
+
+    def write_key(path: Path) -> Path:
+        key = ed25519.Ed25519PrivateKey.generate()
+        path.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        path.chmod(0o600)
+        return path
+
+    record_key = write_key(dep.root / "record-private.pem")
+    row_key = record_key
+    if copied_row_key is None:
+        row_key = write_key(dep.root / "row-private.pem")
+    elif copied_row_key:
+        row_key = dep.root / "row-private-copy.pem"
+        row_key.write_bytes(record_key.read_bytes())
+        row_key.chmod(0o600)
+    other_key = write_key(dep.root / "other-private.pem")
+    signing = AuditSigningConfig(
+        backend=AuditSigningBackendKind.LOCAL_ED25519,
+        local_key_paths={
+            _RECORD_KEY: str(record_key),
+            _ROW_KEY: str(row_key),
+            "harness-runtime-redaction-token": str(other_key),
+            "harness-runtime-dev": str(other_key),
+            "harness-cost-attribution-v1": str(other_key),
+        },
+    )
+    config = dep.config().model_copy(update={"audit_signing": signing})
+    backend = make_audit_signing_backend(signing)
+    assert backend is not None
+    return config, backend
+
+
+def test_direct_author_rejects_same_local_record_key_before_publication(dep: _Deployment) -> None:
+    config, backend = _local_alias_config(dep, copied_row_key=False)
+    dep.sidecar_path.write_text("")
+    with pytest.raises(RecordMigrationError, match="physically distinct"):
+        author_cutover_record(
+            config,
+            sidecar_path=dep.sidecar_path,
+            signing_backend=backend,
+            attestation={},
+        )
+    assert not dep.record_path.exists()
+    assert dep.sidecar_path.read_text() == ""
+
+
+def test_direct_retag_rejects_copied_local_record_key_before_sidecar_change(
+    dep: _Deployment,
+) -> None:
+    config, backend = _local_alias_config(dep, copied_row_key=True)
+    record = AuditCutoverRecord(
+        schema_version=1,
+        authored_at=datetime(2026, 7, 21, tzinfo=UTC),
+        algorithm=SignatureAlgorithm.ED25519,
+        key_id=_RECORD_KEY,
+        ledger_binding_id=_BINDING,
+        rows=(),
+    )
+    signature = sign_cutover_record(record, backend=backend)
+    dep.record_path.write_text(record.model_dump_json() + "\n" + signature.hex() + "\n")
+    dep.sidecar_path.write_text("")
+    before_record = dep.record_path.read_bytes()
+    before_sidecar = dep.sidecar_path.read_bytes()
+    with pytest.raises(RecordMigrationError, match="physically distinct"):
+        retag_sidecar(config, sidecar_path=dep.sidecar_path, signing_backend=backend)
+    assert dep.record_path.read_bytes() == before_record
+    assert dep.sidecar_path.read_bytes() == before_sidecar
+
+
+def test_direct_author_accepts_distinct_local_record_key(dep: _Deployment) -> None:
+    config, backend = _local_alias_config(dep, copied_row_key=None)
+    dep.sidecar_path.write_text("")
+    record = author_cutover_record(
+        config,
+        sidecar_path=dep.sidecar_path,
+        signing_backend=backend,
+        attestation={},
+    )
+    record_line, signature_line = dep.record_path.read_text().splitlines()
+    assert AuditCutoverRecord.model_validate_json(record_line) == record
+    assert verify_cutover_record_signature(record, bytes.fromhex(signature_line), backend=backend)

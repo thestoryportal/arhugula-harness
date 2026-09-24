@@ -299,6 +299,7 @@ def _validate_signing_config(config: RuntimeConfig, *, signing_backend: SigningB
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
         IncompatibleConfigVersion,
         validate_mtc_audit_signing_config,
+        validate_record_key_distinctness,
     )
     from harness_runtime.lifecycle.span_processor import (
         SpanProcessorBindError,
@@ -307,6 +308,8 @@ def _validate_signing_config(config: RuntimeConfig, *, signing_backend: SigningB
 
     try:
         validate_mtc_audit_signing_config(config)
+        # [LAW:single-enforcer] Direct record modes use the same loaded-key check as bootstrap.
+        validate_record_key_distinctness(config, signing_backend)
         validate_audit_signing_for_span_stage(
             config,
             signing_backend=signing_backend,
