@@ -92,10 +92,9 @@ __all__ = [
 ]
 
 REDACTION_TOKEN_SIGNING_KEY_ID = "harness-runtime-redaction-token"
-"""The logical signing `key_id` the multi-tenant redaction-token audit map
-signs under. An `aws-kms` deployment's `audit_signing.key_arns` mapping MUST
-cover it — validated at stage construction (fail-at-bootstrap, not on the
-first redacted span)."""
+"""The logical signing key ID for the multi-tenant redaction-token audit map.
+The selected backend's active signing map must cover it at stage construction.
+"""
 
 
 class SpanProcessorBindError(Exception):
@@ -177,7 +176,7 @@ def validate_audit_signing_for_span_stage(
     failure surfacing after `set_tracer_provider` poisoned same-process
     bootstrap retry with `TracerProviderConcurrentRegistrationError`).
 
-    Checks, both scoped to a tokenizer that will actually bind:
+    Checks:
     - a tokenizer that will bind with NO signing_backend at all, regardless
       of `config.audit_signing.backend` kind → raise (out-of-family Codex
       P1, U-OD-30/B-51 landing: OD spec v1.34 §21.2.3 row 6 made the
@@ -187,13 +186,10 @@ def validate_audit_signing_for_span_stage(
       of returning the `unsigned:*` placeholder; a plain unconfigured
       `audit_signing.backend` previously sailed through this validator's
       aws-kms-scoped checks below and only failed mid-run);
-    - explicit `aws-kms` config with no constructed backend → raise (a
-      deployment that asked for real signing never silently degrades —
-      round 16);
-    - an `aws-kms` mapping that omits the redaction-token map's signing key
-      → raise (would otherwise surface as `UnknownSigningKeyIdError` on the
-      FIRST redacted span mid-run — round 3; validated before any
-      `BatchSpanProcessor` worker thread exists — round 6).
+    - either configured signing backend must cover every additional audit
+      consumer key even when no tokenizer binds, and must be constructed;
+    - when the tokenizer binds, its signing key must be in that same active
+      map (before any BatchSpanProcessor worker thread exists).
     """
     if tokenizer_will_bind and signing_backend is None:
         raise SpanProcessorBindError(
@@ -207,27 +203,37 @@ def validate_audit_signing_for_span_stage(
             "make_audit_signing_backend(config.audit_signing)) and pass it "
             "through."
         )
-    if config.audit_signing.backend is not AuditSigningBackendKind.AWS_KMS:
+    backend_kind = config.audit_signing.backend
+    if backend_kind is AuditSigningBackendKind.NONE:
         return
+    # [LAW:single-enforcer] Stage 4 checks active signing keys, not historical public keys.
+    if backend_kind is AuditSigningBackendKind.AWS_KMS:
+        active_keys = config.audit_signing.key_arns
+        map_name = "key_arns"
+    elif backend_kind is AuditSigningBackendKind.LOCAL_ED25519:
+        active_keys = config.audit_signing.local_key_paths
+        map_name = "local_key_paths"
+    else:
+        raise SpanProcessorBindError(f"unsupported audit_signing backend {backend_kind!r}")
     # B-47 PR B2a — `additional_key_ids` (the HITL/sub-agent composers' and
     # cost builders' key_ids, passed by stage 4) sign on EVERY audit write
     # once the backend is threaded, independent of the tokenizer — so their
     # mapping check must NOT sit behind the tokenizer gate. The
     # tokenizer-scoped checks below keep the original round-16/round-3 gate.
-    missing = tuple(k for k in additional_key_ids if k not in config.audit_signing.key_arns)
+    missing = tuple(k for k in additional_key_ids if k not in active_keys)
     if missing:
         raise SpanProcessorBindError(
-            f"audit_signing.key_arns is missing signing key(s) {missing!r} "
-            f"used by the runtime's audit composers — the aws-kms mapping "
+            f"audit_signing.{map_name} is missing signing key(s) {missing!r} "
+            f"used by the runtime's audit composers — the active signing map "
             f"must cover every composition-root signing consumer (ADR-D8 "
             f"§Decision item 2: no default key is ever assumed); without "
-            f"this the FIRST HITL/sub-agent/cost audit write would die "
-            f"mid-run with UnknownSigningKeyIdError"
+            f"this the FIRST HITL/sub-agent/cost audit write would fail "
+            f"mid-run on an unmapped key_id"
         )
     if additional_key_ids and signing_backend is None:
         raise SpanProcessorBindError(
-            "audit_signing.backend is 'aws-kms' but no signing_backend was "
-            "constructed — explicit KMS configuration must never silently "
+            f"audit_signing.backend is {backend_kind.value!r} but no signing_backend was "
+            "constructed — explicit signing configuration must never silently "
             "degrade to placeholder signing"
         )
     if not tokenizer_will_bind:
@@ -235,15 +241,15 @@ def validate_audit_signing_for_span_stage(
     # `signing_backend is None` is UNREACHABLE below this point: the top
     # unconditional check already raised for tokenizer_will_bind=True with
     # no backend, regardless of `config.audit_signing.backend` kind — so by
-    # the time we reach here (aws-kms configured AND tokenizer will bind),
+    # the time we reach here (signing configured AND tokenizer will bind),
     # `signing_backend` is guaranteed non-`None` (out-of-family Codex
     # test-witness lens finding, PR #1061 merge-gate round; the old
-    # aws-kms-specific "no backend" raise this replaced is now dead code).
-    if REDACTION_TOKEN_SIGNING_KEY_ID not in config.audit_signing.key_arns:
+    # backend-specific "no backend" raise this replaced is now dead code).
+    if REDACTION_TOKEN_SIGNING_KEY_ID not in active_keys:
         raise SpanProcessorBindError(
-            f"audit_signing.key_arns is missing the redaction-token "
+            f"audit_signing.{map_name} is missing the redaction-token "
             f"map's signing key {REDACTION_TOKEN_SIGNING_KEY_ID!r} — "
-            f"the aws-kms mapping must cover every composition-root "
+            f"the active signing map must cover every composition-root "
             f"signing consumer (ADR-D8 §Decision item 2: no default "
             f"key is ever assumed)"
         )
