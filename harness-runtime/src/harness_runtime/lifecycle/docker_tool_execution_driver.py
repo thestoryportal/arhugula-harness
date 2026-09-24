@@ -228,34 +228,55 @@ class DockerToolRunnerExecutionDriver:
         timeout_message: str,
         container_name: str | None = None,
     ) -> tuple[bytes, bytes, int]:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        proc: asyncio.subprocess.Process | None = None
         try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(stdin),
                 timeout=self.timeout_seconds,
             )
         except TimeoutError as exc:
-            if container_name is None:
-                await _reap_child(proc)
-            elif await self._settle_interrupted_run(proc, container_name):
-                raise asyncio.CancelledError() from exc
-            raise ToolInvocationTimeoutError(timeout_message) from exc
-        except asyncio.CancelledError:
+            if proc is None:
+                raise  # preserve a spawn failure; the run deadline covers communication
             if container_name is None:
                 await _reap_child(proc)
             else:
-                await self._settle_interrupted_run(proc, container_name)
+                cancelled, cleanup_error = await self._settle_interrupted_run(proc, container_name)
+                if cancelled:
+                    cancellation = asyncio.CancelledError()
+                    if cleanup_error is not None:
+                        cancellation.add_note(self._cleanup_failure_note(container_name))
+                    raise cancellation from exc
+                if cleanup_error is not None:
+                    raise cleanup_error from exc
+            raise ToolInvocationTimeoutError(timeout_message) from exc
+        except asyncio.CancelledError as exc:
+            if container_name is None:
+                if proc is not None:
+                    await _reap_child(proc)
+            else:
+                _cancelled, cleanup_error = await self._settle_interrupted_run(proc, container_name)
+                if cleanup_error is not None:
+                    exc.add_note(self._cleanup_failure_note(container_name))
             raise
+        assert proc is not None
         return stdout, stderr, proc.returncode or 0
 
+    @staticmethod
+    def _cleanup_failure_note(container_name: str) -> str:
+        # [LAW:no-silent-failure] Preserve the cleanup fact without child stderr.
+        return (
+            f"Docker tool container {container_name} cleanup uncertain (ToolContainerCleanupError)"
+        )
+
     async def _settle_interrupted_run(
-        self, proc: asyncio.subprocess.Process, container_name: str
-    ) -> bool:
+        self, proc: asyncio.subprocess.Process | None, container_name: str
+    ) -> tuple[bool, ToolContainerCleanupError | None]:
         """Reap CLI and remove its container before releasing timeout/cancel.
 
         Shielding the task, then awaiting it again after an outer cancellation,
@@ -265,10 +286,11 @@ class DockerToolRunnerExecutionDriver:
 
         async def settle() -> None:
             reap_error: OSError | None = None
-            try:
-                await _reap_child(proc)
-            except OSError as exc:
-                reap_error = exc
+            if proc is not None:
+                try:
+                    await _reap_child(proc)
+                except OSError as exc:
+                    reap_error = exc
             await self._remove_container(container_name)
             if reap_error is not None:
                 raise ToolContainerCleanupError(
@@ -282,13 +304,15 @@ class DockerToolRunnerExecutionDriver:
         while True:
             try:
                 await asyncio.shield(task)
-                return cancelled_during_cleanup
-            except asyncio.CancelledError as exc:
+                return cancelled_during_cleanup, None
+            except asyncio.CancelledError:
                 cancelled_during_cleanup = True
                 if task.cancelled():
-                    raise ToolContainerCleanupError(
+                    return cancelled_during_cleanup, ToolContainerCleanupError(
                         f"Docker tool container {container_name} cleanup task was cancelled"
-                    ) from exc
+                    )
+            except ToolContainerCleanupError as exc:
+                return cancelled_during_cleanup, exc
 
     async def _remove_container(self, container_name: str) -> None:
         argv = (*self._docker_command(), "rm", "-f", container_name)

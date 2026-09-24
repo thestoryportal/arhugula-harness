@@ -656,7 +656,7 @@ async def test_no_such_container_is_clean_after_timeout(monkeypatch: pytest.Monk
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["nonzero", "spawn", "timeout", "io"])
 @pytest.mark.parametrize("cancel", [False, True])
-async def test_uncertain_cleanup_is_typed_permanent(
+async def test_uncertain_cleanup_preserves_cancellation_or_blocks_timeout_retry(
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
     cancel: bool,
@@ -691,11 +691,18 @@ async def test_uncertain_cleanup_is_typed_permanent(
         cancel=cancel,
         rm_result=rm_result,
     )
-    assert isinstance(exc, ToolContainerCleanupError)
-    assert isinstance(exc, ToolInvocationProtocolError)
+    if cancel:
+        assert isinstance(exc, asyncio.CancelledError)
+        assert any("cleanup uncertain" in note for note in exc.__notes__)
+        assert all("unexpected output" not in note for note in exc.__notes__)
+    else:
+        assert isinstance(exc, ToolContainerCleanupError)
+        assert isinstance(exc, ToolInvocationProtocolError)
     assert len(calls) == 3
     assert events[:2] == ["run-kill", "run-wait"]
     assert len(str(exc)) <= 400
+    name = calls[1][calls[1].index("--name") + 1]
+    assert calls[2] == ("docker", "rm", "-f", name)
 
 
 @pytest.mark.asyncio
@@ -748,5 +755,117 @@ async def test_second_cancellation_waits_for_container_cleanup(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert events == ["run-kill", "run-wait", "rm-finished"]
+    name = calls[1][calls[1].index("--name") + 1]
+    assert calls[2] == ("docker", "rm", "-f", name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rm_fails", [False, True])
+async def test_timeout_then_cancellation_waits_for_rm_and_keeps_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+    rm_fails: bool,
+) -> None:
+    run_started = asyncio.Event()
+    rm_started = asyncio.Event()
+    release_rm = asyncio.Event()
+    calls: list[tuple[str, ...]] = []
+
+    class _HoldingRm(_FakeProcess):
+        async def communicate(self, stdin_payload: bytes) -> tuple[bytes, bytes]:
+            rm_started.set()
+            await release_rm.wait()
+            return b"", b"secret-looking stderr" if rm_fails else b""
+
+    async def fake_exec(*argv: str, **_kwargs: Any) -> _FakeProcess:
+        calls.append(argv)
+        if argv[:2] == ("docker", "inspect"):
+            return _FakeProcess(stdout=b"sha256:local\n")
+        if argv[:2] == ("docker", "run"):
+            return _InterruptedRunProcess([], run_started)
+        assert argv[:2] == ("docker", "rm")
+        return _HoldingRm(stdout=b"", returncode=2 if rm_fails else 0)
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
+        fake_exec,
+    )
+    driver = DockerToolRunnerExecutionDriver(
+        image="image:tag",
+        command=("runner",),
+        timeout_seconds=0.01,
+    )
+    task = asyncio.create_task(
+        driver.call_tool(
+            mcp_client_host=cast(MCPClientHost, object()),
+            sandbox_decision=_decision(),
+            tool_id="echo",
+            tool_args={},
+            idempotency_key="idem",
+        )
+    )
+    await run_started.wait()
+    await rm_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "cancellation must not abandon the in-flight rm"
+    release_rm.set()
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await task
+    name = calls[1][calls[1].index("--name") + 1]
+    assert calls[2] == ("docker", "rm", "-f", name)
+    notes = getattr(raised.value, "__notes__", [])
+    assert any("cleanup uncertain" in note for note in notes) is rm_fails
+    assert all("secret-looking stderr" not in note for note in notes)
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_run_spawn_removes_exact_name_then_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spawn_started = asyncio.Event()
+    rm_started = asyncio.Event()
+    release_rm = asyncio.Event()
+    calls: list[tuple[str, ...]] = []
+
+    class _HoldingRm(_FakeProcess):
+        async def communicate(self, stdin_payload: bytes) -> tuple[bytes, bytes]:
+            rm_started.set()
+            await release_rm.wait()
+            return b"", b""
+
+    async def fake_exec(*argv: str, **_kwargs: Any) -> _FakeProcess:
+        calls.append(argv)
+        if argv[:2] == ("docker", "inspect"):
+            return _FakeProcess(stdout=b"sha256:local\n")
+        if argv[:2] == ("docker", "run"):
+            spawn_started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+        assert argv[:2] == ("docker", "rm")
+        return _HoldingRm(stdout=b"")
+
+    monkeypatch.setattr(
+        "harness_runtime.lifecycle.docker_tool_execution_driver.asyncio.create_subprocess_exec",
+        fake_exec,
+    )
+    driver = DockerToolRunnerExecutionDriver(image="image:tag", command=("runner",))
+    task = asyncio.create_task(
+        driver.call_tool(
+            mcp_client_host=cast(MCPClientHost, object()),
+            sandbox_decision=_decision(),
+            tool_id="echo",
+            tool_args={},
+            idempotency_key="idem",
+        )
+    )
+    await spawn_started.wait()
+    task.cancel()
+    await rm_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    assert not task.done(), "second cancellation must wait for rm after spawn cancellation"
+    release_rm.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
     name = calls[1][calls[1].index("--name") + 1]
     assert calls[2] == ("docker", "rm", "-f", name)
