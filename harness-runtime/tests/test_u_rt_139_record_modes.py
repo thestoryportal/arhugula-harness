@@ -22,6 +22,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from harness_core import PersonaTier
@@ -1671,7 +1672,7 @@ def test_b93_retag_refuses_on_lock_timeout(
 
 # B1b direct callers must share bootstrap's loaded-key separation boundary.
 def _local_alias_config(
-    dep: _Deployment, *, copied_row_key: bool
+    dep: _Deployment, *, row_key_relation: Literal["same_path", "copied", "distinct"]
 ) -> tuple[RuntimeConfig, SigningBackend]:
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -1691,9 +1692,9 @@ def _local_alias_config(
 
     record_key = write_key(dep.root / "record-private.pem")
     row_key = record_key
-    if copied_row_key is None:
+    if row_key_relation == "distinct":
         row_key = write_key(dep.root / "row-private.pem")
-    elif copied_row_key:
+    elif row_key_relation == "copied":
         row_key = dep.root / "row-private-copy.pem"
         row_key.write_bytes(record_key.read_bytes())
         row_key.chmod(0o600)
@@ -1714,8 +1715,16 @@ def _local_alias_config(
     return config, backend
 
 
-def test_direct_author_rejects_same_local_record_key_before_publication(dep: _Deployment) -> None:
-    config, backend = _local_alias_config(dep, copied_row_key=False)
+def test_direct_author_rejects_same_local_record_key_before_publication(
+    dep: _Deployment, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import harness_runtime.lifecycle.span_processor as span_processor
+
+    def span_must_not_run(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("alias refusal must precede span validation")
+
+    monkeypatch.setattr(span_processor, "validate_audit_signing_for_span_stage", span_must_not_run)
+    config, backend = _local_alias_config(dep, row_key_relation="same_path")
     dep.sidecar_path.write_text("")
     with pytest.raises(RecordMigrationError, match="physically distinct"):
         author_cutover_record(
@@ -1731,7 +1740,7 @@ def test_direct_author_rejects_same_local_record_key_before_publication(dep: _De
 def test_direct_retag_rejects_copied_local_record_key_before_sidecar_change(
     dep: _Deployment,
 ) -> None:
-    config, backend = _local_alias_config(dep, copied_row_key=True)
+    config, backend = _local_alias_config(dep, row_key_relation="copied")
     record = AuditCutoverRecord(
         schema_version=1,
         authored_at=datetime(2026, 7, 21, tzinfo=UTC),
@@ -1752,7 +1761,7 @@ def test_direct_retag_rejects_copied_local_record_key_before_sidecar_change(
 
 
 def test_direct_author_accepts_distinct_local_record_key(dep: _Deployment) -> None:
-    config, backend = _local_alias_config(dep, copied_row_key=None)
+    config, backend = _local_alias_config(dep, row_key_relation="distinct")
     dep.sidecar_path.write_text("")
     record = author_cutover_record(
         config,
