@@ -1,7 +1,7 @@
 """U-RT-97 stage-5 webhook composer factory for local operator binding.
 
 `None` preserves production opt-out. The legacy empty marker still constructs
-an unconfigured composer, except when a durable pause is active: that unsafe
+an unconfigured composer, except when a pause protocol is bound: that unsafe
 combination is refused at bootstrap. A complete config binds only literal
 loopback HTTP, one attempt, fail-closed behavior and an isolated HTTP client.
 Construction failures use RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE.
@@ -79,7 +79,7 @@ async def materialize_webhook_delivery_composer_stage(
     ------
     WebhookDeliveryComposerStageMaterializeError
         Fail class `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE` per spec
-        §14.16.4. An invalid local endpoint, timeout or incomplete durable
+        §14.16.4. An invalid local endpoint, timeout or incomplete pause
         binding is refused before workflow execution.
     """
     operator = config.webhook_delivery_composer_config
@@ -91,10 +91,9 @@ async def materialize_webhook_delivery_composer_stage(
         # sync-blocking). Pre-v1.26 production-default state preserved.
         return None
 
-    configured = (
-        operator.webhook_id is not None
-        or operator.endpoint_url is not None
-        or operator.timeout_seconds != 3
+    configured = any(
+        field is not None
+        for field in (operator.webhook_id, operator.endpoint_url, operator.timeout_seconds)
     )
     webhook_config = None
     if configured:
@@ -106,24 +105,26 @@ async def materialize_webhook_delivery_composer_stage(
                 raise ValueError("webhook_id must be a non-secret public identifier")
             if not isinstance(operator.endpoint_url, str):
                 raise ValueError("endpoint_url is required with webhook_id")
-            if type(operator.timeout_seconds) is not int or not 1 <= operator.timeout_seconds <= 5:
+            timeout_seconds = operator.timeout_seconds
+            if (
+                not isinstance(timeout_seconds, int)
+                or isinstance(timeout_seconds, bool)
+                or not 1 <= timeout_seconds <= 5
+            ):
                 raise ValueError("timeout_seconds must be an integer from 1 to 5")
             webhook_config = WebhookConfig(
                 webhook_id=operator.webhook_id,
                 endpoint_url=parse_loopback_webhook_endpoint(operator.endpoint_url),
-                timeout=operator.timeout_seconds,
+                timeout=timeout_seconds,
                 degradation_mode="fail-closed",
             )
         except ValueError as exc:
             raise WebhookDeliveryComposerStageMaterializeError(
                 f"RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE: {exc}"
             ) from exc
-    elif (
-        config.pause_resume_protocol_config is not None
-        and config.pause_resume_protocol_config.durable
-    ):
+    elif config.pause_resume_protocol_config is not None:
         raise WebhookDeliveryComposerStageMaterializeError(
-            "RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE: durable pause needs a webhook endpoint"
+            "RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE: bound pause needs a webhook endpoint"
         )
 
     # Construct the C-RT-20 carrier with the stage-4 tracer and the validated

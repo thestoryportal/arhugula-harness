@@ -56,14 +56,14 @@ def parse_loopback_webhook_endpoint(url: str) -> str:
 class WebhookDeliveryComposerConfig:
     """Operator-supplied local webhook binding, with legacy empty marker.
 
-    Empty marker remains compatible with legacy binding tests. A complete
+    Empty marker remains compatible where no pause protocol is bound. A complete
     endpoint and public identifier enable one-attempt loopback delivery.
     Absence (`None`) remains the production opt-out.
     """
 
     webhook_id: str | None = None
     endpoint_url: str | None = None
-    timeout_seconds: int = 3
+    timeout_seconds: int | None = None
 
     @classmethod
     def default(cls) -> WebhookDeliveryComposerConfig:

@@ -49,6 +49,8 @@ def _config(tmp_path: Path, webhook: WebhookDeliveryComposerConfig) -> RuntimeCo
         "http://192.168.1.2:1234/hitl",
         "http://169.254.169.254/latest",
         "http://[::ffff:127.0.0.1]:1234/hitl",
+        "http://[::1%eth0]:1234/hitl",
+        "http://127.0.0.1%2e:1234/hitl",
         "http://example.com:1234/hitl",
         "http://127.0.0.1:1234/hitl?token=x",
         "http://127.0.0.1:1234/hitl?",
@@ -68,6 +70,17 @@ def test_operator_endpoint_refuses_nonliteral_or_ambiguous_targets(url: str) -> 
 @pytest.mark.parametrize("url", ["http://127.0.0.1:1234/hitl", "http://[::1]:1234/hitl"])
 def test_operator_endpoint_accepts_only_exact_loopback_literals(url: str) -> None:
     assert parse_loopback_webhook_endpoint(url) == url
+
+
+@pytest.mark.parametrize(
+    ("raw", "canonical"),
+    [
+        ("HTTP://127.0.0.1:1234/hitl", "http://127.0.0.1:1234/hitl"),
+        ("http://127.0.0.1:001234/hitl", "http://127.0.0.1:1234/hitl"),
+    ],
+)
+def test_operator_endpoint_normalizes_safe_spellings(raw: str, canonical: str) -> None:
+    assert parse_loopback_webhook_endpoint(raw) == canonical
 
 
 def test_runtime_toml_loads_typed_webhook_and_refuses_unknown_fields(tmp_path: Path) -> None:
@@ -118,9 +131,10 @@ async def test_stage_five_binds_one_attempt_loopback_client(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_durable_pause_refuses_empty_webhook_marker(tmp_path: Path) -> None:
+@pytest.mark.parametrize("durable", [False, True])
+async def test_bound_pause_refuses_empty_webhook_marker(tmp_path: Path, durable: bool) -> None:
     config = _config(tmp_path, WebhookDeliveryComposerConfig.default()).model_copy(
-        update={"pause_resume_protocol_config": PauseResumeProtocolConfig(durable=True)}
+        update={"pause_resume_protocol_config": PauseResumeProtocolConfig(durable=durable)}
     )
     with pytest.raises(WebhookDeliveryComposerStageMaterializeError, match="endpoint"):
         await materialize_webhook_delivery_composer_stage(config, _MutableHarnessContext())
@@ -132,6 +146,7 @@ async def test_durable_pause_refuses_empty_webhook_marker(tmp_path: Path) -> Non
     [
         WebhookDeliveryComposerConfig(endpoint_url="http://127.0.0.1:1234/hitl"),
         WebhookDeliveryComposerConfig(webhook_id="local-approval"),
+        WebhookDeliveryComposerConfig(timeout_seconds=3),
         WebhookDeliveryComposerConfig(timeout_seconds=99),
         WebhookDeliveryComposerConfig(
             webhook_id="local-approval",
@@ -197,6 +212,41 @@ async def test_cost_audit_target_uses_digest_not_url_path(monkeypatch: pytest.Mo
     assert target == hashlib.sha256(endpoint.encode()).hexdigest()
     assert "pathsecret" not in str(captured)
     assert endpoint not in str(captured)
+
+
+@pytest.mark.asyncio
+async def test_whole_attempt_deadline_stops_slow_receiver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def slow(_request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(1.4)
+        return httpx.Response(204)
+
+    composer = WebhookDeliveryComposer(
+        retry_max_attempts=1,
+        http_client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(slow)),
+    )
+
+    async def skip_unbound_cost(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(composer, "_attribute_webhook_cost_off_loop", skip_unbound_cost)
+    config = WebhookConfig(
+        webhook_id="local-approval",
+        endpoint_url="http://127.0.0.1:1234/hitl",
+        timeout=1,
+        degradation_mode="fail-closed",
+    )
+    payload = WebhookPayload(
+        approval_id="approve-local",
+        idempotency_key="idem-payload",
+        gate_evaluation_ref="entry-local",
+        payload_body={},
+    )
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(WebhookDeliveryExhaustedError):
+        await composer.deliver_webhook(config, payload, "idem-request")
+    assert asyncio.get_running_loop().time() - started < 1.3
 
 
 @pytest.mark.asyncio

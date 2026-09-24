@@ -213,7 +213,11 @@ def _config(tmp_path: Path) -> RuntimeConfig:
         openai_optional=True,
         ollama_optional=True,
         pause_resume_protocol_config=PauseResumeProtocolConfig.default(),
-        webhook_delivery_composer_config=WebhookDeliveryComposerConfig.default(),
+        webhook_delivery_composer_config=WebhookDeliveryComposerConfig(
+            webhook_id="local-binding-test",
+            endpoint_url="http://127.0.0.1:9/hitl",
+            timeout_seconds=1,
+        ),
         routing_manifest=RoutingManifest(
             manifest_version=1,
             per_role_bindings={},

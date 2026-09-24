@@ -2530,7 +2530,7 @@ class RuntimeConfig(BaseModel):
 
     The first Omarchy operator shape supplies a public webhook_id, a literal
     loopback HTTP endpoint and a bounded timeout. The empty marker remains
-    for legacy binding behavior; durable pause with an empty marker is
+    for legacy binding behavior; a bound pause protocol with an empty marker is
     refused during stage-5 bootstrap. Remote delivery, authentication and
     generalized retry remain separate follow-on work under C-RT-26.
     """
