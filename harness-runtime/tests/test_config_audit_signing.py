@@ -485,3 +485,94 @@ def test_malformed_signature_is_typed_failure_and_counts_toward_breaker() -> Non
     # Malformed responses COUNT toward the breaker: it is open now.
     with pytest.raises(AuditSigningBreakerOpenError):
         guarded.sign(message=b"m", key_id="k", key_period=0)
+
+
+def test_local_selector_validation_and_immutable_mapping(tmp_path) -> None:
+    import copy
+    import pickle
+
+    path = tmp_path / "key.pem"
+    good = {" key ": f"  {path}  "}
+    config = AuditSigningConfig(backend="local-ed25519", local_key_paths=good)
+    assert config.local_key_paths == {"key": str(path)}
+    assert config.model_dump()["local_key_paths"] == {"key": str(path)}
+    assert AuditSigningConfig.model_validate_json(config.model_dump_json()).local_key_paths == {
+        "key": str(path)
+    }
+    for copied in (
+        copy.deepcopy(config),
+        pickle.loads(pickle.dumps(config)),
+        config.model_copy(deep=True),
+    ):
+        assert copied.local_key_paths == {"key": str(path)}
+        with pytest.raises(TypeError, match="immutable after validation"):
+            copied.local_key_paths["other"] = str(path)
+    with pytest.raises(TypeError, match="immutable after validation"):
+        config.local_key_paths.__init__({"other": str(path)})
+    assert config.local_key_paths == {"key": str(path)}
+    assert AuditSigningConfig().local_key_paths == {}
+    with pytest.raises(TypeError, match="immutable after validation"):
+        AuditSigningConfig().local_key_paths["x"] = str(path)
+    assert isinstance(config.backend, AuditSigningBackendKind)
+    assert config.backend is AuditSigningBackendKind.LOCAL_ED25519
+
+
+@pytest.mark.parametrize(
+    "kwargs, error",
+    [
+        ({"backend": "local-ed25519"}, "local_key_paths must be non-empty"),
+        (
+            {"backend": "local-ed25519", "local_key_paths": {" ": "/tmp/key.pem"}},
+            "blank logical key_id",
+        ),
+        ({"backend": "local-ed25519", "local_key_paths": {"k": " "}}, "is blank"),
+        ({"backend": "local-ed25519", "local_key_paths": {"k": "relative.pem"}}, "absolute"),
+        (
+            {"backend": "local-ed25519", "local_key_paths": {"k": "/tmp/k", " k ": "/tmp/j"}},
+            "duplicate logical key_id",
+        ),
+        (
+            {
+                "backend": "local-ed25519",
+                "local_key_paths": {"k": "/tmp/k"},
+                "key_arns": {"k": _ARN},
+            },
+            "key_arns",
+        ),
+        (
+            {"backend": "aws-kms", "key_arns": {"k": _ARN}, "local_key_paths": {"k": "/tmp/k"}},
+            "local_key_paths",
+        ),
+        ({"backend": "none", "local_key_paths": {"k": "/tmp/k"}}, "local_key_paths"),
+    ],
+)
+def test_local_config_rejects_invalid_maps(kwargs: dict, error: str) -> None:
+    with pytest.raises(ValidationError, match=error):
+        AuditSigningConfig(**kwargs)
+
+
+def test_factory_constructs_local_without_boto3(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from harness_runtime.config.local_ed25519_signing_backend import LocalEd25519SigningBackend
+
+    path = tmp_path / "key.pem"
+    path.write_bytes(
+        ed25519.Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    path.chmod(0o600)
+
+    def no_boto3(name: str) -> object:
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(audit_signing_module, "import_module", no_boto3)
+    config = AuditSigningConfig(backend="local-ed25519", local_key_paths={"k": str(path)})
+    backend = make_audit_signing_backend(config)
+    assert isinstance(backend, BreakerGuardedSigningBackend)
+    assert isinstance(backend._inner, LocalEd25519SigningBackend)
+    assert backend.breaker_key.secret_backend == "local-ed25519"
+    assert len(backend.sign(message=b"row", key_id="k", key_period=0)) == 64

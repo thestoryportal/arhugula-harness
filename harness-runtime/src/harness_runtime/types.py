@@ -464,11 +464,13 @@ class AuditSigningBackendKind(StrEnum):
     — no backend is constructed and every audit write behaves exactly as
     before the seam existed. `AWS_KMS` selects ADR-D8's
     `AwsKmsSigningBackend` (Ed25519, KMS-delegated — the private key never
-    enters harness process memory).
+    enters harness process memory). `LOCAL_ED25519` loads private PKCS#8 keys
+    from host-owned files; one fixed key per ID does not provide rotation.
     """
 
     NONE = "none"
     AWS_KMS = "aws-kms"
+    LOCAL_ED25519 = "local-ed25519"
 
 
 _EMPTY_KEY_ARNS: Mapping[str, str] = MappingProxyType({})
@@ -564,12 +566,10 @@ class AuditSigningConfig(BaseModel):
     """Audit-signing composition-root config (`B-47` PR B; ADR-D8 §Decision
     items 2/5).
 
-    Carries the deployment-time selection + the logical `key_id → physical
-    KMS key ARN` mapping ADR-D8 requires the composition root to own. Key
-    MATERIAL never lives in this config — only key *identifiers*; the AWS
-    credential chain is boto3's own (env / shared config / instance role),
-    never harness-managed. Mirrors `ProviderSecretsConfig`'s config-driven
-    backend-selector shape (the R-421 precedent).
+    Carries deployment-time selection and logical key IDs mapped to physical
+    KMS ARNs or absolute local PEM paths. Key material never lives in config;
+    the local backend reads it only during construction. AWS credentials use
+    boto3's resolution chain. Mirrors `ProviderSecretsConfig`'s selector shape.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -582,15 +582,21 @@ class AuditSigningConfig(BaseModel):
     AWS KMS key ARN/ID. Aliases are rejected at backend construction
     (`MutableKeyAliasRejectedError` — ADR-D8 §Decision item 2)."""
 
+    local_key_paths: Mapping[str, str] = Field(default_factory=dict, validate_default=True)
+    """Logical key ID to absolute private PKCS#8 PEM path for local signing.
+
+    Paths are identifiers, never key material. One key per ID does not prove
+    rotation or resistance to compromise of the harness OS user.
+    """
+
     aws_region: str | None = None
     """Optional region override for the boto3 KMS client; `None` defers to
     boto3's own resolution chain."""
 
-    @field_serializer("key_arns")
+    @field_serializer("key_arns", "local_key_paths")
     def _serialize_key_arns(self, value: Mapping[str, str]) -> dict[str, str]:
-        # The stored value is an _ImmutableKeyArns (immutability, round-9
-        # codex); serialize as a plain dict so model_dump/model_dump_json
-        # stay warning-free and TOML/JSON round-trips re-validate cleanly.
+        # The sealed mapping serializes as a plain dict so model dumps and
+        # TOML/JSON round-trips re-validate cleanly for either backend.
         return dict(value)
 
     @field_validator("key_arns")
@@ -629,14 +635,48 @@ class AuditSigningConfig(BaseModel):
         # TypeError.
         return _ImmutableKeyArns(normalized)
 
+    @field_validator("local_key_paths")
+    @classmethod
+    def _local_key_paths_entries_valid(cls, value: Mapping[str, str]) -> Mapping[str, str]:
+        # [LAW:single-enforcer] Normalize logical IDs and require absolute paths at config load.
+        normalized: dict[str, str] = {}
+        for raw_key_id, raw_path in value.items():
+            key_id, path = raw_key_id.strip(), raw_path.strip()
+            if not key_id:
+                raise ValueError("local_key_paths contains a blank logical key_id")
+            if not path:
+                raise ValueError(f"local_key_paths[{raw_key_id!r}] is blank")
+            if not Path(path).is_absolute():
+                raise ValueError(f"local_key_paths[{raw_key_id!r}] must be absolute")
+            if key_id in normalized:
+                raise ValueError(
+                    f"local_key_paths contains duplicate logical key_id {key_id!r} "
+                    "after whitespace normalization"
+                )
+            normalized[key_id] = path
+        # [LAW:one-type-per-behavior] Both signing maps need the same sealed carrier.
+        return _ImmutableKeyArns(normalized)
+
     @model_validator(mode="after")
-    def _require_key_arns_for_aws_kms(self) -> Self:
-        if self.backend is AuditSigningBackendKind.AWS_KMS and not self.key_arns:
-            raise ValueError(
-                "key_arns must be non-empty when backend is aws-kms — the "
-                "composition root must supply an explicit key_id -> KMS key "
-                "ARN mapping (ADR-D8 §Decision item 2); no default key is assumed"
-            )
+    def _require_selected_signing_map(self) -> Self:
+        if self.key_arns and self.local_key_paths:
+            raise ValueError("key_arns and local_key_paths are mutually incompatible")
+        if self.backend is AuditSigningBackendKind.AWS_KMS:
+            if self.local_key_paths:
+                raise ValueError("local_key_paths is incompatible with aws-kms")
+            if not self.key_arns:
+                raise ValueError(
+                    "key_arns must be non-empty when backend is aws-kms — the "
+                    "composition root must supply an explicit key_id -> KMS key "
+                    "ARN mapping (ADR-D8 §Decision item 2); no default key is assumed"
+                )
+        elif self.backend is AuditSigningBackendKind.LOCAL_ED25519:
+            if self.key_arns:
+                raise ValueError("key_arns is incompatible with local-ed25519")
+            if not self.local_key_paths:
+                raise ValueError("local_key_paths must be non-empty when backend is local-ed25519")
+        elif self.local_key_paths:
+            raise ValueError("local_key_paths is incompatible with none")
         return self
 
 
