@@ -855,6 +855,7 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1074,6 +1075,7 @@ async def test_ac1_real_anthropic_single_step_succeeds(
     assert result.workflow_id == "wf-ac1-real-anthropic"
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1346,6 +1348,7 @@ async def test_ac3_daemon_mode_equivalent_to_one_shot_with_real_llm(
         await _shutdown(ctx)
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1566,6 +1569,7 @@ async def test_ac4_multi_step_real_llm_execution(
     assert result.workflow_id == "wf-ac4-multi-step"
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
@@ -1852,6 +1856,7 @@ async def test_ac7_skill_activation_emits_skill_namespace_span(
     assert span.attrs["workflow.id"] == "wf-ac7-skill-activation"
 
 
+@pytest.mark.e2e
 @pytest.mark.asyncio
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),

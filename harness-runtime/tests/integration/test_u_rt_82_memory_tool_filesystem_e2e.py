@@ -73,20 +73,8 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 # ---------------------------------------------------------------------------
-# Module-level gating: every test in this module requires ANTHROPIC_API_KEY.
+# Only the write-path test calls the Anthropic API.
 # ---------------------------------------------------------------------------
-
-
-pytestmark = [
-    pytest.mark.e2e,
-    pytest.mark.skipif(
-        not os.getenv("ANTHROPIC_API_KEY"),
-        reason=(
-            "U-RT-82 e2e requires ANTHROPIC_API_KEY for real Anthropic API "
-            "calls. Skipped per @pytest.mark.skipif gate (AC #2)."
-        ),
-    ),
-]
 
 
 # Anthropic Memory tool client-side type + required beta header per ADR-D3
@@ -227,6 +215,14 @@ def _step_context() -> StepExecutionContext:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.e2e
+@pytest.mark.skipif(
+    not os.getenv("ANTHROPIC_API_KEY"),
+    reason=(
+        "U-RT-82 e2e requires ANTHROPIC_API_KEY for real Anthropic API "
+        "calls. Skipped per @pytest.mark.skipif gate (AC #2)."
+    ),
+)
 @pytest.mark.asyncio
 async def test_memory_tool_filesystem_e2e_write_path(
     memory_backend_root: Path,
@@ -322,23 +318,20 @@ async def test_memory_tool_filesystem_e2e_write_path(
 
 # ---------------------------------------------------------------------------
 # AC #2 — Test runs without ANTHROPIC_API_KEY: skips cleanly per
-# @pytest.mark.skipif gate (covered at module-level pytestmark above —
+# @pytest.mark.skipif gate (applied to the paid write-path test —
 # pytest reports the skip without false failure).
 #
-# This module-level assertion documents the gating shape; the actual skip
+# This assertion documents the paid test's gate; the actual skip
 # behavior is exercised when ANTHROPIC_API_KEY is unset.
 # ---------------------------------------------------------------------------
 
 
 def test_module_skip_gate_present() -> None:
-    """AC #2 gate-mechanism assertion: the module-level pytestmark includes
-    a skipif gate on ANTHROPIC_API_KEY env var, so the e2e tests skip
-    cleanly when no credential is available (no false failure in CI)."""
-    skipif_marker = next((m for m in pytestmark if m.name == "skipif"), None)
+    """AC #2: the paid write-path test skips without an Anthropic key."""
+    marks = vars(test_memory_tool_filesystem_e2e_write_path)["pytestmark"]
+    skipif_marker = next((m for m in marks if m.name == "skipif"), None)
     assert skipif_marker is not None
-    # The skipif condition is `not os.getenv("ANTHROPIC_API_KEY")` — when
-    # the env var is set (as it must be for this test to even reach this
-    # line), the condition evaluates False and the gate doesn't trigger.
+    assert skipif_marker.args == (not bool(os.getenv("ANTHROPIC_API_KEY")),)
     assert "ANTHROPIC_API_KEY" in (skipif_marker.kwargs.get("reason") or "")
 
 

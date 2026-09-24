@@ -14,11 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import sys
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
+from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
+
+if TYPE_CHECKING:
+    import httpx
 
 import typer
 from harness_cp.cp_shared_types import ModelBinding
@@ -144,12 +150,37 @@ def _print_fail_class(fail_class: str, detail: str) -> None:
 
 
 _DAEMON_CLIENT_STREAMABLE_HTTP_URL = "http://127.0.0.1/mcp"
+_DAEMON_CLIENT_TEARDOWN_TIMEOUT_SECONDS = 30.0
+
+
+async def _close_daemon_client(stack: AsyncExitStack, client: httpx.AsyncClient) -> None:
+    """Bound session DELETE and HTTP close under one teardown deadline."""
+    budget = _DAEMON_CLIENT_TEARDOWN_TIMEOUT_SECONDS
+    deadline = asyncio.get_running_loop().time() + budget
+    # [LAW:no-ambient-temporal-coupling] Reserve part of this same deadline
+    # for the client close even if the session DELETE never finishes.
+    session_deadline = deadline - min(1.0, budget / 2)
+    expired = False
+    try:
+        async with asyncio.timeout_at(session_deadline):
+            await stack.aclose()
+    except TimeoutError:
+        expired = True
+    finally:
+        try:
+            async with asyncio.timeout_at(deadline):
+                await client.aclose()
+        except TimeoutError:
+            expired = True
+    if expired:
+        raise DaemonResultError(f"daemon MCP teardown exceeded the {budget:g}s client budget")
 
 
 async def _daemon_client_dispatch(
     *,
     workflow_file: Path,
     socket_path: Path,
+    result_timeout_seconds: float,
 ) -> dict[str, Any]:
     """Connect to the running daemon via Unix-socket; invoke run_workflow.
 
@@ -174,45 +205,119 @@ async def _daemon_client_dispatch(
     import httpx
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
+    from mcp.shared.exceptions import McpError
 
     transport = httpx.AsyncHTTPTransport(uds=str(socket_path))
-    http_client = httpx.AsyncClient(transport=transport, timeout=httpx.Timeout(30.0))
+    # [LAW:no-ambient-temporal-coupling] MCP owns the workflow result deadline;
+    # an HTTP read-idle timeout would reject a valid quiet stream first.
+    http_client = httpx.AsyncClient(
+        transport=transport,
+        timeout=httpx.Timeout(None, connect=30.0, write=30.0, pool=30.0),
+    )
 
+    stack = AsyncExitStack()
+    phase = "initialize"
     try:
-        async with streamable_http_client(
-            _DAEMON_CLIENT_STREAMABLE_HTTP_URL,
-            http_client=http_client,
-        ) as (read_stream, write_stream, _get_session_id):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                tool_result = await session.call_tool(
-                    "run_workflow",
-                    {"workflow_id": str(workflow_file)},
-                )
-    except OSError as exc:
-        raise DaemonStartupError(f"failed to connect to daemon at {socket_path}: {exc}") from exc
+        try:
+            read_stream, write_stream, _get_session_id = await stack.enter_async_context(
+                streamable_http_client(_DAEMON_CLIENT_STREAMABLE_HTTP_URL, http_client=http_client)
+            )
+            session = await stack.enter_async_context(
+                ClientSession(read_stream, write_stream, read_timeout_seconds=timedelta(seconds=30))
+            )
+            await session.initialize()
+            phase = "run_workflow"
+            tool_result = await session.call_tool(
+                "run_workflow",
+                {"workflow_id": str(workflow_file)},
+                read_timeout_seconds=timedelta(seconds=result_timeout_seconds),
+            )
+        except Exception as exc:
+            # [LAW:no-silent-failure] AnyIO may group transport and response
+            # errors during cleanup; classify every leaf without losing detail.
+            pending: list[Exception] = [exc]
+            leaves: list[Exception] = []
+            while pending:
+                item = pending.pop()
+                if isinstance(item, ExceptionGroup):
+                    group = cast(ExceptionGroup[Exception], item)
+                    pending.extend(group.exceptions)
+                else:
+                    leaves.append(item)
+            connection = next(
+                (
+                    e
+                    for e in leaves
+                    if isinstance(e, (OSError, httpx.ConnectError, httpx.ConnectTimeout))
+                ),
+                None,
+            )
+            if connection is not None:
+                raise DaemonStartupError(
+                    f"failed to connect to daemon at {socket_path}: {connection}"
+                ) from exc
+            if not leaves or any(not isinstance(e, (httpx.HTTPError, McpError)) for e in leaves):
+                raise
+            budget = 30.0 if phase == "initialize" else result_timeout_seconds
+            raise DaemonResultError(
+                f"daemon MCP {phase} response failed (budget {budget:g}s): {leaves[0]}"
+            ) from exc
     finally:
-        await http_client.aclose()
+        primary_error = sys.exception()
+        try:
+            await _close_daemon_client(stack, http_client)
+        except Exception as exc:
+            task = asyncio.current_task()
+            # [LAW:no-ambient-temporal-coupling] AnyIO can cancel initialize
+            # internally on a refused socket, then clear that cancellation as
+            # its scope exits. A caller's cancellation remains pending here.
+            if (
+                primary_error is not None
+                and not isinstance(primary_error, Exception)
+                and (
+                    not isinstance(primary_error, asyncio.CancelledError)
+                    or (task is not None and task.cancelling() > 0)
+                )
+            ):
+                primary_error.add_note(f"daemon MCP teardown failed: {exc}")
+            elif isinstance(exc, DaemonResultError):
+                raise
+            elif isinstance(primary_error, (DaemonStartupError, DaemonResultError)):
+                raise primary_error from exc
+            else:
+                cause: Exception = exc
+                while isinstance(cause, ExceptionGroup):
+                    cause = cast(Exception, cause.exceptions[0])
+                if phase == "initialize" and isinstance(
+                    cause, (OSError, httpx.ConnectError, httpx.ConnectTimeout)
+                ):
+                    raise DaemonStartupError(
+                        f"failed to connect to daemon at {socket_path}: {cause}"
+                    ) from exc
+                raise DaemonResultError(f"daemon MCP teardown failed: {cause}") from exc
 
     if tool_result.isError:
         # The handler raised; surface the textual error to operator.
         text_block = tool_result.content[0] if tool_result.content else None
         detail = getattr(text_block, "text", "unknown tool error")
-        raise DaemonStartupError(f"daemon-side run_workflow failed: {detail}")
+        raise DaemonResultError(f"daemon-side run_workflow failed: {detail}")
     if not tool_result.content:
-        raise DaemonStartupError("daemon-side run_workflow returned empty content")
+        raise DaemonResultError("daemon-side run_workflow returned empty content")
 
     import json
 
     text_block = tool_result.content[0]
     payload_text = getattr(text_block, "text", None)
     if payload_text is None:
-        raise DaemonStartupError(
+        raise DaemonResultError(
             f"daemon-side run_workflow returned non-text content: {type(text_block).__name__}"
         )
-    parsed = json.loads(payload_text)
+    try:
+        parsed = json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise DaemonResultError(f"daemon-side run_workflow returned invalid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
-        raise DaemonStartupError(
+        raise DaemonResultError(
             f"daemon-side run_workflow returned non-dict payload: {type(parsed).__name__}"
         )
     result: dict[str, Any] = {str(k): v for k, v in parsed.items()}  # type: ignore[reportUnknownVariableType,reportUnknownMemberType]
@@ -284,8 +389,25 @@ def run_command(
             help="Unix-socket path of the daemon (only with --daemon)",
         ),
     ] = None,
+    daemon_result_timeout_seconds: Annotated[
+        float | None,
+        typer.Option(
+            "--daemon-result-timeout-seconds",
+            help="Maximum wait for a daemon workflow result (default: 3600; only with --daemon)",
+        ),
+    ] = None,
 ) -> None:
     """Invoke a workflow (one-shot, or daemon-client when ``--daemon`` is set)."""
+    # [LAW:single-enforcer] Parse the daemon-only positive deadline at the CLI edge.
+    if daemon_result_timeout_seconds is not None:
+        if not daemon:
+            raise typer.BadParameter(
+                "requires --daemon", param_hint="--daemon-result-timeout-seconds"
+            )
+        if not math.isfinite(daemon_result_timeout_seconds) or daemon_result_timeout_seconds <= 0:
+            raise typer.BadParameter(
+                "must be a finite positive number", param_hint="--daemon-result-timeout-seconds"
+            )
     if daemon:
         # --- Daemon-client mode (U-RT-108 per plan v2.31 §1.8) -----------
         resolved_socket = socket_path if socket_path is not None else _default_daemon_socket_path()
@@ -297,9 +419,13 @@ def run_command(
             raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR)
         try:
             payload = asyncio.run(
-                _daemon_client_dispatch(workflow_file=workflow_file, socket_path=resolved_socket)
+                _daemon_client_dispatch(
+                    workflow_file=workflow_file,
+                    socket_path=resolved_socket,
+                    result_timeout_seconds=daemon_result_timeout_seconds or 3600.0,
+                )
             )
-        except DaemonStartupError as exc:
+        except (DaemonStartupError, DaemonResultError) as exc:
             _print_fail_class(exc.FAIL_CLASS, str(exc))
             raise typer.Exit(code=EXIT_BOOTSTRAP_ERROR) from exc
         _emit_daemon_run_result(payload, output=output)
@@ -373,6 +499,12 @@ def _default_daemon_socket_path() -> Path:
     import tempfile
 
     return Path(tempfile.gettempdir()) / "harness-daemon.sock"
+
+
+class DaemonResultError(RuntimeError):
+    """A daemon MCP response failed before a RunResult was received."""
+
+    FAIL_CLASS: str = "RT-FAIL-CLI-DAEMON-RESULT"
 
 
 class DaemonStartupError(RuntimeError):
@@ -830,7 +962,8 @@ def main() -> None:
     )
 
     try:
-        app(standalone_mode=False)
+        # [LAW:no-silent-failure] Click returns the command's exit code in this mode.
+        raise SystemExit(app(standalone_mode=False))
     except _UsageError as exc:
         # Click's default formatter writes "Usage: ..." + "Error: ..." to
         # stderr. Mirror that, then append the fail-class line per spec.

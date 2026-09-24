@@ -24,6 +24,7 @@ Useful flags:
 | `--tenant-id <id>` | Override `RuntimeConfig.tenant_id`. |
 | `--daemon` | Dispatch through a running daemon instead of one-shot bootstrap. |
 | `--socket-path <path>` | Select the daemon Unix socket for daemon-client mode. |
+| `--daemon-result-timeout-seconds <seconds>` | Set a finite positive wait for a daemon workflow result (default: 3600 seconds; requires `--daemon`). |
 
 ## Run The Daemon
 
@@ -44,6 +45,14 @@ uv run harness run examples/minimal.toml --daemon
 ```
 
 The `just run-daemon examples/minimal.toml` recipe uses this client path.
+For a run expected to take more than one hour, set
+`--daemon-result-timeout-seconds` above its expected duration. The limit covers
+the client's wait for the MCP result. If it expires, the client exits with
+`RT-FAIL-CLI-DAEMON-RESULT` and code 4, without a workflow result. Expiry does
+not prove that the daemon cancelled the run. Session teardown, including the
+daemon's DELETE response, has a separate 30-second maximum. If teardown
+expires, the client reports the same result fail class and exit code without
+printing the workflow result. The client does not retry either failure.
 
 ## Inspect And Shut Down
 
@@ -70,9 +79,9 @@ a running harness process to drain and exit through the admin shutdown path.
 | ---: | --- |
 | `0` | Successful CLI command or completed workflow. |
 | `1` | Workflow-level failure or unknown daemon workflow status. |
-| `2` | Workflow manifest load or admissibility error. |
+| `2` | CLI option usage, workflow manifest load, or admissibility error. |
 | `3` | Runtime config load error. |
-| `4` | Bootstrap or daemon connection/startup error. |
+| `4` | Bootstrap, daemon connection/startup, or daemon MCP result error. |
 
 ## Config Practices
 
