@@ -1391,7 +1391,13 @@ def _test_spki_pin(public_key: object) -> str:
     return f"ed25519-spki-sha256:{hashlib.sha256(der).hexdigest()}"
 
 
-def _public_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _public_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    row_signed_record: bool = False,
+    two_rows: bool = False,
+) -> Path:
     import shutil
 
     from cryptography.hazmat.primitives import serialization
@@ -1400,6 +1406,18 @@ def _public_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     source.mkdir()
     fx = _Fixture(source, monkeypatch)
     _greenfield_passing(fx)
+    if row_signed_record:
+        fx.write_record(signer=fx.row_backend)
+    if two_rows:
+        first = AuditLedgerEntry.model_validate(json.loads(fx.sidecar_path.read_text())["entry"])
+        second = fx.signed_entry("ref-2", tenant_id=_TENANT)
+        fx.write_sidecar([(_TENANT, first), (_TENANT, second)])
+        fx.write_ledger(
+            [
+                f"audit:{_TENANT}:{first.entry_hash}",
+                f"audit:{_TENANT}:{second.entry_hash}",
+            ]
+        )
     keys = source / "keys"
     keys.mkdir()
     mapping = {}
@@ -1535,7 +1553,7 @@ def test_local_public_map_refuses_unsafe_inputs(
     elif case == "absolute":
         entry["public_key_path"] = str(public)
     elif case == "escape":
-        entry["public_key_path"] = "../keys/row-key.pub.pem"
+        entry["public_key_path"] = "../source/keys/row-key.pub.pem"
     elif case == "symlink":
         (evidence / "keys" / "linked.pub.pem").symlink_to(public)
         entry["public_key_path"] = "keys/linked.pub.pem"
@@ -1569,6 +1587,21 @@ def test_local_public_map_refuses_unsafe_inputs(
     assert exit_code == 3, output
     assert "UNVERIFIED" in output.out
     assert "--signing-key-map unusable" in output.out
+    # [LAW:behavior-not-structure] Each refusal pins its specific operator-facing cause.
+    expected_reason = {
+        "private-spec": "private local key specs are not accepted",
+        "missing-pin": "public entry has missing/extra fields",
+        "wrong-pin": "public key disagrees with spki_sha256",
+        "absolute": "public_key_path must stay inside the map directory",
+        "escape": "public_key_path must stay inside the map directory",
+        "symlink": "public key path cannot be opened safely",
+        "symlink-parent": "public key path cannot be opened safely",
+        "fifo": "path is not a regular file",
+        "group-write": "public key permissions must allow no group/other write",
+        "rsa": "is not an Ed25519 public key",
+        "private-pem": "must contain an Ed25519 public PEM",
+    }[case]
+    assert expected_reason in output.out
     assert "Traceback" not in output.err
 
 
@@ -1592,7 +1625,7 @@ def test_local_public_inspect_fails_closed_on_tampering(
     case: str,
     expected_exit: int,
 ) -> None:
-    evidence = _public_evidence(tmp_path, monkeypatch)
+    evidence = _public_evidence(tmp_path, monkeypatch, row_signed_record=case == "record-row-alias")
     map_path = evidence / "key-map.json"
     mapping = json.loads(map_path.read_text())
     sidecar = evidence / "audit-entries.jsonl"
@@ -1636,7 +1669,64 @@ def test_local_public_inspect_fails_closed_on_tampering(
     assert exit_code == expected_exit, output
     expected_disposition = "FAILED" if expected_exit == 4 else "UNVERIFIED"
     assert f"audit verification: {expected_disposition}" in output.out
+    # [LAW:behavior-not-structure] The named tamper path must cause the disposition.
+    expected_reason = {
+        "sidecar-signature": "failed backend signature verification",
+        "ledger": "response_hash mismatch",
+        "record-signature": "failed signature verification",
+        "unsigned": "undecodable audit_signature_value",
+        "missing-map": "no exact --signing-key-map entry",
+        "binding": "disagrees with the configured audit_ledger_binding_id",
+        "record-row-alias": "shares backing key material",
+        "wrong-row-key": "failed backend signature verification",
+    }[case]
+    assert expected_reason in output.out
     assert "Traceback" not in output.err
+
+
+@pytest.mark.parametrize("malformed_private", [False, True])
+def test_local_map_errors_redact_entry_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    malformed_private: bool,
+) -> None:
+    # [LAW:behavior-not-structure] The CLI must reject unsafe entries without echoing key paths.
+    evidence = _public_evidence(tmp_path, monkeypatch)
+    mapping = json.loads((evidence / "key-map.json").read_text())
+    secret_path = "/operator-private-path-MUST-NOT-ECHO.pem"
+    mapping[f"ed25519:{_ROW_KEY}"] = (
+        {
+            "backend": "local-ed25519",
+            "local_key_paths": {_ROW_KEY: secret_path},
+            "key_arns": {_ROW_KEY: "invalid-together-with-local"},
+        }
+        if malformed_private
+        else {
+            "kind": "local-ed25519-pubic",
+            "public_key_path": secret_path,
+            "spki_sha256": mapping[f"ed25519:{_ROW_KEY}"]["spki_sha256"],
+        }
+    )
+    (evidence / "key-map.json").write_text(json.dumps(mapping), encoding="utf-8")
+    exit_code = _inspect_public_evidence(evidence)
+    output = capsys.readouterr()
+    assert exit_code == 3
+    assert "UNVERIFIED" in output.out
+    assert "--signing-key-map unusable" in output.out
+    assert secret_path not in output.out + output.err
+    assert "input_value" not in output.out + output.err
+    if malformed_private:
+        assert "private local key specs are not accepted" in output.out
+
+
+def test_local_public_two_rows_same_id_and_material_verifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # [LAW:behavior-not-structure] Two valid rows prove the negative case is key replacement.
+    evidence = _public_evidence(tmp_path, monkeypatch, two_rows=True)
+    assert _inspect_public_evidence(evidence) == 0
+    assert "audit verification: VERIFIED" in capsys.readouterr().out
 
 
 def test_local_public_same_id_replacement_fails_under_either_one_id_map(

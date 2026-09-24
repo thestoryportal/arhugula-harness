@@ -325,6 +325,8 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         )
     except ImportError:  # boto3 optional — absent SDK surfaces as the typed error below
         boto_construction_errors = ()
+    from pydantic import ValidationError
+
     from harness_runtime.config.local_ed25519_signing_backend import (
         LocalEd25519PublicVerifier,
         load_ed25519_public_key,
@@ -333,7 +335,7 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
         canonical_kms_key_identity,
     )
-    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+    from harness_runtime.types import AuditSigningConfig
 
     raw: object = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -400,11 +402,20 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
             backends[map_key] = LocalEd25519PublicVerifier(key_id, public_key)
             materials[map_key] = identity
             continue
-        config = AuditSigningConfig.model_validate(spec)
-        if config.backend is AuditSigningBackendKind.LOCAL_ED25519:
+        # [LAW:single-enforcer] Refuse private specs at the raw map boundary,
+        # before model errors can echo paths from malformed entries.
+        if isinstance(spec, dict) and spec.get("backend") == "local-ed25519":
             raise ValueError(
                 f"key-map entry {map_key!r}: private local key specs are not accepted by inspect"
             )
+        try:
+            config = AuditSigningConfig.model_validate(spec)
+        except ValidationError as exc:
+            # [LAW:no-silent-failure] Keep the failure reason, never Pydantic's raw input.
+            error_types = sorted({error["type"] for error in exc.errors(include_input=False)})
+            raise ValueError(
+                f"key-map entry {map_key!r}: invalid backend config ({', '.join(error_types)})"
+            ) from None
         if key_id not in config.key_arns:
             # Validated BEFORE construction: a malformed entry whose
             # declared key ID its own backend config cannot resolve would

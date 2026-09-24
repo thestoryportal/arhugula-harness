@@ -194,10 +194,13 @@ def _add_audit_verification_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "JSON file keyed '<algorithm>:<key_id>' mapping to KMS backend "
-            "specs or verify-only local-ed25519-public entries (relative "
-            "public_key_path plus mandatory spki_sha256); private local "
-            "signing specs are refused. Supplies the OD §21.2.2 row-1 "
-            "per-row resolver (§13.5 input (iii))."
+            "specs or verify-only local-ed25519-public entries. Public paths "
+            "resolve relative to the map directory; no path component may "
+            "be a symlink, and the PEM must be owned by inspect's effective "
+            "user. spki_sha256 pins the PEM against replacement; the map "
+            "itself remains the trust root. Private signing specs are "
+            "refused. Supplies the OD §21.2.2 row-1 per-row resolver "
+            "(§13.5 input (iii))."
         ),
     )
     parser.add_argument(
