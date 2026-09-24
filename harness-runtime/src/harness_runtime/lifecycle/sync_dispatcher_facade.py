@@ -62,12 +62,11 @@ Two constraints surfaced at design (advisor cross-check, 2026-05-20):
    the ``to_thread`` future but cannot cancel the thread. Without a bound
    on ``future.result(...)``, a hung inner coroutine + a drained outer loop
    would leak the worker thread for the lifetime of the interpreter. The
-   facade applies ``future.result(timeout=result_timeout_seconds)``. The
-   bound is constructor-supplied so the caller can align it with the
-   drain-timeout / step-timeout budget. On expiry, ``TimeoutError`` is
-   re-raised verbatim; the driver maps to its existing typed fail-mode
-   taxonomy per C-CP-25 §25.3.3.4 (no new fail class added at the facade
-   layer — the facade is a transport adapter, not a policy surface).
+   facade bounds the wait at ``result_timeout_seconds``. The bound is
+   constructor-supplied so the caller can align it with the drain-timeout /
+   step-timeout budget. A dispatch still pending at the bound is cancelled
+   and surfaces as ``StepDispatchTimeoutError``; a dispatch that completed,
+   even with its own ``TimeoutError``, surfaces its own outcome.
 
 Discovery test coverage
 -----------------------
@@ -90,6 +89,7 @@ See ``harness-runtime/tests/test_lifecycle_sync_dispatcher_facade.py``:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 import time
 from collections.abc import Mapping
@@ -120,9 +120,10 @@ _AUDIT_DRAIN_GRACE_SECONDS = 10.0
 class StepDispatchTimeoutError(Exception):
     """Typed per-step worker-thread blocking timeout.
 
-    Raised by ``SyncDispatcherFacade.dispatch`` when the underlying
-    ``future.result(timeout=self.result_timeout_seconds)`` exceeds the
-    bound. Discriminated from generic ``TimeoutError`` so the CP workflow
+    Raised by ``SyncDispatcherFacade.dispatch`` when the dispatch is still
+    pending at ``result_timeout_seconds``. Never raised for an inner
+    ``TimeoutError`` the dispatch itself completed with. Discriminated from
+    generic ``TimeoutError`` so the CP workflow
     driver can map to ``RT-FAIL-STEP-DISPATCH-TIMEOUT`` per
     ``Spec_Harness_Runtime_v1.md`` v1.31 §11 failure-mode taxonomy.
 
@@ -181,8 +182,8 @@ class SyncDispatcherFacade:
         ``dispatch`` calls for the lifetime of the bootstrap context.
     result_timeout_seconds :
         Upper bound on the worker-thread blocking wait per ``dispatch``
-        invocation. On expiry, ``concurrent.futures.TimeoutError`` is raised
-        (Python ≥ 3.11: aliased to ``builtins.TimeoutError``). Caller
+        invocation. A dispatch still pending at the bound is cancelled and
+        raises ``StepDispatchTimeoutError``. Caller
         chooses the bound; aligning with drain-timeout budget per
         ``Spec_Harness_Runtime_v1.md`` §11 is the natural choice.
     """
@@ -204,11 +205,12 @@ class SyncDispatcherFacade:
         ``asyncio.to_thread(execute_workflow, ...)`` at
         ``harness_runtime/api.py:399``). Schedules
         ``self.inner.dispatch(...)`` onto ``self.loop`` via
-        ``asyncio.run_coroutine_threadsafe`` and blocks the worker thread on
-        ``future.result(timeout=self.result_timeout_seconds)``.
+        ``asyncio.run_coroutine_threadsafe`` and blocks the worker thread for
+        at most ``self.result_timeout_seconds``.
 
         Exception propagation: ``future.result()`` re-raises any exception
-        raised by the inner coroutine verbatim (no wrapping). The driver's
+        the completed inner coroutine raised verbatim (no wrapping), an inner
+        ``TimeoutError`` included. The driver's
         existing typed try/except per C-CP-25 §25.3.3.4 maps to fail-mode
         taxonomy as before.
         """
@@ -258,31 +260,21 @@ class SyncDispatcherFacade:
             cancel_token,
         )
         future = asyncio.run_coroutine_threadsafe(coro, self.loop)
-        try:
-            return future.result(timeout=self.result_timeout_seconds)
-        except PostEffectAuditSigningError as exc:
-            # U-RT-136 (plan v2.49 §1.3 acc 1b) — the OUTERMOST runtime
-            # dispatch boundary: every step-kind path (inference / tool /
-            # sub-agent, nested children included) funnels through this
-            # facade before the CP driver's generic handler stringifies the
-            # exception into `RunResult.fail_class`. Consume the carrier
-            # here into the audit-failure report (structured log keyed by
-            # `result_ref`, carrying the preserved effect payload), then
-            # re-raise — the caller's fail_class string carries the same
-            # `result_ref` via the carrier's message.
-            report_post_effect_audit_failure(exc)
-            raise
-        except TimeoutError as exc:
-            # `future.result(timeout=...)` only stops *waiting* — the inner
-            # coroutine (and its cost/audit-ledger write) keeps running
-            # detached on `self.loop` unless explicitly cancelled. Without
-            # this, a retry of the same run can execute concurrently with
-            # the orphaned original dispatch: two live LLM calls / two audit
-            # writes for the same logical step. `run_coroutine_threadsafe`'s
-            # future chains cancellation back to the scheduled Task via
-            # `call_soon_threadsafe`, so `.cancel()` is safe to call here
-            # from this (worker) thread.
-            future.cancel()
+        # [LAW:no-ambient-temporal-coupling] The future's state, not an
+        # exception class, decides deadline versus outcome: since Python 3.11
+        # a wait expiry and an inner `TimeoutError` are the same class, so the
+        # wait is kept apart from the result. `cancel()` wins only while the
+        # dispatch is still pending; one that completes at the bound keeps its
+        # own outcome, including its own `TimeoutError`.
+        _, pending = concurrent.futures.wait((future,), timeout=self.result_timeout_seconds)
+        if pending and future.cancel():
+            # `run_coroutine_threadsafe`'s future chains the cancellation
+            # back to the scheduled Task via `call_soon_threadsafe`; without
+            # it the inner coroutine (and its cost/audit-ledger write) would
+            # keep running detached on `self.loop`, and a retry of the same
+            # run could execute concurrently with the orphaned original: two
+            # live LLM calls / two audit writes for the same logical step.
+            #
             # B-48 (U-RT-143; §14.8.10.3 part 2/3): trip the JOB-WIDE effect
             # fence — no further F2/audit writes begin anywhere in the job
             # (post-child persists included; cascades through descent) —
@@ -330,7 +322,21 @@ class SyncDispatcherFacade:
             )
             timeout_error.audit_drain_incomplete = drain_incomplete  # type: ignore[attr-defined]
             timeout_error.fence_ack_outcome = fence_outcome.value  # type: ignore[attr-defined]
-            raise timeout_error from exc
+            raise timeout_error
+        try:
+            return future.result()
+        except PostEffectAuditSigningError as exc:
+            # U-RT-136 (plan v2.49 §1.3 acc 1b) — the OUTERMOST runtime
+            # dispatch boundary: every step-kind path (inference / tool /
+            # sub-agent, nested children included) funnels through this
+            # facade before the CP driver's generic handler stringifies the
+            # exception into `RunResult.fail_class`. Consume the carrier
+            # here into the audit-failure report (structured log keyed by
+            # `result_ref`, carrying the preserved effect payload), then
+            # re-raise — the caller's fail_class string carries the same
+            # `result_ref` via the carrier's message.
+            report_post_effect_audit_failure(exc)
+            raise
 
     def cohort_key(
         self,

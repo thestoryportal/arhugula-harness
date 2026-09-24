@@ -27,7 +27,9 @@ Test taxonomy (mapped to module docstring D1-D6):
        realistic ``StepEffectiveBinding`` / ``WorkflowStep`` /
        ``StepExecutionContext`` argument shapes.
   D4 — ``result_timeout_seconds`` bound fires when inner exceeds budget.
+  D4c — A dispatch pending at the bound is cancelled, fenced and joined.
   D5 — Inner exceptions propagate verbatim through ``future.result()``.
+  D5b — A completed inner ``TimeoutError`` propagates verbatim, unfenced.
   D6 — ``materialize_sync_dispatcher_facade`` raises ``RuntimeError`` when
        called outside an async context.
 """
@@ -48,6 +50,10 @@ from harness_cp.cp_shared_types import ModelBinding
 from harness_cp.engine_class import EngineClass
 from harness_cp.gate_level_rule import GateLevel
 from harness_cp.per_step_override_evaluator import StepEffectiveBinding
+from harness_cp.sub_agent_dispatch_cancellation import (
+    DISPATCH_CANCEL_TOKEN_VAR,
+    DispatchCancelToken,
+)
 from harness_cp.workflow_driver import StepDispatcher
 from harness_cp.workflow_driver_types import (
     StepExecutionContext,
@@ -366,6 +372,114 @@ async def test_d5_inner_exception_propagates_verbatim() -> None:
 
     with pytest.raises(_DispatchBoomError, match="inner dispatcher failed"):
         await asyncio.to_thread(_worker)
+
+
+# ---------------------------------------------------------------------------
+# D5b — A completed inner TimeoutError is an inner failure, not the deadline
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _InnerTimeoutAsyncDispatcher:
+    """Async dispatcher whose own operation times out: it finishes promptly by
+    raising ``error``, well inside the facade's bound. Records the dispatch's
+    effect fence so the test can observe whether the facade tripped it."""
+
+    error: TimeoutError
+    fences: list[DispatchCancelToken]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        self.fences.append(DISPATCH_CANCEL_TOKEN_VAR.get())
+        await asyncio.sleep(0)
+        raise self.error
+
+
+@pytest.mark.asyncio
+async def test_d5b_completed_inner_timeout_error_propagates_without_tripping_fence() -> None:
+    """D5b — on Python >= 3.11 an inner ``TimeoutError`` and the facade's own
+    wait expiry share one exception class. A dispatch that COMPLETED with its
+    own ``TimeoutError`` must surface that exact error — not be relabelled
+    ``StepDispatchTimeoutError`` (RT-FAIL-STEP-DISPATCH-TIMEOUT) and not trip
+    the job-wide effect fence that only a still-pending deadline owns."""
+    inner_error = TimeoutError("provider read timed out")
+    inner = _InnerTimeoutAsyncDispatcher(error=inner_error, fences=[])
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=5.0)
+
+    def _worker() -> Mapping[str, Any]:
+        return facade.dispatch(_binding(), _step(), step_context=_step_context())
+
+    with pytest.raises(TimeoutError) as excinfo:
+        await asyncio.to_thread(_worker)
+
+    # asyncio's future bridge re-creates a bare TimeoutError from its args, so
+    # "verbatim" is class + message here, not object identity.
+    assert type(excinfo.value) is TimeoutError
+    assert excinfo.value.args == inner_error.args
+    assert len(inner.fences) == 1
+    assert inner.fences[0].tripped is False
+
+
+# ---------------------------------------------------------------------------
+# D4c — A pending deadline still owns cancel + fence + bounded join
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _SlowCancelAsyncDispatcher:
+    """Async dispatcher that is still pending at the facade's deadline and
+    needs ``cleanup_seconds`` of cooperative teardown once cancelled."""
+
+    cleanup_seconds: float
+    fences: list[DispatchCancelToken]
+    cleaned_up: list[bool]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        self.fences.append(DISPATCH_CANCEL_TOKEN_VAR.get())
+        try:
+            await asyncio.sleep(60.0)
+            return {}
+        except asyncio.CancelledError:
+            await asyncio.sleep(self.cleanup_seconds)
+            self.cleaned_up.append(True)
+            raise
+
+
+@pytest.mark.asyncio
+async def test_d4c_pending_deadline_trips_fence_and_joins_cancelled_dispatch() -> None:
+    """D4c — the counterpart of D5b: a dispatch still pending at the bound is
+    cancelled, its effect fence is tripped, and the facade raises
+    ``StepDispatchTimeoutError`` only after the cancelled dispatch has
+    finished its teardown (the bounded join)."""
+    inner = _SlowCancelAsyncDispatcher(cleanup_seconds=0.2, fences=[], cleaned_up=[])
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=0.05)
+    cleaned_up_at_raise: list[bool] = []
+
+    def _worker() -> Mapping[str, Any]:
+        try:
+            return facade.dispatch(_binding(), _step(), step_context=_step_context())
+        except StepDispatchTimeoutError:
+            cleaned_up_at_raise.append(bool(inner.cleaned_up))
+            raise
+
+    with pytest.raises(StepDispatchTimeoutError) as excinfo:
+        await asyncio.to_thread(_worker)
+
+    assert cleaned_up_at_raise == [True]
+    assert len(inner.fences) == 1
+    assert inner.fences[0].tripped is True
+    assert excinfo.value.audit_drain_incomplete is False  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
