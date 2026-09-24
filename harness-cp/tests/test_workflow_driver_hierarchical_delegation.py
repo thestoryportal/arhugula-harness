@@ -28,7 +28,7 @@ U-CP-89):
       → test_hierarchical_delegation_two_level_delegation_composes_bottom_up
   gate-level monotonic descent across depth (C-CP-12 §12.2; HONEST — see below):
       → test_hierarchical_delegation_gate_level_monotonic_across_depth
-      → test_sub_agent_descent_is_equality_default_recorded_not_applied
+      → test_sub_agent_descent_defaults_to_parent_floor
   persisted branch-causality at depth:
       → test_hierarchical_delegation_branch_causality_at_depth
   deterministic-append (branch-index order, NOT completion order):
@@ -42,16 +42,9 @@ U-CP-89):
       → test_hierarchical_delegation_live_real_ledger_chain_valid_at_depth
       → test_hierarchical_delegation_live_real_ledger_chain_valid_with_linear_child
 
-**Gate-level descent honesty (C-CP-12 §12.2 is monotonic-≤, equality the valid
-default).** `dispatch_sub_agent` ALWAYS returns `child_gate_level ==
-parent_gate_level` (the blast-radius downgrade rides `child_blast_radius_ceiling`,
-not the gate level), and `child_workflow_runner` drops the computed descent —
-the child re-seeds its executed gate from its own manifest (pre-existing v1.6 MVP
-child-context sharing). So these tests assert the monotonic INVARIANT (never
-ascends) across the genuine 2-level tree, with a genuine non-equal descent driven
-by the child manifest's declared `default_gate_level` (honestly attributed — NOT
-a harness-computed strict descent). The recorded-not-applied seam is documented
-at `.harness/class_3_hierarchical_delegation_descent_recorded_not_applied.md`.
+**Gate-level descent (C-CP-12 §12.2).** Child execution clamps its manifest
+gate to the recorded parent floor. The class-3 recorded-not-applied note is
+superseded for this behavior.
 
 Authority: `Spec_Control_Plane_v1_32.md` §25.10/§25.11/§25.13/§25.15 +
 `Implementation_Plan_Control_Plane_v2_32.md` §2.2 (U-CP-89).
@@ -307,8 +300,7 @@ class _HierarchicalDispatcher:
     - `SUB_AGENT_DISPATCH` steps RECURSE: re-enter `execute_workflow` with the
       child's own manifest + step sequence, sharing the parent `ctx` +
       `step_dispatchers` registry — EXACTLY as `child_workflow_runner._runner`
-      does (the harness-computed descent is recorded-not-applied; the child
-      re-seeds its executed gate from its own manifest). Child SUCCESS →
+      does (the child receives its parent's effective gate floor). Child SUCCESS →
       `final_state` becomes this step's output; child FAILED → raise (the
       orchestrator-workers cascade trigger).
 
@@ -359,6 +351,7 @@ class _HierarchicalDispatcher:
                 ctx=self.ctx,
                 default_model_binding=_DEFAULT_BINDING,
                 step_dispatchers=self.registry,
+                parent_gate_floor=step_context.parent_gate_level,
             )
             if child_result.status is RunStatus.FAILED:
                 raise RuntimeError(f"sub-agent child failed: {child_result.fail_class}")
@@ -587,13 +580,7 @@ def test_hierarchical_delegation_two_level_delegation_composes_bottom_up() -> No
 
 
 def test_hierarchical_delegation_gate_level_monotonic_across_depth() -> None:
-    """The executed gate-level NEVER ascends across the genuine 2-level tree
-    (C-CP-12 §12.2 monotonic invariant). The within-level descent is the §12.2
-    equality default (`compose_branch_child_context` copies the parent gate); the
-    genuine non-equal descent here is the child manifest's DECLARED lower gate
-    (AUTO < ASK) — honestly attributed to the manifest, NOT a harness-computed
-    strict descent (`dispatch_sub_agent` returns equality; the runner drops it —
-    see `test_sub_agent_descent_is_equality_default_recorded_not_applied`)."""
+    """A declared AUTO child inherits its ASK parent's effective floor."""
     child_manifest = _manifest(workflow_id="wf-hd-child", default_gate_level=GateLevel.AUTO)
     child_steps = _level([_orchestrator_step("orch-child"), _leaf_worker("g0")])
     root_steps = _level(
@@ -603,31 +590,16 @@ def test_hierarchical_delegation_gate_level_monotonic_across_depth() -> None:
         ]
     )
     ledger = _RecordingLedger()
-    # Root declares ASK; child declares AUTO (rank AUTO=0 < ASK=1 → strict descent).
     result, disp, _emitter = _run(steps=root_steps, ledger=ledger, default_gate_level=GateLevel.ASK)
     assert result.status is RunStatus.SUCCESS
-
-    # Root-level leaves (orchestrator + the recursing worker context) see ASK.
-    assert disp.contexts["orch-root"].parent_gate_level == GateLevel.ASK
-    assert disp.contexts["sub"].parent_gate_level == GateLevel.ASK
-    # Child-level leaf (grandchild) sees AUTO — strictly below the root gate.
-    assert disp.contexts["g0"].parent_gate_level == GateLevel.AUTO
-    # Monotonic invariant: the child gate never ascends above the parent gate
-    # (AUTO rank 0 <= ASK rank 1; C-CP-12 §12.2).
-    assert _gate_rank(GateLevel.AUTO) <= _gate_rank(GateLevel.ASK)
+    assert disp.contexts["orch-root"].parent_gate_level is GateLevel.ASK
+    assert disp.contexts["sub"].parent_gate_level is GateLevel.ASK
+    assert disp.contexts["orch-child"].parent_gate_level is GateLevel.ASK
+    assert disp.contexts["g0"].parent_gate_level is GateLevel.ASK
 
 
-def _gate_rank(level: GateLevel) -> int:
-    return {GateLevel.AUTO: 0, GateLevel.ASK: 1, GateLevel.DENY: 2}[level]
-
-
-def test_sub_agent_descent_is_equality_default_recorded_not_applied() -> None:
-    """The recorded-not-applied seam (the Class-3 honesty note): the
-    harness-computed sub-agent descent (`dispatch_sub_agent`, C-CP-12 §12.2)
-    returns `child_gate_level == parent_gate_level` (equality default — the
-    blast-radius downgrade rides `child_blast_radius_ceiling`, not the gate
-    level). The cross-level EXECUTED descent in the test above comes from the
-    child manifest, NOT this computed value (the runner drops it)."""
+def test_sub_agent_descent_defaults_to_parent_floor() -> None:
+    """The recorded child floor equals the parent absent a stricter gate axis."""
     descent = dispatch_sub_agent(
         parent_action_id=ActionID("workflow:wf-hd:step:1"),
         parent_gate_level=GateLevel.ASK,
@@ -635,7 +607,7 @@ def test_sub_agent_descent_is_equality_default_recorded_not_applied() -> None:
         sub_agent_brief=_brief(),
         operator_override=None,
     )
-    assert descent.child_gate_level == GateLevel.ASK  # equality — recorded-not-applied
+    assert descent.child_gate_level == GateLevel.ASK
     assert descent.child_gate_level == descent.parent_gate_level
 
 
@@ -1453,3 +1425,134 @@ def test_linear_driver_durable_write_counts_as_inflight_effect_at_trip_time() ->
         )
     finally:
         DISPATCH_CANCEL_TOKEN_VAR.reset(reset_token)
+
+
+@pytest.mark.parametrize(
+    ("declared", "floor", "expected"),
+    [
+        (GateLevel.AUTO, GateLevel.ASK, GateLevel.ASK),
+        (GateLevel.DENY, GateLevel.ASK, GateLevel.DENY),
+        (GateLevel.AUTO, GateLevel.AUTO, GateLevel.AUTO),
+    ],
+)
+def test_descended_linear_child_uses_stricter_gate(
+    declared: GateLevel, floor: GateLevel, expected: GateLevel
+) -> None:
+    """The effective gate is the stricter of manifest and parent floor."""
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    dispatcher = _HierarchicalDispatcher(ctx=ctx)
+    registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, dispatcher)))
+    dispatcher.registry = registry
+    result = execute_workflow(
+        _manifest(
+            workflow_id="wf-linear-child",
+            default_gate_level=declared,
+            topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+        ),
+        [_leaf_worker("child-leaf")],
+        run_id="run-linear-child",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        parent_gate_floor=floor,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert dispatcher.contexts["child-leaf"].parent_gate_level is expected
+
+
+@pytest.mark.parametrize(
+    "topology",
+    [
+        TopologyPattern.PARALLELIZATION,
+        TopologyPattern.EVALUATOR_OPTIMIZER,
+        TopologyPattern.ORCHESTRATOR_WORKERS,
+        TopologyPattern.HIERARCHICAL_DELEGATION,
+        TopologyPattern.DECENTRALIZED_HANDOFF,
+    ],
+)
+def test_descended_non_linear_contexts_keep_parent_floor(topology: TopologyPattern) -> None:
+    """Each strategy records the same effective floor in dispatched contexts."""
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    dispatcher = _HierarchicalDispatcher(ctx=ctx)
+    registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, dispatcher)))
+    dispatcher.registry = registry
+    steps = (
+        [_orchestrator_step("orch"), _leaf_worker("worker")]
+        if topology
+        in (TopologyPattern.ORCHESTRATOR_WORKERS, TopologyPattern.HIERARCHICAL_DELEGATION)
+        else [_leaf_worker("first"), _leaf_worker("second")]
+        if topology is TopologyPattern.EVALUATOR_OPTIMIZER
+        else [_leaf_worker("first")]
+    )
+    result = execute_workflow(
+        _manifest(
+            workflow_id=f"wf-floor-{topology.value}",
+            default_gate_level=GateLevel.AUTO,
+            topology_pattern=topology,
+        ),
+        steps,
+        run_id="run-floor",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+        parent_gate_floor=GateLevel.ASK,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert dispatcher.contexts
+    assert all(
+        context.parent_gate_level is GateLevel.ASK for context in dispatcher.contexts.values()
+    )
+
+
+def test_linear_grandchild_cannot_drop_ask_floor() -> None:
+    """Two recursive child entries keep the root ASK floor through AUTO manifests."""
+    ledger = _RecordingLedger()
+    emitter = _Emitter()
+    ctx = cast(DriverContext, _Ctx(ledger=ledger, emitter=emitter))
+    dispatcher = _HierarchicalDispatcher(ctx=ctx)
+    registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, dispatcher)))
+    dispatcher.registry = registry
+    grandchild = _manifest(
+        workflow_id="wf-grandchild",
+        default_gate_level=GateLevel.AUTO,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    child = _manifest(
+        workflow_id="wf-child",
+        default_gate_level=GateLevel.AUTO,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    root = _manifest(
+        workflow_id="wf-root",
+        default_gate_level=GateLevel.ASK,
+        topology_pattern=TopologyPattern.SINGLE_THREADED_LINEAR,
+    )
+    result = execute_workflow(
+        root,
+        [
+            _sub_agent_worker(
+                "child-dispatch",
+                child_manifest=child,
+                child_steps=[
+                    _sub_agent_worker(
+                        "grandchild-dispatch",
+                        child_manifest=grandchild,
+                        child_steps=[_leaf_worker("grandchild-leaf")],
+                    )
+                ],
+            )
+        ],
+        run_id="run-root",
+        ctx=ctx,
+        default_model_binding=_DEFAULT_BINDING,
+        step_dispatchers=registry,
+    )
+    assert result.status is RunStatus.SUCCESS
+    assert set(dispatcher.contexts) == {"child-dispatch", "grandchild-dispatch", "grandchild-leaf"}
+    assert all(
+        context.parent_gate_level is GateLevel.ASK for context in dispatcher.contexts.values()
+    )

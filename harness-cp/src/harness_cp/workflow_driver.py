@@ -3207,6 +3207,7 @@ def execute_workflow(
     pause_snapshot_input: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
     sub_agent_descent: bool = False,
+    parent_gate_floor: GateLevel = GateLevel.AUTO,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -3307,6 +3308,14 @@ def execute_workflow(
                         workflow_id=manifest_entry.workflow_id,
                         skill=_skills[_skill_id],
                     )
+
+    # [LAW:single-enforcer] C-CP-12: clamp a reusable manifest to the descent floor
+    # once per invocation; all topology contexts consume this effective value.
+    from harness_cp.gate_level_rule import max_gate_level
+
+    effective_parent_gate_level = max_gate_level(
+        resolve_parent_gate_level(manifest_entry), parent_gate_floor
+    )
 
     # U-RT-89 (C-RT-24 §14.14.3) — entry-point resume detection.
     # When the caller supplies a pause_snapshot_input + the operator has bound
@@ -3485,6 +3494,7 @@ def execute_workflow(
             step_dispatchers=step_dispatchers,
             span=span,
             run_idempotency_key=run_idempotency_key,
+            effective_parent_gate_level=effective_parent_gate_level,
             resume_at_step_index_override=resume_at_step_index,
             # B-FANOUT-PAUSE — the validated snapshot threads to the non-linear
             # strategy so a `cascade_policy=pause` fan-out resume can skip terminal
@@ -3541,6 +3551,7 @@ def _execute_workflow_body(
     step_dispatchers: StepDispatcherRegistry,
     span: Any,
     run_idempotency_key: str,
+    effective_parent_gate_level: GateLevel,
     resume_at_step_index_override: int | None = None,
     resume_snapshot: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
@@ -4573,6 +4584,7 @@ def _execute_workflow_body(
         _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_parallelization(
             manifest_entry=manifest_entry,
+            effective_parent_gate_level=effective_parent_gate_level,
             steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
@@ -4603,6 +4615,7 @@ def _execute_workflow_body(
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
             manifest_entry=manifest_entry,
+            effective_parent_gate_level=effective_parent_gate_level,
             steps=steps,
             run_id=run_id,
             ctx=ctx,
@@ -4628,6 +4641,7 @@ def _execute_workflow_body(
         _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_orchestrator_workers(
             manifest_entry=manifest_entry,
+            effective_parent_gate_level=effective_parent_gate_level,
             steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
@@ -4672,6 +4686,7 @@ def _execute_workflow_body(
         _branch_steps, _synthesis_step = _split_synthesis(steps)
         return _execute_hierarchical_delegation(
             manifest_entry=manifest_entry,
+            effective_parent_gate_level=effective_parent_gate_level,
             steps=_branch_steps,
             run_id=run_id,
             ctx=ctx,
@@ -4700,6 +4715,7 @@ def _execute_workflow_body(
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
             manifest_entry=manifest_entry,
+            effective_parent_gate_level=effective_parent_gate_level,
             steps=steps,
             run_id=run_id,
             ctx=ctx,
@@ -5485,7 +5501,7 @@ def _execute_workflow_body(
         step_context = StepExecutionContext(
             workflow_id=manifest_entry.workflow_id,
             parent_action_id=(f"workflow:{manifest_entry.workflow_id}:step:{step_index}"),
-            parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            parent_gate_level=effective_parent_gate_level,
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — surface the workflow's declared
             # placements onto the per-step context so the wrap-time HITL composer
             # (runtime §14.8.2 step 1) fires per-step. Default () → no gate.
@@ -7973,6 +7989,7 @@ def _execute_parallelization(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    effective_parent_gate_level: GateLevel,
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
@@ -8405,7 +8422,7 @@ def _execute_parallelization(
     fanout_parent = StepExecutionContext(
         workflow_id=workflow_id,
         parent_action_id=_parallelization_fanout_action_id(workflow_id),
-        parent_gate_level=resolve_parent_gate_level(manifest_entry),
+        parent_gate_level=effective_parent_gate_level,
         # B-HITL-PLACEMENT-PER-STEP-PRODUCER — branch children inherit this via
         # compose_branch_child_context's model_copy (covers fan-out workers).
         hitl_placements=manifest_entry.hitl_placements,
@@ -10945,6 +10962,7 @@ def _execute_evaluator_optimizer(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    effective_parent_gate_level: GateLevel,
     resume_snapshot: PauseSnapshot | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
@@ -11213,7 +11231,7 @@ def _execute_evaluator_optimizer(
         step_context = StepExecutionContext(
             workflow_id=workflow_id,
             parent_action_id=f"workflow:{workflow_id}:step:{entry_index}",
-            parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            parent_gate_level=effective_parent_gate_level,
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — EVALUATOR_OPTIMIZER per-step.
             # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold
             # the per-step `binding.hitl_placement` override onto the workflow
@@ -11910,6 +11928,7 @@ def _execute_orchestrator_workers(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    effective_parent_gate_level: GateLevel,
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
@@ -12518,7 +12537,7 @@ def _execute_orchestrator_workers(
     orchestrator_context = StepExecutionContext(
         workflow_id=workflow_id,
         parent_action_id=orchestrator_action_id,
-        parent_gate_level=resolve_parent_gate_level(manifest_entry),
+        parent_gate_level=effective_parent_gate_level,
         # B-HITL-PLACEMENT-PER-STEP-PRODUCER — orchestrator step + workers
         # (workers inherit via compose_branch_child_context's model_copy).
         # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold the
@@ -15190,6 +15209,7 @@ def _execute_hierarchical_delegation(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    effective_parent_gate_level: GateLevel,
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
@@ -15238,18 +15258,13 @@ def _execute_hierarchical_delegation(
     level's deadline stays a hard cap over an inner-level in-flight dispatch.
     Returns `(RunResult, steps_executed)` for the `_execute_workflow_body` caller.
 
-    **Gate-level descent across the recursion boundary (honest scope).** The
-    sub-agent gate-level descent (C-CP-12 §12.2) is COMPUTED + RECORDED at the
-    `SUB_AGENT_DISPATCH` dispatch boundary (the runtime
-    `RuntimeHandoffRegistry.dispatch` → `dispatch_sub_agent`), but the child's
-    EXECUTED gate-level re-seeds from its own manifest — the harness-computed
-    descent is recorded-not-applied at the child run (pre-existing v1.6 MVP
-    child-context sharing, `child_workflow_runner.py` module docstring). Strict
-    cross-level *executed* descent is a v1.7+/B4-adjacent arc
-    (`.harness/class_3_hierarchical_delegation_descent_recorded_not_applied.md`);
-    §12.2 itself is monotonic-≤ with equality as the valid default, so the
-    within-level worker descent (`compose_branch_child_context`) + the recorded
-    boundary descent satisfy the monotonic invariant.
+    **Gate-level descent across the recursion boundary.** Runtime passes the
+    recorded `descent.child_gate_level` to each child `execute_workflow` call.
+    The child clamps its manifest default to this floor once and threads the
+    effective value through all strategy contexts, including resume re-entry.
+    A reusable AUTO child under an ASK parent therefore executes at ASK.
+    The prior recorded-not-applied conclusion is retained only as historical
+    provenance in `.harness/class_3_hierarchical_delegation_descent_recorded_not_applied.md`.
     """
     workflow_id = manifest_entry.workflow_id
 
@@ -15288,6 +15303,7 @@ def _execute_hierarchical_delegation(
     # does), so the materialization is now wired for the recursion-heavy topology.
     return _execute_orchestrator_workers(
         manifest_entry=manifest_entry,
+        effective_parent_gate_level=effective_parent_gate_level,
         steps=steps,
         run_id=run_id,
         ctx=ctx,
@@ -15397,6 +15413,7 @@ def _execute_decentralized_handoff(
     default_model_binding: ModelBinding,
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
+    effective_parent_gate_level: GateLevel,
     resume_snapshot: PauseSnapshot | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
@@ -15752,7 +15769,7 @@ def _execute_decentralized_handoff(
         spawning = StepExecutionContext(
             workflow_id=workflow_id,
             parent_action_id=prev_action_id,
-            parent_gate_level=resolve_parent_gate_level(manifest_entry),
+            parent_gate_level=effective_parent_gate_level,
             # B-HITL-PLACEMENT-PER-STEP-PRODUCER — hierarchical/handoff stage ctx
             # (stage_ctx inherits via compose_branch_child_context's model_copy).
             # B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD (CP spec v1.49 §6.2) — fold
