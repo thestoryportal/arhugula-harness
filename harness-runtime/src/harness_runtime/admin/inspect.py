@@ -193,10 +193,11 @@ def _add_audit_verification_arguments(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=(
-            "JSON file keyed '<algorithm>:<key_id>' mapping to "
-            "AuditSigningConfig-shaped backend specs — the operator-supplied "
-            "form of the OD v1.34 §21.2.2 row-1 per-row resolver (§13.5 "
-            "input (iii); NOT a single backend)."
+            "JSON file keyed '<algorithm>:<key_id>' mapping to KMS backend "
+            "specs or verify-only local-ed25519-public entries (relative "
+            "public_key_path plus mandatory spki_sha256); private local "
+            "signing specs are refused. Supplies the OD §21.2.2 row-1 "
+            "per-row resolver (§13.5 input (iii))."
         ),
     )
     parser.add_argument(

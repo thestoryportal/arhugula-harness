@@ -198,10 +198,10 @@ def test_public_loader_rejects_special_files_owners_and_algorithms(
     os.mkfifo(fifo)
     for bad in (linked_parent / "public.pem", fifo, private):
         with pytest.raises(LocalSigningKeyConfigError):
-            local_module._load_public_key("retired", str(bad))
+            local_module.load_ed25519_public_key("retired", str(bad))
     monkeypatch.setattr(local_module.os, "geteuid", lambda: os.stat(public).st_uid + 1)
     with pytest.raises(LocalSigningKeyConfigError, match="owner"):
-        local_module._load_public_key("retired", str(public))
+        local_module.load_ed25519_public_key("retired", str(public))
     monkeypatch.undo()
 
     rsa_public = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
@@ -211,7 +211,7 @@ def test_public_loader_rejects_special_files_owners_and_algorithms(
         )
     )
     with pytest.raises(LocalSigningKeyConfigError, match="Ed25519"):
-        local_module._load_public_key("retired", str(public))
+        local_module.load_ed25519_public_key("retired", str(public))
     _write_public(public, private)
 
     def unsupported(_pem: bytes) -> object:
@@ -219,4 +219,33 @@ def test_public_loader_rejects_special_files_owners_and_algorithms(
 
     monkeypatch.setattr(local_module.serialization, "load_pem_public_key", unsupported)
     with pytest.raises(LocalSigningKeyConfigError, match="Ed25519"):
-        local_module._load_public_key("retired", str(public))
+        local_module.load_ed25519_public_key("retired", str(public))
+
+
+def test_public_verifier_is_verify_only_and_bound_to_one_id(tmp_path: Path) -> None:
+    from harness_runtime.config.local_ed25519_signing_backend import (
+        LocalEd25519PublicVerifier,
+        load_ed25519_public_key,
+        spki_identity,
+    )
+
+    private = ed25519.Ed25519PrivateKey.generate()
+    public_path = tmp_path / "row.pub.pem"
+    public_path.write_bytes(
+        private.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    public_path.chmod(0o644)
+    public = load_ed25519_public_key("row", str(public_path))
+    verifier = LocalEd25519PublicVerifier("row", public)
+    signature = private.sign(b"row")
+    assert verifier.algorithm == "ed25519"
+    assert verifier.key_identity() == spki_identity(public)
+    assert verifier.verify(message=b"row", signature=signature, key_id="row", key_period=0)
+    assert not verifier.verify(message=b"wrong", signature=signature, key_id="row", key_period=0)
+    assert not verifier.verify(message=b"row", signature=b"short", key_id="row", key_period=0)
+    with pytest.raises(SigningBackendUnavailableError):
+        verifier.verify(message=b"row", signature=signature, key_id="other", key_period=0)
+    with pytest.raises(SigningBackendUnavailableError):
+        verifier.sign(message=b"row", key_id="row", key_period=0)

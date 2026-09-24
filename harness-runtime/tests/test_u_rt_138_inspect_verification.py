@@ -1376,3 +1376,296 @@ def test_b63_record_verify_availability_maps_to_unverified_not_traceback(
     assert "forged/untrusted" not in captured.err
     assert "Traceback" not in captured.err
     assert "audit verification: UNVERIFIED" in captured.out
+
+
+def _test_spki_pin(public_key: object) -> str:
+    import hashlib
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    assert isinstance(public_key, Ed25519PublicKey)
+    der = public_key.public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    return f"ed25519-spki-sha256:{hashlib.sha256(der).hexdigest()}"
+
+
+def _public_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    import shutil
+
+    from cryptography.hazmat.primitives import serialization
+
+    source = tmp_path / "source"
+    source.mkdir()
+    fx = _Fixture(source, monkeypatch)
+    _greenfield_passing(fx)
+    keys = source / "keys"
+    keys.mkdir()
+    mapping = {}
+    for key_id, backend in ((_ROW_KEY, fx.row_backend), (_RECORD_KEY, fx.record_backend)):
+        private = keys / f"{key_id}.pem"
+        private.write_bytes(
+            backend._private_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        private.chmod(0o600)
+        public = keys / f"{key_id}.pub.pem"
+        public.write_bytes(
+            backend._private_key.public_key().public_bytes(
+                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        )
+        public.chmod(0o644)
+        mapping[f"ed25519:{key_id}"] = {
+            "kind": "local-ed25519-public",
+            "public_key_path": f"keys/{key_id}.pub.pem",
+            "spki_sha256": _test_spki_pin(backend._private_key.public_key()),
+        }
+    fx.key_map_path.write_text(json.dumps(mapping), encoding="utf-8")
+    evidence = tmp_path / "evidence"
+    shutil.copytree(source, evidence)
+    for private in (evidence / "keys").glob("*.pem"):
+        if not private.name.endswith(".pub.pem"):
+            private.unlink()
+    assert sorted(p.name for p in (evidence / "keys").iterdir()) == [
+        "record-key.pub.pem",
+        "row-key.pub.pem",
+    ]
+    copied_config = evidence / "harness.toml"
+    copied_config.write_text(
+        copied_config.read_text().replace(str(source), str(evidence)), encoding="utf-8"
+    )
+    return evidence
+
+
+def test_local_public_only_inspect_copied_evidence_without_private_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    evidence = _public_evidence(tmp_path, monkeypatch)
+    original_open = os.open
+    opened: list[str] = []
+
+    def tracked_open(path: str | bytes | os.PathLike[str], *args: object, **kwargs: object) -> int:
+        opened.append(os.fsdecode(path))
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", tracked_open)
+    exit_code = main(
+        [
+            "--ledger-path",
+            str(evidence / "state.jsonl"),
+            "--audit-sidecar",
+            str(evidence / "audit-entries.jsonl"),
+            "--runtime-config",
+            str(evidence / "harness.toml"),
+            "--signing-key-map",
+            str(evidence / "key-map.json"),
+            "--cutover-record",
+            str(evidence / "cutover-record"),
+        ]
+    )
+    output = capsys.readouterr().out
+    assert exit_code == 0, output
+    assert "VERIFIED" in output
+    assert not any(
+        name.endswith("row-key.pem") or name.endswith("record-key.pem") for name in opened
+    )
+
+
+def _inspect_public_evidence(evidence: Path) -> int:
+    return main(
+        [
+            "--ledger-path",
+            str(evidence / "state.jsonl"),
+            "--audit-sidecar",
+            str(evidence / "audit-entries.jsonl"),
+            "--runtime-config",
+            str(evidence / "harness.toml"),
+            "--signing-key-map",
+            str(evidence / "key-map.json"),
+            "--cutover-record",
+            str(evidence / "cutover-record"),
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "private-spec",
+        "missing-pin",
+        "wrong-pin",
+        "absolute",
+        "escape",
+        "symlink",
+        "symlink-parent",
+        "fifo",
+        "group-write",
+        "rsa",
+        "private-pem",
+    ],
+)
+def test_local_public_map_refuses_unsafe_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    case: str,
+) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    evidence = _public_evidence(tmp_path, monkeypatch)
+    map_path = evidence / "key-map.json"
+    mapping = json.loads(map_path.read_text())
+    entry = mapping[f"ed25519:{_ROW_KEY}"]
+    public = evidence / "keys" / "row-key.pub.pem"
+    if case == "private-spec":
+        mapping[f"ed25519:{_ROW_KEY}"] = {
+            "backend": "local-ed25519",
+            "local_key_paths": {_ROW_KEY: str(public)},
+        }
+    elif case == "missing-pin":
+        del entry["spki_sha256"]
+    elif case == "wrong-pin":
+        entry["spki_sha256"] = "ed25519-spki-sha256:" + "0" * 64
+    elif case == "absolute":
+        entry["public_key_path"] = str(public)
+    elif case == "escape":
+        entry["public_key_path"] = "../keys/row-key.pub.pem"
+    elif case == "symlink":
+        (evidence / "keys" / "linked.pub.pem").symlink_to(public)
+        entry["public_key_path"] = "keys/linked.pub.pem"
+    elif case == "symlink-parent":
+        (evidence / "linked-keys").symlink_to(evidence / "keys", target_is_directory=True)
+        entry["public_key_path"] = "linked-keys/row-key.pub.pem"
+    elif case == "fifo":
+        os.mkfifo(evidence / "keys" / "pipe.pub.pem")
+        entry["public_key_path"] = "keys/pipe.pub.pem"
+    elif case == "group-write":
+        public.chmod(0o664)
+    elif case == "rsa":
+        rsa_public = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
+        public.write_bytes(
+            rsa_public.public_bytes(
+                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        )
+    elif case == "private-pem":
+        private = Ed25519PrivateKey.generate()
+        public.write_bytes(
+            private.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+    map_path.write_text(json.dumps(mapping), encoding="utf-8")
+    exit_code = _inspect_public_evidence(evidence)
+    output = capsys.readouterr()
+    assert exit_code == 3, output
+    assert "UNVERIFIED" in output.out
+    assert "--signing-key-map unusable" in output.out
+    assert "Traceback" not in output.err
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_exit"),
+    [
+        ("sidecar-signature", 4),
+        ("ledger", 4),
+        ("record-signature", 3),
+        ("unsigned", 4),
+        ("missing-map", 3),
+        ("binding", 3),
+        ("record-row-alias", 3),
+        ("wrong-row-key", 4),
+    ],
+)
+def test_local_public_inspect_fails_closed_on_tampering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    case: str,
+    expected_exit: int,
+) -> None:
+    evidence = _public_evidence(tmp_path, monkeypatch)
+    map_path = evidence / "key-map.json"
+    mapping = json.loads(map_path.read_text())
+    sidecar = evidence / "audit-entries.jsonl"
+    if case in ("sidecar-signature", "unsigned"):
+        row = json.loads(sidecar.read_text())
+        row["entry"]["signature_attrs"]["audit_signature_value"] = (
+            "A" * 86 + "==" if case == "sidecar-signature" else "unsigned:missing"
+        )
+        sidecar.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    elif case == "ledger":
+        ledger = evidence / "state.jsonl"
+        row = json.loads(ledger.read_text())
+        row["action_id"] = "forged-action"
+        ledger.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    elif case == "record-signature":
+        record = evidence / "cutover-record"
+        body, signature = record.read_text().splitlines()
+        record.write_text(
+            body + "\n" + ("0" if signature[0] != "0" else "1") + signature[1:] + "\n"
+        )
+    elif case == "missing-map":
+        del mapping[f"ed25519:{_ROW_KEY}"]
+    elif case == "binding":
+        config = evidence / "harness.toml"
+        config.write_text(config.read_text().replace(_BINDING, "other-sidecar"))
+    elif case == "record-row-alias":
+        mapping[f"ed25519:{_RECORD_KEY}"] = dict(mapping[f"ed25519:{_ROW_KEY}"])
+    elif case == "wrong-row-key":
+        replacement = Ed25519PrivateKey.generate().public_key()
+        from cryptography.hazmat.primitives import serialization
+
+        (evidence / "keys" / "row-key.pub.pem").write_bytes(
+            replacement.public_bytes(
+                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+            )
+        )
+        mapping[f"ed25519:{_ROW_KEY}"]["spki_sha256"] = _test_spki_pin(replacement)
+    map_path.write_text(json.dumps(mapping), encoding="utf-8")
+    exit_code = _inspect_public_evidence(evidence)
+    output = capsys.readouterr()
+    assert exit_code == expected_exit, output
+    expected_disposition = "FAILED" if expected_exit == 4 else "UNVERIFIED"
+    assert f"audit verification: {expected_disposition}" in output.out
+    assert "Traceback" not in output.err
+
+
+def test_local_public_same_id_replacement_fails_under_either_one_id_map(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from cryptography.hazmat.primitives import serialization
+
+    evidence = _public_evidence(tmp_path, monkeypatch)
+    first = AuditLedgerEntry.model_validate(
+        json.loads((evidence / "audit-entries.jsonl").read_text())["entry"]
+    )
+    second_fixture = _Fixture(evidence, monkeypatch)
+    second = second_fixture.signed_entry("ref-2", tenant_id=_TENANT)
+    second_fixture.write_sidecar([(_TENANT, first), (_TENANT, second)])
+    second_fixture.write_ledger(
+        [f"audit:{_TENANT}:{first.entry_hash}", f"audit:{_TENANT}:{second.entry_hash}"]
+    )
+    map_path = evidence / "key-map.json"
+    mapping = json.loads(map_path.read_text())
+    assert _inspect_public_evidence(evidence) == 4
+    assert "FAILED" in capsys.readouterr().out
+
+    replacement = second_fixture.row_backend._private_key.public_key()
+    (evidence / "keys" / "row-key.pub.pem").write_bytes(
+        replacement.public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    mapping[f"ed25519:{_ROW_KEY}"]["spki_sha256"] = _test_spki_pin(replacement)
+    map_path.write_text(json.dumps(mapping), encoding="utf-8")
+    assert _inspect_public_evidence(evidence) == 4
+    assert "FAILED" in capsys.readouterr().out

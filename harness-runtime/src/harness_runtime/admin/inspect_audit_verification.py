@@ -49,10 +49,10 @@ the pre-v1.101 ledger summary is unchanged for it. Once engaged:
 read-only; this module writes nothing.
 
 **Key map form (plan acc 4 implementation discretion):** `--signing-key-map`
-is a JSON object keyed `"<algorithm>:<key_id>"`, each value an
-`AuditSigningConfig`-shaped backend spec consumed by
-`config.audit_signing.make_audit_signing_backend` — the operator-supplied
-form of the §21.2.2 row-1 PER-ROW resolver (NOT a single backend).
+is a JSON object keyed `"<algorithm>:<key_id>"`. KMS values are
+`AuditSigningConfig`-shaped backend specs; local verification values use
+`kind: local-ed25519-public` with a relative public PEM path and SPKI pin.
+The map supplies the §21.2.2 row-1 PER-ROW resolver.
 """
 
 from __future__ import annotations
@@ -304,11 +304,9 @@ def _read_sidecar(sidecar_path: Path) -> _SidecarContent:
 def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]]:
     """Parse the operator key map into per-`(algorithm, key_id)` backends.
 
-    Also returns per-entry BACKING-MATERIAL fingerprints (the physical KMS
-    ARN the logical `key_id` maps to, falling back to the whole canonical
-    `key_arns` mapping) — codex round-2 P1 on this leg: the record-key
-    physical-distinctness check must compare backing material, not logical
-    `key_id` strings; two distinct ids aliasing one ARN share a key.
+    Also returns per-entry backing identities: canonical KMS ARN/ID or local
+    DER-SPKI digest. Record/row distinctness compares these physical identities,
+    not logical key IDs.
     """
     from harness_runtime.config.audit_signing import (
         SigningBackendSdkUnavailableError,
@@ -327,10 +325,15 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         )
     except ImportError:  # boto3 optional — absent SDK surfaces as the typed error below
         boto_construction_errors = ()
+    from harness_runtime.config.local_ed25519_signing_backend import (
+        LocalEd25519PublicVerifier,
+        load_ed25519_public_key,
+        spki_identity,
+    )
     from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
         canonical_kms_key_identity,
     )
-    from harness_runtime.types import AuditSigningConfig
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
 
     raw: object = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -343,6 +346,8 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
         # (codex round-6 P1).
         raise ValueError("--signing-key-map contains no entries")
     for map_key, spec in cast("dict[str, object]", raw).items():
+        if not isinstance(map_key, str):
+            raise ValueError("--signing-key-map keys must be strings")
         if ":" not in map_key:
             raise ValueError(f"key-map key {map_key!r} must be '<algorithm>:<key_id>'")
         algo_prefix = map_key.split(":", 1)[0]
@@ -355,8 +360,51 @@ def _load_key_map(path: Path) -> tuple[dict[str, SigningBackend], dict[str, str]
             raise ValueError(
                 f"key-map key {map_key!r}: {algo_prefix!r} is not an admissible SignatureAlgorithm"
             ) from exc
-        config = AuditSigningConfig.model_validate(spec)
         key_id = map_key.split(":", 1)[1]
+        if isinstance(spec, dict) and spec.get("kind") == "local-ed25519-public":
+            # [LAW:parse-dont-validate] One inspect-only boundary stamps a
+            # contained public path and matching SPKI pin before constructing
+            # a verifier. Private material never enters this branch.
+            if algo_prefix != "ed25519" or not key_id:
+                raise ValueError(f"key-map entry {map_key!r}: invalid public key identity")
+            if set(spec) != {"kind", "public_key_path", "spki_sha256"}:
+                raise ValueError(
+                    f"key-map entry {map_key!r}: public entry has missing/extra fields"
+                )
+            relative = spec["public_key_path"]
+            pin = spec["spki_sha256"]
+            if (
+                not isinstance(relative, str)
+                or not relative
+                or Path(relative).is_absolute()
+                or ".." in Path(relative).parts
+            ):
+                raise ValueError(
+                    f"key-map entry {map_key!r}: public_key_path must stay inside the map directory"
+                )
+            if (
+                not isinstance(pin, str)
+                or len(pin) != 84
+                or not pin.startswith("ed25519-spki-sha256:")
+                or any(c not in "0123456789abcdef" for c in pin[20:])
+            ):
+                raise ValueError(
+                    f"key-map entry {map_key!r}: spki_sha256 must be an Ed25519 DER-SPKI identity"
+                )
+            public_key = load_ed25519_public_key(key_id, str(path.absolute().parent / relative))
+            identity = spki_identity(public_key)
+            if identity != pin:
+                raise ValueError(
+                    f"key-map entry {map_key!r}: public key disagrees with spki_sha256"
+                )
+            backends[map_key] = LocalEd25519PublicVerifier(key_id, public_key)
+            materials[map_key] = identity
+            continue
+        config = AuditSigningConfig.model_validate(spec)
+        if config.backend is AuditSigningBackendKind.LOCAL_ED25519:
+            raise ValueError(
+                f"key-map entry {map_key!r}: private local key specs are not accepted by inspect"
+            )
         if key_id not in config.key_arns:
             # Validated BEFORE construction: a malformed entry whose
             # declared key ID its own backend config cannot resolve would

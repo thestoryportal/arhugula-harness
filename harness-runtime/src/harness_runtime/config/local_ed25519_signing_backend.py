@@ -39,12 +39,12 @@ class LocalEd25519SigningBackend:
             raise LocalSigningKeyConfigError("local_key_paths must be non-empty")
         self._keys = {key_id: _load_private_key(key_id, path) for key_id, path in key_paths.items()}
         self._historical = {
-            key_id: _load_public_key(key_id, path)
+            key_id: load_ed25519_public_key(key_id, path)
             for key_id, path in (public_key_paths or {}).items()
         }
         # [LAW:one-source-of-truth] A configured active ID has one physical identity.
         for key_id, public_key in self._historical.items():
-            if key_id in self._keys and _spki_identity(public_key) != self.key_identity(key_id):
+            if key_id in self._keys and spki_identity(public_key) != self.key_identity(key_id):
                 raise LocalSigningKeyConfigError(
                     f"key_id {key_id!r} public and private key identities must match"
                 )
@@ -66,14 +66,14 @@ class LocalEd25519SigningBackend:
 
     def key_identity(self, key_id: str) -> str:
         # [LAW:one-source-of-truth] Derive identity from the key already loaded for signing.
-        return _spki_identity(self._key(key_id).public_key())
+        return spki_identity(self._key(key_id).public_key())
 
     def row_key_identity(self, key_id: str) -> str | None:
         # [LAW:types-are-the-program] Public-only IDs resolve rows, never active signing.
         if key_id in self._keys:
             return self.key_identity(key_id)
         public_key = self._historical.get(key_id)
-        return _spki_identity(public_key) if public_key is not None else None
+        return spki_identity(public_key) if public_key is not None else None
 
     def _key(self, key_id: str) -> Ed25519PrivateKey:
         try:
@@ -84,7 +84,38 @@ class LocalEd25519SigningBackend:
             ) from exc
 
 
-def _spki_identity(public_key: Ed25519PublicKey) -> str:
+class UnknownLocalPublicKeyIdError(SigningBackendUnavailableError, KeyError):
+    """A public verifier was asked to verify a different logical key ID."""
+
+
+class LocalEd25519PublicVerifier:
+    """Verify one public key without carrying any signing capability."""
+
+    algorithm: str = "ed25519"
+
+    def __init__(self, key_id: str, public_key: Ed25519PublicKey) -> None:
+        self._key_id = key_id
+        self._public_key = public_key
+
+    def sign(self, *, message: bytes, key_id: str, key_period: int) -> bytes:
+        raise SigningBackendUnavailableError("public Ed25519 verifier cannot sign")
+
+    def verify(self, *, message: bytes, signature: bytes, key_id: str, key_period: int) -> bool:
+        if key_id != self._key_id:
+            raise UnknownLocalPublicKeyIdError(f"public Ed25519 key_id {key_id!r} is not bound")
+        if len(signature) != 64:
+            return False
+        try:
+            self._public_key.verify(signature, message)
+        except InvalidSignature:
+            return False
+        return True
+
+    def key_identity(self) -> str:
+        return spki_identity(self._public_key)
+
+
+def spki_identity(public_key: Ed25519PublicKey) -> str:
     spki = public_key.public_bytes(
         encoding=serialization.Encoding.DER,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
@@ -160,7 +191,7 @@ def _load_private_key(key_id: str, path: str) -> Ed25519PrivateKey:
     return key
 
 
-def _load_public_key(key_id: str, path: str) -> Ed25519PublicKey:
+def load_ed25519_public_key(key_id: str, path: str) -> Ed25519PublicKey:
     pem = _read_key_file(key_id, path, public=True)
     if not pem.startswith(b"-----BEGIN PUBLIC KEY-----"):
         raise LocalSigningKeyConfigError(f"key_id {key_id!r} must contain an Ed25519 public PEM")
