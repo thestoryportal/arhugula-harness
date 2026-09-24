@@ -64,6 +64,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Final, Protocol, cast, runtime_checkable
 
 from harness_as.memory_tool_contracts import MEMORY_TOOL_CONTRACTS, MemoryToolName
@@ -5368,6 +5369,8 @@ def materialize_llm_dispatcher_stage(
     prompt_versions_by_sha: Mapping[str, str] | None = None,
     approved_prompt_version_shas: frozenset[str] = frozenset(),
     routing_activation: bool = False,
+    embedding_model_dir: Path | None = None,
+    embedding_cache_dir: Path | None = None,
     embedding_classifier: LayerDecisionFn | None = None,
     prewarm_model: str | None = None,
     prewarm_policy_fail_closed: bool = False,
@@ -5406,24 +5409,27 @@ def materialize_llm_dispatcher_stage(
     # route-once-then-fallback-the-chain pattern applied to layered routing).
 
     # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2): when routing_activation is on and no
-    # classifier is injected, build the default L2 EMBEDDING classifier (the light
-    # in-process fastembed realization over the default per-workload corpus) so the
-    # §2.2-conditional DECLARATIVE decline has a real fall-through target. Local
-    # imports keep the module-load light + touch fastembed ONLY when flag-on;
-    # `make_fastembed_embedding` fail-louds with the install hint when the optional
-    # `[embedding]` extra is absent (the dep stays optional — promoting it to a
-    # required dependency is the deferred deployment step). Default-off ⇒ this block
-    # is skipped, fastembed is never imported, byte-identical.
+    # classifier is injected, build L2 from the explicit verified local model.
+    # Local imports keep the optional extra untouched for default-off and injected
+    # classifiers; either local admission or a missing extra fails bootstrap.
     if routing_activation and embedding_classifier is None:
         from harness_cp.embedding_routing import make_embedding_classifier
 
         from harness_runtime.lifecycle.embedding_resolution import (
+            EmbeddingModelError,
             default_routing_corpus,
             make_fastembed_embedding,
         )
 
+        try:
+            embed = make_fastembed_embedding(
+                model_dir=embedding_model_dir, cache_dir=embedding_cache_dir
+            )
+        except (EmbeddingModelError, ImportError) as exc:
+            # [LAW:no-silent-failure] A missing or invalid local L2 model aborts bootstrap.
+            raise LLMDispatchBindError(str(exc)) from exc
         embedding_classifier = make_embedding_classifier(
-            embed=make_fastembed_embedding(),
+            embed=embed,
             corpus=default_routing_corpus(),
         )
 

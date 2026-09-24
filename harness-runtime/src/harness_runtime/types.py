@@ -2124,9 +2124,16 @@ class RuntimeConfig(BaseModel):
     (the #213 MVP behavior-preserving echo) → byte-identical, ZERO blast radius on
     existing deployments. This is the HIGHEST-blast-radius opt-in (it changes WHICH
     model serves a workload), so default-off is load-bearing; flag-on additionally
-    requires the operator to wire an embedding classifier (+ install the optional
-    `[embedding]` extra) and a partial manifest, and the LIVE multi-provider exercise
+    requires an injected classifier or a local hashed model and private cache (+ the
+    optional `[embedding]` extra), and a partial routing manifest. The LIVE exercise
     needs a second configured provider (a deployment gate, not a build gate)."""
+
+    embedding_model_dir: Path | None = None
+    """Absolute local FastEmbed directory with SHA256SUMS; required only when the
+    routing factory builds its own L2 classifier."""
+
+    embedding_cache_dir: Path | None = None
+    """Absolute private cache directory for local L2 construction."""
 
     tenant_id: str | None = None
     """Multi-tenant separation key per OD audit-ledger. `None` = single-tenant."""

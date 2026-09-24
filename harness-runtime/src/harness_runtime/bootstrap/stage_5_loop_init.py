@@ -414,9 +414,11 @@ async def execute(
             # B-L2-EMBEDDING-ACTIVATION (C-CP-02 §2.2 — the routing-activation gate).
             # When True, the DECLARATIVE layer is §2.2-faithful (declines on a
             # manifest-miss → EMBEDDING → L3) and the factory builds the default L2
-            # classifier (fail-loud if the `[embedding]` extra is absent). Default
-            # False → the #213 always-echo, byte-identical / zero blast radius.
+            # classifier from the verified local model (fail-loud on absent model,
+            # cache or optional extra). Default False preserves the #213 echo.
             routing_activation=config.routing_activation,
+            embedding_model_dir=config.embedding_model_dir,
+            embedding_cache_dir=config.embedding_cache_dir,
             # B-18-KEEPALIVE — Anthropic model string for prewarm/keep-alive pings
             # (ADR-D3 §1.5:189). File/CLI-only on RuntimeConfig (not env-keyed);
             # resolved inside `prewarm()` from routing_manifest first, then this
