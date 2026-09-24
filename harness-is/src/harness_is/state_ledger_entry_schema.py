@@ -24,11 +24,11 @@ ADR-F2 v1.2 §Decision (state-ledger entry shape).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Literal, NewType, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Identifier = NewType("Identifier", str)
 """Opaque identifier — concrete format (UUID v4 / ULID / …) deferred per §5."""
@@ -131,11 +131,19 @@ class RecoveryRecordIdentity(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    tenant_id: str
+    tenant_id: str | None
     workflow_id: str
     record_count: Annotated[int, Field(ge=0)]
     latest_digest: DigestHex
     snapshot_hash: DigestHex
+
+    @field_validator("tenant_id")
+    @classmethod
+    def _reject_reserved_tenant_scope(cls, value: str | None) -> str | None:
+        # [LAW:one-source-of-truth] The audit cannot rename an untenanted journal scope.
+        if value in ("", "_single"):
+            raise ValueError("reserved journal tenant scope")
+        return value
 
 
 class QuiescenceAttestation(BaseModel):
@@ -144,10 +152,16 @@ class QuiescenceAttestation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     operator_uid: Annotated[int, Field(ge=0)]
-    attested_at: datetime
+    attested_at: AwareDatetime
     stopped_services_digest: DigestHex
     no_workers_observed: Literal[True]
     restart_disabled: Literal[True]
+
+    @field_validator("attested_at", mode="after")
+    @classmethod
+    def _normalize_attested_at(cls, value: datetime) -> datetime:
+        # [LAW:one-source-of-truth] Equal instants have one persisted UTC spelling.
+        return value.astimezone(UTC)
 
 
 class ClaimObservation(BaseModel):
@@ -159,8 +173,9 @@ class ClaimObservation(BaseModel):
     canonical_claim_path: Annotated[str, Field(pattern=r"^/")]
     claim_st_dev: Annotated[int, Field(ge=0)]
     claim_st_ino: Annotated[int, Field(ge=0)]
-    lease_generation: str
-    lease_identity: str
+    lease_generation: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    lease_st_dev: Annotated[int, Field(strict=True, ge=0)]
+    lease_st_ino: Annotated[int, Field(strict=True, ge=0)]
 
 
 class _RecordObservationBase(BaseModel):
@@ -199,8 +214,10 @@ class _RecoveryAuditBase(BaseModel):
 
     schema_version: Literal[1]
     record_identity: RecoveryRecordIdentity
-    subject_id: str
-    action_id: str
+    subject_id: DigestHex
+    action_id: Annotated[
+        str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    ]
     operator_uid: Annotated[int, Field(ge=0)]
     reason_digest: DigestHex
 

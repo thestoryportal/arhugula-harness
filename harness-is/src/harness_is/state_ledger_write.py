@@ -44,7 +44,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
 
 from harness_is.chain_link_construction import construct_prior_event_hash
 from harness_is.cross_process_ledger_lock import (
@@ -218,7 +218,7 @@ def _serialize_entry(entry: StateLedgerEntry) -> str:
     if entry.rotation_correlation_id is not None:
         payload["rotation_correlation_id"] = entry.rotation_correlation_id
     if entry.recovery_audit is not None:
-        payload["recovery_audit"] = entry.recovery_audit.model_dump(mode="json", exclude_none=True)
+        payload["recovery_audit"] = entry.recovery_audit.model_dump(mode="json")
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -263,7 +263,14 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
             else None
         ),
         "rotation_correlation_id": raw.get("rotation_correlation_id"),
-        "recovery_audit": raw.get("recovery_audit"),
+        # [LAW:parse-dont-validate] Persisted audit JSON crosses this reader boundary once.
+        "recovery_audit": (
+            TypeAdapter(RecoveryAudit).validate_json(
+                json.dumps(raw["recovery_audit"]), strict=True,
+            )
+            if raw.get("recovery_audit") is not None
+            else None
+        ),
     })
 
 

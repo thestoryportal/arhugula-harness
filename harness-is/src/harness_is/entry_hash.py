@@ -124,7 +124,7 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
     if entry.recovery_audit is not None:
         # [LAW:one-source-of-truth] Hash the same typed fields the JSONL codec persists.
         payload["recovery_audit"] = _canonical_nested(
-            entry.recovery_audit.model_dump(mode="json", exclude_none=True)
+            entry.recovery_audit.model_dump(mode="json")
         )
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"

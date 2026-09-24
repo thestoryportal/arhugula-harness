@@ -663,16 +663,16 @@ These are distinct token sets recorded on **distinct carriers** — a `subagent.
 
 ### §5.7 D-derivative sidecar field — `recovery_audit` (v1.14, B-104 Task 1)
 
-`StateLedgerEntry` and its write payload MAY carry a version-1 `recovery_audit` record. The field defaults to `None`; it does not change the six F-layer fields in §5. A present audit names the exact journal record (`tenant_id`, `workflow_id`, `record_count`, `latest_digest`, `snapshot_hash`), `subject_id`, action ID, action, operator UID, reason digest, scope, phase, and stable observation. All digests are lowercase SHA-256 hex. The sidecar excludes raw reasons, claim tokens, and HITL answers. Memory operation entries cannot carry it because their separate hash and JSONL format do not represent it.
+`StateLedgerEntry` and its write payload MAY carry a version-1 `recovery_audit` record. The field defaults to `None`; it does not change the six F-layer fields in §5. A present audit names the exact journal record (`tenant_id`, `workflow_id`, `record_count`, `latest_digest`, `snapshot_hash`), `subject_id`, action ID, action, operator UID, reason digest, scope, phase, and stable observation. `tenant_id` is required and is JSON `null` for an untenanted journal; absence and sentinel strings cannot stand for that scope. `subject_id` and every digest are lowercase 64-character SHA-256 hex. `action_id` is 1–128 ASCII characters, starts with an alphanumeric character, and thereafter permits only alphanumeric characters, `.`, `_`, `:`, or `-`. The sidecar excludes raw reasons, claim tokens, and HITL answers. Memory operation entries cannot carry it because their separate hash and JSONL format do not represent it.
 
 | Scope and phase | Required observation and transition |
 |---|---|
-| Claim INTENT | `release` or `abandon`; original claim-byte digest, canonical claim path, claim `st_dev/st_ino`, original lease generation and identity. No transition fields. |
-| Claim COMPLETE | The same claim observation plus transition kind and digest. `release_archive` requires `release`; `claim_tombstone` requires `abandon`; `none` records a proved unchanged claim without authorizing execution. |
+| Claim INTENT | `release` or `abandon`; original claim-byte digest, canonical claim path, claim `st_dev/st_ino`, original lease generation as 32 lowercase hex characters, and original lease file `st_dev/st_ino`. No transition fields. |
+| Claim COMPLETE | The same claim observation plus transition kind and digest. `release_archive` requires `release`; `claim_tombstone` requires `abandon`; `none` records a proved unchanged claim without authorizing execution. The structured lease fields must compare exactly with INTENT during reconciliation. |
 | Record INTENT | `abandon` only; `claim_absent`, `claim_no_token`, or `claim_unreadable` observation with canonical claim path and parent `st_dev/st_ino`. The two claim-present variants also carry claim `st_dev/st_ino`; `claim_no_token` includes its readable raw-byte digest. No transition fields. |
 | Record COMPLETE | The same record observation plus `record_tombstone` transition kind and digest. |
 
-A record-scoped audit requires `QuiescenceAttestation(operator_uid, attested_at, stopped_services_digest, no_workers_observed=true, restart_disabled=true)`. A claim-scoped abandon MAY carry this attestation when quiescence is required; a release cannot. The attestation states the operator's observation, not independent product proof, and its UID must match the audit operator UID. Illegal scope, phase, action, observation, attestation, or transition combinations are refused at the schema boundary. The durable INTENT/COMPLETE write and retry contract belongs to the later C-IS-07 recovery append amendment.
+A record-scoped audit requires `QuiescenceAttestation(operator_uid, attested_at, stopped_services_digest, no_workers_observed=true, restart_disabled=true)`. A claim-scoped abandon MAY carry this attestation when quiescence is required; a release cannot. `attested_at` requires a timezone-aware instant and is stored in UTC, so equal instants have one hash representation. The attestation states the operator's observation, not independent product proof, and its UID must match the audit operator UID. Illegal scope, phase, action, observation, attestation, or transition combinations are refused at the schema boundary; JSONL readers parse a present sidecar strictly rather than coercing field types. A present sidecar retains explicit JSON `null` values, while an absent sidecar omits the outer key. The durable INTENT/COMPLETE write and retry contract, including refusal of audit data through the ordinary append path, belongs to the later C-IS-07 recovery append amendment.
 
 ## §6 C-IS-06 — Hash-chain integrity construction discipline
 
@@ -696,7 +696,7 @@ Hash-chain integrity is constructed **at write-time** via the following four-ste
 
 **Contract.** Canonicalization is deterministic — given the same logical entry, two canonicalizations on different runs / machines / library versions of the same canonicalization scheme produce identical byte sequences. Non-determinism in canonicalization is a contract violation.
 
-The optional §5.7 `recovery_audit` contributes every present nested field to the canonical payload, including scope, phase, observation, transition, and quiescence attestation. It is omitted entirely when `None`, preserving historical canonical bytes and hashes. A changed present audit value changes that entry's computed hash.
+The optional §5.7 `recovery_audit` contributes its complete typed nested record to the canonical payload, including explicit `null` values and scope, phase, observation, transition, and quiescence attestation. The outer audit key is omitted entirely when the sidecar is `None`, preserving historical canonical bytes and hashes. A changed present audit value changes that entry's computed hash.
 
 ### §6.2 Per-entry hash computation
 
@@ -785,7 +785,7 @@ The composition contract commits:
 
 - **Storage representation** — JSONL file (one JSON-serialized entry per line) at workflow-canonical path per C-IS-01.
 - **Per-entry shape** — six-field record per C-IS-05.
-- **Recovery audit line field** — when §5.7 `recovery_audit` is present, the line includes its versioned nested record with every present field; when absent, the key is omitted. A reader reconstructs the same typed audit from the line. Legacy lines remain byte-identical.
+- **Recovery audit line field** — when §5.7 `recovery_audit` is present, the line includes its complete versioned nested record, including explicit `null` values; when absent, the key is omitted. A reader reconstructs the same typed audit from the line with strict field types. Legacy lines remain byte-identical.
 - **Indexable access** — line-per-entry structure permits offset-based indexing; navigation primitives exposed as Skills or in-process tools per the C2-pole read contract.
 - **Concurrent access** — the C3-pole append-only write contract serializes writers; the C2-pole selective read contract permits concurrent readers.
 

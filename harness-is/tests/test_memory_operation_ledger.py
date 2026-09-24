@@ -195,13 +195,13 @@ def test_memory_entry_rejects_inherited_recovery_audit_before_hashing() -> None:
             "tenant_id": "tenant", "workflow_id": "workflow", "record_count": 1,
             "latest_digest": "a" * 64, "snapshot_hash": "b" * 64,
         },
-        "subject_id": "claim-1", "action_id": "recover-1", "action": "release",
+        "subject_id": "1" * 64, "action_id": "recover-1", "action": "release",
         "operator_uid": 1000, "reason_digest": "c" * 64,
         "observation": {
             "claim_bytes_digest": "d" * 64,
             "canonical_claim_path": "/state/claim-1",
             "claim_st_dev": 8, "claim_st_ino": 42,
-            "lease_generation": "generation-1", "lease_identity": "lease-1",
+            "lease_generation": "a" * 32, "lease_st_dev": 8, "lease_st_ino": 43,
         },
     }
     with pytest.raises(ValidationError, match="memory operation entries cannot carry recovery_audit"):
