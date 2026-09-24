@@ -941,6 +941,7 @@ def test_local_signing_requires_each_active_additional_key(
             "audit_signing": AuditSigningConfig(
                 backend=AuditSigningBackendKind.LOCAL_ED25519,
                 local_key_paths=active_paths,
+                local_public_key_paths={missing_key: str(tmp_path / "retired.pub")},
             )
         }
     )
@@ -1073,8 +1074,11 @@ async def test_stage_4_rejects_missing_local_signing_key_before_tracer_registrat
     assert tracer_calls == []
 
 
+@pytest.mark.parametrize("alias_kind", ["active", "historical"])
 @pytest.mark.asyncio
-async def test_stage_4_rejects_local_record_alias_before_record_and_tracer(tmp_path: Path) -> None:
+async def test_stage_4_rejects_local_record_alias_before_record_and_tracer(
+    tmp_path: Path, alias_kind: str
+) -> None:
     import unittest.mock as mock
     from types import SimpleNamespace
 
@@ -1098,6 +1102,23 @@ async def test_stage_4_rejects_local_record_alias_before_record_and_tracer(tmp_p
         )
     )
     path.chmod(0o600)
+    other = tmp_path / "other.pem"
+    other.write_bytes(
+        ed25519.Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    other.chmod(0o600)
+    historical_public = tmp_path / "historical.pub"
+    historical_public.write_bytes(
+        key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    historical_public.chmod(0o644)
+    active_path = path if alias_kind == "active" else other
     record = tmp_path / "record.json"
     config = _config(tmp_path).model_copy(
         update={
@@ -1105,9 +1126,12 @@ async def test_stage_4_rejects_local_record_alias_before_record_and_tracer(tmp_p
                 backend=AuditSigningBackendKind.LOCAL_ED25519,
                 local_key_paths={
                     "record": str(path),
-                    "harness-runtime-dev": str(path),
-                    "harness-cost-attribution-v1": str(path),
+                    "harness-runtime-dev": str(active_path),
+                    "harness-cost-attribution-v1": str(active_path),
                 },
+                local_public_key_paths=(
+                    {"retired": str(historical_public)} if alias_kind == "historical" else {}
+                ),
             ),
             "audit_cutover_record_path": str(record),
             "audit_cutover_record_key_id": "record",

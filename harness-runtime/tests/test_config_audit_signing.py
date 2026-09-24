@@ -576,3 +576,42 @@ def test_factory_constructs_local_without_boto3(tmp_path, monkeypatch: pytest.Mo
     assert isinstance(backend._inner, LocalEd25519SigningBackend)
     assert backend.breaker_key.secret_backend == "local-ed25519"
     assert len(backend.sign(message=b"row", key_id="k", key_period=0)) == 64
+
+
+def test_local_public_map_schema_and_backend_restriction(tmp_path) -> None:
+    private = tmp_path / "private.pem"
+    public = tmp_path / "public.pem"
+    config = AuditSigningConfig(
+        backend="local-ed25519",
+        local_key_paths={"active": str(private)},
+        local_public_key_paths={" retired ": f" {public} "},
+    )
+    assert config.local_public_key_paths == {"retired": str(public)}
+    assert config.model_dump()["local_public_key_paths"] == {"retired": str(public)}
+    with pytest.raises(TypeError, match="immutable after validation"):
+        config.local_public_key_paths["another"] = str(public)
+    for kwargs in (
+        {"backend": "none", "local_public_key_paths": {"old": str(public)}},
+        {
+            "backend": "aws-kms",
+            "key_arns": {"k": _ARN},
+            "local_public_key_paths": {"old": str(public)},
+        },
+        {
+            "backend": "local-ed25519",
+            "local_key_paths": {"k": str(private)},
+            "local_public_key_paths": {" ": str(public)},
+        },
+        {
+            "backend": "local-ed25519",
+            "local_key_paths": {"k": str(private)},
+            "local_public_key_paths": {"old": "relative.pem"},
+        },
+        {
+            "backend": "local-ed25519",
+            "local_key_paths": {"k": str(private)},
+            "local_public_key_paths": {"old": str(public), " old ": str(public)},
+        },
+    ):
+        with pytest.raises(ValidationError, match="local_public_key_paths"):
+            AuditSigningConfig(**kwargs)

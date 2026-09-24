@@ -134,6 +134,12 @@ class BreakerGuardedSigningBackend:
             raise TypeError("key identity is available only for local Ed25519 signing")
         return self._inner.key_identity(key_id)
 
+    def row_key_identity(self, key_id: str) -> str | None:
+        # [LAW:composability] Historical identity travels through the existing breaker seam.
+        if not isinstance(self._inner, LocalEd25519SigningBackend):
+            raise TypeError("row identity is available only for local Ed25519 signing")
+        return self._inner.row_key_identity(key_id)
+
     def _admit_or_raise(self) -> tuple[bool, int]:
         """Under the lock: admit this call and return
         `(is_half_open_probe, admission_epoch)`; raise when the breaker
@@ -268,7 +274,7 @@ def make_audit_signing_backend(
     # [LAW:single-enforcer] Select and guard concrete signing backends here.
     if config.backend is AuditSigningBackendKind.LOCAL_ED25519:
         return BreakerGuardedSigningBackend(
-            LocalEd25519SigningBackend(config.local_key_paths),
+            LocalEd25519SigningBackend(config.local_key_paths, config.local_public_key_paths),
             breaker_key=LOCAL_ED25519_SIGNING_BREAKER_KEY,
         )
     if config.backend is AuditSigningBackendKind.AWS_KMS:

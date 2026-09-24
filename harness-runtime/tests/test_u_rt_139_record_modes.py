@@ -1772,3 +1772,33 @@ def test_direct_author_accepts_distinct_local_record_key(dep: _Deployment) -> No
     record_line, signature_line = dep.record_path.read_text().splitlines()
     assert AuditCutoverRecord.model_validate_json(record_line) == record
     assert verify_cutover_record_signature(record, bytes.fromhex(signature_line), backend=backend)
+
+
+def test_direct_record_modes_refuse_unmapped_local_historical_row(dep: _Deployment) -> None:
+    config, backend = _local_alias_config(dep, row_key_relation="distinct")
+    dep.sidecar_path.write_text(
+        json.dumps({"entry": {"signature_attrs": {"audit_signature_key_id": "retired"}}}) + "\n"
+    )
+    original_sidecar = dep.sidecar_path.read_bytes()
+    with pytest.raises(RecordMigrationError, match="local_public_key_paths"):
+        author_cutover_record(
+            config, sidecar_path=dep.sidecar_path, signing_backend=backend, attestation={}
+        )
+    assert not dep.record_path.exists()
+    assert dep.sidecar_path.read_bytes() == original_sidecar
+
+    record = AuditCutoverRecord(
+        schema_version=1,
+        authored_at=datetime(2026, 7, 21, tzinfo=UTC),
+        algorithm=SignatureAlgorithm.ED25519,
+        key_id=_RECORD_KEY,
+        ledger_binding_id=_BINDING,
+        rows=(),
+    )
+    signature = sign_cutover_record(record, backend=backend)
+    dep.record_path.write_text(record.model_dump_json() + "\n" + signature.hex() + "\n")
+    original_record = dep.record_path.read_bytes()
+    with pytest.raises(RecordMigrationError, match="local_public_key_paths"):
+        retag_sidecar(config, sidecar_path=dep.sidecar_path, signing_backend=backend)
+    assert dep.record_path.read_bytes() == original_record
+    assert dep.sidecar_path.read_bytes() == original_sidecar

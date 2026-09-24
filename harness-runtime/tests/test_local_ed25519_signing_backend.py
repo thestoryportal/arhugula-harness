@@ -137,3 +137,86 @@ def test_key_identity_uses_loaded_public_spki_and_unknown_id(tmp_path: Path) -> 
     assert backend.key_identity("a") == expected
     with pytest.raises(UnknownLocalSigningKeyIdError):
         backend.key_identity("missing")
+
+
+def _write_public(path: Path, private_path: Path) -> Path:
+    key = serialization.load_pem_private_key(private_path.read_bytes(), password=None)
+    assert isinstance(key, ed25519.Ed25519PrivateKey)
+    path.write_bytes(
+        key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    path.chmod(0o644)
+    return path
+
+
+def test_historical_public_identity_is_resolvable_but_cannot_sign(tmp_path: Path) -> None:
+    active = _write_key(tmp_path / "active.pem")
+    retired = _write_key(tmp_path / "retired.pem")
+    public = _write_public(tmp_path / "retired.pub", retired)
+    backend = LocalEd25519SigningBackend({"active": str(active)}, {"retired": str(public)})
+    assert backend.row_key_identity("active") == backend.key_identity("active")
+    assert backend.row_key_identity("retired") is not None
+    assert backend.row_key_identity("missing") is None
+    with pytest.raises(UnknownLocalSigningKeyIdError):
+        backend.sign(message=b"row", key_id="retired", key_period=0)
+    with pytest.raises(UnknownLocalSigningKeyIdError):
+        backend.verify(message=b"row", signature=b"x" * 64, key_id="retired", key_period=0)
+
+
+def test_public_loader_rejects_unsafe_paths_and_mismatched_active_id(tmp_path: Path) -> None:
+    active = _write_key(tmp_path / "active.pem")
+    other = _write_key(tmp_path / "other.pem")
+    public = _write_public(tmp_path / "public.pem", other)
+    with pytest.raises(LocalSigningKeyConfigError, match="match"):
+        LocalEd25519SigningBackend({"active": str(active)}, {"active": str(public)})
+    for mode in (0o622, 0o666, 0o000):
+        public.chmod(mode)
+        with pytest.raises(LocalSigningKeyConfigError):
+            LocalEd25519SigningBackend({"active": str(active)}, {"retired": str(public)})
+    public.chmod(0o644)
+    link = tmp_path / "link.pub"
+    link.symlink_to(public)
+    with pytest.raises(LocalSigningKeyConfigError):
+        LocalEd25519SigningBackend({"active": str(active)}, {"retired": str(link)})
+    public.write_bytes(b"x" * 65537)
+    with pytest.raises(LocalSigningKeyConfigError):
+        LocalEd25519SigningBackend({"active": str(active)}, {"retired": str(public)})
+
+
+def test_public_loader_rejects_special_files_owners_and_algorithms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cryptography.exceptions import UnsupportedAlgorithm
+
+    private = _write_key(tmp_path / "private.pem")
+    public = _write_public(tmp_path / "public.pem", private)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(tmp_path, target_is_directory=True)
+    fifo = tmp_path / "fifo.pub"
+    os.mkfifo(fifo)
+    for bad in (linked_parent / "public.pem", fifo, private):
+        with pytest.raises(LocalSigningKeyConfigError):
+            local_module._load_public_key("retired", str(bad))
+    monkeypatch.setattr(local_module.os, "geteuid", lambda: os.stat(public).st_uid + 1)
+    with pytest.raises(LocalSigningKeyConfigError, match="owner"):
+        local_module._load_public_key("retired", str(public))
+    monkeypatch.undo()
+
+    rsa_public = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
+    public.write_bytes(
+        rsa_public.public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    with pytest.raises(LocalSigningKeyConfigError, match="Ed25519"):
+        local_module._load_public_key("retired", str(public))
+    _write_public(public, private)
+
+    def unsupported(_pem: bytes) -> object:
+        raise UnsupportedAlgorithm("unsupported")
+
+    monkeypatch.setattr(local_module.serialization, "load_pem_public_key", unsupported)
+    with pytest.raises(LocalSigningKeyConfigError, match="Ed25519"):
+        local_module._load_public_key("retired", str(public))

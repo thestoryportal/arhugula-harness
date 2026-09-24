@@ -1450,7 +1450,7 @@ def test_b93_record_key_separation_folds_a_lock_timeout(
 
     with _b93_hold(tmp_path, sidecar):
         with pytest.raises(AuditSigningConfigInvalidError) as caught:
-            reject(config, sidecar_path=sidecar, record_key_id="cutover-key")
+            reject(config, sidecar_path=sidecar, record_key_id="cutover-key", signing_backend=None)
 
     assert "could not be read" in str(caught.value)
 
@@ -1553,3 +1553,102 @@ def test_local_record_key_rejects_physical_alias_and_accepts_distinct(
     validate_record_key_distinctness(
         distinct_config, make_audit_signing_backend(distinct_config.audit_signing)
     )
+
+
+def test_local_historical_row_resolution_and_record_alias_refusal(tmp_path: Path) -> None:
+    import json
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from harness_runtime.config.audit_signing import make_audit_signing_backend
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        validate_mtc_audit_signing_config,
+        validate_record_key_distinctness,
+    )
+
+    def key_pair(name: str) -> tuple[Path, Path]:
+        key = ed25519.Ed25519PrivateKey.generate()
+        private = tmp_path / f"{name}.pem"
+        public = tmp_path / f"{name}.pub"
+        private.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        private.chmod(0o600)
+        public.write_bytes(
+            key.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        public.chmod(0o644)
+        return private, public
+
+    record_private, record_public = key_pair("record")
+    active_private, _ = key_pair("active")
+    _, retired_public = key_pair("retired")
+    record_path = tmp_path / "record.json"
+    sidecar = tmp_path / "audit-entries.jsonl"
+    sidecar.write_text("")
+    base = _config(
+        tmp_path,
+        audit_cutover_record_path=str(record_path),
+        audit_cutover_record_key_id="record",
+        audit_ledger_binding_id="sidecar-1",
+    )
+
+    def configured(public: dict[str, str]) -> RuntimeConfig:
+        return base.model_copy(
+            update={
+                "audit_signing": AuditSigningConfig(
+                    backend="local-ed25519",
+                    local_key_paths={"record": str(record_private), "active": str(active_private)},
+                    local_public_key_paths=public,
+                )
+            }
+        )
+
+    config = configured({})
+    backend = make_audit_signing_backend(config.audit_signing)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=backend, audit_sidecar_path=sidecar
+    )
+    assert record_path.is_file()
+    original_record = record_path.read_bytes()
+    row = {"entry": {"signature_attrs": {"audit_signature_key_id": "retired"}}}
+    sidecar.write_text(json.dumps(row) + "\n")
+    with pytest.raises(AuditSigningConfigInvalidError, match="local_public_key_paths"):
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=backend, audit_sidecar_path=sidecar
+        )
+    mapped = configured({"retired": str(retired_public)})
+    mapped_backend = make_audit_signing_backend(mapped.audit_signing)
+    validate_and_initialize_mtc_audit_signing(
+        mapped, signing_backend=mapped_backend, audit_sidecar_path=sidecar
+    )
+    row["entry"]["signature_attrs"]["audit_signature_key_id"] = "active"
+    sidecar.write_text(json.dumps(row) + "\n")
+    validate_and_initialize_mtc_audit_signing(
+        mapped, signing_backend=mapped_backend, audit_sidecar_path=sidecar
+    )
+    assert record_path.read_bytes() == original_record
+
+    alias = configured({"retired": str(record_public)})
+    with pytest.raises(AuditSigningConfigInvalidError, match="physically distinct"):
+        validate_record_key_distinctness(alias, make_audit_signing_backend(alias.audit_signing))
+    assert record_path.read_bytes() == original_record
+
+    public_only = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend="local-ed25519",
+                local_key_paths={"active": str(active_private)},
+                local_public_key_paths={"record": str(record_public)},
+            )
+        }
+    )
+    with pytest.raises(AuditSigningConfigInvalidError, match="active record signing key"):
+        validate_mtc_audit_signing_config(public_only)

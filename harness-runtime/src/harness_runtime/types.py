@@ -115,6 +115,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    ValidationInfo,
     computed_field,
     field_serializer,
     field_validator,
@@ -589,11 +590,14 @@ class AuditSigningConfig(BaseModel):
     rotation or resistance to compromise of the harness OS user.
     """
 
+    local_public_key_paths: Mapping[str, str] = Field(default_factory=dict, validate_default=True)
+    """Logical key ID to absolute public PEM path for historical row identity only."""
+
     aws_region: str | None = None
     """Optional region override for the boto3 KMS client; `None` defers to
     boto3's own resolution chain."""
 
-    @field_serializer("key_arns", "local_key_paths")
+    @field_serializer("key_arns", "local_key_paths", "local_public_key_paths")
     def _serialize_key_arns(self, value: Mapping[str, str]) -> dict[str, str]:
         # The sealed mapping serializes as a plain dict so model dumps and
         # TOML/JSON round-trips re-validate cleanly for either backend.
@@ -635,22 +639,25 @@ class AuditSigningConfig(BaseModel):
         # TypeError.
         return _ImmutableKeyArns(normalized)
 
-    @field_validator("local_key_paths")
+    @field_validator("local_key_paths", "local_public_key_paths")
     @classmethod
-    def _local_key_paths_entries_valid(cls, value: Mapping[str, str]) -> Mapping[str, str]:
+    def _local_key_paths_entries_valid(
+        cls, value: Mapping[str, str], info: ValidationInfo
+    ) -> Mapping[str, str]:
         # [LAW:single-enforcer] Normalize logical IDs and require absolute paths at config load.
+        map_name = info.field_name
         normalized: dict[str, str] = {}
         for raw_key_id, raw_path in value.items():
             key_id, path = raw_key_id.strip(), raw_path.strip()
             if not key_id:
-                raise ValueError("local_key_paths contains a blank logical key_id")
+                raise ValueError(f"{map_name} contains a blank logical key_id")
             if not path:
-                raise ValueError(f"local_key_paths[{raw_key_id!r}] is blank")
+                raise ValueError(f"{map_name}[{raw_key_id!r}] is blank")
             if not Path(path).is_absolute():
-                raise ValueError(f"local_key_paths[{raw_key_id!r}] must be absolute")
+                raise ValueError(f"{map_name}[{raw_key_id!r}] must be absolute")
             if key_id in normalized:
                 raise ValueError(
-                    f"local_key_paths contains duplicate logical key_id {key_id!r} "
+                    f"{map_name} contains duplicate logical key_id {key_id!r} "
                     "after whitespace normalization"
                 )
             normalized[key_id] = path
@@ -659,6 +666,11 @@ class AuditSigningConfig(BaseModel):
 
     @model_validator(mode="after")
     def _require_selected_signing_map(self) -> Self:
+        if (
+            self.local_public_key_paths
+            and self.backend is not AuditSigningBackendKind.LOCAL_ED25519
+        ):
+            raise ValueError("local_public_key_paths requires local-ed25519")
         if self.key_arns and self.local_key_paths:
             raise ValueError("key_arns and local_key_paths are mutually incompatible")
         if self.backend is AuditSigningBackendKind.AWS_KMS:

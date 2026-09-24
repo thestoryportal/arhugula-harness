@@ -395,7 +395,10 @@ def _authenticate_record(
     # contends between fds within one process).
     try:
         _reject_record_key_used_by_persisted_rows(
-            config, sidecar_path=sidecar_path, record_key_id=record_key_id
+            config,
+            sidecar_path=sidecar_path,
+            record_key_id=record_key_id,
+            signing_backend=signing_backend,
         )
         return _verify_existing_record(
             record_path,
@@ -644,7 +647,10 @@ def author_cutover_record(
         )
     try:
         _reject_record_key_used_by_persisted_rows(
-            config, sidecar_path=sidecar_path, record_key_id=record_key_id
+            config,
+            sidecar_path=sidecar_path,
+            record_key_id=record_key_id,
+            signing_backend=signing_backend,
         )
     except AuditSigningConfigInvalidError as exc:
         # Expected trust rejection (e.g. a historical row key omitted from
