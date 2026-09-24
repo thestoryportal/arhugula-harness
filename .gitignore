@@ -35,6 +35,8 @@ audit-entries.jsonl.lock
 # here, so a smoke run fills it with state.jsonl + runtime sidecars — throwaway state,
 # never committed (codex round-2 [P2]).
 .harness/r420-scratch/
+# [LAW:effects-at-boundaries] The generic local template writes runtime ledger and sidecars here.
+.harness/state-ledger/
 # [LAW:effects-at-boundaries] Keep the local onboarding ledger and sidecars out of source.
 .harness/onboarding/
 routing_manifest/
