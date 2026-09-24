@@ -2,13 +2,15 @@
 
 Set HARNESS_L2_PROFILE_CONFIG to a TOML harness profile with four
 embedding_routing_candidates and absolute embedding_model_dir/cache_dir.
-The optional embedding extra may skip; missing or invalid profile/model fails.
+Only an absent optional embedding package may skip; invalid profile/model/import fails.
+The chosen local + Claude profile has three distinct candidate labels, so the
+>=3 assertion proves separation of those labels, not four-way model quality.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
-import tomllib
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,6 +20,7 @@ from harness_cp.cp_shared_types import ProviderAgnosticPayload
 from harness_cp.embedding_routing import make_embedding_classifier
 from harness_cp.layered_routing_strategy import LayerDecisionFn
 from harness_cp.routing_manifest_residence import RoutingManifest
+from harness_runtime.config_source import RuntimeConfigSource
 from harness_runtime.lifecycle.embedding_resolution import (
     make_fastembed_embedding,
     routing_corpus,
@@ -29,22 +32,34 @@ pytestmark = pytest.mark.e2e
 def _profile() -> tuple[dict[WorkloadClass, str], Path, Path, set[str]]:
     profile_path = os.environ.get("HARNESS_L2_PROFILE_CONFIG")
     if not profile_path:
-        pytest.fail("HARNESS_L2_PROFILE_CONFIG is required for the L2 live witness")
-    with Path(profile_path).open("rb") as handle:
-        runtime = tomllib.load(handle)["runtime"]
-    candidates = {
-        WorkloadClass(key): value for key, value in runtime["embedding_routing_candidates"].items()
+        raise ValueError("HARNESS_L2_PROFILE_CONFIG is required for the L2 live witness")
+    config = RuntimeConfigSource.load(config_file=Path(profile_path))
+    # [LAW:one-source-of-truth] Read the profile through the runtime loader.
+    required = {
+        "enabled_provider_names",
+        "external_cli_providers",
+        "embedding_routing_candidates",
+        "embedding_model_dir",
+        "embedding_cache_dir",
     }
-    enabled = set(runtime["enabled_provider_names"])
-    cli = {item["provider"] for item in runtime.get("external_cli_providers", ())}
-    available = enabled & ({"ollama"} | cli)
+    missing = required - config.model_fields_set
+    if missing:
+        raise ValueError("L2 live profile must set: " + ", ".join(sorted(missing)))
+    candidates = config.embedding_routing_candidates
+    model_dir = config.embedding_model_dir
+    cache_dir = config.embedding_cache_dir
+    if candidates is None or model_dir is None or cache_dir is None:
+        raise ValueError("L2 live profile requires candidates and local model/cache paths")
+    cli = {item.provider for item in config.external_cli_providers}
+    available = set(config.enabled_provider_names) & ({"ollama"} | cli)
     routing_corpus(candidates, available)
-    return (
-        candidates,
-        Path(runtime["embedding_model_dir"]),
-        Path(runtime["embedding_cache_dir"]),
-        available,
-    )
+    return candidates, model_dir, cache_dir, available
+
+
+def _require_fastembed() -> None:
+    # [LAW:no-silent-failure] Only an absent optional package can skip this witness.
+    if importlib.util.find_spec("fastembed") is None:
+        pytest.skip("fastembed not installed (optional [embedding] extra)")
 
 
 def _real_classifier(
@@ -53,10 +68,8 @@ def _real_classifier(
     cache_dir: Path,
     available: set[str],
 ) -> LayerDecisionFn:
-    try:
-        embed = make_fastembed_embedding(model_dir=model_dir, cache_dir=cache_dir)
-    except ImportError as exc:
-        pytest.skip(f"fastembed not installed (optional [embedding] extra): {exc}")
+    _require_fastembed()
+    embed = make_fastembed_embedding(model_dir=model_dir, cache_dir=cache_dir)
     return make_embedding_classifier(
         embed=embed,
         corpus=routing_corpus(candidates, available),
@@ -110,6 +123,7 @@ def test_l2_factory_builds_real_classifier_when_routing_activation_on() -> None:
     candidates, model_dir, cache_dir, available = _profile()
     from harness_runtime.lifecycle.llm_dispatch import materialize_llm_dispatcher_stage
 
+    _require_fastembed()
     dispatcher = materialize_llm_dispatcher_stage(
         cast("Any", {provider: object() for provider in available}),
         cast("Any", object()),
