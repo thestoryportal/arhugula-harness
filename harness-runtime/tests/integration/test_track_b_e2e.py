@@ -828,9 +828,12 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
     # Daemon-client mode: mock _daemon_client_dispatch + verify it sees the path.
     daemon_captured: dict[str, Any] = {}
 
-    async def _fake_daemon_dispatch(*, workflow_file: Path, socket_path: Path) -> dict[str, Any]:
+    async def _fake_daemon_dispatch(
+        *, workflow_file: Path, socket_path: Path, result_timeout_seconds: float
+    ) -> dict[str, Any]:
         daemon_captured["workflow_file"] = workflow_file
         daemon_captured["socket_path"] = socket_path
+        daemon_captured["result_timeout_seconds"] = result_timeout_seconds
         return {"status": "success", "workflow_id": "track-b-minimal"}
 
     socket_path = tmp_path / "track-b.sock"
@@ -842,6 +845,7 @@ def test_one_shot_and_daemon_client_pass_same_manifest_path(
     )
     assert result_dc.exit_code == EXIT_SUCCESS, result_dc.stdout + result_dc.stderr
     assert daemon_captured["workflow_file"] == manifest
+    assert daemon_captured["result_timeout_seconds"] == 3600.0
 
     # Both modes report SUCCESS-class status (exit code 0 verified above).
     # one-shot uses runtime status="completed"; daemon-client uses CP "success".
