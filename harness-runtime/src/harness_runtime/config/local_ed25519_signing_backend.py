@@ -6,6 +6,7 @@ by key period or protect signatures against compromise of the harness OS user.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 from collections.abc import Mapping
@@ -54,6 +55,18 @@ class LocalEd25519SigningBackend:
         except InvalidSignature:
             return False
         return True
+
+    def key_identity(self, key_id: str) -> str:
+        # [LAW:one-source-of-truth] Derive identity from the key already loaded for signing.
+        spki = (
+            self._key(key_id)
+            .public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        return f"ed25519-spki-sha256:{hashlib.sha256(spki).hexdigest()}"
 
     def _key(self, key_id: str) -> Ed25519PrivateKey:
         try:

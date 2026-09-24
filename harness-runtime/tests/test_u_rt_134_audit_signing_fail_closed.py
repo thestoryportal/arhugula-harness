@@ -1012,6 +1012,10 @@ async def test_stage_4_wires_record_initialization_through_real_ledger_handle(
             async def start(self) -> None:
                 return None
 
+        # [LAW:behavior-not-structure] GC offload is unrelated to record wiring and stalls on this host.
+        monkeypatch.setattr(
+            stage_4_od, "materialize_protected_result_store_stage", lambda _cfg: None
+        )
         monkeypatch.setattr(stage_4_od, "make_audit_signing_backend", lambda _cfg: _FakeBackend())
         monkeypatch.setattr(
             stage_4_od, "validate_audit_signing_for_span_stage", lambda *_a, **_k: None
@@ -1449,3 +1453,103 @@ def test_b93_record_key_separation_folds_a_lock_timeout(
             reject(config, sidecar_path=sidecar, record_key_id="cutover-key")
 
     assert "could not be read" in str(caught.value)
+
+
+def test_local_record_key_resolves_from_active_map_and_missing_is_typed(tmp_path: Path) -> None:
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        validate_mtc_audit_signing_config,
+    )
+
+    base = _config(
+        tmp_path,
+        audit_cutover_record_path=str(tmp_path / "record.json"),
+        audit_cutover_record_key_id="record",
+        audit_ledger_binding_id="ledger",
+    )
+    local = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={"record": str(tmp_path / "ephemeral.pem")},
+            )
+        }
+    )
+    validate_mtc_audit_signing_config(local)
+    missing = local.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={"other": str(tmp_path / "other.pem")},
+            )
+        }
+    )
+    with pytest.raises(AuditSigningConfigInvalidError, match="audit_signing.local_key_paths"):
+        validate_mtc_audit_signing_config(missing)
+    assert not (tmp_path / "record.json").exists()
+
+
+@pytest.mark.parametrize("alias", ["same-path", "hardlink", "copy"])
+def test_local_record_key_rejects_physical_alias_and_accepts_distinct(
+    tmp_path: Path, alias: str
+) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from harness_runtime.config.audit_signing import make_audit_signing_backend
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        validate_mtc_audit_signing_config,
+        validate_record_key_distinctness,
+    )
+
+    def key_at(path: Path) -> Path:
+        key = ed25519.Ed25519PrivateKey.generate()
+        path.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        path.chmod(0o600)
+        return path
+
+    record = key_at(tmp_path / "record.pem")
+    row = tmp_path / "row.pem"
+    if alias == "same-path":
+        row = record
+    elif alias == "hardlink":
+        row.hardlink_to(record)
+    else:
+        row.write_bytes(record.read_bytes())
+        row.chmod(0o600)
+    base = _config(
+        tmp_path,
+        audit_cutover_record_path=str(tmp_path / "record.json"),
+        audit_cutover_record_key_id="record",
+        audit_ledger_binding_id="ledger",
+    )
+    config = base.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={"record": str(record), "row": str(row)},
+            )
+        }
+    )
+    validate_mtc_audit_signing_config(config)
+    backend = make_audit_signing_backend(config.audit_signing)
+    with pytest.raises(AuditSigningConfigInvalidError, match="physically distinct"):
+        validate_record_key_distinctness(config, backend)
+    assert not (tmp_path / "record.json").exists()
+
+    distinct = key_at(tmp_path / "distinct.pem")
+    distinct_config = config.model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={"record": str(record), "row": str(distinct)},
+            )
+        }
+    )
+    validate_record_key_distinctness(
+        distinct_config, make_audit_signing_backend(distinct_config.audit_signing)
+    )

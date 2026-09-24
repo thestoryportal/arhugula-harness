@@ -47,6 +47,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from harness_core import PersonaTier
 from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
@@ -78,6 +79,7 @@ __all__ = [
     "resolve_audit_signing_fail_closed",
     "validate_and_initialize_mtc_audit_signing",
     "validate_mtc_audit_signing_config",
+    "validate_record_key_distinctness",
 ]
 
 
@@ -208,6 +210,7 @@ def validate_and_initialize_mtc_audit_signing(
     triggering this function's side-effecting record I/O first.
     """
     validate_mtc_audit_signing_config(config)
+    validate_record_key_distinctness(config, signing_backend)
     initialize_mtc_audit_signing_record(
         config,
         signing_backend=signing_backend,
@@ -383,13 +386,21 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
                 "— the record key must be physically distinct from every "
                 "row-signing key, including this deployment's own"
             )
-        resolved_arn = _resolve_record_key_arn(config, record_key_id)
-        if resolved_arn is None:
+        # [LAW:effects-at-boundaries] Config resolution stays pure; loaded keys are checked later.
+        signing = config.audit_signing
+        if signing.backend is AuditSigningBackendKind.AWS_KMS:
+            map_name, active_map = "key_arns", signing.key_arns
+        elif signing.backend is AuditSigningBackendKind.LOCAL_ED25519:
+            map_name, active_map = "local_key_paths", signing.local_key_paths
+        else:
+            map_name, active_map = "key_arns", {}
+        resolved_key = active_map.get(record_key_id)
+        if resolved_key is None:
             invalid.append(
                 f"audit_cutover_record_key_id={record_key_id!r} does not "
-                "resolve to any entry in audit_signing.key_arns"
+                f"resolve to any entry in audit_signing.{map_name}"
             )
-        else:
+        elif signing.backend is AuditSigningBackendKind.AWS_KMS:
             # Out-of-family Codex [P1] finding: compare CANONICAL key
             # identities, not raw ARN strings — AWS KMS accepts both a
             # full ARN and its bare key UUID for the SAME physical key;
@@ -399,7 +410,7 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
             # needs a live KMS `DescribeKey` call this module does not
             # make, matching `AwsKmsSigningBackend`'s own no-DescribeKey
             # posture) — it closes the common ARN-vs-bare-UUID spelling gap.
-            canonical_resolved = canonical_kms_key_identity(resolved_arn)
+            canonical_resolved = canonical_kms_key_identity(resolved_key)
             sharing = [
                 other_id
                 for other_id, other_arn in config.audit_signing.key_arns.items()
@@ -425,6 +436,40 @@ def validate_mtc_audit_signing_config(config: RuntimeConfig) -> None:
         raise AuditSigningConfigInvalidError(tuple(invalid))
     if missing:
         raise IncompatibleConfigVersion(tuple(missing))
+
+
+@runtime_checkable
+class _LocalKeyIdentityCapable(Protocol):
+    def key_identity(self, key_id: str) -> str: ...
+
+
+def validate_record_key_distinctness(
+    config: RuntimeConfig, signing_backend: SigningBackend | None
+) -> None:
+    """Reject a local record key reused by any other active signing ID."""
+    if config.audit_signing.backend is not AuditSigningBackendKind.LOCAL_ED25519:
+        return
+    if _is_blank(config.audit_cutover_record_path) or _is_blank(config.audit_cutover_record_key_id):
+        return
+    if not isinstance(signing_backend, _LocalKeyIdentityCapable):
+        raise AuditSigningConfigInvalidError(("local Ed25519 signing backend has no key identity",))
+    record_key_id = config.audit_cutover_record_key_id
+    assert record_key_id is not None  # normalized by the preceding config validation
+    # [LAW:single-enforcer] Compare loaded public-key identities once at the backend boundary.
+    record_identity = signing_backend.key_identity(record_key_id)
+    sharing = sorted(
+        key_id
+        for key_id in config.audit_signing.local_key_paths
+        if key_id != record_key_id and signing_backend.key_identity(key_id) == record_identity
+    )
+    if sharing:
+        raise AuditSigningConfigInvalidError(
+            (
+                f"audit_cutover_record_key_id={record_key_id!r} resolves to the SAME "
+                f"backing key material as row-signing key(s) {sharing!r} — the record "
+                "key must be physically distinct from every row-signing key",
+            )
+        )
 
 
 def initialize_mtc_audit_signing_record(

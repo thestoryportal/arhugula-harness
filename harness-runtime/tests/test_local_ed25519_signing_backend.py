@@ -121,3 +121,19 @@ def test_rejects_non_ed25519_and_malformed_key(tmp_path: Path) -> None:
     path.write_bytes(b"not a PEM key")
     with pytest.raises(LocalSigningKeyConfigError, match="PKCS#8"):
         LocalEd25519SigningBackend({"k": str(path)})
+
+
+def test_key_identity_uses_loaded_public_spki_and_unknown_id(tmp_path: Path) -> None:
+    import hashlib
+
+    key = ed25519.Ed25519PrivateKey.generate()
+    path = _write_key(tmp_path / "key.pem", key)
+    backend = LocalEd25519SigningBackend({"a": str(path)})
+    spki = key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    expected = f"ed25519-spki-sha256:{hashlib.sha256(spki).hexdigest()}"
+    path.unlink()  # identity must come from the key already loaded, without reopening
+    assert backend.key_identity("a") == expected
+    with pytest.raises(UnknownLocalSigningKeyIdError):
+        backend.key_identity("missing")

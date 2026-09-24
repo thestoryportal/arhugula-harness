@@ -128,6 +128,12 @@ class BreakerGuardedSigningBackend:
         # double-count into the new window).
         self._epoch = 0
 
+    def key_identity(self, key_id: str) -> str:
+        # [LAW:composability] Preserve the local identity seam across the signing breaker.
+        if not isinstance(self._inner, LocalEd25519SigningBackend):
+            raise TypeError("key identity is available only for local Ed25519 signing")
+        return self._inner.key_identity(key_id)
+
     def _admit_or_raise(self) -> tuple[bool, int]:
         """Under the lock: admit this call and return
         `(is_half_open_probe, admission_epoch)`; raise when the breaker

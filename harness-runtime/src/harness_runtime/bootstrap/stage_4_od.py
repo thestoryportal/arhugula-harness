@@ -44,6 +44,7 @@ from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     initialize_mtc_audit_signing_record,
     resolve_audit_signing_fail_closed,
     validate_mtc_audit_signing_config,
+    validate_record_key_distinctness,
 )
 from harness_runtime.lifecycle.audit_writer import (
     AUDIT_SIDECAR_FILENAME,
@@ -138,6 +139,7 @@ async def execute(
     # the persona predicate directly: stage 4 always materializes the audit
     # writer below, so MTC ⇒ the token map WILL bind.
     ctx.audit_signing_backend = make_audit_signing_backend(config.audit_signing)
+    validate_record_key_distinctness(config, ctx.audit_signing_backend)
     validate_audit_signing_for_span_stage(
         config,
         signing_backend=ctx.audit_signing_backend,

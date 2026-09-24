@@ -232,3 +232,53 @@ def test_b93_legacy_adoption_refuses_on_lock_timeout(
     assert "migration refused" in capsys.readouterr().err
     # Nothing was adopted — the deployment is unchanged and the run is retryable.
     assert not sidecar.is_file() or sidecar.read_text() == ""
+
+
+def test_record_migration_rejects_local_key_alias_before_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from harness_cp.topology_pattern import TopologyPattern
+    from harness_runtime.config_source import RuntimeConfigSource
+    from harness_runtime.types import (
+        AuditSigningConfig,
+        CollectorConfig,
+        OTelConfig,
+        ProviderSecretsConfig,
+        RuntimeConfig,
+    )
+
+    ledger = tmp_path / "state.jsonl"
+    ledger.write_text("")
+    key = ed25519.Ed25519PrivateKey.generate()
+    path = tmp_path / "ephemeral.pem"
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    path.chmod(0o600)
+    record = tmp_path / "record.json"
+    config = RuntimeConfig(
+        deployment_surface=DeploymentSurface.LOCAL_DEVELOPMENT,
+        repository_root=tmp_path,
+        path_bindings=PathBindingConfig(),
+        provider_secrets=ProviderSecretsConfig(),
+        otel=OTelConfig(otlp_endpoint="http://localhost:4317"),
+        collector=CollectorConfig(),
+        default_topology=TopologyPattern.SINGLE_THREADED_LINEAR,
+        audit_signing=AuditSigningConfig(
+            backend="local-ed25519", local_key_paths={"record": str(path), "row": str(path)}
+        ),
+        audit_cutover_record_path=str(record),
+        audit_cutover_record_key_id="record",
+        audit_ledger_binding_id="ledger",
+    )
+    monkeypatch.setattr(RuntimeConfigSource, "load", lambda **kwargs: config)
+    assert main([str(ledger), "--author", "--runtime-config", str(tmp_path / "config.toml")]) == 1
+    assert "physically distinct" in capsys.readouterr().err
+    assert not record.exists()
+    assert not (tmp_path / "audit-entries.jsonl").exists()

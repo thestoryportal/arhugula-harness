@@ -198,6 +198,7 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
         AuditSigningConfigInvalidError,
         IncompatibleConfigVersion,
         validate_mtc_audit_signing_config,
+        validate_record_key_distinctness,
     )
 
     try:
@@ -224,6 +225,11 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        validate_record_key_distinctness(config, backend)
+    except AuditSigningConfigInvalidError as exc:
+        print(f"record migration refused: {exc}", file=sys.stderr)
+        return 1
     sidecar_path = ledger_path.parent / AUDIT_SIDECAR_FILENAME
     # The immutable IS ledger's audit: refs anchor forward coverage — the
     # record modes refuse over truncated sidecar history (final codex P1).

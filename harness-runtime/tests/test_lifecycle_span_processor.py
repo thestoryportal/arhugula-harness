@@ -1071,3 +1071,56 @@ async def test_stage_4_rejects_missing_local_signing_key_before_tracer_registrat
         with pytest.raises(SpanProcessorBindError, match="harness-runtime-dev"):
             await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
     assert tracer_calls == []
+
+
+@pytest.mark.asyncio
+async def test_stage_4_rejects_local_record_alias_before_record_and_tracer(tmp_path: Path) -> None:
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from harness_core.workload_class import WorkloadClass
+    from harness_runtime.bootstrap import stage_4_od
+    from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
+    from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+        AuditSigningConfigInvalidError,
+    )
+    from harness_runtime.types import AuditSigningBackendKind, AuditSigningConfig
+
+    key = ed25519.Ed25519PrivateKey.generate()
+    path = tmp_path / "ephemeral.pem"
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    path.chmod(0o600)
+    record = tmp_path / "record.json"
+    config = _config(tmp_path).model_copy(
+        update={
+            "audit_signing": AuditSigningConfig(
+                backend=AuditSigningBackendKind.LOCAL_ED25519,
+                local_key_paths={
+                    "record": str(path),
+                    "harness-runtime-dev": str(path),
+                    "harness-cost-attribution-v1": str(path),
+                },
+            ),
+            "audit_cutover_record_path": str(record),
+            "audit_cutover_record_key_id": "record",
+            "audit_ledger_binding_id": "ledger",
+        }
+    )
+    ctx = _MutableHarnessContext()
+    ctx.ledger_writer = SimpleNamespace()
+    tracer_calls: list[object] = []
+    with mock.patch.object(
+        stage_4_od, "materialize_tracer_provider_stage", lambda cfg: tracer_calls.append(cfg)
+    ):
+        with pytest.raises(AuditSigningConfigInvalidError, match="physically distinct"):
+            await stage_4_od.execute(ctx, config, WorkloadClass.SOFTWARE_ENGINEERING)
+    assert not record.exists()
+    assert tracer_calls == []
