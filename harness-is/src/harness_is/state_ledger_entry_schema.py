@@ -26,9 +26,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal, NewType
+from typing import Annotated, Literal, NewType, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Identifier = NewType("Identifier", str)
 """Opaque identifier — concrete format (UUID v4 / ULID / …) deferred per §5."""
@@ -123,6 +123,151 @@ class BranchMetadata(BaseModel):
     terminal_status: Literal["cancelled", "completed", "timed_out"] | None = None
 
 
+DigestHex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
+class RecoveryRecordIdentity(BaseModel):
+    """Exact journal record referenced by a recovery action."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tenant_id: str
+    workflow_id: str
+    record_count: Annotated[int, Field(ge=0)]
+    latest_digest: DigestHex
+    snapshot_hash: DigestHex
+
+
+class QuiescenceAttestation(BaseModel):
+    """Operator assertion of stopped execution; not independent product proof."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    operator_uid: Annotated[int, Field(ge=0)]
+    attested_at: datetime
+    stopped_services_digest: DigestHex
+    no_workers_observed: Literal[True]
+    restart_disabled: Literal[True]
+
+
+class ClaimObservation(BaseModel):
+    """Stable claim bytes, inode and original lease identity under recovery."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    claim_bytes_digest: DigestHex
+    canonical_claim_path: Annotated[str, Field(pattern=r"^/")]
+    claim_st_dev: Annotated[int, Field(ge=0)]
+    claim_st_ino: Annotated[int, Field(ge=0)]
+    lease_generation: str
+    lease_identity: str
+
+
+class _RecordObservationBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    canonical_claim_path: Annotated[str, Field(pattern=r"^/")]
+    parent_st_dev: Annotated[int, Field(ge=0)]
+    parent_st_ino: Annotated[int, Field(ge=0)]
+
+
+class ClaimAbsentObservation(_RecordObservationBase):
+    kind: Literal["claim_absent"]
+
+
+class ClaimNoTokenObservation(_RecordObservationBase):
+    kind: Literal["claim_no_token"]
+    claim_st_dev: Annotated[int, Field(ge=0)]
+    claim_st_ino: Annotated[int, Field(ge=0)]
+    raw_digest: DigestHex
+
+
+class ClaimUnreadableObservation(_RecordObservationBase):
+    kind: Literal["claim_unreadable"]
+    claim_st_dev: Annotated[int, Field(ge=0)]
+    claim_st_ino: Annotated[int, Field(ge=0)]
+
+
+RecordObservation = Annotated[
+    ClaimAbsentObservation | ClaimNoTokenObservation | ClaimUnreadableObservation,
+    Field(discriminator="kind"),
+]
+
+
+class _RecoveryAuditBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    record_identity: RecoveryRecordIdentity
+    subject_id: str
+    action_id: str
+    operator_uid: Annotated[int, Field(ge=0)]
+    reason_digest: DigestHex
+
+
+class _ClaimAuditBase(_RecoveryAuditBase):
+    scope: Literal["claim"]
+    action: Literal["release", "abandon"]
+    observation: ClaimObservation
+    quiescence_attestation: QuiescenceAttestation | None = None
+
+    @model_validator(mode="after")
+    def _attestation_belongs_to_abandon(self) -> Self:
+        if self.action == "release" and self.quiescence_attestation is not None:
+            raise ValueError("release cannot carry a quiescence attestation")
+        if (
+            self.quiescence_attestation is not None
+            and self.quiescence_attestation.operator_uid != self.operator_uid
+        ):
+            raise ValueError("quiescence attestation operator must match recovery operator")
+        return self
+
+
+class ClaimIntentAudit(_ClaimAuditBase):
+    phase: Literal["intent"]
+
+
+class ClaimCompleteAudit(_ClaimAuditBase):
+    phase: Literal["complete"]
+    transition_kind: Literal["release_archive", "claim_tombstone", "none"]
+    transition_digest: DigestHex
+
+    @model_validator(mode="after")
+    def _transition_matches_action(self) -> Self:
+        if self.transition_kind == "release_archive" and self.action != "release":
+            raise ValueError("release_archive requires release")
+        if self.transition_kind == "claim_tombstone" and self.action != "abandon":
+            raise ValueError("claim_tombstone requires abandon")
+        return self
+
+
+class _RecordAuditBase(_RecoveryAuditBase):
+    scope: Literal["record"]
+    action: Literal["abandon"]
+    observation: RecordObservation
+    quiescence_attestation: QuiescenceAttestation
+
+    @model_validator(mode="after")
+    def _attestation_operator_matches(self) -> Self:
+        if self.quiescence_attestation.operator_uid != self.operator_uid:
+            raise ValueError("quiescence attestation operator must match recovery operator")
+        return self
+
+
+class RecordIntentAudit(_RecordAuditBase):
+    phase: Literal["intent"]
+
+
+class RecordCompleteAudit(_RecordAuditBase):
+    phase: Literal["complete"]
+    transition_kind: Literal["record_tombstone"]
+    transition_digest: DigestHex
+
+
+# [LAW:types-are-the-program] Scope and phase select four complete, legal shapes.
+RecoveryAudit = ClaimIntentAudit | ClaimCompleteAudit | RecordIntentAudit | RecordCompleteAudit
+
+
 class StateLedgerEntry(BaseModel):
     """The F2 six-field state-ledger entry shape (C-IS-05 §5).
 
@@ -173,6 +318,7 @@ class StateLedgerEntry(BaseModel):
     branch_metadata: BranchMetadata | None = None
     # v1.12 NEW D-derivative sidecar (C-IS-05 §5.6).
     rotation_correlation_id: str | None = None
+    recovery_audit: RecoveryAudit | None = None
 
     @field_validator("rotation_correlation_id")
     @classmethod

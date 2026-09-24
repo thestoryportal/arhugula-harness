@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import json
 import unicodedata
+from typing import cast
 
 from harness_is.state_ledger_entry_schema import Bytes32, StateLedgerEntry
 
@@ -47,6 +48,20 @@ from harness_is.state_ledger_entry_schema import Bytes32, StateLedgerEntry
 def _nfc(value: str) -> str:
     """NFC-normalize a string (RFC 8785 JCS Unicode normalization)."""
     return unicodedata.normalize("NFC", value)
+
+
+def _canonical_nested(value: object) -> object:
+    """Normalize every string in a typed nested audit record before hashing."""
+    if isinstance(value, str):
+        return _nfc(value)
+    if isinstance(value, dict):
+        return {
+            key: _canonical_nested(item)
+            for key, item in cast(dict[str, object], value).items()
+        }
+    if isinstance(value, list):
+        return [_canonical_nested(item) for item in cast(list[object], value)]
+    return value
 
 
 def canonicalize(entry: StateLedgerEntry) -> bytes:
@@ -106,6 +121,11 @@ def canonicalize(entry: StateLedgerEntry) -> bytes:
         }
     if entry.rotation_correlation_id is not None:
         payload["rotation_correlation_id"] = _nfc(entry.rotation_correlation_id)
+    if entry.recovery_audit is not None:
+        # [LAW:one-source-of-truth] Hash the same typed fields the JSONL codec persists.
+        payload["recovery_audit"] = _canonical_nested(
+            entry.recovery_audit.model_dump(mode="json", exclude_none=True)
+        )
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )

@@ -40,8 +40,14 @@
 | Revision date | 2026-07-22 |
 | Revision | v1.12 → v1.13 (`B-57` spec leg — **per-call-site writer-owned timestamp election on DIRECT append surfaces**, ratified **Reading A** — Class 2 fork `.harness/class_2_fork_b57_direct_append_writer_owned_opt_in.md`, operator-ratified 2026-08-07. NEW **§7.6.1** under C-IS-07 §7.6: a DIRECT-append call site MAY **elect** writer-owned sampling by supplying the EXISTING `WRITER_OWNED_TIMESTAMP` sentinel (§7.6, v1.11) as its write payload's `timestamp`; on an electing call the persisted `timestamp` is sampled by the writer INSIDE the write serialization point, exactly as on the buffered/branch-drain surface. **The election is PER CALL SITE — never a default, never a writer mode**: a direct producer that supplies any other value retains caller-supplied semantics BYTE-VERBATIM, so §7.6's direct-path contract is unchanged for every non-electing producer, and the writer acquires no surface discriminator, mode flag or path gate. **Eligibility rule:** a site MAY elect only where its entry's `timestamp` means *when the entry was appended*; where it means *when the event happened*, caller-supplied semantics are REQUIRED and an out-of-order refusal is the honest outcome. The §7.6 *"Surfaces that do NOT change"* paragraph and its *registered residual* are **PRESERVED VERBATIM as historical record** (both remain accurate for every non-electing producer) with ONE added status paragraph recording that the residual's demanded back-flow HAS NOW BEEN PERFORMED and DISCHARGED in this narrow form — mirroring how §7.5 preserved the §7.4 deferral text it lifted; the §7.1 row-7 *"Timestamp authority"* cell gains a CROSS-REFERENCE-ONLY clause naming §7.6.1 (zero new semantics at that cell — authored so the summary row does not become stale-as-described). **ZERO new contract numbers** (the EXISTING C-IS-07 §7.6 is extended; a spec leg cannot mint one). **ZERO change to the §5 six-field shape / §5.1–§5.6 sidecars / §6 hash-chain construction + canonicalization / §7.2–§7.5 / §7.7 / §8 / §9 / §10 seam exports — no field added, no shape changed, no recipe touched, no `snapshot_hash` or migration surface**; only WHICH INSTANT a consenting call site records changes. **ZERO CXA rows** (the sentinel is already exported from `harness-is` and every converting call site already imports the C-IS-07 §7.1 write contract — no new package edge, no new typed seam). **ZERO new plan units** — U-IS-11 already owns the §7.1/§7.6 write surface; the per-site ELECT / RETAIN / DEFER roster is carried at the PLAN (`Implementation_Plan_Information_Substrate_v2_9.md` U-IS-11), not here, per Reading A. **SPEC-ONLY leg** — the call-site conversions, the injection-caveat resolutions and the two-process contention witness are the separate impl leg (the `B-33-A`/`B-59-A` spec-leg-then-impl-leg precedent). v1.12 + v1.11 + v1.10 + v1.9 + v1.8 + v1.7 + v1.6 + v1.5 + v1.4 + v1.3 + v1.2 + v1.1 + v1 PRESERVED VERBATIM per delta-only convention. 2026-08-07) |
 | Revision date | 2026-08-07 |
+| Revision | v1.13 → v1.14 (B-104 Task 1: optional versioned `recovery_audit` D-derivative sidecar, hash coverage, and JSONL representation; the six F-layer fields and absent-sidecar legacy bytes remain unchanged. Durable recovery append and runtime recovery remain later tasks.) |
+| Revision date | 2026-09-24 |
 
 ---
+
+## Change-note (v1.13 → v1.14)
+
+The operator-ratified B-104 amendment adds §5.7's recovery audit sidecar. §6.1 includes every present audit field in the entry hash, and §7.3 carries the same nested fields in JSONL. Entries without the sidecar retain their existing canonical, hash, and serialized bytes. This revision does not add the durable append operation or recovery behavior.
 
 ## Change-note (v1.12 → v1.13)
 
@@ -655,6 +661,19 @@ These are distinct token sets recorded on **distinct carriers** — a `subagent.
 
 ---
 
+### §5.7 D-derivative sidecar field — `recovery_audit` (v1.14, B-104 Task 1)
+
+`StateLedgerEntry` and its write payload MAY carry a version-1 `recovery_audit` record. The field defaults to `None`; it does not change the six F-layer fields in §5. A present audit names the exact journal record (`tenant_id`, `workflow_id`, `record_count`, `latest_digest`, `snapshot_hash`), `subject_id`, action ID, action, operator UID, reason digest, scope, phase, and stable observation. All digests are lowercase SHA-256 hex. The sidecar excludes raw reasons, claim tokens, and HITL answers. Memory operation entries cannot carry it because their separate hash and JSONL format do not represent it.
+
+| Scope and phase | Required observation and transition |
+|---|---|
+| Claim INTENT | `release` or `abandon`; original claim-byte digest, canonical claim path, claim `st_dev/st_ino`, original lease generation and identity. No transition fields. |
+| Claim COMPLETE | The same claim observation plus transition kind and digest. `release_archive` requires `release`; `claim_tombstone` requires `abandon`; `none` records a proved unchanged claim without authorizing execution. |
+| Record INTENT | `abandon` only; `claim_absent`, `claim_no_token`, or `claim_unreadable` observation with canonical claim path and parent `st_dev/st_ino`. The two claim-present variants also carry claim `st_dev/st_ino`; `claim_no_token` includes its readable raw-byte digest. No transition fields. |
+| Record COMPLETE | The same record observation plus `record_tombstone` transition kind and digest. |
+
+A record-scoped audit requires `QuiescenceAttestation(operator_uid, attested_at, stopped_services_digest, no_workers_observed=true, restart_disabled=true)`. A claim-scoped abandon MAY carry this attestation when quiescence is required; a release cannot. The attestation states the operator's observation, not independent product proof, and its UID must match the audit operator UID. Illegal scope, phase, action, observation, attestation, or transition combinations are refused at the schema boundary. The durable INTENT/COMPLETE write and retry contract belongs to the later C-IS-07 recovery append amendment.
+
 ## §6 C-IS-06 — Hash-chain integrity construction discipline
 
 **Contract surface.** Construction-time discipline + verification-time procedure + tamper-evidence contract.
@@ -676,6 +695,8 @@ Hash-chain integrity is constructed **at write-time** via the following four-ste
 **Discipline.** Each state-ledger entry is canonicalized to a deterministic byte representation prior to hashing. RFC 8785 JSON Canonicalization Scheme (JCS) is the corpus-converged baseline candidate **[MODERATE — per ADR-F2 §Rationale (a.1), library binding to be confirmed at the D-ADR on canonicalization library per language ecosystem]**.
 
 **Contract.** Canonicalization is deterministic — given the same logical entry, two canonicalizations on different runs / machines / library versions of the same canonicalization scheme produce identical byte sequences. Non-determinism in canonicalization is a contract violation.
+
+The optional §5.7 `recovery_audit` contributes every present nested field to the canonical payload, including scope, phase, observation, transition, and quiescence attestation. It is omitted entirely when `None`, preserving historical canonical bytes and hashes. A changed present audit value changes that entry's computed hash.
 
 ### §6.2 Per-entry hash computation
 
@@ -764,6 +785,7 @@ The composition contract commits:
 
 - **Storage representation** — JSONL file (one JSON-serialized entry per line) at workflow-canonical path per C-IS-01.
 - **Per-entry shape** — six-field record per C-IS-05.
+- **Recovery audit line field** — when §5.7 `recovery_audit` is present, the line includes its versioned nested record with every present field; when absent, the key is omitted. A reader reconstructs the same typed audit from the line. Legacy lines remain byte-identical.
 - **Indexable access** — line-per-entry structure permits offset-based indexing; navigation primitives exposed as Skills or in-process tools per the C2-pole read contract.
 - **Concurrent access** — the C3-pole append-only write contract serializes writers; the C2-pole selective read contract permits concurrent readers.
 

@@ -59,6 +59,7 @@ from harness_is.state_ledger_entry_schema import (
     ActorClass,
     BranchMetadata,
     Identifier,
+    RecoveryAudit,
     StateLedgerEntry,
     Timestamp,
     reject_noncanonical_rotation_correlation_id,
@@ -144,6 +145,7 @@ class EntryPayload(BaseModel):
     # compat; non-None value propagates to StateLedgerEntry + canonicalize +
     # JSONL line.
     rotation_correlation_id: str | None = None
+    recovery_audit: RecoveryAudit | None = None
 
     @field_validator("rotation_correlation_id")
     @classmethod
@@ -215,6 +217,8 @@ def _serialize_entry(entry: StateLedgerEntry) -> str:
         }
     if entry.rotation_correlation_id is not None:
         payload["rotation_correlation_id"] = entry.rotation_correlation_id
+    if entry.recovery_audit is not None:
+        payload["recovery_audit"] = entry.recovery_audit.model_dump(mode="json", exclude_none=True)
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -236,20 +240,20 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
     raw = json.loads(line)
     snapshot_ref_raw = raw.get("procedural_tier_snapshot_ref")
     branch_metadata_raw = raw.get("branch_metadata")
-    return StateLedgerEntry(
-        action_id=Identifier(raw["action_id"]),
-        idempotency_key=Identifier(raw["idempotency_key"]),
-        actor=Actor(
+    return StateLedgerEntry.model_validate({
+        "action_id": Identifier(raw["action_id"]),
+        "idempotency_key": Identifier(raw["idempotency_key"]),
+        "actor": Actor(
             actor_class=ActorClass(raw["actor"]["actor_class"]),
             actor_id=raw["actor"]["actor_id"],
         ),
-        response_hash=bytes.fromhex(raw["response_hash"]),
-        timestamp=Timestamp.fromisoformat(raw["timestamp"]),
-        prior_event_hash=bytes.fromhex(raw["prior_event_hash"]),
-        procedural_tier_snapshot_ref=(
+        "response_hash": bytes.fromhex(raw["response_hash"]),
+        "timestamp": Timestamp.fromisoformat(raw["timestamp"]),
+        "prior_event_hash": bytes.fromhex(raw["prior_event_hash"]),
+        "procedural_tier_snapshot_ref": (
             Identifier(snapshot_ref_raw) if snapshot_ref_raw is not None else None
         ),
-        branch_metadata=(
+        "branch_metadata": (
             BranchMetadata(
                 parent_action_id=Identifier(branch_metadata_raw["parent_action_id"]),
                 branch_index=branch_metadata_raw["branch_index"],
@@ -258,8 +262,9 @@ def _deserialize_entry(line: str) -> StateLedgerEntry:
             if branch_metadata_raw is not None
             else None
         ),
-        rotation_correlation_id=raw.get("rotation_correlation_id"),
-    )
+        "rotation_correlation_id": raw.get("rotation_correlation_id"),
+        "recovery_audit": raw.get("recovery_audit"),
+    })
 
 
 def _read_ledger_unlocked(ledger_handle: JsonlLedgerHandle) -> list[StateLedgerEntry]:
@@ -363,6 +368,7 @@ def append_ledger_entry(
             # EntryPayload; canonicalize() includes it in the hash recipe
             # when non-None.
             rotation_correlation_id=entry_payload.rotation_correlation_id,
+            recovery_audit=entry_payload.recovery_audit,
         )
         entry = draft.model_copy(update={"response_hash": compute_response_hash(draft)})
         with ledger_handle.canonical_path.open("a") as fh:
