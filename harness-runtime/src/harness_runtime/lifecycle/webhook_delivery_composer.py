@@ -347,7 +347,9 @@ class WebhookDeliveryComposer:
         # failure raises the result-preserving carrier (CP v1.101 §2).
         try:
             await self._attribute_webhook_cost_off_loop(
-                url=url,
+                # The URL path can hold operator material. Cost records and
+                # signed audit payloads carry only this fixed-length digest.
+                url=url_hash,
                 request_body=request_body,
                 idempotency_key=idempotency_key,
                 tenant_id=effective_tenant_id,

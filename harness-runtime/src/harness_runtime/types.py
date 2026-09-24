@@ -2528,12 +2528,11 @@ class RuntimeConfig(BaseModel):
     instance bound to `ctx.webhook_delivery_composer`; durable-async branch
     at §14.8.8.1 step 3 invokes `ctx.webhook_delivery_composer.deliver_webhook(...)`.
 
-    Internal operator-supply shape (per-endpoint URL, per-retry-policy,
-    per-idempotency-key-store substrate, outbound HTTP timeout, TLS/auth)
-    deferred to implementation discretion at C-RT-26 landing arc per FM-2
-    (spec §14.16.1 + change-note adjacent defect (i)). Ingested at stage 5
-    LOOP_INIT by `materialize_webhook_delivery_composer_stage` factory
-    (U-RT-97) per §14.16.3.
+    The first Omarchy operator shape supplies a public webhook_id, a literal
+    loopback HTTP endpoint and a bounded timeout. The empty marker remains
+    for legacy binding behavior; durable pause with an empty marker is
+    refused during stage-5 bootstrap. Remote delivery, authentication and
+    generalized retry remain separate follow-on work under C-RT-26.
     """
 
     skill_activation_hook_config: SkillActivationHookConfig | None = None

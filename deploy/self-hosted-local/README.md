@@ -16,6 +16,9 @@ in the OS keyring through `[runtime.provider_secrets] backend =
 "self-hosted-keyring"`. The default live e2e uses local Ollama and a
 non-secret sentinel keyring entry, so it makes no hosted-provider call.
 
+The first same-VM HITL webhook configuration is documented in
+[webhook-loopback.md](webhook-loopback.md).
+
 ## Runbook
 
 1. Start the Docker daemon on the Omarchy/Arch host.

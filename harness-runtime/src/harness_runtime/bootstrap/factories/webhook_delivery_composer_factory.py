@@ -1,43 +1,27 @@
-"""U-RT-97 — WebhookDeliveryComposer stage-5 LOOP_INIT factory.
+"""U-RT-97 stage-5 webhook composer factory for local operator binding.
 
-Implements runtime spec v1.26 §14.16.2 factory signature + §14.16.3 stage-5
-LOOP_INIT placement + §14.16.4 failure-mode taxonomy + §14.16.5
-operator-opt-in RETIRE-READY pattern.
-
-Reading A path 1 absorption of fork
-`.harness/class_1_fork_u_rt_94_webhook_delivery_composer_binding_chain_absence.md`
-(operator-ratified 2026-05-24):
-
-- Opt-out branch (`config.webhook_delivery_composer_config is None`) returns
-  `None` unconditionally — preserves the pre-v1.26 production-default
-  behavior; the §14.8.8.1 step 0 OR-form precondition AND-arm at
-  `ctx.webhook_delivery_composer is None` falls through to sync-blocking.
-- Opt-in branch (non-None config) constructs a `WebhookDeliveryComposer`
-  instance per spec v1.26 §14.16.1 + the existing C-RT-20 §14.10.1 carrier
-  class body at `lifecycle/webhook_delivery_composer.py:94`. The empty-marker
-  `WebhookDeliveryComposerConfig` at v1.26 carries no operator-supplied
-  endpoint configuration; richer construction (per-endpoint URL,
-  per-retry-policy, idempotency-key-store substrate, outbound HTTP timeout,
-  TLS/auth) lands at a follow-on arc per FM-2 no-extension discipline
-  (§14.16.1 + change-note adjacent defect (i)).
-- Construction failure raises `WebhookDeliveryComposerStageMaterializeError`
-  (fail class `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE`, permanent severity
-  → bootstrap rollback per C-RT-02).
-
-Mirrors L9-decies validator_framework_factory + L9-undecies
-pause_resume_protocol_factory module-shape precedent (per-factory module
-under `bootstrap/factories/` with typed exception + async factory body +
-opt-out short-circuit + opt-in construction body).
+`None` preserves production opt-out. The legacy empty marker still constructs
+an unconfigured composer, except when a durable pause is active: that unsafe
+combination is refused at bootstrap. A complete config binds only literal
+loopback HTTP, one attempt, fail-closed behavior and an isolated HTTP client.
+Construction failures use RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE.
 """
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
+
+import httpx
+from harness_cp.hitl_timeout_degradation import WebhookConfig
 
 from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
     resolve_audit_signing_fail_closed,
 )
 from harness_runtime.lifecycle.webhook_delivery_composer import WebhookDeliveryComposer
+from harness_runtime.lifecycle.webhook_delivery_composer_types import (
+    parse_loopback_webhook_endpoint,
+)
 from harness_runtime.types import RuntimeConfig
 
 if TYPE_CHECKING:
@@ -95,13 +79,11 @@ async def materialize_webhook_delivery_composer_stage(
     ------
     WebhookDeliveryComposerStageMaterializeError
         Fail class `RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE` per spec
-        §14.16.4. Empty-marker config at v1.26 has no operator-supplied
-        substrate that can fail at construction; the exception class is
-        registered defensively for the post-FM-2-extension landing arc when
-        operator-supplied endpoint config can fail validation. Currently
-        unreachable at v1.26 empty-marker scope.
+        §14.16.4. An invalid local endpoint, timeout or incomplete durable
+        binding is refused before workflow execution.
     """
-    if config.webhook_delivery_composer_config is None:
+    operator = config.webhook_delivery_composer_config
+    if operator is None:
         # Empty-sentinel branch. Operator opted out;
         # ctx.webhook_delivery_composer binds to None; §14.8.8.1 step 0
         # OR-form precondition AND-arm at ctx.webhook_delivery_composer is
@@ -109,11 +91,43 @@ async def materialize_webhook_delivery_composer_stage(
         # sync-blocking). Pre-v1.26 production-default state preserved.
         return None
 
-    # Operator opt-in branch. Construct the C-RT-20 §14.10.1 carrier with
-    # tracer_provider from ctx (stage 4 OD-bucket bound). Empty-marker config
-    # carries no operator-supplied endpoint substrate at v1.26 per spec
-    # §14.16.1 + change-note adjacent defect (i); richer construction lands at
-    # a follow-on arc per FM-2.
+    configured = (
+        operator.webhook_id is not None
+        or operator.endpoint_url is not None
+        or operator.timeout_seconds != 3
+    )
+    webhook_config = None
+    if configured:
+        try:
+            if (
+                not isinstance(operator.webhook_id, str)
+                or re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", operator.webhook_id) is None
+            ):
+                raise ValueError("webhook_id must be a non-secret public identifier")
+            if not isinstance(operator.endpoint_url, str):
+                raise ValueError("endpoint_url is required with webhook_id")
+            if type(operator.timeout_seconds) is not int or not 1 <= operator.timeout_seconds <= 5:
+                raise ValueError("timeout_seconds must be an integer from 1 to 5")
+            webhook_config = WebhookConfig(
+                webhook_id=operator.webhook_id,
+                endpoint_url=parse_loopback_webhook_endpoint(operator.endpoint_url),
+                timeout=operator.timeout_seconds,
+                degradation_mode="fail-closed",
+            )
+        except ValueError as exc:
+            raise WebhookDeliveryComposerStageMaterializeError(
+                f"RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE: {exc}"
+            ) from exc
+    elif (
+        config.pause_resume_protocol_config is not None
+        and config.pause_resume_protocol_config.durable
+    ):
+        raise WebhookDeliveryComposerStageMaterializeError(
+            "RT-FAIL-WEBHOOK-COMPOSER-STAGE-MATERIALIZE: durable pause needs a webhook endpoint"
+        )
+
+    # Construct the C-RT-20 carrier with the stage-4 tracer and the validated
+    # local endpoint when supplied. Legacy empty markers stay unconfigured.
     tracer_provider = ctx.tracer_provider
     # R-FS-1 arc CA — thread the run-scoped cost accumulator so webhook
     # SpanCostRecords feed `RunResult.cost_attribution` (runtime v1.53 §9). The
@@ -121,6 +135,15 @@ async def materialize_webhook_delivery_composer_stage(
     # the composer's cost wrapper early-returns in production — the sink is
     # forward-ready, dormant until the FM-2 webhook config arc binds substrates.
     return WebhookDeliveryComposer(
+        webhook_config=webhook_config,
+        # The local profile allows one bounded attempt. Retry behavior needs a
+        # separate response-class and deadline contract before production use.
+        retry_max_attempts=1 if webhook_config is not None else 3,
+        http_client_factory=(
+            (lambda: httpx.AsyncClient(follow_redirects=False, trust_env=False))
+            if webhook_config is not None
+            else None
+        ),
         tracer_provider=tracer_provider,
         # B-INTERSTEP-PERRUN-ISOLATION — the run-scoped accumulator PROXY (not its
         # `.records` list) so any appended SpanCostRecord routes to the current
