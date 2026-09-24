@@ -28,8 +28,12 @@ Test taxonomy (mapped to module docstring D1-D6):
        ``StepExecutionContext`` argument shapes.
   D4 — ``result_timeout_seconds`` bound fires when inner exceeds budget.
   D4c — A dispatch pending at the bound is cancelled, fenced and joined.
+  D4d — A carrier completing after the deadline claimed it is still reported.
   D5 — Inner exceptions propagate verbatim through ``future.result()``.
   D5b — A completed inner ``TimeoutError`` propagates verbatim, unfenced.
+  D5c/D5d/D5e — A completed ``TimeoutError`` / audit carrier / BaseException
+       control signal keeps its outcome while asyncio's copy of it to the
+       bridge future is still queued.
   D6 — ``materialize_sync_dispatcher_facade`` raises ``RuntimeError`` when
        called outside an async context.
 """
@@ -37,6 +41,9 @@ Test taxonomy (mapped to module docstring D1-D6):
 from __future__ import annotations
 
 import asyncio
+import logging
+import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -61,6 +68,10 @@ from harness_cp.workflow_driver_types import (
     WorkflowStep,
 )
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
+from harness_runtime.lifecycle.audit_signing_errors import (
+    PostEffectAuditSigningError,
+    PostEffectClass,
+)
 from harness_runtime.lifecycle.sync_dispatcher_facade import (
     AsyncStepDispatcher,
     StepDispatchTimeoutError,
@@ -480,6 +491,213 @@ async def test_d4c_pending_deadline_trips_fence_and_joins_cancelled_dispatch() -
     assert len(inner.fences) == 1
     assert inner.fences[0].tripped is True
     assert excinfo.value.audit_drain_incomplete is False  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# D5c/D5d/D5e/D4d — completion versus the deadline when asyncio's copy lags
+# ---------------------------------------------------------------------------
+
+_AUDIT_LOGGER = "harness.runtime.audit_signing"
+#: Upper bound on any loop-thread hold in these fixtures, so a facade that
+#: never releases them fails the test instead of hanging the event loop.
+_HOLD_BOUND_SECONDS = 10.0
+
+
+def _carrier() -> PostEffectAuditSigningError:
+    return PostEffectAuditSigningError(
+        "audit signing failed after a completed provider response (test)",
+        effect_class=PostEffectClass.PROVIDER_RESPONSE,
+        result={"id": "msg_preserved"},
+        result_ref="test-tenant:" + "b" * 32,
+    )
+
+
+def _reported(caplog: pytest.LogCaptureFixture, carrier: PostEffectAuditSigningError) -> bool:
+    return any(
+        r.name == _AUDIT_LOGGER
+        and r.levelno == logging.ERROR
+        and carrier.result_ref in r.getMessage()
+        for r in caplog.records
+    )
+
+
+@dataclass
+class _CompletesWithCopyHeldAsyncDispatcher:
+    """Completes promptly by raising ``error``, after queueing a loop callback
+    that holds the loop thread until ``release`` is set.
+
+    asyncio queues the bridge future's outcome copy only once the task has
+    completed, i.e. behind this hold. While it holds, the dispatch is done
+    but the ``run_coroutine_threadsafe`` future the worker was handed is
+    still pending — the race the Codex review reproduced."""
+
+    error: BaseException
+    release: threading.Event
+    fences: list[DispatchCancelToken]
+    task_done_while_held: list[bool]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        self.fences.append(DISPATCH_CANCEL_TOKEN_VAR.get())
+        task = asyncio.current_task()
+        assert task is not None
+
+        def _hold() -> None:
+            self.task_done_while_held.append(task.done())
+            self.release.wait(timeout=_HOLD_BOUND_SECONDS)
+
+        asyncio.get_running_loop().call_soon(_hold)
+        raise self.error
+
+
+def _dispatch_then_release(facade: Any, release: threading.Event) -> Mapping[str, Any]:
+    try:
+        return facade.dispatch(_binding(), _step(), step_context=_step_context())
+    finally:
+        release.set()
+
+
+@pytest.mark.asyncio
+async def test_d5c_completed_inner_timeout_error_wins_over_lagging_outcome_copy() -> None:
+    """D5c — the dispatch completed with its own ``TimeoutError`` well inside
+    the bound, but the loop has not yet copied that outcome to the bridge
+    future when the bound expires. The completed outcome still wins: the
+    worker sees the inner ``TimeoutError`` and the effect fence stays
+    untripped. (The bound is deliberately generous; the hold, released only
+    once the worker has its answer, is what orders the race.)"""
+    inner_error = TimeoutError("provider read timed out")
+    release = threading.Event()
+    inner = _CompletesWithCopyHeldAsyncDispatcher(
+        error=inner_error, release=release, fences=[], task_done_while_held=[]
+    )
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=1.0)
+
+    with pytest.raises(TimeoutError) as excinfo:
+        await asyncio.to_thread(_dispatch_then_release, facade, release)
+
+    assert inner.task_done_while_held == [True]
+    assert type(excinfo.value) is TimeoutError
+    assert excinfo.value.args == inner_error.args
+    assert len(inner.fences) == 1
+    assert inner.fences[0].tripped is False
+
+
+@pytest.mark.asyncio
+async def test_d5d_completed_audit_carrier_wins_over_lagging_outcome_copy(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D5d — the D5c race with a post-effect audit carrier: the completed
+    effect's carrier reaches the worker intact, the audit-failure report is
+    emitted before the worker sees the raise, and the fence stays
+    untripped."""
+    carrier = _carrier()
+    release = threading.Event()
+    inner = _CompletesWithCopyHeldAsyncDispatcher(
+        error=carrier, release=release, fences=[], task_done_while_held=[]
+    )
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=1.0)
+    reported_at_raise: list[bool] = []
+
+    def _worker() -> Mapping[str, Any]:
+        try:
+            return _dispatch_then_release(facade, release)
+        except PostEffectAuditSigningError:
+            reported_at_raise.append(_reported(caplog, carrier))
+            raise
+
+    with caplog.at_level(logging.ERROR, logger=_AUDIT_LOGGER):
+        with pytest.raises(PostEffectAuditSigningError) as excinfo:
+            await asyncio.to_thread(_worker)
+
+    assert inner.task_done_while_held == [True]
+    assert excinfo.value is carrier
+    assert reported_at_raise == [True]
+    assert len(inner.fences) == 1
+    assert inner.fences[0].tripped is False
+
+
+class _ControlSignal(BaseException):
+    """Stands in for the runtime's ``BaseException`` control signals that
+    cross the facade (``HITLPauseRequestedSignal``, ``DispatchFenceTrippedSignal``)."""
+
+
+@pytest.mark.asyncio
+async def test_d5e_completed_base_exception_signal_wins_over_lagging_outcome_copy() -> None:
+    """D5e — the D5c race with a ``BaseException`` control signal, which
+    normal ``except Exception`` handling must not swallow: the worker gets
+    the signal itself, promptly, with the fence untripped — not a deadline
+    timeout after the full bound."""
+    signal = _ControlSignal("pause requested")
+    release = threading.Event()
+    inner = _CompletesWithCopyHeldAsyncDispatcher(
+        error=signal, release=release, fences=[], task_done_while_held=[]
+    )
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=1.0)
+
+    with pytest.raises(_ControlSignal) as excinfo:
+        await asyncio.to_thread(_dispatch_then_release, facade, release)
+
+    assert inner.task_done_while_held == [True]
+    assert excinfo.value is signal
+    assert len(inner.fences) == 1
+    assert inner.fences[0].tripped is False
+
+
+@dataclass
+class _CompletesAfterFenceTripAsyncDispatcher:
+    """Still running at the deadline: holds the loop thread inside its own
+    step until the facade trips the effect fence, then completes by raising
+    ``error``. The deadline's task cancellation cannot land inside a running
+    step, so this dispatch completes AFTER the deadline has claimed it."""
+
+    error: Exception
+    fences: list[DispatchCancelToken]
+
+    async def dispatch(
+        self,
+        binding: StepEffectiveBinding,
+        step: WorkflowStep,
+        *,
+        step_context: StepExecutionContext,
+    ) -> Mapping[str, Any]:
+        fence = DISPATCH_CANCEL_TOKEN_VAR.get()
+        assert fence is not None
+        self.fences.append(fence)
+        give_up_at = time.monotonic() + _HOLD_BOUND_SECONDS
+        while not fence.tripped and time.monotonic() < give_up_at:
+            time.sleep(0.001)  # noqa: ASYNC251 — holding the loop thread is the point
+        raise self.error
+
+
+@pytest.mark.asyncio
+async def test_d4d_carrier_completing_after_deadline_claim_is_still_reported(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """D4d — the deadline legitimately wins (the dispatch was pending), so the
+    worker gets ``StepDispatchTimeoutError`` with the fence tripped. The
+    dispatch then completes with a post-effect audit carrier; its completed
+    effect must still reach the audit-failure report rather than vanish with
+    the discarded outcome."""
+    carrier = _carrier()
+    inner = _CompletesAfterFenceTripAsyncDispatcher(error=carrier, fences=[])
+    facade = materialize_sync_dispatcher_facade(inner, result_timeout_seconds=0.05)
+
+    def _worker() -> Mapping[str, Any]:
+        return facade.dispatch(_binding(), _step(), step_context=_step_context())
+
+    with caplog.at_level(logging.ERROR, logger=_AUDIT_LOGGER):
+        with pytest.raises(StepDispatchTimeoutError) as excinfo:
+            await asyncio.to_thread(_worker)
+
+    assert len(inner.fences) == 1
+    assert inner.fences[0].tripped is True
+    assert excinfo.value.audit_drain_incomplete is False  # type: ignore[attr-defined]
+    assert _reported(caplog, carrier)
 
 
 # ---------------------------------------------------------------------------
