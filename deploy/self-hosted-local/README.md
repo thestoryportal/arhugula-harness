@@ -23,7 +23,7 @@ non-secret sentinel keyring entry, so it makes no hosted-provider call.
    prompt hides the password; the commands do not print or store it in shell
    history. Keep this exported path in the shell that runs the stack commands:
 
-   ```sh
+   ```bash
    grafana_secret_dir="$HOME/.local/share/arhugula/secrets"
    install -d -m 0700 "$grafana_secret_dir"
    grafana_secret_file="$grafana_secret_dir/grafana-admin-password"

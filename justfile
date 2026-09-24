@@ -683,6 +683,7 @@ self-hosted-readiness *args:
 q4-packaging-check:
     uv run python tools/q4_packaging_gate.py --build --check
 
+# Export R420_GRAFANA_ADMIN_PASSWORD_FILE before these three stack recipes.
 # Start the local R-420 SELF_HOSTED_SERVER telemetry backend:
 # OTel Collector Contrib + Tempo + Grafana. Requires Docker Desktop/daemon.
 r420-self-hosted-stack-up:
