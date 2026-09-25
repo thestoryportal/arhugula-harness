@@ -36,7 +36,14 @@ The CLI does not print the model's reply in text mode. The state ledger is `.har
 
 Two further manifests run real multi-step topologies against the same local `llama3.2:3b` model, with no hosted provider and an empty fallback chain. Prompts and `num_predict` are small on purpose.
 
-- `ollama-decentralized-handoff.toml` — `pipeline-automation`, `decentralized-handoff`, three sequential stage-expert inference steps (`stage-draft`, `stage-review`, `stage-finalize`). It runs with the config from the previous section unchanged.
+- `ollama-decentralized-handoff.toml` — `pipeline-automation`, `decentralized-handoff`, three sequential stage-expert inference steps (`stage-draft`, `stage-review`, `stage-finalize`). Stages 2 and 3 act on the previous stage's output, which the runtime only delivers when `inter_step_data_flow` is on. The shared config leaves it off, so this example has its own config, `ollama.handoff.local.toml.example`: the shared config plus that one flag. Prepare and run it like this:
+
+```sh
+cp examples/ollama.handoff.local.toml.example harness.handoff.toml
+${EDITOR:-vi} harness.handoff.toml   # replace every /absolute/path/to/your/workspace
+uv run --no-sync harness run examples/ollama-decentralized-handoff.toml --config harness.handoff.toml
+```
+
 - `ollama-parallelization.toml` — `research`, `parallelization`, two peer inference branches (`branch-overview`, `branch-risks`). Parallelization is admissible only for research and content-creation, and `ollama.local.toml.example` binds paths for `pipeline-automation` only, so add research bindings to your `harness.toml` before running it. Insert this block above the `[runtime.routing_manifest]` table and replace the path prefix as before:
 
 ```toml
@@ -66,8 +73,7 @@ path = "/absolute/path/to/your/workspace/.harness/onboarding/state-ledger"
 ```
 
 ```sh
-uv run --no-sync harness run examples/ollama-decentralized-handoff.toml --config harness.toml
 uv run --no-sync harness run examples/ollama-parallelization.toml --config harness.toml
 ```
 
-These two manifests are checked provider-free (they load through the real manifest loader and their payloads validate), but they are **not yet witnessed** end to end: an installed-candidate run against a live local model, in a quiet Ollama window, is still open. Do not read a successful `completed` status here as that acceptance. The other topologies (evaluator-optimizer, orchestrator-workers, hierarchical delegation) have no local manifest yet, and the `examples/workflows/topology/*.yaml` files remain admissibility fixtures with a stand-in child, not runnable workflows.
+These two manifests are checked provider-free (they load through the real manifest loader, their payloads validate, and a recording provider double shows the handoff stages receiving the prior stage's output under the handoff config), but they are **not yet witnessed** end to end: an installed-candidate run against a live local model, in a quiet Ollama window, is still open. Do not read a successful `completed` status here as that acceptance. The other topologies (evaluator-optimizer, orchestrator-workers, hierarchical delegation) have no local manifest yet, and the `examples/workflows/topology/*.yaml` files remain admissibility fixtures with a stand-in child, not runnable workflows.

@@ -1,5 +1,7 @@
 # Three-stage local decentralized-handoff workflow; run with
-# examples/ollama.local.toml.example copied as harness.toml. One stage owns the
+# examples/ollama.handoff.local.toml.example copied as harness.handoff.toml (it
+# enables inter_step_data_flow, so stage 2 and 3 receive the prior stage's output as an
+# "Upstream step output" message ahead of their own prompt). One stage owns the
 # work at a time; each declared step is a stage-expert and the declared order is
 # the handoff sequence. Only local Ollama is bound; the fallback chain is empty,
 # so no hosted provider can be reached.
@@ -34,7 +36,7 @@ step_id = "stage-review"
 step_kind = "inference-step"
 
 [steps.step_payload]
-messages = [{ role = "user", content = "In one short sentence, name one thing to check before a release." }]
+messages = [{ role = "user", content = "Using the upstream output above, reply with one short sentence naming one improvement to it." }]
 tools = []
 params = { options = { num_predict = 32 } }
 
@@ -43,6 +45,6 @@ step_id = "stage-finalize"
 step_kind = "inference-step"
 
 [steps.step_payload]
-messages = [{ role = "user", content = "Reply with the single word: DONE" }]
+messages = [{ role = "user", content = "Using the upstream output above, reply with the improved one-sentence release announcement." }]
 tools = []
-params = { options = { num_predict = 8 } }
+params = { options = { num_predict = 32 } }
