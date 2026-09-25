@@ -96,6 +96,7 @@ class StatePlacementRefusal(StrEnum):
     IDENTITY_CHANGED = "identity-changed"
     UNVERIFIED_PLACEMENT = "unverified-placement"
     PATH_OUTSIDE_ROOT = "path-outside-root"
+    OPERATOR_DEFINED_UNVERIFIABLE = "operator-defined-unverifiable"
 
 
 class StateRootPlacementError(Exception):

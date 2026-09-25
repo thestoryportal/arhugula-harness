@@ -56,6 +56,8 @@ from harness_core.deployment_surface import DeploymentSurface
 from harness_runtime.bootstrap.mutable_context import _MutableHarnessContext
 from harness_runtime.config.state_placement import (
     StateKind,
+    StatePlacementRefusal,
+    StateRootPlacementError,
     require_inside_state_root,
     resolve_state_path,
 )
@@ -475,6 +477,14 @@ def _construct_backend(
     if configured is MemoryToolStorageBackend.OPERATOR_DEFINED:
         # B-MEMORY-SURFACE-BACKEND-IMPLS: operator class resolved from
         # backend_params['class_qualified_name'] via importlib introspection.
+        # [LAW:single-enforcer] An opaque constructor cannot prove where it writes;
+        # refuse declared placement here, before importing operator code.
+        if config.state_placement is not None:
+            raise StateRootPlacementError(
+                StatePlacementRefusal.OPERATOR_DEFINED_UNVERIFIABLE,
+                "operator_defined memory backend cannot prove persistent writes "
+                "remain inside the verified state root before construction",
+            )
         return _construct_operator_defined_backend(config)
     assert_never(configured)
 

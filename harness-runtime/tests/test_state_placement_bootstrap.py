@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -385,6 +386,82 @@ def test_a_database_connection_string_outside_the_root_refuses_before_any_write(
 
     assert excinfo.value.reason is Refusal.PATH_OUTSIDE_ROOT
     assert site.snapshot() == before
+
+
+def test_operator_defined_memory_refuses_placement_before_import_or_write(
+    site: Site, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = site.repo / ".harness" / "operator-memory"
+    calls: list[str] = []
+    operator_module = ModuleType("operator_memory_fixture")
+
+    class OutsideWriter:
+        def __init__(self, _params: object) -> None:
+            calls.append("construct")
+            outside.write_text("persistent data")
+
+    operator_module.OutsideWriter = OutsideWriter  # type: ignore[attr-defined]
+    original_import = memory_factory.importlib.import_module
+
+    def import_operator(name: str, package: str | None = None) -> ModuleType:
+        if name == "operator_memory_fixture":
+            calls.append("import")
+            return operator_module
+        return original_import(name, package)
+
+    monkeypatch.setattr(memory_factory.importlib, "import_module", import_operator)
+    config = site.config(
+        placement=True,
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.OPERATOR_DEFINED,
+            backend_params={"class_qualified_name": "operator_memory_fixture:OutsideWriter"},
+        ),
+    )
+    stamp = site.stamp(config)
+    before = site.snapshot()
+
+    with pytest.raises(StateRootPlacementError) as excinfo:
+        memory_factory._construct_backend(  # pyright: ignore[reportPrivateUsage]
+            MemoryToolStorageBackend.OPERATOR_DEFINED, config, stamp
+        )
+
+    assert excinfo.value.reason is Refusal.OPERATOR_DEFINED_UNVERIFIABLE
+    assert calls == []
+    assert site.snapshot() == before
+
+
+def test_operator_defined_memory_without_placement_still_constructs(
+    site: Site, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = site.repo / ".harness" / "operator-memory"
+    calls: list[str] = []
+
+    class OutsideWriter:
+        def __init__(self, params: object) -> None:
+            calls.append("construct")
+            outside.write_text("persistent data")
+            self.params = params
+
+    monkeypatch.setattr(
+        memory_factory,
+        "_resolve_class_qualified_name",
+        lambda _name: OutsideWriter,
+    )
+    config = site.config(
+        placement=False,
+        memory_tool_backend_config=MemoryToolBackendConfig(
+            backend=MemoryToolStorageBackend.OPERATOR_DEFINED,
+            backend_params={"class_qualified_name": "operator_memory_fixture:OutsideWriter"},
+        ),
+    )
+
+    backend = memory_factory._construct_backend(  # pyright: ignore[reportPrivateUsage]
+        MemoryToolStorageBackend.OPERATOR_DEFINED, config, None
+    )
+
+    assert isinstance(backend, OutsideWriter)
+    assert calls == ["construct"]
+    assert outside.read_text() == "persistent data"
 
 
 @pytest.mark.asyncio
