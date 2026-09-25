@@ -47,7 +47,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast, runtime_checkable
 
 from harness_core import PersonaTier
 from harness_core.cross_process_lock_deadline import CrossProcessLockTimeoutError
@@ -66,9 +66,10 @@ from harness_od.audit_ledger_types import SignatureAlgorithm
 from harness_od.multi_tenant_trace_separation_and_audit_ledger import signing_token
 from pydantic import ValidationError
 
+from harness_runtime.config.state_placement import require_inside_state_root
 from harness_runtime.lifecycle.audit_writer import AUDIT_WRITER_RESERVED_FILENAMES
 from harness_runtime.lifecycle.span_processor import REDACTION_TOKEN_SIGNING_KEY_ID
-from harness_runtime.types import AuditSigningBackendKind, RuntimeConfig
+from harness_runtime.types import AuditSigningBackendKind, RuntimeConfig, VerifiedStateRoot
 
 __all__ = [
     "AuditSigningConfigInvalidError",
@@ -196,6 +197,7 @@ def validate_and_initialize_mtc_audit_signing(
     config: RuntimeConfig,
     *,
     signing_backend: SigningBackend | None,
+    verified_state_root: VerifiedStateRoot | None,
     audit_sidecar_path: Path | None = None,
     ledger_has_audit_refs: Callable[[], bool] | None = None,
 ) -> None:
@@ -214,6 +216,7 @@ def validate_and_initialize_mtc_audit_signing(
     initialize_mtc_audit_signing_record(
         config,
         signing_backend=signing_backend,
+        verified_state_root=verified_state_root,
         audit_sidecar_path=audit_sidecar_path,
         ledger_has_audit_refs=ledger_has_audit_refs,
     )
@@ -495,10 +498,37 @@ def validate_record_key_distinctness(
         )
 
 
+def configured_cutover_record_path(
+    config: RuntimeConfig, verified_state_root: VerifiedStateRoot | None
+) -> Path | None:
+    """The ONE placement judgment for the configured cutover record path.
+
+    A configured record is a durable audit trust anchor: with `state_placement` declared it
+    must resolve inside the verified external state root, so a checkout clean or restore
+    cannot remove or rewind it while the external ledger survives. Bootstrap, the migration
+    author/retag modes and inspect's config-derived default all route through here
+    ([LAW:single-enforcer]); each takes the stamp explicitly. Blank means absent
+    (`_is_blank`, exactly as `validate_mtc_audit_signing_config`). With no placement the
+    path passes through unchanged (legacy). Never derives, moves, copies or re-mints a
+    record: an outside-root path refuses with `StateRootPlacementError` and the operator
+    migrates the original signed bytes while stopped.
+    """
+    raw = config.audit_cutover_record_path
+    if _is_blank(raw):
+        return None
+    return require_inside_state_root(
+        Path(cast("str", raw)),
+        config,
+        verified_state_root,
+        what="audit_cutover_record_path",
+    )
+
+
 def initialize_mtc_audit_signing_record(
     config: RuntimeConfig,
     *,
     signing_backend: SigningBackend | None,
+    verified_state_root: VerifiedStateRoot | None,
     audit_sidecar_path: Path | None = None,
     ledger_has_audit_refs: Callable[[], bool] | None = None,
 ) -> AuditCutoverRecord | None:
@@ -541,11 +571,10 @@ def initialize_mtc_audit_signing_record(
     # for validation purposes, at a non-MTC tier where nothing else
     # required it) slip through and create a record file literally named
     # `"   "` on disk.
-    record_path = (
-        None if _is_blank(config.audit_cutover_record_path) else config.audit_cutover_record_path
-    )
-    if record_path is None:
+    path = configured_cutover_record_path(config, verified_state_root)
+    if path is None:
         return None
+    record_path = str(path)
     record_key_id = (
         None
         if _is_blank(config.audit_cutover_record_key_id)
@@ -557,7 +586,6 @@ def initialize_mtc_audit_signing_record(
     assert record_key_id is not None and record_binding_id is not None  # config validated first
     assert signing_backend is not None  # config validated first (resolved_fail_closed at MTC)
 
-    path = Path(record_path)
     if audit_sidecar_path is not None:
         # Out-of-family Codex [P2] rounds 6+9: a record path resolving to
         # ANY audit-writer-owned file is rejected before any branch — the

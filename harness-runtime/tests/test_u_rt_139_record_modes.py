@@ -259,7 +259,10 @@ def test_retag_named_rows_reachable_by_tenant_read_content_and_hash_unchanged(
     )
 
     outcome = retag_sidecar(
-        dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
     )
     assert outcome.retagged == 1
     assert outcome.quarantined_left == 1
@@ -286,7 +289,12 @@ def test_post_retag_restart_and_append_pass_coverage(dep: _Deployment) -> None:
     entry = dep.signed_entry("ref-1", placeholder=True)
     dep.writer().append(None, entry)
     record = dep.write_record(_row(entry.entry_hash))
-    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    retag_sidecar(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
+    )
 
     fresh = dep.writer(cutover_record=record)
     appended = dep.signed_entry("ref-2")
@@ -306,7 +314,12 @@ def test_post_retag_refold_and_append_report_full_history(dep: _Deployment) -> N
     entry = dep.signed_entry("ref-1", placeholder=True)
     dep.writer().append(None, entry)
     record = dep.write_record(_row(entry.entry_hash))
-    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    retag_sidecar(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
+    )
 
     # The `"_single"`-scope read is where the immutable IS refs live —
     # without the record the retagged row is invisible to it.
@@ -344,13 +357,19 @@ def test_retag_interrupted_midway_leaves_all_or_nothing(
     monkeypatch.setattr(rm.os, "replace", crash_replace)
     with pytest.raises(OSError, match="simulated crash"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
     assert dep.sidecar_path.read_bytes() == before  # byte-identical — nothing mixed
 
     monkeypatch.setattr(rm.os, "replace", real_replace)
     outcome = retag_sidecar(
-        dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
     )
     assert outcome.retagged == 2
     tags = [
@@ -374,7 +393,10 @@ def test_retag_refuses_on_undispositioned_single_leftovers(dep: _Deployment) -> 
 
     with pytest.raises(RecordMigrationError, match="does not disposition"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
     assert dep.sidecar_path.read_bytes() == before
 
@@ -392,7 +414,10 @@ def test_baseline_pairs_project_through_alias_no_divergence(dep: _Deployment) ->
     before_lines = dep.sidecar_path.read_text().splitlines()
 
     outcome = retag_sidecar(
-        dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
     )
     assert outcome.baseline_aliased == 1
     after_lines = dep.sidecar_path.read_text().splitlines()
@@ -408,7 +433,10 @@ def test_baseline_pairs_project_through_alias_no_divergence(dep: _Deployment) ->
     dep2.write_record(_row(entry2.entry_hash))  # baseline pair undispositioned
     with pytest.raises(RecordMigrationError, match="does not disposition"):
         retag_sidecar(
-            dep2.config(), sidecar_path=dep2.sidecar_path, signing_backend=dep2.record_backend
+            dep2.config(),
+            sidecar_path=dep2.sidecar_path,
+            signing_backend=dep2.record_backend,
+            verified_state_root=None,
         )
 
 
@@ -428,7 +456,10 @@ def test_record_from_other_deployment_rejected_by_binding_compare(dep: _Deployme
 
     with pytest.raises(RecordMigrationError, match="ledger_binding_id"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
     assert dep.sidecar_path.read_bytes() == before
 
@@ -527,6 +558,7 @@ def test_authoring_round_trip_record_verifies_and_drives_retag(dep: _Deployment)
             # observed tag.
             tagged_entry.entry_hash: TenantAttestation(tenant="tenant-b"),
         },
+        verified_state_root=None,
     )
     assert dep.record_path.is_file()
     record_line, signature_line = dep.record_path.read_text().splitlines()
@@ -549,7 +581,10 @@ def test_authoring_round_trip_record_verifies_and_drives_retag(dep: _Deployment)
     assert by_source[("_single", baseline_hash)] is VerificationDisposition.PLACEHOLDER_EXEMPT
 
     outcome = retag_sidecar(
-        dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
     )
     assert outcome.retagged == 2  # both _single full rows; tagged row untouched
     assert outcome.already_tagged_left == 1
@@ -571,6 +606,7 @@ def test_authoring_refuses_unattested_without_tofu_and_quarantines_with(
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -580,10 +616,14 @@ def test_authoring_refuses_unattested_without_tofu_and_quarantines_with(
         signing_backend=dep.record_backend,
         attestation={},
         tofu_quarantine_tenant=_TENANT,
+        verified_state_root=None,
     )
     assert record.rows[0].verification_disposition is VerificationDisposition.QUARANTINED
     outcome = retag_sidecar(
-        dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
     )
     assert outcome.retagged == 0
     assert outcome.quarantined_left == 1
@@ -601,6 +641,7 @@ def test_authoring_refuses_to_overwrite_existing_record(dep: _Deployment) -> Non
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
 
 
@@ -625,7 +666,10 @@ def test_retag_tmp_hardlink_to_ledger_never_destroys_it(dep: _Deployment) -> Non
     _os.link(dep.ledger_path, tmp)  # the attacker's planted hard link
 
     outcome = retag_sidecar(
-        dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
     )
     assert outcome.retagged == 1
     assert dep.ledger_path.read_bytes() == ledger_before  # never truncated
@@ -652,6 +696,7 @@ def test_record_modes_refuse_config_bootstrap_would_reject(dep: _Deployment) -> 
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -670,6 +715,7 @@ def test_author_record_path_symlink_refused(dep: _Deployment) -> None:
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
     assert not target.exists()  # nothing was created through the link
 
@@ -695,6 +741,7 @@ def test_author_crash_before_publication_leaves_no_partial_record(
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
     assert not dep.record_path.with_name(dep.record_path.name + ".author.tmp").exists()
@@ -718,7 +765,10 @@ def test_retag_refuses_on_destination_collision(dep: _Deployment) -> None:
 
     with pytest.raises(RecordMigrationError, match="collide"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
     assert dep.sidecar_path.read_bytes() == before
 
@@ -756,7 +806,12 @@ def test_retag_read_happens_inside_replace_lock(
 
     monkeypatch.setattr(rm, "cross_process_replace_lock", tracking_lock)
     monkeypatch.setattr(rm, "_read_sidecar_rows", tracking_read)
-    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    retag_sidecar(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
+    )
     assert reads_under_lock == [True]
 
 
@@ -767,7 +822,12 @@ def test_tampered_alias_target_row_detected_on_single_read(dep: _Deployment) -> 
     entry = dep.signed_entry("ref-1", placeholder=True)
     dep.writer().append(None, entry)
     record = dep.write_record(_row(entry.entry_hash))
-    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    retag_sidecar(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
+    )
 
     rows = [json.loads(line) for line in dep.sidecar_path.read_text().splitlines() if line.strip()]
     rows[0]["entry"]["payload"]["audit_namespace_attrs"] = {"audit.actor": "TAMPERED"}
@@ -802,6 +862,7 @@ def test_record_path_aliasing_migration_temp_refused(dep: _Deployment) -> None:
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
 
 
@@ -822,6 +883,7 @@ def test_author_unverifiable_signature_refused(dep: _Deployment) -> None:
             sidecar_path=dep.sidecar_path,
             signing_backend=_SignOnlyBackend(secret=b"record-secret"),
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -839,6 +901,7 @@ def test_blank_tenant_bindings_rejected(dep: _Deployment) -> None:
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant="")},
+            verified_state_root=None,
         )
     with pytest.raises(RecordMigrationError, match="non-blank"):
         author_cutover_record(
@@ -847,6 +910,7 @@ def test_blank_tenant_bindings_rejected(dep: _Deployment) -> None:
             signing_backend=dep.record_backend,
             attestation={},
             tofu_quarantine_tenant="  ",
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -875,6 +939,7 @@ def test_stage4_consumer_mapping_gap_refused(dep: _Deployment) -> None:
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -899,7 +964,10 @@ def test_symlinked_sidecar_refused(dep: _Deployment) -> None:
     # the operator the actionable diagnosis).
     with pytest.raises(RecordMigrationError, match="migration reads only"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
     assert real.read_bytes()  # untouched through the link
 
@@ -916,7 +984,10 @@ def test_torn_tail_sidecar_refused(dep: _Deployment) -> None:
 
     with pytest.raises(RecordMigrationError, match="unterminated"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
 
 
@@ -933,7 +1004,10 @@ def test_baseline_alias_destination_collision_refused(dep: _Deployment) -> None:
 
     with pytest.raises(RecordMigrationError, match="collide"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
     assert dep.sidecar_path.read_bytes() == before
 
@@ -950,7 +1024,10 @@ def test_corrupt_sidecar_row_refused_before_any_signing(dep: _Deployment) -> Non
 
     with pytest.raises(RecordMigrationError, match="content-integrity"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
 
 
@@ -1012,7 +1089,8 @@ def test_placeholder_shape_never_infers_exemption(dep: _Deployment) -> None:
         dep.config(),
         sidecar_path=dep.sidecar_path,
         signing_backend=dep.record_backend,
-        attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},  # plain
+        attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+        verified_state_root=None,  # plain
     )
     assert record.rows[0].verification_disposition is VerificationDisposition.FOUR_TUPLE_REAL
 
@@ -1023,6 +1101,7 @@ def test_placeholder_shape_never_infers_exemption(dep: _Deployment) -> None:
         sidecar_path=dep.sidecar_path,
         signing_backend=dep.record_backend,
         attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT, placeholder_exempt=True)},
+        verified_state_root=None,
     )
     assert record.rows[0].verification_disposition is (VerificationDisposition.PLACEHOLDER_EXEMPT)
 
@@ -1042,6 +1121,7 @@ def test_already_tagged_rows_require_external_binding(dep: _Deployment) -> None:
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant="tenant-c")},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -1052,6 +1132,7 @@ def test_already_tagged_rows_require_external_binding(dep: _Deployment) -> None:
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={},
+            verified_state_root=None,
         )
 
     # Declared TOFU — quarantined under the OBSERVED tag.
@@ -1061,6 +1142,7 @@ def test_already_tagged_rows_require_external_binding(dep: _Deployment) -> None:
         signing_backend=dep.record_backend,
         attestation={},
         tofu_quarantine_tenant=_TENANT,
+        verified_state_root=None,
     )
     row = record.rows[0]
     assert row.source_tag == "tenant-b"
@@ -1080,7 +1162,12 @@ def test_deleted_retagged_destination_still_fails_coverage(dep: _Deployment) -> 
     entry = dep.signed_entry("ref-1", placeholder=True)
     dep.writer().append(None, entry)
     record = dep.write_record(_row(entry.entry_hash))
-    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    retag_sidecar(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
+    )
     dep.sidecar_path.write_text("", encoding="utf-8")  # destination row deleted
 
     fresh = dep.writer(cutover_record=record)
@@ -1106,7 +1193,12 @@ def test_rewrapped_quarantined_row_never_alias_covered(dep: _Deployment) -> None
     record = dep.write_record(
         _row(entry.entry_hash, disposition=VerificationDisposition.QUARANTINED)
     )
-    retag_sidecar(dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend)
+    retag_sidecar(
+        dep.config(),
+        sidecar_path=dep.sidecar_path,
+        signing_backend=dep.record_backend,
+        verified_state_root=None,
+    )
     rows = [json.loads(line) for line in dep.sidecar_path.read_text().splitlines() if line.strip()]
     assert rows[0]["tenant_tag"] == "_single"  # quarantined stayed
     rows[0]["tenant_tag"] = _TENANT  # the attacker's rewrap
@@ -1243,6 +1335,7 @@ def test_tagged_baseline_pair_requires_external_binding(dep: _Deployment) -> Non
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation=dict(base_attestation),
+            verified_state_root=None,
         )
     with pytest.raises(RecordMigrationError, match="relabeled wrapper"):
         author_cutover_record(
@@ -1253,6 +1346,7 @@ def test_tagged_baseline_pair_requires_external_binding(dep: _Deployment) -> Non
                 **base_attestation,
                 baseline_hash: TenantAttestation(tenant="tenant-c"),
             },
+            verified_state_root=None,
         )
     record = author_cutover_record(
         dep.config(),
@@ -1262,6 +1356,7 @@ def test_tagged_baseline_pair_requires_external_binding(dep: _Deployment) -> Non
             **base_attestation,
             baseline_hash: TenantAttestation(tenant="tenant-b"),
         },
+        verified_state_root=None,
     )
     by_hash = {row.entry_hash: row for row in record.rows}
     assert by_hash[baseline_hash].verification_disposition is (
@@ -1288,6 +1383,7 @@ def test_source_keyed_attestation_disambiguates_shared_hash(dep: _Deployment) ->
             f"tenant-b:{entry.entry_hash}": TenantAttestation(tenant="tenant-b"),
             f"tenant-c:{entry.entry_hash}": TenantAttestation(tenant="tenant-c"),
         },
+        verified_state_root=None,
     )
     scopes = {row.source_tag for row in record.rows}
     assert scopes == {"tenant-b", "tenant-c"}
@@ -1320,6 +1416,7 @@ def test_lower_tier_config_without_redaction_key_accepted(dep: _Deployment) -> N
         sidecar_path=dep.sidecar_path,
         signing_backend=dep.record_backend,
         attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+        verified_state_root=None,
     )
     assert record.rows
 
@@ -1351,6 +1448,7 @@ def test_record_modes_refuse_over_truncated_sidecar_history(dep: _Deployment) ->
             signing_backend=dep.record_backend,
             attestation={entry_a.entry_hash: TenantAttestation(tenant=_TENANT)},
             ledger_audit_refs=refs,
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -1361,6 +1459,7 @@ def test_record_modes_refuse_over_truncated_sidecar_history(dep: _Deployment) ->
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             ledger_audit_refs=refs,
+            verified_state_root=None,
         )
 
 
@@ -1384,6 +1483,7 @@ def test_historical_row_key_missing_from_mapping_typed_refusal(dep: _Deployment)
             sidecar_path=dep.sidecar_path,
             signing_backend=dep.record_backend,
             attestation={entry.entry_hash: TenantAttestation(tenant=_TENANT)},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
 
@@ -1399,7 +1499,10 @@ def test_malformed_baseline_pair_typed_refusal(dep: _Deployment) -> None:
 
     with pytest.raises(RecordMigrationError, match="string pairs"):
         retag_sidecar(
-            dep.config(), sidecar_path=dep.sidecar_path, signing_backend=dep.record_backend
+            dep.config(),
+            sidecar_path=dep.sidecar_path,
+            signing_backend=dep.record_backend,
+            verified_state_root=None,
         )
 
 
@@ -1732,6 +1835,7 @@ def test_direct_author_rejects_same_local_record_key_before_publication(
             sidecar_path=dep.sidecar_path,
             signing_backend=backend,
             attestation={},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
     assert dep.sidecar_path.read_text() == ""
@@ -1755,7 +1859,9 @@ def test_direct_retag_rejects_copied_local_record_key_before_sidecar_change(
     before_record = dep.record_path.read_bytes()
     before_sidecar = dep.sidecar_path.read_bytes()
     with pytest.raises(RecordMigrationError, match="physically distinct"):
-        retag_sidecar(config, sidecar_path=dep.sidecar_path, signing_backend=backend)
+        retag_sidecar(
+            config, sidecar_path=dep.sidecar_path, signing_backend=backend, verified_state_root=None
+        )
     assert dep.record_path.read_bytes() == before_record
     assert dep.sidecar_path.read_bytes() == before_sidecar
 
@@ -1768,6 +1874,7 @@ def test_direct_author_accepts_distinct_local_record_key(dep: _Deployment) -> No
         sidecar_path=dep.sidecar_path,
         signing_backend=backend,
         attestation={},
+        verified_state_root=None,
     )
     record_line, signature_line = dep.record_path.read_text().splitlines()
     assert AuditCutoverRecord.model_validate_json(record_line) == record
@@ -1782,7 +1889,11 @@ def test_direct_record_modes_refuse_unmapped_local_historical_row(dep: _Deployme
     original_sidecar = dep.sidecar_path.read_bytes()
     with pytest.raises(RecordMigrationError, match="local_public_key_paths"):
         author_cutover_record(
-            config, sidecar_path=dep.sidecar_path, signing_backend=backend, attestation={}
+            config,
+            sidecar_path=dep.sidecar_path,
+            signing_backend=backend,
+            attestation={},
+            verified_state_root=None,
         )
     assert not dep.record_path.exists()
     assert dep.sidecar_path.read_bytes() == original_sidecar
@@ -1799,6 +1910,8 @@ def test_direct_record_modes_refuse_unmapped_local_historical_row(dep: _Deployme
     dep.record_path.write_text(record.model_dump_json() + "\n" + signature.hex() + "\n")
     original_record = dep.record_path.read_bytes()
     with pytest.raises(RecordMigrationError, match="local_public_key_paths"):
-        retag_sidecar(config, sidecar_path=dep.sidecar_path, signing_backend=backend)
+        retag_sidecar(
+            config, sidecar_path=dep.sidecar_path, signing_backend=backend, verified_state_root=None
+        )
     assert dep.record_path.read_bytes() == original_record
     assert dep.sidecar_path.read_bytes() == original_sidecar

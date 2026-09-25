@@ -170,6 +170,7 @@ async def execute(
     cutover_record = initialize_mtc_audit_signing_record(
         config,
         signing_backend=ctx.audit_signing_backend,
+        verified_state_root=ctx.verified_state_root,
         audit_sidecar_path=(
             stage_1_ledger_writer.handle.canonical_path.parent / AUDIT_SIDECAR_FILENAME
         ),

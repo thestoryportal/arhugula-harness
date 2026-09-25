@@ -167,7 +167,9 @@ def test_mtc_explicit_false_rejected_at_config_validation(tmp_path: Path) -> Non
     kwargs["audit_signing_fail_closed"] = False
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="audit_signing_fail_closed=false"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 @pytest.mark.parametrize(
@@ -193,7 +195,9 @@ def test_fail_closed_on_without_backend_rejected_at_bootstrap_every_tier(
         backend=AuditSigningBackendKind.NONE,
     )
     with pytest.raises(IncompatibleConfigVersion, match="audit_signing.backend"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=None)
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=None, verified_state_root=None
+        )
 
 
 @pytest.mark.parametrize(
@@ -225,7 +229,9 @@ def test_fail_closed_on_without_store_key_rejected_at_bootstrap_every_tier(
         tenant_id=tenant_id,
     )
     with pytest.raises(IncompatibleConfigVersion, match="protected result store key"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_fail_closed_on_with_malformed_store_key_rejected_at_bootstrap(
@@ -245,7 +251,9 @@ def test_fail_closed_on_with_malformed_store_key_rejected_at_bootstrap(
         audit_signing_fail_closed=True,
     )
     with pytest.raises(IncompatibleConfigVersion, match="protected result store key"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_fail_closed_off_without_store_key_accepted(
@@ -261,7 +269,9 @@ def test_fail_closed_off_without_store_key_accepted(
         audit_signing_fail_closed=False,
         backend=AuditSigningBackendKind.NONE,
     )
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=None)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=None, verified_state_root=None
+    )
 
 
 def test_env_only_override_honored_through_both_loaders() -> None:
@@ -323,7 +333,9 @@ def test_lower_tier_explicit_true_with_backend_accepted(tmp_path: Path) -> None:
         backend=AuditSigningBackendKind.AWS_KMS,
         key_arns={"harness-runtime-dev": _ARN_A},
     )
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=_FakeBackend(), verified_state_root=None
+    )
     assert resolve_audit_signing_fail_closed(config) is True
 
 
@@ -343,7 +355,9 @@ def test_non_mtc_record_opt_in_without_backend_rejected(tmp_path: Path) -> None:
         audit_ledger_binding_id="sidecar-1",
     )
     with pytest.raises(AuditSigningConfigInvalidError, match="backend is required"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=None)
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=None, verified_state_root=None
+        )
 
 
 def test_blank_string_record_fields_treated_as_missing(tmp_path: Path) -> None:
@@ -362,7 +376,9 @@ def test_blank_string_record_fields_treated_as_missing(tmp_path: Path) -> None:
         kwargs[blank_field] = "   "  # whitespace-only, not None
         config = _config(tmp_path, **kwargs)
         with pytest.raises(IncompatibleConfigVersion, match=blank_field):
-            validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+            validate_and_initialize_mtc_audit_signing(
+                config, signing_backend=_FakeBackend(), verified_state_root=None
+            )
 
 
 def test_blank_record_path_at_non_mtc_does_not_create_whitespace_named_file(
@@ -383,7 +399,9 @@ def test_blank_record_path_at_non_mtc_does_not_create_whitespace_named_file(
         audit_cutover_record_key_id="   ",
         audit_ledger_binding_id="   ",
     )
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=_FakeBackend(), verified_state_root=None
+    )
     assert not (tmp_path / "   ").exists()
     assert list(tmp_path.iterdir()) == []
 
@@ -402,7 +420,9 @@ def test_mtc_invalid_tenant_rejected_at_config_validation(tmp_path: Path) -> Non
     kwargs["tenant_id"] = None
     config = _config(tmp_path, **kwargs)
     with pytest.raises(IncompatibleConfigVersion, match="tenant_id"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
     for reserved in ("", "_single"):
         kwargs2 = _mtc_ready_kwargs(tmp_path)
@@ -421,7 +441,9 @@ def test_bootstrap_rejects_record_key_sharing_row_material(tmp_path: Path) -> No
     kwargs["key_arns"] = {"cutover-key": _ARN_A, "row-key": _ARN_A}
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="physically distinct"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_bootstrap_rejects_record_key_id_equal_to_row_signing_consumer_id(tmp_path: Path) -> None:
@@ -435,7 +457,9 @@ def test_bootstrap_rejects_record_key_id_equal_to_row_signing_consumer_id(tmp_pa
     kwargs["key_arns"] = {"harness-runtime-dev": _ARN_A}
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="row-signing consumer key ids"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_bootstrap_rejects_redaction_token_key_as_record_key(tmp_path: Path) -> None:
@@ -448,7 +472,9 @@ def test_bootstrap_rejects_redaction_token_key_as_record_key(tmp_path: Path) -> 
     kwargs["key_arns"] = {"harness-runtime-redaction-token": _ARN_A}
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="row-signing consumer key ids"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_existing_non_regular_record_path_rejected_not_overwritten(tmp_path: Path) -> None:
@@ -462,7 +488,9 @@ def test_existing_non_regular_record_path_rejected_not_overwritten(tmp_path: Pat
     kwargs["audit_cutover_record_path"] = str(record_dir)
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="not a regular file"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
     assert record_dir.is_dir()  # untouched
 
     broken_symlink = tmp_path / "record2.json"
@@ -470,7 +498,9 @@ def test_existing_non_regular_record_path_rejected_not_overwritten(tmp_path: Pat
     kwargs["audit_cutover_record_path"] = str(broken_symlink)
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="not a regular file"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
     assert broken_symlink.is_symlink()  # untouched, not replaced
 
 
@@ -486,7 +516,9 @@ def test_bootstrap_rejects_record_key_sharing_arn_spelled_as_bare_uuid(tmp_path:
     }
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="physically distinct"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_bootstrap_rejects_unresolvable_record_key_id(tmp_path: Path) -> None:
@@ -494,7 +526,9 @@ def test_bootstrap_rejects_unresolvable_record_key_id(tmp_path: Path) -> None:
     kwargs["audit_cutover_record_key_id"] = "does-not-exist"
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="does not resolve"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_record_algorithm_authority_is_the_mapping(tmp_path: Path) -> None:
@@ -521,7 +555,9 @@ def test_record_algorithm_authority_is_the_mapping(tmp_path: Path) -> None:
     kwargs["audit_cutover_record_path"] = str(record_path)
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="algorithm"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -538,7 +574,9 @@ def test_mtc_bootstrap_without_record_inputs_rejected(tmp_path: Path, missing_fi
     kwargs[missing_field] = None
     config = _config(tmp_path, **kwargs)
     with pytest.raises(IncompatibleConfigVersion, match=missing_field):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_FakeBackend(), verified_state_root=None
+        )
 
 
 def test_greenfield_empty_record_signs_configured_binding(tmp_path: Path) -> None:
@@ -550,7 +588,9 @@ def test_greenfield_empty_record_signs_configured_binding(tmp_path: Path) -> Non
     backend = _FakeBackend()
 
     assert not record_path.is_file()
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=backend, verified_state_root=None
+    )
     assert record_path.is_file()
 
     lines = record_path.read_text(encoding="utf-8").splitlines()
@@ -566,7 +606,9 @@ def test_greenfield_empty_record_signs_configured_binding(tmp_path: Path) -> Non
     # Re-running against the now-existing file takes the verify path, not
     # greenfield again — a second call must not raise or rewrite it.
     written_mtime = record_path.stat().st_mtime_ns
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=backend, verified_state_root=None
+    )
     assert record_path.stat().st_mtime_ns == written_mtime
 
 
@@ -579,12 +621,16 @@ def test_existing_record_with_wrong_binding_id_rejected(tmp_path: Path) -> None:
     kwargs["audit_cutover_record_path"] = str(record_path)
     kwargs["audit_ledger_binding_id"] = "sidecar-original"
     original_config = _config(tmp_path, **kwargs)
-    validate_and_initialize_mtc_audit_signing(original_config, signing_backend=backend)
+    validate_and_initialize_mtc_audit_signing(
+        original_config, signing_backend=backend, verified_state_root=None
+    )
 
     kwargs["audit_ledger_binding_id"] = "sidecar-different"
     mismatched_config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="ledger_binding_id"):
-        validate_and_initialize_mtc_audit_signing(mismatched_config, signing_backend=backend)
+        validate_and_initialize_mtc_audit_signing(
+            mismatched_config, signing_backend=backend, verified_state_root=None
+        )
 
 
 def test_greenfield_minting_rejected_when_sidecar_has_rows(tmp_path: Path) -> None:
@@ -610,14 +656,20 @@ def test_greenfield_minting_rejected_when_sidecar_has_rows(tmp_path: Path) -> No
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="NOT fresh"):
         validate_and_initialize_mtc_audit_signing(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
     assert not record_path.exists()  # nothing minted
 
     # Control: an ABSENT (or empty) sidecar IS fresh — greenfield proceeds.
     fresh_sidecar = tmp_path / "no-such-sidecar.jsonl"
     validate_and_initialize_mtc_audit_signing(
-        config, signing_backend=_FakeBackend(), audit_sidecar_path=fresh_sidecar
+        config,
+        signing_backend=_FakeBackend(),
+        audit_sidecar_path=fresh_sidecar,
+        verified_state_root=None,
     )
     assert record_path.is_file()
 
@@ -640,6 +692,7 @@ def test_greenfield_minting_rejected_when_is_ledger_has_audit_refs(tmp_path: Pat
             signing_backend=_FakeBackend(),
             audit_sidecar_path=absent_sidecar,
             ledger_has_audit_refs=lambda: True,
+            verified_state_root=None,
         )
     assert not record_path.exists()
 
@@ -652,6 +705,7 @@ def test_greenfield_minting_rejected_when_is_ledger_has_audit_refs(tmp_path: Pat
             signing_backend=_FakeBackend(),
             audit_sidecar_path=absent_sidecar,
             ledger_has_audit_refs=_raising_probe,
+            verified_state_root=None,
         )
     assert not record_path.exists()
 
@@ -661,6 +715,7 @@ def test_greenfield_minting_rejected_when_is_ledger_has_audit_refs(tmp_path: Pat
         signing_backend=_FakeBackend(),
         audit_sidecar_path=absent_sidecar,
         ledger_has_audit_refs=lambda: False,
+        verified_state_root=None,
     )
     assert record_path.is_file()
 
@@ -685,11 +740,15 @@ def test_greenfield_signature_verified_before_publication(tmp_path: Path) -> Non
     config = _config(tmp_path, **kwargs)
 
     with pytest.raises(AuditSigningConfigInvalidError, match="round-trip RAISED"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_SignOnlyBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_SignOnlyBackend(), verified_state_root=None
+        )
     assert not record_path.exists()
 
     with pytest.raises(AuditSigningConfigInvalidError, match="verification round-trip"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=_WrongSignatureBackend())
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=_WrongSignatureBackend(), verified_state_root=None
+        )
     assert not record_path.exists()
 
 
@@ -711,7 +770,9 @@ def test_greenfield_temp_file_symlink_planting_does_not_overwrite_target(tmp_pat
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(record_path)
     config = _config(tmp_path, **kwargs)
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=_FakeBackend())
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=_FakeBackend(), verified_state_root=None
+    )
 
     assert victim.read_text(encoding="utf-8") == "precious"  # never followed
     assert record_path.is_file() and not record_path.is_symlink()
@@ -741,14 +802,20 @@ def test_record_key_used_by_persisted_sidecar_rows_rejected(tmp_path: Path) -> N
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="already used to sign"):
         validate_and_initialize_mtc_audit_signing(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
 
     # Unparseable row → fail closed.
     sidecar.write_text("not-json\n", encoding="utf-8")
     with pytest.raises(AuditSigningConfigInvalidError, match="unparseable"):
         validate_and_initialize_mtc_audit_signing(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
 
 
@@ -765,7 +832,10 @@ def test_non_string_persisted_key_id_fails_closed(tmp_path: Path) -> None:
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="non-string"):
         validate_and_initialize_mtc_audit_signing(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
 
 
@@ -782,7 +852,9 @@ def test_legacy_baseline_sidecar_rows_skipped_not_rejected(tmp_path: Path) -> No
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(record_path)
     config = _config(tmp_path, **kwargs)
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=backend, verified_state_root=None
+    )
 
     sidecar = tmp_path / "audit-entries.jsonl"
     sidecar.write_text(
@@ -791,7 +863,7 @@ def test_legacy_baseline_sidecar_rows_skipped_not_rejected(tmp_path: Path) -> No
     # Record exists + sidecar holds ONLY a baseline row → verify path, scan
     # skips the baseline row, bootstrap validation succeeds.
     validate_and_initialize_mtc_audit_signing(
-        config, signing_backend=backend, audit_sidecar_path=sidecar
+        config, signing_backend=backend, audit_sidecar_path=sidecar, verified_state_root=None
     )
 
 
@@ -812,7 +884,10 @@ def test_unmapped_persisted_row_key_fails_closed(tmp_path: Path) -> None:
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="cannot be proven"):
         validate_and_initialize_mtc_audit_signing(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
 
 
@@ -830,7 +905,9 @@ def test_greenfield_publication_race_converges_on_winner(tmp_path: Path) -> None
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(record_path)
     config = _config(tmp_path, **kwargs)
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=winner_backend)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=winner_backend, verified_state_root=None
+    )
     winner_bytes = record_path.read_bytes()
 
     # Same-config loser (simulating the race window AFTER its absent-check):
@@ -884,7 +961,10 @@ def test_record_path_colliding_with_sidecar_rejected(tmp_path: Path) -> None:
     config = _config(tmp_path, **kwargs)
     with pytest.raises(AuditSigningConfigInvalidError, match="audit-writer-owned"):
         validate_and_initialize_mtc_audit_signing(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
     assert not sidecar.exists()  # nothing written
 
@@ -901,7 +981,10 @@ def test_record_path_colliding_with_snapshot_files_rejected(tmp_path: Path) -> N
         config = _config(tmp_path, **kwargs)
         with pytest.raises(AuditSigningConfigInvalidError, match="audit-writer-owned"):
             validate_and_initialize_mtc_audit_signing(
-                config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+                config,
+                signing_backend=_FakeBackend(),
+                audit_sidecar_path=sidecar,
+                verified_state_root=None,
             )
         assert not (tmp_path / reserved).exists()
 
@@ -919,7 +1002,9 @@ def test_explicit_false_at_mtc_wins_over_missing_inputs(tmp_path: Path) -> None:
         # tenant/record inputs all missing — Pass 1 would have plenty to say.
     )
     with pytest.raises(AuditSigningConfigInvalidError, match="audit_signing_fail_closed=false"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=None)
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=None, verified_state_root=None
+        )
 
 
 def test_existing_record_with_trailing_lines_rejected(tmp_path: Path) -> None:
@@ -931,12 +1016,16 @@ def test_existing_record_with_trailing_lines_rejected(tmp_path: Path) -> None:
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(record_path)
     config = _config(tmp_path, **kwargs)
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=backend, verified_state_root=None
+    )
 
     original = record_path.read_text(encoding="utf-8")
     record_path.write_text(original + "unsigned trailing garbage\n", encoding="utf-8")
     with pytest.raises(AuditSigningConfigInvalidError, match="exactly 2 lines"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=backend, verified_state_root=None
+        )
 
 
 def test_existing_record_tampered_signature_rejected(tmp_path: Path) -> None:
@@ -945,7 +1034,9 @@ def test_existing_record_tampered_signature_rejected(tmp_path: Path) -> None:
     kwargs = _mtc_ready_kwargs(tmp_path)
     kwargs["audit_cutover_record_path"] = str(record_path)
     config = _config(tmp_path, **kwargs)
-    validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+    validate_and_initialize_mtc_audit_signing(
+        config, signing_backend=backend, verified_state_root=None
+    )
 
     lines = record_path.read_text(encoding="utf-8").splitlines()
     original_sig = bytes.fromhex(lines[1])
@@ -953,7 +1044,9 @@ def test_existing_record_tampered_signature_rejected(tmp_path: Path) -> None:
     tampered_sig = bytes([flipped_first_byte]) + original_sig[1:]
     record_path.write_text(lines[0] + "\n" + tampered_sig.hex() + "\n")
     with pytest.raises(AuditSigningConfigInvalidError, match="signature verification"):
-        validate_and_initialize_mtc_audit_signing(config, signing_backend=backend)
+        validate_and_initialize_mtc_audit_signing(
+            config, signing_backend=backend, verified_state_root=None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1187,6 +1280,7 @@ def test_b64_probe_publish_window_excludes_concurrent_sidecar_append(
             config,
             signing_backend=_FakeBackend(),
             audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
     finally:
         appender.join(timeout=10.0)
@@ -1228,7 +1322,10 @@ def test_b64_unlockable_sidecar_path_surfaces_typed_config_error(tmp_path: Path)
 
     with pytest.raises(AuditSigningConfigInvalidError, match="could not be locked"):
         initialize_mtc_audit_signing_record(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar_as_dir
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar_as_dir,
+            verified_state_root=None,
         )
     assert not record_path.exists()  # nothing minted over the failure
 
@@ -1258,7 +1355,10 @@ def test_b64_mangled_legacy_lock_sidecar_surfaces_typed_config_error(tmp_path: P
 
     with pytest.raises(AuditSigningConfigInvalidError, match="could not be locked"):
         initialize_mtc_audit_signing_record(
-            config, signing_backend=_FakeBackend(), audit_sidecar_path=sidecar
+            config,
+            signing_backend=_FakeBackend(),
+            audit_sidecar_path=sidecar,
+            verified_state_root=None,
         )
     assert not record_path.exists()  # nothing minted over the failure
 
@@ -1291,7 +1391,7 @@ def test_b64_verify_branch_releases_sidecar_lock_before_record_verification(
     # persisted row makes the second call take the verify branch with an
     # EXISTING sidecar (file-mode lock).
     minted = validation.initialize_mtc_audit_signing_record(
-        config, signing_backend=backend, audit_sidecar_path=sidecar
+        config, signing_backend=backend, audit_sidecar_path=sidecar, verified_state_root=None
     )
     assert minted is not None and record_path.is_file()
     sidecar.write_text(
@@ -1318,7 +1418,7 @@ def test_b64_verify_branch_releases_sidecar_lock_before_record_verification(
 
     monkeypatch.setattr(validation, "_verify_existing_record", instrumented_verify)
     verified = validation.initialize_mtc_audit_signing_record(
-        config, signing_backend=backend, audit_sidecar_path=sidecar
+        config, signing_backend=backend, audit_sidecar_path=sidecar, verified_state_root=None
     )
     assert verified is not None
     # The load-bearing assertion: the sidecar lock was already released
@@ -1409,6 +1509,7 @@ def test_b93_mint_folds_a_lock_timeout_into_the_config_taxonomy(
                 config,
                 signing_backend=_FakeBackend(),
                 audit_sidecar_path=sidecar,
+                verified_state_root=None,
             )
 
     assert "could not be locked" in str(caught.value)
@@ -1614,7 +1715,7 @@ def test_local_historical_row_resolution_and_record_alias_refusal(tmp_path: Path
     config = configured({})
     backend = make_audit_signing_backend(config.audit_signing)
     validate_and_initialize_mtc_audit_signing(
-        config, signing_backend=backend, audit_sidecar_path=sidecar
+        config, signing_backend=backend, audit_sidecar_path=sidecar, verified_state_root=None
     )
     assert record_path.is_file()
     original_record = record_path.read_bytes()
@@ -1622,17 +1723,17 @@ def test_local_historical_row_resolution_and_record_alias_refusal(tmp_path: Path
     sidecar.write_text(json.dumps(row) + "\n")
     with pytest.raises(AuditSigningConfigInvalidError, match="local_public_key_paths"):
         validate_and_initialize_mtc_audit_signing(
-            config, signing_backend=backend, audit_sidecar_path=sidecar
+            config, signing_backend=backend, audit_sidecar_path=sidecar, verified_state_root=None
         )
     mapped = configured({"retired": str(retired_public)})
     mapped_backend = make_audit_signing_backend(mapped.audit_signing)
     validate_and_initialize_mtc_audit_signing(
-        mapped, signing_backend=mapped_backend, audit_sidecar_path=sidecar
+        mapped, signing_backend=mapped_backend, audit_sidecar_path=sidecar, verified_state_root=None
     )
     row["entry"]["signature_attrs"]["audit_signature_key_id"] = "active"
     sidecar.write_text(json.dumps(row) + "\n")
     validate_and_initialize_mtc_audit_signing(
-        mapped, signing_backend=mapped_backend, audit_sidecar_path=sidecar
+        mapped, signing_backend=mapped_backend, audit_sidecar_path=sidecar, verified_state_root=None
     )
     assert record_path.read_bytes() == original_record
 

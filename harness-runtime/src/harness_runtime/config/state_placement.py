@@ -59,6 +59,7 @@ __all__ = [
     "filesystem_type_from_mountinfo",
     "linux_filesystem_type",
     "place_state_dir",
+    "probe_declared_state_root",
     "probe_state_root",
     "require_inside_state_root",
     "resolve_state_path",
@@ -493,6 +494,24 @@ def probe_state_root(
             StatePlacementRefusal.MARKER_MISSING, f"no {MARKER_NAME} marker in the state root"
         )
     return _stamp(judged.resolved, root_id)
+
+
+def probe_declared_state_root(config: RuntimeConfig) -> VerifiedStateRoot | None:
+    """The read-only stamp for a config: `None` when no placement is declared.
+
+    The one probe every read-only or admin consumer calls, so none re-derives the
+    checkout, worktree base and bindings the verifier judges against. A declared root that
+    cannot be verified raises `StateRootPlacementError`; it never yields a guessed path.
+    """
+    if config.state_placement is None:
+        return None
+    return probe_state_root(
+        config.state_placement,
+        repository_root=config.repository_root,
+        worktree_base=transient_worktree_base(config.repository_root),
+        path_bindings=config.path_bindings,
+        filesystem_type=linux_filesystem_type,
+    )
 
 
 def bootstrap_state_root(

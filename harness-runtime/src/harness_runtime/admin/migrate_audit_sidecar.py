@@ -174,6 +174,10 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
         retag_sidecar,
     )
     from harness_runtime.config.audit_signing import make_audit_signing_backend
+    from harness_runtime.config.state_placement import (
+        StateRootPlacementError,
+        probe_declared_state_root,
+    )
     from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
     from harness_runtime.lifecycle.audit_writer import AUDIT_SIDECAR_FILENAME
 
@@ -204,6 +208,14 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
     try:
         validate_mtc_audit_signing_config(config)
     except (AuditSigningConfigInvalidError, IncompatibleConfigVersion) as exc:
+        print(f"record migration refused: {exc}", file=sys.stderr)
+        return 1
+    # Placement stamp for the record path: a mutating admin never creates the root, so this
+    # is the read-only probe. An unverifiable declared root refuses here, before any I/O
+    # (the outside-root judgment itself runs inside the record modes, before their writes).
+    try:
+        verified_state_root = probe_declared_state_root(config)
+    except StateRootPlacementError as exc:
         print(f"record migration refused: {exc}", file=sys.stderr)
         return 1
     from harness_od.per_family_audit_verification import (
@@ -299,6 +311,7 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
                 config,
                 sidecar_path=sidecar_path,
                 signing_backend=backend,
+                verified_state_root=verified_state_root,
                 attestation=attestation,
                 tofu_quarantine_tenant=args.tofu_quarantine,
                 ledger_audit_refs=ledger_audit_refs,
@@ -312,6 +325,7 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
                 config,
                 sidecar_path=sidecar_path,
                 signing_backend=backend,
+                verified_state_root=verified_state_root,
                 ledger_audit_refs=ledger_audit_refs,
             )
             print(
@@ -329,7 +343,8 @@ def _run_record_mode(args: argparse.Namespace, ledger_path: Path) -> int:
         # rather than the command's refusal exit 1.
         print(f"migration refused: {exc}", file=sys.stderr)
         return 1
-    except RecordMigrationError as exc:
+    except (RecordMigrationError, StateRootPlacementError) as exc:
+        # A placement refusal carries its RT-FAIL-STATE-ROOT-PLACEMENT:<reason> class.
         print(f"record migration refused: {exc}", file=sys.stderr)
         return 1
     except SigningBackendSdkUnavailableError as exc:

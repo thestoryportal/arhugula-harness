@@ -904,13 +904,33 @@ def _run_audit_verification_if_engaged(
     # overrides it (codex round-3 P2 — a fully configured MTC deployment
     # must not report UNVERIFIED just because the CLI didn't duplicate the
     # configured path).
+    #
+    # The config-derived default is the production record, so with `state_placement`
+    # declared it must sit inside the verified root (the shared placement judgment, on the
+    # read-only probe). An explicit --cutover-record stays a diagnostic that is never a
+    # placement witness. A refusal is reported and exits; it is never downgraded to an
+    # absent-record report.
     cutover_record_path: Path | None = args.cutover_record
     if (
         cutover_record_path is None
         and runtime_config is not None
         and runtime_config.audit_cutover_record_path is not None
     ):
-        cutover_record_path = Path(runtime_config.audit_cutover_record_path)
+        from harness_runtime.config.state_placement import (
+            StateRootPlacementError,
+            probe_declared_state_root,
+        )
+        from harness_runtime.lifecycle.audit_signing_fail_closed_validation import (
+            configured_cutover_record_path,
+        )
+
+        try:
+            cutover_record_path = configured_cutover_record_path(
+                runtime_config, probe_declared_state_root(runtime_config)
+            )
+        except StateRootPlacementError as exc:
+            print(f"harness-inspect: {exc}", file=sys.stderr)
+            return _EXIT_INSPECT_PATH
     try:
         outcome = run_audit_inspection(
             sidecar_path=sidecar_path,
@@ -1111,10 +1131,8 @@ def _read_protected_result_store_if_engaged(
     from harness_runtime.config.state_placement import (
         StateKind,
         StateRootPlacementError,
-        linux_filesystem_type,
-        probe_state_root,
+        probe_declared_state_root,
         resolve_state_path,
-        transient_worktree_base,
     )
     from harness_runtime.config_source import RuntimeConfigLoadError, RuntimeConfigSource
     from harness_runtime.lifecycle.protected_result_store import (
@@ -1125,21 +1143,13 @@ def _read_protected_result_store_if_engaged(
         config = RuntimeConfigSource.load(config_file=args.runtime_config)
     except RuntimeConfigLoadError:
         return None
-    verified = None
-    if config.state_placement is not None:
-        # Read-only: probe never creates. A placement that cannot be verified leaves the
-        # root UNRESOLVABLE (no row) — never a guessed checkout-local directory. Reporting
-        # the typed refusal itself belongs to the inspect placement surface (S3).
-        try:
-            verified = probe_state_root(
-                config.state_placement,
-                repository_root=config.repository_root,
-                worktree_base=transient_worktree_base(config.repository_root),
-                path_bindings=config.path_bindings,
-                filesystem_type=linux_filesystem_type,
-            )
-        except StateRootPlacementError:
-            return None
+    # Read-only: probe never creates. A placement that cannot be verified leaves the
+    # root UNRESOLVABLE (no row) — never a guessed checkout-local directory. Reporting
+    # the typed refusal itself belongs to the inspect placement surface (S3).
+    try:
+        verified = probe_declared_state_root(config)
+    except StateRootPlacementError:
+        return None
     return read_protected_result_store_snapshot(
         resolve_state_path(StateKind.PROTECTED_RESULTS, config, verified)
     )
