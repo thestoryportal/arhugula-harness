@@ -48,6 +48,7 @@ __all__ = [
     "HeldLease",
     "InvalidClaim",
     "LeaseBusy",
+    "LeaseCapability",
     "LeaseInvalid",
     "LeaseMissing",
     "LeaseProbe",
@@ -200,18 +201,56 @@ class LeaseInvalid:
     status: LeaseProbe = LeaseProbe.INVALID
 
 
+_MINT = object()
+
+
+class LeaseCapability:
+    """The store-issued, still-live hold on one lease flock, from `claim` to the worker's close.
+
+    [LAW:types-are-the-program] Ownership is provenance, not a lock taken on demand: an
+    instance can only be minted by `ResumeClaimStore.claim`, which hands it the fd that took
+    the flock, and only `close` releases that fd. A validator that flock()s a presented fd
+    would turn any unlocked descriptor into an owner the moment the real holder lets go, so
+    admission asks whether the capability is one the store issued and that is still open.
+
+    Trust assumption: `_MINT` is module-private, so this stops any caller working through the
+    public API, including a `HeldClaim` rebuilt from the readable token and a fresh fd. It is
+    not a hostile same-process boundary; code that reaches into this module's privates or
+    closes the fd behind the capability's back is outside the model. Across processes the
+    only way to hold the flock is to inherit the fd, which is the worker handoff itself.
+    """
+
+    __slots__ = ("_fd",)
+
+    def __init__(self, mint: object, fd: int) -> None:
+        if mint is not _MINT:
+            raise TypeError("a lease capability is issued only by ResumeClaimStore.claim")
+        self._fd = fd
+
+    @property
+    def fd(self) -> int:
+        return self._fd
+
+    def close(self) -> None:
+        if self._fd >= 0:
+            os.close(self._fd)
+            self._fd = -1
+
+
 @dataclass
 class HeldClaim:
-    """The lease fd remains locked until the actual executing worker closes it."""
+    """The lease capability stays live until the actual executing worker closes it."""
 
     token: str
     record_ref: JournalRecordRef
-    lease_fd: int
+    lease: LeaseCapability
+
+    @property
+    def lease_fd(self) -> int:
+        return self.lease.fd
 
     def close(self) -> None:
-        if self.lease_fd >= 0:
-            os.close(self.lease_fd)
-            self.lease_fd = -1
+        self.lease.close()
 
     def __enter__(self) -> HeldClaim:
         return self
@@ -415,20 +454,22 @@ class ResumeClaimStore:
         current = os.stat(path, follow_symlinks=False)
         return (own.st_dev, own.st_ino) == (current.st_dev, current.st_ino)
 
-    def _require_lease_lock_held(self, fd: int, lease: Path) -> None:
-        """Prove THIS descriptor holds the lease's exclusive flock (nonblocking).
+    def _require_lease_live(self, lease: object, path: Path) -> None:
+        """Admit only a store-issued capability that is still open on the canonical lease.
 
-        Inode and frame checks only show the fd names the canonical file; a fresh read-only
-        fd plus the disk-readable token would pass them. Two nonblocking attempts prove
-        ownership: a fresh open of the canonical lease must be REFUSED the lock (someone
-        holds it), and this fd's own re-lock must succeed (a holder's re-lock is a no-op,
-        a non-holder's would be refused). If the fresh open acquires the lock nobody holds
-        the lease, so this fd is no holder either. Never blocks; the transient probe lock
-        is released on close.
+        The single flock attempt is on a FRESH open and can only refuse: if it acquires, the
+        capability's lock is gone (closed or released behind its back) and the transient lock
+        drops on close. Nothing here ever locks the presented fd, so no unlocked descriptor
+        can become a holder by winning a lock that was just freed.
         """
         import fcntl  # POSIX-only; the degraded platform refuses before any caller gets here.
 
-        probe = os.open(lease, _OPEN_FLAGS)
+        # [LAW:parse-dont-validate] A forged HeldClaim carries a stand-in, never a capability.
+        if not isinstance(lease, LeaseCapability) or lease.fd < 0:
+            raise ValueError("lease is not a live store-issued capability")
+        if not self._same_inode(lease.fd, path):
+            raise ValueError("lease is not the canonical live lease")
+        probe = os.open(path, _OPEN_FLAGS)
         try:
             try:
                 fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -439,12 +480,6 @@ class ResumeClaimStore:
                 raise ValueError("lease lock is not held by anyone")
         finally:
             os.close(probe)  # also drops a transient lock taken by the probe
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
-                raise ValueError("lease lock is held by another descriptor") from exc
-            raise
 
     def _publish_lease(self, paths: _Paths, ref: JournalRecordRef) -> None:
         """Call only under the journal lock; never replace the canonical inode."""
@@ -557,13 +592,11 @@ class ResumeClaimStore:
     def _require_parent_carried(self, ref: JournalRecordRef, parent: StartedClaim) -> None:
         """Admit a positional child ref only through a live STARTED parent that carries it once."""
         # [LAW:single-enforcer] The one place child recency is decided; every fault refuses.
-        if parent.lease_fd < 0 or parent.record_ref.tenant != ref.tenant:
-            raise ClaimRefusedError("parent claim is closed or in another tenant scope")
+        if parent.record_ref.tenant != ref.tenant:
+            raise ClaimRefusedError("parent claim is in another tenant scope")
         parent_paths = self.paths_for(parent.record_ref)
         try:
-            if not self._same_inode(parent.lease_fd, parent_paths.lease):
-                raise ValueError("parent lease is not live")
-            self._require_lease_lock_held(parent.lease_fd, parent_paths.lease)
+            self._require_lease_live(parent.claim.lease, parent_paths.lease)
             self._valid_lease(parent.lease_fd, parent.record_ref)
             state = parse_claim(_read_regular_no_follow(parent_paths.claim), parent.record_ref)
         except (OSError, ValueError) as exc:
@@ -666,7 +699,7 @@ class ResumeClaimStore:
                 finally:
                     os.close(fd)
                 _fsync_dir(paths.journal.parent)
-                return HeldClaim(token, ref, probe.fd)
+                return HeldClaim(token, ref, LeaseCapability(_MINT, probe.fd))
         except BaseException:
             probe.close()
             raise
@@ -692,8 +725,6 @@ class ResumeClaimStore:
             or not hasattr(os, "O_CLOEXEC")
         ):
             raise ClaimRefusedError("journal exclusion or safe open flags are unavailable")
-        if held.lease_fd < 0:
-            raise ClaimRefusedError("lease is closed")
         paths = self.paths_for(held.record_ref)
         self._placement.revalidate()
         with cross_process_journal_lock(paths.journal, deadline_seconds=deadline_seconds):
@@ -703,9 +734,7 @@ class ResumeClaimStore:
                 # The lease frame carries the LEASE token (distinct from the claim token,
                 # which the claim file proves below): the fd must name the canonical inode
                 # and hold a canonical lease frame for this exact ref.
-                if not self._same_inode(held.lease_fd, paths.lease):
-                    raise ValueError("lease is not the canonical live lease")
-                self._require_lease_lock_held(held.lease_fd, paths.lease)
+                self._require_lease_live(held.lease, paths.lease)
                 self._valid_lease(held.lease_fd, held.record_ref)
                 fd = os.open(paths.claim, os.O_RDWR | os.O_APPEND | _OPEN_FLAGS_NO_ACCESS)
             except (OSError, ValueError) as exc:

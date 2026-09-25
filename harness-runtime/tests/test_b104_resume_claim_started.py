@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +56,23 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="claim leases re
 
 def _claim_bytes(store: ResumeClaimStore, ref: JournalRecordRef) -> bytes:
     return store.paths_for(ref).claim.read_bytes()
+
+
+class _ForgedLease:
+    """A stand-in for the lease capability: a bare descriptor a caller opened for itself."""
+
+    def __init__(self, fd: int) -> None:
+        self.fd = fd
+
+    def close(self) -> None:
+        if self.fd >= 0:
+            os.close(self.fd)
+            self.fd = -1
+
+
+def _forged_claim(held: HeldClaim, fd: int) -> HeldClaim:
+    """What any caller can build from the public dataclass and the disk-readable token."""
+    return HeldClaim(held.token, held.record_ref, _ForgedLease(fd))  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
 
 
 def _held(placed: Placed) -> tuple[ResumeClaimStore, JournalRecordRef, HeldClaim]:
@@ -174,7 +193,7 @@ def test_a_lease_fd_that_is_not_the_canonical_lease_refuses(placed: Placed) -> N
     claimed = _claim_bytes(store, ref)
     decoy = placed.journal_dir / "decoy"
     decoy.write_bytes(b"x")
-    forged = HeldClaim(held.token, held.record_ref, os.open(decoy, os.O_RDONLY))
+    forged = _forged_claim(held, os.open(decoy, os.O_RDONLY))
     try:
         with pytest.raises(ClaimRefusedError):
             store.mark_started(forged)
@@ -188,7 +207,7 @@ def test_a_lease_fd_that_is_not_the_canonical_lease_refuses(placed: Placed) -> N
 def test_a_wrong_token_for_the_live_lease_refuses(placed: Placed) -> None:
     store, ref, held = _held(placed)
     claimed = _claim_bytes(store, ref)
-    forged = HeldClaim(uuid.uuid4().hex, held.record_ref, held.lease_fd)
+    forged = HeldClaim(uuid.uuid4().hex, held.record_ref, held.lease)
 
     with pytest.raises(ClaimRefusedError):
         store.mark_started(forged)
@@ -489,7 +508,7 @@ def test_a_forged_claim_on_an_unlocked_fd_refuses_while_the_real_holder_is_live(
 ) -> None:
     store, ref, held = _held(placed)
     claimed = _claim_bytes(store, ref)
-    forged = HeldClaim(held.token, held.record_ref, _unlocked_fd_for(store, ref))
+    forged = _forged_claim(held, _unlocked_fd_for(store, ref))
     try:
         with pytest.raises(ClaimRefusedError) as raised:
             store.mark_started(forged)
@@ -509,7 +528,7 @@ def test_a_forged_claim_on_an_unlocked_fd_refuses_when_nobody_holds_the_lease(
     must not leave the lease locked behind it."""
     store, ref, held = _held(placed)
     claimed = _claim_bytes(store, ref)
-    forged = HeldClaim(held.token, held.record_ref, _unlocked_fd_for(store, ref))
+    forged = _forged_claim(held, _unlocked_fd_for(store, ref))
     held.close()
     try:
         with pytest.raises(ClaimRefusedError):
@@ -527,9 +546,7 @@ def test_a_forged_started_parent_on_an_unlocked_fd_admits_no_child(
     store = placed.store()
     real_parent = _started_parent(store, family)  # the genuine holder stays live
     forged = StartedClaim(
-        HeldClaim(
-            real_parent.token, real_parent.record_ref, _unlocked_fd_for(store, family.parent_ref)
-        )
+        _forged_claim(real_parent.claim, _unlocked_fd_for(store, family.parent_ref))
     )
     try:
         _parent_carried_refusal(placed, family, forged)
@@ -545,3 +562,136 @@ def test_the_real_holder_is_unaffected_by_the_lock_proof_repeated_probes(placed:
     started = store.mark_started(held)
     assert isinstance(started, StartedClaim) and _lease_is_held_elsewhere(store, ref)
     started.close()
+
+
+# --- F2 release race: ownership is a store-issued capability, not a lock acquired on demand --
+
+
+@contextmanager
+def _release_holder_when_a_nonblocking_lock_is_first_refused(
+    monkeypatch: pytest.MonkeyPatch, holder: HeldClaim
+) -> Generator[None]:
+    """The genuine holder closes at the exact point a fresh lock attempt is refused.
+
+    This is the OS ordering behind the review finding: whatever the store does after its
+    first refused lock attempt runs against a lease nobody holds any more.
+    """
+    import fcntl
+
+    real_flock = fcntl.flock
+    released: list[bool] = []
+
+    def flock(fd: int, operation: int) -> None:
+        try:
+            real_flock(fd, operation)
+        except OSError:
+            if not released:
+                released.append(True)
+                holder.close()
+            raise
+
+    monkeypatch.setattr(fcntl, "flock", flock)
+    yield
+
+
+def test_a_forged_claim_is_refused_when_the_holder_releases_between_lock_attempts(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, ref, held = _held(placed)
+    claimed = _claim_bytes(store, ref)
+    forged = _forged_claim(held, _unlocked_fd_for(store, ref))
+    try:
+        with _release_holder_when_a_nonblocking_lock_is_first_refused(monkeypatch, held):
+            with pytest.raises(ClaimRefusedError):
+                store.mark_started(forged)
+    finally:
+        forged.close()
+
+    assert _claim_bytes(store, ref) == claimed  # no started frame was appended
+
+
+def test_a_forged_parent_admits_no_child_when_the_holder_releases_between_lock_attempts(
+    placed: Placed, family: Family, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = placed.store()
+    real_parent = _started_parent(store, family)
+    forged = StartedClaim(
+        _forged_claim(real_parent.claim, _unlocked_fd_for(store, family.parent_ref))
+    )
+    try:
+        with _release_holder_when_a_nonblocking_lock_is_first_refused(
+            monkeypatch, real_parent.claim
+        ):
+            _parent_carried_refusal(placed, family, forged)
+    finally:
+        forged.close()
+        real_parent.close()
+
+
+def test_lease_capabilities_are_issued_only_by_the_store() -> None:
+    from harness_runtime.lifecycle.resume_claim_store import LeaseCapability
+
+    with pytest.raises(TypeError):
+        LeaseCapability(object(), 0)
+
+
+def test_a_started_parent_from_one_store_instance_admits_a_child_in_another(
+    placed: Placed, family: Family
+) -> None:
+    parent = _started_parent(placed.store(), family)
+    with parent:
+        with placed.store().claim(family.child_refs[0], ParentCarriedAdmission(parent)) as child:
+            assert child.record_ref == family.child_refs[0]
+            assert _lease_is_held_elsewhere(placed.store(), child.record_ref)
+
+
+def test_closing_a_claim_invalidates_it_for_start_and_for_parent_admission(
+    placed: Placed, family: Family
+) -> None:
+    store = placed.store()
+    parent = _started_parent(store, family)
+    parent.close()
+    assert parent.lease_fd == -1 and not _lease_is_held_elsewhere(store, family.parent_ref)
+    _parent_carried_refusal(placed, family, parent)
+
+    _store, ref, held = _held(placed)
+    held.close()
+    with pytest.raises(ClaimRefusedError):
+        store.mark_started(held)
+
+
+def test_a_capability_whose_flock_was_released_behind_its_back_refuses(placed: Placed) -> None:
+    import fcntl
+
+    store, ref, held = _held(placed)
+    claimed = _claim_bytes(store, ref)
+    fcntl.flock(held.lease_fd, fcntl.LOCK_UN)  # the fd is open, the lock is gone
+
+    with pytest.raises(ClaimRefusedError):
+        store.mark_started(held)
+
+    assert _claim_bytes(store, ref) == claimed
+    held.close()
+
+
+def test_a_capability_on_a_moved_lease_refuses_even_if_someone_holds_the_new_one(
+    placed: Placed,
+) -> None:
+    import fcntl
+
+    store, ref, held = _held(placed)
+    claimed = _claim_bytes(store, ref)
+    lease = store.paths_for(ref).lease
+    data = lease.read_bytes()
+    lease.rename(lease.with_name(lease.name + ".moved"))
+    lease.write_bytes(data)  # a different inode with identical bytes, held by another party
+    other = os.open(lease, os.O_RDONLY)
+    try:
+        fcntl.flock(other, fcntl.LOCK_EX)
+        with pytest.raises(ClaimRefusedError):
+            store.mark_started(held)
+    finally:
+        os.close(other)
+        held.close()
+
+    assert _claim_bytes(store, ref) == claimed
