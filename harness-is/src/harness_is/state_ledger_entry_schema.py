@@ -232,6 +232,10 @@ class _ClaimAuditBase(_RecoveryAuditBase):
     def _attestation_belongs_to_abandon(self) -> Self:
         if self.action == "release" and self.quiescence_attestation is not None:
             raise ValueError("release cannot carry a quiescence attestation")
+        # B-104 operator terms: abandoning a claim rests on the operator's quiescence
+        # attestation, so an unattested claim abandon is not a representable audit.
+        if self.action == "abandon" and self.quiescence_attestation is None:
+            raise ValueError("claim abandon requires a quiescence attestation")
         if (
             self.quiescence_attestation is not None
             and self.quiescence_attestation.operator_uid != self.operator_uid

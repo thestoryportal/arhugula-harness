@@ -1,4 +1,28 @@
-# Specification — Harness Runtime v1.126
+# Specification — Harness Runtime v1.127
+
+## Change-note (v1.126 → v1.127)
+
+**B-104 Task 6a: claim-scoped audited recovery of one exact resume claim.** `harness_runtime.admin.pause_claim_recovery.PauseClaimRecovery` accepts `ClaimRelease(record_ref, action_id, operator_uid, reason_digest)` or `ClaimAbandon(…, quiescence_attestation)` over the placed pause-journal directory and a recovery ledger inside the same verified state root. An abandon without a `QuiescenceAttestation` is refused at construction, and the C-IS-05 claim audit schema refuses `action="abandon"` with no attestation. It returns `RecoveryDisposition(outcome, reason)` with outcome `released | abandoned | completed_none | held | retryable_contention | integrity_fault`. Durability failures and placement faults raise; they are never outcomes. Record-scoped recovery (claim absent, no token or unreadable, missing or invalid lease with no pending INTENT) is not expressible here and is refused `held` without an audit.
+
+**Order and evidence.** Placement is revalidated before the journal lock, by every lease probe, before INTENT and before each link, unlink or tombstone creation. Under the journal lock, the exact lease is taken by nonblocking exclusive probe; a busy lease is `retryable_contention` with no INTENT. A new action reads the claim only while holding the lease and pins, in INTENT, the claim-byte digest, canonical claim path, claim `st_dev/st_ino`, lease generation and lease `st_dev/st_ino`. Only `append_recovery_audit_entry` writes audits. One action may be open per claim. A claim closed by `COMPLETE/none` admits only a new abandon. Any tombstone-prefix entry holds a new action. A completed action ID reports its completed outcome and never starts a new action.
+
+**Completing a pending INTENT.** Every completion of a pending INTENT, whatever transition persisted, first requires the exact original lease: same generation, `st_dev/st_ino`, held exclusively. A missing, invalid or replaced lease is `held` and moves neither claim nor audit. The persisted phase is re-appended identically, which re-syncs it, before any further step. Release links the live claim to its archive with no replace, fsyncs the directory, unlinks the live name only while it is still on the pinned inode, then fsyncs the archive inode and the directory before COMPLETE. Abandon creates the tombstone with `O_EXCL`, then fsyncs it and the directory before COMPLETE, preserving the claim bytes. These finish steps run on the first pass and on every retry, so a retry after a failed sync re-establishes durability before appending COMPLETE. With no persisted transition, `COMPLETE/none` is written only when, under the lease, the claim is byte-, path- and inode-identical, no tombstone exists, the exact record reads, and the release is moot because the record is no longer current. Any other change is `held`. A foreign archive or tombstone at the deterministic name is `integrity_fault`; so is a changed stable payload for the same action.
+
+**Recipes.** `D(parts…)` is lowercase hex SHA-256 of the UTF-8 JSON array of the parts with sorted keys and `(",", ":")` separators.
+
+| Value | Definition |
+| --- | --- |
+| `subject_id` | `D("harness-runtime/resume-claim-subject/v1", JournalRecordRef JSON, canonical claim file name, claim token)` |
+| Archive name | claim-store archive prefix + `D("harness-runtime/resume-claim-archive/v1", subject_id, action_id)` |
+| Tombstone name | claim-store tombstone prefix + `D("harness-runtime/resume-claim-tombstone/v1", subject_id, action_id)` |
+| Tombstone bytes | sorted-key compact JSON `{version:1, kind:"claim_tombstone", subject_id, action_id, record_identity, claim_bytes_digest}` plus `\n` |
+| `release_archive` digest | `D("harness-runtime/resume-claim-transition/release-archive/v1", archive name, claim_bytes_digest, claim_st_dev, claim_st_ino)` |
+| `claim_tombstone` digest | `D("harness-runtime/resume-claim-transition/claim-tombstone/v1", tombstone name, sha256(tombstone bytes))` |
+| `none` digest | `D("harness-runtime/resume-claim-transition/none/v1", ClaimObservation JSON)` |
+
+The C-IS-07 identity (`recovery:{scope}:{phase}:{action_id}`, the five-part key) is unchanged. A retry therefore re-derives the identical COMPLETE, and IS refuses a divergent one.
+
+**Boundary and limits.** No CLI, inspect, MCP, gateway or record-scoped path consumes this coordinator yet. C-IS-05 §5.7 still says a claim-scoped abandon "MAY" carry the attestation; the schema now requires it, and that IS text is owed a matching amendment. Crash witnesses fail a sync at each boundary and retry; they are not process-kill or power-loss proof. Placement revalidation before a mutation is path-based, within the trusted same-UID host. The journal lock blocks by default. The S5 installed storage gate remains held. Clearance and the artifact-head row are owed at integration.
 
 ## Change-note (v1.125 → v1.126)
 

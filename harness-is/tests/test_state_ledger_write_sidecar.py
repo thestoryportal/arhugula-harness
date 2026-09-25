@@ -641,3 +641,22 @@ def test_legacy_entry_without_sidecar_key_hashes_same_as_v1_3_none(
         update={"procedural_tier_snapshot_ref": _SNAPSHOT_REF},
     )
     assert hash_a != compute_response_hash(entry_v1_3_with)
+
+
+@pytest.mark.parametrize("phase", ["intent", "complete"])
+def test_claim_abandon_requires_a_quiescence_attestation(phase: str) -> None:
+    # B-104 operator terms: a claim-scoped abandon needs the operator's quiescence
+    # attestation; an unattested abandon is an illegal audit, not a weaker one.
+    audit = _recovery_audit_data()
+    audit["action"] = "abandon"
+    audit["phase"] = phase
+    audit["quiescence_attestation"] = None
+    if phase == "intent":
+        audit.pop("transition_kind")
+        audit.pop("transition_digest")
+    else:
+        audit["transition_kind"] = "claim_tombstone"
+    with pytest.raises(ValidationError):
+        _recovery_entry(audit)
+    audit["quiescence_attestation"] = _attestation()
+    _recovery_entry(audit)

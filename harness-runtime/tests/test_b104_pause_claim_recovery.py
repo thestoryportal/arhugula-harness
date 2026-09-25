@@ -527,3 +527,171 @@ def test_one_open_action_per_claim_even_with_evidence_intact(
     assert result.outcome is RecoveryOutcome.HELD
     assert _audits(placed) == [("intent", "rel-1", "-")]
     assert _tree(placed.journal_dir) == before
+
+
+# --- HOLD correction (Codex review b104-task6a-codex-1) --------------------------------------
+
+
+def _release_crashed_at(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch, sync: int
+) -> JournalRecordRef:
+    """A release whose n-th directory sync failed: 1 leaves live+archive, 2 archive-only."""
+    ref = _claimed(placed)
+    with monkeypatch.context() as patch:
+        _fail_nth_dir_sync(patch, sync)
+        with pytest.raises(OSError):
+            _recovery(placed).recover(_release(ref))
+    return ref
+
+
+def _damage_lease(placed: Placed, ref: JournalRecordRef, damage: str) -> None:
+    store = placed.store()
+    lease = store.paths_for(ref).lease
+    lease.unlink()
+    if damage == "invalid":
+        lease.write_bytes(b"not a lease\n")
+    elif damage == "replaced":
+        lease.write_bytes(store._lease_bytes(ref, "9" * 32))
+
+
+@pytest.mark.parametrize("damage", ["missing", "invalid", "replaced"])
+@pytest.mark.parametrize(("sync", "state"), [(1, "live+archive"), (2, "archive-only")])
+def test_a_persisted_archive_never_completes_without_the_original_lease(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch, sync: int, state: str, damage: str
+) -> None:
+    ref = _release_crashed_at(placed, monkeypatch, sync)
+    paths = placed.store().paths_for(ref)
+    assert paths.claim.exists() is (state == "live+archive")
+    _damage_lease(placed, ref, damage)
+    before = _tree(placed.journal_dir)
+    ledger_bytes = _ledger(placed).canonical_path.read_bytes()
+
+    result = _recovery(placed).recover(_release(ref))
+
+    assert result.outcome is RecoveryOutcome.HELD
+    # Neither the claim nor the audit moves: no unlink, no COMPLETE.
+    assert _tree(placed.journal_dir) == before
+    assert _ledger(placed).canonical_path.read_bytes() == ledger_bytes
+
+
+def test_an_archive_only_retry_waits_for_a_live_c2_worker(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ref = _release_crashed_at(placed, monkeypatch, 2)
+    ledger_bytes = _ledger(placed).canonical_path.read_bytes()
+    with placed.store().claim(ref):  # C2's worker holds the original lease
+        result = _recovery(placed).recover(_release(ref))
+    assert result.outcome is RecoveryOutcome.RETRYABLE_CONTENTION
+    assert _ledger(placed).canonical_path.read_bytes() == ledger_bytes
+    assert _recovery(placed).recover(_release(ref)).outcome is RecoveryOutcome.RELEASED
+
+
+@pytest.mark.parametrize("damage", ["missing", "invalid", "replaced"])
+def test_a_persisted_tombstone_never_completes_without_the_original_lease(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch, damage: str
+) -> None:
+    ref = _claimed(placed)
+    with monkeypatch.context() as patch:
+        _fail_nth_dir_sync(patch, 1)
+        with pytest.raises(OSError):
+            _recovery(placed).recover(_abandon(ref))
+    _damage_lease(placed, ref, damage)
+    ledger_bytes = _ledger(placed).canonical_path.read_bytes()
+
+    result = _recovery(placed).recover(_abandon(ref))
+
+    assert result.outcome is RecoveryOutcome.HELD
+    assert _ledger(placed).canonical_path.read_bytes() == ledger_bytes
+
+
+def test_abandon_without_an_attestation_is_refused_at_the_request_boundary(placed: Placed) -> None:
+    ref = _claimed(placed)
+    with pytest.raises(TypeError):
+        ClaimAbandon(
+            record_ref=ref,
+            action_id="abn-unattested",
+            operator_uid=UID,
+            reason_digest=REASON,
+            quiescence_attestation=None,  # type: ignore[arg-type]
+        )
+    assert _audits(placed) == []
+    assert _tombstones(placed, ref) == []
+
+
+def _record_syncs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record every coordinator file/dir sync and every audit-ledger file sync, in order."""
+    import os
+    import stat
+
+    import harness_is.state_ledger_write as writer
+
+    events: list[str] = []
+    file_sync = recovery_module._fsync_file
+    dir_sync = recovery_module._fsync_dir
+    ledger_sync = writer._fsync_recovery_target
+
+    def on_file(fd: int) -> None:
+        events.append("file")
+        file_sync(fd)
+
+    def on_dir(path: Path) -> None:
+        events.append("dir")
+        dir_sync(path)
+
+    def on_ledger(fd: int) -> None:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            events.append("ledger")
+        ledger_sync(fd)
+
+    monkeypatch.setattr(recovery_module, "_fsync_file", on_file)
+    monkeypatch.setattr(recovery_module, "_fsync_dir", on_dir)
+    monkeypatch.setattr(writer, "_fsync_recovery_target", on_ledger)
+    return events
+
+
+def _failing_file_sync(_fd: int) -> None:
+    raise OSError("injected tombstone fsync failure")
+
+
+@pytest.mark.parametrize("fail", ["file", "dir"])
+def test_abandon_retry_resyncs_the_tombstone_before_complete(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch, fail: str
+) -> None:
+    ref = _claimed(placed)
+    with monkeypatch.context() as patch:
+        if fail == "file":
+            patch.setattr(recovery_module, "_fsync_file", _failing_file_sync)
+        else:
+            _fail_nth_dir_sync(patch, 1)
+        with pytest.raises(OSError):
+            _recovery(placed).recover(_abandon(ref))
+    assert len(_tombstones(placed, ref)) == 1
+
+    with monkeypatch.context() as patch:
+        events = _record_syncs(patch)
+        assert _recovery(placed).recover(_abandon(ref)).outcome is RecoveryOutcome.ABANDONED
+    # INTENT re-synced, then the tombstone file and its directory, then COMPLETE.
+    assert events == ["ledger", "file", "dir", "ledger"]
+
+
+@pytest.mark.parametrize("sync", [1, 2])
+def test_release_retry_resyncs_the_transition_before_complete(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch, sync: int
+) -> None:
+    ref = _release_crashed_at(placed, monkeypatch, sync)
+    with monkeypatch.context() as patch:
+        events = _record_syncs(patch)
+        assert _recovery(placed).recover(_release(ref)).outcome is RecoveryOutcome.RELEASED
+    # INTENT re-synced, then the archive inode and the directory (after any unlink),
+    # then COMPLETE — even when the unlink itself had already happened.
+    assert events == ["ledger", "file", "dir", "ledger"]
+
+
+def test_first_release_syncs_intent_link_unlink_then_complete(
+    placed: Placed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ref = _claimed(placed)
+    with monkeypatch.context() as patch:
+        events = _record_syncs(patch)
+        assert _recovery(placed).recover(_release(ref)).outcome is RecoveryOutcome.RELEASED
+    assert events == ["ledger", "dir", "file", "dir", "ledger"]

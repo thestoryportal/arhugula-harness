@@ -136,6 +136,12 @@ class ClaimAbandon:
     reason_digest: str
     quiescence_attestation: QuiescenceAttestation
 
+    def __post_init__(self) -> None:
+        # The annotation alone does not stop `None` at runtime; refuse it at the boundary
+        # so an unattested abandon never reaches the audit or a tombstone.
+        if not isinstance(self.quiescence_attestation, QuiescenceAttestation):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise TypeError("claim abandon requires a QuiescenceAttestation")
+
 
 # [LAW:types-are-the-program] Only claim-scoped actions exist here; record-scoped abandon
 # will be its own request type with its own audited path, not a variant of these.
@@ -231,6 +237,18 @@ def _fsync_dir(path: Path) -> None:
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_file(fd: int) -> None:
+    os.fsync(fd)
+
+
+def _sync_file(path: Path) -> None:
+    fd = os.open(path, _OPEN_FLAGS)
+    try:
+        _fsync_file(fd)
     finally:
         os.close(fd)
 
@@ -502,18 +520,9 @@ class PauseClaimRecovery:
     ) -> RecoveryDisposition:
         paths = self._claims.paths_for(request.record_ref)
         observation = intent.observation
-        if intent.action == "release":
-            archive = _archive_path(paths.journal, paths.archive_prefix, intent)
-            if os.path.lexists(archive):
-                return self._finish_release(intent, paths, archive)
-        else:
-            tombstone = _tombstone_path(paths.journal, paths.tombstone_prefix, intent)
-            if os.path.lexists(tombstone):
-                return self._finish_abandon(intent, tombstone)
-        # No transition persisted. Every piece of pinned evidence must be exactly intact,
-        # or the INTENT stays held: missing evidence never proves non-execution.
-        if self._tombstoned(request.record_ref):
-            raise _held("evidence-changed: a tombstone appeared")
+        # Whatever transition persisted, completing this INTENT requires the exact original
+        # lease: a missing, invalid or replaced lease is a permanent hold, never COMPLETE,
+        # and a live holder (including a later claim C2's worker) is retryable contention.
         try:
             lease = self._exact_lease(request.record_ref)
         except _DispositionError as refused:
@@ -523,6 +532,18 @@ class PauseClaimRecovery:
         try:
             if not _lease_is_original(lease, observation):
                 raise _held("evidence-lost: lease is not the original")
+            if intent.action == "release":
+                archive = _archive_path(paths.journal, paths.archive_prefix, intent)
+                if os.path.lexists(archive):
+                    return self._finish_release(intent, paths, archive)
+            else:
+                tombstone = _tombstone_path(paths.journal, paths.tombstone_prefix, intent)
+                if os.path.lexists(tombstone):
+                    return self._finish_abandon(intent, paths, tombstone)
+            # No transition persisted. Every piece of pinned evidence must be exactly
+            # intact, or the INTENT stays held: missing evidence never proves non-execution.
+            if self._tombstoned(request.record_ref):
+                raise _held("evidence-changed: a tombstone appeared")
             # Read under the held lease: no claimant or worker can change the claim now.
             try:
                 live = _read_live_claim(paths.claim)
@@ -547,7 +568,7 @@ class PauseClaimRecovery:
             archive = _archive_path(paths.journal, paths.archive_prefix, intent)
             self._placement.revalidate()
             _link_archive(paths.claim, archive)
-            _fsync_dir(paths.journal.parent)
+            _fsync_dir(paths.journal.parent)  # the link is durable before the unlink
             return self._finish_release(intent, paths, archive)
         tombstone = _tombstone_path(paths.journal, paths.tombstone_prefix, intent)
         body = _tombstone_bytes(intent)
@@ -560,11 +581,13 @@ class PauseClaimRecovery:
                 if written <= 0:
                     raise OSError("short tombstone write")
                 view = view[written:]
-            os.fsync(fd)
         finally:
             os.close(fd)
-        _fsync_dir(paths.journal.parent)
-        return self._finish_abandon(intent, tombstone)
+        return self._finish_abandon(intent, paths, tombstone)
+
+    # The finish steps run on the first pass AND on every retry. Each re-establishes the
+    # durability of the persisted transition (file, then directory) before COMPLETE, so
+    # a retry after a failed sync never records a transition that may not have persisted.
 
     def _finish_release(
         self, intent: ClaimIntentAudit, paths: _ClaimPaths, archive: Path
@@ -587,10 +610,13 @@ class PauseClaimRecovery:
         ):
             self._placement.revalidate()
             os.unlink(paths.claim)
-            _fsync_dir(paths.journal.parent)
+        _sync_file(archive)
+        _fsync_dir(paths.journal.parent)
         return self._complete(intent, "release_archive", _release_digest(archive, observation))
 
-    def _finish_abandon(self, intent: ClaimIntentAudit, tombstone: Path) -> RecoveryDisposition:
+    def _finish_abandon(
+        self, intent: ClaimIntentAudit, paths: _ClaimPaths, tombstone: Path
+    ) -> RecoveryDisposition:
         body = _tombstone_bytes(intent)
         try:
             fd = os.open(tombstone, _OPEN_FLAGS)
@@ -599,8 +625,10 @@ class PauseClaimRecovery:
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode) or os.read(fd, len(body) + 1) != body:
                 raise _fault("foreign-tombstone")
+            _fsync_file(fd)
         finally:
             os.close(fd)
+        _fsync_dir(paths.journal.parent)
         return self._complete(intent, "claim_tombstone", _tombstone_digest(tombstone, body))
 
     def _complete(
