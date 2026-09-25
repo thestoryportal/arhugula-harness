@@ -22,7 +22,7 @@
 
 The C-IS-07 identity (`recovery:{scope}:{phase}:{action_id}`, the five-part key) is unchanged. A retry therefore re-derives the identical COMPLETE, and IS refuses a divergent one.
 
-**Boundary and limits.** No CLI, inspect, MCP, gateway or record-scoped path consumes this coordinator yet. C-IS-05 §5.7 still says a claim-scoped abandon "MAY" carry the attestation; the schema now requires it, and that IS text is owed a matching amendment. Crash witnesses fail a sync at each boundary and retry; they are not process-kill or power-loss proof. Placement revalidation before a mutation is path-based, within the trusted same-UID host. The journal lock blocks by default. The S5 installed storage gate remains held. Clearance and the artifact-head row are owed at integration.
+**Boundary and limits.** No CLI, inspect, MCP, gateway or record-scoped path consumes this coordinator yet. C-IS-05 §5.7 v1.16 requires typed quiescence attestation for claim-scoped abandon, matching the schema refusal. Crash witnesses fail a sync at each boundary and retry; they are not process-kill or power-loss proof. Placement revalidation before a mutation is path-based, within the trusted same-UID host. The journal lock blocks by default. The S5 installed storage gate remains held. This claim-scoped slice does not establish installed or full B-104 acceptance.
 
 ## Change-note (v1.125 → v1.126)
 
