@@ -77,6 +77,12 @@ _RANK: dict[GateLevel, _GateRank] = {
 _BY_RANK: dict[_GateRank, GateLevel] = {v: k for k, v in _RANK.items()}
 
 
+def max_gate_level(first: GateLevel, second: GateLevel, *rest: GateLevel) -> GateLevel:
+    """Compose a gate floor using the canonical C-CP-19 rank."""
+    # [LAW:one-source-of-truth] Descended gate floors share the four-axis rank.
+    return _BY_RANK[max(_RANK[level] for level in (first, second, *rest))]
+
+
 class GateLevelInput(BaseModel):
     """The 4-axis input set for the gate-level rule (U-CP-43, v2.20 conformed).
 

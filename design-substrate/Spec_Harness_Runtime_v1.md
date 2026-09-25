@@ -1,4 +1,12 @@
-# Specification — Harness Runtime v1.121
+# Specification — Harness Runtime v1.122
+
+## Change-note (v1.121 → v1.122)
+
+**Descended HITL gate enforcement at matching wrap-time placements.** C-CP-12 §12.2–§12.3 and C-CP-19 §19.1/§19.4 require a descended step's effective gate to be the stricter of its existing four-axis result and its inherited parent gate level. This version amends §14.8.2 step 4c, the v1.53 `SUB_AGENT_BOUNDARY` removal recompute, step 4d, step 4i, and the resume Step 0 path. The parent term applies only where `sub_agent_descent` is true; a root workflow's default gate remains a descent seed. A partial four-axis binding uses `ASK` for a placement that requires HITL and `AUTO` otherwise, then applies the same parent term. The effective level selects both the HITL requirement and response palette.
+
+**DENY is a structural refusal after audit.** A `DENY` gate offers only `{reject, respond}`; either response is audited and then refuses the inner dispatch with `sandbox.fail.class = policy_override`. The gate span and CP audit entry record the effective level that governed the response. Resume recomputes the effective level from the current binding and inherited floor without asking or delivering a webhook again. A delivered response outside the current palette is audited and refused. At `ASK`, a valid delivered response routes once. Solo auto-approval and boundary-removal overrides cannot lower the inherited term.
+
+**Boundary of this amendment.** Runtime v1.61 still evaluates a wrap-time gate only at a matching declared placement. Inheritance of a parent's matching `PRE_ACTION` placements into descendants is a separately ratified successor slice; this version does not gate a child step with no matching placement. The model-emitted tool loop, direct child resume, inverted descent assertion, and nested fan-out execution remain separate work. No CP spec version is changed by this Runtime amendment. Clearance: `.harness/clearance/spec-harness-runtime-v1-122-cleared-2026-09-24.md`.
 
 ## Change-note (v1.120 → v1.121)
 
@@ -4748,6 +4756,8 @@ The asymmetry is intentional: HITL gate composer is a per-step *wrap layer*, not
 **Execution venue per inner (NEW at v1.102 — B-48).** The wrap chain above pins *composition*, not execution venue. From v1.102 the venue is selected at stage-5 construction per the composer's inner's wrap-asymmetry row (§14.8.10.2): the **sync** inner (the `SUB_AGENT_DISPATCH` row's C-RT-17 dispatcher) is SUBMITTED to the §14.8.10 grow-on-demand dispatch executor (off-loop); **async** inners (the `INFERENCE_STEP` row's C-RT-15 dispatcher; the tool-path dispatcher) keep the direct await path. Pre-v1.102 history: the U-RT-60 fork's Q3-ratified direct call ran the entire sync C-RT-17 dispatch synchronously ON the event loop — revised at the RATIFIED B-48 Class 2 filing (`.harness/class_2_fork_b48_sync_subagent_dispatch_offload.md` §1).
 
 ### §14.8.2 Per-step invocation discipline (composer body)
+
+**v1.122 canonical reading.** On a descended step with a matching wrap-time placement, step 4c uses `max(four_axis_gate, step_context.parent_gate_level)` in the canonical `AUTO < ASK < DENY` order. The same parent term participates in the v1.53 boundary-removal recompute; an override never removes it. A partial binding uses `max(ASK if placement requires HITL else AUTO, parent term)` and step 4d derives the palette from that effective level. At root, the parent term is absent. The gate span and step 4h CP audit entry record this effective level instead of the historical matrix-cell `AUTO` placeholder. After step 4h records the response, step 4i refuses dispatch for `DENY` with `sandbox.fail.class = policy_override` whether the response is `REJECT` or `RESPOND`. Resume Step 0 recomputes the same effective level and palette without a second prompt or webhook: audit first, refuse `DENY` and invalid delivered responses, and route a valid `ASK` response once. No matching placement continues to skip the wrap-time gate under v1.61. The older step bodies below record their historical revision; this paragraph governs the listed sites at v1.122.
 
 The body of `RuntimeHITLGateComposer.dispatch(binding, step, *, step_context)`:
 

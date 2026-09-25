@@ -83,6 +83,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import PauseResumeProtocol
 from harness_cp.pause_resume_protocol_types import (
@@ -900,6 +901,7 @@ def test_ow_protocol_not_bound_union_arm_completed_no_snapshot() -> None:
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, registry),
         run_idempotency_key=run_key,
+        effective_parent_gate_level=GateLevel.AUTO,
         resume_snapshot=snapshot,
         pause_resumable=True,
     )
@@ -1068,6 +1070,7 @@ def test_ow_not_yet_materialized_direct_call_scan_runs() -> None:
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, registry),
         run_idempotency_key="ow9-direct",
+        effective_parent_gate_level=GateLevel.AUTO,
     )
 
     assert result.status is RunStatus.FAILED

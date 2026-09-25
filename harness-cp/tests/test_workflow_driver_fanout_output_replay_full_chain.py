@@ -42,6 +42,7 @@ from harness_cp.cross_family_fallback_chain import (
     ProviderFamily,
 )
 from harness_cp.engine_class import EngineClass
+from harness_cp.gate_level_rule import GateLevel
 from harness_cp.handoff_context import StateSummary
 from harness_cp.pause_resume_protocol import (
     CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
@@ -883,6 +884,7 @@ def test_reconciler_parallelization_effect_fence_proceed_rejects_before_cas() ->
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, _Registry(_CountingDispatcher(n=1))),
         run_idempotency_key="rk-rec-proceed-fence-peer",
+        effective_parent_gate_level=GateLevel.AUTO,
         crash_fan_out_resume=PeerFanOutResumeState(
             branches=(),
             branch_count=1,
@@ -925,6 +927,7 @@ def test_reconciler_orchestrator_effect_fence_proceed_rejects_before_cas() -> No
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, _Registry(_CountingDispatcher(n=1))),
         run_idempotency_key="rk-rec-proceed-fence-orch",
+        effective_parent_gate_level=GateLevel.AUTO,
         crash_fan_out_resume=FanOutResumeState(
             orchestrator_output={"branch": 0},
             orchestrator_step_id="orch",

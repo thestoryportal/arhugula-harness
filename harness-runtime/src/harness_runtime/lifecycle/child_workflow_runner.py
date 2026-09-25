@@ -278,6 +278,8 @@ def compose_child_workflow_runner(ctx: HarnessContext) -> ChildWorkflowRunner:
             # C10 condition-2 gap. Monotonic-sticky: a grandchild re-enters here with
             # True again (the REMOVE downgrade is idempotent).
             sub_agent_descent=True,
+            # [LAW:single-enforcer] CP clamps the child manifest to this recorded descent.
+            parent_gate_floor=descent.child_gate_level,
         )
 
     return _runner
