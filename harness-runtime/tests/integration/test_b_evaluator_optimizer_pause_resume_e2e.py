@@ -384,28 +384,31 @@ async def test_api_resume_malformed_ollama_prefix_is_mismatch_without_dispatch(
     config = _config_opt_in(tmp_path)
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-eo-malformed-prefix",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
-            completed_steps=(
-                EvaluatorOptimizerStepResumeState(
-                    entry_index=0,
-                    declared_step_index=0,
-                    step_id=_GENERATE,
-                    output={"draft": 1},
-                ),
-                EvaluatorOptimizerStepResumeState.model_construct(
-                    entry_index=1,
-                    declared_step_index=1,
-                    step_id=_EVALUATE,
-                    output=malformed,
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-eo-malformed-prefix",
+            step_index=0,
+            descent_depth=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            evaluator_optimizer_resume=EvaluatorOptimizerResumeState(
+                completed_steps=(
+                    EvaluatorOptimizerStepResumeState(
+                        entry_index=0,
+                        declared_step_index=0,
+                        step_id=_GENERATE,
+                        output={"draft": 1},
+                    ),
+                    EvaluatorOptimizerStepResumeState.model_construct(
+                        entry_index=1,
+                        declared_step_index=1,
+                        step_id=_EVALUATE,
+                        output=malformed,
+                    ),
                 ),
             ),
-        ),
-    )
+        )
+    ).snapshot
     # A non-Mapping recovered output cannot pass the persisted schema. Exercise the
     # in-memory CP boundary directly; the valid Mapping case retains the JSON round-trip.
     rehydrated = (
