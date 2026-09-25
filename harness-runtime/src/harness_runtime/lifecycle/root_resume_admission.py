@@ -1,9 +1,10 @@
 """B-104: a durable root `resume_handle` is claimed and durably started before its body runs.
 
-`api.resume` reads one exact root record before bootstrap and hands its address — the journal
-directory it read and the `JournalRecordRef` of that same read — to the in-process
-`run_workflow` tool as a `DurableRootResume`. The tool's `asyncio.to_thread` worker calls
-`run`, which places that directory under the verified external state root, claims the ref as
+`api.resume` reads one exact root record before bootstrap and hands its address — the real
+journal directory that read opened and the `JournalRecordRef` of that same read — to the
+in-process `run_workflow` tool as a `DurableRootResume`. The tool's `asyncio.to_thread` worker
+calls `run`, which places that directory under the verified external state root, refuses unless
+the bootstrapped capture directory resolves to that same directory, claims the ref as
 the journal's current latest root record, fsyncs ``started`` (`run_started`), and only then
 runs the workflow body with a `ClaimedChildAdmission` over the root's `StartedProof` as CP's
 `child_resume_authority`. Running in the worker is what makes the lease outlive a drain
@@ -21,6 +22,7 @@ child's own refusal included) propagate as themselves.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -32,6 +34,7 @@ from harness_cp.workflow_driver_types import ChildResumeAuthority
 from harness_runtime.config import state_placement
 from harness_runtime.config.state_placement import StateRootPlacementError, place_state_dir
 from harness_runtime.lifecycle.claimed_child_admission import ClaimedChildAdmission
+from harness_runtime.lifecycle.journal_workflow_pause_store import pause_journal_dir_for
 from harness_runtime.lifecycle.resume_claim_store import (
     ClaimBusyError,
     ClaimRefusedError,
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
 __all__ = [
     "UNCLAIMED",
     "DurableRootResume",
+    "JournalDirectoryMismatchError",
     "ResumeAdmission",
     "ResumeClaimRefusedError",
     "RootResumeRefusal",
@@ -85,10 +89,29 @@ class ResumeClaimRefusedError(Exception):
         self.reason: RootResumeRefusal = reason
 
 
-def _reason_of(refusal: GatewayRefusal | StateRootPlacementError) -> RootResumeRefusal | None:
+class JournalDirectoryMismatchError(Exception):
+    """The bootstrapped capture directory is not the directory the record was read from.
+
+    Both may sit inside the verified root, yet a STATE_LEDGER binding changed (or a symlink in
+    it retargeted) between the pre-bootstrap read and bootstrap would pair a record claimed in
+    one directory with a run that captures and admits children in another. A `placement`
+    refusal: no claim is made and the body never runs.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the bootstrapped pause-journal directory is not the directory the durable "
+            "record was read from"
+        )
+
+
+type _PreBodyRefusal = GatewayRefusal | StateRootPlacementError | JournalDirectoryMismatchError
+
+
+def _reason_of(refusal: _PreBodyRefusal) -> RootResumeRefusal | None:
     """The root refusal for a typed pre-body refusal, or `None` for an unmapped combination."""
     match refusal:
-        case StateRootPlacementError():
+        case StateRootPlacementError() | JournalDirectoryMismatchError():
             return RootResumeRefusal.PLACEMENT
         case GatewayRefusal(phase=GatewayPhase.CLAIM, cause=ClaimRefusedError()):
             return RootResumeRefusal.CLAIM_REFUSED
@@ -103,10 +126,11 @@ def _reason_of(refusal: GatewayRefusal | StateRootPlacementError) -> RootResumeR
 class DurableRootResume:
     """The exact root record `api.resume` read, admitted inside the resume worker.
 
-    [LAW:one-source-of-truth] `journal_dir` and `ref` come from ONE pre-bootstrap read and are
-    the record's only address: the worker never re-reads the journal or derives a directory,
-    and the store re-proves under its journal lock that `ref` is still that directory's latest
-    depth-0 record.
+    [LAW:one-source-of-truth] `journal_dir` (the real path the read opened) and `ref` come from
+    ONE pre-bootstrap read and are the record's only address: the worker never re-reads the
+    journal or claims anywhere else, and the store re-proves under its journal lock that `ref`
+    is still that directory's latest depth-0 record. Bootstrap's capture directory is only
+    compared with it, never substituted for it.
 
     `refusal` has one writer (`run`, before any body) and one reader (`api.resume`, after the
     tool call raised); it stays `None` whenever the body was reached.
@@ -121,17 +145,20 @@ class DurableRootResume:
         """Claim, durably start, run `body` with the root's child authority, release once."""
         entered = False
         try:
-            store = ResumeClaimStore(
-                placement=place_state_dir(
-                    self.journal_dir,
-                    ctx.config,
-                    ctx.verified_state_root,
-                    what="durable resume journal directory",
-                    # Looked up at call time: the same verifier stage 1 stamped the root with.
-                    filesystem_type=state_placement.linux_filesystem_type,
-                ),
-                tenant_id=ctx.config.tenant_id,
+            placement = place_state_dir(
+                self.journal_dir,
+                ctx.config,
+                ctx.verified_state_root,
+                what="durable resume journal directory",
+                # Looked up at call time: the same verifier stage 1 stamped the root with.
+                filesystem_type=state_placement.linux_filesystem_type,
             )
+            # The stage-5 capture derivation, resolved like the read's: containment alone would
+            # admit a different directory inside the same root.
+            capture_dir = pause_journal_dir_for(ctx.ledger_writer.handle.canonical_path.parent)
+            if Path(os.path.realpath(capture_dir)) != self.journal_dir:
+                raise JournalDirectoryMismatchError
+            store = ResumeClaimStore(placement=placement, tenant_id=ctx.config.tenant_id)
 
             def started_body(started: StartedProof) -> R:
                 nonlocal entered
@@ -141,7 +168,7 @@ class DurableRootResume:
                 return body(ClaimedChildAdmission(store, started))
 
             return run_started(store, self.ref, RootLatestAdmission(), started_body)
-        except (GatewayRefusal, StateRootPlacementError) as exc:
+        except (GatewayRefusal, StateRootPlacementError, JournalDirectoryMismatchError) as exc:
             reason = None if entered else _reason_of(exc)
             # A refusal raised inside the body is the body's, and an unmapped one is a fault.
             if reason is None:

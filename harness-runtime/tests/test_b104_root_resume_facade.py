@@ -60,6 +60,7 @@ from harness_runtime.lifecycle.resume_claim_store import (
     parse_claim,
 )
 from harness_runtime.shutdown import shutdown
+from harness_runtime.types import RuntimeConfig
 
 from .integration.test_r_cc_1_api_resume import (
     _CHAIN,  # pyright: ignore[reportPrivateUsage]
@@ -147,10 +148,25 @@ class _Workflow:
 
 
 class Harness:
-    def __init__(self, scratch: Path, *, placement: bool = True, drain: float = 60.0) -> None:
+    def __init__(
+        self,
+        scratch: Path,
+        *,
+        placement: bool = True,
+        drain: float = 60.0,
+        ledger: str = "state-ledger",
+    ) -> None:
         self.site = Site(scratch / "site")
-        self.config = self.site.config(
-            placement=placement,
+        self._placement = placement
+        self._drain = drain
+        self.config = self.config_with_ledger(self.site.root / ledger)
+        self.journal_dir = pause_journal_dir_for(self.site.root / ledger)
+
+    def config_with_ledger(self, ledger: Path) -> RuntimeConfig:
+        """This site's config with its STATE_LEDGER cell bound to `ledger`."""
+        return self.site.config(
+            placement=self._placement,
+            ledger=ledger,
             ollama_optional=True,
             pause_resume_protocol_config=PauseResumeProtocolConfig(durable=True),
             routing_manifest=RoutingManifest(
@@ -160,9 +176,8 @@ class Harness:
                 fallback_chains=(_CHAIN,),
                 retry_policies={},
             ),
-            drain_timeout_seconds=drain,
+            drain_timeout_seconds=self._drain,
         )
-        self.journal_dir = pause_journal_dir_for(self.site.root / "state-ledger")
 
     async def capture_root(self, run_id: str = "run-root") -> JournalRecordRef:
         """Pause through the real durable protocol of a bootstrapped harness (the capture side)."""
@@ -459,6 +474,85 @@ async def test_after_a_drain_timeout_the_worker_keeps_the_lease_until_its_body_r
         release.set()
     assert _eventually(lambda: harness.lease(ref) == "free")
     assert harness.phase(ref) == "started"
+
+
+# --- the record is claimed only where it was read, and only if bootstrap captures there ---------
+
+
+def _changing_bootstrap(
+    monkeypatch: pytest.MonkeyPatch, change: Callable[[RuntimeConfig], RuntimeConfig]
+) -> None:
+    """Run `change` after resume's pre-bootstrap read and before the real bootstrap."""
+    real = bootstrap_module.run_bootstrap
+
+    async def bootstrap(config: RuntimeConfig, **kwargs: Any) -> Any:
+        return await real(change(config), **kwargs)
+
+    monkeypatch.setattr(bootstrap_module, "run_bootstrap", bootstrap)
+
+
+def _retargeted_link(scratch: Path) -> tuple[Harness, Path]:
+    """A site whose STATE_LEDGER binding is a symlink inside the root, now naming `a`."""
+    harness = Harness(scratch, ledger="ledger-link")
+    harness.site.stamp(harness.config)  # the placed root exists before the link is made
+    (harness.site.root / "state-ledger-a").mkdir()
+    link = harness.site.root / "ledger-link"
+    link.symlink_to(harness.site.root / "state-ledger-a")
+    return harness, link
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["rebound", "retargeted"])
+async def test_a_capture_directory_changed_between_read_and_bootstrap_refuses_before_any_claim(
+    world: Path,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    if change == "rebound":
+        harness = Harness(world)
+        await harness.capture_root()
+        other = harness.site.root / "state-ledger-b"  # still inside the verified root
+        _changing_bootstrap(monkeypatch, lambda _config: harness.config_with_ledger(other))
+    else:
+        harness, link = _retargeted_link(world)
+        await harness.capture_root()
+
+        def retarget(config: RuntimeConfig) -> RuntimeConfig:
+            (harness.site.root / "state-ledger-b").mkdir()
+            link.unlink()
+            link.symlink_to(harness.site.root / "state-ledger-b")  # same binding, new target
+            return config
+
+        _changing_bootstrap(monkeypatch, retarget)
+    dispatcher = _Dispatcher()
+
+    outcome = await _outcome(
+        resume(_Workflow(dispatcher), resume_handle=_WORKFLOW_ID, config=harness.config)
+    )
+
+    assert dispatcher.steps == []
+    _assert_refused(outcome, "placement")
+    assert type(getattr(outcome, "__cause__", None)).__name__ == "JournalDirectoryMismatchError"
+    assert harness.claim_files() == []  # no claim or lease in either directory
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ledger", ["state-ledger", "ledger-link"])
+async def test_a_capture_directory_unchanged_through_bootstrap_is_claimed_and_run(
+    world: Path,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+    ledger: str,
+) -> None:
+    harness = _retargeted_link(world)[0] if ledger == "ledger-link" else Harness(world)
+    ref = await harness.capture_root()
+    _changing_bootstrap(monkeypatch, lambda config: config)  # the same binding and target
+    dispatcher = _Dispatcher()
+
+    result = await resume(_Workflow(dispatcher), resume_handle=_WORKFLOW_ID, config=harness.config)
+
+    assert result.status == "completed", result
+    assert dispatcher.steps == ["step-0"]
+    assert (harness.phase(ref), harness.lease(ref)) == ("started", "free")
 
 
 # --- the root authority reaches CP and admits carried children exactly -------------------------
