@@ -206,7 +206,7 @@ class SubAgentChildPausedError(Exception):
 
 
 class ChildResumeRefusal(StrEnum):
-    """Why the Runtime refused to run a durable paused child (B-104 Task 4c)."""
+    """Why the Runtime refused to run a durable paused child (Task 4c; claim/start added by S1)."""
 
     MISSING_REF = "missing-ref"
     UNREADABLE_RECORD = "unreadable-record"
@@ -214,6 +214,9 @@ class ChildResumeRefusal(StrEnum):
     DEPTH_MISMATCH = "depth-mismatch"
     GATEWAY_NOT_INSTALLED = "gateway-not-installed"
     WORKFLOW_MISMATCH = "workflow-mismatch"
+    CLAIM_REFUSED = "claim-refused"
+    CLAIM_BUSY = "claim-busy"
+    START_REFUSED = "start-refused"
 
 
 class ChildResumeRefusedError(Exception):

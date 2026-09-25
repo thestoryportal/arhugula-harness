@@ -11,7 +11,7 @@ import ast
 import contextlib
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -83,7 +83,7 @@ class _Body:
 
 
 @contextlib.contextmanager
-def _gateway_refusal(phase: str, cause_type: type[Exception]) -> Iterator[None]:
+def _gateway_refusal(phase: str, cause_type: type[Exception]) -> Generator[None]:
     """Expect the gateway's typed refusal: the phase and the original cause, by type."""
     with pytest.raises(_gateway().GatewayRefusal) as caught:
         yield
@@ -340,8 +340,8 @@ def test_stage_five_still_binds_the_always_refusing_admission_and_nothing_calls_
 
     assert "durable_admission=RefuseDurableChildAdmission()" in stage5
     for path in _SRC.rglob("*.py"):
-        if path.name == "started_body_gateway.py":
-            continue
+        if path.name in {"started_body_gateway.py", "claimed_child_admission.py"}:
+            continue  # the gateway, and its one unbound consumer (guarded by the S1 test)
         tree = ast.parse(path.read_text())
         names = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)} | {
             a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names
