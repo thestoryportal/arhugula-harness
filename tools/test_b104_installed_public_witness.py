@@ -533,3 +533,112 @@ def test_records_are_written_once(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         w.write_json_new(tmp_path / "r.json", {"a": 2})
+
+
+# --- a timeout excuses only what it made unjudgeable (Codex delta HOLD on 924528e) -------
+
+
+def stopped_at(phase: str) -> dict[str, Any]:
+    """What the scenario records when `phase` times out: its group killed and reaped, no
+    result from it, and no later phase launched (the scenario stops at its first timeout)."""
+    evidence = passing_evidence()
+    later = w.PHASES[w.PHASES.index(phase) + 1 :]
+    run = evidence["runs"][phase]
+    if phase == "resume-a":
+        run.update(timeout=True, barrier_entered=False)
+    else:
+        run.update(exit=-signal.SIGKILL, timeout=True, kill=dict(KILLED))
+        evidence["results"][phase] = None
+    for gone in later:
+        evidence["runs"].pop(gone)
+        evidence["results"].pop(gone)
+    if phase == "capture":
+        evidence["runs"].pop("webhooks_after_capture")
+        evidence["webhook_requests"] = []
+    return evidence
+
+
+@pytest.mark.parametrize("phase", w.PHASES)
+def test_an_isolated_timeout_with_proven_cleanup_is_inconclusive(phase: str) -> None:
+    verdict = w.evaluate(stopped_at(phase))
+
+    assert verdict["independent_failures"] == []
+    assert verdict["status"] == "INCONCLUSIVE"
+    assert verdict["timed_out_phases"] == [phase]
+    assert verdict["excused_by_timeout"]  # the unjudgeable checks are named, not dropped
+
+
+@pytest.mark.parametrize("phase", EXITING_PHASES)
+def test_a_timeout_without_a_kill_record_fails(phase: str) -> None:
+    evidence = stopped_at(phase)
+    evidence["runs"][phase].pop("kill")
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"cleanup.{phase}-group-gone" in verdict["independent_failures"]
+
+
+@pytest.mark.parametrize("phase", w.PHASES)
+@pytest.mark.parametrize("gone", [False, None, "yes"])
+def test_a_timeout_whose_kill_does_not_prove_the_group_gone_fails(phase: str, gone: object) -> None:
+    evidence = stopped_at(phase)
+    evidence["runs"][phase]["kill"] = {**KILLED, "group_gone": gone}
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert f"cleanup.{phase}-group-gone" in verdict["independent_failures"]
+
+
+@pytest.mark.parametrize(
+    ("capped", "check"),
+    [
+        ("resume-b", "processes.resume-b-output-bounded"),  # the timed-out phase itself
+        ("capture", "processes.capture-output-bounded"),  # an earlier phase
+        ("tool-server", "processes.tool-server-output-bounded"),
+    ],
+)
+def test_capped_output_stays_a_failure_when_a_phase_timed_out(capped: str, check: str) -> None:
+    evidence = stopped_at("resume-b")
+    record = evidence["tool_server"] if capped == "tool-server" else evidence["runs"][capped]
+    record["output_ok"] = False
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert check in verdict["independent_failures"]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "check"),
+    [
+        (_set("results.capture", "garbage"), "capture.paused"),
+        (_set("runs.observe-held", "garbage"), "processes.observe-held-exited-0"),
+        (_set("tool_server.kill", "garbage"), "cleanup.tool-server-group-gone"),
+        (_set("webhook_errors", None), "no-replay.no_webhook_errors"),
+        (_set("tool_calls", 1), "no-replay.tool_never_called"),
+        (_set("results.resume-a", {"ok": True}), "resume-a-started.no_result_from_a"),
+    ],
+)
+def test_a_malformed_or_failed_earlier_fact_stays_a_failure_when_a_phase_timed_out(
+    mutation: Callable[[dict[str, Any]], None], check: str
+) -> None:
+    evidence = stopped_at("resume-b")
+    mutation(evidence)
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert check in verdict["independent_failures"]
+
+
+def test_two_timeouts_are_not_a_run_the_scenario_can_produce() -> None:
+    evidence = stopped_at("resume-b")
+    evidence["runs"]["observe-held"].update(timeout=True, kill=dict(KILLED))
+
+    verdict = w.evaluate(evidence)
+
+    assert verdict["status"] == "FAIL"
+    assert "processes.at-most-one-timeout" in verdict["independent_failures"]
+    assert verdict["excused_by_timeout"] == []

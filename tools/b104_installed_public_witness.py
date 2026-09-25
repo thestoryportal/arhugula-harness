@@ -1240,11 +1240,41 @@ def _observed(results: dict[str, object], phase: str) -> dict[str, Any]:
     return _dict(item.get("observed")) if item.get("ok") is True else {}
 
 
+def _result(*phases: str) -> frozenset[str]:
+    """A check that reads these phases' results (outcome, observed data or clean exit)."""
+    return frozenset(f"result:{phase}" for phase in phases)
+
+
+def _record(phase: str) -> frozenset[str]:
+    """A check that reads only this phase's own run record (streams, kill)."""
+    return frozenset({f"record:{phase}"})
+
+
+INDEPENDENT: frozenset[str] = frozenset()
+"""A check no timeout can excuse: cleanup, output caps, replay and receipt facts."""
+
+
+def excused_by_timeout(depends: frozenset[str], timed_out: str) -> bool:
+    """Whether a timeout of `timed_out` alone explains this check's failure.
+
+    The scenario stops at the first phase that cannot continue, so the timed-out phase has
+    no result and no later phase runs. A check reading the timed-out phase's result, or
+    anything of a later phase, cannot be judged; a check on the timed-out phase's own run
+    record (its streams and kill proof) or on any earlier phase can, and still counts.
+    """
+    later = PHASES[PHASES.index(timed_out) + 1 :]
+    return f"result:{timed_out}" in depends or any(
+        f"{kind}:{phase}" in depends for phase in later for kind in ("result", "record")
+    )
+
+
 def evaluate(evidence: dict[str, object]) -> dict[str, object]:
     """Pure per-case predicates over the recorded evidence; PASS needs every check.
 
-    Verdict order: a surviving owned process group FAILs (cleanup is never inconclusive);
-    otherwise a genuine timeout is INCONCLUSIVE; otherwise PASS only if every check holds.
+    Each check declares the phase facts it reads. Verdict: any independent failure FAILs
+    (cleanup, capped output, malformed or replay facts, earlier phases, and a second or
+    unreadable timeout); only then is one timeout, whose own group is proven gone,
+    INCONCLUSIVE; otherwise PASS only if every check holds.
     """
     runs = _dict(evidence.get("runs"))
     results = _dict(evidence.get("results"))
@@ -1270,119 +1300,202 @@ def evaluate(evidence: dict[str, object]) -> dict[str, object]:
     audits = [_dict(a) for a in raw_audits] if isinstance(raw_audits, list) else []
     abandon_audits = [a for a in audits if a.get("action_id") == "b104w-abandon-1"]
     release = _dict(recover.get("release"))
+    timed_out = sorted(p for p, r in runs.items() if _dict(r).get("timeout") is True)
+    waited = [p for p in PHASES if p != "resume-a"]
+    everyone = _result(*waited)
 
-    def refused_without_replay(outcome: dict[str, Any]) -> dict[str, bool]:
+    def refused_without_replay(
+        outcome: dict[str, Any], phase: str
+    ) -> dict[str, tuple[bool, frozenset[str]]]:
         return {
-            "typed_refusal": outcome.get("outcome") == "refused"
-            and outcome.get("error_type")
-            == "harness_runtime.lifecycle.root_resume_admission.ResumeClaimRefusedError"
-            and outcome.get("reason") == "claim-refused",
-            "no_body": outcome.get("body_marker_present") is False,
-            "same_record": outcome.get("ref") == ref,
-            "claim_still_started": _dict(outcome.get("claim")).get("phase") == "started",
+            "typed_refusal": (
+                outcome.get("outcome") == "refused"
+                and outcome.get("error_type")
+                == "harness_runtime.lifecycle.root_resume_admission.ResumeClaimRefusedError"
+                and outcome.get("reason") == "claim-refused",
+                _result(phase),
+            ),
+            "no_body": (outcome.get("body_marker_present") is False, _result(phase)),
+            "same_record": (outcome.get("ref") == ref, _result(phase, "capture")),
+            "claim_still_started": (
+                _dict(outcome.get("claim")).get("phase") == "started",
+                _result(phase),
+            ),
         }
 
-    # [LAW:no-silent-failure] Every owned group the parent killed must be proven gone, and
-    # every phase it waited for must have exited 0 within its cap with bounded output.
-    killed = {"tool-server": _dict(tool_server.get("kill"))} | {
-        phase: _dict(_dict(run).get("kill"))
-        for phase, run in runs.items()
-        if _dict(run).get("kill") is not None
+    # [LAW:no-silent-failure] Every owned group must be proven gone: the tool server,
+    # resume-a once launched (it is always killed at its barrier), every timed-out phase
+    # (a missing kill record is no proof) and any other recorded kill.
+    must_be_gone = {"tool-server": tool_server.get("kill")} | {
+        phase: _dict(runs.get(phase)).get("kill")
+        for phase in PHASES
+        if (phase == "resume-a" and phase in runs)
+        or phase in timed_out
+        or _dict(runs.get(phase)).get("kill") is not None
     }
-    cleanup = {f"{phase}-group-gone": k.get("group_gone") is True for phase, k in killed.items()}
-    processes = (
-        {
-            f"{phase}-exited-0": _dict(runs.get(phase)).get("exit") == 0
-            and _dict(runs.get(phase)).get("timeout") is False
-            for phase in PHASES
-            if phase != "resume-a"
+    checks: dict[str, dict[str, tuple[bool, frozenset[str]]]] = {
+        "cleanup": {
+            f"{phase}-group-gone": (_dict(k).get("group_gone") is True, INDEPENDENT)
+            for phase, k in must_be_gone.items()
+        },
+        "processes": {
+            f"{phase}-exited-0": (
+                _dict(runs.get(phase)).get("exit") == 0
+                and _dict(runs.get(phase)).get("timeout") is False,
+                _result(phase),
+            )
+            for phase in waited
         }
         | {
-            f"{phase}-output-bounded": _dict(runs.get(phase)).get("output_ok") is True
+            f"{phase}-output-bounded": (
+                _dict(runs.get(phase)).get("output_ok") is True,
+                _record(phase),
+            )
             for phase in PHASES
         }
-        | {"tool-server-output-bounded": tool_server.get("output_ok") is True}
-    )
-    cases: dict[str, dict[str, bool]] = {
-        "cleanup": cleanup,
-        "processes": processes,
+        | {
+            "tool-server-output-bounded": (tool_server.get("output_ok") is True, INDEPENDENT),
+            # The scenario stops at its first timeout; two are not a run it can produce.
+            "at-most-one-timeout": (len(timed_out) <= 1, INDEPENDENT),
+        },
         "provenance": {
-            "every_phase_recorded": all(
-                isinstance(results.get(p), dict) for p in PHASES if p != "resume-a"
+            "every_phase_recorded": (
+                all(isinstance(results.get(p), dict) for p in waited),
+                everyone,
             ),
-            "every_child_installed": len(provenance) == len(PHASES) - 1
-            and all(_dict(p.get("interpreter")).get("isolated") for p in provenance),
-            "one_receipt": len(receipt_hashes) == 1,
+            "every_child_installed": (
+                len(provenance) == len(waited)
+                and all(_dict(p.get("interpreter")).get("isolated") for p in provenance),
+                everyone,
+            ),
+            "one_receipt": (len(receipt_hashes) <= 1, INDEPENDENT),
         },
         "capture": {
-            "paused": capture.get("status") == "paused",
-            "root_record": capture.get("depth") == 0 and ref is not None,
-            "snapshot_is_record": capture.get("snapshot_hash") == _dict(ref).get("snapshot_hash"),
-            "no_claim_yet": _dict(capture.get("claim")).get("phase") == "absent",
-            "one_webhook": runs.get("webhooks_after_capture") == 1,
+            "paused": (capture.get("status") == "paused", _result("capture")),
+            "root_record": (capture.get("depth") == 0 and ref is not None, _result("capture")),
+            "snapshot_is_record": (
+                capture.get("snapshot_hash") == _dict(ref).get("snapshot_hash"),
+                _result("capture"),
+            ),
+            "no_claim_yet": (
+                _dict(capture.get("claim")).get("phase") == "absent",
+                _result("capture"),
+            ),
+            "one_webhook": (runs.get("webhooks_after_capture") == 1, _result("capture")),
         },
         "resume-a-started": {
-            "barrier_entered": run_a.get("barrier_entered") is True,
-            "started_before_kill": _dict(held.get("claim")).get("phase") == "started",
-            "lease_held_by_a": _dict(held.get("claim")).get("lease") == "busy",
-            "same_record": held.get("ref") == ref,
-            "killed_by_parent": kill.get("signal") == "SIGKILL"
-            and kill.get("returncode") == -signal.SIGKILL
-            and kill.get("group_gone") is True,
-            "no_result_from_a": results.get("resume-a") is None,
+            "barrier_entered": (run_a.get("barrier_entered") is True, _result("resume-a")),
+            "started_before_kill": (
+                _dict(held.get("claim")).get("phase") == "started",
+                _result("observe-held"),
+            ),
+            "lease_held_by_a": (
+                _dict(held.get("claim")).get("lease") == "busy",
+                _result("observe-held"),
+            ),
+            "same_record": (held.get("ref") == ref, _result("observe-held", "capture")),
+            "killed_by_parent": (
+                kill.get("signal") == "SIGKILL"
+                and kill.get("returncode") == -signal.SIGKILL
+                and kill.get("group_gone") is True,
+                _record("resume-a"),
+            ),
+            "no_result_from_a": (results.get("resume-a") is None, INDEPENDENT),
         },
         "resume-b-refused": {
-            **refused_without_replay(b),
-            "lease_released_by_kill": _dict(b.get("claim")).get("lease") == "free",
-            "claim_bytes_unchanged": _dict(b.get("claim")).get("claim_sha256")
-            == _dict(held.get("claim")).get("claim_sha256"),
+            **refused_without_replay(b, "resume-b"),
+            "lease_released_by_kill": (
+                _dict(b.get("claim")).get("lease") == "free",
+                _result("resume-b"),
+            ),
+            "claim_bytes_unchanged": (
+                _dict(b.get("claim")).get("claim_sha256")
+                == _dict(held.get("claim")).get("claim_sha256"),
+                _result("resume-b", "observe-held"),
+            ),
         },
         "release-held": {
-            "held": release.get("outcome") == "held"
-            and str(release.get("reason", "")).startswith("release-forbidden"),
-            "no_mutation": recover.get("inventory_before") is not None
-            and recover.get("inventory_before") == recover.get("inventory_after_release"),
-            "no_release_audit": isinstance(raw_audits, list)
-            and not any(a.get("action") == "release" for a in audits),
+            "held": (
+                release.get("outcome") == "held"
+                and str(release.get("reason", "")).startswith("release-forbidden"),
+                _result("recover"),
+            ),
+            "no_mutation": (
+                recover.get("inventory_before") is not None
+                and recover.get("inventory_before") == recover.get("inventory_after_release"),
+                _result("recover"),
+            ),
+            "no_release_audit": (
+                isinstance(raw_audits, list)
+                and not any(a.get("action") == "release" for a in audits),
+                _result("recover"),
+            ),
         },
         "abandon-audited": {
-            "abandoned": _dict(recover.get("abandon")).get("outcome") == "abandoned",
-            "exact_record": recover.get("claim_frame_names_record") is True
-            and recover.get("ref") == ref,
-            "intent_and_complete": sorted(str(a.get("phase")) for a in abandon_audits)
-            == ["complete", "intent"],
-            "attested_by_kill_record": all(
-                a.get("stopped_services_digest") == recover.get("kill_record_sha256")
-                for a in abandon_audits
+            "abandoned": (
+                _dict(recover.get("abandon")).get("outcome") == "abandoned",
+                _result("recover"),
             ),
-            "tombstoned": isinstance(recover.get("tombstones"), list)
-            and len(recover["tombstones"]) == 1,
-            "claim_bytes_kept": _dict(recover.get("claim_after")).get("claim_sha256")
-            == _dict(held.get("claim")).get("claim_sha256"),
+            "exact_record": (
+                recover.get("claim_frame_names_record") is True and recover.get("ref") == ref,
+                _result("recover", "capture"),
+            ),
+            "intent_and_complete": (
+                sorted(str(a.get("phase")) for a in abandon_audits) == ["complete", "intent"],
+                _result("recover"),
+            ),
+            "attested_by_kill_record": (
+                all(
+                    a.get("stopped_services_digest") == recover.get("kill_record_sha256")
+                    for a in abandon_audits
+                ),
+                _result("recover"),
+            ),
+            "tombstoned": (
+                isinstance(recover.get("tombstones"), list) and len(recover["tombstones"]) == 1,
+                _result("recover"),
+            ),
+            "claim_bytes_kept": (
+                _dict(recover.get("claim_after")).get("claim_sha256")
+                == _dict(held.get("claim")).get("claim_sha256"),
+                _result("recover", "observe-held"),
+            ),
         },
-        "resume-after-abandon-refused": refused_without_replay(d),
+        "resume-after-abandon-refused": refused_without_replay(d, "resume-after-abandon"),
         "no-replay": {
-            "tool_server_ready": tool_server.get("ready") is True,
-            "webhooks_total": isinstance(webhooks, list)
-            and len(webhooks) == 1
-            and evidence.get("webhook_errors") == [],
-            "tool_never_called": tool_calls == 0,
+            "tool_server_ready": (tool_server.get("ready") is True, INDEPENDENT),
+            "webhooks_total": (
+                isinstance(webhooks, list) and len(webhooks) == 1,
+                _result("capture"),
+            ),
+            "no_webhook_errors": (evidence.get("webhook_errors") == [], INDEPENDENT),
+            "tool_never_called": (tool_calls == 0, INDEPENDENT),
         },
     }
-    failed = sorted(
-        f"{case}.{name}" for case, checks in cases.items() for name, ok in checks.items() if not ok
+    failed = {
+        f"{case}.{name}": depends
+        for case, items in checks.items()
+        for name, (ok, depends) in items.items()
+        if not ok
+    }
+    # Exactly one timeout may excuse what it made unjudgeable; nothing else is excused.
+    only = timed_out[0] if len(timed_out) == 1 else None
+    excused = sorted(
+        name for name, depends in failed.items() if only and excused_by_timeout(depends, only)
     )
-    timed_out = sorted(p for p, r in runs.items() if _dict(r).get("timeout") is True)
-    if not all(cleanup.values()):
+    independent = sorted(set(failed) - set(excused))
+    if independent:
         status = "FAIL"
-    elif timed_out:
+    elif only is not None:
         status = "INCONCLUSIVE"
     else:
-        status = "FAIL" if failed else "PASS"
+        status = "PASS"
     return {
         "status": status,
-        "cases": cases,
-        "failed_checks": failed,
+        "cases": {case: {n: ok for n, (ok, _) in items.items()} for case, items in checks.items()},
+        "failed_checks": sorted(failed),
+        "independent_failures": independent,
+        "excused_by_timeout": excused,
         "timed_out_phases": timed_out,
     }
 
