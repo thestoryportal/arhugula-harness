@@ -687,8 +687,9 @@ def compose_branch_child_context(
             "parent_action_id": parent_context.parent_action_id,
             "branch_index": branch_index,
             "agent_role": agent_role,
-            # C-CP-12 §12.2 monotonic descent — child <= parent; equality is
-            # the valid default (dispatch_sub_agent's no-override default).
+            # C-CP-12 §12.2/§12.3 — the parent floor is copied unchanged
+            # (equality is dispatch_sub_agent's no-override default); an
+            # effective child gate may be stricter than it, never weaker.
             "parent_gate_level": parent_context.parent_gate_level,
             # B-FANOUT-CRASH-RESUME-ORCHESTRATOR-MAYBE-RAN-SUBAGENT — a fan-out
             # CHILD is NEVER the orchestrator. Reset the flag so a worker composed

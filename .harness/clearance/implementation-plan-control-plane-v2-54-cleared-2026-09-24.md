@@ -1,7 +1,7 @@
 ---
 artifact: design-substrate/Implementation_Plan_Control_Plane_v2_54.md
 version: v2.54
-cleared_at: 2026-09-24T12:00:00-07:00
+cleared_at: 2026-09-24T18:44:57-06:00
 clearance_type: plan-follows-spec-correction
 back_reference:
   - "Spec_Control_Plane_v1_2.md C-CP-12 §12.2/§12.3 and ADR-D4 v1.1 §1.5 (source contract; unchanged, no spec delta)"
@@ -9,7 +9,8 @@ back_reference:
 merge_commit: pending (recorded at the integration PR)
 reviewer_chain:
   - independent Opus source/contract verdict (above) — GO to correct as an isolated slice; authored the direction finding, did not review this delta
-  - out-of-family Codex source review of this slice — PENDING at marker authoring; not yet performed
+  - "out-of-family Codex source review of 678b314e (LIT cmt-627d4c62): core logic source GO, final clearance HOLD pending three corrections; corrections applied at the revision recorded by cleared_at"
+  - out-of-family Codex delta review of the corrections — PENDING; this marker is not independently final until it returns GO
 supersedes: implementation-plan-control-plane-v2-53-cleared-2026-08-13.md
 ---
 

@@ -29,7 +29,7 @@ is the one that resolved the head.
 | `adr-d8-audit-signing-backend` | `v1 (Accepted, 2026-07-16)` | 2026-07-16 | `design-substrate/ADR-D8_audit_signing_backend.md` | 1 | `ADR-D8_audit_signing_backend-cleared-2026-07-16.md` |
 | `cross-axis-composition-document` | `v2.23` | 2026-07-30 | `design-substrate/Cross_Axis_Composition_Document_v2_23.md` | 8 | `cross-axis-composition-v2-23-cleared-2026-07-30.md` |
 | `implementation-plan-action-surface` | `v1.6` | 2026-07-15 | `design-substrate/Implementation_Plan_Action_Surface_v1_6.md` | 2 | `implementation-plan-action-surface-v1-6-cleared-2026-07-15.md` |
-| `implementation-plan-control-plane` | `v2.53` | 2026-08-13 | `design-substrate/Implementation_Plan_Control_Plane_v2_53.md` | 23 | `implementation-plan-control-plane-v2-53-cleared-2026-08-13.md` |
+| `implementation-plan-control-plane` | `v2.54` | 2026-09-24 | `design-substrate/Implementation_Plan_Control_Plane_v2_54.md` | 24 | `implementation-plan-control-plane-v2-54-cleared-2026-09-24.md` |
 | `implementation-plan-harness-core` | `v1.3` | 2026-07-19 | `design-substrate/Implementation_Plan_Harness_Core_v1_3.md` | 1 | `implementation-plan-harness-core-v1-3-cleared-2026-07-19.md` |
 | `implementation-plan-harness-runtime` | `v2.63` | 2026-08-13 | `design-substrate/Implementation_Plan_Harness_Runtime_v2_63.md` | 22 | `implementation-plan-harness-runtime-v2-63-cleared-2026-08-13.md` |
 | `implementation-plan-information-substrate` | `v2.9` | 2026-08-07 | `design-substrate/Implementation_Plan_Information_Substrate_v2_9.md` | 5 | `implementation-plan-information-substrate-v2-9-cleared-2026-08-07.md` |
