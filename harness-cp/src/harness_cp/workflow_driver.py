@@ -77,7 +77,12 @@ from harness_cp.handoff_context import (
     RetryHistory,
     StateSummary,
 )
-from harness_cp.hitl_placement import HITLPlacement, HITLResult, LoosenablePlacementKind
+from harness_cp.hitl_placement import (
+    HITLPlacement,
+    HITLPlacementKind,
+    HITLResult,
+    LoosenablePlacementKind,
+)
 from harness_cp.pause_resume_protocol import (
     CP_FAIL_PAUSE_SNAPSHOT_CORRUPTION,
     CP_FAIL_RESUME_MATERIAL_DIFF_DETECTED,
@@ -2790,6 +2795,7 @@ def _captured_hitl_gate_config_hash(
     manifest_entry: WorkflowManifestEntry,
     *,
     default_model_binding: ModelBinding,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
 ) -> str:
     """A step's applicable HITL gate configuration, captured AT PAUSE-CAPTURE (or
     resume-recompute) TIME as a content hash (CP spec v1.111 §1.2 property 7).
@@ -2820,7 +2826,7 @@ def _captured_hitl_gate_config_hash(
         persona_tier=manifest_entry.persona_tier,
     )
     applicable_placements = fold_step_hitl_placements(
-        manifest_entry.hitl_placements, binding.hitl_placement
+        manifest_entry.hitl_placements, binding.hitl_placement, inherited=inherited_hitl_placements
     )
     return _hash_hitl_gate_config(applicable_placements, binding.removed_placements)
 
@@ -3212,6 +3218,7 @@ def execute_workflow(
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
     effect_fence_tree_wide_abort_present: bool = False,
+    inherited_hitl_placements: tuple[HITLPlacement, ...] = (),
 ) -> RunResult:
     """Execute the workflow per C-CP-25 §25.3 happy-path discipline.
 
@@ -3245,6 +3252,15 @@ def execute_workflow(
         `step_dispatchers.lookup(step.kind).dispatch(...)` (§25.3.3.4
         opaque-step-body discipline preserved — driver routes on the
         declared enum field, not on opaque payload content).
+    inherited_hitl_placements
+        CP spec v1.120 §17.3: the `PRE_ACTION` placements a sub-agent child
+        inherits from its ancestors, outermost first. Prepended to the child's own
+        workflow placements at every per-step context site and bound into the
+        captured gate-config hash (an empty tuple — every root run — is
+        byte-identical to pre-v1.120). Any non-`PRE_ACTION` entry raises
+        `ValueError`. This is the CP carrier only; the Runtime `ChildWorkflowRunner`
+        that feeds it and the composer that selects the governing placement are a
+        separate slice.
 
     Returns
     -------
@@ -3259,6 +3275,21 @@ def execute_workflow(
     EngineClassNotYetMaterializedError
         `manifest_entry.engine_class` is outside the v1.4 in-scope set.
     """
+    # CP spec v1.120 §17.3 — the inherited prefix is PRE_ACTION-only (the operator
+    # decision covers nothing else). Checked first, before any state change, so a
+    # boundary/validator placement can never ride down into a child.
+    _non_pre_action = [
+        p.position.value
+        for p in inherited_hitl_placements
+        if p.position is not HITLPlacementKind.PRE_ACTION
+    ]
+    if _non_pre_action:
+        msg = (
+            "inherited_hitl_placements admits PRE_ACTION placements only "
+            f"(CP spec v1.120 §17.3); got {_non_pre_action}"
+        )
+        raise ValueError(msg)
+
     # § 25.4 row "Driver entry" — drain check at entry (U-CP-57 AC #1).
     # If drained at entry, return DRAINED before any state mutation (no
     # workflow.start emit; no ledger append; no validation). Per spec §25.4
@@ -3519,6 +3550,7 @@ def execute_workflow(
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+            inherited_hitl_placements=inherited_hitl_placements,
         )
 
         # C-OD-25 §25.1 close-time attributes (4 of 12). Outcome enum serializes
@@ -3552,6 +3584,7 @@ def _execute_workflow_body(
     span: Any,
     run_idempotency_key: str,
     effective_parent_gate_level: GateLevel,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_at_step_index_override: int | None = None,
     resume_snapshot: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
@@ -4611,6 +4644,7 @@ def _execute_workflow_body(
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+            inherited_hitl_placements=inherited_hitl_placements,
         )
     if strategy is _DriverStrategyStatus.EVALUATOR_OPTIMIZER:
         return _execute_evaluator_optimizer(
@@ -4631,6 +4665,7 @@ def _execute_workflow_body(
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+            inherited_hitl_placements=inherited_hitl_placements,
         )
     if strategy is _DriverStrategyStatus.ORCHESTRATOR_WORKERS:
         # B-POSTJOIN-LLM-SYNTHESIS (CP spec v1.54 §3) — carve an opt-in terminal
@@ -4672,6 +4707,7 @@ def _execute_workflow_body(
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+            inherited_hitl_placements=inherited_hitl_placements,
         )
     if strategy is _DriverStrategyStatus.HIERARCHICAL_DELEGATION:
         # B-HIERARCHICAL-PAUSE (R-FS-1) — HIERARCHICAL now threads the resume
@@ -4711,6 +4747,7 @@ def _execute_workflow_body(
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+            inherited_hitl_placements=inherited_hitl_placements,
         )
     if strategy is _DriverStrategyStatus.DECENTRALIZED_HANDOFF:
         return _execute_decentralized_handoff(
@@ -4732,6 +4769,7 @@ def _execute_workflow_body(
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
             effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+            inherited_hitl_placements=inherited_hitl_placements,
         )
 
     # Selective per-run replay-resumption via N-lookup over the existing
@@ -5245,6 +5283,7 @@ def _execute_workflow_body(
                     steps[resume_at],
                     manifest_entry,
                     default_model_binding=default_model_binding,
+                    inherited_hitl_placements=inherited_hitl_placements,
                 )
                 if _resumed_linear_gate_config_hash != resume_snapshot.hitl_gate_config_hash:
                     return (
@@ -5509,7 +5548,9 @@ def _execute_workflow_body(
             # the per-step `binding.hitl_placement` override onto the workflow
             # tuple (union-by-position, tune-not-remove, monotone). None → verbatim.
             hitl_placements=fold_step_hitl_placements(
-                manifest_entry.hitl_placements, binding.hitl_placement
+                manifest_entry.hitl_placements,
+                binding.hitl_placement,
+                inherited=inherited_hitl_placements,
             ),
             # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
             # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
@@ -5601,6 +5642,7 @@ def _execute_workflow_body(
                                 step,
                                 manifest_entry,
                                 default_model_binding=default_model_binding,
+                                inherited_hitl_placements=inherited_hitl_placements,
                             ),
                         )
                     )
@@ -6732,6 +6774,7 @@ def _maybe_post_join_synthesis(
     run_idempotency_key: str,
     run_id: str,
     branch_count: int,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
 ) -> RunResult | dict[str, Any] | None:
     """Dispatch the opt-in terminal `POST_JOIN_SYNTHESIS` step.
 
@@ -6871,7 +6914,9 @@ def _maybe_post_join_synthesis(
             # with the worker site (an empty `AgentRole("")` is not a usable routing key).
             "agent_role": synth_binding.agent_role or derive_agent_role(synthesis_step.step_id),
             "hitl_placements": fold_step_hitl_placements(
-                manifest_entry.hitl_placements, synth_binding.hitl_placement
+                manifest_entry.hitl_placements,
+                synth_binding.hitl_placement,
+                inherited=inherited_hitl_placements,
             ),
         }
     )
@@ -7990,6 +8035,7 @@ def _execute_parallelization(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     effective_parent_gate_level: GateLevel,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
@@ -8375,6 +8421,7 @@ def _execute_parallelization(
                         steps[pg.branch_index],
                         manifest_entry,
                         default_model_binding=default_model_binding,
+                        inherited_hitl_placements=inherited_hitl_placements,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
                         return (
@@ -8425,7 +8472,7 @@ def _execute_parallelization(
         parent_gate_level=effective_parent_gate_level,
         # B-HITL-PLACEMENT-PER-STEP-PRODUCER — branch children inherit this via
         # compose_branch_child_context's model_copy (covers fan-out workers).
-        hitl_placements=manifest_entry.hitl_placements,
+        hitl_placements=(*inherited_hitl_placements, *manifest_entry.hitl_placements),
         # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
         # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
         run_engine_class=manifest_entry.engine_class,
@@ -8608,7 +8655,9 @@ def _execute_parallelization(
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
-                    manifest_entry.hitl_placements, binding.hitl_placement
+                    manifest_entry.hitl_placements,
+                    binding.hitl_placement,
+                    inherited=inherited_hitl_placements,
                 ),
                 # U-CP-102 / `B-71` — the two §25.20/§25.21 carriers. The BASIS is
                 # set for EVERY branch (see the unconditional derivation above); the
@@ -8860,7 +8909,9 @@ def _execute_parallelization(
             ).model_copy(
                 update={
                     "hitl_placements": fold_step_hitl_placements(
-                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                        manifest_entry.hitl_placements,
+                        _r_binding.hitl_placement,
+                        inherited=inherited_hitl_placements,
                     )
                 }
             )
@@ -9027,6 +9078,7 @@ def _execute_parallelization(
             run_idempotency_key=run_idempotency_key,
             run_id=run_id,
             branch_count=len(steps),
+            inherited_hitl_placements=inherited_hitl_placements,
         )
         # A FAILED RunResult ⟺ the synthesis dispatch/append raised → return it
         # directly (no escaping exception post-drain — Codex [P2]).
@@ -9337,7 +9389,9 @@ def _execute_parallelization(
             ).model_copy(
                 update={
                     "hitl_placements": fold_step_hitl_placements(
-                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                        manifest_entry.hitl_placements,
+                        _r_binding.hitl_placement,
+                        inherited=inherited_hitl_placements,
                     )
                 }
             )
@@ -10660,6 +10714,7 @@ def _execute_parallelization(
                             steps[_bi],
                             manifest_entry,
                             default_model_binding=default_model_binding,
+                            inherited_hitl_placements=inherited_hitl_placements,
                         )
                     ),
                     # U-CP-102 / `B-71` (CP spec v1.119 §26.9 WRITER row + its
@@ -10963,6 +11018,7 @@ def _execute_evaluator_optimizer(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     effective_parent_gate_level: GateLevel,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_snapshot: PauseSnapshot | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
@@ -11237,7 +11293,9 @@ def _execute_evaluator_optimizer(
             # the per-step `binding.hitl_placement` override onto the workflow
             # tuple (union-by-position, tune-not-remove, monotone). None → verbatim.
             hitl_placements=fold_step_hitl_placements(
-                manifest_entry.hitl_placements, binding.hitl_placement
+                manifest_entry.hitl_placements,
+                binding.hitl_placement,
+                inherited=inherited_hitl_placements,
             ),
             # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
             # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
@@ -11435,6 +11493,7 @@ def _execute_evaluator_optimizer(
                     steps[resume_snapshot.step_index],
                     manifest_entry,
                     default_model_binding=default_model_binding,
+                    inherited_hitl_placements=inherited_hitl_placements,
                 )
                 if _resumed_eo_gate_config_hash != resume_snapshot.hitl_gate_config_hash:
                     return RunResult(
@@ -11566,6 +11625,7 @@ def _execute_evaluator_optimizer(
                     steps[_eo_hitl_step_index],
                     manifest_entry,
                     default_model_binding=default_model_binding,
+                    inherited_hitl_placements=inherited_hitl_placements,
                 ),
             )
         )
@@ -11929,6 +11989,7 @@ def _execute_orchestrator_workers(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     effective_parent_gate_level: GateLevel,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
@@ -12355,6 +12416,7 @@ def _execute_orchestrator_workers(
                         worker_steps[pg.branch_index],
                         manifest_entry,
                         default_model_binding=default_model_binding,
+                        inherited_hitl_placements=inherited_hitl_placements,
                     )
                     if _resumed_pg_gate_config_hash != pg.hitl_gate_config_hash:
                         return (
@@ -12548,6 +12610,7 @@ def _execute_orchestrator_workers(
         hitl_placements=fold_step_hitl_placements(
             manifest_entry.hitl_placements,
             _per_step_hitl_placement_override(manifest_entry, orchestrator_step.step_id),
+            inherited=inherited_hitl_placements,
         ),
         # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
         # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
@@ -13022,7 +13085,9 @@ def _execute_orchestrator_workers(
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
-                    manifest_entry.hitl_placements, binding.hitl_placement
+                    manifest_entry.hitl_placements,
+                    binding.hitl_placement,
+                    inherited=inherited_hitl_placements,
                 ),
                 # U-CP-102 / `B-71` — the two §25.20/§25.21 carriers. The BASIS is
                 # set for EVERY worker (see the unconditional derivation above); the
@@ -13205,7 +13270,9 @@ def _execute_orchestrator_workers(
                 update={
                     "step_index": _bi + 1,
                     "hitl_placements": fold_step_hitl_placements(
-                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                        manifest_entry.hitl_placements,
+                        _r_binding.hitl_placement,
+                        inherited=inherited_hitl_placements,
                     ),
                 }
             )
@@ -13264,7 +13331,9 @@ def _execute_orchestrator_workers(
             update={
                 "step_index": _sa_bi + 1,
                 "hitl_placements": fold_step_hitl_placements(
-                    manifest_entry.hitl_placements, _sa_binding.hitl_placement
+                    manifest_entry.hitl_placements,
+                    _sa_binding.hitl_placement,
+                    inherited=inherited_hitl_placements,
                 ),
             }
         )
@@ -13480,7 +13549,9 @@ def _execute_orchestrator_workers(
                 update={
                     "step_index": _bi + 1,
                     "hitl_placements": fold_step_hitl_placements(
-                        manifest_entry.hitl_placements, _r_binding.hitl_placement
+                        manifest_entry.hitl_placements,
+                        _r_binding.hitl_placement,
+                        inherited=inherited_hitl_placements,
                     ),
                 }
             )
@@ -13691,6 +13762,7 @@ def _execute_orchestrator_workers(
             run_idempotency_key=run_idempotency_key,
             run_id=run_id,
             branch_count=len(steps),
+            inherited_hitl_placements=inherited_hitl_placements,
         )
         if isinstance(_synth, RunResult):
             return _synth, (1 if orchestrator_writer is not None else 0) + _rematerialized_steps
@@ -13762,6 +13834,7 @@ def _execute_orchestrator_workers(
             run_idempotency_key=run_idempotency_key,
             run_id=run_id,
             branch_count=len(steps),
+            inherited_hitl_placements=inherited_hitl_placements,
         )
         if isinstance(_synth, RunResult):
             return _synth, steps_executed
@@ -15107,6 +15180,7 @@ def _execute_orchestrator_workers(
                             worker_steps[_bi],
                             manifest_entry,
                             default_model_binding=default_model_binding,
+                            inherited_hitl_placements=inherited_hitl_placements,
                         )
                     ),
                     # U-CP-102 / `B-71` (CP spec v1.119 §26.9 WRITER row + its
@@ -15210,6 +15284,7 @@ def _execute_hierarchical_delegation(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     effective_parent_gate_level: GateLevel,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_snapshot: PauseSnapshot | None = None,
     crash_fan_out_resume: FanOutResumeState | PeerFanOutResumeState | None = None,
     crash_pause_reconstruct_no_dispatch: bool = False,
@@ -15338,6 +15413,7 @@ def _execute_hierarchical_delegation(
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
         effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+        inherited_hitl_placements=inherited_hitl_placements,
     )
 
 
@@ -15415,6 +15491,7 @@ def _execute_decentralized_handoff(
     step_dispatchers: StepDispatcherRegistry,
     run_idempotency_key: str,
     effective_parent_gate_level: GateLevel,
+    inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_snapshot: PauseSnapshot | None = None,
     sub_agent_descent: bool = False,
     resume_context: ResumeContext | None = None,
@@ -15620,6 +15697,7 @@ def _execute_decentralized_handoff(
                     steps[resume_snapshot.step_index],
                     manifest_entry,
                     default_model_binding=default_model_binding,
+                    inherited_hitl_placements=inherited_hitl_placements,
                 )
                 if _resumed_handoff_gate_config_hash != resume_snapshot.hitl_gate_config_hash:
                     return RunResult(
@@ -15777,7 +15855,9 @@ def _execute_decentralized_handoff(
             # this stage's per-step `binding.hitl_placement` override onto the
             # workflow tuple (union-by-position, tune-not-remove, monotone).
             hitl_placements=fold_step_hitl_placements(
-                manifest_entry.hitl_placements, binding.hitl_placement
+                manifest_entry.hitl_placements,
+                binding.hitl_placement,
+                inherited=inherited_hitl_placements,
             ),
             # B-EFFECT-FENCE-DURABLE-AUTO — the RUN engine class (NOT a per-step
             # StepOverride.engine_class) so the tool dispatcher auto-fences durable runs.
@@ -16095,6 +16175,7 @@ def _execute_decentralized_handoff(
                         step,
                         manifest_entry,
                         default_model_binding=default_model_binding,
+                        inherited_hitl_placements=inherited_hitl_placements,
                     ),
                 )
             )

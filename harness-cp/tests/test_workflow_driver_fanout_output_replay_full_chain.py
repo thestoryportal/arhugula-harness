@@ -898,6 +898,7 @@ def test_reconciler_parallelization_effect_fence_proceed_rejects_before_cas() ->
             ),
         ),
         reconciler_engine_resume_required=True,
+        inherited_hitl_placements=(),
     )
 
     assert result.status is RunStatus.FAILED
@@ -944,6 +945,7 @@ def test_reconciler_orchestrator_effect_fence_proceed_rejects_before_cas() -> No
         ),
         pause_resumable=True,
         reconciler_engine_resume_required=True,
+        inherited_hitl_placements=(),
     )
 
     assert result.status is RunStatus.FAILED

@@ -31,13 +31,13 @@ verbatim into v1.3); ADR-D5 v1.3 §1.3 + §1.3.1.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from harness_core.identity import EntryID
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from harness_cp.handoff_context import ProposedAction
 from harness_cp.hitl_response_palette import HITLResponse
@@ -173,12 +173,19 @@ class HITLResult(BaseModel):
     """SHA-256 hex-64 over the canonicalized response payload."""
 
 
+#: Glob/regex metacharacters refused in a `tool_filter` entry (exact-name matching only).
+_TOOL_NAME_PATTERN_CHARS = frozenset("*?[]{}()|\\^$+!")
+
+
 class HITLPlacement(BaseModel):
     """A workflow-definition HITL placement declaration (C-CP-17 §17.3).
 
     Four fields verbatim. Multiple placements per workflow are admitted. The
     `tool_filter` glob/regex semantics are deferred to implementation
-    discretion per §17.3.
+    discretion per §17.3; this implementation matches EXACT tool names only
+    (see `select_governing_pre_action_placement`) and refuses pattern syntax
+    at construction, so a pattern the runtime cannot honour fails loudly
+    instead of silently gating nothing.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -188,12 +195,59 @@ class HITLPlacement(BaseModel):
     """`pre-action` — limits which tools trigger the gate. Element type is
     `str` (AS-owned tool name); no AS `ToolName` NewType is landed."""
 
+    @field_validator("tool_filter")
+    @classmethod
+    def _tool_filter_is_exact_names(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        # [LAW:parse-dont-validate] The one construction-time checkpoint: past it, every
+        # filter is a non-empty tuple of plain names, so matching never re-checks.
+        if value is None:
+            return value
+        if not value:
+            msg = "tool_filter must be None or a non-empty tuple of exact tool names"
+            raise ValueError(msg)
+        for entry in value:
+            if not entry or _TOOL_NAME_PATTERN_CHARS.intersection(entry):
+                msg = (
+                    f"tool_filter entry {entry!r} is empty or contains glob/regex "
+                    "metacharacters; entries are exact tool names"
+                )
+                raise ValueError(msg)
+        return value
+
     cascade_policy: CascadePolicy | None = None
     """Overrides the workload-class default per C-CP-11 §11.1."""
 
     timeout: int | None = None
     """Overrides the cell synchrony-class default; millisecond wall-clock
     budget. `Duration` rendered as `int`; concrete type deferred per §17.3."""
+
+
+def select_governing_pre_action_placement(
+    placements: Sequence[HITLPlacement], *, tool_id: str | None
+) -> HITLPlacement | None:
+    """The single `PRE_ACTION` placement that governs one action, else `None`.
+
+    C-CP-17 §17.3 (CP spec v1.120). `placements` is the step's composed set in
+    ancestor-first order (outer ancestor, nearer parent, then the child's own), so
+    the FIRST matching placement governs: an inherited parent placement always
+    outranks a child's, a narrower or duplicate child declaration can neither
+    suppress it nor add a second prompt, and a child placement governs only the
+    actions no ancestor covers.
+
+    `tool_id` is the exact tool name of a `TOOL_STEP` action, or `None` for a
+    non-tool action (inference). An unfiltered placement matches every action; a
+    filtered one matches only a tool whose exact name is in its filter and never
+    an inference step (the filter "limits which tools trigger the gate").
+    Non-`PRE_ACTION` positions are never selected.
+    """
+    for placement in placements:
+        if placement.position is not HITLPlacementKind.PRE_ACTION:
+            continue
+        if placement.tool_filter is None or (
+            tool_id is not None and tool_id in placement.tool_filter
+        ):
+            return placement
+    return None
 
 
 @runtime_checkable

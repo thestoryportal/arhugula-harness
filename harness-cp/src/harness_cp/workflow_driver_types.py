@@ -311,6 +311,12 @@ class StepExecutionContext(BaseModel):
     short-circuits to the inner dispatcher (byte-identical to pre-arc; a gate
     fires only when the operator declares a placement in the manifest).
 
+    CP spec v1.120 §17.3: for a sub-agent child the tuple begins with the
+    `PRE_ACTION` placements inherited from its ancestors (outermost first,
+    supplied via `execute_workflow(inherited_hitl_placements=...)`), then the
+    child's own; the governing placement for an action is the first match
+    (`select_governing_pre_action_placement`).
+
     Workflow-scoped (identical for every step of a workflow), NOT a per-step
     override — placements are workflow config per C-CP-25 §25.2, so this rides
     `StepExecutionContext` (the per-step execution metadata), NOT
@@ -719,6 +725,8 @@ def compose_branch_child_context(
 def fold_step_hitl_placements(
     workflow_placements: tuple[HITLPlacement, ...],
     override: HITLPlacement | None,
+    *,
+    inherited: tuple[HITLPlacement, ...] = (),
 ) -> tuple[HITLPlacement, ...]:
     """Fold a per-step ``StepOverride.hitl_placement`` onto the workflow tuple.
 
@@ -758,17 +766,27 @@ def fold_step_hitl_placements(
 
     Key from ``manifest_entry.hitl_placements`` (the workflow base) at each call
     site so a per-step override on one cell never leaks to a sibling cell.
+
+    **Parent PRE_ACTION inheritance (CP spec v1.120 §17.3).** ``inherited`` is the
+    ancestor-first prefix a sub-agent child receives from its parents (outer
+    ancestor, then nearer parent; each parent's own step-folded set already
+    contains what it inherited, so the order composes transitively). It is
+    prepended to the child's own workflow placements BEFORE the ADD-only fold, so
+    an inherited placement is never displaced: a per-step override at a position
+    an ancestor already declares is the same-position no-op above. An empty
+    ``inherited`` (every root run) returns the workflow tuple verbatim.
     """
+    composed = (*inherited, *workflow_placements) if inherited else workflow_placements
     if override is None:
-        return workflow_placements
-    if any(p.position == override.position for p in workflow_placements):
+        return composed
+    if any(p.position == override.position for p in composed):
         # Same-position collision: the workflow placement WINS (the override is a
         # no-op). A replace/tune could loosen attributes (tool_filter / timeout /
         # cascade_policy), so it is the operator-gated B-HITL-PLACEMENT-PER-STEP-
         # LOOSEN arc — NOT this monotone ADD-only fold.
-        return workflow_placements
+        return composed
     # ADD: a new position is appended (strictly adds gating).
-    return (*workflow_placements, override)
+    return (*composed, override)
 
 
 def _require_branch(branch_context: StepExecutionContext) -> int:
