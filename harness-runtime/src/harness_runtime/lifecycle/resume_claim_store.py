@@ -402,7 +402,8 @@ class ParentCarriedAdmission:
     """A child ref admitted through its live, STARTED parent claim.
 
     The child may be positional (not the journal latest) only because its parent's own
-    hash-covered snapshot carries this exact child exactly once.
+    hash-covered snapshot carries this exact child RECORD (its `child_record_ref`) exactly
+    once, with the journaled snapshot the carrier names.
     """
 
     parent: StartedClaim
@@ -715,13 +716,15 @@ class ResumeClaimStore:
                 else ()
             ),
         ]
-        # This base predates the Task 4b `child_record_ref` carrier field, so the carrier is
-        # matched by the FULL child snapshot equalling the exact journal record's snapshot
-        # (workflow, run, hash and content). Once 4b is integrated this must tighten to
-        # ref equality so two byte-identical records at different positions cannot both match.
-        matching = [c for c in carriers if c.child_snapshot == child_record.snapshot]
-        if len(matching) != 1:
-            raise ClaimRefusedError("parent does not carry this child exactly once")
+        # [LAW:one-source-of-truth] The authority is the parent's OWN journaled snapshot, whose
+        # hash (checked above) covers each carrier's `child_record_ref`; never a caller's capture.
+        # The exact ref (tenant, workflow, run, position, digest and snapshot hash) is what tells
+        # byte-identical records at different positions apart, and a legacy carrier with no ref
+        # (`None`) never equals one. The snapshot must also equal the record's, since the hash
+        # does not cover every snapshot field.
+        matching = [c for c in carriers if c.child_record_ref == ref]
+        if len(matching) != 1 or matching[0].child_snapshot != child_record.snapshot:
+            raise ClaimRefusedError("parent does not carry this exact child record exactly once")
 
     @contextmanager
     def _admitting(

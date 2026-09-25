@@ -352,9 +352,13 @@ def _summary_snapshot(workflow_id: str, run_id: str, **carriers: Any) -> PauseSn
 class Family:
     """Parent P (depth 0) carrying two same-workflow children N and N+1 (depth 1)."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, identical_children: bool = False) -> None:
         self.journal = JournalWorkflowPauseStore(journal_dir=root, tenant_id=None)
-        self.child_snaps = [_summary_snapshot("wf-child", f"run-child-{i}") for i in (0, 1)]
+        # Twins are two byte-identical snapshots journaled at DIFFERENT positions.
+        self.child_snaps = [
+            _summary_snapshot("wf-child", "run-child-0" if identical_children else f"run-child-{i}")
+            for i in (0, 1)
+        ]
         self.child_refs = [self.journal.capture(s, depth=1) for s in self.child_snaps]
         self.parent_snapshot = self.parent_with(self.child_refs)
         self.parent_ref = self.journal.capture(self.parent_snapshot, depth=0)
@@ -365,13 +369,21 @@ class Family:
         *,
         rehash: bool = True,
         snaps: list[PauseSnapshot] | None = None,
+        carried: list[JournalRecordRef | None] | None = None,
     ) -> PauseSnapshot:
+        """The parent snapshot carrying one paused child per entry of `refs`.
+
+        `carried` overrides the `child_record_ref` each carrier holds (`None` builds a legacy,
+        ref-less carrier); by default every carrier names its own exact record.
+        """
+        named = refs if carried is None else carried
         carriers = tuple(
             PausedChildBranchResumeState(
                 branch_index=i,
                 step_id=f"w-{i}",
                 child_workflow_id="wf-child",
                 child_snapshot=(snaps or self.child_snaps)[i],
+                child_record_ref=named[i],
             )
             for i, _ref in enumerate(refs)
         )
