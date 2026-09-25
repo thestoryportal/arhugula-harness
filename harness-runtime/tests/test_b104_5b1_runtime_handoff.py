@@ -17,6 +17,7 @@ import pytest
 from harness_core import JournalRecordRef
 from harness_cp.pause_resume_protocol import (
     _compute_snapshot_hash,  # pyright: ignore[reportPrivateUsage]
+    verify_pause_snapshot_hash,
 )
 from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
@@ -58,9 +59,14 @@ from .test_state_placement import world  # noqa: F401  (fixture: scratch dir wit
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="claim leases require POSIX flock")
 
 
-def _carrying(workflow_id: str, run_id: str, child_workflow_id: str, child: PauseSnapshot):
+def _carrying(workflow_id: str, run_id: str, child_ref: JournalRecordRef, child: PauseSnapshot):
+    # [LAW:one-source-of-truth] The captured ref supplies both the carrier's workflow and record.
     carrier = PausedChildBranchResumeState(
-        branch_index=0, step_id="w-0", child_workflow_id=child_workflow_id, child_snapshot=child
+        branch_index=0,
+        step_id="w-0",
+        child_workflow_id=child_ref.workflow_id,
+        child_snapshot=child,
+        child_record_ref=child_ref,
     )
     fan_out = FanOutResumeState(
         orchestrator_output={},
@@ -70,7 +76,7 @@ def _carrying(workflow_id: str, run_id: str, child_workflow_id: str, child: Paus
         paused_child_branches=(carrier,),
     )
     snapshot = _summary_snapshot(workflow_id, run_id, fan_out_resume=fan_out)
-    return snapshot.model_copy(
+    covered = snapshot.model_copy(
         update={
             "snapshot_hash": _compute_snapshot_hash(
                 workflow_id=snapshot.workflow_id,
@@ -81,6 +87,8 @@ def _carrying(workflow_id: str, run_id: str, child_workflow_id: str, child: Paus
             )
         }
     )
+    assert verify_pause_snapshot_hash(covered)
+    return covered
 
 
 class Chain:
@@ -90,9 +98,9 @@ class Chain:
         self.journal = JournalWorkflowPauseStore(journal_dir=root, tenant_id=None)
         self.g_snap = _summary_snapshot("wf-g", "run-g")
         self.g_ref = self.journal.capture(self.g_snap, depth=2)
-        self.c_snap = _carrying("wf-c", "run-c", "wf-g", self.g_snap)
+        self.c_snap = _carrying("wf-c", "run-c", self.g_ref, self.g_snap)
         self.c_ref = self.journal.capture(self.c_snap, depth=1)
-        self.p_snap = _carrying("wf-p", "run-p", "wf-c", self.c_snap)
+        self.p_snap = _carrying("wf-p", "run-p", self.c_ref, self.c_snap)
         self.p_ref = self.journal.capture(self.p_snap, depth=0)
 
     def verified(self, ref: JournalRecordRef, snap: PauseSnapshot, depth: int):
