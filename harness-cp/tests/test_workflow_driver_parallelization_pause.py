@@ -57,6 +57,7 @@ from harness_cp.pause_resume_protocol_types import (
     FanOutResumeState,
     HandoffResumeState,
     PausedChildBranchResumeState,
+    PausedChildCapture,
     PauseSnapshot,
     PeerFanOutResumeState,
     ResumeContext,
@@ -338,8 +339,9 @@ def _captured_snapshot(
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             peer_fan_out_resume=peer_fan_out_resume,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -723,8 +725,9 @@ def test_synthesis_material_diff_helper_covers_both_carriers() -> None:
                 step_index=0,
                 pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
                 fan_out_resume=fan,
+                descent_depth=0,
             )
-        )
+        ).snapshot
 
     no_synth = _steps(1)
     with_synth = [*_steps(1), _synthesis_step("synthesis")]
@@ -902,8 +905,9 @@ def _captured_with(**carrier: Any) -> PauseSnapshot:
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             **carrier,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 def _a_fan_out(synthesis_step_id: str | None = None) -> FanOutResumeState:
@@ -2041,7 +2045,7 @@ def _peer_child_steps() -> list[WorkflowStep]:
 
 class _PeerFaithfulSubAgentDispatcher:
     """A faithful double of `RuntimeSubAgentDispatcher` for the B-21 seam: dispatches a
-    REAL child `execute_workflow`, reading `step_context.child_resume_snapshot` to
+    REAL child `execute_workflow`, reading `step_context.child_resume` to
     thread the child's resume snapshot, and RAISING `SubAgentChildPausedError`
     (carrying the child's `PauseSnapshot`) when the child returns PAUSED — exactly what
     the runtime dispatcher does at `sub_agent_dispatch.py`, and exactly the double
@@ -2056,7 +2060,7 @@ class _PeerFaithfulSubAgentDispatcher:
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> dict[str, Any]:
         self.child_calls += 1
-        child_resume = getattr(step_context, "child_resume_snapshot", None)
+        child_resume = getattr(getattr(step_context, "child_resume", None), "child_snapshot", None)
         self.received_resume.append(child_resume)
         child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
         child_result = execute_workflow(
@@ -2071,7 +2075,11 @@ class _PeerFaithfulSubAgentDispatcher:
         if child_result.status is RunStatus.PAUSED:
             assert child_result.pause_snapshot is not None
             raise SubAgentChildPausedError(
-                child_workflow_id="wf-child-peer", child_snapshot=child_result.pause_snapshot
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child-peer",
+                    child_snapshot=child_result.pause_snapshot,
+                    child_record_ref=None,
+                )
             )
         return dict(child_result.final_state or child_result.partial_state or {})
 
@@ -2287,7 +2295,11 @@ class _PeerOrderedPausingSubAgentDispatcher:
             # branch's pause drains in-flight under the shield → CancelledError path.
             assert self._gate.wait(timeout=10.0)
         raise SubAgentChildPausedError(
-            child_workflow_id=f"wf-child-{sid}", child_snapshot=child_result.pause_snapshot
+            capture=PausedChildCapture(
+                child_workflow_id=f"wf-child-{sid}",
+                child_snapshot=child_result.pause_snapshot,
+                child_record_ref=None,
+            )
         )
 
 
@@ -2411,8 +2423,11 @@ class _SinglePeerHITLPausingSubAgentDispatcher:
         self, binding: StepEffectiveBinding, step: WorkflowStep, *, step_context: Any = None
     ) -> dict[str, Any]:
         raise SubAgentChildPausedError(
-            child_workflow_id="wf-child-branch-0",
-            child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-branch-0"),
+            capture=PausedChildCapture(
+                child_workflow_id="wf-child-branch-0",
+                child_snapshot=_hitl_pending_child_pause_snapshot("wf-child-branch-0"),
+                child_record_ref=None,
+            )
         )
 
 
@@ -3227,7 +3242,9 @@ class _RoundTwoResolveOnePausedChildFireOtherDispatcher:
             holder = getattr(step_context, "hitl_delivery_holder", None)
             resolved = holder.consume_and_clear() if holder is not None else None
             assert resolved is not None, "branch-0-sub must receive its delivery cell this round"
-            child_resume = getattr(step_context, "child_resume_snapshot", None)
+            child_resume = getattr(
+                getattr(step_context, "child_resume", None), "child_snapshot", None
+            )
             child_ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
             child_result = execute_workflow(
                 _peer_child_manifest("wf-child-0"),
@@ -3244,7 +3261,11 @@ class _RoundTwoResolveOnePausedChildFireOtherDispatcher:
             )
             assert child_result.pause_snapshot is not None
             raise SubAgentChildPausedError(
-                child_workflow_id="wf-child-0", child_snapshot=child_result.pause_snapshot
+                capture=PausedChildCapture(
+                    child_workflow_id="wf-child-0",
+                    child_snapshot=child_result.pause_snapshot,
+                    child_record_ref=None,
+                )
             )
         raise HITLPauseRequestedSignal()
 

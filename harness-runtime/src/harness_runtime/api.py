@@ -226,6 +226,27 @@ class ResumeHandleUnknownError(Exception):
         self.indeterminate: bool = indeterminate
 
 
+class ResumeDirectChildHandleError(Exception):
+    """`RT-FAIL-RESUME-DIRECT-CHILD-HANDLE` — the latest durable record for the supplied
+    `resume_handle` is not a depth-0 root record (B-104 Task 4d).
+
+    A child or grandchild pause is resumable only through its parent's carried,
+    verified and admitted child capture. A direct handle to such a record — or to a
+    legacy record whose depth is unknown or malformed, which is never inferred to be
+    root — is refused pre-bootstrap: before any claim, model or tool call, body
+    invocation or other side effect. Names the recorded depth only, never a path.
+    """
+
+    def __init__(self, *, depth: int | None) -> None:
+        shown = "unknown" if depth is None else str(depth)
+        super().__init__(
+            "RT-FAIL-RESUME-DIRECT-CHILD-HANDLE: the latest durable record for this "
+            f"resume_handle is not a root record (recorded depth={shown}); only a depth-0 "
+            "record may be resumed directly (B-104 Task 4d)."
+        )
+        self.depth: int | None = depth
+
+
 class PausedWorkflowStateUnavailableError(Exception):
     """The §14.14.9 accessor could not return a projection.
 
@@ -1373,6 +1394,12 @@ async def resume(
                 retryable=_read.retryable,
                 indeterminate=_read.indeterminate,
             )
+        # B-104 Task 4d — the depth rides the SAME read as the snapshot; anything but an
+        # exact depth of 0 (child, grandchild, legacy/unknown, malformed) is refused here,
+        # pre-bootstrap. A depth-0 record continues into the existing path (Task 5 still
+        # owns the claim/started barrier for it).
+        if _read.depth != 0:
+            raise ResumeDirectChildHandleError(depth=_read.depth)
         snapshot = _read.snapshot
     else:
         assert pause_snapshot is not None  # exactly-one-of guard guarantees this

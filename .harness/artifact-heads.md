@@ -39,8 +39,8 @@ is the one that resolved the head.
 | `prd` | `v1.2 (Proposed, 2026-07-01)` | 2026-07-09 | `design-substrate/PRD_v1_2.md` | 1 | `PRD_v1_2-cleared-2026-07-09.md` |
 | `project-workflow` | `v1.19` | 2026-07-24 | `design-substrate/Project_Workflow_v1_19.md` | 7 | `Project_Workflow-v1_19-cleared-2026-07-24.md` |
 | `spec-action-surface` | `v1.14` | 2026-07-15 | `design-substrate/Spec_Action_Surface_v1.md` | 6 | `spec-action-surface-v1-14-cleared-2026-07-15.md` |
-| `spec-control-plane` | `v1.121` | 2026-09-24 | `design-substrate/Spec_Control_Plane_v1_121.md` | 96 | `spec-control-plane-v1-121-cleared-2026-09-24.md` |
-| `spec-harness-runtime` | `v1.128` | 2026-09-25 | `design-substrate/Spec_Harness_Runtime_v1.md` | 91 | `spec-harness-runtime-v1-128-cleared-2026-09-25.md` |
+| `spec-control-plane` | `v1.123` | 2026-09-25 | `design-substrate/Spec_Control_Plane_v1_123.md` | 98 | `spec-control-plane-v1-123-cleared-2026-09-25.md` |
+| `spec-harness-runtime` | `v1.129` | 2026-09-25 | `design-substrate/Spec_Harness_Runtime_v1.md` | 92 | `spec-harness-runtime-v1-129-cleared-2026-09-25.md` |
 | `spec-information-substrate` | `v1.16` | 2026-09-25 | `design-substrate/Spec_Information_Substrate_v1.md` | 14 | `spec-information-substrate-v1-16-cleared-2026-09-25.md` |
 | `spec-memory-substrate` | `v1.3` | 2026-08-06 | `design-substrate/Spec_Memory_Substrate_v1.md` | 4 | `spec-memory-substrate-v1-3-cleared-2026-08-06.md` |
 | `spec-operational-discipline` | `v1.42` | 2026-08-16 | `design-substrate/Spec_Operational_Discipline_v1_42.md` | 16 | `spec-operational-discipline-v1-42-cleared-2026-08-16.md` |

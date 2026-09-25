@@ -2512,12 +2512,14 @@ def test_ac6_daemon_concurrent_two_clients_complete_independently(
         *,
         default_model_binding: Any = None,
         step_dispatchers: Any = None,
+        descent_depth: int = 0,
         pause_snapshot_input: Any = None,
         resume_context: Any = None,
         hitl_uniform_fallback_eligible_run_id: Any = None,
         effect_fence_uniform_fallback_eligible_key: Any = None,
         effect_fence_tree_wide_abort_present: Any = False,
     ) -> _CpRunResult:
+        _ = descent_depth  # B-104 Task 4a — the depth-0 root run path.
         _ = pause_snapshot_input  # C-RT-35 resume threading — None on the run path.
         _ = resume_context  # B-39 Slice B — None on the (non-resume) run path.
         _ = hitl_uniform_fallback_eligible_run_id  # B-39 Slice B, codex round-2 [P1] fix.

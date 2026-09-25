@@ -284,23 +284,26 @@ async def test_api_resume_parallelization_pause_restart_proof_round_trip(
     # ---- "Pause" — capture a real peer fan-out PauseSnapshot via a bootstrapped protocol.
     capture_ctx = await run_bootstrap(config, workload_class=_WORKLOAD)
     assert capture_ctx.pause_resume_protocol is not None
-    snapshot = await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
-        workflow_id=_WORKFLOW_ID,
-        run_id="run-par-resume-e2e",
-        step_index=0,
-        pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
-        peer_fan_out_resume=PeerFanOutResumeState(
-            branches=(
-                FanOutBranchResumeState(
-                    branch_index=0,
-                    step_id="branch-0",
-                    terminal_status="completed",
-                    output={"step_id": "branch-0", "recovered": True},
-                ),
-            ),  # branch-1 absent → re-dispatchable
-            branch_count=2,
-        ),
-    )
+    snapshot = (
+        await capture_ctx.pause_resume_protocol.capture_pause_snapshot(
+            workflow_id=_WORKFLOW_ID,
+            run_id="run-par-resume-e2e",
+            step_index=0,
+            pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            peer_fan_out_resume=PeerFanOutResumeState(
+                branches=(
+                    FanOutBranchResumeState(
+                        branch_index=0,
+                        step_id="branch-0",
+                        terminal_status="completed",
+                        output={"step_id": "branch-0", "recovered": True},
+                    ),
+                ),  # branch-1 absent → re-dispatchable
+                branch_count=2,
+            ),
+            descent_depth=0,
+        )
+    ).snapshot
 
     # ---- "Restart" — persist + reload across a process boundary (JSON round-trip).
     rehydrated = PauseSnapshot.model_validate_json(snapshot.model_dump_json())

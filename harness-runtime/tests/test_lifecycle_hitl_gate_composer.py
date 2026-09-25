@@ -3688,7 +3688,7 @@ async def test_descended_parent_floor_gates_real_composer_even_when_four_axes_au
         inner=inner,
     )
     context = _make_step_context().model_copy(
-        update={"sub_agent_descent": True, "parent_gate_level": GateLevel(parent)}
+        update={"descent_depth": 1, "parent_gate_level": GateLevel(parent)}
     )
     import asyncio
 
@@ -3786,7 +3786,7 @@ async def test_descended_parent_ask_routes_sync_response_once(
         inner=inner,
     )
     context = _make_step_context().model_copy(
-        update={"sub_agent_descent": True, "parent_gate_level": GateLevel.ASK}
+        update={"descent_depth": 1, "parent_gate_level": GateLevel.ASK}
     )
     if response is HITLResponse.REJECT:
         with pytest.raises(HITLGateRejectedError):
@@ -3834,7 +3834,7 @@ async def test_descended_parent_deny_audits_then_refuses_dispatch(
         audit=audit,
     )
     context = _make_step_context().model_copy(
-        update={"sub_agent_descent": True, "parent_gate_level": GateLevel.DENY}
+        update={"descent_depth": 1, "parent_gate_level": GateLevel.DENY}
     )
     with pytest.raises(HITLGatePolicyOverrideError) as exc:
         await composer.dispatch(
@@ -3877,7 +3877,7 @@ async def test_descended_resume_recomputes_floor_without_reprompt(
     )
     context = context.model_copy(
         update={
-            "sub_agent_descent": True,
+            "descent_depth": 1,
             "parent_gate_level": GateLevel(parent),
             "hitl_delivery_holder": HITLDeliveryCell(
                 _make_resume_hitl_result(HITLResponse.APPROVE)
@@ -3936,7 +3936,7 @@ async def test_descended_partial_binding_respects_parent_ask(
     step = _make_step(placements=(placement,))
     context = _make_step_context().model_copy(
         update={
-            "sub_agent_descent": True,
+            "descent_depth": 1,
             "parent_gate_level": GateLevel.ASK,
         }
     )
@@ -3968,7 +3968,7 @@ async def test_descended_auto_parent_removal_persists_clamped_auto_level(
         audit=audit,
     )
     context = _make_step_context().model_copy(
-        update={"sub_agent_descent": True, "parent_gate_level": GateLevel.AUTO}
+        update={"descent_depth": 1, "parent_gate_level": GateLevel.AUTO}
     )
 
     result = await composer.dispatch(
@@ -4009,7 +4009,7 @@ async def test_descended_boundary_removal_cannot_lower_parent_ask(
     )
     context = _make_step_context().model_copy(
         update={
-            "sub_agent_descent": True,
+            "descent_depth": 1,
             "parent_gate_level": GateLevel.ASK,
         }
     )
@@ -4035,7 +4035,7 @@ async def test_descended_parent_floor_keeps_no_placement_opt_in_behavior(
     composer = _make_composer(inner=inner, surface=surface, tracer_provider=provider)
     context = _make_step_context().model_copy(
         update={
-            "sub_agent_descent": True,
+            "descent_depth": 1,
             "parent_gate_level": GateLevel.ASK,
         }
     )

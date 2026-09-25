@@ -93,6 +93,7 @@ from harness_cp.workflow_driver import (
     StepKindDispatcherNotBoundError,
     _admit_fanout_branch_plan,
     execute_workflow,
+    execute_workflow_at_depth,
     resume_should_redispatch,
 )
 from harness_cp.workflow_driver_types import (
@@ -344,7 +345,7 @@ class _HierarchicalDispatcher:
             assert self.registry is not None, "registry must be wired before dispatch"
             child_manifest = cast(WorkflowManifestEntry, step.step_payload["child_manifest"])
             child_steps = cast(list[WorkflowStep], step.step_payload["child_steps"])
-            child_result = execute_workflow(
+            child_result = execute_workflow_at_depth(
                 child_manifest,
                 child_steps,
                 run_id=f"child-run-{step_id}",
@@ -352,6 +353,7 @@ class _HierarchicalDispatcher:
                 default_model_binding=_DEFAULT_BINDING,
                 step_dispatchers=self.registry,
                 parent_gate_floor=step_context.parent_gate_level,
+                descent_depth=1,
             )
             if child_result.status is RunStatus.FAILED:
                 raise RuntimeError(f"sub-agent child failed: {child_result.fail_class}")
@@ -1461,7 +1463,7 @@ def test_descended_linear_child_uses_stricter_gate(
     dispatcher = _HierarchicalDispatcher(ctx=ctx)
     registry = cast(StepDispatcherRegistry, _Registry(cast(StepDispatcher, dispatcher)))
     dispatcher.registry = registry
-    result = execute_workflow(
+    result = execute_workflow_at_depth(
         _manifest(
             workflow_id="wf-linear-child",
             default_gate_level=declared,
@@ -1473,6 +1475,7 @@ def test_descended_linear_child_uses_stricter_gate(
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=registry,
         parent_gate_floor=floor,
+        descent_depth=1,
     )
     assert result.status is RunStatus.SUCCESS
     assert dispatcher.contexts["child-leaf"].parent_gate_level is expected
@@ -1508,7 +1511,7 @@ def test_descended_non_linear_contexts_keep_parent_floor(topology: TopologyPatte
         if topology is TopologyPattern.EVALUATOR_OPTIMIZER
         else [_leaf_worker("first")]
     )
-    result = execute_workflow(
+    result = execute_workflow_at_depth(
         _manifest(
             workflow_id=f"wf-floor-{topology.value}",
             default_gate_level=GateLevel.AUTO,
@@ -1520,6 +1523,7 @@ def test_descended_non_linear_contexts_keep_parent_floor(topology: TopologyPatte
         default_model_binding=_DEFAULT_BINDING,
         step_dispatchers=registry,
         parent_gate_floor=GateLevel.ASK,
+        descent_depth=1,
     )
     assert result.status is RunStatus.SUCCESS
     assert dispatcher.contexts

@@ -32,9 +32,10 @@ from enum import StrEnum
 from typing import Any, Literal
 
 from harness_as.sandbox_tier import SandboxTier
+from harness_core import JournalRecordRef
 from harness_core.identity import StepID
 from harness_is.state_ledger_entry_schema import Actor, BranchMetadata, Identifier
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness_cp.cp_shared_types import AgentRole
 from harness_cp.engine_class import EngineClass
@@ -43,8 +44,10 @@ from harness_cp.hitl_placement import HITLPlacement
 from harness_cp.pause_resume_protocol_types import (
     EffectFenceResolutionDirective,
     HITLDeliveryCell,
+    PausedChildCapture,
     PauseSnapshot,
     ResumeContext,
+    require_ref_binds_snapshot,
 )
 
 
@@ -153,6 +156,18 @@ class RunResult(BaseModel):
     resume. `None` for all non-PAUSED returns per runtime spec v1.21 §14.14.5
     invariant 4. Additive minor-version evolution.
     """
+    pause_record_ref: JournalRecordRef | None = None
+    """B-104 Task 4a — the exact journal record the durable capture of `pause_snapshot`
+    appended (`None` for an ephemeral capture). Bound to `pause_snapshot` by the
+    validator below; never a field of the snapshot itself."""
+
+    @model_validator(mode="after")
+    def _ref_names_the_pause_snapshot(self) -> RunResult:
+        if self.pause_record_ref is not None:
+            if self.pause_snapshot is None:
+                raise ValueError("pause_record_ref requires the pause_snapshot it identifies")
+            require_ref_binds_snapshot(self.pause_record_ref, self.pause_snapshot)
+        return self
 
 
 class SubAgentChildPausedError(Exception):
@@ -174,13 +189,52 @@ class SubAgentChildPausedError(Exception):
     needs a CP-importable type.
     """
 
-    def __init__(self, *, child_workflow_id: str, child_snapshot: PauseSnapshot) -> None:
-        self.child_workflow_id = child_workflow_id
-        self.child_snapshot = child_snapshot
+    def __init__(self, *, capture: PausedChildCapture) -> None:
+        self.capture = capture
         super().__init__(
-            f"child sub-workflow {child_workflow_id!r} returned RunStatus.PAUSED "
-            f"(step_index={child_snapshot.step_index}); captured for resume re-entry"
+            f"child sub-workflow {capture.child_workflow_id!r} returned RunStatus.PAUSED "
+            f"(step_index={capture.child_snapshot.step_index}); captured for resume re-entry"
         )
+
+    @property
+    def child_workflow_id(self) -> str:
+        return self.capture.child_workflow_id
+
+    @property
+    def child_snapshot(self) -> PauseSnapshot:
+        return self.capture.child_snapshot
+
+
+class ChildResumeRefusal(StrEnum):
+    """Why the Runtime refused to run a durable paused child (B-104 Task 4c)."""
+
+    MISSING_REF = "missing-ref"
+    UNREADABLE_RECORD = "unreadable-record"
+    SNAPSHOT_MISMATCH = "snapshot-mismatch"
+    DEPTH_MISMATCH = "depth-mismatch"
+    GATEWAY_NOT_INSTALLED = "gateway-not-installed"
+    WORKFLOW_MISMATCH = "workflow-mismatch"
+
+
+class ChildResumeRefusedError(Exception):
+    """A durable paused child was refused BEFORE any of its steps ran.
+
+    Raised by the Runtime child runner (its verification or its required admission step).
+    Defined here so the CP fan-out barrier can catch it typed without importing Runtime.
+    It is terminal for the parent run: no new pause snapshot, no fresh child dispatch and
+    no journal capture follow it, so the prior durable pause stays the only record.
+    """
+
+    def __init__(
+        self, reason: ChildResumeRefusal, detail: str = "", *, audit_signing_failed: bool = False
+    ) -> None:
+        self.reason = reason
+        self.detail = detail
+        #: True when composing this refusal's audit record also failed signing under
+        #: fail-closed. CP-owned (a plain bool) so CP never imports the OD signing family;
+        #: it only makes the terminal fail_class truthful about the audit failure.
+        self.audit_signing_failed = audit_signing_failed
+        super().__init__(f"child resume refused ({reason.value}){': ' + detail if detail else ''}")
 
 
 class StepExecutionContext(BaseModel):
@@ -313,7 +367,7 @@ class StepExecutionContext(BaseModel):
 
     CP spec v1.120 §17.3: for a sub-agent child the tuple begins with the
     `PRE_ACTION` placements inherited from its ancestors (outermost first,
-    supplied via `execute_workflow(inherited_hitl_placements=...)`), then the
+    supplied via `execute_workflow_at_depth(inherited_hitl_placements=...)`), then the
     child's own; the governing placement for an action is the first match
     (`select_governing_pre_action_placement`).
 
@@ -324,36 +378,39 @@ class StepExecutionContext(BaseModel):
     outcome-hash). The per-step `StepOverride.hitl_placement` override fold is
     the separate follow-on arc `B-HITL-PLACEMENT-PER-STEP-OVERRIDE-FOLD`."""
 
-    sub_agent_descent: bool = False
-    """U-1 slice 3a (B-18) — whether this step executes inside a DESCENDED
-    sub-agent (child) workflow (ADR-D4 §1.5 sub-agent privilege inheritance).
+    descent_depth: int = Field(default=0, ge=0)
+    """U-1 slice 3a (B-18) / B-104 Task 4a — how many sub-agent (child) workflows deep
+    this step executes: the depth-0 root, a child at 1, its own child at 2.
 
     A RUN-LEVEL constant for a given `execute_workflow` invocation: `execute_workflow`
-    threads its `sub_agent_descent` param onto EVERY `StepExecutionContext` it composes
+    threads its `descent_depth` param onto EVERY `StepExecutionContext` it composes
     (linear + the 5 non-linear strategies; branch children inherit via
-    `compose_branch_child_context`'s `model_copy`). The runtime
-    `child_workflow_runner` re-enters `execute_workflow(sub_agent_descent=True)`; the
-    top-level `harness_runtime.api.run` uses the `False` default. Monotonic-sticky
-    (once True, all descendant runs are True — the recursive child_workflow_runner
-    re-passes True), which is correct because the ADR-D4 §1.5 REMOVE downgrade is
-    idempotent.
-
-    Read at the runtime LLM dispatch (`RuntimeLLMDispatcher.dispatch`): a descended
-    INFERENCE step emits the child (downgraded) `frozen_tool_superset` — the ADR-D4
-    §1.5 REMOVE half drops external-irreversible tools from the child's visibility —
-    instead of the parent's full superset (closing the F1 latent C10 condition-2 gap).
-    Rides `StepExecutionContext` (per-step execution metadata, NOT persisted, NOT in
+    `compose_branch_child_context`'s `model_copy`). The runtime `child_workflow_runner`
+    re-enters `execute_workflow_at_depth(descent_depth=<parent depth + 1>)`; the top-level
+    `harness_runtime.api.run` is the depth-0 root. It is the single source for the
+    ancestry the durable journal records at capture and for `sub_agent_descent`.
+    Rides `StepExecutionContext` (per-step execution metadata, NOT persisted here, NOT in
     any §5.2 / per-step-override outcome-hash — the hash-inert carrier per the
     new-surface-audit hash-config-not-carrier discipline), NOT `StepEffectiveBinding`
     (which IS hashed) and NOT a run-scoped ContextVar (it travels with the dispatch
-    call itself — no daemon-isolation concern). Default `False` → byte-identical to
-    pre-slice-3a (a top-level dispatch)."""
+    call itself — no daemon-isolation concern)."""
 
-    child_resume_snapshot: PauseSnapshot | None = None
+    @property
+    def sub_agent_descent(self) -> bool:
+        """ADR-D4 §1.5 sub-agent privilege inheritance: whether this step runs inside a
+        DESCENDED (child) workflow. Derived from `descent_depth`, never stored alongside it.
+
+        Read at the runtime LLM dispatch (`RuntimeLLMDispatcher.dispatch`): a descended
+        INFERENCE step emits the child (downgraded) `frozen_tool_superset`, dropping
+        external-irreversible tools from the child's visibility (closing the F1 latent
+        C10 condition-2 gap). Monotonic-sticky because a grandchild's depth stays > 0."""
+        return self.descent_depth > 0
+
+    child_resume: PausedChildCapture | None = None
     """B-HIERARCHICAL-PAUSE (R-FS-1) — on RESUME, the `PauseSnapshot` a recursive
     child sub-workflow paused at, threaded to its `SUB_AGENT_DISPATCH` worker so the
     runtime dispatcher re-enters the child via `execute_workflow(pause_snapshot_input=
-    child_resume_snapshot)` — the child resumes at its cursor (the grandchild's
+    child_resume)` — the child resumes at its cursor (the grandchild's
     completed steps are NOT re-executed), the THIRD branch disposition distinct from
     skip-terminal and re-dispatch-fresh. Set by the CP driver ONLY on the specific
     paused-child worker's context when re-dispatching it on resume (sourced from the
@@ -482,7 +539,7 @@ class StepExecutionContext(BaseModel):
     fan-out) read it directly in place of the retired `getattr(ctx,
     "resume_context_holder", None)` + `.peek()`.
 
-    Same hash-inert / per-step-transient posture as `child_resume_snapshot` (NOT
+    Same hash-inert / per-step-transient posture as `child_resume` (NOT
     persisted, NOT in any §5.2 / outcome-hash); `None` default → byte-identical to
     pre-arc (a non-resume dispatch, or a resume with no HITL/effect-fence
     ambiguity, sees no behavior change)."""
@@ -951,6 +1008,8 @@ def compose_branch_terminal_path(branch_context: StepExecutionContext) -> str:
 
 
 __all__ = [
+    "ChildResumeRefusal",
+    "ChildResumeRefusedError",
     "RunResult",
     "RunStatus",
     "StepExecutionContext",

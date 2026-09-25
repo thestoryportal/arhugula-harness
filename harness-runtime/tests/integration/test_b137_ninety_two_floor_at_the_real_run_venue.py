@@ -962,17 +962,17 @@ def test_the_scope_is_inside_the_envelope_not_all_nineteen() -> None:
     # exempting `skill.activation` outright — pinned by the containment witness below,
     # which is the same structure the nested-resume case relies on.
     # The load-bearing structural fact behind that qualification: the emit lives inside
-    # `execute_workflow`, which is precisely the function the child runner re-enters under
-    # `subagent.span`. So the same line is a root on a top-level call and a child on a
-    # nested one.
+    # `execute_workflow_at_depth` (the body behind the root-only `execute_workflow`), which is
+    # precisely the function the child runner re-enters under `subagent.span`. So the same
+    # line is a root on a top-level call and a child on a nested one.
     tree_fns = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
         and node.lineno < emit_line <= (node.end_lineno or node.lineno)
     ]
-    assert any(fn.name == "execute_workflow" for fn in tree_fns), (
-        f"the skill-activation emit at :{emit_line} is no longer inside `execute_workflow` "
+    assert any(fn.name == "execute_workflow_at_depth" for fn in tree_fns), (
+        f"the skill-activation emit at :{emit_line} is no longer inside `execute_workflow_at_depth` "
         f"(enclosing: {[fn.name for fn in tree_fns]}) — the top-level-vs-nested "
         "qualification on B-137's root counterexample must be re-derived"
     )
@@ -1249,10 +1249,10 @@ def test_a_nested_child_resume_runs_under_subagent_span() -> None:
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "child_workflow_runner"
-        and any(kw.arg == "pause_snapshot_input" for kw in node.keywords)
+        and any(kw.arg == "child_resume" for kw in node.keywords)
     ]
     assert dispatch_calls, (
-        "no `child_workflow_runner(..., pause_snapshot_input=...)` call was found inside "
+        "no `child_workflow_runner(..., child_resume=...)` call was found inside "
         "the `subagent.span` block — if the nested resume moved out of the span, "
         "`resume.attempted` may now be a root there too and B-162 must be re-scoped"
     )

@@ -3,7 +3,7 @@ PRE_ACTION inheritance (operator decision 2026-09-24; CP spec v1.120 C-CP-17 §1
 C-CP-25 execute_workflow input, C-CP-26 property 7).
 
 CP-only slice: this proves the interface a Runtime `ChildWorkflowRunner` will feed
-(`execute_workflow(inherited_hitl_placements=...)`) and the selection contract a Runtime
+(`execute_workflow_at_depth(inherited_hitl_placements=..., descent_depth=1,)`) and the selection contract a Runtime
 composer will apply. It does NOT prove a child's real gate prompts once; that
 one-prompt audit witness belongs to the separate Runtime slice.
 """
@@ -33,7 +33,7 @@ from harness_cp.workflow_driver import (
     StepDispatcherRegistry,
     _captured_hitl_gate_config_hash,  # pyright: ignore[reportPrivateUsage]
     _hash_hitl_gate_config,  # pyright: ignore[reportPrivateUsage]
-    execute_workflow,
+    execute_workflow_at_depth,
 )
 from harness_cp.workflow_driver_types import (
     RunStatus,
@@ -234,7 +234,7 @@ def _run(
     **kwargs: Any,
 ) -> _ContextRecorder:
     recorder = _ContextRecorder()
-    result = execute_workflow(
+    result = execute_workflow_at_depth(
         manifest,
         steps,
         run_id="run-inherit",
@@ -242,6 +242,7 @@ def _run(
         default_model_binding=_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, recorder),
         **kwargs,
+        descent_depth=1,
     )
     assert result.status is RunStatus.SUCCESS
     return recorder
@@ -356,7 +357,7 @@ def test_a_changed_parent_prefix_fails_a_child_resume_closed_and_an_unchanged_on
     prefix = (_pre("read_file", timeout=5000, cascade=CascadePolicy.PAUSE),)
     manifest = _manifest(TopologyPattern.PARALLELIZATION)
     dispatcher = _PreDispatchGateOnceDispatcher()
-    paused = execute_workflow(
+    paused = execute_workflow_at_depth(
         manifest,
         _peer_steps(),
         run_id="run-1",
@@ -364,13 +365,14 @@ def test_a_changed_parent_prefix_fails_a_child_resume_closed_and_an_unchanged_on
         default_model_binding=_BINDING,
         step_dispatchers=cast(StepDispatcherRegistry, dispatcher),
         inherited_hitl_placements=prefix,
+        descent_depth=1,
     )
     assert paused.status is RunStatus.PAUSED
     snapshot = paused.pause_snapshot
     assert snapshot is not None
 
     def resume(inherited: tuple[HITLPlacement, ...], disp: Any) -> Any:
-        return execute_workflow(
+        return execute_workflow_at_depth(
             manifest,
             _peer_steps(),
             run_id="run-1",
@@ -379,6 +381,7 @@ def test_a_changed_parent_prefix_fails_a_child_resume_closed_and_an_unchanged_on
             step_dispatchers=cast(StepDispatcherRegistry, disp),
             pause_snapshot_input=snapshot,
             inherited_hitl_placements=inherited,
+            descent_depth=1,
         )
 
     dropped = resume((), _PreDispatchGateAlwaysDispatcher())
@@ -399,7 +402,7 @@ def test_only_pre_action_placements_may_be_inherited(kind: HITLPlacementKind) ->
     # The operator decision covers PRE_ACTION only; boundary and validator placements
     # belong to the declaring workflow and must never ride down to a child.
     with pytest.raises(ValueError, match="PRE_ACTION"):
-        execute_workflow(
+        execute_workflow_at_depth(
             _manifest(TopologyPattern.SINGLE_THREADED_LINEAR),
             _linear_steps(),
             run_id="run-inherit",
@@ -407,4 +410,5 @@ def test_only_pre_action_placements_may_be_inherited(kind: HITLPlacementKind) ->
             default_model_binding=_BINDING,
             step_dispatchers=cast(StepDispatcherRegistry, _ContextRecorder()),
             inherited_hitl_placements=(HITLPlacement(position=kind),),
+            descent_depth=1,
         )

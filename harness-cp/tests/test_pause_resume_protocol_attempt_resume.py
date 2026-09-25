@@ -65,8 +65,9 @@ def _capture_then_protocol(
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     resume_protocol = PauseResumeProtocol(
         state_ledger_writer=object(),
         state_ledger_reader=object(),

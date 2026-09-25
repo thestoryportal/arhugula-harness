@@ -299,6 +299,7 @@ async def test_stage5_child_runner_reads_bound_ollama_verdict(
     from types import SimpleNamespace
 
     from harness_runtime.lifecycle import child_workflow_runner as child_module
+    from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 
     captured: list[_MutableHarnessContext] = []
     _capture_completed_stages_then_explode(monkeypatch, stage_6_cxa_wiring, captured)
@@ -321,8 +322,10 @@ async def test_stage5_child_runner_reads_bound_ollama_verdict(
         )
         return object()
 
-    monkeypatch.setattr(child_module, "execute_workflow", _fake_child_driver)
-    runner = child_module.compose_child_workflow_runner(cast(Any, builder))
+    monkeypatch.setattr(child_module, "execute_workflow_at_depth", _fake_child_driver)
+    runner = child_module.compose_child_workflow_runner(
+        cast(Any, builder), durable_admission=RefuseDurableChildAdmission()
+    )
     runner(
         workflow_id="eo-child",
         manifest_entry=cast(Any, object()),
@@ -330,6 +333,7 @@ async def test_stage5_child_runner_reads_bound_ollama_verdict(
         handoff_context=cast(Any, object()),
         descent=cast(Any, SimpleNamespace(child_gate_level=None)),
         default_model_binding=cast(Any, object()),
+        descent_depth=1,
     )
     assert seen == [True]
 

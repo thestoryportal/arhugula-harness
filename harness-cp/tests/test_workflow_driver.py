@@ -309,6 +309,7 @@ def test_run_result_eight_fields() -> None:
         "final_state",
         "fail_class",
         "pause_snapshot",
+        "pause_record_ref",
     }
 
 
@@ -1766,6 +1767,7 @@ def test_reconstruct_final_state_on_explicit_pause_override_path() -> None:
         run_idempotency_key="rik-1",  # the fake store ignores the key
         resume_at_step_index_override=2,  # the explicit-pause / #680 resume path
         reconstruct_final_state=True,
+        descent_depth=0,
     )
     span.end()
     assert result.status is RunStatus.SUCCESS

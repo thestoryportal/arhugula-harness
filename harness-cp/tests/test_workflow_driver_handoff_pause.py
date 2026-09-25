@@ -41,6 +41,7 @@ from harness_cp.pause_resume_protocol import (
 from harness_cp.pause_resume_protocol_types import (
     HandoffResumeState,
     HandoffStageResumeState,
+    PausedChildCapture,
     PauseSnapshot,
     WorkflowPauseReason,
 )
@@ -534,8 +535,9 @@ def _captured_handoff_snapshot(handoff_resume: HandoffResumeState) -> PauseSnaps
             step_index=2,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
             handoff_resume=handoff_resume,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
 
 def test_handoff_snapshot_hash_covers_handoff_resume_tamper_rejected() -> None:
@@ -646,8 +648,9 @@ def test_handoff_resume_cursor_step_index_mismatch_fails_closed() -> None:
                 ),
                 stage_count=3,
             ),
+            descent_depth=0,
         )
-    )
+    ).snapshot
     ctx = cast(DriverContext, _CtxP(ledger=_RecordingLedger(), emitter=_Emitter()))
     result = _run(
         steps=[_stage("s0"), _stage("s1"), _stage("s2")],
@@ -861,7 +864,11 @@ def test_handoff_stage_child_pause_fails_closed_not_handoff_paused() -> None:
             step_id = str(step.step_id)
             if step_id == "s1":
                 raise SubAgentChildPausedError(
-                    child_workflow_id="child-wf", child_snapshot=child_snapshot
+                    capture=PausedChildCapture(
+                        child_workflow_id="child-wf",
+                        child_snapshot=child_snapshot,
+                        child_record_ref=None,
+                    )
                 )
             return {"role": step_id, "echoed": dict(step.step_payload)}
 

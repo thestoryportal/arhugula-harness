@@ -63,8 +63,9 @@ def test_capture_pause_snapshot_returns_pause_snapshot() -> None:
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     assert isinstance(snapshot, PauseSnapshot)
 
 
@@ -77,8 +78,9 @@ def test_capture_pause_snapshot_hash_is_sha256_hex_64() -> None:
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     assert len(snapshot.snapshot_hash) == 64
     # All chars are hex
     int(snapshot.snapshot_hash, 16)
@@ -94,8 +96,9 @@ def test_capture_pause_snapshot_hash_matches_canonical_serialization() -> None:
             run_id="run-1",
             step_index=3,
             pause_reason=WorkflowPauseReason.HITL_PENDING,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     expected_payload = json.dumps(
         {
             "workflow_id": "wf-1",
@@ -122,16 +125,18 @@ def test_capture_pause_snapshot_hash_deterministic() -> None:
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     snapshot_b = asyncio.run(
         protocol_b.capture_pause_snapshot(
             workflow_id="wf-1",
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     assert snapshot_a.snapshot_hash == snapshot_b.snapshot_hash
 
 
@@ -146,16 +151,18 @@ def test_capture_pause_snapshot_hash_changes_with_step_index() -> None:
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     snap_1 = asyncio.run(
         protocol.capture_pause_snapshot(
             workflow_id="wf-1",
             run_id="run-1",
             step_index=1,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     assert snap_0.snapshot_hash != snap_1.snapshot_hash
 
 
@@ -171,8 +178,9 @@ def test_pause_snapshot_immutable_after_capture() -> None:
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     with pytest.raises(ValidationError):
         snapshot.workflow_id = "wf-2"  # type: ignore[misc]
     with pytest.raises(ValidationError):
@@ -192,8 +200,9 @@ def test_capture_populates_state_ledger_anchor_from_reader() -> None:
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     assert snapshot.state_ledger_anchor == expected_anchor
 
 
@@ -225,16 +234,18 @@ def test_capture_invokes_pause_context_reader_each_call() -> None:
             run_id="run-1",
             step_index=0,
             pause_reason=WorkflowPauseReason.HITL_PENDING,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     snap_1 = asyncio.run(
         protocol.capture_pause_snapshot(
             workflow_id="wf-1",
             run_id="run-1",
             step_index=1,
             pause_reason=WorkflowPauseReason.HITL_PENDING,
+            descent_depth=0,
         )
-    )
+    ).snapshot
     assert snap_0.state_ledger_anchor == anchors[0]
     assert snap_1.state_ledger_anchor == anchors[1]
     assert len(invocations) == 2
@@ -257,8 +268,9 @@ def test_ac4_capture_then_verify_hash_then_verify_immutability() -> None:
             run_id="run-ac4",
             step_index=7,
             pause_reason=WorkflowPauseReason.VALIDATOR_ESCALATION,
+            descent_depth=0,
         )
-    )
+    ).snapshot
 
     # Verify hash recipe
     expected_payload = json.dumps(

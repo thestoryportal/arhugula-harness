@@ -37,6 +37,7 @@ from harness_cp.workflow_driver_types import RunStatus, StepKind, WorkflowStep
 from harness_cp.workflow_manifest_entry import WorkflowManifestEntry
 from harness_is.state_ledger_entry_schema import Actor, ActorClass
 from harness_runtime.lifecycle.child_workflow_runner import compose_child_workflow_runner
+from harness_runtime.lifecycle.durable_child_admission import RefuseDurableChildAdmission
 from harness_runtime.lifecycle.engine_output_store import EngineOutputStore, engine_output_dir_for
 from harness_runtime.lifecycle.sub_agent_dispatch import compose_child_run_id_seed
 
@@ -160,15 +161,18 @@ def _drive(
     engine_class: EngineClass = EngineClass.EVENT_SOURCED_REPLAY,
 ) -> Any:
     ctx = _Ctx(ledger=_Ledger(), store=store, dispatchers=_Registry(dispatcher))
-    runner = compose_child_workflow_runner(cast(Any, ctx))
+    runner = compose_child_workflow_runner(
+        cast(Any, ctx), durable_admission=RefuseDurableChildAdmission()
+    )
     return runner(
         workflow_id=_CHILD_WF,
         manifest_entry=_manifest(engine_class),
         steps=[_branch_step(0, kind), _branch_step(1, kind), _branch_step(2, kind)],
         handoff_context=cast(Any, None),
         descent=cast(Any, None),
+        descent_depth=1,  # a direct child-runner call is a depth-1 child of the root
         default_model_binding=_DEFAULT_BINDING,
-        pause_snapshot_input=None,  # CRASH-resume
+        child_resume=None,  # CRASH-resume
         child_run_id_seed=seed,
     )
 

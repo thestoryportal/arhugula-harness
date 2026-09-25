@@ -265,6 +265,34 @@ class PauseJournalReadResult(NamedTuple):
     latest_record_digest: str | None
     """sha256 of the latest RAW journal line, or ``None`` when there is none."""
 
+    depth: int | None = None
+    """B-104 Task 4d — the ancestry depth recorded on THIS SAME latest line (root 0, child
+    1, grandchild 2), taken from the one read that supplied :attr:`snapshot`, never from a
+    later lookup. ``None`` means unknown: no snapshot, a legacy line with no depth, or a
+    malformed depth. Unknown is never inferred to be root, and it never alters
+    :attr:`cause`, :attr:`record_count` or :attr:`latest_record_digest`."""
+
+
+def _depth_is_wellformed(depth: object) -> bool:
+    """A journaled ancestry depth is a nonnegative int, or `None` (unknown/legacy).
+
+    [LAW:single-enforcer] The one definition, shared by the writer and both readers.
+    `bool` is refused (`type(...) is int`): `True` must never read as depth 1.
+    """
+    return depth is None or (type(depth) is int and depth >= 0)
+
+
+def _recorded_depth(line: str) -> int | None:
+    """The depth recorded on one journal line, or `None` when absent or malformed."""
+    try:
+        record: object = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(record, dict):
+        return None
+    depth: object = cast("dict[str, object]", record).get("depth")
+    return depth if _depth_is_wellformed(depth) and isinstance(depth, int) else None
+
 
 class JournalRecordAtRef(NamedTuple):
     """A verified exact journal position and its recorded ancestry depth."""
@@ -669,6 +697,7 @@ class JournalWorkflowPauseStore:
             indeterminate=cause is PauseJournalReadCause.CORRUPT_LATEST,
             record_count=len(lines),
             latest_record_digest=digest,
+            depth=_recorded_depth(latest) if snapshot is not None else None,
         )
 
     def read_exact(self, ref: JournalRecordRef) -> JournalRecordAtRef | None:
@@ -701,7 +730,7 @@ class JournalWorkflowPauseStore:
         if snapshot.run_id != ref.run_id or snapshot.snapshot_hash != ref.snapshot_hash:
             return None
         depth = record.get("depth")
-        if depth is not None and (type(depth) is not int or depth < 0):
+        if not _depth_is_wellformed(depth):
             return None
         return JournalRecordAtRef(snapshot=snapshot, depth=depth)
 
@@ -815,7 +844,7 @@ class JournalWorkflowPauseStore:
         **The read path deliberately does NOT take this lock** — see
         :meth:`read_latest_attributed`.
         """
-        if depth is not None and (type(depth) is not int or depth < 0):
+        if not _depth_is_wellformed(depth):
             raise ValueError("journal depth must be a nonnegative integer or None")
         record = {
             "workflow_id": snapshot.workflow_id,

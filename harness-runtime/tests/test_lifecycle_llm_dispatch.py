@@ -1241,7 +1241,7 @@ async def test_the_loop_context_carries_the_parent_gate_floor_only_when_descende
         _binding("anthropic", model="claude-test"),
         _step(_two_tool_step_payload()),
         step_context=_step_context().model_copy(
-            update={"sub_agent_descent": descended, "parent_gate_level": parent}
+            update={"descent_depth": 1 if descended else 0, "parent_gate_level": parent}
         ),
     )
 

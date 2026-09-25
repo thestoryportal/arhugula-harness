@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from harness_cp.validator_framework_types import ValidatorEvaluation
 
 from harness_core import (
+    JournalRecordRef,
     SubAgentDispatchCapacityError,
     ValidatorEscalationGateAuditComposeError,
     ValidatorEscalationGateRejectedError,
@@ -113,6 +114,7 @@ from harness_cp.pause_resume_protocol_types import (
     MaterialDiffPolicy,
     OrchestratorEffectFencePausedResumeState,
     PausedChildBranchResumeState,
+    PausedChildCapture,
     PauseSnapshot,
     PeerFanOutResumeState,
     PreDispatchGateOwningBranchResumeState,
@@ -157,6 +159,7 @@ from harness_cp.workflow_driver_errors import (
     TopologyPatternNotYetMaterializedError,
 )
 from harness_cp.workflow_driver_types import (
+    ChildResumeRefusedError,
     RunResult,
     RunStatus,
     StepExecutionContext,
@@ -3207,6 +3210,19 @@ def _emit_resume_attempted(
     emit_resume_attempted_span(snapshot, result, tracer=tracer, diff_policy=diff_policy)
 
 
+def _refused_fail_class(prefix: str, refusals: Mapping[int, ChildResumeRefusedError]) -> str:
+    """The terminal fail_class for a run ended by a refused durable paused child.
+
+    Keeps the stable `<family>-child-resume-refused` prefix and appends the distinct
+    refusal reasons, plus `audit-signing-failed` when composing a refusal's audit also
+    failed signing under fail-closed, so the run records what truly happened.
+    """
+    parts = sorted({r.reason.value for r in refusals.values()})
+    if any(r.audit_signing_failed for r in refusals.values()):
+        parts.append("audit-signing-failed")
+    return f"{prefix} ({'; '.join(parts)})"
+
+
 def execute_workflow(
     manifest_entry: WorkflowManifestEntry,
     steps: Sequence[WorkflowStep],
@@ -3217,7 +3233,46 @@ def execute_workflow(
     step_dispatchers: StepDispatcherRegistry,
     pause_snapshot_input: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
-    sub_agent_descent: bool = False,
+    resume_context: ResumeContext | None = None,
+    hitl_uniform_fallback_eligible_run_id: str | None = None,
+    effect_fence_uniform_fallback_eligible_key: str | None = None,
+    effect_fence_tree_wide_abort_present: bool = False,
+) -> RunResult:
+    """Run a ROOT workflow: the depth-0 entry of `execute_workflow_at_depth`.
+
+    Takes no depth, parent gate floor or inherited placements, so a caller cannot
+    describe a descended child here and have it journaled as root.
+    [LAW:types-are-the-program] Every child entry goes through `execute_workflow_at_depth`,
+    where the depth has no default. All other parameters are documented there.
+    """
+    return execute_workflow_at_depth(
+        manifest_entry,
+        steps,
+        run_id,
+        ctx,
+        default_model_binding=default_model_binding,
+        step_dispatchers=step_dispatchers,
+        pause_snapshot_input=pause_snapshot_input,
+        reconstruct_final_state=reconstruct_final_state,
+        descent_depth=0,
+        resume_context=resume_context,
+        hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
+        effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
+        effect_fence_tree_wide_abort_present=effect_fence_tree_wide_abort_present,
+    )
+
+
+def execute_workflow_at_depth(
+    manifest_entry: WorkflowManifestEntry,
+    steps: Sequence[WorkflowStep],
+    run_id: str,
+    ctx: DriverContext,
+    *,
+    default_model_binding: ModelBinding,
+    step_dispatchers: StepDispatcherRegistry,
+    descent_depth: int,
+    pause_snapshot_input: PauseSnapshot | None = None,
+    reconstruct_final_state: bool = True,
     parent_gate_floor: GateLevel = GateLevel.AUTO,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
@@ -3257,6 +3312,10 @@ def execute_workflow(
         `step_dispatchers.lookup(step.kind).dispatch(...)` (§25.3.3.4
         opaque-step-body discipline preserved — driver routes on the
         declared enum field, not on opaque payload content).
+    descent_depth
+        Required, no default: 0 for a root run, the parent's depth + 1 for each
+        descended child. It is journaled with every captured pause, so a child that
+        omitted it would otherwise be recorded as a root.
     inherited_hitl_placements
         CP spec v1.120 §17.3: the `PRE_ACTION` placements a sub-agent child
         inherits from its ancestors, outermost first. Prepended to the child's own
@@ -3548,7 +3607,7 @@ def execute_workflow(
             # U-1 slice 3a (B-18) — run-level descent marker; threaded onto every
             # StepExecutionContext so a descended sub-agent inference emits the child
             # (downgraded) frozen_tool_superset. False for a top-level run.
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             # B-39 Slice B — the operator's resume payload, threaded verbatim (this
             # execute_workflow call's own top-level parameter; unmodified pass-through).
             resume_context=resume_context,
@@ -3593,7 +3652,7 @@ def _execute_workflow_body(
     resume_at_step_index_override: int | None = None,
     resume_snapshot: PauseSnapshot | None = None,
     reconstruct_final_state: bool = True,
-    sub_agent_descent: bool = False,
+    descent_depth: int,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -4644,7 +4703,7 @@ def _execute_workflow_body(
             crash_pause_reconstruct_refire_safe=_crash_pause_reconstruct_refire_safe,
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             synthesis_step=_synthesis_step,
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
@@ -4665,7 +4724,7 @@ def _execute_workflow_body(
             # snapshot's `evaluator_optimizer_resume` drives the recover-prefix +
             # re-dispatch-from-failed-step path; None on a normal first run.
             resume_snapshot=resume_snapshot,
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
@@ -4707,7 +4766,7 @@ def _execute_workflow_body(
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
@@ -4747,7 +4806,7 @@ def _execute_workflow_body(
             reconciler_engine_resume_required=_reconciler_fanout_engine_resume_required,
             pause_resumable=True,
             synthesis_step=_synthesis_step,
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
@@ -4769,7 +4828,7 @@ def _execute_workflow_body(
             # recover-completed-prefix + re-dispatch-from-the-cursor path; None on a
             # normal first run.
             resume_snapshot=resume_snapshot,
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
             effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
@@ -5229,7 +5288,7 @@ def _execute_workflow_body(
         # no child run_id to key by (it IS the run); its gate always consumes the
         # uniform hitl_response field directly." `hitl_responses` is keyed by a
         # recursively-dispatched CHILD's own run_id (§0's keying-defect note) —
-        # never the depth-0 root's. `sub_agent_descent` (already threaded, set
+        # never the depth-0 root's. `descent_depth > 0` (already threaded, set
         # True by `child_workflow_runner.py` for every recursive child dispatch,
         # monotonic-sticky through further descent) is the existing "am I the
         # depth-0 root" discriminator — consult the map only when it is True, so
@@ -5239,7 +5298,7 @@ def _execute_workflow_body(
         _resolved_hitl: HITLResult | None = None
         _mapped_hitl = (
             resume_context.hitl_responses.get(run_id)
-            if sub_agent_descent and resume_context.hitl_responses
+            if descent_depth > 0 and resume_context.hitl_responses
             else None
         )
         if _mapped_hitl is not None:
@@ -5425,14 +5484,16 @@ def _execute_workflow_body(
         # §14.14.7.
         if ctx.pause_resume_protocol is not None and ctx.pause_requested_flag.is_set():
             protocol = cast(PauseResumeProtocol, ctx.pause_resume_protocol)
-            pause_snapshot = _run_protocol_method_sync(
+            pause_snapshot_captured = _run_protocol_method_sync(
                 protocol.capture_pause_snapshot(
                     workflow_id=manifest_entry.workflow_id,
                     run_id=run_id,
                     step_index=step_index,
                     pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
+                    descent_depth=descent_depth,
                 )
             )
+            pause_snapshot = pause_snapshot_captured.snapshot
             # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
             # The helper is emission-only; the driver owns the tracer (B-162).
             _emit_pause_captured(pause_snapshot, ctx=ctx)
@@ -5461,6 +5522,7 @@ def _execute_workflow_body(
                 final_state=None,
                 fail_class=None,
                 pause_snapshot=pause_snapshot,
+                pause_record_ref=pause_snapshot_captured.record_ref,
             ), steps_executed
 
         # § 25.3.3.2 — Resolve binding via U-CP-14.
@@ -5581,7 +5643,7 @@ def _execute_workflow_body(
             # auto-resumes the grandchild instead of re-firing its committed effects.
             is_linear_sequential_dispatch=True,
             # U-1 slice 3a (B-18) — run-level descent marker (ADR-D4 §1.5).
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             # B-39 Slice B — the operator's full resume payload, pass-through on EVERY
             # step (a `RuntimeSubAgentDispatcher` reads it off a SUB_AGENT_DISPATCH
             # step's context to forward into the recursive `execute_workflow` call).
@@ -5633,7 +5695,7 @@ def _execute_workflow_body(
             if type(exc).__name__ == "HITLPauseRequestedSignal":
                 if ctx.pause_resume_protocol is not None and ctx.pause_requested_flag.is_set():
                     protocol = cast(PauseResumeProtocol, ctx.pause_resume_protocol)
-                    pause_snapshot = _run_protocol_method_sync(
+                    pause_snapshot_captured = _run_protocol_method_sync(
                         protocol.capture_pause_snapshot(
                             workflow_id=manifest_entry.workflow_id,
                             run_id=run_id,
@@ -5649,8 +5711,10 @@ def _execute_workflow_body(
                                 default_model_binding=default_model_binding,
                                 inherited_hitl_placements=inherited_hitl_placements,
                             ),
+                            descent_depth=descent_depth,
                         )
                     )
+                    pause_snapshot = pause_snapshot_captured.snapshot
                     # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
                     # The helper is emission-only; the driver owns the tracer (B-162).
                     _emit_pause_captured(pause_snapshot, ctx=ctx)
@@ -5680,6 +5744,7 @@ def _execute_workflow_body(
                         final_state=None,
                         fail_class=None,
                         pause_snapshot=pause_snapshot,
+                        pause_record_ref=pause_snapshot_captured.record_ref,
                     ), steps_executed
                 # Defensive — signal fired but pause_resume_protocol absent.
                 # Per §14.8.8.1 step 0 OR-form precondition this is
@@ -5708,7 +5773,7 @@ def _execute_workflow_body(
                 # None carrier → resume cannot resolve, re-pauses (the pre-resolution
                 # INERT behavior, never an auto-re-fire).
                 _fence_key = getattr(exc, "idempotency_key", None)
-                pause_snapshot = _run_protocol_method_sync(
+                pause_snapshot_captured = _run_protocol_method_sync(
                     protocol.capture_pause_snapshot(
                         workflow_id=manifest_entry.workflow_id,
                         run_id=run_id,
@@ -5719,8 +5784,10 @@ def _execute_workflow_body(
                             if isinstance(_fence_key, str)
                             else None
                         ),
+                        descent_depth=descent_depth,
                     )
                 )
+                pause_snapshot = pause_snapshot_captured.snapshot
                 # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
                 # The helper is emission-only; the driver owns the tracer (B-162).
                 _emit_pause_captured(pause_snapshot, ctx=ctx)
@@ -5748,6 +5815,7 @@ def _execute_workflow_body(
                     final_state=None,
                     fail_class=None,
                     pause_snapshot=pause_snapshot,
+                    pause_record_ref=pause_snapshot_captured.record_ref,
                 ), steps_executed
             if not isinstance(exc, Exception):
                 # Unknown BaseException (KeyboardInterrupt, SystemExit, etc.) —
@@ -8048,7 +8116,7 @@ def _execute_parallelization(
     crash_pause_reconstruct_refire_safe: frozenset[int] = frozenset(),
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
-    sub_agent_descent: bool = False,
+    descent_depth: int,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -8115,8 +8183,8 @@ def _execute_parallelization(
     # the branch is RE-DISPATCHED with its child's snapshot threaded so the child re-enters
     # at its cursor (the THIRD branch disposition). Rebuilt fresh per round (re-dispatch IS
     # the carry — no carry-seed).
-    _recovered_paused_child: dict[int, PauseSnapshot] = (
-        {b.branch_index: b.child_snapshot for b in _peer_resume.paused_child_branches}
+    _recovered_paused_child: dict[int, PausedChildCapture] = (
+        {b.branch_index: b.as_capture() for b in _peer_resume.paused_child_branches}
         if _peer_resume is not None
         else {}
     )
@@ -8263,12 +8331,19 @@ def _execute_parallelization(
             # the terminal `branches` (`seen`) — a paused-child ordinal is the disjoint THIRD
             # disposition (the ORCHESTRATOR_WORKERS analogue), so a snapshot listing the same
             # ordinal as both terminal AND paused-child is corrupt (fail closed).
+            _seen_child_refs: set[JournalRecordRef] = set()
             for pc in _peer_resume.paused_child_branches:
                 if not (0 <= pc.branch_index < len(steps)):
                     return f"paused-child-index-out-of-range: {pc.branch_index} ∉ [0, {len(steps)})"
                 if pc.branch_index in seen:
                     return f"paused-child-overlaps-terminal-or-duplicate: {pc.branch_index}"
                 seen.add(pc.branch_index)
+                # B-104 Task 4c — two paused children never share one journal record: a duplicate
+                # ref means one child's record is being presented for another (fail closed).
+                if pc.child_record_ref is not None:
+                    if pc.child_record_ref in _seen_child_refs:
+                        return f"paused-child-duplicate-record-ref at {pc.branch_index}"
+                    _seen_child_refs.add(pc.child_record_ref)
                 if str(steps[pc.branch_index].step_id) != pc.step_id:
                     return (
                         f"paused-child-identity-mismatch at {pc.branch_index}: snapshot "
@@ -8489,7 +8564,7 @@ def _execute_parallelization(
         step_index=0,
         # U-1 slice 3a (B-18) — run-level descent marker; branch children inherit
         # it via compose_branch_child_context's model_copy (ADR-D4 §1.5).
-        sub_agent_descent=sub_agent_descent,
+        descent_depth=descent_depth,
         # B-39 Slice B — plain pass-through; branch children inherit it via
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
@@ -8656,7 +8731,7 @@ def _execute_parallelization(
             # tuple (keyed from manifest_entry, so no sibling/parent leak; the child
             # inherits manifest_entry.hitl_placements from fanout_parent otherwise).
             update={
-                "child_resume_snapshot": _child_resume,
+                "child_resume": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
@@ -8808,7 +8883,7 @@ def _execute_parallelization(
     # `terminal_dispositions` (the two sets are disjoint). B-31 adds `child_workflow_id`
     # (previously discarded) so the resume guard can validate the re-supplied branch still
     # targets the same child workflow.
-    paused_child_dispositions: dict[int, tuple[str, PauseSnapshot]] = {}
+    paused_child_dispositions: dict[int, PausedChildCapture] = {}
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — branch_index -> the held reserve's idempotency_key
     # for each peer branch whose OWN dispatch raised the effect fence (the PARALLELIZATION
     # analogue). DISJOINT from `terminal_dispositions` (caught at a different except site); read
@@ -8822,6 +8897,11 @@ def _execute_parallelization(
     # LINEAR effect-fence ABORT does (out-of-family Codex [P1]: without this an ABORT re-supplied
     # under CascadePolicy.PAUSE fell through the generic branch-failure path → re-pause).
     effect_fence_aborted_dispositions: set[int] = set()
+    # B-104 Task 4c — ordinals whose durable paused child was REFUSED by the Runtime before it
+    # ran (`ChildResumeRefusedError`). TERMINAL like the fence ABORT: the post-barrier forces
+    # RunStatus.FAILED, tier-agnostically, so a refusal never re-pauses, re-dispatches or
+    # captures anything; the prior durable pause stays the only record.
+    child_resume_refused_dispositions: dict[int, ChildResumeRefusedError] = {}
     # B-72 impl leg (CP spec v1.108 §1) — peer ordinals whose OWN dispatch raised the runtime's
     # `HITLPauseRequestedSignal` THIS round (its own `SUB_AGENT_BOUNDARY` gate fired before any
     # child run was dispatched). DISJOINT from `terminal_dispositions` (caught at a dedicated
@@ -9056,6 +9136,7 @@ def _execute_parallelization(
         fail_class: str | None,
         salvage: bool,
         pause_snapshot: PauseSnapshot | None = None,
+        pause_record_ref: JournalRecordRef | None = None,
     ) -> tuple[RunResult, int]:
         # B-FANOUT-OUTPUT-REPLAY — a crash-resume that recovered a ran-and-errored branch
         # (terminal, no output) keeps the run DEGRADED: never report SUCCESS while omitting
@@ -9135,6 +9216,7 @@ def _execute_parallelization(
             # B-FANOUT-PAUSE-PARALLELIZATION — PAUSED carries the salvaged aggregate
             # as partial_state (above) + the resumable snapshot.
             pause_snapshot=pause_snapshot,
+            pause_record_ref=pause_record_ref,
         )
         return result, steps_executed
 
@@ -9544,6 +9626,11 @@ def _execute_parallelization(
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
                 raise
+            except ChildResumeRefusedError as _refusal:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions[branch_index] = _refusal
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-21 — this branch's own dispatch is a `SUB_AGENT_DISPATCH` step whose
                 # recursive child sub-workflow PAUSED. Under `proceed` (SOLO) there is no
@@ -9554,10 +9641,7 @@ def _execute_parallelization(
                 # terminal branch) + re-raise so the gather marks the branch; the
                 # post-barrier guard FAILS the run HONESTLY (a paused child cannot be
                 # carried under proceed). No silent loss.
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except SubAgentDispatchCapacityError:
                 # codex round-4 [P2] "avoid recording rejected branches as
@@ -9800,6 +9884,9 @@ def _execute_parallelization(
                     results_by_ordinal[plan[0]] = result
                 return [results_by_ordinal[plan[0]] for plan in branch_plan]
 
+        # [LAW:no-ambient-temporal-coupling] Keep the deadline as state until the
+        # already-recorded refusal has had its terminal decision.
+        deadline_struck = False
         try:
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
@@ -9807,8 +9894,9 @@ def _execute_parallelization(
         except (BranchBarrierDeadlineExceededError, TimeoutError):
             # The deadline struck (a stuck branch, or — under warm-up — Phase 1
             # consumed the budget before releasing the siblings); the completed
-            # branches buffered their entries → PARTIAL (degraded). proceed does
-            # not cancel; a stuck branch is abandoned per
+            # branches buffered their entries. A recorded child refusal stays FAILED;
+            # otherwise proceed returns PARTIAL. Proceed does not cancel; a stuck
+            # branch is abandoned per
             # `_run_fanout_to_completion`. Never-released branches record their
             # obligation-4 `cancelled` terminal (B-18-3C-PREWARM-TIMEOUT-LEDGER
             # M2 audit completeness — in-flight-cut branches already recorded
@@ -9824,6 +9912,19 @@ def _execute_parallelization(
             # named comment ("its stash-then-deadline interleaving exits HERE, before the
             # paused-child check below") — a deliberate, already-shipped trade-off this
             # port intentionally preserves, not a gap unique to PARALLELIZATION.
+            deadline_struck = True
+        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
+        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
+        if child_resume_refused_dispositions:
+            _synthesize_undispatched_terminals()
+            return _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class(
+                    "parallelization-child-resume-refused", child_resume_refused_dispositions
+                ),
+                salvage=False,
+            )
+        if deadline_struck:
             _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         if paused_child_dispositions:
@@ -9978,6 +10079,11 @@ def _execute_parallelization(
                 _inflight_exc = (
                     inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
                 )
+                if isinstance(_inflight_exc, ChildResumeRefusedError):
+                    # B-104 Task 4c — an in-flight sibling's durable paused child was refused (the
+                    # shielded drain suppresses it, as it does a child pause): same terminal record.
+                    child_resume_refused_dispositions[branch_index] = _inflight_exc
+                    raise
                 if isinstance(_inflight_exc, SubAgentChildPausedError):
                     # B-21 — this branch was cancelled because a SIBLING raised first, but its OWN
                     # in-flight child sub-workflow may have PAUSED: `dispatch_branch_step_shielded`
@@ -9988,10 +10094,7 @@ def _execute_parallelization(
                     # it as a paused-child (NOT a terminal `completed` branch — else the snapshot
                     # records it terminal, resume skips it, and the child's PauseSnapshot is
                     # DROPPED): stash + re-raise, no step/terminal entry recorded.
-                    paused_child_dispositions[branch_index] = (
-                        _inflight_exc.child_workflow_id,
-                        _inflight_exc.child_snapshot,
-                    )
+                    paused_child_dispositions[branch_index] = _inflight_exc.capture
                     raise
                 if type(_inflight_exc).__name__ == "HITLPauseRequestedSignal":
                     # B-72 impl leg (CP spec v1.108 §1) — this branch was cancelled because a
@@ -10105,6 +10208,11 @@ def _execute_parallelization(
                         output=None,
                     )
                 raise  # honor the cancellation (the barrier cancelled this branch)
+            except ChildResumeRefusedError as _refusal:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions[branch_index] = _refusal
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-21 — this branch's own dispatch is a `SUB_AGENT_DISPATCH` step whose
                 # recursive child sub-workflow PAUSED (a grandchild failed under
@@ -10117,10 +10225,7 @@ def _execute_parallelization(
                 # Re-raise so the TaskGroup halts the fan-out at the pause boundary (siblings:
                 # in-flight finish / not-yet-dispatched left re-dispatchable — the §25.15.1
                 # pause semantic, driving the pause branch below).
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except Exception as _exc:
                 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this
@@ -10474,6 +10579,18 @@ def _execute_parallelization(
     # branch AND the withheld followers (v1.91 item 6a). The aborted arm records the ABORTED
     # branch `completed` terminal-ONLY; withheld recovered fence peers `completed`
     # (capture-less); plain withheld branches `cancelled`. fail_class + run status unchanged.
+    # B-104 Task 4c — a durable paused child was refused before it ran: TERMINAL, forced
+    # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
+    if child_resume_refused_dispositions:
+        _synthesize_undispatched_terminals()
+        return _finish(
+            RunStatus.FAILED,
+            fail_class=_refused_fail_class(
+                "parallelization-child-resume-refused", child_resume_refused_dispositions
+            ),
+            salvage=False,
+        )
+
     if effect_fence_aborted_dispositions:
         _synthesize_undispatched_terminals()
         return _finish(
@@ -10652,12 +10769,11 @@ def _execute_parallelization(
                 PausedChildBranchResumeState(
                     branch_index=_bi,
                     step_id=str(steps[_bi].step_id),
-                    child_workflow_id=_cwid,
-                    child_snapshot=_child_snap,
+                    child_workflow_id=_capture.child_workflow_id,
+                    child_snapshot=_capture.child_snapshot,
+                    child_record_ref=_capture.child_record_ref,
                 )
-                for _bi, (_cwid, _child_snap) in sorted(
-                    paused_child_dispositions.items(), key=lambda kv: kv[0]
-                )
+                for _bi, _capture in sorted(paused_child_dispositions.items(), key=lambda kv: kv[0])
             ),
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — peers whose OWN dispatch raised the effect
             # fence this round. DISJOINT from `branches` (a fence-paused ordinal never entered
@@ -10774,8 +10890,8 @@ def _execute_parallelization(
         # gate-owning test — so an operator surface keying off the reason knows to supply a
         # `hitl_response` exactly as it would for a nested HITL-paused child).
         _any_nested_hitl_pending = any(
-            _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
-            for _, _child_snap in paused_child_dispositions.values()
+            _capture.child_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+            for _capture in paused_child_dispositions.values()
         )
         _pause_reason = (
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
@@ -10788,19 +10904,27 @@ def _execute_parallelization(
             )
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
-        snapshot = _run_protocol_method_sync(
+        snapshot_captured = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                 workflow_id=workflow_id,
                 run_id=run_id,
                 step_index=0,
                 pause_reason=_pause_reason,
                 peer_fan_out_resume=peer_fan_out_resume,
+                descent_depth=descent_depth,
             )
         )
+        snapshot = snapshot_captured.snapshot
         # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
         # The helper is emission-only; the driver owns the tracer (B-162).
         _emit_pause_captured(snapshot, ctx=ctx)
-        return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
+        return _finish(
+            RunStatus.PAUSED,
+            fail_class=None,
+            salvage=True,
+            pause_snapshot=snapshot,
+            pause_record_ref=snapshot_captured.record_ref,
+        )
     # No branch failed THIS round. But a RECOVERED terminal branch may have failed in
     # the original run (a resume tail) — a terminal branch with no collected output is
     # a failed/timed-out branch (`_record_clean` always populates `collected` for a
@@ -11016,7 +11140,7 @@ def _execute_evaluator_optimizer(
     effective_parent_gate_level: GateLevel,
     inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_snapshot: PauseSnapshot | None = None,
-    sub_agent_descent: bool = False,
+    descent_depth: int,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -11330,7 +11454,7 @@ def _execute_evaluator_optimizer(
             # precedent). None → byte-identical to v1.37 (§14.5.3 invariant-1).
             agent_role=binding.agent_role,
             # U-1 slice 3a (B-18) — run-level descent marker (ADR-D4 §1.5).
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             # B-39 Slice B — plain pass-through (no fan-out at this strategy).
             resume_context=resume_context,
             hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
@@ -11473,7 +11597,7 @@ def _execute_evaluator_optimizer(
     # (no fan-out, no branch-ordinal ambiguity), so the LINEAR mechanism applies
     # unmodified: gated on genuinely resuming a HITL_PENDING pause; a map HIT on
     # `resume_context.hitl_responses` (keyed by THIS run_id, only consulted when
-    # `sub_agent_descent` — the "am I the depth-0 root" discriminator) is always
+    # `descent_depth > 0` — the "am I the depth-0 root" discriminator) is always
     # safe; the UNIFORM `hitl_response` fallback applies only when this run_id is
     # the resume cycle's sole unaddressed gate-owning member
     # (`hitl_uniform_fallback_eligible_run_id`, computed once at the true root).
@@ -11486,7 +11610,7 @@ def _execute_evaluator_optimizer(
         _eo_resolved_hitl: HITLResult | None = None
         _eo_mapped_hitl = (
             resume_context.hitl_responses.get(run_id)
-            if sub_agent_descent and resume_context.hitl_responses
+            if descent_depth > 0 and resume_context.hitl_responses
             else None
         )
         if _eo_mapped_hitl is not None:
@@ -11624,7 +11748,7 @@ def _execute_evaluator_optimizer(
             completed_steps=tuple(completed_step_records),
         )
         _eo_hitl_step_index = entry_index % 2
-        snapshot = _run_protocol_method_sync(
+        snapshot_captured = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                 workflow_id=workflow_id,
                 run_id=run_id,
@@ -11645,8 +11769,10 @@ def _execute_evaluator_optimizer(
                     default_model_binding=default_model_binding,
                     inherited_hitl_placements=inherited_hitl_placements,
                 ),
+                descent_depth=descent_depth,
             )
         )
+        snapshot = snapshot_captured.snapshot
         # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
         # The helper is emission-only; the driver owns the tracer (B-162).
         _emit_pause_captured(snapshot, ctx=ctx)
@@ -11681,6 +11807,7 @@ def _execute_evaluator_optimizer(
             final_state=None,
             fail_class=None,
             pause_snapshot=snapshot,
+            pause_record_ref=snapshot_captured.record_ref,
         ), entry_index - _resume_completed_count
     except _EvaluatorOptimizerStepDispatchError as _dispatch_failure:
         # A generate/evaluate DISPATCH raised (the ONLY pause-eligible failure — setup +
@@ -11793,7 +11920,7 @@ def _execute_evaluator_optimizer(
             eo_resume = EvaluatorOptimizerResumeState(
                 completed_steps=tuple(completed_step_records),
             )
-            snapshot = _run_protocol_method_sync(
+            snapshot_captured = _run_protocol_method_sync(
                 cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                     workflow_id=workflow_id,
                     run_id=run_id,
@@ -11807,8 +11934,10 @@ def _execute_evaluator_optimizer(
                     step_index=entry_index % 2,
                     pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
                     evaluator_optimizer_resume=eo_resume,
+                    descent_depth=descent_depth,
                 )
             )
+            snapshot = snapshot_captured.snapshot
             # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
             # The helper is emission-only; the driver owns the tracer (B-162).
             _emit_pause_captured(snapshot, ctx=ctx)
@@ -11828,6 +11957,7 @@ def _execute_evaluator_optimizer(
                 final_state=None,
                 fail_class=None,
                 pause_snapshot=snapshot,
+                pause_record_ref=snapshot_captured.record_ref,
             ), entry_index - _resume_completed_count
         # `proceed` / `cascade-cancel` — preserve EO's existing terminal-FAILED behavior
         # (drain whatever was buffered so the completed steps' entries persist).
@@ -12035,7 +12165,7 @@ def _execute_orchestrator_workers(
     pause_resumable: bool = False,
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
-    sub_agent_descent: bool = False,
+    descent_depth: int,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -12112,8 +12242,8 @@ def _execute_orchestrator_workers(
     # re-dispatched THIS round → it either completes (→ terminal), fails, or pauses again
     # (→ recaptured into this round's paused_child set), so the set is rebuilt fresh per
     # round (no carry-seed — re-dispatch IS the carry).
-    _recovered_paused_child: dict[int, PauseSnapshot] = (
-        {b.branch_index: b.child_snapshot for b in _fan_out_resume.paused_child_branches}
+    _recovered_paused_child: dict[int, PausedChildCapture] = (
+        {b.branch_index: b.as_capture() for b in _fan_out_resume.paused_child_branches}
         if _fan_out_resume is not None
         else {}
     )
@@ -12300,6 +12430,7 @@ def _execute_orchestrator_workers(
             # PLUS no-overlap with the terminal `branches` (`seen`) — a paused-child
             # ordinal is the disjoint THIRD disposition, so a snapshot listing the same
             # ordinal as both terminal AND paused-child is corrupt (fail closed).
+            _seen_child_refs: set[JournalRecordRef] = set()
             for pc in _fan_out_resume.paused_child_branches:
                 if not (0 <= pc.branch_index < len(worker_steps)):
                     return (
@@ -12309,6 +12440,12 @@ def _execute_orchestrator_workers(
                 if pc.branch_index in seen:
                     return f"paused-child-overlaps-terminal-or-duplicate: {pc.branch_index}"
                 seen.add(pc.branch_index)
+                # B-104 Task 4c — two paused children never share one journal record: a duplicate
+                # ref means one child's record is being presented for another (fail closed).
+                if pc.child_record_ref is not None:
+                    if pc.child_record_ref in _seen_child_refs:
+                        return f"paused-child-duplicate-record-ref at {pc.branch_index}"
+                    _seen_child_refs.add(pc.child_record_ref)
                 if str(worker_steps[pc.branch_index].step_id) != pc.step_id:
                     return (
                         f"paused-child-identity-mismatch at {pc.branch_index}: snapshot "
@@ -12677,7 +12814,7 @@ def _execute_orchestrator_workers(
         is_orchestrator_dispatch=True,
         # U-1 slice 3a (B-18) — run-level descent marker; workers inherit it via
         # compose_branch_child_context's model_copy (ADR-D4 §1.5).
-        sub_agent_descent=sub_agent_descent,
+        descent_depth=descent_depth,
         # B-39 Slice B — plain pass-through; workers inherit it via
         # compose_branch_child_context's model_copy (deliberately not reset).
         resume_context=resume_context,
@@ -12874,7 +13011,7 @@ def _execute_orchestrator_workers(
                 # Do NOT drain `orchestrator_writer` here (unlike the terminal FAILED path): on
                 # resume the orchestrator re-dispatches + re-buffers its per-step override entry,
                 # so persisting it now would DOUBLE it. The reserve marker is already fsynced.
-                _orch_pause_snapshot = _run_protocol_method_sync(
+                _orch_pause_snapshot_captured = _run_protocol_method_sync(
                     cast(PauseResumeProtocol, _orch_pause_protocol).capture_pause_snapshot(
                         workflow_id=workflow_id,
                         run_id=run_id,
@@ -12885,8 +13022,10 @@ def _execute_orchestrator_workers(
                             step_id=str(orchestrator_step.step_id),
                             step_kind=str(orchestrator_step.step_kind.value),
                         ),
+                        descent_depth=descent_depth,
                     )
                 )
+                _orch_pause_snapshot = _orch_pause_snapshot_captured.snapshot
                 # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
                 # The helper is emission-only; the driver owns the tracer (B-162).
                 _emit_pause_captured(_orch_pause_snapshot, ctx=ctx)
@@ -12900,6 +13039,7 @@ def _execute_orchestrator_workers(
                     final_state=None,
                     fail_class=None,
                     pause_snapshot=_orch_pause_snapshot,
+                    pause_record_ref=_orch_pause_snapshot_captured.record_ref,
                 ), 0
             # The orchestrator failed before any worker fan-out → FAILED. Drain the
             # orchestrator_writer so a buffered per-step override entry persists (the
@@ -13118,7 +13258,7 @@ def _execute_orchestrator_workers(
             # the orchestrator's own placement override never leaks to a worker).
             update={
                 "step_index": branch_index + 1,
-                "child_resume_snapshot": _child_resume,
+                "child_resume": _child_resume,
                 "effect_fence_resolution": _branch_effect_fence_directive,
                 "hitl_delivery_holder": _branch_hitl_delivery_cell,
                 "hitl_placements": fold_step_hitl_placements(
@@ -13206,7 +13346,7 @@ def _execute_orchestrator_workers(
     # enters `terminal_dispositions` (the two sets are disjoint). B-31 adds
     # `child_workflow_id` (previously discarded) so the resume guard can validate the
     # re-supplied branch still targets the same child workflow.
-    paused_child_dispositions: dict[int, tuple[str, PauseSnapshot]] = {}
+    paused_child_dispositions: dict[int, PausedChildCapture] = {}
     # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — branch_index -> the held effect-fence
     # reserve's idempotency_key for each TOOL_STEP worker whose OWN dispatch raised the
     # runtime fence's `EffectFenceAmbiguousUncommittedError` (C-RT-31 §14.22). Like a paused
@@ -13221,6 +13361,11 @@ def _execute_orchestrator_workers(
     # post-barrier forces RunStatus.FAILED tier-agnostic, BEFORE the pause path (the LINEAR ABORT
     # → FAILED analogue; Codex [P1]).
     effect_fence_aborted_dispositions: set[int] = set()
+    # B-104 Task 4c — ordinals whose durable paused child was REFUSED by the Runtime before it
+    # ran (`ChildResumeRefusedError`). TERMINAL like the fence ABORT: the post-barrier forces
+    # RunStatus.FAILED, tier-agnostically, so a refusal never re-pauses, re-dispatches or
+    # captures anything; the prior durable pause stays the only record.
+    child_resume_refused_dispositions: dict[int, ChildResumeRefusedError] = {}
     # B-72 impl leg (CP spec v1.108 §1) — worker ordinals whose OWN dispatch raised the runtime's
     # `HITLPauseRequestedSignal` THIS round (its own `SUB_AGENT_BOUNDARY` gate fired before any
     # child run was dispatched — the ORCHESTRATOR_WORKERS analogue of the PARALLELIZATION set).
@@ -13739,15 +13884,17 @@ def _execute_orchestrator_workers(
                     str(synthesis_step.step_id) if synthesis_step is not None else None
                 ),
             )
-            _reestablish_snapshot = _run_protocol_method_sync(
+            _reestablish_snapshot_captured = _run_protocol_method_sync(
                 cast(PauseResumeProtocol, _reestablish_protocol).capture_pause_snapshot(
                     workflow_id=workflow_id,
                     run_id=run_id,
                     step_index=0,
                     pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
                     fan_out_resume=_reestablish_fan_out_resume,
+                    descent_depth=descent_depth,
                 )
             )
+            _reestablish_snapshot = _reestablish_snapshot_captured.snapshot
             # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
             # The helper is emission-only; the driver owns the tracer (B-162).
             _emit_pause_captured(_reestablish_snapshot, ctx=ctx)
@@ -13762,6 +13909,7 @@ def _execute_orchestrator_workers(
                 final_state=None,
                 fail_class=None,
                 pause_snapshot=_reestablish_snapshot,
+                pause_record_ref=_reestablish_snapshot_captured.record_ref,
             )
             _finalize_reconciler_cas_if_attempted()
             return result, _reestablish_steps
@@ -13837,6 +13985,7 @@ def _execute_orchestrator_workers(
         fail_class: str | None,
         salvage: bool,
         pause_snapshot: PauseSnapshot | None = None,
+        pause_record_ref: JournalRecordRef | None = None,
     ) -> tuple[RunResult, int]:
         # B-FANOUT-OUTPUT-REPLAY — a crash-resume that recovered a ran-and-errored worker
         # (terminal, no output) keeps the run DEGRADED (Codex [P2]).
@@ -13897,6 +14046,7 @@ def _execute_orchestrator_workers(
             final_state=aggregate if status is RunStatus.SUCCESS else None,
             fail_class=fail_class,
             pause_snapshot=pause_snapshot,
+            pause_record_ref=pause_record_ref,
         )
         return result, steps_executed
 
@@ -14144,6 +14294,11 @@ def _execute_orchestrator_workers(
                     procedural_tier_snapshot_ref=snapshot_ref,
                 )
                 raise
+            except ChildResumeRefusedError as _refusal:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions[branch_index] = _refusal
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-HIERARCHICAL-PAUSE — this worker's recursive child PAUSED. Under
                 # `proceed` (SOLO) there is no resumable-pause boundary to honor it (the
@@ -14152,10 +14307,7 @@ def _execute_orchestrator_workers(
                 # Stash it (no terminal — not a terminal branch) + re-raise so the
                 # gather marks the branch; the post-barrier guard FAILS the run HONESTLY
                 # (a paused child cannot be carried under proceed). No silent loss.
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except SubAgentDispatchCapacityError:
                 # codex round-4 [P2] — see `_proceed_branch`'s identical
@@ -14372,6 +14524,9 @@ def _execute_orchestrator_workers(
                     results_by_ordinal[plan[0]] = result
                 return [results_by_ordinal[plan[0]] for plan in branch_plan]
 
+        # [LAW:no-ambient-temporal-coupling] Keep the deadline as state until the
+        # already-recorded refusal has had its terminal decision.
+        deadline_struck = False
         try:
             results = _run_fanout_to_completion(
                 _proceed_fanout(), max_workers=max(1, len(branch_plan))
@@ -14379,8 +14534,9 @@ def _execute_orchestrator_workers(
         except (BranchBarrierDeadlineExceededError, TimeoutError):
             # A stuck worker hit the deadline (or — under warm-up — Phase 1 consumed
             # the budget before releasing the followers, B-18-PREWARM-OW); the
-            # completed workers buffered their entries → PARTIAL (degraded). (proceed
-            # does not cancel; the stuck worker is abandoned per
+            # completed workers buffered their entries. A recorded child refusal
+            # stays FAILED; otherwise proceed returns PARTIAL. (Proceed does not
+            # cancel; the stuck worker is abandoned per
             # `_run_fanout_to_completion`; handlers merged — the M2 parity shape.) A
             # TERMINAL exit nothing resumes → run the obligation-4 scan
             # (B-18-FENCE-LEDGER-FIDELITY-OW): a never-scheduled worker — incl. a
@@ -14389,6 +14545,19 @@ def _execute_orchestrator_workers(
             # the paused-child check below) records `completed` terminal-only —
             # in-flight-cut workers already recorded `timed_out` at their own
             # CancelledError handler.
+            deadline_struck = True
+        # B-104 Task 4c — a durable paused child refused before it ran is a terminal run
+        # failure even under `proceed` (never degraded into PARTIAL/SUCCESS).
+        if child_resume_refused_dispositions:
+            _synthesize_undispatched_terminals()
+            return _finish(
+                RunStatus.FAILED,
+                fail_class=_refused_fail_class(
+                    "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+                ),
+                salvage=False,
+            )
+        if deadline_struck:
             _synthesize_undispatched_terminals()
             return _finish(RunStatus.PARTIAL, fail_class=None, salvage=True)
         if paused_child_dispositions:
@@ -14526,11 +14695,13 @@ def _execute_orchestrator_workers(
                 _inflight_exc = (
                     inflight.exception() if (inflight.done() and not inflight.cancelled()) else None
                 )
+                if isinstance(_inflight_exc, ChildResumeRefusedError):
+                    # B-104 Task 4c — an in-flight sibling's durable paused child was refused (the
+                    # shielded drain suppresses it, as it does a child pause): same terminal record.
+                    child_resume_refused_dispositions[branch_index] = _inflight_exc
+                    raise
                 if isinstance(_inflight_exc, SubAgentChildPausedError):
-                    paused_child_dispositions[branch_index] = (
-                        _inflight_exc.child_workflow_id,
-                        _inflight_exc.child_snapshot,
-                    )
+                    paused_child_dispositions[branch_index] = _inflight_exc.capture
                     raise
                 if type(_inflight_exc).__name__ == "HITLPauseRequestedSignal":
                     # B-72 impl leg (CP spec v1.108 §1) — this worker was cancelled because a
@@ -14652,6 +14823,11 @@ def _execute_orchestrator_workers(
                         output=None,
                     )
                 raise  # honor the cancellation (the barrier cancelled this branch)
+            except ChildResumeRefusedError as _refusal:
+                # B-104 Task 4c — the Runtime refused this durable paused child before running it.
+                # TERMINAL for the run (post-barrier forces FAILED): record + re-raise, no capture.
+                child_resume_refused_dispositions[branch_index] = _refusal
+                raise
             except SubAgentChildPausedError as _paused:
                 # B-HIERARCHICAL-PAUSE — this worker's recursive child sub-workflow PAUSED
                 # (a grandchild failed under cascade_policy=pause). NOT a terminal branch
@@ -14662,10 +14838,7 @@ def _execute_orchestrator_workers(
                 # already buffered stays). Re-raise so the TaskGroup halts the fan-out at the
                 # pause boundary (siblings: in-flight finish / not-yet-dispatched left
                 # re-dispatchable — the §25.15.1 pause semantic), driving the pause branch.
-                paused_child_dispositions[branch_index] = (
-                    _paused.child_workflow_id,
-                    _paused.child_snapshot,
-                )
+                paused_child_dispositions[branch_index] = _paused.capture
                 raise
             except Exception as _exc:
                 # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE (R-FS-1) — this TOOL_STEP worker's OWN
@@ -14997,6 +15170,18 @@ def _execute_orchestrator_workers(
     # re-paused peer records `completed` + the durable capture (the v1.65 §1(c) trade, named);
     # withheld recovered peers record `completed` capture-less; plain withheld `cancelled`.
     # fail_class + run status unchanged.
+    # B-104 Task 4c — a durable paused child was refused before it ran: TERMINAL, forced
+    # FAILED before any policy branching so nothing re-pauses, re-dispatches or captures.
+    if child_resume_refused_dispositions:
+        _synthesize_undispatched_terminals()
+        return _finish(
+            RunStatus.FAILED,
+            fail_class=_refused_fail_class(
+                "orchestrator-workers-child-resume-refused", child_resume_refused_dispositions
+            ),
+            salvage=False,
+        )
+
     if effect_fence_aborted_dispositions:
         _synthesize_undispatched_terminals()
         return _finish(
@@ -15153,12 +15338,11 @@ def _execute_orchestrator_workers(
                 PausedChildBranchResumeState(
                     branch_index=_bi,
                     step_id=str(worker_steps[_bi].step_id),
-                    child_workflow_id=_cwid,
-                    child_snapshot=_child_snap,
+                    child_workflow_id=_capture.child_workflow_id,
+                    child_snapshot=_capture.child_snapshot,
+                    child_record_ref=_capture.child_record_ref,
                 )
-                for _bi, (_cwid, _child_snap) in sorted(
-                    paused_child_dispositions.items(), key=lambda kv: kv[0]
-                )
+                for _bi, _capture in sorted(paused_child_dispositions.items(), key=lambda kv: kv[0])
             ),
             # B-FANOUT-EFFECT-FENCE-BRANCH-PAUSE — TOOL_STEP workers whose OWN dispatch
             # raised the runtime effect fence this round. DISJOINT from both `branches`
@@ -15260,8 +15444,8 @@ def _execute_orchestrator_workers(
         # B-72 impl leg — a worker that IS itself pre-dispatch gate-owning this round ALSO labels
         # the pause HITL_PENDING (the PARALLELIZATION analogue).
         _any_nested_hitl_pending = any(
-            _child_snap.pause_reason is WorkflowPauseReason.HITL_PENDING
-            for _, _child_snap in paused_child_dispositions.values()
+            _capture.child_snapshot.pause_reason is WorkflowPauseReason.HITL_PENDING
+            for _capture in paused_child_dispositions.values()
         )
         _pause_reason = (
             WorkflowPauseReason.EFFECT_FENCE_AMBIGUOUS
@@ -15274,19 +15458,27 @@ def _execute_orchestrator_workers(
             )
             else WorkflowPauseReason.EXPLICIT_OPERATOR
         )
-        snapshot = _run_protocol_method_sync(
+        snapshot_captured = _run_protocol_method_sync(
             cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                 workflow_id=workflow_id,
                 run_id=run_id,
                 step_index=0,
                 pause_reason=_pause_reason,
                 fan_out_resume=fan_out_resume,
+                descent_depth=descent_depth,
             )
         )
+        snapshot = snapshot_captured.snapshot
         # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
         # The helper is emission-only; the driver owns the tracer (B-162).
         _emit_pause_captured(snapshot, ctx=ctx)
-        return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
+        return _finish(
+            RunStatus.PAUSED,
+            fail_class=None,
+            salvage=True,
+            pause_snapshot=snapshot,
+            pause_record_ref=snapshot_captured.record_ref,
+        )
     # No worker failed THIS round. But a RECOVERED terminal branch may have failed
     # in the original run (a resume tail) — a terminal branch with no collected
     # output is a failed/timed-out branch (`_record_clean` always populates
@@ -15330,7 +15522,7 @@ def _execute_hierarchical_delegation(
     pause_resumable: bool = False,
     reconciler_engine_resume_required: bool = False,
     synthesis_step: WorkflowStep | None = None,
-    sub_agent_descent: bool = False,
+    descent_depth: int,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -15445,7 +15637,7 @@ def _execute_hierarchical_delegation(
         # at its own dispatch site, so this top-level `synthesis_step` never leaks
         # into a recursive level (synthesis-per-level is the registered follow-on).
         synthesis_step=synthesis_step,
-        sub_agent_descent=sub_agent_descent,
+        descent_depth=descent_depth,
         resume_context=resume_context,
         hitl_uniform_fallback_eligible_run_id=hitl_uniform_fallback_eligible_run_id,
         effect_fence_uniform_fallback_eligible_key=effect_fence_uniform_fallback_eligible_key,
@@ -15530,7 +15722,7 @@ def _execute_decentralized_handoff(
     effective_parent_gate_level: GateLevel,
     inherited_hitl_placements: tuple[HITLPlacement, ...],
     resume_snapshot: PauseSnapshot | None = None,
-    sub_agent_descent: bool = False,
+    descent_depth: int,
     resume_context: ResumeContext | None = None,
     hitl_uniform_fallback_eligible_run_id: str | None = None,
     effect_fence_uniform_fallback_eligible_key: str | None = None,
@@ -15699,7 +15891,7 @@ def _execute_decentralized_handoff(
     # fan-out, no branch-ordinal ambiguity), so the LINEAR mechanism applies
     # unmodified: gated on genuinely resuming a HITL_PENDING pause; a map HIT on
     # `resume_context.hitl_responses` (keyed by THIS run_id, only consulted when
-    # `sub_agent_descent`) is always safe; the UNIFORM `hitl_response` fallback
+    # `descent_depth > 0`) is always safe; the UNIFORM `hitl_response` fallback
     # applies only when this run_id is the resume cycle's sole unaddressed
     # gate-owning member.
     hitl_delivery_cell: HITLDeliveryCell | None = None
@@ -15711,7 +15903,7 @@ def _execute_decentralized_handoff(
         _handoff_resolved_hitl: HITLResult | None = None
         _handoff_mapped_hitl = (
             resume_context.hitl_responses.get(run_id)
-            if sub_agent_descent and resume_context.hitl_responses
+            if descent_depth > 0 and resume_context.hitl_responses
             else None
         )
         if _handoff_mapped_hitl is not None:
@@ -15806,6 +15998,7 @@ def _execute_decentralized_handoff(
         fail_class: str | None,
         salvage: bool,
         pause_snapshot: PauseSnapshot | None = None,
+        pause_record_ref: JournalRecordRef | None = None,
     ) -> tuple[RunResult, int]:
         # Drain the COMPLETED-stage writers in stage order (writer.branch_index =
         # stage ordinal) + emit one STEP_BOUNDARY per stage that ran. On resume, the
@@ -15832,6 +16025,7 @@ def _execute_decentralized_handoff(
             # B-HANDOFF-PAUSE — PAUSED carries the salvaged aggregate as partial_state
             # (above) + the resumable stage-cursor snapshot.
             pause_snapshot=pause_snapshot,
+            pause_record_ref=pause_record_ref,
         ), steps_executed
 
     def _append_handoff_if_not_terminal(
@@ -15907,7 +16101,7 @@ def _execute_decentralized_handoff(
             step_index=stage_index,
             # U-1 slice 3a (B-18) — run-level descent marker; stage_ctx inherits it
             # via compose_branch_child_context's model_copy (ADR-D4 §1.5).
-            sub_agent_descent=sub_agent_descent,
+            descent_depth=descent_depth,
             # B-39 Slice B — plain pass-through; stage_ctx inherits it via
             # compose_branch_child_context's model_copy (deliberately not reset).
             resume_context=resume_context,
@@ -16133,20 +16327,26 @@ def _execute_decentralized_handoff(
                     completed_stages=tuple(completed_stage_records),
                     stage_count=len(steps),
                 )
-                snapshot = _run_protocol_method_sync(
+                snapshot_captured = _run_protocol_method_sync(
                     cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                         workflow_id=workflow_id,
                         run_id=run_id,
                         step_index=stage_index,
                         pause_reason=WorkflowPauseReason.EXPLICIT_OPERATOR,
                         handoff_resume=handoff_resume,
+                        descent_depth=descent_depth,
                     )
                 )
+                snapshot = snapshot_captured.snapshot
                 # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
                 # The helper is emission-only; the driver owns the tracer (B-162).
                 _emit_pause_captured(snapshot, ctx=ctx)
                 return _finish(
-                    RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot
+                    RunStatus.PAUSED,
+                    fail_class=None,
+                    salvage=True,
+                    pause_snapshot=snapshot,
+                    pause_record_ref=snapshot_captured.record_ref,
                 )
             return _finish(
                 RunStatus.FAILED,
@@ -16199,7 +16399,7 @@ def _execute_decentralized_handoff(
                 completed_stages=tuple(completed_stage_records),
                 stage_count=len(steps),
             )
-            snapshot = _run_protocol_method_sync(
+            snapshot_captured = _run_protocol_method_sync(
                 cast(PauseResumeProtocol, protocol).capture_pause_snapshot(
                     workflow_id=workflow_id,
                     run_id=run_id,
@@ -16214,8 +16414,10 @@ def _execute_decentralized_handoff(
                         default_model_binding=default_model_binding,
                         inherited_hitl_placements=inherited_hitl_placements,
                     ),
+                    descent_depth=descent_depth,
                 )
             )
+            snapshot = snapshot_captured.snapshot
             # U-CP-65 AC #1 — `pause.captured` caller-side emission per OD spec §C-OD-30.3.
             # The helper is emission-only; the driver owns the tracer (B-162).
             _emit_pause_captured(snapshot, ctx=ctx)
@@ -16236,7 +16438,13 @@ def _execute_decentralized_handoff(
                         actor=ActorIdentity(ctx.ledger_writer.actor.actor_id),
                     )
                 )
-            return _finish(RunStatus.PAUSED, fail_class=None, salvage=True, pause_snapshot=snapshot)
+            return _finish(
+                RunStatus.PAUSED,
+                fail_class=None,
+                salvage=True,
+                pause_snapshot=snapshot,
+                pause_record_ref=snapshot_captured.record_ref,
+            )
         # Persist the stage as a per-role branch entry whose branch_metadata chains
         # off the prior stage (causality) + a fresh `completed` terminal entry (U-CP-84).
         append_branch_step_ledger_entry(
@@ -16302,6 +16510,7 @@ __all__ = [
     "dispatch_branch_step_shielded",
     "drain_branch_buffers",
     "execute_workflow",
+    "execute_workflow_at_depth",
     "reset_offloaded_job_branch_inflight_registry",
     "resume_should_redispatch",
 ]

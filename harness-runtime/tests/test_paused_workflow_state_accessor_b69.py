@@ -223,9 +223,11 @@ async def _capture(
     **carriers: Any,
 ) -> PauseSnapshot:
     """A GENUINE re-pause through `capture_pause_snapshot`, never a synthesized record."""
-    return await _protocol(tmp_path).capture_pause_snapshot(
-        _WORKFLOW_ID, run_id, step_index, pause_reason, **carriers
-    )
+    return (
+        await _protocol(tmp_path).capture_pause_snapshot(
+            _WORKFLOW_ID, run_id, step_index, pause_reason, **carriers, descent_depth=0
+        )
+    ).snapshot
 
 
 def _hitl(response: HITLResponse = HITLResponse.APPROVE) -> HITLResult:
@@ -401,9 +403,11 @@ async def _child_snapshot(tmp_path: Path, *, run_id: str) -> PauseSnapshot:
         pause_context_reader=lambda: (_summary(), _ANCHOR),
         store=JournalWorkflowPauseStore(journal_dir=tmp_path / "throwaway-journal", tenant_id=None),
     )
-    return await protocol.capture_pause_snapshot(
-        _WORKFLOW_ID, run_id, 1, WorkflowPauseReason.HITL_PENDING
-    )
+    return (
+        await protocol.capture_pause_snapshot(
+            _WORKFLOW_ID, run_id, 1, WorkflowPauseReason.HITL_PENDING, descent_depth=0
+        )
+    ).snapshot
 
 
 # --------------------------------------------------------------------------
@@ -1573,12 +1577,16 @@ async def test_workflow_match_guard_runs_before_any_projection_is_returned(
     compose a response map for a state they cannot resume."""
     config = _config(tmp_path)
     store = _store(tmp_path)
-    other = await DurablePauseResumeProtocol(
-        state_ledger_writer=object(),
-        state_ledger_reader=object(),
-        pause_context_reader=lambda: (_summary(), _ANCHOR),
-        store=store,
-    ).capture_pause_snapshot("some-other-wf", "run-x", 0, WorkflowPauseReason.HITL_PENDING)
+    other = (
+        await DurablePauseResumeProtocol(
+            state_ledger_writer=object(),
+            state_ledger_reader=object(),
+            pause_context_reader=lambda: (_summary(), _ANCHOR),
+            store=store,
+        ).capture_pause_snapshot(
+            "some-other-wf", "run-x", 0, WorkflowPauseReason.HITL_PENDING, descent_depth=0
+        )
+    ).snapshot
     assert other.workflow_id == "some-other-wf"
     # The record is journaled under the OTHER workflow's key, so reading OUR handle
     # is `absent`; the mismatch branch is exercised by planting the foreign record
