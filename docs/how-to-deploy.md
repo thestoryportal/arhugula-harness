@@ -90,7 +90,8 @@ ARM) with local Ollama or a subscription CLI. Paid hosted providers are excluded
 Each profile has two literal placeholders you must edit: `/absolute/path/to/your/workspace`
 (this checkout) and `/absolute/path/to/your/state-root` (used in `[runtime.state_placement]`
 and again as the parent of the `STATE_LEDGER` cell). No `~` or environment variable is
-expanded. An unedited placeholder is refused at bootstrap (`parent-missing`).
+expanded. Replace both placeholders before starting; bootstrap reports
+`parent-missing` when a placeholder's parent does not exist.
 
 Setup, in order:
 
